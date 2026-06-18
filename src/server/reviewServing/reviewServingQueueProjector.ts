@@ -18,6 +18,8 @@ export type ReviewServingQueueProjectorDatabase = ReviewServingProjectorWriterDa
 export type ProjectReviewServingQueueInput = {
   acknowledgeClaims?: boolean
   baseGeneration: number
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
   projectId: string
@@ -133,6 +135,45 @@ const getValuesCte = (columnName: string, values: readonly string[]) => {
         .join(', ')}))`
 }
 
+const hasChunkArticleRange = (input: {chunkEndArticleId?: string | null; chunkStartArticleId?: string | null}) => {
+  return input.chunkStartArticleId !== undefined || input.chunkEndArticleId !== undefined
+}
+
+const getArticleRangePredicate = (input: {
+  alias: string
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
+}) => {
+  const startPredicate =
+    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
+      ? ''
+      : `AND ${input.alias}.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`
+  const endPredicate =
+    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
+      ? ''
+      : `AND ${input.alias}.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+
+  return `${startPredicate}
+          ${endPredicate}`
+}
+
+const getQueueServingRangePredicate = (input: {
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
+}) => {
+  const startPredicate =
+    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
+      ? ''
+      : `AND article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`
+  const endPredicate =
+    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
+      ? ''
+      : `AND article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+
+  return `${startPredicate}
+          ${endPredicate}`
+}
+
 const getDirtyArticleCte = (projectId: string, articleIds: readonly string[], promptIds: readonly string[]) => {
   if (articleIds.length > 0) {
     return getValuesCte('article_id', articleIds)
@@ -149,19 +190,19 @@ const getDirtyArticleCte = (projectId: string, articleIds: readonly string[], pr
 }
 
 const getQueueDirtyArticleCte = (
-  projectId: string,
+  input: ProjectReviewServingQueueInput,
   articleIds: readonly string[],
   promptIds: readonly string[],
-  claims: readonly ReviewServingDirtyWorkClaim[],
 ) => {
-  return promptIds.length === 0 && hasProjectScopedClaim(claims)
+  return (promptIds.length === 0 && hasProjectScopedClaim(input.claims)) || hasChunkArticleRange(input)
     ? `article_id_filter(article_id) AS (
         SELECT scope.article_id
         FROM mart.project_scope_article scope
-        WHERE scope.project_id = ${getSqlLiteral(projectId)}
+        WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
           AND (scope.in_curated_scope OR scope.in_route_scope)
+          ${getArticleRangePredicate({alias: 'scope', ...input})}
       )`
-    : getDirtyArticleCte(projectId, articleIds, promptIds)
+    : getDirtyArticleCte(input.projectId, articleIds, promptIds)
 }
 
 const getDirtyPromptJoin = (promptIds: readonly string[], alias: string) => {
@@ -193,7 +234,7 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
   const broadProjectClaim = hasProjectScopedClaim(input.claims)
   const articleIds = broadProjectClaim ? [] : getClaimArticleIds(input.claims)
   const promptIds = broadProjectClaim ? [] : getClaimPromptIds(input.claims)
-  const dirtyArticleCte = getQueueDirtyArticleCte(input.projectId, articleIds, promptIds, input.claims)
+  const dirtyArticleCte = getQueueDirtyArticleCte(input, articleIds, promptIds)
   const dirtyPromptCte = getValuesCte('prompt_id', promptIds)
   const ctes = [dirtyArticleCte, dirtyPromptCte].filter((cte) => {
     return cte.length > 0
@@ -438,10 +479,15 @@ const getDeleteReplacedQueueServingStatement = (
     reviewConfigHashes.length === 0
       ? ''
       : `AND review_config_hash IN (${reviewConfigHashes.map(getSqlLiteral).join(', ')})`
+  const rangePredicate = getQueueServingRangePredicate(input)
 
   return input.snapshotId === null
     || input.snapshotId === undefined
-    || (!broadProjectClaim && articleIds.length === 0 && promptIds.length === 0 && reviewConfigHashes.length === 0)
+    || (!broadProjectClaim
+      && !hasChunkArticleRange(input)
+      && articleIds.length === 0
+      && promptIds.length === 0
+      && reviewConfigHashes.length === 0)
     ? null
     : articleIds.length > 0
       ? `DELETE FROM mart.review_unassessed_queue_serving_v4
@@ -458,6 +504,7 @@ const getDeleteReplacedQueueServingStatement = (
         : `DELETE FROM mart.review_unassessed_queue_serving_v4
         WHERE project_id = ${getSqlLiteral(input.projectId)}
           AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          ${rangePredicate}
           ${reviewConfigPredicate}`
 }
 

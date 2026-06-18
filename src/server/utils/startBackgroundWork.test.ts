@@ -36,6 +36,7 @@ const runStartBackgroundWork = (role: 'api' | 'judge-worker' | 'maintenance-work
         const martRefreshDrainEligibilityModulePath = getModulePath('./src/server/utils/martRefreshDrainEligibility.ts')
         const projectMartLargeRebuildHeartbeatModulePath = getModulePath('./src/server/utils/projectMartLargeRebuildHeartbeat.ts')
         const projectMartRefreshWorkerHeartbeatModulePath = getModulePath('./src/server/utils/projectMartRefreshWorkerHeartbeat.ts')
+        const reviewServingProjectorWorkerHeartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
         const requestAttemptCloseoutBackfillSchedulerModulePath = getModulePath('./src/server/utils/startRequestAttemptCloseoutBackfillScheduler.ts')
         const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
         const duckdbOwnerConnectionHeartbeatModulePath = getModulePath('./src/server/utils/duckdbOwnerConnectionHeartbeat.ts')
@@ -60,6 +61,13 @@ const runStartBackgroundWork = (role: 'api' | 'judge-worker' | 'maintenance-work
           return {
             startProjectMartRefreshWorkerHeartbeat: () => {
               calls.push('projectMartRefreshWorkerHeartbeat')
+            },
+          }
+        })
+        void mock.module(reviewServingProjectorWorkerHeartbeatModulePath, () => {
+          return {
+            startReviewServingProjectorWorkerHeartbeat: () => {
+              calls.push('reviewServingProjectorWorkerHeartbeat')
             },
           }
         })
@@ -112,6 +120,7 @@ test('startBackgroundWork starts shared infrastructure and maintenance work for 
     'requestAttemptCloseoutBackfillScheduler',
     'projectMartRefreshWorkerHeartbeat',
     'projectMartLargeRebuildHeartbeat',
+    'reviewServingProjectorWorkerHeartbeat',
   ])
 })
 

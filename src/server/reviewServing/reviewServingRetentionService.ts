@@ -55,6 +55,8 @@ type PatchComponentSpec = {component: ReviewServingProjectionComponent; identity
 type CleanupTableSpec = {keyColumn: string; protectedPredicate: string; table: string}
 
 const defaultPatchBudget: ReviewServingPatchBudget = {maxPatchRows: 50_000, maxPatchWatermarks: 25}
+const defaultRetentionCleanupBatchSize = 512
+const defaultRetentionCleanupTargetLimit = 16
 
 const patchComponentSpecs: readonly PatchComponentSpec[] = [
   {component: 'display', identityColumn: 'display_identity', table: 'mart.review_article_display_patch_v4'},
@@ -573,9 +575,7 @@ export const compactReviewServingCandidateSnapshotPatches = async (
       await tx.run(`
         UPDATE app.review_serving_snapshot_manifest
         SET
-          component_state_json = ${getJsonLiteral(
-            componentState as unknown as ReviewServingIdentityValue,
-          )},
+          component_state_json = ${getJsonLiteral(componentState as unknown as ReviewServingIdentityValue)},
           composed_identity_json = ${getJsonLiteral(getCompactedComposedIdentity(input.candidate.composedIdentity, componentState))},
           updated_at = current_timestamp
         WHERE project_id = ${getSqlLiteral(input.candidate.projectId)}
@@ -597,13 +597,13 @@ export const cleanupReviewServingRetentionState = async (
     const retentionState = await getRetentionState(retentionScope, tx)
     const tableIndex = getRetentionCursorIndex(retentionState)
     const allSpecs = [...cleanupTableSpecs, ...patchComponentSpecs]
-    const spec = allSpecs[tableIndex % allSpecs.length]!
+    const spec = allSpecs[tableIndex % allSpecs.length]
 
-    if ('protectedPredicate' in spec) {
+    if (spec !== undefined && 'protectedPredicate' in spec) {
       await deleteCleanupBatch({...input, spec}, tx)
     }
 
-    if ('identityColumn' in spec) {
+    if (spec !== undefined && 'identityColumn' in spec) {
       await deletePatchTableBatch({...input, spec}, tx)
     }
 
@@ -619,5 +619,28 @@ export const cleanupReviewServingRetentionState = async (
     )
 
     return {retentionScope}
+  })
+}
+
+export const getReviewServingRetentionCleanupTargets = async (
+  input: {cleanupBatchSize?: number; now?: Date | string; targetLimit?: number} = {},
+  database: ReviewServingRetentionServiceTransaction = getReviewServingRetentionDatabase(),
+): Promise<readonly ReviewServingRetentionCleanupInput[]> => {
+  const cleanupBatchSize = Math.max(1, Math.floor(input.cleanupBatchSize ?? defaultRetentionCleanupBatchSize))
+  const targetLimit = Math.max(1, Math.floor(input.targetLimit ?? defaultRetentionCleanupTargetLimit))
+  const now = input.now ?? new Date()
+  const rows = await database.queryJson<{projectId: string; reviewConfigHash: string | null}>(`
+    SELECT
+      project_id AS projectId,
+      review_config_hash AS reviewConfigHash
+    FROM app.review_serving_snapshot_manifest
+    WHERE snapshot_status IN ('active', 'retired', 'failed')
+    GROUP BY project_id, review_config_hash
+    ORDER BY MAX(updated_at) ASC, project_id ASC, review_config_hash ASC NULLS FIRST
+    LIMIT ${getSqlLiteral(targetLimit)}
+  `)
+
+  return rows.map((row) => {
+    return {batchSize: cleanupBatchSize, now, projectId: row.projectId, reviewConfigHash: row.reviewConfigHash}
   })
 }

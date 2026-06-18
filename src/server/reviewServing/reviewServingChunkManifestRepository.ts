@@ -198,6 +198,36 @@ export const getReviewServingRebuildChunkManifestForIdentity = async (
   return getReviewServingRebuildChunkManifest({chunkId: getReviewServingRebuildChunkId(input)}, database)
 }
 
+export const getNextClaimableReviewServingRebuildChunk = async (
+  input: {now: Date | string; projectId?: string | null},
+  database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
+) => {
+  const projectPredicate =
+    input.projectId === undefined ? '' : `AND project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}`
+  const rows = await database.queryJson<ReviewServingRebuildChunkManifestRow>(`
+    ${getReviewServingRebuildChunkSelect()}
+    WHERE (${getReviewServingRebuildChunkClaimPredicate(input)})
+      ${projectPredicate}
+    ORDER BY updated_at ASC, input_watermark ASC, chunk_start_key ASC, chunk_id ASC
+    LIMIT 1
+  `)
+  const row = rows[0]
+
+  return row === undefined
+    ? null
+    : {
+        checksum: row.checksum,
+        chunkEndKey: row.chunkEndKey,
+        chunkStartKey: row.chunkStartKey,
+        inputDigest: row.inputDigest,
+        inputWatermark: Number(row.inputWatermark),
+        outputBaseGeneration: Number(row.outputBaseGeneration),
+        projectId: row.projectId,
+        projectionComponent: row.projectionComponent,
+        projectionIdentity: row.projectionIdentity,
+      }
+}
+
 export const upsertReviewServingRebuildChunkManifests = async (
   inputs: readonly ReviewServingRebuildChunkManifestInput[],
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),

@@ -1,6 +1,10 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {buildPromptConfigHash, buildReviewConfigHash, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
+import {
+  buildPromptConfigHash,
+  buildReviewConfigHash,
+  type ReviewServingIdentityValue,
+} from './reviewProjectionIdentity.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
@@ -17,6 +21,8 @@ export type ReviewServingLlmStatusProjectorDatabase = ReviewServingProjectorWrit
 
 export type ProjectReviewServingLlmStatusInput = {
   baseGeneration: number
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
   listModeKeys: readonly string[]
@@ -151,6 +157,28 @@ const getValuesCte = (columnName: string, values: readonly string[]) => {
           return `(${getSqlLiteral(value)})`
         })
         .join(', ')}))`
+}
+
+const hasChunkArticleRange = (input: {chunkEndArticleId?: string | null; chunkStartArticleId?: string | null}) => {
+  return input.chunkStartArticleId !== undefined || input.chunkEndArticleId !== undefined
+}
+
+const getArticleRangePredicate = (input: {
+  alias: string
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
+}) => {
+  const startPredicate =
+    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
+      ? ''
+      : `AND ${input.alias}.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`
+  const endPredicate =
+    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
+      ? ''
+      : `AND ${input.alias}.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+
+  return `${startPredicate}
+          ${endPredicate}`
 }
 
 const getProjectPromptConfigRows = async (
@@ -357,6 +385,7 @@ const getPromptScopedRows = async (
         INNER JOIN mart.project_scope_article scope
           ON scope.project_id = ${getSqlLiteral(input.projectId)}
           AND (scope.in_curated_scope OR scope.in_route_scope)
+          ${getArticleRangePredicate({alias: 'scope', ...input})}
         LEFT JOIN app.project_prompt project_prompt
           ON project_prompt.project_id = project.id
           AND project_prompt.prompt_id = dirty_prompt.prompt_id
@@ -370,7 +399,7 @@ const getProjectScopedRows = async (
   input: ProjectReviewServingLlmStatusInput,
   database: ReviewServingLlmStatusProjectorDatabase,
 ) => {
-  return !hasProjectReviewConfigClaim(input.claims)
+  return !hasProjectReviewConfigClaim(input.claims) && !hasChunkArticleRange(input)
     ? []
     : database.queryJson<LlmStatusSourceRow>(`
         WITH prompt_id_filter(prompt_id) AS (
@@ -387,6 +416,7 @@ const getProjectScopedRows = async (
           FROM mart.project_scope_article scope
           WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
             AND (scope.in_curated_scope OR scope.in_route_scope)
+            ${getArticleRangePredicate({alias: 'scope', ...input})}
         ), latest_judgment AS (
           SELECT
             judgment.*,

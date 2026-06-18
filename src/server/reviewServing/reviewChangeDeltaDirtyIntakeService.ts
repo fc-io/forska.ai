@@ -53,10 +53,7 @@ type ReviewChangeDeltaRow = {
 
 type ValidatedReviewChangeDelta = {
   deltaId: string
-  projections: readonly {
-    projectionComponent: ReviewServingProjectionComponent
-    projectionIdentity: string
-  }[]
+  projections: readonly {projectionComponent: ReviewServingProjectionComponent; projectionIdentity: string}[]
   scope: ReviewServingDirtyWorkScope
   sourceHighWaterMark: number
 }
@@ -252,10 +249,7 @@ const getValidatedReviewChangeDelta = (
     projections: rule.affectedComponents.map((projectionComponent) => {
       return {
         projectionComponent,
-        projectionIdentity: getProjectionIdentity({
-          projectionComponent,
-          projectId: scope.projectId,
-        }),
+        projectionIdentity: getProjectionIdentity({projectionComponent, projectId: scope.projectId}),
       }
     }),
     scope,
@@ -263,7 +257,10 @@ const getValidatedReviewChangeDelta = (
   }
 }
 
-const getValidatedReviewChangeDeltas = async (row: ReviewChangeDeltaRow, database: ReviewChangeDeltaDirtyIntakeDatabase) => {
+const getValidatedReviewChangeDeltas = async (
+  row: ReviewChangeDeltaRow,
+  database: ReviewChangeDeltaDirtyIntakeDatabase,
+) => {
   const projectRows = await getArticleProjectIds(row, database)
 
   if (projectRows.length > 0) {
@@ -337,11 +334,13 @@ export const intakeReviewChangeDeltasToDirtyWork = async (
   database: ReviewChangeDeltaDirtyIntakeDatabase = getAppDatabaseService(),
 ): Promise<ReviewChangeDeltaDirtyIntakeResult> => {
   const rows = await getReviewChangeDeltaRows(database, params)
-  const validated = (await Promise.all(
-    rows.map((row) => {
-      return getValidatedReviewChangeDeltas(row, database)
-    }),
-  )).flat()
+  const validated = (
+    await Promise.all(
+      rows.map((row) => {
+        return getValidatedReviewChangeDeltas(row, database)
+      }),
+    )
+  ).flat()
   const invalid = validated.find((delta) => {
     return 'reason' in delta
   })

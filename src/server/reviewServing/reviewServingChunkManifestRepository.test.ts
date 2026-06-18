@@ -2,6 +2,7 @@ import {expect, test} from 'bun:test'
 
 import {
   claimReviewServingRebuildChunk,
+  getNextClaimableReviewServingRebuildChunk,
   getReviewServingRebuildChunkId,
   isReviewServingRebuildChunkComplete,
   type ReviewServingChunkManifestRepositoryDatabase,
@@ -185,6 +186,14 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
     }
 
     if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+      if (statement.includes('ORDER BY updated_at ASC')) {
+        const claimable = [...rows.values()].find((row) => {
+          return row.status === 'pending' || row.status === 'failed' || row.status === 'running'
+        })
+
+        return (claimable === undefined ? [] : [claimable]) as T[]
+      }
+
       const chunkId = getReviewServingRebuildChunkId(baseChunkIdentity)
       const row = rows.get(chunkId)
       const complete =
@@ -242,6 +251,20 @@ test('completed chunks resume after restart and are skipped for the same maintai
       return statement.includes('FROM mart.') || statement.includes('FROM app.review_change_delta')
     }),
   ).toBe(false)
+})
+
+test('next claimable chunk discovery returns maintained identity and checksum', async () => {
+  const pending = getChunkRowFromIdentity(baseChunkIdentity, [])
+  const {database, statements} = createFakeChunkManifestDatabase([pending])
+
+  const next = await getNextClaimableReviewServingRebuildChunk(
+    {now: '2026-06-16T14:00:00.000Z', projectId: 'project-1'},
+    database,
+  )
+
+  expect(next).toEqual({...baseChunkIdentity, checksum: null})
+  expect(statements.join('\n')).toContain("status IN ('pending', 'failed')")
+  expect(statements.join('\n')).toContain("project_id IS NOT DISTINCT FROM 'project-1'")
 })
 
 test('failed chunks can be claimed again and completed transactionally with output validation', async () => {

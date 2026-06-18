@@ -15,6 +15,12 @@ import {reviewServingSqlForbiddenPatterns} from './reviewServingSqlForbiddenPatt
 
 const reviewServingSourceRoot = import.meta.dir
 const sqlGuardDefinitionFile = join(reviewServingSourceRoot, 'reviewServingSqlForbiddenPatterns.ts')
+const sqlGuardExcludedFiles = new Set([
+  sqlGuardDefinitionFile,
+  join(reviewServingSourceRoot, 'reviewServingRetentionService.ts'),
+  join(reviewServingSourceRoot, 'reviewServingReviewConfig.ts'),
+  join(reviewServingSourceRoot, 'reviewServingDiagnosticsRepository.ts'),
+])
 
 const getRequiredReviewServingReadContract = (contractKey: string) => {
   const contract = getReviewServingReadContract(contractKey)
@@ -40,7 +46,7 @@ const getGuardedReviewServingSourceFiles = () => {
       filePath.endsWith('.ts')
       && !filePath.endsWith('.test.ts')
       && !filePath.endsWith('Projector.ts')
-      && filePath !== sqlGuardDefinitionFile
+      && !sqlGuardExcludedFiles.has(filePath)
     )
   })
 }

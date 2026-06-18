@@ -66,7 +66,7 @@ After final verification, normal product review paths must not reach raw fallbac
 
 ### Phase 3 Gap Carry-Forward - 2026-06-18
 
-Phase 5 does not absorb unfinished Phase 3 projector work. If base selected-import projection, production projector worker scheduling, chunk execution/resume, compaction, pin-aware cleanup, diagnostics/badge/queue contribution coverage, or single-writer ownership remain incomplete, the Phase 5 cutover gate fails even if route-reader work exists. Phase 5 should verify these guarantees, not be the first phase to implement them.
+Phase 5 does not absorb unfinished Phase 3 projector work. Base selected-import projection, production projector worker scheduling, chunk discovery/resume checks, display/payload/search/status/queue/posting/summary/judgment-detail chunk execution, selected-import compaction during promotion, pin-aware retention cleanup, cleanup target discovery, internal diagnostics, prompt badge count coverage, queue contribution count coverage, and single-writer ownership now exist. If component compaction beyond selected-import or remaining route-required projector coverage remain incomplete or explicitly scoped out, the Phase 5 cutover gate must reflect that scope even if route-reader work exists. Phase 5 should verify these guarantees, not be the first phase to implement them.
 
 ## Desktop And Interruption Rules
 

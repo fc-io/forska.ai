@@ -8,8 +8,24 @@ import {
   buildReviewConfigHash,
   type ReviewServingIdentityValue,
 } from '../reviewServing/reviewProjectionIdentity.ts'
+import {
+  claimReviewServingRebuildChunk,
+  getNextClaimableReviewServingRebuildChunk,
+  isReviewServingRebuildChunkComplete,
+  markReviewServingRebuildChunkFailed,
+  type ReviewServingChunkManifestRepositoryDatabase,
+  type ReviewServingChunkManifestRepositoryTransaction,
+  type ReviewServingRebuildChunkIdentity,
+  type ReviewServingRebuildChunkManifest,
+  writeReviewServingRebuildChunkOutput,
+} from '../reviewServing/reviewServingChunkManifestRepository.ts'
 import {reviewServingListModes, type ReviewServingProjectionComponent} from '../reviewServing/reviewServingContracts.ts'
 import {
+  completeReviewServingDirtyWorkClaims,
+  releaseReviewServingDirtyWorkClaims,
+} from '../reviewServing/reviewServingDirtyWorkService.ts'
+import {
+  projectReviewServingDisplayBaseRows,
   projectReviewServingDisplayPatches,
   projectReviewServingPayloadRows,
 } from '../reviewServing/reviewServingDisplayPayloadProjector.ts'
@@ -17,23 +33,12 @@ import {
   getReviewServingFilterOptionIdentity,
   projectReviewServingFilterOptions,
 } from '../reviewServing/reviewServingFilterOptionProjector.ts'
-import {
-  claimReviewServingRebuildChunk,
-  isReviewServingRebuildChunkComplete,
-  markReviewServingRebuildChunkFailed,
-  type ReviewServingChunkManifestRepositoryDatabase,
-  type ReviewServingRebuildChunkIdentity,
-  type ReviewServingRebuildChunkManifest,
-} from '../reviewServing/reviewServingChunkManifestRepository.ts'
+import {projectReviewServingFilterPostings} from '../reviewServing/reviewServingFilterPostingProjector.ts'
 import {projectReviewServingHumanStatusPatches} from '../reviewServing/reviewServingHumanStatusProjector.ts'
 import {projectReviewServingJudgmentPayloadRows} from '../reviewServing/reviewServingJudgmentPayloadProjector.ts'
 import {projectReviewServingLlmStatusPatches} from '../reviewServing/reviewServingLlmStatusProjector.ts'
-import {completeReviewServingDirtyWorkClaims} from '../reviewServing/reviewServingDirtyWorkService.ts'
 import {getReviewServingProjectionIdentityManifest} from '../reviewServing/reviewServingManifestRepository.ts'
-import {projectReviewServingFilterPostings} from '../reviewServing/reviewServingFilterPostingProjector.ts'
 import {getReviewServingSourcePartitionWatermarks} from '../reviewServing/reviewServingProjectorDomain.ts'
-import {projectReviewServingQueuePatches} from '../reviewServing/reviewServingQueueProjector.ts'
-import {projectReviewServingProjectScopePatches} from '../reviewServing/reviewServingProjectScopeProjector.ts'
 import {
   type ReviewServingProjectorRunner,
   type ReviewServingProjectorServiceDependencies,
@@ -42,14 +47,18 @@ import {
   type WakeReviewServingProjectorServiceResult,
 } from '../reviewServing/reviewServingProjectorService.ts'
 import {writeReviewServingProjectorComponent} from '../reviewServing/reviewServingProjectorWriter.ts'
-import {projectReviewServingSummaries} from '../reviewServing/reviewServingSummaryProjector.ts'
-import {projectReviewServingTitleSearchRows} from '../reviewServing/reviewServingTitleSearchProjector.ts'
+import {projectReviewServingProjectScopePatches} from '../reviewServing/reviewServingProjectScopeProjector.ts'
+import {projectReviewServingQueuePatches} from '../reviewServing/reviewServingQueueProjector.ts'
 import {
   cleanupReviewServingRetentionState,
+  getReviewServingRetentionCleanupTargets,
   type ReviewServingRetentionCleanupInput,
   type ReviewServingRetentionServiceDatabase,
 } from '../reviewServing/reviewServingRetentionService.ts'
 import {projectReviewServingSelectedImportPatches} from '../reviewServing/reviewServingSelectedImportPatchProjector.ts'
+import {projectReviewServingSelectedImportBatch} from '../reviewServing/reviewServingSelectedImportProjector.ts'
+import {projectReviewServingSummaries} from '../reviewServing/reviewServingSummaryProjector.ts'
+import {projectReviewServingTitleSearchRows} from '../reviewServing/reviewServingTitleSearchProjector.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
@@ -69,10 +78,14 @@ type DeltaIntakePartitionRow = {
 type ReviewServingProjectorWorkerRebuildChunkService = {
   claimChunk: typeof claimReviewServingRebuildChunk
   failChunk: typeof markReviewServingRebuildChunkFailed
-  getNextChunk: () => Promise<ReviewServingProjectorWorkerChunkInput | null>
+  getNextChunk: (input: {
+    database: ReviewServingChunkManifestRepositoryDatabase
+    now: Date
+  }) => Promise<ReviewServingProjectorWorkerChunkInput | null>
   isChunkComplete: typeof isReviewServingRebuildChunkComplete
   runClaimedChunk: (input: {
     chunk: ReviewServingRebuildChunkManifest
+    database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase
     leaseOwner: string
     workloadContext: DuckdbWorkloadContext
   }) => Promise<{status: 'completed'}>
@@ -80,7 +93,9 @@ type ReviewServingProjectorWorkerRebuildChunkService = {
 
 type ReviewServingProjectorWorkerDependencies = {
   cleanupRetentionState?: typeof cleanupReviewServingRetentionState
-  getCleanupTargets?: () => Promise<readonly ReviewServingProjectorWorkerCleanupTarget[]>
+  getCleanupTargets?: (
+    database: ReviewServingRetentionServiceDatabase,
+  ) => Promise<readonly ReviewServingProjectorWorkerCleanupTarget[]>
   getDatabase?: () => ReviewServingProjectorWorkerDatabase
     & ReviewServingChunkManifestRepositoryDatabase
     & ReviewServingRetentionServiceDatabase
@@ -189,6 +204,10 @@ type ProjectPromptConfigRow = {
 
 type ProjectReviewSnapshotSettings = ProjectReviewSettingsRow & {reviewConfigHash: string}
 
+type SelectedImportSnapshotStatusRow = {sourceDeltaHighWater: number; status: string}
+
+type RebuildChunkOutputChecksumRow = {actualChecksum: string; actualCount: number}
+
 const defaultReviewServingProjectorWorkerBatchSize = 64
 const defaultReviewServingProjectorWorkerCleanupIntervalMs = 60_000
 const defaultReviewServingProjectorWorkerLeaseMs = 30_000
@@ -197,6 +216,7 @@ const defaultReviewServingProjectorWorkerMaxRowsPerWake = 512
 const defaultReviewServingProjectorWorkerMaxWakeMs = 5_000
 const defaultReviewServingProjectorWorkerPollIntervalMs = 2_000
 const defaultReviewServingProjectorWorkerErrorBackoffMs = 10_000
+const defaultReviewServingSelectedImportBaseBatchSize = 512
 const reviewServingProjectorWorkerRouteOrJobKey = 'reviewServing.projector.worker'
 const defaultReviewServingLlmListModeKeys = ['llm', 'both'] as const
 const defaultReviewServingHumanListModeKeys = ['human', 'both'] as const
@@ -221,9 +241,11 @@ const defaultHumanFilterOptionKeys = [
 ] as const
 
 const getClaimProjectId = (claims: readonly {projectId: string | null}[]) => {
-  return claims.find((claim) => {
-    return claim.projectId !== null
-  })?.projectId ?? null
+  return (
+    claims.find((claim) => {
+      return claim.projectId !== null
+    })?.projectId ?? null
+  )
 }
 
 const getDefaultClaimManifestInput = async (
@@ -252,39 +274,6 @@ const getDefaultClaimManifestInput = async (
   return {manifest, projectId}
 }
 
-const getSnapshotContext = async (
-  input: {
-    component: ReviewServingProjectionComponent
-    projectId: string
-    projectionIdentity: string
-    reviewConfigHash: string | null
-  },
-  database: ReviewServingProjectorWorkerDatabase,
-) => {
-  const rows = await database.queryJson<ReviewServingSnapshotContextRow>(`
-    SELECT
-      snapshot_id AS snapshotId,
-      review_config_hash AS reviewConfigHash,
-      selected_import_snapshot_id AS selectedImportSnapshotId,
-      component_state_json AS componentStateJson
-    FROM app.review_serving_snapshot_manifest
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      ${input.reviewConfigHash === null ? '' : `AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}`}
-      AND snapshot_status IN ('candidate', 'active')
-    ORDER BY CASE WHEN snapshot_status = 'candidate' THEN 0 ELSE 1 END, updated_at DESC
-  `)
-  const snapshots = rows.map((row) => {
-    return {
-      ...row,
-      componentState: getJsonValue(row.componentStateJson) as ReviewServingSnapshotComponentStateJson,
-    }
-  })
-
-  return snapshots.find((snapshot) => {
-    return getSnapshotComponentState(snapshot, input.component)?.projectionIdentity === input.projectionIdentity
-  }) ?? null
-}
-
 const getSnapshotContexts = async (
   input: {
     component: ReviewServingProjectionComponent
@@ -307,10 +296,7 @@ const getSnapshotContexts = async (
     ORDER BY CASE WHEN snapshot_status = 'candidate' THEN 0 ELSE 1 END, updated_at DESC
   `)
   const snapshots = rows.map((row) => {
-    return {
-      ...row,
-      componentState: getJsonValue(row.componentStateJson) as ReviewServingSnapshotComponentStateJson,
-    }
+    return {...row, componentState: getJsonValue(row.componentStateJson) as ReviewServingSnapshotComponentStateJson}
   })
 
   return snapshots.filter((snapshot) => {
@@ -336,31 +322,15 @@ const requireSnapshotContexts = async (
   return contexts
 }
 
-const requireSnapshotContext = async (
-  input: {
-    component: ReviewServingProjectionComponent
-    projectId: string
-    projectionIdentity: string
-    reviewConfigHash: string | null
-  },
-  database: ReviewServingProjectorWorkerDatabase,
-) => {
-  const context = await getSnapshotContext(input, database)
-
-  if (context === null) {
-    throw new Error(`cannot run projector without a candidate or active snapshot for project ${input.projectId}`)
-  }
-
-  return context
-}
-
 const getSnapshotComponentState = (
   snapshot: ReviewServingSnapshotContext,
   component: ReviewServingProjectionComponent,
 ) => {
-  return [...(snapshot.componentState.required ?? []), ...(snapshot.componentState.optional ?? [])].find((state) => {
-    return state.component === component
-  }) ?? null
+  return (
+    [...(snapshot.componentState.required ?? []), ...(snapshot.componentState.optional ?? [])].find((state) => {
+      return state.component === component
+    }) ?? null
+  )
 }
 
 const requireSnapshotComponentIdentity = (
@@ -374,6 +344,936 @@ const requireSnapshotComponentIdentity = (
   }
 
   return projectionIdentity
+}
+
+const getSnapshotComponentBaseGeneration = (
+  snapshot: ReviewServingSnapshotContext,
+  component: ReviewServingProjectionComponent,
+) => {
+  return Number(getSnapshotComponentState(snapshot, component)?.baseGeneration ?? Number.NaN)
+}
+
+const requireRebuildChunkProjectId = (chunk: ReviewServingRebuildChunkManifest) => {
+  if (chunk.projectId === null) {
+    throw new Error(`cannot run ${chunk.projectionComponent} rebuild chunk without a project id`)
+  }
+
+  return chunk.projectId
+}
+
+const getChunkArticleRangePredicate = (input: {alias: string; chunk: ReviewServingRebuildChunkManifest}) => {
+  return `${input.alias}.article_id >= ${getSqlLiteral(input.chunk.chunkStartKey)}
+    AND ${input.alias}.article_id <= ${getSqlLiteral(input.chunk.chunkEndKey)}`
+}
+
+const getSnapshotIdPredicate = (snapshotIds: readonly string[]) => {
+  return snapshotIds.length === 0
+    ? 'FALSE'
+    : `snapshot_id IN (${snapshotIds
+        .map((snapshotId) => {
+          return getSqlLiteral(snapshotId)
+        })
+        .join(', ')})`
+}
+
+const getChunkProjectorDatabase = (
+  tx: ReviewServingChunkManifestRepositoryTransaction,
+): ReviewServingProjectorWorkerDatabase => {
+  return {
+    ...tx,
+    transaction: async (operation) => {
+      return operation(tx)
+    },
+  } as ReviewServingProjectorWorkerDatabase
+}
+
+const getRebuildChunkSnapshots = async (
+  chunk: ReviewServingRebuildChunkManifest,
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const projectId = requireRebuildChunkProjectId(chunk)
+  const snapshots = await requireSnapshotContexts(
+    {
+      component: chunk.projectionComponent,
+      projectId,
+      projectionIdentity: chunk.projectionIdentity,
+      reviewConfigHash: null,
+    },
+    database,
+  )
+  const matchingSnapshots = snapshots.filter((snapshot) => {
+    return getSnapshotComponentBaseGeneration(snapshot, chunk.projectionComponent) === chunk.outputBaseGeneration
+  })
+
+  if (matchingSnapshots.length === 0) {
+    throw new Error(
+      `cannot run ${chunk.projectionComponent} rebuild chunk without snapshot state for base generation ${chunk.outputBaseGeneration}`,
+    )
+  }
+
+  return matchingSnapshots
+}
+
+const getRebuildSnapshotIds = (snapshots: readonly ReviewServingSnapshotContext[]) => {
+  return snapshots.map((snapshot) => {
+    return snapshot.snapshotId
+  })
+}
+
+const requireRebuildChunkProjectionManifest = async (
+  chunk: ReviewServingRebuildChunkManifest,
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const manifest = await getReviewServingProjectionIdentityManifest(
+    {
+      projectId: requireRebuildChunkProjectId(chunk),
+      projectionComponent: chunk.projectionComponent,
+      projectionIdentity: chunk.projectionIdentity,
+    },
+    database,
+  )
+
+  if (manifest === null) {
+    throw new Error(`cannot run ${chunk.projectionComponent} rebuild chunk without an identity manifest`)
+  }
+
+  return manifest
+}
+
+const getDisplayRebuildChunkOutputChecksum = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256(COALESCE(string_agg(
+        CAST(snapshot_id AS VARCHAR) || ':' ||
+        CAST(list_mode_key AS VARCHAR) || ':' ||
+        CAST(article_id AS VARCHAR) || ':' ||
+        COALESCE(CAST(sort_key AS VARCHAR), '') || ':' ||
+        COALESCE(article_title, ''),
+        '|' ORDER BY snapshot_id, list_mode_key, article_id
+      ), '')) AS actualChecksum
+    FROM mart.review_article_serving_v4 serving
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND display_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const getPayloadRebuildChunkOutputChecksum = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256(COALESCE(string_agg(
+        CAST(snapshot_id AS VARCHAR) || ':' ||
+        CAST(display_identity AS VARCHAR) || ':' ||
+        CAST(article_id AS VARCHAR) || ':' ||
+        COALESCE(CAST(article_created_at AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(payload_bytes AS VARCHAR), ''),
+        '|' ORDER BY snapshot_id, display_identity, article_id
+      ), '')) AS actualChecksum
+    FROM mart.review_article_serving_payload_v4 payload
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND payload_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'payload', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const getSearchRebuildChunkOutputChecksum = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256(COALESCE(string_agg(
+        CAST(snapshot_id AS VARCHAR) || ':' ||
+        CAST(project_scope_identity AS VARCHAR) || ':' ||
+        CAST(article_id AS VARCHAR) || ':' ||
+        CAST(token AS VARCHAR) || ':' ||
+        COALESCE(title_prefix, ''),
+        '|' ORDER BY snapshot_id, project_scope_identity, article_id, token
+      ), '')) AS actualChecksum
+    FROM mart.review_title_search_serving_v4 search
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND search_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'search', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const getLlmStatusRebuildChunkOutputChecksum = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256(COALESCE(string_agg(
+        CAST(snapshot_id AS VARCHAR) || ':' ||
+        CAST(review_config_hash AS VARCHAR) || ':' ||
+        CAST(list_mode_key AS VARCHAR) || ':' ||
+        CAST(article_id AS VARCHAR) || ':' ||
+        COALESCE(CAST(enabled_prompt_count AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(llm_judged_prompt_count AS VARCHAR), '') || ':' ||
+        COALESCE(llm_status_key, ''),
+        '|' ORDER BY snapshot_id, review_config_hash, list_mode_key, article_id
+      ), '')) AS actualChecksum
+    FROM mart.review_article_serving_v4 serving
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND llm_status_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const getHumanStatusRebuildChunkOutputChecksum = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256(COALESCE(string_agg(
+        CAST(snapshot_id AS VARCHAR) || ':' ||
+        CAST(review_config_hash AS VARCHAR) || ':' ||
+        CAST(list_mode_key AS VARCHAR) || ':' ||
+        CAST(article_id AS VARCHAR) || ':' ||
+        COALESCE(CAST(human_answered_prompt_count AS VARCHAR), '') || ':' ||
+        COALESCE(human_status_key, ''),
+        '|' ORDER BY snapshot_id, review_config_hash, list_mode_key, article_id
+      ), '')) AS actualChecksum
+    FROM mart.review_article_serving_v4 serving
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND human_status_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const getQueueRebuildChunkOutputChecksum = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256(COALESCE(string_agg(
+        CAST(snapshot_id AS VARCHAR) || ':' ||
+        CAST(review_config_hash AS VARCHAR) || ':' ||
+        CAST(queue_kind AS VARCHAR) || ':' ||
+        CAST(priority_bucket AS VARCHAR) || ':' ||
+        CAST(article_id AS VARCHAR) || ':' ||
+        COALESCE(CAST(prompt_id AS VARCHAR), '') || ':' ||
+        CAST(queue_identity AS VARCHAR),
+        '|' ORDER BY snapshot_id, review_config_hash, queue_kind, priority_bucket, article_id, prompt_id
+      ), '')) AS actualChecksum
+    FROM mart.review_unassessed_queue_serving_v4 serving
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const getPostingRebuildChunkOutputChecksum = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256(COALESCE(string_agg(
+        CAST(snapshot_id AS VARCHAR) || ':' ||
+        CAST(review_config_hash AS VARCHAR) || ':' ||
+        CAST(list_mode_key AS VARCHAR) || ':' ||
+        CAST(filter_kind AS VARCHAR) || ':' ||
+        CAST(filter_value AS VARCHAR) || ':' ||
+        CAST(article_id AS VARCHAR) || ':' ||
+        COALESCE(CAST(sort_key AS VARCHAR), ''),
+        '|' ORDER BY snapshot_id, review_config_hash, list_mode_key, filter_kind, filter_value, article_id
+      ), '')) AS actualChecksum
+    FROM mart.review_article_filter_posting_serving_v4 serving
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const getSummaryRebuildChunkOutputChecksum = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    WITH output_row(row_key, row_value) AS (
+      SELECT
+        'count:' || CAST(snapshot_id AS VARCHAR) || ':' || CAST(list_mode_key AS VARCHAR) || ':' || CAST(count_kind AS VARCHAR) || ':' || CAST(filter_key AS VARCHAR) || ':' || CAST(summary_definition_version AS VARCHAR) AS row_key,
+        COALESCE(CAST(count_value AS VARCHAR), '') || ':' || COALESCE(availability, '')
+      FROM mart.review_article_count_serving_v4
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      UNION ALL
+      SELECT
+        'facet:' || CAST(snapshot_id AS VARCHAR) || ':' || CAST(summary_identity AS VARCHAR) || ':' || CAST(facet_kind AS VARCHAR) || ':' || CAST(facet_key AS VARCHAR) || ':' || CAST(facet_value AS VARCHAR) || ':' || CAST(summary_definition_version AS VARCHAR) AS row_key,
+        COALESCE(CAST(count_value AS VARCHAR), '') || ':' || COALESCE(availability, '')
+      FROM mart.review_filter_facet_serving_v4
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      UNION ALL
+      SELECT
+        'option:' || CAST(snapshot_id AS VARCHAR) || ':' || CAST(search_identity AS VARCHAR) || ':' || CAST(filter_option_identity AS VARCHAR) || ':' || CAST(filter_kind AS VARCHAR) || ':' || CAST(facet_key AS VARCHAR) || ':' || CAST(option_value_key AS VARCHAR) AS row_key,
+        COALESCE(CAST(count_value AS VARCHAR), '') || ':' || COALESCE(CAST(numeric_min AS VARCHAR), '') || ':' || COALESCE(CAST(numeric_max AS VARCHAR), '') || ':' || COALESCE(CAST(facet_value AS VARCHAR), '')
+      FROM mart.review_filter_option_serving_v4
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND ${getSnapshotIdPredicate(input.snapshotIds)}
+    )
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256(COALESCE(string_agg(row_key || ':' || row_value, '|' ORDER BY row_key), '')) AS actualChecksum
+    FROM output_row
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const getJudgmentInputContentRebuildChunkOutputChecksum = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256(COALESCE(string_agg(
+        CAST(snapshot_id AS VARCHAR) || ':' ||
+        CAST(review_config_hash AS VARCHAR) || ':' ||
+        CAST(list_mode_key AS VARCHAR) || ':' ||
+        CAST(payload_kind AS VARCHAR) || ':' ||
+        CAST(article_id AS VARCHAR) || ':' ||
+        CAST(prompt_id AS VARCHAR) || ':' ||
+        COALESCE(CAST(judgment_id AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(placeholder_kind AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(answered_original AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(answered_original_as_array AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(judgment_payload_json AS VARCHAR), ''),
+        '|' ORDER BY snapshot_id, review_config_hash, list_mode_key, payload_kind, article_id, prompt_id
+      ), '')) AS actualChecksum
+    FROM mart.review_article_judgment_detail_serving_v4 detail
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'detail', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const runValidatedRebuildChunkOutput = async (
+  input: {
+    chunk: ReviewServingRebuildChunkManifest
+    leaseOwner: string
+    validateOutput: (
+      tx: ReviewServingChunkManifestRepositoryTransaction,
+    ) => Promise<{actualChecksum: string; actualCount?: number; expectedChecksum: string; expectedCount?: number}>
+    writeOutput: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<void>
+  },
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  const completedChunk = await writeReviewServingRebuildChunkOutput(
+    {
+      ...input.chunk,
+      leaseOwner: input.leaseOwner,
+      validateOutput: input.validateOutput,
+      writeOutput: input.writeOutput,
+    },
+    database,
+  )
+
+  if (completedChunk === null) {
+    throw new Error(`review serving rebuild chunk ${input.chunk.chunkId} is no longer claimed by ${input.leaseOwner}`)
+  }
+
+  return {status: 'completed' as const}
+}
+
+const runDisplayRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
+  const snapshotIds = snapshots.map((snapshot) => {
+    return snapshot.snapshotId
+  })
+  const completedChunk = await writeReviewServingRebuildChunkOutput(
+    {
+      ...input.chunk,
+      leaseOwner: input.leaseOwner,
+      validateOutput: async (tx) => {
+        const checksum = await getDisplayRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+
+        return {
+          actualChecksum: checksum.actualChecksum,
+          actualCount: checksum.actualCount,
+          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
+        }
+      },
+      writeOutput: async (tx) => {
+        const chunkDatabase = getChunkProjectorDatabase(tx)
+
+        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+          await previous
+          await projectReviewServingDisplayBaseRows(
+            {
+              baseGeneration: input.chunk.outputBaseGeneration,
+              chunkEndArticleId: input.chunk.chunkEndKey,
+              chunkStartArticleId: input.chunk.chunkStartKey,
+              displayIdentity: input.chunk.projectionIdentity,
+              humanStatusIdentity: requireSnapshotComponentIdentity(snapshot, 'humanStatus'),
+              listModeKeys: reviewServingListModes,
+              llmStatusIdentity: requireSnapshotComponentIdentity(snapshot, 'llmStatus'),
+              payloadIdentity: requireSnapshotComponentIdentity(snapshot, 'payload'),
+              postingIdentity: requireSnapshotComponentIdentity(snapshot, 'posting'),
+              projectId,
+              projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+              reviewConfigHash: requireReviewConfigHash(snapshot),
+              selectedImportIdentity: requireSnapshotComponentIdentity(snapshot, 'selectedImport'),
+              selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+              snapshotId: snapshot.snapshotId,
+              summaryIdentity: requireSnapshotComponentIdentity(snapshot, 'summary'),
+            },
+            chunkDatabase,
+          )
+        }, Promise.resolve())
+      },
+    },
+    database,
+  )
+
+  if (completedChunk === null) {
+    throw new Error(`review serving rebuild chunk ${input.chunk.chunkId} is no longer claimed by ${input.leaseOwner}`)
+  }
+
+  return {status: 'completed' as const}
+}
+
+const runPayloadRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
+  const snapshotIds = snapshots.map((snapshot) => {
+    return snapshot.snapshotId
+  })
+  const completedChunk = await writeReviewServingRebuildChunkOutput(
+    {
+      ...input.chunk,
+      leaseOwner: input.leaseOwner,
+      validateOutput: async (tx) => {
+        const checksum = await getPayloadRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+
+        return {
+          actualChecksum: checksum.actualChecksum,
+          actualCount: checksum.actualCount,
+          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
+        }
+      },
+      writeOutput: async (tx) => {
+        const chunkDatabase = getChunkProjectorDatabase(tx)
+
+        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+          await previous
+          await projectReviewServingPayloadRows(
+            {
+              baseGeneration: input.chunk.outputBaseGeneration,
+              chunkEndArticleId: input.chunk.chunkEndKey,
+              chunkStartArticleId: input.chunk.chunkStartKey,
+              displayIdentity: requireSnapshotComponentIdentity(snapshot, 'display'),
+              payloadIdentity: input.chunk.projectionIdentity,
+              projectId,
+              snapshotId: snapshot.snapshotId,
+            },
+            chunkDatabase,
+          )
+        }, Promise.resolve())
+      },
+    },
+    database,
+  )
+
+  if (completedChunk === null) {
+    throw new Error(`review serving rebuild chunk ${input.chunk.chunkId} is no longer claimed by ${input.leaseOwner}`)
+  }
+
+  return {status: 'completed' as const}
+}
+
+const runSearchRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
+  const snapshotIds = snapshots.map((snapshot) => {
+    return snapshot.snapshotId
+  })
+  const completedChunk = await writeReviewServingRebuildChunkOutput(
+    {
+      ...input.chunk,
+      leaseOwner: input.leaseOwner,
+      validateOutput: async (tx) => {
+        const checksum = await getSearchRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+
+        return {
+          actualChecksum: checksum.actualChecksum,
+          actualCount: checksum.actualCount,
+          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
+        }
+      },
+      writeOutput: async (tx) => {
+        const chunkDatabase = getChunkProjectorDatabase(tx)
+
+        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+          await previous
+          await projectReviewServingTitleSearchRows(
+            {
+              baseGeneration: input.chunk.outputBaseGeneration,
+              chunkEndArticleId: input.chunk.chunkEndKey,
+              chunkStartArticleId: input.chunk.chunkStartKey,
+              projectId,
+              projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+              searchIdentity: input.chunk.projectionIdentity,
+              selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+              snapshotId: snapshot.snapshotId,
+            },
+            chunkDatabase,
+          )
+        }, Promise.resolve())
+      },
+    },
+    database,
+  )
+
+  if (completedChunk === null) {
+    throw new Error(`review serving rebuild chunk ${input.chunk.chunkId} is no longer claimed by ${input.leaseOwner}`)
+  }
+
+  return {status: 'completed' as const}
+}
+
+const runLlmStatusRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
+  const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
+  const snapshotIds = getRebuildSnapshotIds(snapshots)
+
+  return runValidatedRebuildChunkOutput(
+    {
+      ...input,
+      validateOutput: async (tx) => {
+        const checksum = await getLlmStatusRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+
+        return {
+          actualChecksum: checksum.actualChecksum,
+          actualCount: checksum.actualCount,
+          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
+        }
+      },
+      writeOutput: async (tx) => {
+        await projectReviewServingLlmStatusPatches(
+          {
+            baseGeneration: input.chunk.outputBaseGeneration,
+            chunkEndArticleId: input.chunk.chunkEndKey,
+            chunkStartArticleId: input.chunk.chunkStartKey,
+            claims: [],
+            definitionVersion: manifest.definitionVersion,
+            listModeKeys: defaultReviewServingLlmListModeKeys,
+            projectId,
+            projectionIdentity: input.chunk.projectionIdentity,
+          },
+          getChunkProjectorDatabase(tx),
+        )
+      },
+    },
+    database,
+  )
+}
+
+const runHumanStatusRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
+  const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
+  const snapshotIds = getRebuildSnapshotIds(snapshots)
+
+  return runValidatedRebuildChunkOutput(
+    {
+      ...input,
+      validateOutput: async (tx) => {
+        const checksum = await getHumanStatusRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+
+        return {
+          actualChecksum: checksum.actualChecksum,
+          actualCount: checksum.actualCount,
+          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
+        }
+      },
+      writeOutput: async (tx) => {
+        await projectReviewServingHumanStatusPatches(
+          {
+            acknowledgeClaims: false,
+            baseGeneration: input.chunk.outputBaseGeneration,
+            chunkEndArticleId: input.chunk.chunkEndKey,
+            chunkStartArticleId: input.chunk.chunkStartKey,
+            claims: [],
+            definitionVersion: manifest.definitionVersion,
+            listModeKeys: defaultReviewServingHumanListModeKeys,
+            projectId,
+            projectionIdentity: input.chunk.projectionIdentity,
+          },
+          getChunkProjectorDatabase(tx),
+        )
+      },
+    },
+    database,
+  )
+}
+
+const runQueueRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
+  const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
+  const snapshotIds = getRebuildSnapshotIds(snapshots)
+
+  return runValidatedRebuildChunkOutput(
+    {
+      ...input,
+      validateOutput: async (tx) => {
+        const checksum = await getQueueRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+
+        return {
+          actualChecksum: checksum.actualChecksum,
+          actualCount: checksum.actualCount,
+          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
+        }
+      },
+      writeOutput: async (tx) => {
+        const chunkDatabase = getChunkProjectorDatabase(tx)
+
+        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+          await previous
+          await projectReviewServingQueuePatches(
+            {
+              acknowledgeClaims: false,
+              baseGeneration: input.chunk.outputBaseGeneration,
+              chunkEndArticleId: input.chunk.chunkEndKey,
+              chunkStartArticleId: input.chunk.chunkStartKey,
+              claims: [],
+              definitionVersion: manifest.definitionVersion,
+              projectId,
+              projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+              projectionIdentity: input.chunk.projectionIdentity,
+              selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+              snapshotId: snapshot.snapshotId,
+            },
+            chunkDatabase,
+          )
+        }, Promise.resolve())
+      },
+    },
+    database,
+  )
+}
+
+const runPostingRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
+  const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
+  const snapshotIds = getRebuildSnapshotIds(snapshots)
+
+  return runValidatedRebuildChunkOutput(
+    {
+      ...input,
+      validateOutput: async (tx) => {
+        const checksum = await getPostingRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+
+        return {
+          actualChecksum: checksum.actualChecksum,
+          actualCount: checksum.actualCount,
+          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
+        }
+      },
+      writeOutput: async (tx) => {
+        const chunkDatabase = getChunkProjectorDatabase(tx)
+
+        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+          await previous
+          await projectReviewServingFilterPostings(
+            {
+              acknowledgeClaims: false,
+              baseGeneration: input.chunk.outputBaseGeneration,
+              chunkEndArticleId: input.chunk.chunkEndKey,
+              chunkStartArticleId: input.chunk.chunkStartKey,
+              claims: [],
+              definitionVersion: manifest.definitionVersion,
+              listModeKeys: reviewServingListModes,
+              projectId,
+              projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+              projectionIdentity: input.chunk.projectionIdentity,
+              reviewConfigHash: requireReviewConfigHash(snapshot),
+              selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+              snapshotId: snapshot.snapshotId,
+            },
+            chunkDatabase,
+          )
+        }, Promise.resolve())
+      },
+    },
+    database,
+  )
+}
+
+const runSummaryRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
+  const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
+  const snapshotIds = getRebuildSnapshotIds(snapshots)
+
+  return runValidatedRebuildChunkOutput(
+    {
+      ...input,
+      validateOutput: async (tx) => {
+        const checksum = await getSummaryRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+
+        return {
+          actualChecksum: checksum.actualChecksum,
+          actualCount: checksum.actualCount,
+          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
+        }
+      },
+      writeOutput: async (tx) => {
+        const chunkDatabase = getChunkProjectorDatabase(tx)
+
+        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+          await previous
+          const searchIdentity = getSnapshotComponentState(snapshot, 'search')?.projectionIdentity ?? ''
+
+          await projectReviewServingSummaries(
+            {
+              acknowledgeClaims: false,
+              baseGeneration: input.chunk.outputBaseGeneration,
+              chunkEndArticleId: input.chunk.chunkEndKey,
+              chunkStartArticleId: input.chunk.chunkStartKey,
+              claims: [],
+              listModeKeys: reviewServingListModes,
+              projectId,
+              projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+              projectionIdentity: input.chunk.projectionIdentity,
+              reviewConfigHash: requireReviewConfigHash(snapshot),
+              selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+              snapshotId: snapshot.snapshotId,
+            },
+            chunkDatabase,
+          )
+          await projectReviewServingFilterOptions(
+            {
+              acknowledgeClaims: false,
+              baseGeneration: input.chunk.outputBaseGeneration,
+              claims: [],
+              definitionVersion: manifest.definitionVersion,
+              filterOptionIdentity: getReviewServingFilterOptionIdentity({
+                filterKeys: defaultReviewFilterOptionKeys,
+                listModeKeys: reviewServingListModes,
+                optionMode: 'review',
+                searchIdentity,
+              }),
+              listModeKeys: reviewServingListModes,
+              optionMode: 'review',
+              projectId,
+              projectionIdentity: input.chunk.projectionIdentity,
+              reviewConfigHash: requireReviewConfigHash(snapshot),
+              searchIdentity,
+              snapshotId: snapshot.snapshotId,
+            },
+            chunkDatabase,
+          )
+          await projectReviewServingFilterOptions(
+            {
+              acknowledgeClaims: false,
+              baseGeneration: input.chunk.outputBaseGeneration,
+              claims: [],
+              definitionVersion: manifest.definitionVersion,
+              filterOptionIdentity: getReviewServingFilterOptionIdentity({
+                filterKeys: defaultHumanFilterOptionKeys,
+                listModeKeys: defaultReviewServingHumanListModeKeys,
+                optionMode: 'human',
+                searchIdentity,
+              }),
+              listModeKeys: defaultReviewServingHumanListModeKeys,
+              optionMode: 'human',
+              projectId,
+              projectionIdentity: input.chunk.projectionIdentity,
+              reviewConfigHash: requireReviewConfigHash(snapshot),
+              searchIdentity,
+              snapshotId: snapshot.snapshotId,
+            },
+            chunkDatabase,
+          )
+        }, Promise.resolve())
+      },
+    },
+    database,
+  )
+}
+
+const runJudgmentInputContentRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
+  const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
+  const snapshotIds = getRebuildSnapshotIds(snapshots)
+  const currentSettings = await getCurrentProjectReviewSnapshotSettings(projectId, database)
+  const payloadSnapshots = snapshots.filter((snapshot) => {
+    return getSnapshotReviewSettings(snapshot, currentSettings) !== null
+  })
+
+  return runValidatedRebuildChunkOutput(
+    {
+      ...input,
+      validateOutput: async (tx) => {
+        const checksum = await getJudgmentInputContentRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+
+        return {
+          actualChecksum: checksum.actualChecksum,
+          actualCount: checksum.actualCount,
+          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
+        }
+      },
+      writeOutput: async (tx) => {
+        const chunkDatabase = getChunkProjectorDatabase(tx)
+
+        await payloadSnapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+          await previous
+          const project = getSnapshotReviewSettings(snapshot, currentSettings)
+
+          if (project !== null) {
+            await projectReviewServingJudgmentPayloadRows(
+              {
+                acknowledgeClaims: false,
+                baseGeneration: input.chunk.outputBaseGeneration,
+                chunkEndArticleId: input.chunk.chunkEndKey,
+                chunkStartArticleId: input.chunk.chunkStartKey,
+                claims: [],
+                definitionVersion: manifest.definitionVersion,
+                listModeKeys: reviewServingListModes,
+                modelId: project.modelId,
+                projectId,
+                projectionIdentity: input.chunk.projectionIdentity,
+                reviewConfigHash: requireReviewConfigHash(snapshot),
+                snapshotId: snapshot.snapshotId,
+                useAbstract: project.useAbstract,
+                useFulltext: project.useFulltext,
+                useFulltextNoImages: project.useFulltextNoImages,
+                useTitle: project.useTitle,
+              },
+              chunkDatabase,
+            )
+          }
+        }, Promise.resolve())
+      },
+    },
+    database,
+  )
+}
+
+export const runReviewServingProjectorWorkerClaimedRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  if (input.chunk.projectionComponent === 'display') {
+    return runDisplayRebuildChunk(input, database)
+  }
+
+  if (input.chunk.projectionComponent === 'payload') {
+    return runPayloadRebuildChunk(input, database)
+  }
+
+  if (input.chunk.projectionComponent === 'search') {
+    return runSearchRebuildChunk(input, database)
+  }
+
+  if (input.chunk.projectionComponent === 'llmStatus') {
+    return runLlmStatusRebuildChunk(input, database)
+  }
+
+  if (input.chunk.projectionComponent === 'humanStatus') {
+    return runHumanStatusRebuildChunk(input, database)
+  }
+
+  if (input.chunk.projectionComponent === 'queue') {
+    return runQueueRebuildChunk(input, database)
+  }
+
+  if (input.chunk.projectionComponent === 'posting') {
+    return runPostingRebuildChunk(input, database)
+  }
+
+  if (input.chunk.projectionComponent === 'summary') {
+    return runSummaryRebuildChunk(input, database)
+  }
+
+  if (input.chunk.projectionComponent === 'judgmentInputContent') {
+    return runJudgmentInputContentRebuildChunk(input, database)
+  }
+
+  throw new Error(`review serving rebuild chunk executor is not registered for ${input.chunk.projectionComponent}`)
 }
 
 const requireReviewConfigHash = (snapshot: ReviewServingSnapshotContext) => {
@@ -390,6 +1290,56 @@ const requireSelectedImportSnapshotId = (snapshot: ReviewServingSnapshotContext)
   }
 
   return snapshot.selectedImportSnapshotId
+}
+
+const getSelectedImportSnapshotStatus = async (
+  selectedImportSnapshotId: string,
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const [row] = await database.queryJson<SelectedImportSnapshotStatusRow>(`
+    SELECT
+      source_delta_high_water AS sourceDeltaHighWater,
+      status
+    FROM app.review_selected_import_snapshot
+    WHERE selected_import_snapshot_id = ${getSqlLiteral(selectedImportSnapshotId)}
+    LIMIT 1
+  `)
+
+  return row ?? null
+}
+
+const getPatchWatermark = (claims: readonly {latestSourceHighWaterMark: number}[]) => {
+  return Math.max(
+    0,
+    ...claims.map((claim) => {
+      return claim.latestSourceHighWaterMark
+    }),
+  )
+}
+
+const getSelectedImportBaseProjectionResult = async (
+  input: {
+    claims: Parameters<ReviewServingProjectorRunner>[0]['claims']
+    projectId: string
+    projectScopeIdentity: string
+    selectedImportSnapshotId: string
+  },
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const existingSnapshot = await getSelectedImportSnapshotStatus(input.selectedImportSnapshotId, database)
+
+  return existingSnapshot?.status === 'completed'
+    ? {insertedRowCount: 0, selectedImportSnapshotId: input.selectedImportSnapshotId, status: 'completed' as const}
+    : projectReviewServingSelectedImportBatch(
+        {
+          limit: defaultReviewServingSelectedImportBaseBatchSize,
+          projectId: input.projectId,
+          projectScopeIdentity: input.projectScopeIdentity,
+          selectedImportSnapshotId: input.selectedImportSnapshotId,
+          sourceDeltaHighWater: Number(existingSnapshot?.sourceDeltaHighWater ?? getPatchWatermark(input.claims)),
+        },
+        database,
+      )
 }
 
 const getProjectReviewSettings = async (projectId: string, database: ReviewServingProjectorWorkerDatabase) => {
@@ -454,7 +1404,9 @@ const getPromptConfigHash = (row: ProjectPromptConfigRow) => {
   })
 }
 
-const getReviewConfigHash = (input: ProjectReviewSettingsRow & {promptConfigRows: readonly ProjectPromptConfigRow[]}) => {
+const getReviewConfigHash = (
+  input: ProjectReviewSettingsRow & {promptConfigRows: readonly ProjectPromptConfigRow[]},
+) => {
   return buildReviewConfigHash({
     humanJudgmentMode: input.humanJudgmentMode,
     modelExecutionIdentity: {
@@ -495,24 +1447,6 @@ const getSnapshotReviewSettings = (
   return snapshot.reviewConfigHash === currentSettings.reviewConfigHash ? currentSettings : null
 }
 
-const getDefaultRunnerInput = async (
-  context: Parameters<ReviewServingProjectorRunner>[0],
-  database: ReviewServingProjectorWorkerDatabase,
-) => {
-  const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
-  const snapshot = await requireSnapshotContext(
-    {
-      component: context.component,
-      projectId,
-      projectionIdentity: manifest.projectionIdentity,
-      reviewConfigHash: manifest.reviewConfigHash,
-    },
-    database,
-  )
-
-  return {manifest, projectId, snapshot}
-}
-
 const getDefaultRunnerInputs = async (
   context: Parameters<ReviewServingProjectorRunner>[0],
   database: ReviewServingProjectorWorkerDatabase,
@@ -547,7 +1481,7 @@ const runSnapshotProjectors = async <T>(
     : [...resultsWithoutAcknowledgement, await runSnapshot(finalSnapshot, true)]
 }
 
-const getDefaultReviewServingProjectorRunners = (
+export const getDefaultReviewServingProjectorRunners = (
   database: ReviewServingProjectorWorkerDatabase,
 ): ReviewServingProjectorServiceDependencies['runners'] => {
   return {
@@ -585,12 +1519,10 @@ const getDefaultReviewServingProjectorRunners = (
         }),
       )
       const finalPatchSnapshot = snapshots.at(-1)
-      const results = finalPatchSnapshot === undefined
-        ? patchSnapshotsWithoutAcknowledgement
-        : [
-            ...patchSnapshotsWithoutAcknowledgement,
-            await patchSnapshot(finalPatchSnapshot, true),
-          ]
+      const results =
+        finalPatchSnapshot === undefined
+          ? patchSnapshotsWithoutAcknowledgement
+          : [...patchSnapshotsWithoutAcknowledgement, await patchSnapshot(finalPatchSnapshot, true)]
 
       return {
         processedCount: results.reduce((total, result) => {
@@ -746,10 +1678,16 @@ const getDefaultReviewServingProjectorRunners = (
           database,
         )
 
-        return articlePayloadResult.payloadRowCount + judgmentPayloadResult.humanRowCount + judgmentPayloadResult.llmRowCount
+        return (
+          articlePayloadResult.payloadRowCount + judgmentPayloadResult.humanRowCount + judgmentPayloadResult.llmRowCount
+        )
       })
 
-      return {processedCount: results.reduce((total, count) => total + count, 0)}
+      return {
+        processedCount: results.reduce((total, count) => {
+          return total + count
+        }, 0),
+      }
     },
     posting: async (context) => {
       const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
@@ -772,7 +1710,11 @@ const getDefaultReviewServingProjectorRunners = (
         )
       })
 
-      return {processedCount: results.reduce((total, result) => total + result.servingRowCount, 0)}
+      return {
+        processedCount: results.reduce((total, result) => {
+          return total + result.servingRowCount
+        }, 0),
+      }
     },
     projectScope: async (context) => {
       const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
@@ -808,7 +1750,11 @@ const getDefaultReviewServingProjectorRunners = (
         )
       })
 
-      return {processedCount: results.reduce((total, result) => total + result.servingRowCount, 0)}
+      return {
+        processedCount: results.reduce((total, result) => {
+          return total + result.servingRowCount
+        }, 0),
+      }
     },
     search: async (context) => {
       const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
@@ -830,10 +1776,46 @@ const getDefaultReviewServingProjectorRunners = (
         )
       })
 
-      return {processedCount: results.reduce((total, result) => total + result.searchRowCount, 0)}
+      return {
+        processedCount: results.reduce((total, result) => {
+          return total + result.searchRowCount
+        }, 0),
+      }
     },
     selectedImport: async (context) => {
       const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
+      const baseResults = await Promise.all(
+        snapshots.map((snapshot) => {
+          return getSelectedImportBaseProjectionResult(
+            {
+              claims: context.claims,
+              projectId,
+              projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+              selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+            },
+            database,
+          )
+        }),
+      )
+      const baseProjectionIncomplete = baseResults.some((result) => {
+        return result.status !== 'completed'
+      })
+
+      if (baseProjectionIncomplete) {
+        await releaseReviewServingDirtyWorkClaims(
+          context.claims.map((claim) => {
+            return claim.dirtyWorkId
+          }),
+          database,
+        )
+
+        return {
+          processedCount: baseResults.reduce((total, result) => {
+            return total + result.insertedRowCount
+          }, 0),
+        }
+      }
+
       const results = await runSnapshotProjectors(snapshots, (snapshot, acknowledgeClaims) => {
         return projectReviewServingSelectedImportPatches(
           {
@@ -850,7 +1832,11 @@ const getDefaultReviewServingProjectorRunners = (
         )
       })
 
-      return {processedCount: results.reduce((total, result) => total + result.patchRowCount, 0)}
+      return {
+        processedCount: results.reduce((total, result) => {
+          return total + result.patchRowCount
+        }, 0),
+      }
     },
     summary: async (context) => {
       const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
@@ -916,10 +1902,16 @@ const getDefaultReviewServingProjectorRunners = (
           database,
         )
 
-        return result.summaryRowCount + reviewFilterOptionsResult.optionRowCount + humanFilterOptionsResult.optionRowCount
+        return (
+          result.summaryRowCount + reviewFilterOptionsResult.optionRowCount + humanFilterOptionsResult.optionRowCount
+        )
       })
 
-      return {processedCount: results.reduce((total, count) => total + count, 0)}
+      return {
+        processedCount: results.reduce((total, count) => {
+          return total + count
+        }, 0),
+      }
     },
   }
 }
@@ -927,18 +1919,18 @@ const getDefaultReviewServingProjectorRunners = (
 const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWorkerDependencies = {
   cleanupRetentionState: cleanupReviewServingRetentionState,
   getDatabase: getAppDatabaseService as ReviewServingProjectorWorkerDependencies['getDatabase'],
-  getCleanupTargets: async () => {
-    return []
+  getCleanupTargets: (database) => {
+    return getReviewServingRetentionCleanupTargets({}, database)
   },
   rebuildChunkService: {
     claimChunk: claimReviewServingRebuildChunk,
     failChunk: markReviewServingRebuildChunkFailed,
-    getNextChunk: async () => {
-      return null
+    getNextChunk: ({database, now}) => {
+      return getNextClaimableReviewServingRebuildChunk({now}, database)
     },
     isChunkComplete: isReviewServingRebuildChunkComplete,
-    runClaimedChunk: async () => {
-      return {status: 'completed'}
+    runClaimedChunk: async ({chunk, database, leaseOwner}) => {
+      return runReviewServingProjectorWorkerClaimedRebuildChunk({chunk, leaseOwner}, database)
     },
   },
   sleep,
@@ -1067,7 +2059,7 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
   workerId: string
 }): Promise<ReviewServingProjectorWorkerChunkResult> => {
   const service = dependencies.rebuildChunkService
-  const chunkInput = await service?.getNextChunk()
+  const chunkInput = await service?.getNextChunk({database, now: getWorkerNow(options)})
 
   if (!service || chunkInput === null || chunkInput === undefined) {
     return {chunkId: null, status: 'idle'}
@@ -1090,7 +2082,7 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
   }
 
   try {
-    await service.runClaimedChunk({chunk: claimedChunk, leaseOwner: workerId, workloadContext})
+    await service.runClaimedChunk({chunk: claimedChunk, database, leaseOwner: workerId, workloadContext})
 
     return {chunkId: claimedChunk.chunkId, status: 'completed'}
   } catch (error) {
@@ -1120,7 +2112,7 @@ const runReviewServingProjectorWorkerCleanup = async ({
     return {retentionScopes: [], status: 'skipped'}
   }
 
-  const cleanupTargets = await dependencies.getCleanupTargets?.()
+  const cleanupTargets = await dependencies.getCleanupTargets?.(database)
   const cleanupRetentionState = dependencies.cleanupRetentionState
 
   if (!cleanupRetentionState || cleanupTargets === undefined || cleanupTargets.length === 0) {
@@ -1164,7 +2156,9 @@ const runReviewServingProjectorWorkerDeltaIntake = async ({
   const intakeImportDeltas = dependencies.intakeImportDeltas ?? intakeReviewImportDeltasToDirtyWork
   const reviewChangePartitions = await getDeltaIntakePartitions(database, 'app.review_change_delta')
   const importPartitions = await getDeltaIntakePartitions(database, 'app.import_run_article_delta')
-  const reviewChangeResults = await reviewChangePartitions.reduce<Promise<ReviewServingProjectorWorkerDeltaIntakeResult>>(
+  const reviewChangeResults = await reviewChangePartitions.reduce<
+    Promise<ReviewServingProjectorWorkerDeltaIntakeResult>
+  >(
     async (previousResult, partition) => {
       const result = await previousResult
 

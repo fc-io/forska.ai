@@ -216,7 +216,9 @@ test('projects human summary-answer facets independently from prompt answers', a
   ).toBe(true)
   expect(selectStatement).toContain('FROM mart.review_human_status_patch_v4 newer')
   expect(selectStatement).toContain('human.base_generation = 5')
-  expect(selectStatement).toContain("COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = 'project-1'), 'prompt') AS human_judgment_mode")
+  expect(selectStatement).toContain(
+    "COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = 'project-1'), 'prompt') AS human_judgment_mode",
+  )
   expect(selectStatement).toContain("project_settings.human_judgment_mode <> 'summary'")
   expect(selectStatement).toContain("project_settings.human_judgment_mode = 'summary'")
   expect(selectStatement).toContain('newer.prompt_id IS NOT DISTINCT FROM human.prompt_id')
@@ -240,7 +242,9 @@ test('project-scoped summary rebuilds subtract prior contribution articles missi
   const oldRow = sourceCountRow({articleId: 'article-old'})
   const {database, statements} = createSummaryDatabase({
     contributionRows: [storedContributionRow(oldRow)],
-    countRows: [{countKind: 'review.llm.assessedByPrompt', countValue: 3, filterKey: 'prompt:prompt-1', listModeKey: 'llm'}],
+    countRows: [
+      {countKind: 'review.llm.assessedByPrompt', countValue: 3, filterKey: 'prompt:prompt-1', listModeKey: 'llm'},
+    ],
     sourceRows: [],
   })
 
@@ -261,22 +265,27 @@ test('project-scoped summary rebuilds subtract prior contribution articles missi
   const storedContributionSelect = statements.find((statement) => {
     return statement.includes("VALUES ('article-old')")
   })
-
-  expect(result.summaryValues).toContainEqual({
-    availability: 'ready',
-    count_kind: 'review.llm.assessedByPrompt',
-    count_updated_at: expect.any(Date),
-    count_value: 2,
-    filter_key: 'prompt:prompt-1',
-    list_mode_key: 'llm',
-    project_id: 'project-1',
-    review_config_hash: 'review-config-1',
-    snapshot_id: 'snapshot-1',
-    stale_reason: null,
-    summary_definition_version: 'review-llm-assessed-by-prompt:v1',
-    summary_identity: 'review.llm.assessedByPrompt',
+  const projectedSummaryValue = result.summaryValues.find((row) => {
+    return row.count_kind === 'review.llm.assessedByPrompt' && row.count_value === 2
   })
-  expect(priorArticleSelect).toContain('component_kind = \'count\'')
+
+  expect(projectedSummaryValue?.count_updated_at).toBeInstanceOf(Date)
+  expect(
+    hasSummaryValue(result.summaryValues, {
+      availability: 'ready',
+      count_kind: 'review.llm.assessedByPrompt',
+      count_value: 2,
+      filter_key: 'prompt:prompt-1',
+      list_mode_key: 'llm',
+      project_id: 'project-1',
+      review_config_hash: 'review-config-1',
+      snapshot_id: 'snapshot-1',
+      stale_reason: null,
+      summary_definition_version: 'review-llm-assessed-by-prompt:v1',
+      summary_identity: 'review.llm.assessedByPrompt',
+    }),
+  ).toBe(true)
+  expect(priorArticleSelect).toContain("component_kind = 'count'")
   expect(storedContributionSelect).toBeDefined()
 })
 
@@ -344,6 +353,51 @@ test('summary diffs aggregate before writing shared count keys', async () => {
     }),
   ).toHaveLength(1)
   expect(hasSummaryValue(result.summaryValues, {count_kind: 'review.queue.unassessedReady', count_value: 6})).toBe(true)
+})
+
+test('prompt badge counts flow through summary contribution rows used by review.prompt.badges', async () => {
+  const badgeRows = [
+    sourceCountRow({
+      countKind: 'review.llm.assessedByPrompt',
+      filterKey: 'prompt:prompt-1',
+      listModeKey: 'llm',
+      summaryIdentity: 'review.llm.assessedByPrompt',
+    }),
+    sourceCountRow({
+      countKind: 'review.llm.unassessedByPrompt',
+      filterKey: 'prompt:prompt-1',
+      listModeKey: 'llm',
+      summaryIdentity: 'review.llm.unassessedByPrompt',
+    }),
+    sourceCountRow({
+      countKind: 'review.human.reviewedByPrompt',
+      filterKey: 'prompt:prompt-1',
+      listModeKey: 'human',
+      summaryIdentity: 'review.human.reviewedByPrompt',
+    }),
+    sourceCountRow({
+      countKind: 'review.both.conflictByPrompt',
+      filterKey: 'prompt:prompt-1',
+      listModeKey: 'both',
+      summaryIdentity: 'review.both.conflictByPrompt',
+    }),
+  ]
+  const {database, statements} = createSummaryDatabase({sourceRows: badgeRows})
+  const result = await projectReviewServingSummaries(projectInput([summaryClaim()], ['llm', 'human', 'both']), database)
+  const joined = statements.join('\n')
+
+  expect(
+    [
+      'review.llm.assessedByPrompt',
+      'review.llm.unassessedByPrompt',
+      'review.human.reviewedByPrompt',
+      'review.both.conflictByPrompt',
+    ].every((countKind) => {
+      return hasSummaryValue(result.summaryValues, {count_kind: countKind, count_value: 1})
+    }),
+  ).toBe(true)
+  expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
 })
 
 test('summary status and answer sources require selected scope', async () => {

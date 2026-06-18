@@ -100,9 +100,7 @@ const hasOptionValue = (rows: readonly Record<string, unknown>[], expected: Reco
 }
 
 test('projects supported enum option payloads into scoped option rows', async () => {
-  const {database, statements} = createFilterOptionDatabase({
-    sourceRows: [sourceRow()],
-  })
+  const {database, statements} = createFilterOptionDatabase({sourceRows: [sourceRow()]})
 
   const result = await projectReviewServingFilterOptions(projectInput(), database)
   const joined = statements.join('\n')

@@ -16,6 +16,8 @@ export type ReviewServingJudgmentPayloadProjectorDatabase = ReviewServingProject
 export type ProjectReviewServingJudgmentPayloadInput = {
   acknowledgeClaims?: boolean
   baseGeneration?: number
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
   claims?: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion?: string
   listModeKeys: readonly ReviewServingListMode[]
@@ -96,6 +98,29 @@ const getValuesCte = (columnName: string, values: readonly string[]) => {
         .join(', ')}))`
 }
 
+const hasChunkArticleRange = (input: {chunkEndArticleId?: string | null; chunkStartArticleId?: string | null}) => {
+  return input.chunkStartArticleId !== undefined || input.chunkEndArticleId !== undefined
+}
+
+const getArticleRangePredicate = (input: {
+  alias?: string
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
+}) => {
+  const columnPrefix = input.alias === undefined ? '' : `${input.alias}.`
+  const startPredicate =
+    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
+      ? ''
+      : `AND ${columnPrefix}article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`
+  const endPredicate =
+    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
+      ? ''
+      : `AND ${columnPrefix}article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+
+  return `${startPredicate}
+          ${endPredicate}`
+}
+
 const getActiveArticleCte = (input: ProjectReviewServingJudgmentPayloadInput) => {
   const articleIds = getClaimArticleIds(input.claims)
   const dirtyArticleCte = getValuesCte('article_id', articleIds)
@@ -109,6 +134,7 @@ const getActiveArticleCte = (input: ProjectReviewServingJudgmentPayloadInput) =>
       ${dirtyJoinSql}
       WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
         AND (scope.in_curated_scope OR scope.in_route_scope)
+        ${getArticleRangePredicate({alias: 'scope', ...input})}
     )`
 }
 
@@ -145,12 +171,15 @@ const getRequestedPayloadKinds = (listModeKeys: readonly ReviewServingListMode[]
   })
 }
 
-const getPayloadManifestInputs = (input: ProjectReviewServingJudgmentPayloadInput, claims: readonly ReviewServingDirtyWorkClaim[]) => {
-  return claims.length === 0 ||
-    input.acknowledgeClaims === false ||
-    input.baseGeneration === undefined ||
-    input.definitionVersion === undefined ||
-    input.projectionIdentity === undefined
+const getPayloadManifestInputs = (
+  input: ProjectReviewServingJudgmentPayloadInput,
+  claims: readonly ReviewServingDirtyWorkClaim[],
+) => {
+  return claims.length === 0
+    || input.acknowledgeClaims === false
+    || input.baseGeneration === undefined
+    || input.definitionVersion === undefined
+    || input.projectionIdentity === undefined
     ? []
     : [
         getReviewServingPayloadPatchManifest(
@@ -166,7 +195,10 @@ const getPayloadManifestInputs = (input: ProjectReviewServingJudgmentPayloadInpu
       ]
 }
 
-const getPayloadWatermark = (input: ProjectReviewServingJudgmentPayloadInput, claims: readonly ReviewServingDirtyWorkClaim[]) => {
+const getPayloadWatermark = (
+  input: ProjectReviewServingJudgmentPayloadInput,
+  claims: readonly ReviewServingDirtyWorkClaim[],
+) => {
   const sourceHighWaterMark = Math.max(
     0,
     ...claims.map((claim) => {
@@ -185,7 +217,10 @@ const getPayloadWatermark = (input: ProjectReviewServingJudgmentPayloadInput, cl
       }
 }
 
-const getPayloadAcknowledgements = (input: ProjectReviewServingJudgmentPayloadInput, claims: readonly ReviewServingDirtyWorkClaim[]) => {
+const getPayloadAcknowledgements = (
+  input: ProjectReviewServingJudgmentPayloadInput,
+  claims: readonly ReviewServingDirtyWorkClaim[],
+) => {
   return claims.length > 0 && input.acknowledgeClaims !== false ? claims : []
 }
 
@@ -450,8 +485,9 @@ const getReplacementDeleteStatements = (
   const shouldReplaceBroadScope = claims.some((claim) => {
     return claim.scopeKind === 'project' || claim.scopeKind === 'prompt'
   })
+  const shouldReplaceChunkRange = hasChunkArticleRange(input)
 
-  return articleIds.length === 0 && !shouldReplaceBroadScope
+  return articleIds.length === 0 && !shouldReplaceBroadScope && !shouldReplaceChunkRange
     ? []
     : payloadKinds.flatMap((payloadKind) => {
         const listModeKeys =
@@ -459,6 +495,16 @@ const getReplacementDeleteStatements = (
 
         return listModeKeys.map((listModeKey) => {
           const articlePredicate = articleIds.length === 0 ? {} : {article_id: articleIds}
+
+          if (shouldReplaceChunkRange && articleIds.length === 0) {
+            return `DELETE FROM mart.review_article_judgment_detail_serving_v4
+              WHERE project_id = ${getSqlLiteral(input.projectId)}
+                AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+                AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+                AND list_mode_key = ${getSqlLiteral(listModeKey)}
+                AND payload_kind = ${getSqlLiteral(payloadKind)}
+                ${getArticleRangePredicate(input)}`
+          }
 
           return getDeleteReviewServingProjectorRowsStatement({
             predicates: {

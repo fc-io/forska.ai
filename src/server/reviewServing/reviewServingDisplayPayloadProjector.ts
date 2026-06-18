@@ -18,6 +18,8 @@ export type ReviewServingDisplayPayloadProjectorDatabase = ReviewServingProjecto
 
 export type ProjectReviewServingDisplayBaseInput = {
   baseGeneration: number
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
   displayIdentity: string
   humanStatusIdentity: string
   listModeKeys: readonly string[]
@@ -50,6 +52,8 @@ export type ProjectReviewServingDisplayPatchInput = {
 export type ProjectReviewServingPayloadInput = {
   acknowledgeClaims?: boolean
   baseGeneration: number
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
   claims?: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion?: string
   displayIdentity: string
@@ -169,6 +173,20 @@ const getDirtyArticleCteSql = (articleIds: readonly string[]) => {
     `
 }
 
+const getArticleRangePredicate = (input: {chunkEndArticleId?: string | null; chunkStartArticleId?: string | null}) => {
+  const startPredicate =
+    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
+      ? ''
+      : `AND scope.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`
+  const endPredicate =
+    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
+      ? ''
+      : `AND scope.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+
+  return `${startPredicate}
+      ${endPredicate}`
+}
+
 const getDisplayBaseRows = async (
   input: ProjectReviewServingDisplayBaseInput,
   database: ReviewServingDisplayPayloadProjectorDatabase,
@@ -199,6 +217,7 @@ const getDisplayBaseRows = async (
       AND NOT selected.tombstone
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope)
+      ${getArticleRangePredicate(input)}
     ORDER BY scope.article_id ASC
   `)
 }
@@ -266,6 +285,7 @@ const getPayloadRows = async (
       ON article.id = scope.article_id
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope)
+      ${getArticleRangePredicate(input)}
     ORDER BY article.article_created_at ASC NULLS LAST, scope.article_id ASC
   `)
 }

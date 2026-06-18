@@ -5,11 +5,13 @@ import {
   assessReviewServingCandidatePatchBudgets,
   cleanupReviewServingRetentionState,
   compactReviewServingCandidateSnapshotPatches,
+  getReviewServingRetentionCleanupTargets,
   type ReviewServingRetentionServiceDatabase,
 } from './reviewServingRetentionService.ts'
 
 const createRetentionDatabase = (input?: {
   budgetRows?: Record<string, {patchRows: number; patchWatermarks: number}>
+  cleanupTargetRows?: readonly {projectId: string; reviewConfigHash: string | null}[]
   retentionState?: {baseGeneration: number; cursorJson: unknown; patchWatermark: number; snapshotId: string | null}
 }) => {
   const statements: string[] = []
@@ -19,6 +21,10 @@ const createRetentionDatabase = (input?: {
 
       if (statement.includes('FROM app.review_serving_retention_mark')) {
         return (input?.retentionState === undefined ? [] : [input.retentionState]) as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest') && statement.includes('GROUP BY')) {
+        return (input?.cleanupTargetRows ?? []) as T[]
       }
 
       const budgetKey = Object.keys(input?.budgetRows ?? {}).find((key) => {
@@ -193,4 +199,22 @@ test('patch cleanup uses component-state protection for pinned snapshot base gen
   expect(joined).not.toContain('manifest.projection_identity = candidate.display_identity')
   expect(joined).toContain('CAST(candidate.base_generation AS VARCHAR)')
   expect(joined).toContain('LIMIT 5')
+})
+
+test('retention cleanup target discovery scopes normal cleanup by project and review config', async () => {
+  const {database, statements} = createRetentionDatabase({
+    cleanupTargetRows: [{projectId: 'project-1', reviewConfigHash: 'review-config-1'}],
+  })
+
+  const targets = await getReviewServingRetentionCleanupTargets(
+    {cleanupBatchSize: 25, now: '2026-06-16T00:00:00.000Z', targetLimit: 3},
+    database,
+  )
+
+  expect(targets).toEqual([
+    {batchSize: 25, now: '2026-06-16T00:00:00.000Z', projectId: 'project-1', reviewConfigHash: 'review-config-1'},
+  ])
+  expect(statements.join('\n')).toContain("snapshot_status IN ('active', 'retired', 'failed')")
+  expect(statements.join('\n')).toContain('GROUP BY project_id, review_config_hash')
+  expect(statements.join('\n')).toContain('LIMIT 3')
 })

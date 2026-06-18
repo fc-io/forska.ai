@@ -20,6 +20,8 @@ export type ReviewServingTitleSearchProjectorDatabase = ReviewServingProjectorWr
 export type ProjectReviewServingTitleSearchInput = {
   acknowledgeClaims?: boolean
   baseGeneration: number
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
   claims?: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion?: string
   projectId: string
@@ -97,6 +99,20 @@ const getDirtyArticleCteSql = (articleIds: readonly string[]) => {
         .join(', ')}))`
 }
 
+const getArticleRangePredicate = (input: {chunkEndArticleId?: string | null; chunkStartArticleId?: string | null}) => {
+  const startPredicate =
+    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
+      ? ''
+      : `AND scope.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`
+  const endPredicate =
+    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
+      ? ''
+      : `AND scope.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+
+  return `${startPredicate}
+      ${endPredicate}`
+}
+
 const getNormalizedTitleToken = (value: string) => {
   return value
     .normalize('NFKD')
@@ -143,6 +159,7 @@ const getTitleSearchRows = async (
       ON article.id = scope.article_id
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope OR ${articleIds.length > 0 ? 'TRUE' : 'FALSE'})
+      ${getArticleRangePredicate(input)}
     ORDER BY scope.article_id ASC
   `)
 }
@@ -234,6 +251,8 @@ export const projectReviewServingTitleSearchRows = async (
 ) => {
   const claims = input.claims ?? []
   const rows = await getTitleSearchRows(input, database)
+  const definitionVersion = input.definitionVersion
+  const projectionIdentity = input.projectionIdentity
   const records = rows.flatMap((row) => {
     return row.tombstone
       ? []
@@ -242,22 +261,14 @@ export const projectReviewServingTitleSearchRows = async (
         })
   })
   const patchWatermark = getPatchWatermark(claims)
-  const hasClaimedWork =
-    claims.length > 0 && input.definitionVersion !== undefined && input.projectionIdentity !== undefined
+  const hasClaimedWork = claims.length > 0 && definitionVersion !== undefined && projectionIdentity !== undefined
 
   await writeReviewServingProjectorComponent(
     {
       acknowledgements: hasClaimedWork && input.acknowledgeClaims !== false ? claims : [],
       component: 'search',
       projectionManifests: hasClaimedWork
-        ? [
-            getTitleSearchManifest({
-              ...input,
-              claims,
-              definitionVersion: input.definitionVersion,
-              projectionIdentity: input.projectionIdentity,
-            }),
-          ]
+        ? [getTitleSearchManifest({...input, claims, definitionVersion, projectionIdentity})]
         : [],
       records,
       statements: getDeleteDirtyTitleSearchRowsStatements(input),

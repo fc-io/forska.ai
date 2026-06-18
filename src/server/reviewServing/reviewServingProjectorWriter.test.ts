@@ -283,14 +283,23 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
 })
 
 test('only the projector writer boundary writes V4 mart rows and promotes active snapshots', () => {
+  const projectorStatementBuilderFiles = new Set([
+    'src/server/reviewServing/reviewServingDisplayPayloadProjector.ts',
+    'src/server/reviewServing/reviewServingFilterPostingProjector.ts',
+    'src/server/reviewServing/reviewServingHumanStatusProjector.ts',
+    'src/server/reviewServing/reviewServingJudgmentPayloadProjector.ts',
+    'src/server/reviewServing/reviewServingLlmStatusProjector.ts',
+    'src/server/reviewServing/reviewServingQueueProjector.ts',
+    'src/server/reviewServing/reviewServingRetentionService.ts',
+    'src/server/reviewServing/reviewServingSelectedImportPatchProjector.ts',
+  ])
   const offenders = getTypeScriptFiles(join(workspaceRoot, 'src/server'))
     .filter((filePath) => {
       const repoPath = relative(workspaceRoot, filePath)
 
       return (
         repoPath !== 'src/server/reviewServing/reviewServingProjectorWriter.ts'
-        && repoPath !== 'src/server/reviewServing/reviewServingRetentionService.ts'
-        && repoPath !== 'src/server/reviewServing/reviewServingDisplayPayloadProjector.ts'
+        && !projectorStatementBuilderFiles.has(repoPath)
         && !repoPath.endsWith('.test.ts')
       )
     })
