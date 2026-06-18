@@ -1,15 +1,18 @@
 import {hostname} from 'node:os'
 
 import {sleep} from '../../utils/sleep.ts'
-import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {intakeReviewChangeDeltasToDirtyWork} from '../reviewServing/reviewChangeDeltaDirtyIntakeService.ts'
+import {intakeReviewImportDeltasToDirtyWork} from '../reviewServing/reviewImportDeltaDirtyIntakeService.ts'
 import {
   buildPromptConfigHash,
   buildReviewConfigHash,
   type ReviewServingIdentityValue,
 } from '../reviewServing/reviewProjectionIdentity.ts'
-import {getReviewServingSourcePartitionWatermarks} from '../reviewServing/reviewServingProjectorDomain.ts'
 import {reviewServingListModes, type ReviewServingProjectionComponent} from '../reviewServing/reviewServingContracts.ts'
-import {projectReviewServingDisplayPatches, projectReviewServingPayloadRows} from '../reviewServing/reviewServingDisplayPayloadProjector.ts'
+import {
+  projectReviewServingDisplayPatches,
+  projectReviewServingPayloadRows,
+} from '../reviewServing/reviewServingDisplayPayloadProjector.ts'
 import {
   getReviewServingFilterOptionIdentity,
   projectReviewServingFilterOptions,
@@ -28,8 +31,8 @@ import {projectReviewServingLlmStatusPatches} from '../reviewServing/reviewServi
 import {completeReviewServingDirtyWorkClaims} from '../reviewServing/reviewServingDirtyWorkService.ts'
 import {getReviewServingProjectionIdentityManifest} from '../reviewServing/reviewServingManifestRepository.ts'
 import {projectReviewServingFilterPostings} from '../reviewServing/reviewServingFilterPostingProjector.ts'
+import {getReviewServingSourcePartitionWatermarks} from '../reviewServing/reviewServingProjectorDomain.ts'
 import {projectReviewServingQueuePatches} from '../reviewServing/reviewServingQueueProjector.ts'
-import {projectReviewServingSelectedImportPatches} from '../reviewServing/reviewServingSelectedImportPatchProjector.ts'
 import {projectReviewServingProjectScopePatches} from '../reviewServing/reviewServingProjectScopeProjector.ts'
 import {
   type ReviewServingProjectorRunner,
@@ -46,7 +49,9 @@ import {
   type ReviewServingRetentionCleanupInput,
   type ReviewServingRetentionServiceDatabase,
 } from '../reviewServing/reviewServingRetentionService.ts'
+import {projectReviewServingSelectedImportPatches} from '../reviewServing/reviewServingSelectedImportPatchProjector.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 
 type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorServiceDependencies['database']>
@@ -54,6 +59,12 @@ type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorSe
 type ReviewServingProjectorWorkerCleanupTarget = ReviewServingRetentionCleanupInput
 
 type ReviewServingProjectorWorkerChunkInput = ReviewServingRebuildChunkIdentity & {checksum?: string | null}
+
+type DeltaIntakePartitionRow = {
+  endSourceHighWaterMark: number
+  sourcePartition: string
+  startSourceHighWaterMark: number
+}
 
 type ReviewServingProjectorWorkerRebuildChunkService = {
   claimChunk: typeof claimReviewServingRebuildChunk
@@ -73,6 +84,8 @@ type ReviewServingProjectorWorkerDependencies = {
   getDatabase?: () => ReviewServingProjectorWorkerDatabase
     & ReviewServingChunkManifestRepositoryDatabase
     & ReviewServingRetentionServiceDatabase
+  intakeImportDeltas?: typeof intakeReviewImportDeltasToDirtyWork
+  intakeReviewChangeDeltas?: typeof intakeReviewChangeDeltasToDirtyWork
   nowMs?: () => number
   projectorServiceDependencies?: Omit<ReviewServingProjectorServiceDependencies, 'database' | 'nowMs'>
   rebuildChunkService?: ReviewServingProjectorWorkerRebuildChunkService
@@ -110,9 +123,16 @@ type ReviewServingProjectorWorkerCleanupResult =
   | {retentionScopes: readonly string[]; status: 'completed'}
   | {retentionScopes: readonly string[]; status: 'skipped'}
 
+type ReviewServingProjectorWorkerDeltaIntakeResult = {
+  convertedPartitions: number
+  dirtyWorkCount: number
+  status: 'completed' | 'failed' | 'idle'
+}
+
 type ReviewServingProjectorWorkerCycleResult = {
   chunk: ReviewServingProjectorWorkerChunkResult
   cleanup: ReviewServingProjectorWorkerCleanupResult
+  deltaIntake: ReviewServingProjectorWorkerDeltaIntakeResult
   nextCleanupAtMs: number | null
   projector: WakeReviewServingProjectorServiceResult
   status: 'completed' | 'failed' | 'idle' | 'partial'
@@ -967,7 +987,9 @@ const getErrorText = (error: unknown) => {
 const getReviewServingProjectorWorkerDatabase = (
   dependencies: ReviewServingProjectorWorkerDependencies,
   workloadContext: DuckdbWorkloadContext,
-) => {
+): ReviewServingProjectorWorkerDatabase
+  & ReviewServingChunkManifestRepositoryDatabase
+  & ReviewServingRetentionServiceDatabase => {
   const database = dependencies.getDatabase?.() ?? getAppDatabaseService()
 
   return {
@@ -986,7 +1008,9 @@ const getReviewServingProjectorWorkerDatabase = (
     ) => {
       return database.transaction(operation, workloadContext)
     },
-  }
+  } as ReviewServingProjectorWorkerDatabase
+    & ReviewServingChunkManifestRepositoryDatabase
+    & ReviewServingRetentionServiceDatabase
 }
 
 const getWakeInput = (
@@ -1007,9 +1031,10 @@ const getWakeInput = (
 const getCycleStatus = (input: {
   chunk: ReviewServingProjectorWorkerChunkResult
   cleanup: ReviewServingProjectorWorkerCleanupResult
+  deltaIntake: ReviewServingProjectorWorkerDeltaIntakeResult
   projector: WakeReviewServingProjectorServiceResult
 }): ReviewServingProjectorWorkerCycleResult['status'] => {
-  if (input.projector.status === 'failed' || input.chunk.status === 'failed') {
+  if (input.projector.status === 'failed' || input.chunk.status === 'failed' || input.deltaIntake.status === 'failed') {
     return 'failed'
   }
 
@@ -1112,6 +1137,76 @@ const runReviewServingProjectorWorkerCleanup = async ({
   return {retentionScopes, status: 'completed'}
 }
 
+const getDeltaIntakePartitions = async (database: ReviewServingProjectorWorkerDatabase, tableName: string) => {
+  return database.queryJson<DeltaIntakePartitionRow>(`
+    SELECT
+      source_partition AS sourcePartition,
+      MIN(source_high_water_mark) AS startSourceHighWaterMark,
+      MAX(source_high_water_mark) AS endSourceHighWaterMark
+    FROM ${tableName}
+    WHERE reconciled_at IS NULL
+    GROUP BY source_partition
+    ORDER BY MIN(source_high_water_mark) ASC, source_partition ASC
+  `)
+}
+
+const runReviewServingProjectorWorkerDeltaIntake = async ({
+  database,
+  dependencies,
+  options,
+}: {
+  database: ReviewServingProjectorWorkerDatabase
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}): Promise<ReviewServingProjectorWorkerDeltaIntakeResult> => {
+  const limit = getPositiveInteger(options.maxRowsPerWake, defaultReviewServingProjectorWorkerMaxRowsPerWake)
+  const intakeReviewChangeDeltas = dependencies.intakeReviewChangeDeltas ?? intakeReviewChangeDeltasToDirtyWork
+  const intakeImportDeltas = dependencies.intakeImportDeltas ?? intakeReviewImportDeltasToDirtyWork
+  const reviewChangePartitions = await getDeltaIntakePartitions(database, 'app.review_change_delta')
+  const importPartitions = await getDeltaIntakePartitions(database, 'app.import_run_article_delta')
+  const reviewChangeResults = await reviewChangePartitions.reduce<Promise<ReviewServingProjectorWorkerDeltaIntakeResult>>(
+    async (previousResult, partition) => {
+      const result = await previousResult
+
+      if (result.status === 'failed') {
+        return result
+      }
+
+      const intake = await intakeReviewChangeDeltas({...partition, limit}, database)
+
+      return intake.status === 'failed'
+        ? {...result, status: 'failed'}
+        : {
+            convertedPartitions: result.convertedPartitions + 1,
+            dirtyWorkCount: result.dirtyWorkCount + intake.dirtyWorkCount,
+            status: 'completed',
+          }
+    },
+    Promise.resolve({convertedPartitions: 0, dirtyWorkCount: 0, status: 'idle'}),
+  )
+
+  return importPartitions.reduce<Promise<ReviewServingProjectorWorkerDeltaIntakeResult>>(
+    async (previousResult, partition) => {
+      const result = await previousResult
+
+      if (result.status === 'failed') {
+        return result
+      }
+
+      const intake = await intakeImportDeltas({...partition, limit}, database)
+
+      return intake.status === 'failed'
+        ? {...result, status: 'failed'}
+        : {
+            convertedPartitions: result.convertedPartitions + 1,
+            dirtyWorkCount: result.dirtyWorkCount + intake.dirtyWorkCount,
+            status: 'completed',
+          }
+    },
+    Promise.resolve(reviewChangeResults),
+  )
+}
+
 export const runReviewServingProjectorWorkerCycle = async (
   options: ReviewServingProjectorWorkerCycleOptions = {},
   dependencies: ReviewServingProjectorWorkerDependencies = defaultReviewServingProjectorWorkerDependencies,
@@ -1127,6 +1222,7 @@ export const runReviewServingProjectorWorkerCycle = async (
     workloadContext,
     workerId,
   })
+  const deltaIntake = await runReviewServingProjectorWorkerDeltaIntake({database, dependencies, options})
   const projector = await dependencies.wakeProjectors(getWakeInput(options, wakeId), {
     ...(dependencies.projectorServiceDependencies ?? {runners: getDefaultReviewServingProjectorRunners(database)}),
     database,
@@ -1141,9 +1237,10 @@ export const runReviewServingProjectorWorkerCycle = async (
   return {
     chunk,
     cleanup,
+    deltaIntake,
     nextCleanupAtMs,
     projector,
-    status: getCycleStatus({chunk, cleanup, projector}),
+    status: getCycleStatus({chunk, cleanup, deltaIntake, projector}),
     wakeId,
     workerId,
   }

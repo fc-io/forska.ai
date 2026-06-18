@@ -142,12 +142,12 @@ const insertProjectFixture = async (projectId: string) => {
   }
 
   await runDatabase(`
-    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode)
-    VALUES ('connection-${projectId}', 'sglang', 'SGLang', TRUE, 'none')
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('connection-${projectId}', 'sglang', 'SGLang', TRUE, 'none', 'https://worker.example.test')
   `)
   await runDatabase(`
-    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
-    VALUES ('model-${projectId}', 'connection-${projectId}', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE)
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled, variant, metadata_json)
+    VALUES ('model-${projectId}', 'connection-${projectId}', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE, 'thinking', '{"options":{"thinking":{"effort":"high"}}}'::JSON)
   `)
   await runDatabase(`
     INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
@@ -420,7 +420,8 @@ const insertActiveReviewServingManifest = async (input: {
   const optional = input.includeSearchState
     ? [{baseGeneration: '1', component: 'search', patchWatermark: '0', projectionIdentity: 'search:identity-1'}]
     : []
-  const reviewConfigHash = input.reviewConfigHash === undefined ? getFixtureReviewConfigHash(input.projectId) : input.reviewConfigHash
+  const reviewConfigHash =
+    input.reviewConfigHash === undefined ? getFixtureReviewConfigHash(input.projectId) : input.reviewConfigHash
   const reviewConfigHashSql = reviewConfigHash === null ? 'NULL' : `'${reviewConfigHash}'`
 
   await runDatabase(`
@@ -455,7 +456,15 @@ const insertActiveReviewServingManifest = async (input: {
 const getFixtureReviewConfigHash = (projectId: string) => {
   return buildReviewConfigHash({
     humanJudgmentMode: 'prompt',
-    modelExecutionIdentity: {modelId: `model-${projectId}`},
+    modelExecutionIdentity: {
+      modelExecutionOptions: {thinking: {effort: 'high'}},
+      modelId: `model-${projectId}`,
+      providerBaseUrl: 'https://worker.example.test',
+      providerConnectionId: `connection-${projectId}`,
+      providerKind: 'sglang',
+      remoteModelId: 'Qwen/Qwen3.5-122B-A10B',
+      variant: 'thinking',
+    },
     modelId: `model-${projectId}`,
     promptConfigs: [
       {

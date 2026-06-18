@@ -25,6 +25,10 @@ type TestDatabase = {
   ) => Promise<T>
 }
 
+type DeltaIntakeParams = Parameters<
+  NonNullable<ReviewServingProjectorWorkerDependencies['intakeReviewChangeDeltas']>
+>[0]
+
 const chunkInput = {
   chunkEndKey: 'article-099',
   chunkStartKey: 'article-001',
@@ -174,6 +178,73 @@ test('worker calls projector orchestration with bounded wake budgets and reviewP
   expect(harness.wakeInputs[0]).toMatchObject({batchSize: 3, maxRetries: 2, maxRowsPerWake: 5, maxWakeMs: 250})
   expect(harness.claimInputs[0]).toMatchObject({leaseOwner: 'worker-1', now: new Date('2026-06-16T10:00:00.000Z')})
   expect(harness.workloadContexts).toContainEqual(getReviewServingProjectorWorkerWorkloadContext('worker-1'))
+})
+
+test('worker runs delta intake before waking projectors', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const intakeCalls: Array<{kind: 'import' | 'review'; params: DeltaIntakeParams}> = []
+
+  harness.database.queryJson = async <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => {
+    if (workloadContext) {
+      harness.workloadContexts.push(workloadContext)
+    }
+
+    if (statement.includes('FROM app.review_change_delta')) {
+      return [
+        {endSourceHighWaterMark: 7, sourcePartition: 'review_change_delta:project-1', startSourceHighWaterMark: 3},
+      ] as T[]
+    }
+
+    if (statement.includes('FROM app.import_run_article_delta')) {
+      return [
+        {
+          endSourceHighWaterMark: 11,
+          sourcePartition: 'import_run_article_delta:project-1',
+          startSourceHighWaterMark: 10,
+        },
+      ] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.dependencies.intakeReviewChangeDeltas = async (params: DeltaIntakeParams) => {
+    intakeCalls.push({kind: 'review', params})
+
+    return {dirtyWorkCount: 2, maxSourceHighWaterMark: 7, status: 'converted'}
+  }
+  harness.dependencies.intakeImportDeltas = async (params: DeltaIntakeParams) => {
+    intakeCalls.push({kind: 'import', params})
+
+    return {dirtyWorkCount: 1, maxSourceHighWaterMark: 11, status: 'converted'}
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {maxRowsPerWake: 25, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result.deltaIntake).toEqual({convertedPartitions: 2, dirtyWorkCount: 3, status: 'completed'})
+  expect(intakeCalls).toEqual([
+    {
+      kind: 'review',
+      params: {
+        endSourceHighWaterMark: 7,
+        limit: 25,
+        sourcePartition: 'review_change_delta:project-1',
+        startSourceHighWaterMark: 3,
+      },
+    },
+    {
+      kind: 'import',
+      params: {
+        endSourceHighWaterMark: 11,
+        limit: 25,
+        sourcePartition: 'import_run_article_delta:project-1',
+        startSourceHighWaterMark: 10,
+      },
+    },
+  ])
+  expect(harness.wakeInputs).toHaveLength(1)
 })
 
 test('worker skips completed rebuild chunks whose maintained input digest still matches', async () => {

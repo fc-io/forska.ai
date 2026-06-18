@@ -1,6 +1,10 @@
 import {Elysia, t} from 'elysia'
 
-import {buildPromptConfigHash, buildReviewConfigHash} from '../../reviewServing/reviewProjectionIdentity.ts'
+import {
+  buildPromptConfigHash,
+  buildReviewConfigHash,
+  type ReviewServingIdentityValue,
+} from '../../reviewServing/reviewProjectionIdentity.ts'
 import {getReviewServingSearchAvailabilityFromManifest} from '../../reviewServing/reviewServingTitleSearchProjector.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getJsonValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
@@ -547,21 +551,37 @@ const getReviewServingSearchDiagnostic = async (projectId: string): Promise<Revi
 const getCurrentReviewConfigHash = async (projectId: string) => {
   const [project] = await getAppDatabaseService().queryJson<{
     humanJudgmentMode: 'prompt' | 'summary' | null
+    modelExecutionOptions: unknown
     modelId: string
+    modelProviderBaseUrl: string | null
+    modelProviderConnectionId: string | null
+    modelProviderKind: string | null
+    modelRemoteModelId: string | null
+    modelVariant: string | null
     useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
     useTitle: boolean
   }>(`
     SELECT
-      human_judgment_mode AS humanJudgmentMode,
-      model_id AS modelId,
-      use_title AS useTitle,
-      use_abstract AS useAbstract,
-      use_fulltext AS useFulltext,
-      use_fulltext_no_images AS useFulltextNoImages
+      app.project.human_judgment_mode AS humanJudgmentMode,
+      app.project.model_id AS modelId,
+      model.provider_connection_id AS modelProviderConnectionId,
+      provider_connection.provider_kind AS modelProviderKind,
+      provider_connection.base_url AS modelProviderBaseUrl,
+      model.remote_model_id AS modelRemoteModelId,
+      model.variant AS modelVariant,
+      TO_JSON(json_extract(model.metadata_json, '$.options')) AS modelExecutionOptions,
+      app.project.use_title AS useTitle,
+      app.project.use_abstract AS useAbstract,
+      app.project.use_fulltext AS useFulltext,
+      app.project.use_fulltext_no_images AS useFulltextNoImages
     FROM app.project
-    WHERE id = ${getSqlLiteral(projectId)}
+    LEFT JOIN app.model model
+      ON model.id = app.project.model_id
+    LEFT JOIN app.provider_connection provider_connection
+      ON provider_connection.id = model.provider_connection_id
+    WHERE app.project.id = ${getSqlLiteral(projectId)}
     LIMIT 1
   `)
   const promptConfigs = await getAppDatabaseService().queryJson<{
@@ -587,7 +607,15 @@ const getCurrentReviewConfigHash = async (projectId: string) => {
     ? null
     : buildReviewConfigHash({
         humanJudgmentMode: project.humanJudgmentMode ?? 'prompt',
-        modelExecutionIdentity: {modelId: project.modelId},
+        modelExecutionIdentity: {
+          modelExecutionOptions: getJsonValue(project.modelExecutionOptions) as ReviewServingIdentityValue,
+          modelId: project.modelId,
+          providerBaseUrl: project.modelProviderBaseUrl,
+          providerConnectionId: project.modelProviderConnectionId,
+          providerKind: project.modelProviderKind,
+          remoteModelId: project.modelRemoteModelId,
+          variant: project.modelVariant,
+        },
         modelId: project.modelId,
         promptConfigs: promptConfigs.map((row, index) => {
           return {
