@@ -20,6 +20,29 @@ The serving projector service becomes the single normal write boundary for V4 `m
 - Phase 3 artifacts are not yet implemented: dirty-work conversion/coalescing, component acknowledgements, manifest repositories, snapshot pins, chunk repositories, contribution diffs, selected-import projector, V4 serving writers, projector worker, diagnostics, and retention cleanup remain to do.
 - Phase 3 ends when internal V4 snapshots can be built, patched, promoted, failed, replayed, pinned, and cleaned up safely. Product route migration and removal of legacy read paths remain Phase 4 work.
 
+## Implementation Review - 2026-06-18
+
+Verdict: Phase 3 is not fully implemented. A large portion of the foundation exists, but several Phase 3 completion requirements remain open or only test/injection wired.
+
+| Status | Finding | Evidence | Required Follow-Up |
+|---|---|---|---|
+| Partial | Required service and repository files mostly exist. | `src/server/reviewServing` contains dirty work, contribution, chunk manifest, manifest, snapshot pin, selected-import, writer, projector service, retention, component projector modules, and `src/server/workers/reviewServingProjectorWorker.ts`. | Keep existing tests green, but do not treat file presence as Phase 3 completion. |
+| Open | The base selected-import snapshot projector is not wired into the default projector worker. | `reviewServingSelectedImportProjector.ts` exposes `projectReviewServingSelectedImportBatch`, but production references are limited to tests/coverage inventory; the worker imports and runs `reviewServingSelectedImportPatchProjector.ts` only. | Wire bounded base selected-import snapshot creation/resume/completion into the projector flow, or explicitly re-scope it before Phase 4 route cutover. |
+| Open | The serving projector worker exists but is not started by production runtime wiring. | Searches for `runReviewServingProjectorWorker` only find the worker module and its tests. | Add runtime scheduling/ownership wiring, or document the intended operator entry point and gate Phase 4 on it. |
+| Open | Rebuild chunks, compaction, and cleanup are only partially default-wired. | The worker default `rebuildChunkService.getNextChunk` returns `null`, `runClaimedChunk` is a no-op success, and `getCleanupTargets` returns `[]`; repositories/services exist but discovery/execution is injection-only. | Add real chunk discovery/execution, patch-budget compaction scheduling, and retention target discovery for normal projector operation. |
+| Open | Diagnostics and some route-required projection coverage are incomplete as projector outputs. | Read contracts and tests mention warning/health, prompt badges, detail/list payloads, options, and queue states, but there is no standalone diagnostics projector and badge contribution handling is only vocabulary/test coverage, not a normal projector path. | Close or explicitly re-scope diagnostics, badge, queue contribution, and route-required payload projection coverage before claiming Phase 3 complete. |
+| Open | The Phase 3 Effect rule is not broadly implemented. | Most projector, writer, worker, manifest, lease, and cleanup code uses plain async functions; `effect` usage appears mainly in hot-field/benchmark code. | Either migrate non-trivial server/projector flows to `Effect` or update the plan if the rule is intentionally relaxed. |
+| Complete For Cut Line | Product review routes remain off V4 serving readers. | Route inventory/tests keep incomplete routes unmounted and assert product route handlers do not read V4 serving tables. | This matches the Phase 3 cut line; route migration remains Phase 4 work. |
+
+### Cross-Phase Disposition
+
+| Gap Type | Phase 4 Coverage | Phase 5 Coverage | Disposition |
+|---|---|---|---|
+| Projector internals, selected-import base projection, worker scheduling, chunk execution, compaction, and cleanup | Phase 4 assumes these are ready enough to feed serving readers; it does not replace them. | Phase 5 fails final cutover if these are incomplete. | Close in Phase 3 or as an explicit Phase 3 prerequisite before any Phase 4 route mount. |
+| Serving reader, route migration, durable bulk/search/PDF/export jobs, and parity validation | Phase 4 owns these. | Phase 5 verifies deletion and release gates after Phase 4. | Implement in Phase 4 after Phase 3 projector gaps are closed or explicitly scoped unavailable. |
+| Route response completeness for count, option, detail, warning, preview, badges, and article-set hydration | Phase 4 owns route-reader parity, but missing projector output is a Phase 3 blocker for any mounted route that needs it. | Phase 5 verifies no partial route coverage is claimed as complete. | Split by layer: projection output belongs to Phase 3; reader/route parity belongs to Phase 4. |
+| Final raw fallback deletion, desktop/interruption hardening, and 10M benchmark release gate | Phase 4 prepares migrated routes/jobs. | Phase 5 owns final hardening and release gate. | Do not defer Phase 3 projector gaps to Phase 5; Phase 5 should only verify them. |
+
 ## Remaining Implementation Order
 
 | Status | Slice | Build | Exit Gate |

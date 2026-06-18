@@ -64,6 +64,10 @@ After final verification, normal product review paths must not reach raw fallbac
 - No normal browser or desktop review flow can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
 - Admin/maintenance/debug-only raw reads are named, route-classified, guarded, and excluded from normal product flows.
 
+### Phase 3 Gap Carry-Forward - 2026-06-18
+
+Phase 5 does not absorb unfinished Phase 3 projector work. If base selected-import projection, production projector worker scheduling, chunk execution/resume, compaction, pin-aware cleanup, diagnostics/badge/queue contribution coverage, or single-writer ownership remain incomplete, the Phase 5 cutover gate fails even if route-reader work exists. Phase 5 should verify these guarantees, not be the first phase to implement them.
+
 ## Desktop And Interruption Rules
 
 - Browser and desktop flows use the same bounded serving/job/admission behavior.

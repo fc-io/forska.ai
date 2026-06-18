@@ -20,13 +20,44 @@ Route-specific parity validation blocks that route migration on semantic mismatc
 - Serving-shaped branches that still live in `duckdbOlap.ts`, OLAP wrappers, route handlers, or shared raw hydration helpers remain legacy until moved behind `reviewServingReader` with no raw fallback decision path.
 - The implemented state vocabulary is `ready`, `indexing`, `stale`, and `unavailable` for freshness; `candidate`, `active`, `failed`, and `retired` are snapshot statuses that reader diagnostics must expose without treating failed or candidate snapshots as readable freshness states.
 
+## Implementation Readiness Review - 2026-06-18
+
+- Verdict: Phase 4 is ready to start as an implementation backlog, but no production route is ready to mount yet. The next safe slice is non-mounted reader/job/search/parity implementation plus tests behind the existing `mounted: false` inventory.
+- No Phase 4 production route migration appears complete. `reviewServingReadContractRouteInventory` has no `mounted: true` entries, and the target route handlers still use OLAP wrappers, direct DuckDB SQL, shared raw hydration helpers, or process-local PDF job state.
+- Do not re-implement the Phase 3 foundation listed below. Phase 4 should build on it and only change a production route after that route's serving reader, parity, SQL-shape, budget, and browser/desktop gates pass.
+- Phase 3 is not fully complete as of this review. Before any route inventory entry becomes `mounted: true`, close or explicitly re-scope the Phase 3 gaps recorded in `DUCK_CQRS_PLAN_PHASE_3.md`: base selected-import projector wiring, production projector worker scheduling, chunk/compaction/cleanup discovery, diagnostics/badge/queue contribution coverage, and the Phase 3 Effect rule decision.
+
+## Already Implemented Foundation
+
+| Area | Current Code | Phase 4 Use |
+|---|---|---|
+| Read contract registry and route inventory | `src/server/reviewServing/reviewServingReadContracts.ts` plus `reviewServingReadContracts.test.ts` | Use the existing contract keys, budgets, physical access strategies, surfaces, and conservative `mounted: false` entries. Do not mark an entry `mounted: true` until full product response parity is proven. |
+| Serving state vocabulary | `src/server/reviewServing/reviewServingContracts.ts` | Reuse `ready`, `indexing`, `stale`, `unavailable` freshness states and `candidate`, `active`, `failed`, `retired` snapshot statuses in reader diagnostics. |
+| Admission and workload context | `src/server/reviewServing/reviewServingAdmission.ts` plus tests | Route adapters and jobs should call this before DuckDB work. It already rejects budget excess, unsupported count state, stale snapshots without stale allowance, mismatched search modes, and synchronous substring search. |
+| Cursor and filter signatures | `src/server/reviewServing/reviewServingCursor.ts` plus tests | Use these for projection-identity, snapshot, component-state, and filter-scoped cursors instead of route-local cursor parsing. |
+| SQL-shape guard and serving SQL builder | `src/server/reviewServing/reviewServingSql.ts` and `reviewServingSqlForbiddenPatterns.ts` plus tests | Build serving-table queries through these helpers and assert no raw fallback tables, `OFFSET`, unregistered tables, missing project/snapshot scope, or missing limits. |
+| Snapshot manifests, pins, and retention protection | `reviewServingManifestRepository.ts`, `reviewServingSnapshotPinRepository.ts`, `reviewServingRetentionService.ts` plus tests | Use manifest diagnostics for reader freshness and use pins for repeatable durable jobs. |
+| V4 projector foundation | `reviewServingProjectorService.ts`, projector modules, and `src/server/workers/reviewServingProjectorWorker.ts` plus tests | Treat this as a partial writer/projection foundation until the Phase 3 audit gaps are closed. Phase 4 should not add raw read fallbacks when projections are unavailable. |
+| Title-search projection and contracts | `reviewServingTitleSearchProjector.ts`, `mart.review_title_search_serving_v4`, and `review.search.tokenPrefix` / `review.search.substringAsync` contracts | Use token/prefix search for synchronous ready state and async/unavailable behavior for substring search until a benchmarked n-gram projection exists. |
+| Durable job tables and contract references | DuckDB migration `0097_reviewServingV4Foundation.sql` creates `app.review_bulk_operation_job` and `app.review_search_job`; read contracts reference both tables | Build `reviewBulkOperationService`, `reviewBulkOperationWorker`, and `reviewSearchService` on these tables instead of introducing process-local state. |
+
+## Missing Before Any Route Cutover
+
+- `src/server/reviewServing/reviewServingReader.ts` with manifest lookup, admission, SQL-shape assertion, cursor handling, filter/search/count state handling, diagnostics, and no raw fallback path.
+- `src/server/reviewServing/reviewBulkOperationService.ts` for select-all, add-to-project, PDF, and export criteria persistence, snapshot pinning or declared latest-snapshot semantics, keyset batching, cancellation, retry, and resume.
+- `src/server/workers/reviewBulkOperationWorker.ts` for durable job execution over bounded batches.
+- `src/server/reviewServing/reviewSearchService.ts` for ready token/prefix reads and async/unavailable substring behavior.
+- Route-specific parity validation runner and semantic fixtures comparing `reviewServingReader` output to safe-size current behavior before each route switches.
+- Serving-only route/job tests proving no raw fallback, no all-ID foreground materialization, no process-local job state, no large `OFFSET`, no synchronous substring scans, and full current response shape coverage.
+- Browser review-flow verification for freshness diagnostics and desktop route-surface verification or desktop build for shared runtime changes.
+
 ## Workstreams
 
 | Status | Theme | Implement First | Done When |
 |---|---|---|---|
-| [ ] | Foreground serving reads | Build `reviewServingReader` on the existing read contracts, admission, cursor/filter signature, SQL-shape guard, and manifest diagnostics, then migrate LLM, human, both, unassessed, filters, facets, badges, counts, rows, queues, detail reads, health/warnings, and prompt preview to it. | Route tests prove serving-only reads, complete product response coverage for each serving-mounted route inventory entry, projection-identity/snapshot/filter-scoped cursors, bounded filter access, result caps, no raw fallback, no `OFFSET`, no JSON extraction/sorts, no project-wide windows, registry-based admission, and deletion or hard-disablement of the matching legacy path. |
-| [ ] | Route-specific parity validation | Run the new serving reader against semantic fixtures, invariant checks, benchmarks, and safe-size current behavior before each route or flow is migrated. | Parity checks pass for row payload semantics, named count states, freshness states, cursor behavior, SQL shape, latency budgets, result bytes, and no forbidden foreground DuckDB work before that production route switches. |
-| [ ] | Bulk, export, PDF, and search jobs | Replace select-all/add-to-project/PDF/export all-ID materialization with durable keyset-batched jobs. Add token/prefix search and async-only substring behavior unless n-gram projection is benchmarked. | Bulk/search tests prove criteria/projection-identity/snapshot/filter signatures are persisted, repeatable jobs pin snapshots, batches are bounded, jobs resume/cancel/retry, and synchronous substring search scans are not admitted. |
+| [ ] | Foreground serving reads | Build `reviewServingReader` on the existing read contracts, admission, cursor/filter signature, SQL-shape guard, and manifest diagnostics. Keep route inventory entries `mounted: false` until reader tests and route-specific parity pass, then migrate LLM, human, both, unassessed, filters, facets, badges, counts, rows, queues, detail reads, health/warnings, and prompt preview route by route. | Route tests prove serving-only reads, complete product response coverage for each serving-mounted route inventory entry, projection-identity/snapshot/filter-scoped cursors, bounded filter access, result caps, no raw fallback, no `OFFSET`, no JSON extraction/sorts, no project-wide windows, registry-based admission, and deletion or hard-disablement of the matching legacy path. |
+| [ ] | Route-specific parity validation | Implement the parity runner before the first route mount, then run the new serving reader against semantic fixtures, invariant checks, benchmarks, and safe-size current behavior before each route or flow is migrated. | Parity checks pass for row payload semantics, named count states, freshness states, cursor behavior, SQL shape, latency budgets, result bytes, and no forbidden foreground DuckDB work before that production route switches. |
+| [ ] | Bulk, export, PDF, and search jobs | Build durable services on the existing `app.review_bulk_operation_job` and `app.review_search_job` tables. Replace select-all/add-to-project/PDF/export all-ID materialization with durable keyset-batched jobs. Add token/prefix search and async-only substring behavior unless n-gram projection is benchmarked. | Bulk/search tests prove criteria/projection-identity/snapshot/filter signatures are persisted, repeatable jobs pin snapshots, batches are bounded, jobs resume/cancel/retry, and synchronous substring search scans are not admitted. |
 | [ ] | DuckDB usage migration | Resolve every row in the DuckDB usage migration inventory. | Each current review-related DuckDB use delegates to serving/admission/job logic or is explicitly marked admin/maintenance/debug-only. |
 
 ## Read Migration Scope
@@ -42,6 +73,15 @@ Route-specific parity validation blocks that route migration on semantic mismatc
 - Bulk/PDF/export/add-to-project routes: `ArticlesRoutes.ts`, `ProjectExportRoutes.ts`, and `ProjectsAddArticlesRoutes.ts` for `/api/articles/pdf-fetch-by-filter`, `/api/articles/pdf-fetch-by-project`, `/api/articles/pdf-fetch-jobs/:jobId`, `/api/projects/:id/export`, `/api/projects/add_articles_by_filter`, and `/api/projects/add_articles_by_ids`.
 - Explicit-ID PDF bulk route `/api/articles/pdf-fetch-bulk` is not a project-scoped review-serving inventory entry. It remains in Phase 4 job migration scope and must move to durable article-ID-only job admission with per-request ID and payload caps.
 - Ambiguous adjacent surfaces must be classified before Phase 4 closes: `/api/articles/search`, `/api/articles/latest`, `/api/projects/:id/articles`, and `HumanAssessmentRoutes.ts` are either migrated to serving/job/admission behavior when they participate in review flows or explicitly marked out of scope/admin/debug with a reason.
+
+### Current Route Implementation Check - 2026-06-18
+
+- `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviews.ts`, `projectsRoutesGetArticlesReviewsCount.ts`, `projectsRoutesGetArticlesReviewsBoth.ts`, `projectsRoutesGetArticlesReviewsUnassessed.ts`, and `projectsRoutesGetArticlesReviewsFilters.ts` still call OLAP wrappers.
+- `projectsRoutesGetArticlesReviewsHuman.ts`, `projectsRoutesGetArticlesReviewsHumanFilters.ts`, `projectsRoutesPostArticleReviewDetails.ts`, `projectsRoutesGetPromptPreview.ts`, `ArticlesRoutes.ts`, and `ProjectExportRoutes.ts` still contain direct DuckDB/app-query SQL or shared raw hydration paths that must move behind serving readers or job services before the related route is marked mounted.
+- The current human review routes still use large candidate ID arrays and `OFFSET`; they need serving row/article-set/posting access before 10M-scale certification.
+- The current PDF filter/project and add-to-project-by-filter paths still materialize all matching article IDs in the foreground request.
+- `/api/articles/pdf-fetch-jobs/:jobId` currently reads `src/server/services/pdfFetchJobs.ts`, which stores jobs in an in-memory `Map`; Phase 4 durable jobs must replace this for migrated PDF flows.
+- The public route-surface inventory already classifies `/api/articles/search`, `/api/articles/latest`, `/api/projects/:id/articles`, and `HumanAssessmentRoutes.ts` as product surfaces, but Phase 4 still needs a review-serving participation decision for each.
 
 ## Route Completeness Requirements
 
@@ -70,6 +110,12 @@ Route-specific parity validation blocks that route migration on semantic mismatc
 - Explicit-ID PDF bulk requests use durable article-ID-only job admission with per-request ID and payload budgets. Filter/project PDF requests use persisted selection criteria and never materialize all matching IDs in the foreground request.
 - Job routes and lookup routes, including `/api/articles/pdf-fetch-jobs/:jobId`, bind `job_kind`, filter signature, search mode/text when relevant, projection identity, snapshot pin or latest-snapshot semantics, `updated_at`, and `job_id`; they do not reuse article-row cursors for job-table pagination or in-memory process-local job state.
 
+### Current Job Implementation Check - 2026-06-18
+
+- The DuckDB schema and read contracts already include durable job tables, but the Phase 4 services and worker that write and execute those jobs do not exist yet.
+- Existing PDF fetch jobs are process-local and receive foreground materialized ID arrays. Treat them as legacy for Phase 4 migrated PDF routes.
+- Existing title-search projection support is available, but route/search service wiring still needs to enforce token/prefix ready reads and async/unavailable substring behavior at the API boundary.
+
 ## Serving Reader Rules
 
 - Migrated routes call `reviewServingReader` or job services instead of `duckdbOlap.ts`.
@@ -96,15 +142,26 @@ Route-specific parity validation blocks that route migration on semantic mismatc
 
 Use the `effect` library for non-trivial JavaScript/TypeScript async and server flow in Phase 4 readers, route adapters, durable jobs, workers, search, export/PDF, and parity validation. Prefer `Effect.gen` for sequencing, `Layer`/`Context` for service wiring, `Effect.acquireRelease`/`Scope` for resource lifetime, and `Schedule` for retries, polling, and backoff. Keep pure transforms and very small handlers as plain functions.
 
-## Required Artifacts
+## Required Artifacts And Current Status
 
-- `src/server/reviewServing/reviewServingReader.ts`
-- `src/server/reviewServing/reviewBulkOperationService.ts`
-- `src/server/workers/reviewBulkOperationWorker.ts`
-- `src/server/reviewServing/reviewSearchService.ts`
-- Route-specific parity validation runner/checks
-- Route tests for serving-only behavior and durable job creation
-- Static or route-surface tests for browser/desktop classification
+| Status | Artifact | Notes |
+|---|---|---|
+| Missing | `src/server/reviewServing/reviewServingReader.ts` | First implementation target. It should compose existing contracts, admission, manifests, cursor/filter signatures, SQL builder, and diagnostics. |
+| Missing | `src/server/reviewServing/reviewBulkOperationService.ts` | Should persist criteria and job identity in `app.review_bulk_operation_job`, not process-local memory or all-ID arrays. |
+| Missing | `src/server/workers/reviewBulkOperationWorker.ts` | Should execute durable jobs in bounded keyset batches with cancellation, retry, resume, and progress state. |
+| Missing | `src/server/reviewServing/reviewSearchService.ts` | Should enforce token/prefix ready search and async/unavailable substring behavior. |
+| Missing | Route-specific parity validation runner/checks | Existing OLAP parity tests are not enough because they do not compare `reviewServingReader` responses. |
+| Missing | Route tests for serving-only behavior and durable job creation | Required before any route inventory entry can become `mounted: true`. |
+| Partially present | Static or route-surface tests for browser/desktop classification | Public route-surface inventory tests exist; Phase 4 still needs serving/job-specific browser and desktop verification for changed shared runtime paths. |
+
+## Existing Supporting Gates
+
+- `bun test src/server/reviewServing/reviewServingReadContracts.test.ts` already protects route inventory completeness and keeps incomplete entries unmounted.
+- `bun test src/server/reviewServing/reviewServingAdmission.test.ts` already covers budget, freshness, count, search, and workload admission rules.
+- `bun test src/server/reviewServing/reviewServingSql.test.ts` already covers serving SQL shape and forbidden patterns for helper-built queries.
+- `bun test src/server/reviewServing/reviewServingCursor.test.ts` already covers projection-identity, snapshot, component-state, and filter-scoped cursor validation.
+- Projector, manifest, pin, retention, schema, and title-search tests exist under `src/server/reviewServing` and should stay green while Phase 4 adds reader/job wiring.
+- These supporting gates are prerequisites only; they do not replace the route-specific Phase 4 quality gates below.
 
 ## Quality Gates
 
