@@ -1,0 +1,229 @@
+import {readFile} from 'node:fs/promises'
+
+import {expect, test} from 'bun:test'
+
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
+import type {ReviewServingProjectionComponent, ReviewServingSnapshotStatus} from './reviewServingContracts.ts'
+import {getReviewFiltersFromServing} from './reviewServingFilterRouteService.ts'
+import type {ReviewServingManifestRepositoryDatabase} from './reviewServingManifestRepository.ts'
+import type {ReviewServingReaderDatabase} from './reviewServingReader.ts'
+
+const components: readonly ReviewServingProjectionComponent[] = [
+  'display',
+  'projectScope',
+  'selectedImport',
+  'llmStatus',
+  'humanStatus',
+  'posting',
+  'summary',
+  'search',
+]
+const forbiddenSqlFragments = [
+  'FROM app.article',
+  'FROM app.judgment',
+  'FROM app.judgment_human',
+  'selected_scoped_article_import',
+  'OFFSET',
+  'json_extract',
+  'json_extract_string',
+]
+
+const getComponentState = () => {
+  return {
+    optional: [],
+    required: components.map((component) => {
+      return {
+        baseGeneration: '1',
+        component,
+        patchWatermark: '2',
+        projectionIdentity: `${component}-identity`,
+        requirement: 'required' as const,
+      }
+    }),
+  }
+}
+
+const getSnapshotRow = (status: ReviewServingSnapshotStatus) => {
+  return {
+    componentStateJson: getComponentState(),
+    composedIdentityJson: {snapshot: `${status}-snapshot`},
+    lastError: status === 'failed' ? 'projection failed' : null,
+    lastKnownGoodSnapshotId: status === 'active' ? 'retired-snapshot' : null,
+    optionalComponentsJson: [],
+    projectId: 'project-1',
+    requiredComponentsJson: components,
+    reviewConfigHash: 'config-1',
+    selectedImportSnapshotId: 'selected-import-snapshot-1',
+    snapshotId: `${status}-snapshot`,
+    snapshotStatus: status,
+    sourceWatermarksJson: {},
+    validationResultJson: null,
+  }
+}
+
+const createManifestDatabase = (status: ReviewServingSnapshotStatus | 'missing') => {
+  const database: ReviewServingManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      if (!statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return []
+      }
+
+      if (status === 'missing') {
+        return []
+      }
+
+      if (statement.includes('snapshot_id =')) {
+        return [getSnapshotRow(status)] as T[]
+      }
+
+      if (statement.includes("snapshot_status = 'active'")) {
+        return status === 'active' ? ([getSnapshotRow('active')] as T[]) : []
+      }
+
+      if (statement.includes("snapshot_status = 'retired'")) {
+        return status === 'retired' ? ([getSnapshotRow('retired')] as T[]) : []
+      }
+
+      return [getSnapshotRow(status)] as T[]
+    },
+    run: async () => {},
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+
+  return database
+}
+
+const createReaderDatabase = () => {
+  const statements: string[] = []
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string, _workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
+      statements.push(statement)
+
+      if (statement.includes('FROM mart.review_filter_option_serving_v4')) {
+        return [
+          {
+            count_value: 3,
+            facet_key: 'promptAnswer',
+            facet_value: 'yes',
+            filter_kind: 'review',
+            option_payload_json: {filterType: 'enum', promptId: 'prompt-1', value: 'yes'},
+            option_value_key: 'review:promptAnswer:prompt-1:yes',
+            prompt_id: 'prompt-1',
+          },
+          {
+            count_value: 1,
+            facet_key: 'publicationYear',
+            facet_value: '2026',
+            filter_kind: 'review',
+            option_payload_json: {facetKey: 'publicationYear', filterType: 'enum', value: '2026'},
+            option_value_key: 'review:publicationYear:2026',
+          },
+        ] as T[]
+      }
+
+      return [
+        {
+          availability: 'ready',
+          count_value: 3,
+          facet_key: 'promptAnswer',
+          facet_kind: 'review',
+          facet_value: 'yes',
+          prompt_id: 'prompt-1',
+          summary_identity: 'review.filter.promptAnswer',
+        },
+      ] as T[]
+    },
+  }
+
+  return {database, statements}
+}
+
+test('review filter route service reads facet and option contracts without raw fallback SQL', async () => {
+  const reader = createReaderDatabase()
+  const response = await getReviewFiltersFromServing({
+    dependencies: {database: reader.database, manifestDatabase: createManifestDatabase('active')},
+    mode: 'review',
+    params: {covidenceConflicts: '1', covidenceDuplicates: '1', projectId: 'project-1', search: 'heart'},
+    promptRows: [{id: 'prompt-1', promptHeading: 'Prompt 1', originalText: 'Prompt one'}],
+  })
+  const sql = reader.statements.join('\n')
+
+  expect(response.filters).toEqual([
+    {answeredOriginalValues: ['yes'], filterType: 'enum', promptId: 'prompt-1', promptName: 'Prompt 1'},
+  ])
+  expect(response.facets[0]).toMatchObject({facet_key: 'promptAnswer', summary_identity: 'review.filter.promptAnswer'})
+  expect(response.filterOptions[0]).toMatchObject({optionValueKey: 'review:promptAnswer:prompt-1:yes'})
+  expect(response.searchScope).toMatchObject({mode: 'tokenPrefix', searchIdentity: 'search-identity', text: 'heart'})
+  expect(reader.statements).toHaveLength(5)
+  expect(sql).toContain('FROM mart.review_filter_facet_serving_v4')
+  expect(sql).toContain('FROM mart.review_filter_option_serving_v4')
+  expect(sql).toContain("AND facet_kind = 'review'")
+  expect(sql).toContain('AND search_identity = ')
+  forbiddenSqlFragments.forEach((fragment) => {
+    expect(sql).not.toContain(fragment)
+  })
+})
+
+test('human filter route service keeps summary-mode answer scope from serving options', async () => {
+  const statements: string[] = []
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      return statement.includes('FROM mart.review_filter_option_serving_v4')
+        ? ([
+            {
+              count_value: 2,
+              facet_key: 'promptAnswer',
+              facet_value: 'include',
+              filter_kind: 'human',
+              option_payload_json: {filterType: 'enum', promptId: 'summary', summaryMode: true, value: 'include'},
+              option_value_key: 'human:promptAnswer:summary:include',
+              prompt_id: 'summary',
+            },
+          ] as T[])
+        : ([] as T[])
+    },
+  }
+  const response = await getReviewFiltersFromServing({
+    dependencies: {database, manifestDatabase: createManifestDatabase('active')},
+    mode: 'human',
+    params: {projectId: 'project-1'},
+    promptRows: [{id: 'prompt-1', promptHeading: 'Prompt 1'}],
+  })
+
+  expect(response.filters).toEqual([
+    {
+      answeredOriginalValues: ['include'],
+      filterType: 'enum',
+      promptId: 'summary',
+      promptName: 'Overall human screening decision',
+    },
+  ])
+  expect(statements.join('\n')).toContain("AND facet_kind = 'human'")
+})
+
+test('filter contracts cover synchronous combinations with bounded serving access', async () => {
+  const source = await readFile(new URL('./reviewServingReadContracts.ts', import.meta.url), 'utf8')
+  const routeSource = await readFile(
+    new URL('../routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts', import.meta.url),
+    'utf8',
+  )
+  const humanRouteSource = await readFile(
+    new URL('../routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts', import.meta.url),
+    'utf8',
+  )
+
+  expect(source).toContain("physicalAccessStrategy: 'orderedPrefix'")
+  expect(source).toContain("physicalAccessStrategy: 'postingIntersection'")
+  expect(source).toContain("physicalAccessStrategy: 'summaryLookup'")
+  expect(source).toContain("'review.filters.facets'")
+  expect(source).toContain("'review.filters.options'")
+  expect(source).toContain("'review.human.filters.facets'")
+  expect(source).toContain("'review.human.filters.options'")
+  expect(source).toContain("namedFastCounts: ['review.human.filter.promptAnswer', 'review.human.filter.summaryAnswer']")
+  expect(`${routeSource}\n${humanRouteSource}`).not.toContain('articlesReviewsFiltersOlap')
+  expect(`${routeSource}\n${humanRouteSource}`).not.toContain('getAppDatabaseService')
+})
