@@ -214,6 +214,7 @@ test('summary-mode human rows join queue work through article-level summary prom
 
   expect(result.patchRowCount).toBe(1)
   expect(selectStatement).toContain("AND (llm.prompt_id = human.prompt_id OR human.prompt_id = 'summary')")
+  expect(selectStatement).toContain("human.prompt_id <> 'summary' OR project_settings.human_judgment_mode = 'summary'")
   expect(selectStatement).toContain('SELECT DISTINCT')
 })
 

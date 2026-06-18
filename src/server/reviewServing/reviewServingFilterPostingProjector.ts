@@ -314,11 +314,26 @@ const getPostingContributionRows = async (
           WHERE human.project_id = ${getSqlLiteral(input.projectId)}
             AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND ${getLatestHumanPatchPredicate('human')}
+        ), project_settings AS (
+          SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = ${getSqlLiteral(input.projectId)}), 'prompt') AS human_judgment_mode
         ),
         human_article_status AS (
-          SELECT article_id, list_mode_key, MAX(latest_human_updated_at) AS latest_human_updated_at, COUNT(*) FILTER (WHERE NOT tombstone) = 0 AS tombstone, CASE WHEN COUNT(*) FILTER (WHERE NOT tombstone AND human_status_key = 'answered') = COUNT(*) FILTER (WHERE NOT tombstone) AND COUNT(*) FILTER (WHERE NOT tombstone) > 0 THEN 'answered' ELSE 'unanswered' END AS human_status_key
+          SELECT
+            human.article_id,
+            human.list_mode_key,
+            MAX(human.latest_human_updated_at) AS latest_human_updated_at,
+            CASE
+              WHEN project_settings.human_judgment_mode = 'summary' THEN COUNT(*) FILTER (WHERE NOT human.tombstone AND human.prompt_id = 'summary') = 0
+              ELSE COUNT(*) FILTER (WHERE NOT human.tombstone AND human.prompt_id <> 'summary') = 0
+            END AS tombstone,
+            CASE
+              WHEN project_settings.human_judgment_mode = 'summary' AND COUNT(*) FILTER (WHERE NOT human.tombstone AND human.prompt_id = 'summary' AND human.human_status_key = 'answered') > 0 THEN 'answered'
+              WHEN project_settings.human_judgment_mode <> 'summary' AND COUNT(*) FILTER (WHERE NOT human.tombstone AND human.prompt_id <> 'summary' AND human.human_status_key = 'answered') = COUNT(*) FILTER (WHERE NOT human.tombstone AND human.prompt_id <> 'summary') AND COUNT(*) FILTER (WHERE NOT human.tombstone AND human.prompt_id <> 'summary') > 0 THEN 'answered'
+              ELSE 'unanswered'
+            END AS human_status_key
           FROM latest_human_patch
-          GROUP BY article_id, list_mode_key
+          CROSS JOIN project_settings
+          GROUP BY human.article_id, human.list_mode_key, project_settings.human_judgment_mode
         ),
         human_postings AS (
           SELECT human.article_id AS articleId, human.list_mode_key AS listModeKey, COALESCE(human.latest_human_updated_at, scoped.sort_key) AS sortKey, human.tombstone OR scoped.scope_tombstone AS tombstone, 'humanStatus' AS filterKind, human.human_status_key AS filterValue

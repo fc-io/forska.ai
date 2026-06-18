@@ -235,6 +235,8 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
                 AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
                 AND newer.article_id = selected_patch.article_id
             )
+        ), project_settings AS (
+          SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = ${getSqlLiteral(input.projectId)}), 'prompt') AS human_judgment_mode
         ),
         llm_queue AS (
           SELECT
@@ -282,6 +284,7 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
             AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND human.article_id = scoped.article_id
             ${getHumanDirtyPromptJoin(promptIds)}
+          CROSS JOIN project_settings
           INNER JOIN mart.review_llm_status_patch_v4 llm
             ON llm.project_id = ${getSqlLiteral(input.projectId)}
             AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
@@ -309,6 +312,7 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
                 AND newer.prompt_id IS NOT DISTINCT FROM human.prompt_id
                 AND newer.list_mode_key = human.list_mode_key
             )
+            AND (human.prompt_id <> 'summary' OR project_settings.human_judgment_mode = 'summary')
         ),
         queue_union AS (
           SELECT * FROM llm_queue

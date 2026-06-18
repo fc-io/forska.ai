@@ -99,6 +99,42 @@ test('title search projection writes token rows and search-only component state 
   expect(joined).not.toContain("'selectedImport'")
 })
 
+test('project-scoped title search rebuilds all scoped articles instead of deriving an article id from scope id', async () => {
+  const {database, statements} = createTitleSearchDatabase()
+
+  await projectReviewServingTitleSearchRows(
+    {
+      baseGeneration: 2,
+      claims: [
+        searchClaim({
+          articleId: null,
+          dirtyKind: 'project.reviewConfig.updated',
+          scopeId: 'project-1',
+          scopeKind: 'project',
+        }),
+      ],
+      definitionVersion: 'search-v4-test',
+      projectId: 'project-1',
+      projectScopeIdentity: 'projectScope:identity-1',
+      projectionIdentity: 'search:identity-1',
+      searchIdentity: 'search:identity-1',
+      snapshotId: 'snapshot-1',
+    },
+    database,
+  )
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('FROM mart.project_scope_article scope')
+  })
+  const deleteStatement = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_title_search_serving_v4')
+  })
+
+  expect(selectStatement).not.toContain('WITH dirty_article(article_id)')
+  expect(selectStatement).not.toContain('INNER JOIN dirty_article dirty')
+  expect(deleteStatement).toContain('search_identity')
+  expect(deleteStatement).not.toContain('article_id IN')
+})
+
 test('search availability distinguishes ready indexing unavailable and async states', () => {
   expect(
     getReviewServingSearchAvailabilityFromManifest({

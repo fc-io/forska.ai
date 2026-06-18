@@ -272,7 +272,10 @@ test('status postings use article-level all-prompt status rows', async () => {
   expect(selectStatement).toContain('human_article_status AS')
   expect(selectStatement).toContain("'humanStatus' AS filterKind, human.human_status_key AS filterValue")
   expect(selectStatement).toContain("COUNT(*) FILTER (WHERE NOT tombstone AND llm_status_key = 'answered')")
-  expect(selectStatement).toContain("COUNT(*) FILTER (WHERE NOT tombstone AND human_status_key = 'answered')")
+  expect(selectStatement).toContain('project_settings AS')
+  expect(selectStatement).toContain("human_judgment_mode = 'summary'")
+  expect(selectStatement).toContain("human.prompt_id = 'summary' AND human.human_status_key = 'answered'")
+  expect(selectStatement).toContain("human.prompt_id <> 'summary' AND human.human_status_key = 'answered'")
 })
 
 test('prompt-answer postings encode prompt ids in filter values', async () => {
