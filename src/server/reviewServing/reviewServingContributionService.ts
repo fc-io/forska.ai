@@ -252,6 +252,9 @@ export const prepareReviewServingContributionDiff = async (
       return row.articleId
     })
   const corruptedArticleIds = getCorruptedArticleIds(oldRows)
+  const finiteStoredRows = storedRows.filter((row) => {
+    return Number.isFinite(row.contributionValue)
+  })
   const missingArticleIds = getMissingArticleIds({
     expectedArticleIds: input.expectedArticleIds,
     oldRows,
@@ -266,7 +269,7 @@ export const prepareReviewServingContributionDiff = async (
   return {
     contributionRecords,
     deleteContributionStateStatement: getDeleteContributionStateStatement(input, !repairRequired),
-    diffs: repairRequired ? [] : getContributionDiffsFromRows({newRows: input.newRows, oldRows}),
+    diffs: getContributionDiffsFromRows({newRows: input.newRows, oldRows: repairRequired ? finiteStoredRows : oldRows}),
     repairDirtyWork: repairRequired
       ? getRepairDirtyWork({
           articleIds: repairArticleIds,

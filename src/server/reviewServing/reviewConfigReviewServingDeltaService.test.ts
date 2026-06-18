@@ -94,9 +94,9 @@ test('config delta invalidation includes project scope for date and import-route
     'humanStatus',
     'queue',
     'posting',
+    'search',
     'summary',
+    'payload',
   ])
   expect(projectRule?.affectedComponents).not.toContain('display')
-  expect(projectRule?.affectedComponents).not.toContain('search')
-  expect(projectRule?.affectedComponents).not.toContain('payload')
 })

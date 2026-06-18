@@ -2,7 +2,12 @@ import {hostname} from 'node:os'
 
 import {sleep} from '../../utils/sleep.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {buildPromptConfigHash, buildReviewConfigHash} from '../reviewServing/reviewProjectionIdentity.ts'
+import {
+  buildPromptConfigHash,
+  buildReviewConfigHash,
+  type ReviewServingIdentityValue,
+} from '../reviewServing/reviewProjectionIdentity.ts'
+import {getReviewServingSourcePartitionWatermarks} from '../reviewServing/reviewServingProjectorDomain.ts'
 import {reviewServingListModes, type ReviewServingProjectionComponent} from '../reviewServing/reviewServingContracts.ts'
 import {projectReviewServingDisplayPatches, projectReviewServingPayloadRows} from '../reviewServing/reviewServingDisplayPayloadProjector.ts'
 import {
@@ -140,7 +145,13 @@ type ReviewServingSnapshotContext = ReviewServingSnapshotContextRow & {
 
 type ProjectReviewSettingsRow = {
   humanJudgmentMode: 'prompt' | 'summary'
+  modelExecutionOptions: unknown
   modelId: string
+  modelProviderBaseUrl: string | null
+  modelProviderConnectionId: string | null
+  modelProviderKind: string | null
+  modelRemoteModelId: string | null
+  modelVariant: string | null
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -364,14 +375,24 @@ const requireSelectedImportSnapshotId = (snapshot: ReviewServingSnapshotContext)
 const getProjectReviewSettings = async (projectId: string, database: ReviewServingProjectorWorkerDatabase) => {
   const rows = await database.queryJson<ProjectReviewSettingsRow>(`
     SELECT
-      COALESCE(human_judgment_mode, 'prompt') AS humanJudgmentMode,
-      model_id AS modelId,
-      use_title AS useTitle,
-      use_abstract AS useAbstract,
-      use_fulltext AS useFulltext,
-      use_fulltext_no_images AS useFulltextNoImages
-    FROM app.project
-    WHERE id = ${getSqlLiteral(projectId)}
+      COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode,
+      project.model_id AS modelId,
+      model.provider_connection_id AS modelProviderConnectionId,
+      provider_connection.provider_kind AS modelProviderKind,
+      provider_connection.base_url AS modelProviderBaseUrl,
+      model.remote_model_id AS modelRemoteModelId,
+      model.variant AS modelVariant,
+      TO_JSON(json_extract(model.metadata_json, '$.options')) AS modelExecutionOptions,
+      project.use_title AS useTitle,
+      project.use_abstract AS useAbstract,
+      project.use_fulltext AS useFulltext,
+      project.use_fulltext_no_images AS useFulltextNoImages
+    FROM app.project project
+    LEFT JOIN app.model model
+      ON model.id = project.model_id
+    LEFT JOIN app.provider_connection provider_connection
+      ON provider_connection.id = model.provider_connection_id
+    WHERE project.id = ${getSqlLiteral(projectId)}
     LIMIT 1
   `)
   const row = rows[0]
@@ -416,7 +437,15 @@ const getPromptConfigHash = (row: ProjectPromptConfigRow) => {
 const getReviewConfigHash = (input: ProjectReviewSettingsRow & {promptConfigRows: readonly ProjectPromptConfigRow[]}) => {
   return buildReviewConfigHash({
     humanJudgmentMode: input.humanJudgmentMode,
-    modelExecutionIdentity: {modelId: input.modelId},
+    modelExecutionIdentity: {
+      modelExecutionOptions: getJsonValue(input.modelExecutionOptions) as ReviewServingIdentityValue,
+      modelId: input.modelId,
+      providerBaseUrl: input.modelProviderBaseUrl,
+      providerConnectionId: input.modelProviderConnectionId,
+      providerKind: input.modelProviderKind,
+      remoteModelId: input.modelRemoteModelId,
+      variant: input.modelVariant,
+    },
     modelId: input.modelId,
     promptConfigs: input.promptConfigRows.map((row, index) => {
       return {promptConfigHash: getPromptConfigHash(row), promptId: row.promptId, promptOrder: row.promptOrder ?? index}
@@ -599,6 +628,7 @@ const getDefaultReviewServingProjectorRunners = (
                     definitionVersion: manifest.definitionVersion,
                     inputDigest,
                     inputWatermark: patchWatermark,
+                    inputWatermarks: getReviewServingSourcePartitionWatermarks(context.claims),
                     invalidationReason: inputDigest,
                     patchRangeEnd: patchWatermark,
                     patchRangeStart,
