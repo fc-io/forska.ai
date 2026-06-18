@@ -43,9 +43,25 @@ const projectScopeManifest = {
   projectionIdentity: 'project-scope:identity-1',
 } as const
 
+const llmStatusManifest = {
+  ...displayManifest,
+  definitionVersion: 'llm-status-v1',
+  manifestId: 'llm-status-manifest',
+  projectionComponent: 'llmStatus',
+  projectionIdentity: 'llm-status:identity-1',
+} as const
+
+const humanStatusManifest = {
+  ...displayManifest,
+  definitionVersion: 'human-status-v1',
+  manifestId: 'human-status-manifest',
+  projectionComponent: 'humanStatus',
+  projectionIdentity: 'human-status:identity-1',
+} as const
+
 const getManifestKey = (manifest: {
   projectId: string
-  projectionComponent: 'display' | 'projectScope' | 'search'
+  projectionComponent: 'display' | 'humanStatus' | 'llmStatus' | 'projectScope' | 'search'
   projectionIdentity: string
 }) => {
   return getReviewServingProjectionComponentIdentityKey(manifest)
@@ -54,6 +70,8 @@ const getManifestKey = (manifest: {
 const createPromotionDatabase = (input?: {selectedImportStatus?: string}) => {
   const manifests = new Map<string, ReviewServingProjectionIdentityManifest>([
     [getManifestKey(displayManifest), displayManifest],
+    [getManifestKey(humanStatusManifest), humanStatusManifest],
+    [getManifestKey(llmStatusManifest), llmStatusManifest],
     [getManifestKey(projectScopeManifest), projectScopeManifest],
     [getManifestKey(searchManifest), searchManifest],
   ])
@@ -323,6 +341,77 @@ test('snapshot validation requires import-run watermarks for project-scope manif
   expect(result.ok).toBe(false)
   expect(result.ok ? null : result.error).toBe(
     'required component projectScope input watermark 10 is behind source 1000',
+  )
+})
+
+test('snapshot validation requires import-run watermarks for status manifests', async () => {
+  const {database} = createPromotionDatabase()
+  const llmResult = await validateReviewServingCandidateSnapshotManifest(
+    {
+      componentState: {
+        optional: [],
+        required: [
+          {
+            baseGeneration: '1',
+            component: 'llmStatus',
+            patchWatermark: '4',
+            projectionIdentity: 'llm-status:identity-1',
+            requirement: 'required',
+          },
+        ],
+      },
+      composedIdentity: {route: 'review.rows', version: 1},
+      lastError: null,
+      lastKnownGoodSnapshotId: null,
+      optionalComponents: [],
+      projectId: 'project-1',
+      requiredComponents: ['llmStatus'],
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-import-1',
+      snapshotId: 'snapshot-1',
+      sourceWatermarks: {importRunArticle: 1000, reviewChange: 10},
+      status: 'candidate',
+      validationResult: null,
+    },
+    database,
+  )
+  const humanResult = await validateReviewServingCandidateSnapshotManifest(
+    {
+      componentState: {
+        optional: [],
+        required: [
+          {
+            baseGeneration: '1',
+            component: 'humanStatus',
+            patchWatermark: '4',
+            projectionIdentity: 'human-status:identity-1',
+            requirement: 'required',
+          },
+        ],
+      },
+      composedIdentity: {route: 'review.rows', version: 1},
+      lastError: null,
+      lastKnownGoodSnapshotId: null,
+      optionalComponents: [],
+      projectId: 'project-1',
+      requiredComponents: ['humanStatus'],
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-import-1',
+      snapshotId: 'snapshot-1',
+      sourceWatermarks: {importRunArticle: 1000, reviewChange: 10},
+      status: 'candidate',
+      validationResult: null,
+    },
+    database,
+  )
+
+  expect(llmResult.ok).toBe(false)
+  expect(llmResult.ok ? null : llmResult.error).toBe(
+    'required component llmStatus input watermark 10 is behind source 1000',
+  )
+  expect(humanResult.ok).toBe(false)
+  expect(humanResult.ok ? null : humanResult.error).toBe(
+    'required component humanStatus input watermark 10 is behind source 1000',
   )
 })
 

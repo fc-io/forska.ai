@@ -289,3 +289,29 @@ test('missing queue inputs leave optional unassessed state stale without raw agg
   expect(joined).not.toContain('GROUP BY')
   expect(joined).not.toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
 })
+
+test('project-scoped empty queue rebuild clears snapshot serving rows', async () => {
+  const {database, statements} = createQueueDatabase()
+
+  const result = await projectReviewServingQueuePatches(
+    projectInput([
+      queueClaim({
+        articleId: null,
+        dirtyKind: 'project.reviewConfig.updated',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+      }),
+    ]),
+    database,
+  )
+  const servingDelete = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  })
+
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
+  expect(servingDelete).toContain("project_id = 'project-1'")
+  expect(servingDelete).toContain("snapshot_id = 'snapshot-1'")
+  expect(servingDelete).not.toContain('review_config_hash IN')
+  expect(servingDelete).not.toContain('article_id IN')
+  expect(servingDelete).not.toContain('prompt_id IN')
+})

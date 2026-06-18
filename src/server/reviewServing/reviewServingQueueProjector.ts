@@ -422,9 +422,10 @@ const getDeleteReplacedQueueServingStatement = (input: ProjectReviewServingQueue
   const articleIds = broadProjectClaim ? [] : getClaimArticleIds(input.claims)
   const promptIds = broadProjectClaim ? [] : getClaimPromptIds(input.claims)
   const reviewConfigHashes = getQueueReviewConfigHashes(rows)
-  const reviewConfigPredicate = `AND review_config_hash IN (${reviewConfigHashes.map(getSqlLiteral).join(', ')})`
+  const reviewConfigPredicate =
+    reviewConfigHashes.length === 0 ? '' : `AND review_config_hash IN (${reviewConfigHashes.map(getSqlLiteral).join(', ')})`
 
-  return input.snapshotId === null || input.snapshotId === undefined || reviewConfigHashes.length === 0
+  return input.snapshotId === null || input.snapshotId === undefined || (!broadProjectClaim && reviewConfigHashes.length === 0)
     ? null
     : articleIds.length > 0
       ? `DELETE FROM mart.review_unassessed_queue_serving_v4

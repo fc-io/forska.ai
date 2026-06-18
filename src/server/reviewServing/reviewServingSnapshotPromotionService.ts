@@ -66,9 +66,9 @@ const getRequiredComponentState = (
 
 const componentSourceWatermarkKeys: Record<ReviewServingProjectionComponent, readonly string[]> = {
   display: ['reviewChange', 'review-change'],
-  humanStatus: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
+  humanStatus: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
   judgmentInputContent: ['reviewChange', 'review-change'],
-  llmStatus: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
+  llmStatus: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
   payload: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
   posting: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
   projectScope: ['importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
