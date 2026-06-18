@@ -39,7 +39,8 @@ Route-specific parity validation blocks that route migration on semantic mismatc
 - Detail/hydration routes: `projectsRoutesPostArticleReviewDetails.ts`, `ArticlesRoutes.ts` detail reads, `appQueryServiceCore.ts` article hydration helpers
 - Health/warnings/prompt preview: `projectsRoutesGetReviewsHealth.ts`, `projectsRoutesGetReviewsWarnings.ts`, `projectsRoutesGetPromptPreview.ts`
 - Shared legacy helpers and OLAP wrappers: `duckdbOlap.ts`, `articlesReviewsOlap.ts`, `scopedArticleReadAdapter.ts`, and any remaining route-side SQL that builds `selected_scoped_article_import`, decodes review cursors, computes filter signatures, or decides raw fallback.
-- Bulk/PDF/export/add-to-project routes: `ArticlesRoutes.ts`, `ProjectExportRoutes.ts`, and `ProjectsAddArticlesRoutes.ts` for `/api/articles/pdf-fetch-bulk`, `/api/articles/pdf-fetch-by-filter`, `/api/articles/pdf-fetch-by-project`, `/api/projects/:id/export`, and `/api/projects/add_articles_by_filter`.
+- Bulk/PDF/export/add-to-project routes: `ArticlesRoutes.ts`, `ProjectExportRoutes.ts`, and `ProjectsAddArticlesRoutes.ts` for `/api/articles/pdf-fetch-by-filter`, `/api/articles/pdf-fetch-by-project`, `/api/articles/pdf-fetch-jobs/:jobId`, `/api/projects/:id/export`, `/api/projects/add_articles_by_filter`, and `/api/projects/add_articles_by_ids`.
+- Explicit-ID PDF bulk route `/api/articles/pdf-fetch-bulk` is not a project-scoped review-serving inventory entry. It remains in Phase 4 job migration scope and must move to durable article-ID-only job admission with per-request ID and payload caps.
 - Ambiguous adjacent surfaces must be classified before Phase 4 closes: `/api/articles/search`, `/api/articles/latest`, `/api/projects/:id/articles`, and `HumanAssessmentRoutes.ts` are either migrated to serving/job/admission behavior when they participate in review flows or explicitly marked out of scope/admin/debug with a reason.
 
 ## Route Completeness Requirements
@@ -51,22 +52,23 @@ Route-specific parity validation blocks that route migration on semantic mismatc
 - Review list routes must not mount until row contracts preserve row metadata, article timestamps, prompt-level LLM judgment arrays, human prompt/summary arrays, both-mode LLM and human payloads, prompt badges, and the current duplicate/conflict/article-created-date/prompt/search filter scopes.
 - Filtered review list routes must use posting/search selection plus article-set hydration for rows and list judgment payloads. They must not hydrate filtered pages by replaying unfiltered ordered-prefix rows or by issuing N+1 single-article detail lookups.
 - Posting contracts used by list routes must be constrained by list mode or split into per-list contracts before they are mounted.
-- PDF-by-filter and PDF-by-project routes must not mount until list type, date bounds, duplicate/conflict filters, and search scope are represented in the selection contract. Explicit-ID PDF bulk routes must use an article-ID-only contract instead of project-scoped review-serving selection.
+- PDF-by-filter and PDF-by-project routes must not mount until list type, date bounds, duplicate/conflict filters, and search scope are represented in the selection contract. Explicit-ID PDF bulk routes must use article-ID-only job admission instead of project-scoped review-serving selection.
 - Export routes must not mount until export contracts cover selected article metadata plus prompt answers, explanations, and quotes.
 - Prompt preview must preserve the current sample-article order, prompt/config identity, model execution context, full-text preparation behavior, `no_fulltext` handling, and conversion-failure behavior before it is mounted.
 - The health route plan must match the actual mounted route surface. If `/api/projectsreviewshealth` remains unmounted, keep its serving contract internal or fold its diagnostics into `/api/projectsreviewswarnings`; do not count it as a migrated production route.
 
 ## Job Migration Scope
 
-- Select-all and add-to-project use `reviewBulkOperationService` jobs instead of all-ID arrays.
+- Select-all and add-to-project by filter use `reviewBulkOperationService` jobs instead of all-ID arrays.
+- Add-to-project by explicit IDs uses durable article-ID-only admission with per-request ID and payload caps, or is explicitly capped and classified outside review-serving selection semantics.
 - Add-to-project by filter uses a substring async selection contract when the product route receives substring search input; it must not certify substring behavior under token-prefix search semantics.
 - PDF fetch uses durable bulk jobs with snapshot pins or declared latest-snapshot semantics.
 - Project export uses serving/export jobs with projection-identity/snapshot/filter cursors, snapshot pins, and payload budgets.
 - Ready title search uses token/prefix search projection.
 - Unsupported substring search returns unavailable/search-indexing state or creates bounded async work over projected/searchable state.
 - Synchronous substring scans over raw or large serving title state are not admitted at 10M scale unless a benchmarked n-gram projection is added.
-- Explicit-ID PDF bulk requests use an article-ID-only job contract with per-request ID and payload budgets. Filter/project PDF requests use persisted selection criteria and never materialize all matching IDs in the foreground request.
-- Job routes and lookup routes bind `job_kind`, filter signature, search mode/text when relevant, projection identity, snapshot pin or latest-snapshot semantics, `updated_at`, and `job_id`; they do not reuse article-row cursors for job-table pagination.
+- Explicit-ID PDF bulk requests use durable article-ID-only job admission with per-request ID and payload budgets. Filter/project PDF requests use persisted selection criteria and never materialize all matching IDs in the foreground request.
+- Job routes and lookup routes, including `/api/articles/pdf-fetch-jobs/:jobId`, bind `job_kind`, filter signature, search mode/text when relevant, projection identity, snapshot pin or latest-snapshot semantics, `updated_at`, and `job_id`; they do not reuse article-row cursors for job-table pagination or in-memory process-local job state.
 
 ## Serving Reader Rules
 
@@ -121,12 +123,12 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - [ ] Targeted tests for projection-identity/snapshot/filter-scoped cursors and cursor-invalid behavior after identity/snapshot/component-state/filter mismatch.
 - [ ] Targeted tests for hard route result-size caps: max page size, max response bytes, max hydrated payload bytes, and max per-request ID count.
 - [ ] Targeted tests prove stale, indexing, or unavailable freshness states and failed, candidate, retired, or missing snapshot diagnostics do not trigger raw fallback.
-- [ ] Targeted tests prove select-all, add-to-project, PDF fetch, and export use durable jobs and keyset-batched execution without returning all matching article IDs.
-- [ ] Targeted tests prove durable job lookups bind job kind, filter signature, search mode/text when relevant, and pinned or latest-snapshot semantics using job-table cursor fields.
+- [ ] Targeted tests prove select-all, add-to-project by filter, PDF-by-filter/project, and export use durable jobs and keyset-batched execution without returning all matching article IDs; explicit-ID add-to-project and PDF bulk paths enforce article-ID-only caps or are explicitly classified outside review-serving selection semantics.
+- [ ] Targeted tests prove durable job lookups, including `/api/articles/pdf-fetch-jobs/:jobId`, bind job kind, filter signature, search mode/text when relevant, and pinned or latest-snapshot semantics using job-table cursor fields instead of in-memory process-local state.
 - [ ] Targeted tests prove repeatable durable jobs pin serving snapshots and cleanup skips pinned base/patch/payload/count/search state.
 - [ ] Targeted tests prove foreground query admission rejects or serves stale for over-budget workload classes before DuckDB execution.
 - [ ] Targeted tests prove foreground admission rejects mismatched search modes before DuckDB execution.
 - [ ] Targeted tests prove route-specific parity validation blocks route migration on semantic fixture, invariant, sampled parity, cursor, freshness-state, SQL-shape, latency, or response-size mismatches.
-- [ ] Browser review-flow verification for stale/indexing/failed/missing states.
+- [ ] Browser review-flow verification for stale, indexing, and unavailable freshness states plus failed, candidate, retired, and missing snapshot diagnostics.
 - [ ] Desktop route-surface verification or targeted desktop build when shared runtime paths change.
 - [ ] `bun run lint`
