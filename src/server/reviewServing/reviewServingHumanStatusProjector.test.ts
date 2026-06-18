@@ -158,6 +158,7 @@ test('summary human answers do not require prompt IDs and write summary-key patc
 
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
   expect(insertStatement).toContain("'summary'")
+  expect(joined).toContain("'summary', 'answered', FALSE")
   expect(joined).toContain("'humanStatus'")
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')

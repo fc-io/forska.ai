@@ -737,7 +737,7 @@ export const projectReviewServingHumanStatusPatches = async (
         humanStatusKey: row.humanStatusKey,
         listModeKey,
         promptConfigHash,
-        promptId: row.promptId,
+        promptId: getPromptOrSummaryKey(row.promptId),
         reviewConfigHash: currentReviewConfigHash,
         tombstone: row.tombstone,
       }
