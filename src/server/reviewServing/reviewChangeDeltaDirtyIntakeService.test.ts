@@ -145,8 +145,8 @@ test('delta intake starts projector work at first affected component only', asyn
     return parseProjectionKey(statement).projectionComponent
   })
 
-  expect(result).toMatchObject({dirtyWorkCount: 4, maxSourceHighWaterMark: 7, status: 'converted'})
-  expect(projectionComponents).toEqual(['llmStatus', 'queue', 'posting', 'summary'])
+  expect(result).toMatchObject({dirtyWorkCount: 5, maxSourceHighWaterMark: 7, status: 'converted'})
+  expect(projectionComponents).toEqual(['llmStatus', 'queue', 'posting', 'summary', 'payload'])
   expect(dirtyInserts[0]).toContain('judgment.llm.updated')
   expect(dirtyInserts[0]).not.toContain('selectedImport')
   expect(dirtyInserts[0]).not.toContain('display')
@@ -212,7 +212,7 @@ test('delta intake fans route and project changes to project-scope dirty work', 
     return parseProjectionKey(statement).projectionComponent
   })
 
-  expect(result).toMatchObject({dirtyWorkCount: 16, maxSourceHighWaterMark: 10, status: 'converted'})
+  expect(result).toMatchObject({dirtyWorkCount: 19, maxSourceHighWaterMark: 10, status: 'converted'})
   expect(projectionComponents).toEqual([
     'projectScope',
     'selectedImport',
@@ -220,6 +220,7 @@ test('delta intake fans route and project changes to project-scope dirty work', 
     'humanStatus',
     'queue',
     'posting',
+    'search',
     'summary',
     'payload',
     'projectScope',
@@ -229,7 +230,9 @@ test('delta intake fans route and project changes to project-scope dirty work', 
     'humanStatus',
     'queue',
     'posting',
+    'search',
     'summary',
+    'payload',
   ])
   expect(dirtyInserts.map(getDirtyKind)).toEqual([
     'projectScope.article.added',
@@ -240,6 +243,9 @@ test('delta intake fans route and project changes to project-scope dirty work', 
     'projectScope.article.added',
     'projectScope.article.added',
     'projectScope.article.added',
+    'projectScope.article.added',
+    'project.reviewConfig.updated',
+    'project.reviewConfig.updated',
     'project.reviewConfig.updated',
     'project.reviewConfig.updated',
     'project.reviewConfig.updated',
@@ -372,6 +378,6 @@ test('delta projection identity is stable across per-mutation values', async () 
     })
     .map(getProjectionKey)
 
-  expect(projectionKeys).toHaveLength(2)
-  expect(projectionKeys[0]).toBe(projectionKeys[1])
+  expect(projectionKeys).toHaveLength(10)
+  expect(projectionKeys.slice(0, 5)).toEqual(projectionKeys.slice(5))
 })

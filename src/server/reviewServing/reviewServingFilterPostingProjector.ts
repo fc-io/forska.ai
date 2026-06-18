@@ -24,6 +24,8 @@ export type ReviewServingFilterPostingProjectorDatabase = ReviewServingProjector
 export type ProjectReviewServingFilterPostingsInput = {
   acknowledgeClaims?: boolean
   baseGeneration: number
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
   listModeKeys: readonly string[]
@@ -137,6 +139,28 @@ const getValuesCte = (columnName: string, values: readonly string[]) => {
         .join(', ')}))`
 }
 
+const hasChunkArticleRange = (input: {chunkEndArticleId?: string | null; chunkStartArticleId?: string | null}) => {
+  return input.chunkStartArticleId !== undefined || input.chunkEndArticleId !== undefined
+}
+
+const getArticleRangePredicate = (input: {
+  alias: string
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
+}) => {
+  const startPredicate =
+    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
+      ? ''
+      : `AND ${input.alias}.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`
+  const endPredicate =
+    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
+      ? ''
+      : `AND ${input.alias}.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+
+  return `${startPredicate}
+          ${endPredicate}`
+}
+
 const getListModeCte = (listModeKeys: readonly string[]) => {
   return getValuesCte('list_mode_key', listModeKeys)
 }
@@ -185,13 +209,15 @@ const getPostingRowsAsContributionRows = (rows: readonly PostingContributionRow[
   return [...liveRowsByArticleAndStatsKey.values()]
 }
 
-const getDirtyArticleCte = (projectId: string, articleIds: readonly string[]) => {
+const getDirtyArticleCte = (input: ProjectReviewServingFilterPostingsInput, articleIds: readonly string[]) => {
   return articleIds.length > 0
     ? getValuesCte('article_id', articleIds)
     : `article_id_filter(article_id) AS (
         SELECT scope.article_id
         FROM mart.project_scope_article scope
-        WHERE scope.project_id = ${getSqlLiteral(projectId)}
+        WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
+          ${hasChunkArticleRange(input) ? 'AND (scope.in_curated_scope OR scope.in_route_scope)' : ''}
+          ${getArticleRangePredicate({alias: 'scope', ...input})}
       )`
 }
 
@@ -204,7 +230,7 @@ const getPostingContributionRows = async (
   return input.listModeKeys.length === 0
     ? []
     : database.queryJson<PostingContributionRow>(`
-        WITH ${getDirtyArticleCte(input.projectId, articleIds)},
+        WITH ${getDirtyArticleCte(input, articleIds)},
         ${getListModeCte(input.listModeKeys)},
         scoped_article AS (
           SELECT
@@ -383,7 +409,7 @@ const getExistingPostingRows = async (
   const articleIds = getClaimArticleIds(input.claims)
   const articlePredicate =
     articleIds.length === 0
-      ? ''
+      ? getArticleRangePredicate({alias: 'serving', ...input})
       : `AND serving.article_id IN (${articleIds
           .map((articleId) => {
             return getSqlLiteral(articleId)
@@ -557,9 +583,15 @@ const getDeleteServingRowsStatement = (
         },
         table: 'mart.review_article_filter_posting_serving_v4',
       })
-    : tombstoneValues.length === 0
-      ? null
-      : `WITH deleted(article_id, filter_kind, filter_value, list_mode_key) AS (
+    : hasChunkArticleRange(input)
+      ? `DELETE FROM mart.review_article_filter_posting_serving_v4 serving
+        WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+          AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+          AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          ${getArticleRangePredicate({alias: 'serving', ...input})}`
+      : tombstoneValues.length === 0
+        ? null
+        : `WITH deleted(article_id, filter_kind, filter_value, list_mode_key) AS (
           SELECT * FROM (VALUES ${tombstoneValues})
         )
         DELETE FROM mart.review_article_filter_posting_serving_v4 serving

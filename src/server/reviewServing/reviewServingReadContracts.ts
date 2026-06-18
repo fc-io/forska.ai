@@ -457,7 +457,10 @@ export const reviewServingReadContractList = [
     requiredComponents: ['queue', 'summary'],
     searchMode: 'none',
     servingTable: reviewQueueServingTable,
-    sort: {direction: 'desc', fields: ['priority_bucket', 'activity_sort_at', 'article_id', 'prompt_id', 'queue_identity']},
+    sort: {
+      direction: 'desc',
+      fields: ['priority_bucket', 'activity_sort_at', 'article_id', 'prompt_id', 'queue_identity'],
+    },
     workloadClass: 'foregroundReviewQueue',
   }),
   defineContract({

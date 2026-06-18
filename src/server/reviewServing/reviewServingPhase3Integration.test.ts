@@ -4,7 +4,7 @@ import {join, relative} from 'node:path'
 import {expect, test} from 'bun:test'
 
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
-import type {ReviewServingDirtyWorkClaim, ReviewServingDirtyWorkInput} from './reviewServingDirtyWorkService.ts'
+import type {ReviewServingDirtyWorkInput, ReviewServingDirtyWorkRecord} from './reviewServingDirtyWorkService.ts'
 import {getReviewServingDirtyWorkScopeForChange} from './reviewServingProjectorDomain.ts'
 import {
   intakeReviewServingProjectorDirtyWork,
@@ -19,6 +19,8 @@ import {
 import {getReviewServingOptionalComponentAvailability} from './reviewServingSnapshotPromotionService.ts'
 
 const workspaceRoot = join(import.meta.dir, '../../..')
+
+type RunningReviewServingDirtyWorkRecord = ReviewServingDirtyWorkRecord & {status: 'running'}
 
 const getTypeScriptFiles = (directory: string): readonly string[] => {
   return readdirSync(directory, {withFileTypes: true}).flatMap((entry) => {
@@ -51,9 +53,13 @@ const createDatabase = () => {
   return {database, statements}
 }
 
-const claimFromInput = (input: ReviewServingDirtyWorkInput, dirtyWorkId: string): ReviewServingDirtyWorkClaim => {
+const claimFromInput = (
+  input: ReviewServingDirtyWorkInput,
+  dirtyWorkId: string,
+): RunningReviewServingDirtyWorkRecord => {
   return {
     articleId: input.scope.scopeKind === 'article' ? (input.scope.scopeId.split(':').at(-1) ?? null) : null,
+    createdAt: null,
     dirtyKind: input.scope.dirtyKind,
     dirtyRangeEnd: input.scope.dirtyRangeEnd,
     dirtyRangeStart: input.scope.dirtyRangeStart,
@@ -68,6 +74,7 @@ const claimFromInput = (input: ReviewServingDirtyWorkInput, dirtyWorkId: string)
     scopeKind: input.scope.scopeKind,
     sourcePartition: input.scope.sourcePartition,
     status: 'running',
+    updatedAt: null,
   }
 }
 
@@ -92,7 +99,7 @@ const getScope = (input: {
 
 test('Phase 3 intake, projector wake, writer transactions, promotion, and recovery stay integrated', async () => {
   const {database, statements} = createDatabase()
-  const pending: Partial<Record<ReviewServingProjectionComponent, ReviewServingDirtyWorkClaim[]>> = {}
+  const pending: Partial<Record<ReviewServingProjectionComponent, RunningReviewServingDirtyWorkRecord[]>> = {}
   const upserts: ReviewServingDirtyWorkInput[] = []
   const promotions: PromoteReviewServingProjectorSnapshotInput[] = []
   const failedClaimIds: string[] = []
@@ -358,6 +365,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
     'queue',
     'posting',
     'summary',
+    'payload',
     'display',
     'payload',
     'posting',
@@ -520,6 +528,14 @@ test('Phase 3 patch and selected-import guard coverage stays inventoried', () =>
         'selected_scoped_article_import',
       ],
     },
+    {
+      filePath: 'src/server/reviewServing/reviewServingSummaryProjector.test.ts',
+      markers: [
+        'prompt badge counts flow through summary contribution rows used by review.prompt.badges',
+        'review.both.conflictByPrompt',
+        'INSERT INTO mart.review_article_summary_contribution_v4',
+      ],
+    },
   ]
   const missing = coverage.flatMap((entry) => {
     const source = readFileSync(join(workspaceRoot, entry.filePath), 'utf8')
@@ -565,17 +581,16 @@ test('Phase 3 V4 serving readers are not migrated into product review routes', (
 
 test('warning diagnostics coverage includes maintenance rebuild dirty-work quarantine and optional search states', () => {
   const source = readFileSync(
-    join(workspaceRoot, 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts'),
+    join(workspaceRoot, 'src/server/reviewServing/reviewServingDiagnosticsRepository.ts'),
     'utf8',
   )
   const markers = [
-    'dirtyMaterialization',
-    'largeRebuild',
-    'quarantinedArticleRefreshCount',
-    'quarantine_barrier',
+    'review_serving_dirty_work',
+    'review_rebuild_chunk_manifest',
+    'review_source_change_outbox',
+    'review_delta_reconciliation_cursor',
     'maintenance-worker',
-    'search: {',
-    "availability: 'ready' | 'indexing' | 'unavailable' | 'async'",
+    'getReviewServingOptionalComponentAvailability',
   ]
   const missing = markers.filter((marker) => {
     return !source.includes(marker)

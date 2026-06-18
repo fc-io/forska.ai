@@ -24,6 +24,8 @@ export type ReviewServingSummaryProjectorDatabase = ReviewServingProjectorWriter
 export type ProjectReviewServingSummariesInput = {
   acknowledgeClaims?: boolean
   baseGeneration: number
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
   claims: readonly ReviewServingDirtyWorkClaim[]
   listModeKeys: readonly string[]
   projectId: string
@@ -105,6 +107,24 @@ const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   ]
 }
 
+const getArticleRangePredicate = (input: {
+  alias: string
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
+}) => {
+  const startPredicate =
+    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
+      ? ''
+      : `AND ${input.alias}.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`
+  const endPredicate =
+    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
+      ? ''
+      : `AND ${input.alias}.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+
+  return `${startPredicate}
+          ${endPredicate}`
+}
+
 const getExpectedArticleIds = (
   claims: readonly ReviewServingDirtyWorkClaim[],
   rows: readonly SummaryContributionSourceRow[],
@@ -138,6 +158,7 @@ const getPriorContributionArticleIds = async (
           AND contribution.snapshot_id = ${getSqlLiteral(input.snapshotId)}
           AND contribution.component_kind = 'count'
           AND contribution.summary_definition_version = 'review-serving-summary:v1'
+          ${getArticleRangePredicate({alias: 'contribution', ...input})}
       `)
 }
 
@@ -155,13 +176,14 @@ const getListModeCte = (listModeKeys: readonly string[]) => {
   return getValuesCte('list_mode_key', listModeKeys)
 }
 
-const getDirtyArticleCte = (projectId: string, articleIds: readonly string[]) => {
+const getDirtyArticleCte = (input: ProjectReviewServingSummariesInput, articleIds: readonly string[]) => {
   return articleIds.length > 0
     ? getValuesCte('article_id', articleIds)
     : `article_id_filter(article_id) AS (
         SELECT scope.article_id
         FROM mart.project_scope_article scope
-        WHERE scope.project_id = ${getSqlLiteral(projectId)}
+        WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
+          ${getArticleRangePredicate({alias: 'scope', ...input})}
       )`
 }
 
@@ -192,7 +214,7 @@ const getSummaryContributionRows = async (
   return input.listModeKeys.length === 0
     ? []
     : database.queryJson<SummaryContributionSourceRow>(`
-        WITH ${getDirtyArticleCte(input.projectId, articleIds)},
+        WITH ${getDirtyArticleCte(input, articleIds)},
         ${getListModeCte(input.listModeKeys)},
         project_settings AS (
           SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = ${getSqlLiteral(input.projectId)}), 'prompt') AS human_judgment_mode

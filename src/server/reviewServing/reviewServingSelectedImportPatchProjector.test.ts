@@ -118,7 +118,7 @@ test('selected-import routine updates write component-narrow patches for only cl
   expect(joined).toContain('selected_import_route_id = changed.import_route_id')
   expect(joined).toContain('selected_rank_key = changed.selected_rank_key')
   expect(joined).toContain('journal_title = changed.journal_title')
-  expect(joined).toContain("changed.journal_title")
+  expect(joined).toContain('changed.journal_title')
 })
 
 test('selected-import tombstones replay idempotently with the same patch watermark and article key', async () => {
@@ -256,7 +256,12 @@ test('selected-import serving insert can seed rows from snapshot templates witho
               patchWatermark: '1',
               projectionIdentity: 'selectedImport:identity-1',
             },
-            {baseGeneration: '3', component: 'llmStatus', patchWatermark: '1', projectionIdentity: 'llmStatus:identity-1'},
+            {
+              baseGeneration: '3',
+              component: 'llmStatus',
+              patchWatermark: '1',
+              projectionIdentity: 'llmStatus:identity-1',
+            },
             {
               baseGeneration: '3',
               component: 'humanStatus',

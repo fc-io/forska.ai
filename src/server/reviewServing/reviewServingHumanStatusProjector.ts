@@ -24,6 +24,8 @@ export type ReviewServingHumanStatusProjectorDatabase = ReviewServingProjectorWr
 export type ProjectReviewServingHumanStatusInput = {
   acknowledgeClaims?: boolean
   baseGeneration: number
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
   listModeKeys: readonly string[]
@@ -142,6 +144,28 @@ const getValuesCte = (columnName: string, values: readonly string[]) => {
           return `(${getSqlLiteral(value)})`
         })
         .join(', ')}))`
+}
+
+const hasChunkArticleRange = (input: {chunkEndArticleId?: string | null; chunkStartArticleId?: string | null}) => {
+  return input.chunkStartArticleId !== undefined || input.chunkEndArticleId !== undefined
+}
+
+const getArticleRangePredicate = (input: {
+  alias: string
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
+}) => {
+  const startPredicate =
+    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
+      ? ''
+      : `AND ${input.alias}.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`
+  const endPredicate =
+    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
+      ? ''
+      : `AND ${input.alias}.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+
+  return `${startPredicate}
+          ${endPredicate}`
 }
 
 const parsePayloadJson = (value: unknown) => {
@@ -296,6 +320,7 @@ const getPromptScopedRows = async (
         INNER JOIN mart.project_scope_article scope
           ON scope.project_id = ${getSqlLiteral(input.projectId)}
           AND (scope.in_curated_scope OR scope.in_route_scope)
+          ${getArticleRangePredicate({alias: 'scope', ...input})}
         INNER JOIN app.prompt prompt
           ON prompt.id = dirty_prompt.prompt_id
         LEFT JOIN app.project_prompt project_prompt
@@ -392,7 +417,10 @@ const getProjectScopedRows = async (
     })
     .join(', ')
 
-  if (!shouldRebuildProjectHumanStatus(input.claims) || promptConfigRowsWithSummary.length === 0) {
+  if (
+    (!shouldRebuildProjectHumanStatus(input.claims) && !hasChunkArticleRange(input))
+    || promptConfigRowsWithSummary.length === 0
+  ) {
     return []
   }
 
@@ -428,6 +456,7 @@ const getProjectScopedRows = async (
       CROSS JOIN prompt_config
       WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
         AND (scope.in_curated_scope OR scope.in_route_scope)
+        ${getArticleRangePredicate({alias: 'scope', ...input})}
     )
     SELECT
       article_prompt.article_id AS articleId,

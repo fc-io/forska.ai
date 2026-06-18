@@ -122,20 +122,16 @@ test('project-scope invalidation registry uses project article affected keys', (
   const addedRule = getReviewServingInvalidationRule('projectScope.article.added')
   const removedRule = getReviewServingInvalidationRule('projectScope.article.removed')
 
-  expect(addedRule).toMatchObject({
-    affectedComponents: expect.arrayContaining(['search']),
-    downstreamDependents: expect.arrayContaining(['search']),
-    firstAffectedComponent: 'projectScope',
-    requiredKeys: ['projectId', 'articleId', 'projectArticleId', 'sourceHighWaterMark'],
-    updateMode: 'appendPatch',
-  })
-  expect(removedRule).toMatchObject({
-    affectedComponents: expect.arrayContaining(['search']),
-    downstreamDependents: expect.arrayContaining(['search']),
-    firstAffectedComponent: 'projectScope',
-    requiredKeys: ['projectId', 'articleId', 'projectArticleId', 'sourceHighWaterMark'],
-    updateMode: 'appendPatch',
-  })
+  expect(addedRule.affectedComponents).toContain('search')
+  expect(addedRule.downstreamDependents).toContain('search')
+  expect(addedRule.firstAffectedComponent).toBe('projectScope')
+  expect(addedRule.requiredKeys).toEqual(['projectId', 'articleId', 'projectArticleId', 'sourceHighWaterMark'])
+  expect(addedRule.updateMode).toBe('appendPatch')
+  expect(removedRule.affectedComponents).toContain('search')
+  expect(removedRule.downstreamDependents).toContain('search')
+  expect(removedRule.firstAffectedComponent).toBe('projectScope')
+  expect(removedRule.requiredKeys).toEqual(['projectId', 'articleId', 'projectArticleId', 'sourceHighWaterMark'])
+  expect(removedRule.updateMode).toBe('appendPatch')
 })
 
 test('project import-route membership edits emit config deltas rather than synchronous project-scope article deltas', async () => {
