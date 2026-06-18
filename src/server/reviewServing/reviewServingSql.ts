@@ -518,7 +518,6 @@ const getReviewServingRowsSqlUnassessedQueuePredicate = (params: {
   snapshotIdParameter: string
 }) => {
   return params.contract.key === 'review.unassessed.rows'
-    || params.contract.key === 'review.unassessed.rowsByArticleSet'
     ? [
         ' AND EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue',
         ` WHERE queue.project_id = ${params.projectIdParameter}`,

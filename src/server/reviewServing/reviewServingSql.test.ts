@@ -500,7 +500,7 @@ test('buildReviewServingRowsSql uses activity ordering for unassessed row contra
   expect(sql).not.toContain('ORDER BY sort_key')
 })
 
-test('buildReviewServingRowsSql filters unassessed article-set hydration through queue rows', () => {
+test('buildReviewServingRowsSql keeps unassessed article-set hydration bounded to provided queue article ids', () => {
   const sql = buildReviewServingRowsSql({
     articleIdsParameter: '$articleIds',
     contract: getRequiredReviewServingReadContract('review.unassessed.rowsByArticleSet'),
@@ -516,9 +516,8 @@ test('buildReviewServingRowsSql filters unassessed article-set hydration through
   })
 
   expect(sql).toContain('AND article_id IN (SELECT unnest($articleIds))')
-  expect(sql).toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
-  expect(sql).toContain("queue.queue_kind = 'unassessed'")
-  expect(sql).toContain('queue.article_id = mart.review_article_serving_v4.article_id')
+  expect(sql).not.toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(sql).not.toContain('queue.article_id = mart.review_article_serving_v4.article_id')
 })
 
 test('buildReviewServingRowsSql uses count-table sort columns for count serving tables', () => {
