@@ -175,7 +175,7 @@ test('admitReviewServingRequest rejects search modes that do not match the contr
   expect(missingSubstringMode.admitted ? null : missingSubstringMode.reason).toBe('searchModeMismatch')
   expect(acceptedSubstringMode.admitted).toBe(true)
   expect(substringOnTokenPrefixRows.diagnostics.search).toMatchObject({
-    registeredMode: 'none',
+    registeredMode: 'tokenPrefix',
     requestedMode: 'substringAsync',
   })
 })
@@ -562,7 +562,7 @@ test('admitReviewServingDuckdbWorkload maps an admitted contract to generic Duck
     maxResultRows: 100,
     projectId: 'project-a',
     routeOrJobKey: 'review.llm.rows',
-    searchMode: 'none',
+    searchMode: 'tokenPrefix',
     timeoutMs: 5_000,
     workloadClass: 'foregroundReviewRows',
   })

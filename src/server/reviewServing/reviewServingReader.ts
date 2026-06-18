@@ -400,6 +400,63 @@ const getSql = (input: {
   })
 }
 
+const getSqlLiteral = (value: null | number | readonly string[] | string | undefined) => {
+  if (value === null || value === undefined) {
+    return 'NULL'
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : 'NULL'
+  }
+
+  if (typeof value !== 'string') {
+    const values = value.map((entry) => {
+      return `'${entry.replaceAll("'", "''")}'`
+    })
+
+    return `[${values.join(', ')}]::VARCHAR[]`
+  }
+
+  return `'${value.replaceAll("'", "''")}'`
+}
+
+const bindReviewServingRowsSql = (
+  sql: string,
+  request: ReviewServingReaderRequest,
+  manifest: ReviewServingSnapshotManifest,
+) => {
+  const componentStates = getComponentCursorStates(manifest)
+  const parameters: Record<string, null | number | readonly string[] | string | undefined> = {
+    articleId: request.articleId ?? null,
+    articleIds: request.articleIds ?? null,
+    countFilterKey: request.countFilterKey ?? null,
+    displayIdentity: componentStates.display?.projectionIdentity,
+    filterKind: request.filterKind ?? null,
+    filterOptionIdentity: request.filterOptionIdentity ?? null,
+    filterValue: request.filterValue ?? null,
+    jobFilterSignature: request.jobFilterSignature ?? null,
+    limit: request.limit,
+    listMode: request.listMode ?? null,
+    payloadIdentity: componentStates.payload?.projectionIdentity,
+    projectId: request.projectId ?? null,
+    projectScopeIdentity: componentStates.projectScope?.projectionIdentity,
+    queueKind: request.queueKind ?? null,
+    reviewConfigHash: manifest.reviewConfigHash,
+    searchIdentity: request.searchIdentity ?? componentStates.search?.projectionIdentity,
+    searchText: request.searchText ?? null,
+    searchTokenPrefix: request.searchTokenPrefix ?? null,
+    snapshotId: manifest.snapshotId,
+  }
+
+  return Object.entries(parameters)
+    .sort(([left], [right]) => {
+      return right.length - left.length
+    })
+    .reduce((boundSql, [key, value]) => {
+      return boundSql.replaceAll(`$${key}`, getSqlLiteral(value))
+    }, sql)
+}
+
 export const readReviewServingRows = async <T>(
   request: ReviewServingReaderRequest,
   dependencies?: {
@@ -577,7 +634,9 @@ export const readReviewServingRows = async <T>(
     })
   }
 
-  const rows = await (dependencies?.database ?? getReaderDatabase()).queryJson<T>(sql, admission.workloadContext)
+  const database = dependencies?.database ?? getReaderDatabase()
+  const executableSql = dependencies?.database ? sql : bindReviewServingRowsSql(sql, request, manifest)
+  const rows = await database.queryJson<T>(executableSql, admission.workloadContext)
 
   return {
     contract,

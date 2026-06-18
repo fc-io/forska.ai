@@ -1,7 +1,6 @@
 import {Elysia, t} from 'elysia'
 
-import {queryArticlesReviewsFromOlap} from '../../../services/olap/articlesReviewsOlap.ts'
-import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {getLlmReviewArticlesFromServing} from '../../reviewServing/reviewServingLlmReviewRouteService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
@@ -35,7 +34,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
 
       await assertProjectIsActive(body.projectId)
 
-      const result = await queryArticlesReviewsFromOlap({
+      const result = await getLlmReviewArticlesFromServing({
         cursor: body.cursor,
         hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
         hasStudyDecisionConflict: body.hasStudyDecisionConflict,
@@ -49,88 +48,14 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         ...(body.llmStatus ? {llmStatus: body.llmStatus} : {}),
       })
 
-      const hasInlineHydration = result.data.every((article) => {
-        return Object.hasOwn(article, 'articleId')
-      })
-
-      if (hasInlineHydration) {
-        articlesReviewsLogger.force(
-          'projects.articles-reviews.request-summary',
-          'Articles reviews request completed',
-          'log',
-          {projectId: body.projectId, page, limit, returnedCount: result.data.length, hydrationMode: 'inline'},
-        )
-        return result
-      }
-
-      const articleIds = result.data.map((a) => {
-        return a.id
-      })
-      const fullTextRows = await getAppQueryService().getReviewHydrationRows(articleIds, {projectId: body.projectId})
-      const fullTextById = fullTextRows.reduce(
-        (acc, row) => {
-          return {...acc, [row.id]: row}
-        },
-        {} as Record<string, (typeof fullTextRows)[number]>,
-      )
-      const data = result.data.map((article) => {
-        const fullText = fullTextById[article.id]
-        const hydratedFields = fullText
-          ? {
-              articleTitle: fullText.articleTitle,
-              articleCreatedAt: fullText.articleCreatedAt,
-              articleUpdatedAt: fullText.articleUpdatedAt,
-              journalTitle: fullText.sourceMetadata?.journalTitle ?? article.journalTitle,
-              articleId: fullText.articleId,
-              arxivId: fullText.arxivId,
-              biorxivId: fullText.biorxivId,
-              canonicalArticleId: fullText.canonicalArticleId,
-              canonicalSourceMetadata: fullText.canonicalSourceMetadata,
-              doi: fullText.doi,
-              medrxivId: fullText.medrxivId,
-              originalData: fullText.originalData,
-              pubmedId: fullText.pubmedId,
-              url: fullText.url,
-              fullTextPDF: fullText.fullTextPDF,
-              fullTextFetchedAt: fullText.fullTextFetchedAt,
-              fullTextConversionStatus: fullText.fullTextConversionStatus,
-              scopedImportMetadata: fullText.scopedImportMetadata,
-              selectedExternalArticleId: fullText.selectedExternalArticleId,
-              selectedImportRecordId: fullText.selectedImportRecordId,
-              selectedImportRouteId: fullText.selectedImportRouteId,
-              selectedSourceRecordKey: fullText.selectedSourceRecordKey,
-              sourceMetadata: fullText.sourceMetadata,
-            }
-          : {
-              articleTitle: article.articleTitle,
-              articleCreatedAt: article.articleCreatedAt,
-              articleUpdatedAt: article.articleUpdatedAt,
-              journalTitle: article.journalTitle,
-              articleId: null,
-              url: null,
-              fullTextPDF: null,
-              fullTextFetchedAt: null,
-              fullTextConversionStatus: null,
-              sourceMetadata: null,
-            }
-        return {...article, ...hydratedFields}
-      })
-
       articlesReviewsLogger.force(
         'projects.articles-reviews.request-summary',
         'Articles reviews request completed',
         'log',
-        {
-          projectId: body.projectId,
-          page,
-          limit,
-          returnedCount: result.data.length,
-          hydrationMode: 'fallback',
-          hydrationRowCount: fullTextRows.length,
-        },
+        {projectId: body.projectId, page, limit, returnedCount: result.data.length, hydrationMode: 'serving-reader'},
       )
 
-      return {...result, data}
+      return result
     } catch (error) {
       articlesReviewsErrorLogger.force('projects.articles-reviews.error', 'Articles reviews request failed', 'error', {
         projectId: body.projectId,

@@ -103,25 +103,28 @@ const defineContract = (input: ContractInput): ReviewServingReadContract => {
 }
 
 const rowContract = (input: {
+  allowedFilters?: readonly ReviewServingFilterKey[]
   cursorFields?: ReviewServingReadContract['cursorFields']
   key: ReviewServingReadContractKey
   listMode: ReviewServingListMode
   namedFastCounts: readonly NamedReviewFastCountKey[]
+  optionalComponents?: readonly ReviewServingProjectionComponent[]
   requiredComponents: readonly ReviewServingProjectionComponent[]
+  searchMode?: ReviewServingReadContract['searchMode']
   sort?: ReviewServingReadContract['sort']
 }) => {
   return defineContract({
-    allowedFilters: [],
+    allowedFilters: input.allowedFilters ?? [],
     cursorFields: input.cursorFields ?? reviewedRowCursorFields,
     freshnessBehavior: 'requireReadySnapshot',
     key: input.key,
     listMode: input.listMode,
     maxPageSize: 100,
     namedFastCounts: input.namedFastCounts,
-    optionalComponents: [],
+    optionalComponents: input.optionalComponents ?? [],
     physicalAccessStrategy: 'orderedPrefix',
     requiredComponents: input.requiredComponents,
-    searchMode: 'none',
+    searchMode: input.searchMode ?? 'none',
     servingTable: reviewArticleServingTable,
     sort: input.sort ?? reviewedRowSort,
     workloadClass: 'foregroundReviewRows',
@@ -129,6 +132,7 @@ const rowContract = (input: {
 }
 
 const rowByArticleSetContract = (input: {
+  allowedFilters?: readonly ReviewServingFilterKey[]
   cursorFields?: ReviewServingReadContract['cursorFields']
   key: ReviewServingReadContractKey
   listMode: ReviewServingListMode
@@ -137,7 +141,7 @@ const rowByArticleSetContract = (input: {
   sort?: ReviewServingReadContract['sort']
 }) => {
   return defineContract({
-    allowedFilters: ['articleId'],
+    allowedFilters: input.allowedFilters ?? ['articleId'],
     cursorFields: input.cursorFields ?? reviewedRowCursorFields,
     freshnessBehavior: 'requireReadySnapshot',
     key: input.key,
@@ -184,19 +188,23 @@ const filterFacetContract = (input: {
 
 export const reviewServingReadContractList = [
   rowContract({
+    allowedFilters: [...defaultRowFilters, 'conflictFlag', 'llmStatus', 'promptAnswer'],
     key: 'review.llm.rows',
     listMode: 'llm',
     namedFastCounts: [...defaultReviewCounts, 'review.llm.assessedByPrompt'],
+    optionalComponents: ['search'],
     requiredComponents: llmComponents,
+    searchMode: 'tokenPrefix',
   }),
   rowByArticleSetContract({
+    allowedFilters: [...defaultRowFilters, 'articleId', 'conflictFlag', 'llmStatus', 'promptAnswer'],
     key: 'review.llm.rowsByArticleSet',
     listMode: 'llm',
     namedFastCounts: [...defaultReviewCounts, 'review.llm.assessedByPrompt'],
     requiredComponents: llmComponents,
   }),
   defineContract({
-    allowedFilters: [...defaultCountFilters, 'llmStatus', 'promptAnswer'],
+    allowedFilters: [...defaultCountFilters, 'llmStatus', 'promptAnswer', 'searchTokenPrefix'],
     cursorFields: [],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.llm.count',
@@ -802,7 +810,7 @@ export const reviewServingReadContractRouteInventory = [
       'review.search.substringAsync',
     ],
     method: 'POST',
-    mounted: false,
+    mounted: true,
     productRoute: '/api/articlesreviews',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviews.ts',
     surfaces: ['llm', 'row', 'count', 'badge', 'filter', 'search'],
@@ -815,7 +823,7 @@ export const reviewServingReadContractRouteInventory = [
       'review.search.substringAsync',
     ],
     method: 'POST',
-    mounted: false,
+    mounted: true,
     productRoute: '/api/articlesreviewscount',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts',
     surfaces: ['count', 'filter', 'search'],

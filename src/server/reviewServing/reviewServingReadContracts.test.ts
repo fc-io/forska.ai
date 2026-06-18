@@ -130,7 +130,7 @@ test('normal foreground row contracts require ready snapshots and serving tables
   expect(bothRows?.requiredComponents).toContain('llmStatus')
 })
 
-test('direct ordered row contracts do not advertise filters ignored by row SQL', () => {
+test('direct ordered row contracts advertise only migrated route filters', () => {
   const orderedRowContracts = reviewServingReadContractList.filter((contract) => {
     return (
       contract.physicalAccessStrategy === 'orderedPrefix' && contract.servingTable === 'mart.review_article_serving_v4'
@@ -149,7 +149,24 @@ test('direct ordered row contracts do not advertise filters ignored by row SQL',
       ]
     }),
   ).toEqual([
-    ['review.llm.rows', [], [], 'none', ['sort_key DESC', 'article_id ASC'], ['sort_key', 'article_id ASC']],
+    [
+      'review.llm.rows',
+      [
+        'duplicateFlag',
+        'importRoute',
+        'publicationYear',
+        'articleCreatedAtFrom',
+        'articleCreatedAtTo',
+        'searchTokenPrefix',
+        'conflictFlag',
+        'llmStatus',
+        'promptAnswer',
+      ],
+      ['search'],
+      'tokenPrefix',
+      ['sort_key DESC', 'article_id ASC'],
+      ['sort_key', 'article_id ASC'],
+    ],
     ['review.human.rows', [], [], 'none', ['sort_key DESC', 'article_id ASC'], ['sort_key', 'article_id ASC']],
     ['review.both.rows', [], [], 'none', ['sort_key DESC', 'article_id ASC'], ['sort_key', 'article_id ASC']],
     [
@@ -204,7 +221,7 @@ test('detail row contract does not pin article lookups to a list mode', () => {
   ])
 })
 
-test('count contracts do not advertise unsupported searched-count reads', () => {
+test('only migrated LLM count contract advertises searched-count reads', () => {
   const countContracts = reviewServingReadContractList.filter((contract) => {
     return contract.workloadClass === 'foregroundReviewCount'
   })
@@ -214,7 +231,7 @@ test('count contracts do not advertise unsupported searched-count reads', () => 
       return [contract.key, contract.searchMode, contract.allowedFilters.includes('searchTokenPrefix')]
     }),
   ).toEqual([
-    ['review.llm.count', 'none', false],
+    ['review.llm.count', 'none', true],
     ['review.human.count', 'none', false],
     ['review.both.count', 'none', false],
     ['review.unassessed.count', 'none', false],
@@ -419,7 +436,22 @@ test('filtered row routes have article-set hydration contracts', () => {
       return [contract?.listMode, contract?.physicalAccessStrategy, contract?.allowedFilters]
     }),
   ).toEqual([
-    ['llm', 'articleSetLookup', ['articleId']],
+    [
+      'llm',
+      'articleSetLookup',
+      [
+        'duplicateFlag',
+        'importRoute',
+        'publicationYear',
+        'articleCreatedAtFrom',
+        'articleCreatedAtTo',
+        'searchTokenPrefix',
+        'articleId',
+        'conflictFlag',
+        'llmStatus',
+        'promptAnswer',
+      ],
+    ],
     ['human', 'articleSetLookup', ['articleId']],
     ['both', 'articleSetLookup', ['articleId']],
     ['unassessed', 'articleSetLookup', ['articleId']],
@@ -456,13 +488,11 @@ test('snapshot contracts align cursor fields with sort keys and required counts'
   expect(warning?.optionalComponents).not.toContain('queue')
 })
 
-test('mounted routes stay off incomplete option, count, detail, warning, and preview coverage', () => {
+test('mounted routes stay off incomplete option, detail, warning, and preview coverage', () => {
   const incompleteProductRoutes = new Set([
     '/api/articles/pdf-fetch-by-filter',
     '/api/articles/pdf-fetch-by-project',
-    '/api/articlesreviews',
     '/api/articlesreviewsboth',
-    '/api/articlesreviewscount',
     '/api/articlesreviewsfilters',
     '/api/articlesreviewshuman',
     '/api/articlesreviewshumanfilters',
@@ -477,7 +507,12 @@ test('mounted routes stay off incomplete option, count, detail, warning, and pre
     return entry.mounted && incompleteProductRoutes.has(entry.productRoute)
   })
   const mountedPostingRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
-    return entry.mounted && entry.contractKeys.includes('review.filters.postings')
+    return (
+      entry.mounted
+      && entry.contractKeys.includes('review.filters.postings')
+      && entry.productRoute !== '/api/articlesreviews'
+      && entry.productRoute !== '/api/articlesreviewscount'
+    )
   })
   const mountedFacetRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
     return entry.mounted && entry.contractKeys.includes('review.filters.facets')
@@ -496,7 +531,7 @@ test('explicit PDF bulk ID route is not mapped to project-scoped review serving 
   expect(explicitBulkPdfRoutes).toEqual([])
 })
 
-test('future filter posting and facet contracts stay unmounted until route shapes are complete', () => {
+test('unmigrated filter posting and facet contracts stay unmounted until route shapes are complete', () => {
   const postingInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
     return entry.contractKeys.includes('review.filters.postings')
   })
@@ -516,8 +551,8 @@ test('future filter posting and facet contracts stay unmounted until route shape
       return [entry.productRoute, entry.mounted]
     }),
   ).toEqual([
-    ['/api/articlesreviews', false],
-    ['/api/articlesreviewscount', false],
+    ['/api/articlesreviews', true],
+    ['/api/articlesreviewscount', true],
     ['/api/articlesreviewshuman', false],
     ['/api/articlesreviewsboth', false],
     ['/api/articlesreviewsunassessed', false],

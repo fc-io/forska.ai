@@ -1,6 +1,6 @@
 import {Elysia, t} from 'elysia'
 
-import {countArticlesReviewsFromOlap} from '../../../services/olap/articlesReviewsOlap.ts'
+import {countLlmReviewArticlesFromServing} from '../../reviewServing/reviewServingLlmReviewRouteService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
@@ -33,10 +33,11 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
 
       await assertProjectIsActive(body.projectId)
 
-      const result = await countArticlesReviewsFromOlap({
+      const result = await countLlmReviewArticlesFromServing({
         hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
         hasStudyDecisionConflict: body.hasStudyDecisionConflict,
         projectId: body.projectId,
+        page: 1,
         limit,
         from: body.from,
         to: body.to,
