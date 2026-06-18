@@ -200,6 +200,17 @@ const getMissingRequiredComponents = (
   })
 }
 
+const getMissingRuntimeComponents = (
+  contract: ReviewServingReadContract,
+  manifest: ReviewServingSnapshotManifest | null,
+  request: ReviewServingReaderRequest,
+) => {
+  const componentStates = getComponentCursorStates(manifest)
+  const searchComponents = request.searchMode === 'tokenPrefix' && !componentStates.search ? ['search' as const] : []
+
+  return [...getMissingRequiredComponents(contract, manifest), ...searchComponents]
+}
+
 const getUnsupportedFilterKeys = (contract: ReviewServingReadContract, filters: ReviewServingReaderFilterInput) => {
   const allowedFilters = new Set(contract.allowedFilters)
 
@@ -427,7 +438,7 @@ export const readReviewServingRows = async <T>(
     })
   }
 
-  const missingRequiredComponents = getMissingRequiredComponents(contract, manifest)
+  const missingRequiredComponents = getMissingRuntimeComponents(contract, manifest, request)
 
   if (missingRequiredComponents.length > 0) {
     return rejectReaderRequest({

@@ -296,3 +296,152 @@ test('readReviewServingRows rejects unsupported filters before DuckDB execution'
   expect(result).toMatchObject({reason: 'unsupportedFilterKey', status: 'rejected'})
   expect(reader.statements).toHaveLength(0)
 })
+
+test('readReviewServingRows requires supported count state before count SQL execution', async () => {
+  const reader = createReaderDatabase([{value: 12}])
+  const manifestDatabase = createManifestDatabase({
+    bySnapshot: {
+      'active-snapshot': getSnapshotRow({
+        components: ['llmStatus', 'posting', 'queue', 'summary'],
+        snapshotId: 'active-snapshot',
+        status: 'active',
+      }),
+    },
+  })
+  const countRequest = {
+    ...readyRequest,
+    contractKey: 'review.llm.count',
+    countFilterKey: 'prompt:1',
+    countState: {
+      availability: 'ready' as const,
+      filterKey: 'prompt:1',
+      key: 'review.llm.assessedByPrompt' as const,
+      snapshotId: 'active-snapshot',
+      value: 12,
+    },
+    limit: 1,
+    namedCountKey: 'review.llm.assessedByPrompt' as const,
+  }
+  const accepted = await readReviewServingRows<{value: number}>(countRequest, {
+    database: reader.database,
+    diagnosticsDatabase: manifestDatabase,
+    manifestDatabase,
+  })
+  const unavailable = await readReviewServingRows(
+    {
+      ...countRequest,
+      countState: {
+        availability: 'unavailable' as const,
+        filterKey: 'prompt:1',
+        key: 'review.llm.assessedByPrompt' as const,
+        reason: 'count projector unavailable',
+      },
+    },
+    {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase},
+  )
+  const wrongFilterKey = await readReviewServingRows(
+    {...countRequest, countFilterKey: 'prompt:2'},
+    {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase},
+  )
+
+  expect(accepted.status).toBe('accepted')
+  expect(accepted.status === 'accepted' ? accepted.rows : []).toEqual([{value: 12}])
+  expect(reader.statements[0]).toContain('FROM mart.review_article_count_serving_v4')
+  expect(reader.statements[0]).toContain("count_kind = 'review.llm.assessedByPrompt'")
+  expect(reader.statements[0]).toContain('filter_key = $countFilterKey')
+  expect(unavailable).toMatchObject({reason: 'admissionRejected', status: 'rejected'})
+  expect(unavailable.diagnostics.admission?.rejectionReason).toBe('countStateUnavailable')
+  expect(wrongFilterKey).toMatchObject({reason: 'admissionRejected', status: 'rejected'})
+  expect(wrongFilterKey.diagnostics.admission?.rejectionReason).toBe('countStateUnavailable')
+  expect(reader.statements).toHaveLength(1)
+})
+
+test('readReviewServingRows returns explicit async substring search state without raw scans', async () => {
+  const reader = createReaderDatabase([{job_id: 'search-job-1'}])
+  const manifestDatabase = createManifestDatabase({
+    bySnapshot: {
+      'active-snapshot': getSnapshotRow({
+        components: ['projectScope'],
+        snapshotId: 'active-snapshot',
+        status: 'active',
+      }),
+    },
+  })
+  const result = await readReviewServingRows<{job_id: string}>(
+    {
+      ...readyRequest,
+      contractKey: 'review.search.substringAsync',
+      jobFilterSignature: 'filters:1',
+      limit: 1,
+      searchMode: 'substringAsync',
+      searchState: {availability: 'async', jobId: 'search-job-1', reason: 'substring search runs async'},
+      searchText: 'heart failure',
+    },
+    {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase},
+  )
+
+  expect(result.status).toBe('accepted')
+  expect(result.diagnostics.admission?.search.state).toMatchObject({availability: 'async', jobId: 'search-job-1'})
+  expect(reader.statements).toHaveLength(1)
+  expect(reader.statements[0]).toContain('FROM app.review_search_job')
+  expect(reader.statements[0]).toContain("search_mode = 'substringAsync'")
+  expect(reader.statements[0]).not.toContain('FROM app.article')
+  expect(reader.workloads[0]).toMatchObject({fallbackIntent: 'async', searchMode: 'substringAsync'})
+})
+
+test('readReviewServingRows rejects mismatched and missing token-prefix search modes before DuckDB execution', async () => {
+  const reader = createReaderDatabase()
+  const readySearchManifestDatabase = createManifestDatabase({
+    bySnapshot: {
+      'active-snapshot': getSnapshotRow({
+        components: ['projectScope', 'search'],
+        snapshotId: 'active-snapshot',
+        status: 'active',
+      }),
+    },
+  })
+  const missingSearchManifestDatabase = createManifestDatabase({
+    bySnapshot: {
+      'active-snapshot': getSnapshotRow({
+        components: ['display', 'humanStatus', 'llmStatus', 'posting', 'projectScope', 'selectedImport', 'summary'],
+        snapshotId: 'active-snapshot',
+        status: 'active',
+      }),
+    },
+  })
+  const substringSync = await readReviewServingRows(
+    {
+      ...readyRequest,
+      contractKey: 'review.search.tokenPrefix',
+      limit: 10,
+      searchMode: 'substringSync',
+      searchTokenPrefix: 'hea',
+    },
+    {
+      database: reader.database,
+      diagnosticsDatabase: readySearchManifestDatabase,
+      manifestDatabase: readySearchManifestDatabase,
+    },
+  )
+  const missingSearchComponent = await readReviewServingRows(
+    {
+      ...readyRequest,
+      contractKey: 'review.filters.facets',
+      limit: 25,
+      searchMode: 'tokenPrefix',
+      searchState: {availability: 'ready', snapshotId: 'active-snapshot'},
+      searchTokenPrefix: 'hea',
+    },
+    {
+      database: reader.database,
+      diagnosticsDatabase: missingSearchManifestDatabase,
+      manifestDatabase: missingSearchManifestDatabase,
+    },
+  )
+
+  expect(substringSync).toMatchObject({reason: 'admissionRejected', status: 'rejected'})
+  expect(substringSync.diagnostics.admission?.rejectionReason).toBe('synchronousSubstringSearchUnavailable')
+  expect(missingSearchComponent).toMatchObject({reason: 'missingRequiredComponentState', status: 'rejected'})
+  expect(missingSearchComponent.diagnostics.missingRequiredComponents).toContain('search')
+  expect(reader.statements).toHaveLength(0)
+})
