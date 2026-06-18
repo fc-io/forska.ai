@@ -6,6 +6,7 @@ import {
   type ReviewServingProjectionIdentityManifestInput,
   type ReviewServingProjectionManifestStatus,
 } from './reviewServingManifestRepository.ts'
+import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
   getDeleteReviewServingProjectorRowsStatement,
   type ReviewServingProjectorRecord,
@@ -414,6 +415,7 @@ export const getReviewServingPayloadPatchManifest = (
     definitionVersion: input.definitionVersion,
     inputDigest: getClaimKinds(claims),
     inputWatermark: patchWatermark,
+    inputWatermarks: getReviewServingSourcePartitionWatermarks(claims),
     invalidationReason: getClaimKinds(claims),
     patchRangeEnd: patchWatermark,
     patchRangeStart: getPatchRangeStart(claims),

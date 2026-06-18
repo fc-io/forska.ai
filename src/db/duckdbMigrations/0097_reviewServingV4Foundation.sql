@@ -244,6 +244,7 @@ CREATE TABLE IF NOT EXISTS app.review_projection_identity_manifest (
   patch_range_start BIGINT,
   patch_range_end BIGINT,
   input_watermark BIGINT NOT NULL DEFAULT 0,
+  input_watermarks_json JSON NOT NULL DEFAULT '{}',
   input_digest VARCHAR,
   definition_version VARCHAR NOT NULL,
   review_config_hash VARCHAR,

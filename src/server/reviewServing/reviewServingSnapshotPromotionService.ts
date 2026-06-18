@@ -130,6 +130,20 @@ const getRequiredSourceWatermark = (
   return componentValue ?? (sourceValues.length === 0 ? 0 : Math.max(...sourceValues))
 }
 
+const getRequiredSourceWatermarks = (
+  sourceWatermarks: ReviewServingIdentityValue,
+  component: ReviewServingProjectionComponent,
+) => {
+  const componentValue = getNumericObjectValue(sourceWatermarks, component)
+  const sourceEntries = componentSourceWatermarkKeys[component].flatMap((key) => {
+    const value = getNumericObjectValue(sourceWatermarks, key)
+
+    return value === null ? [] : [[key, value] as const]
+  })
+
+  return componentValue === null ? Object.fromEntries(sourceEntries) : {[component]: componentValue}
+}
+
 const getManifestCompletenessError = (
   manifest: ReviewServingProjectionIdentityManifest | null,
   component: ReviewServingProjectionComponent,
@@ -151,6 +165,20 @@ const getWatermarkError = (manifest: ReviewServingProjectionIdentityManifest, re
   return manifest.inputWatermark < requiredSourceWatermark
     ? `component ${manifest.projectionComponent} input watermark ${manifest.inputWatermark} is behind source ${requiredSourceWatermark}`
     : null
+}
+
+const getSourcePartitionWatermarkError = (
+  manifest: ReviewServingProjectionIdentityManifest,
+  requiredSourceWatermarks: Record<string, number>,
+) => {
+  const entries = Object.entries(requiredSourceWatermarks)
+  const missingEntry = entries.find(([sourceKey, requiredWatermark]) => {
+    return (manifest.inputWatermarks[sourceKey] ?? 0) < requiredWatermark
+  })
+
+  return missingEntry === undefined
+    ? null
+    : `component ${manifest.projectionComponent} input watermark ${manifest.inputWatermarks[missingEntry[0]] ?? 0} for source ${missingEntry[0]} is behind source ${missingEntry[1]}`
 }
 
 const getComponentStateConsistencyError = (
@@ -208,10 +236,12 @@ const getRequiredManifestValidationError = async (
 ) => {
   const manifest = await getManifestForState(candidate.projectId, state, database)
   const requiredSourceWatermark = getRequiredSourceWatermark(candidate.sourceWatermarks, state.component)
+  const requiredSourceWatermarks = getRequiredSourceWatermarks(candidate.sourceWatermarks, state.component)
 
   return (
     getManifestCompletenessError(manifest, state.component)
     ?? (manifest === null ? null : getReviewConfigError(manifest, candidate.reviewConfigHash))
+    ?? (manifest === null ? null : getSourcePartitionWatermarkError(manifest, requiredSourceWatermarks))
     ?? (manifest === null ? null : getWatermarkError(manifest, requiredSourceWatermark))
     ?? getComponentStateConsistencyError(manifest, state)
   )
@@ -224,10 +254,12 @@ const getOptionalManifestValidationError = async (
 ) => {
   const manifest = await getManifestForState(candidate.projectId, state, database)
   const requiredSourceWatermark = getRequiredSourceWatermark(candidate.sourceWatermarks, state.component)
+  const requiredSourceWatermarks = getRequiredSourceWatermarks(candidate.sourceWatermarks, state.component)
 
   return (
     getManifestCompletenessError(manifest, state.component)
     ?? (manifest === null ? null : getReviewConfigError(manifest, candidate.reviewConfigHash))
+    ?? (manifest === null ? null : getSourcePartitionWatermarkError(manifest, requiredSourceWatermarks))
     ?? (manifest === null ? null : getWatermarkError(manifest, requiredSourceWatermark))
     ?? getComponentStateConsistencyError(manifest, state)
   )

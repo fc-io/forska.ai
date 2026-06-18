@@ -11,6 +11,7 @@ import {
   type ReviewServingProjectionIdentityManifestInput,
   type ReviewServingProjectionManifestStatus,
 } from './reviewServingManifestRepository.ts'
+import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
   getDeleteReviewServingProjectorRowsStatement,
   type ReviewServingProjectorRecord,
@@ -570,6 +571,7 @@ const getPostingManifest = (
     definitionVersion: input.definitionVersion,
     inputDigest: getClaimKinds(input.claims),
     inputWatermark: patchWatermark,
+    inputWatermarks: getReviewServingSourcePartitionWatermarks(input.claims),
     invalidationReason: getClaimKinds(input.claims),
     patchRangeEnd: patchWatermark,
     patchRangeStart: getPatchRangeStart(input.claims),

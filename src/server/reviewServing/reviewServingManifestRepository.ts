@@ -10,6 +10,7 @@ import {
 import {
   getReviewServingProjectionComponentIdentityKey,
   type ReviewServingProjectionComponentIdentity,
+  type ReviewServingSourcePartitionWatermarks,
 } from './reviewServingProjectorDomain.ts'
 
 export type ReviewServingManifestRepositoryDatabase = {
@@ -30,6 +31,7 @@ export type ReviewServingProjectionIdentityManifest = ReviewServingProjectionCom
   definitionVersion: string
   inputDigest: string | null
   inputWatermark: number
+  inputWatermarks: ReviewServingSourcePartitionWatermarks
   invalidationReason: string | null
   manifestId: string
   patchRangeEnd: number | null
@@ -45,6 +47,7 @@ export type ReviewServingProjectionIdentityManifestInput = ReviewServingProjecti
   definitionVersion: string
   inputDigest?: string | null
   inputWatermark: number
+  inputWatermarks?: ReviewServingSourcePartitionWatermarks
   invalidationReason?: string | null
   patchRangeEnd?: number | null
   patchRangeStart?: number | null
@@ -88,6 +91,7 @@ type ProjectionIdentityManifestRow = {
   definitionVersion: string
   inputDigest: string | null
   inputWatermark: number
+  inputWatermarksJson: unknown
   invalidationReason: string | null
   manifestId: string
   patchRangeEnd: number | null
@@ -135,6 +139,7 @@ const getProjectionManifestFromRow = (row: ProjectionIdentityManifestRow): Revie
     definitionVersion: row.definitionVersion,
     inputDigest: row.inputDigest,
     inputWatermark: Number(row.inputWatermark),
+    inputWatermarks: getJsonValue(row.inputWatermarksJson) as ReviewServingSourcePartitionWatermarks,
     invalidationReason: row.invalidationReason,
     manifestId: row.manifestId,
     patchRangeEnd: row.patchRangeEnd === null ? null : Number(row.patchRangeEnd),
@@ -208,6 +213,7 @@ export const upsertReviewServingProjectionIdentityManifest = async (
       patch_range_start,
       patch_range_end,
       input_watermark,
+      input_watermarks_json,
       input_digest,
       definition_version,
       review_config_hash,
@@ -225,6 +231,7 @@ export const upsertReviewServingProjectionIdentityManifest = async (
       ${getSqlLiteral(input.patchRangeStart ?? null)},
       ${getSqlLiteral(input.patchRangeEnd ?? null)},
       ${getSqlLiteral(input.inputWatermark)},
+      ${getReviewServingJsonLiteral(input.inputWatermarks ?? {})},
       ${getSqlLiteral(input.inputDigest ?? null)},
       ${getSqlLiteral(input.definitionVersion)},
       ${getSqlLiteral(input.reviewConfigHash ?? null)},
@@ -239,6 +246,7 @@ export const upsertReviewServingProjectionIdentityManifest = async (
       patch_range_start = excluded.patch_range_start,
       patch_range_end = excluded.patch_range_end,
       input_watermark = excluded.input_watermark,
+      input_watermarks_json = excluded.input_watermarks_json,
       input_digest = excluded.input_digest,
       definition_version = excluded.definition_version,
       review_config_hash = excluded.review_config_hash,
@@ -266,6 +274,7 @@ export const getReviewServingProjectionIdentityManifest = async (
       patch_range_start AS patchRangeStart,
       patch_range_end AS patchRangeEnd,
       input_watermark AS inputWatermark,
+      input_watermarks_json AS inputWatermarksJson,
       input_digest AS inputDigest,
       definition_version AS definitionVersion,
       review_config_hash AS reviewConfigHash,
