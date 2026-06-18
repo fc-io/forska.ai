@@ -299,6 +299,18 @@ test('worker backs off failed wakes and stops cleanly when aborted during sleep'
   await runReviewServingProjectorWorker({signal: controller.signal, workerId: 'worker-1'}, harness.dependencies)
 
   expect(sleepCalls).toEqual([defaultReviewServingProjectorWorkerErrorBackoffMs])
+  expect(harness.claimInputs).toHaveLength(1)
+})
+
+test('worker does not start a cycle when already aborted', async () => {
+  const harness = createWorkerHarness()
+  const controller = new AbortController()
+
+  controller.abort()
+
+  await runReviewServingProjectorWorker({signal: controller.signal, workerId: 'worker-1'}, harness.dependencies)
+
+  expect(harness.claimInputs).toEqual([])
 })
 
 test('worker source does not start product route migration or V4 route cutover', () => {
