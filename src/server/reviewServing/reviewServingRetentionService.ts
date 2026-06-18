@@ -366,11 +366,14 @@ const compactPatchComponent = async (
   if (assessment.component === 'selectedImport') {
     await compactSelectedImportPatches(candidate, database)
     await database.run(`
-      UPDATE mart.review_article_serving_v4
+      UPDATE mart.review_article_serving_v4 serving
       SET base_generation = ${getSqlLiteral(nextBaseGeneration)}
-      WHERE project_id = ${getSqlLiteral(candidate.projectId)}
-        AND selected_import_snapshot_id = ${getSqlLiteral(candidate.selectedImportSnapshotId)}
-        AND base_generation = ${getSqlLiteral(assessment.baseGeneration)}
+      FROM app.review_serving_snapshot_manifest snapshot
+      WHERE serving.project_id = ${getSqlLiteral(candidate.projectId)}
+        AND serving.project_id = snapshot.project_id
+        AND serving.snapshot_id = snapshot.snapshot_id
+        AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(candidate.selectedImportSnapshotId)}
+        AND serving.base_generation = ${getSqlLiteral(assessment.baseGeneration)}
     `)
   } else {
     return
