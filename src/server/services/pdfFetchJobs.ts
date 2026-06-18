@@ -8,7 +8,14 @@ import {
   getArticleReviewServingMutationValueHash,
 } from '../reviewServing/articleReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {escapeSqlString, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../services/appQueryHelpers.ts'
+import {
+  escapeSqlString,
+  getDateValue,
+  getJsonValue,
+  getQuotedStringList,
+  getSqlLiteral,
+  getTimestampLiteral,
+} from '../services/appQueryHelpers.ts'
 
 type PdfFetchJobStatus = 'queued' | 'running' | 'completed' | 'failed'
 
@@ -31,6 +38,21 @@ export type PdfFetchJob = {
 }
 
 export type StartPdfFetchJobArgs = {articleIds: string[]; concurrency?: number; forceRefetch?: boolean}
+
+type DurablePdfFetchJobRow = {
+  batchSize: number
+  cancelRequested: boolean
+  completedAt: string | null
+  createdAt: string
+  criteriaJson: unknown
+  cursorJson: unknown
+  jobId: string
+  lastError: string | null
+  processedCount: number
+  resultManifestJson: unknown
+  status: string
+  totalEstimate: number | null
+}
 
 const DEFAULT_CONCURRENCY = 5
 
@@ -309,4 +331,84 @@ export const startPdfFetchJob = (args: StartPdfFetchJobArgs): PdfFetchJob => {
 
 export const getPdfFetchJob = (jobId: string): PdfFetchJob | null => {
   return getJob(jobId)
+}
+
+const getDurablePdfFetchJobStatus = (row: DurablePdfFetchJobRow): PdfFetchJobStatus => {
+  return row.status === 'completed'
+    ? 'completed'
+    : row.status === 'failed' || row.status === 'cancelled'
+      ? 'failed'
+      : row.status === 'running'
+        ? 'running'
+        : 'queued'
+}
+
+const getDurablePdfFetchCriteria = (row: DurablePdfFetchJobRow) => {
+  const value = getJsonValue(row.criteriaJson)
+
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as {concurrency?: number; forceRefetch?: boolean})
+    : {}
+}
+
+const getDurablePdfFetchResultManifest = (row: DurablePdfFetchJobRow) => {
+  const value = getJsonValue(row.resultManifestJson)
+
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as {attempted?: number; failed?: number; noPdf?: number; skipped?: number; succeeded?: number})
+    : {}
+}
+
+export const getPdfFetchJobFromDatabase = async (
+  jobId: string,
+  database: Pick<ReturnType<typeof getAppDatabaseService>, 'queryJson'> = getAppDatabaseService(),
+): Promise<PdfFetchJob | null> => {
+  const [row] = await database.queryJson<DurablePdfFetchJobRow>(`
+    SELECT
+      job_id AS jobId,
+      criteria_json AS criteriaJson,
+      cursor_json AS cursorJson,
+      batch_size AS batchSize,
+      status,
+      result_manifest_json AS resultManifestJson,
+      processed_count AS processedCount,
+      total_estimate AS totalEstimate,
+      cancel_requested AS cancelRequested,
+      last_error AS lastError,
+      created_at AS createdAt,
+      completed_at AS completedAt
+    FROM app.review_bulk_operation_job
+    WHERE job_id = ${getSqlLiteral(jobId)}
+      AND job_kind = 'review.pdf.selection'
+    LIMIT 1
+  `)
+
+  if (!row) {
+    return null
+  }
+
+  const criteria = getDurablePdfFetchCriteria(row)
+  const manifest = getDurablePdfFetchResultManifest(row)
+  const createdAtMs = getDateValue(row.createdAt)?.getTime() ?? Date.now()
+  const finishedAtMs = row.completedAt ? (getDateValue(row.completedAt)?.getTime() ?? null) : null
+  const status = getDurablePdfFetchJobStatus(row)
+  const processed = Number(row.processedCount)
+
+  return {
+    attempted: Number(manifest.attempted ?? processed),
+    concurrency: Number(criteria.concurrency ?? row.batchSize),
+    createdAtMs,
+    failed: Number(manifest.failed ?? (status === 'failed' ? 1 : 0)),
+    finishedAtMs,
+    forceRefetch: Boolean(criteria.forceRefetch),
+    jobId: row.jobId,
+    lastError: row.lastError,
+    noPdf: Number(manifest.noPdf ?? 0),
+    processed,
+    skipped: Number(manifest.skipped ?? 0),
+    startedAtMs: status === 'queued' ? null : createdAtMs,
+    status,
+    succeeded: Number(manifest.succeeded ?? 0),
+    total: Number(row.totalEstimate ?? processed),
+  }
 }
