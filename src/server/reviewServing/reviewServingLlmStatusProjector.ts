@@ -1,6 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {buildPromptConfigHash, buildReviewConfigHash} from './reviewProjectionIdentity.ts'
+import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {buildPromptConfigHash, buildReviewConfigHash, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
@@ -42,7 +42,13 @@ type LlmStatusSourceRow = {
   isAnswered: boolean | null
   latestLlmCreatedAt: Date | string | null
   humanJudgmentMode: 'prompt' | 'summary'
+  modelExecutionOptions: string | null
   modelId: string
+  modelProviderBaseUrl: string | null
+  modelProviderConnectionId: string | null
+  modelProviderKind: string | null
+  modelRemoteModelId: string | null
+  modelVariant: string | null
   promptId: string
   promptTextHash: string | null
   settingsVersion: string | null
@@ -187,7 +193,13 @@ const getPromptConfigHash = (
 
 const getReviewConfigHash = (input: {
   humanJudgmentMode: 'prompt' | 'summary'
+  modelExecutionOptions: string | null
   modelId: string
+  modelProviderBaseUrl: string | null
+  modelProviderConnectionId: string | null
+  modelProviderKind: string | null
+  modelRemoteModelId: string | null
+  modelVariant: string | null
   promptConfigRows: readonly ProjectPromptConfigRow[]
   useAbstract: boolean
   useFulltext: boolean
@@ -196,7 +208,15 @@ const getReviewConfigHash = (input: {
 }) => {
   return buildReviewConfigHash({
     humanJudgmentMode: input.humanJudgmentMode,
-    modelExecutionIdentity: {modelId: input.modelId},
+    modelExecutionIdentity: {
+      modelExecutionOptions: getJsonValue(input.modelExecutionOptions) as ReviewServingIdentityValue,
+      modelId: input.modelId,
+      providerBaseUrl: input.modelProviderBaseUrl,
+      providerConnectionId: input.modelProviderConnectionId,
+      providerKind: input.modelProviderKind,
+      remoteModelId: input.modelRemoteModelId,
+      variant: input.modelVariant,
+    },
     modelId: input.modelId,
     promptConfigs: input.promptConfigRows.map((row, index) => {
       return {promptConfigHash: getPromptConfigHash(row), promptId: row.promptId, promptOrder: row.promptOrder ?? index}
@@ -225,6 +245,12 @@ const getJudgmentDeltaRows = async (
           delta.article_id AS articleId,
           delta.prompt_id AS promptId,
           delta.model_id AS modelId,
+          model.provider_connection_id AS modelProviderConnectionId,
+          provider_connection.provider_kind AS modelProviderKind,
+          provider_connection.base_url AS modelProviderBaseUrl,
+          model.remote_model_id AS modelRemoteModelId,
+          model.variant AS modelVariant,
+          TO_JSON(json_extract(model.metadata_json, '$.options')) AS modelExecutionOptions,
           delta.use_title AS useTitle,
           delta.use_abstract AS useAbstract,
           delta.use_fulltext AS useFulltext,
@@ -245,6 +271,10 @@ const getJudgmentDeltaRows = async (
           ON dirty.article_id = delta.article_id
         INNER JOIN app.project project
           ON project.id = delta.project_id
+        LEFT JOIN app.model model
+          ON model.id = delta.model_id
+        LEFT JOIN app.provider_connection provider_connection
+          ON provider_connection.id = model.provider_connection_id
         INNER JOIN app.prompt prompt
           ON prompt.id = delta.prompt_id
         LEFT JOIN app.project_prompt project_prompt
@@ -296,6 +326,12 @@ const getPromptScopedRows = async (
           scope.article_id AS articleId,
           dirty_prompt.prompt_id AS promptId,
           project.model_id AS modelId,
+          model.provider_connection_id AS modelProviderConnectionId,
+          provider_connection.provider_kind AS modelProviderKind,
+          provider_connection.base_url AS modelProviderBaseUrl,
+          model.remote_model_id AS modelRemoteModelId,
+          model.variant AS modelVariant,
+          TO_JSON(json_extract(model.metadata_json, '$.options')) AS modelExecutionOptions,
           project.use_title AS useTitle,
           project.use_abstract AS useAbstract,
           project.use_fulltext AS useFulltext,
@@ -314,6 +350,10 @@ const getPromptScopedRows = async (
         FROM prompt_id_filter dirty_prompt
         INNER JOIN app.project project
           ON project.id = ${getSqlLiteral(input.projectId)}
+        LEFT JOIN app.model model
+          ON model.id = project.model_id
+        LEFT JOIN app.provider_connection provider_connection
+          ON provider_connection.id = model.provider_connection_id
         INNER JOIN mart.project_scope_article scope
           ON scope.project_id = ${getSqlLiteral(input.projectId)}
           AND (scope.in_curated_scope OR scope.in_route_scope)
@@ -372,6 +412,12 @@ const getProjectScopedRows = async (
           scope.article_id AS articleId,
           dirty_prompt.prompt_id AS promptId,
           project.model_id AS modelId,
+          model.provider_connection_id AS modelProviderConnectionId,
+          provider_connection.provider_kind AS modelProviderKind,
+          provider_connection.base_url AS modelProviderBaseUrl,
+          model.remote_model_id AS modelRemoteModelId,
+          model.variant AS modelVariant,
+          TO_JSON(json_extract(model.metadata_json, '$.options')) AS modelExecutionOptions,
           project.use_title AS useTitle,
           project.use_abstract AS useAbstract,
           project.use_fulltext AS useFulltext,
@@ -388,6 +434,10 @@ const getProjectScopedRows = async (
           'prompt-v1' AS settingsVersion,
           NULL AS thresholdVersion
         FROM app.project project
+        LEFT JOIN app.model model
+          ON model.id = project.model_id
+        LEFT JOIN app.provider_connection provider_connection
+          ON provider_connection.id = model.provider_connection_id
         INNER JOIN scoped_article scope
           ON TRUE
         INNER JOIN prompt_id_filter dirty_prompt
@@ -444,6 +494,12 @@ const getArticleScopedRows = async (
           dirty.article_id AS articleId,
           prompt.id AS promptId,
           project.model_id AS modelId,
+          model.provider_connection_id AS modelProviderConnectionId,
+          provider_connection.provider_kind AS modelProviderKind,
+          provider_connection.base_url AS modelProviderBaseUrl,
+          model.remote_model_id AS modelRemoteModelId,
+          model.variant AS modelVariant,
+          TO_JSON(json_extract(model.metadata_json, '$.options')) AS modelExecutionOptions,
           project.use_title AS useTitle,
           project.use_abstract AS useAbstract,
           project.use_fulltext AS useFulltext,
@@ -462,6 +518,10 @@ const getArticleScopedRows = async (
         FROM article_id_filter dirty
         INNER JOIN app.project project
           ON project.id = ${getSqlLiteral(input.projectId)}
+        LEFT JOIN app.model model
+          ON model.id = project.model_id
+        LEFT JOIN app.provider_connection provider_connection
+          ON provider_connection.id = model.provider_connection_id
         INNER JOIN app.project_prompt project_prompt
           ON project_prompt.project_id = project.id
           AND project_prompt.enabled

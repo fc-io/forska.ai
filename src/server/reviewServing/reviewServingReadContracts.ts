@@ -446,7 +446,7 @@ export const reviewServingReadContractList = [
   }),
   defineContract({
     allowedFilters: ['queueKind'],
-    cursorFields: ['priority_bucket', 'activity_sort_at', 'article_id'],
+    cursorFields: ['priority_bucket', 'activity_sort_at', 'article_id', 'prompt_id', 'queue_identity'],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.queue.unassessed',
     listMode: 'unassessed',
@@ -457,7 +457,7 @@ export const reviewServingReadContractList = [
     requiredComponents: ['queue', 'summary'],
     searchMode: 'none',
     servingTable: reviewQueueServingTable,
-    sort: {direction: 'desc', fields: ['priority_bucket', 'activity_sort_at', 'article_id']},
+    sort: {direction: 'desc', fields: ['priority_bucket', 'activity_sort_at', 'article_id', 'prompt_id', 'queue_identity']},
     workloadClass: 'foregroundReviewQueue',
   }),
   defineContract({

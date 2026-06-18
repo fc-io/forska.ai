@@ -15,4 +15,4 @@ CREATE TABLE IF NOT EXISTS mart.review_unassessed_queue_serving_v4 (
 );
 
 CREATE INDEX IF NOT EXISTS idx_review_unassessed_queue_serving_v4_order
-ON mart.review_unassessed_queue_serving_v4(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id);
+ON mart.review_unassessed_queue_serving_v4(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id, queue_identity);

@@ -136,6 +136,10 @@ test('LLM judgment deltas write component-narrow status patches from persisted b
 
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
   expect(selectStatement).toContain('delta.model_id AS modelId')
+  expect(selectStatement).toContain('model.provider_connection_id AS modelProviderConnectionId')
+  expect(selectStatement).toContain('provider_connection.base_url AS modelProviderBaseUrl')
+  expect(selectStatement).toContain("TO_JSON(json_extract(model.metadata_json, '$.options')) AS modelExecutionOptions")
+  expect(selectStatement).toContain('LEFT JOIN app.provider_connection provider_connection')
   expect(selectStatement).toContain("COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode")
   expect(selectStatement).toContain('LEFT JOIN app.project_prompt project_prompt')
   expect(selectStatement).toContain('project_prompt.id IS NULL OR NOT project_prompt.enabled')

@@ -247,8 +247,8 @@ test('queue and count contracts use physical serving-table sort columns', () => 
   const count = getReviewServingReadContract('review.llm.count')
   const badges = getReviewServingReadContract('review.prompt.badges')
 
-  expect(queue?.cursorFields).toEqual(['priority_bucket', 'activity_sort_at', 'article_id'])
-  expect(queue?.sort.fields).toEqual(['priority_bucket', 'activity_sort_at', 'article_id'])
+  expect(queue?.cursorFields).toEqual(['priority_bucket', 'activity_sort_at', 'article_id', 'prompt_id', 'queue_identity'])
+  expect(queue?.sort.fields).toEqual(['priority_bucket', 'activity_sort_at', 'article_id', 'prompt_id', 'queue_identity'])
   expect(queue?.sort.direction).toBe('desc')
   expect(count?.sort.fields).toEqual(['list_mode_key', 'count_kind', 'summary_definition_version', 'filter_key'])
   expect(badges?.sort.fields).toEqual(['list_mode_key', 'count_kind', 'summary_definition_version', 'filter_key'])

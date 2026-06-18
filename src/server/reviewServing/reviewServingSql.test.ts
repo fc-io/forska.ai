@@ -256,7 +256,9 @@ test('buildReviewServingRowsSql only emits list-mode predicates for list-mode ta
   )
   expect(sql).not.toContain('list_mode_key')
   expect(sql).toContain('AND queue_kind = $queueKind')
-  expect(sql).toContain('ORDER BY priority_bucket DESC, activity_sort_at DESC, article_id DESC')
+  expect(sql).toContain(
+    'ORDER BY priority_bucket DESC, activity_sort_at DESC, article_id DESC, prompt_id DESC, queue_identity DESC',
+  )
   expect(sql).not.toContain('sort_key')
 })
 

@@ -77,6 +77,7 @@ type DisplayProjectionRow = {
 }
 
 type DisplayPatchRow = {
+  activitySortAt: Date | string | null
   articleExternalId: string | null
   articleId: string
   articleTitle: string | null
@@ -215,6 +216,7 @@ const getDisplayPatchRows = async (
         SELECT
           dirty.article_id AS articleId,
           COALESCE(article.article_created_at, current_timestamp) AS sortKey,
+          COALESCE(article.article_updated_at, article.article_created_at, current_timestamp) AS activitySortAt,
           article.article_title AS articleTitle,
           article.article_id AS articleExternalId,
           article.full_text_pdf AS fullTextPdf,
@@ -325,6 +327,7 @@ const getDisplayPatchRecord = (
       article_external_id: row.tombstone ? null : row.articleExternalId,
       article_id: row.articleId,
       article_title: row.tombstone ? null : row.articleTitle,
+      activity_sort_at: row.tombstone ? null : row.activitySortAt,
       base_generation: input.baseGeneration,
       display_identity: input.displayIdentity,
       journal_title: row.tombstone ? null : row.journalTitle,
@@ -395,8 +398,7 @@ const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplay
           article_external_id = ${getSqlLiteral(row.articleExternalId)},
           article_title = ${getSqlLiteral(row.articleTitle)},
           full_text_pdf = ${getSqlLiteral(row.fullTextPdf)},
-          journal_title = ${getSqlLiteral(row.journalTitle)},
-          publication_year = ${getSqlLiteral(row.publicationYear)},
+          activity_sort_at = ${getSqlLiteral(row.activitySortAt)},
           sort_key = ${getSqlLiteral(row.sortKey)},
           url = ${getSqlLiteral(row.url)},
           serving_updated_at = current_timestamp
