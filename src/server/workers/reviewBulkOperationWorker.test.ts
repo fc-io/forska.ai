@@ -38,7 +38,9 @@ const jobRow = {
 const createWorkerHarness = (input?: {
   batchRows?: readonly {articleId: string}[]
   cancelRequested?: boolean
+  criteriaJson?: unknown
   executeThrows?: boolean
+  jobKind?: string
   retryCount?: number
 }) => {
   const statements: string[] = []
@@ -60,7 +62,13 @@ const createWorkerHarness = (input?: {
         && statement.includes('criteria_json AS criteriaJson')
       ) {
         return [
-          {...jobRow, cancelRequested: input?.cancelRequested ?? false, retryCount: input?.retryCount ?? 0},
+          {
+            ...jobRow,
+            cancelRequested: input?.cancelRequested ?? false,
+            criteriaJson: input?.criteriaJson ?? jobRow.criteriaJson,
+            jobKind: input?.jobKind ?? jobRow.jobKind,
+            retryCount: input?.retryCount ?? 0,
+          },
         ] as T[]
       }
 
@@ -108,7 +116,7 @@ test('review bulk operation worker claims and advances bounded keyset progress d
   expect(joined).toContain("status IN ('pending', 'running')")
   expect(joined).toContain("status = 'running'")
   expect(joined).toContain("article_id > 'article-001'")
-  expect(joined).toContain('ORDER BY article_id ASC')
+  expect(joined).toContain('ORDER BY p.article_id ASC')
   expect(joined).toContain('LIMIT 2')
   expect(joined).toContain('processed_count = processed_count + 2')
   expect(joined).toContain('"cursor":"article-003"')
@@ -117,6 +125,56 @@ test('review bulk operation worker claims and advances bounded keyset progress d
       return context.fallbackIntent === 'reject' && context.workloadClass === 'bulkReviewJob'
     }),
   ).toBe(true)
+})
+
+test('review bulk operation worker selects add-to-project batches from persisted filter criteria', async () => {
+  const harness = createWorkerHarness({
+    criteriaJson: {
+      from: '2010',
+      hasDuplicateStudyRecords: true,
+      hasStudyDecisionConflict: true,
+      listType: 'both',
+      llmStatus: 'complete',
+      operation: 'addToProject',
+      prompts: {'prompt-1': ['yes', 'maybe']},
+      targetProjectId: 'target-project-1',
+      to: '2020',
+    },
+  })
+
+  await runReviewBulkOperationWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  const joined = harness.statements.join('\n')
+
+  expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 p')
+  expect(joined).toContain("p.list_mode_key = 'both'")
+  expect(joined).toContain("filter_0.filter_kind = 'duplicateFlag'")
+  expect(joined).toContain("filter_1.filter_kind = 'conflictFlag'")
+  expect(joined).toContain("filter_2.filter_kind = 'llmStatus'")
+  expect(joined).toContain('year_filter.filter_kind')
+  expect(joined).toContain('TRY_CAST(year_filter.filter_value AS INTEGER) >= TRY_CAST')
+  expect(joined).toContain("prompt_filter_0.filter_kind = 'promptAnswer'")
+  expect(joined).toContain('review:promptAnswer:prompt-1:yes')
+  expect(joined).toContain('ORDER BY p.article_id ASC')
+  expect(joined).toContain('LIMIT 2')
+  expect(joined).not.toContain('FROM app.article')
+})
+
+test('review bulk operation worker leaves substring add-to-project jobs on async search semantics', async () => {
+  const harness = createWorkerHarness({
+    criteriaJson: {operation: 'addToProject', search: 'heart failure', targetProjectId: 'target-project-1'},
+    jobKind: 'review.bulk.substringSelection',
+  })
+
+  const result = await runReviewBulkOperationWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  const joined = harness.statements.join('\n')
+
+  expect(result.status).toBe('partial')
+  expect(joined).toContain("status = 'pending'")
+  expect(joined).toContain('Substring bulk selection is waiting for async search results')
+  expect(joined).not.toContain('FROM mart.review_article_filter_posting_serving_v4 p')
+  expect(joined).not.toContain('review_title_search_serving_v4')
 })
 
 test('review bulk operation worker completes terminally when the final batch is short', async () => {

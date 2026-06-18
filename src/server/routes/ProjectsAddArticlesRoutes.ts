@@ -1,6 +1,9 @@
 import {Elysia, t} from 'elysia'
 
-import {createReviewBulkOperationJob} from '../reviewServing/reviewBulkOperationService.ts'
+import {
+  assertArticleIdOnlyBulkOperationCaps,
+  createReviewBulkOperationJob,
+} from '../reviewServing/reviewBulkOperationService.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
@@ -83,6 +86,7 @@ export const projectsAddArticlesRoutes = new Elysia()
     '/api/projects/add_articles_by_ids',
     async ({body}) => {
       const ids = Array.isArray(body.articleIds) ? body.articleIds : [body.articleIds]
+      assertArticleIdOnlyBulkOperationCaps(ids)
       const result = await insertArticlesIntoProject(body.targetProjectId, ids, body.sourceProjectId)
 
       projectsAddArticlesLogger.force('projects.add-articles.applied-ids-summary', 'Articles added by ids', 'log', {

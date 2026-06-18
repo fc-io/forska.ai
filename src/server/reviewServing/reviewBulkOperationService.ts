@@ -79,6 +79,7 @@ type ReviewBulkOperationServiceDependencies = {
 
 const defaultBatchSize = 500
 export const reviewBulkOperationArticleIdCap = 5_000
+export const reviewBulkOperationPayloadByteCap = 1_000_000
 
 const getDatabase = () => {
   return getAppDatabaseService() as ReviewBulkOperationServiceDatabase
@@ -271,6 +272,13 @@ const verifyPersistedJobWithContract = async (input: {
 export const assertArticleIdOnlyBulkOperationCaps = (articleIds: readonly string[]) => {
   if (articleIds.length > reviewBulkOperationArticleIdCap) {
     throw new Error(`Bulk article ID operation exceeds cap of ${reviewBulkOperationArticleIdCap}`)
+  }
+
+  if (
+    Buffer.byteLength(getStableReviewServingJson(articleIds as ReviewServingIdentityValue), 'utf8')
+    > reviewBulkOperationPayloadByteCap
+  ) {
+    throw new Error(`Bulk article ID operation payload exceeds cap of ${reviewBulkOperationPayloadByteCap} bytes`)
   }
 }
 
