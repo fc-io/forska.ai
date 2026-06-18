@@ -193,6 +193,43 @@ test('payload claimed updates delete stale rows for removed articles before inse
   expect(deleteStatement).toContain('payload_identity')
 })
 
+test('project-scoped payload rebuilds all scoped articles instead of deriving an article id from scope id', async () => {
+  const {database, statements} = createDisplayPayloadDatabase({payloadRows: []})
+
+  await projectReviewServingPayloadRows(
+    {
+      baseGeneration: 1,
+      claims: [
+        displayClaim({
+          articleId: null,
+          dirtyKind: 'project.reviewConfig.updated',
+          projectionComponent: 'payload',
+          scopeId: 'project-1',
+          scopeKind: 'project',
+        }),
+      ],
+      definitionVersion: 'payload-v4-test',
+      displayIdentity: 'display:identity-1',
+      payloadIdentity: 'payload:identity-1',
+      projectId: 'project-1',
+      projectionIdentity: 'payload:identity-1',
+      snapshotId: 'snapshot-1',
+    },
+    database,
+  )
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('ORDER BY article.article_created_at ASC NULLS LAST, scope.article_id ASC')
+  })
+  const deleteStatement = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_article_serving_payload_v4')
+  })
+
+  expect(selectStatement).not.toContain('WITH dirty_article(article_id)')
+  expect(selectStatement).not.toContain('INNER JOIN dirty_article dirty')
+  expect(deleteStatement).toContain('payload_identity')
+  expect(deleteStatement).not.toContain('article_id IN')
+})
+
 test('payload projection defers manifest and watermark when claims are not acknowledged', async () => {
   const {database, statements} = createDisplayPayloadDatabase({payloadRows: []})
 

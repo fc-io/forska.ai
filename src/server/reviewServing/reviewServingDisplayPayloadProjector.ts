@@ -113,7 +113,7 @@ const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[] = [])
     ...new Set(
       claims
         .map((claim) => {
-          return claim.articleId ?? claim.scopeId.split(':').at(-1) ?? null
+          return claim.articleId ?? (claim.scopeKind === 'article' ? (claim.scopeId.split(':').at(-1) ?? null) : null)
         })
         .filter((articleId) => {
           return articleId !== null && articleId.trim().length > 0
@@ -363,12 +363,13 @@ const getPayloadRecord = (
 
 const getDeletePayloadRowsStatement = (input: ProjectReviewServingPayloadInput) => {
   const articleIds = getClaimArticleIds(input.claims)
+  const hasClaimedWork = (input.claims?.length ?? 0) > 0
 
-  return articleIds.length === 0
+  return !hasClaimedWork
     ? null
     : getDeleteReviewServingProjectorRowsStatement({
         predicates: {
-          article_id: articleIds,
+          ...(articleIds.length > 0 ? {article_id: articleIds} : {}),
           display_identity: input.displayIdentity,
           payload_identity: input.payloadIdentity,
           project_id: input.projectId,
