@@ -7,6 +7,10 @@ const reviewServingManifestRepositoryModulePath = new URL(
   import.meta.url,
 ).pathname
 const reviewServingReaderModulePath = new URL('../../reviewServing/reviewServingReader.ts', import.meta.url).pathname
+const reviewServingProjectConfigIdentityModulePath = new URL(
+  '../../services/reviewServingProjectConfigIdentity.ts',
+  import.meta.url,
+).pathname
 
 const projectReviewConfigRef = {
   current: async (_projectId: string): Promise<unknown> => {
@@ -37,6 +41,12 @@ const activeManifestRef = {
 const lastKnownManifestRef = {
   current: async (_params: unknown): Promise<unknown> => {
     return null
+  },
+}
+
+const currentReviewConfigHashRef = {
+  current: async (_projectId: string): Promise<string | null> => {
+    return 'review-config-1'
   },
 }
 
@@ -97,6 +107,14 @@ const registerModuleMocks = () => {
       },
     }
   })
+
+  void mock.module(reviewServingProjectConfigIdentityModulePath, () => {
+    return {
+      getCurrentReviewConfigHash: (projectId: string) => {
+        return currentReviewConfigHashRef.current(projectId)
+      },
+    }
+  })
 }
 
 const loadHandler = async (): Promise<typeof import('./humanAssessmentRoutesPostInit.ts')> => {
@@ -116,6 +134,9 @@ afterEach(() => {
   }
   lastKnownManifestRef.current = async () => {
     return null
+  }
+  currentReviewConfigHashRef.current = async () => {
+    return 'review-config-1'
   }
   mock.restore()
 })

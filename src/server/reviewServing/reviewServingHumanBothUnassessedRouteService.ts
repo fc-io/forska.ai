@@ -4,6 +4,7 @@ import type {
   ArticlesReviewsParams,
 } from '../../services/olap/olapTypes.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {normalizeSummaryAnswerValue} from '../utils/judgmentAnswers.ts'
 import type {NamedReviewFastCountKey} from './reviewServingContracts.ts'
@@ -21,16 +22,32 @@ import {
 
 type ReviewServingArticleRow = {
   activity_sort_at?: unknown
+  arxiv_id?: string | null
+  arxivId?: string | null
   article_external_id?: string | null
   article_id?: string
   article_title?: string | null
   articleExternalId?: string | null
   articleId?: string
   articleTitle?: string | null
+  biorxiv_id?: string | null
+  biorxivId?: string | null
+  canonical_article_id?: string | null
+  canonicalArticleId?: string | null
+  doi?: string | null
+  full_text_pdf?: string | null
+  fullTextPDF?: string | null
   journal_title?: string | null
   journalTitle?: string | null
+  medrxiv_id?: string | null
+  medrxivId?: string | null
+  original_data?: unknown
+  originalData?: unknown
+  pmid?: string | null
   selected_import_route_id?: string | null
   selectedImportRouteId?: string | null
+  source_metadata?: unknown
+  sourceMetadata?: unknown
   sort_key?: unknown
   url?: string | null
 }
@@ -230,6 +247,10 @@ const getCountValue = async (
   mode: ReviewServingReviewMode,
   dependencies?: ReviewServingRouteDependencies,
 ) => {
+  if (mode !== 'unassessed' && hasDynamicFilters(params, mode)) {
+    return getFilteredCountValue(params, manifest, mode, dependencies)
+  }
+
   const countState = getCountState(params, manifest, mode)
   const result = await readReviewServingRows<ReviewServingCountRow>(
     {
@@ -262,6 +283,105 @@ const getCountValue = async (
   }
 
   return Number(countRow?.count_value ?? countRow?.countValue ?? 0)
+}
+
+const getExclusiveDateToFilter = (value: unknown) => {
+  if (typeof value !== 'string' || !isDateOnlyFilter(value)) {
+    return typeof value === 'string' ? value : null
+  }
+
+  const date = new Date(`${value}T00:00:00.000Z`)
+  date.setUTCDate(date.getUTCDate() + 1)
+
+  return date.toISOString().slice(0, 10)
+}
+
+const isDateOnlyFilter = (value: string) => {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value)
+}
+
+const getDateToPredicate = (column: string, value: unknown) => {
+  const dateTo = getExclusiveDateToFilter(value)
+
+  return dateTo
+    ? `AND ${column} ${typeof value === 'string' && isDateOnlyFilter(value) ? '<' : '<='} TIMESTAMPTZ ${getSqlLiteral(dateTo)}`
+    : ''
+}
+
+const getPromptAnswerPredicates = (
+  params: ArticlesReviewsBothParams | ArticlesReviewsParams,
+  mode: ReviewServingReviewMode,
+) => {
+  const promptPrefix = mode === 'human' ? 'human:promptAnswer:' : 'review:promptAnswer:'
+
+  return Object.entries(params.prompts ?? {})
+    .filter(([, values]) => {
+      return values.length > 0
+    })
+    .map(([promptId, values], index) => {
+      const filterValues = values.map((value) => {
+        return `${promptPrefix}${promptId}:${value}`
+      })
+
+      return `AND EXISTS (
+        SELECT 1
+        FROM mart.review_article_filter_posting_serving_v4 prompt_filter_${index}
+        WHERE prompt_filter_${index}.project_id = serving.project_id
+          AND prompt_filter_${index}.review_config_hash = serving.review_config_hash
+          AND prompt_filter_${index}.snapshot_id = serving.snapshot_id
+          AND prompt_filter_${index}.list_mode_key = serving.list_mode_key
+          AND prompt_filter_${index}.article_id = serving.article_id
+          AND prompt_filter_${index}.filter_kind = 'promptAnswer'
+          AND prompt_filter_${index}.filter_value IN (SELECT unnest(${getSqlLiteral(filterValues)}::VARCHAR[]))
+      )`
+    })
+}
+
+const getManifestComponentIdentity = (manifest: ReviewServingSnapshotManifest, component: string) => {
+  return [...manifest.componentState.required, ...manifest.componentState.optional].find((entry) => {
+    return entry.component === component
+  })?.projectionIdentity
+}
+
+const getSearchPredicate = (filters: ReturnType<typeof getRouteFilters>, manifest: ReviewServingSnapshotManifest) => {
+  return filters.searchTokenPrefix
+    ? `AND EXISTS (
+        SELECT 1
+        FROM mart.review_title_search_serving_v4 search
+        WHERE search.project_id = serving.project_id
+          AND search.search_identity = ${getSqlLiteral(getManifestComponentIdentity(manifest, 'search') ?? '')}
+          AND search.project_scope_identity = ${getSqlLiteral(getManifestComponentIdentity(manifest, 'projectScope') ?? '')}
+          AND search.snapshot_id = serving.snapshot_id
+          AND search.article_id = serving.article_id
+          AND starts_with(search.token, ${getSqlLiteral(filters.searchTokenPrefix)})
+      )`
+    : ''
+}
+
+const getFilteredCountValue = async (
+  params: ArticlesReviewsBothParams | ArticlesReviewsParams,
+  manifest: ReviewServingSnapshotManifest,
+  mode: Exclude<ReviewServingReviewMode, 'unassessed'>,
+  dependencies?: ReviewServingRouteDependencies,
+) => {
+  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const filters = getRouteFilters(params, mode)
+  const [row] = await database.queryJson<{totalCount: number}>(`
+    SELECT COUNT(DISTINCT serving.article_id) AS totalCount
+    FROM mart.review_article_serving_v4 serving
+    WHERE serving.project_id = ${getSqlLiteral(params.projectId)}
+      AND serving.review_config_hash = ${getSqlLiteral(manifest.reviewConfigHash)}
+      AND serving.snapshot_id = ${getSqlLiteral(manifest.snapshotId)}
+      AND serving.list_mode_key = ${getSqlLiteral(mode)}
+      ${filters.articleCreatedAtFrom ? `AND serving.sort_key >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}` : ''}
+      ${getDateToPredicate('serving.sort_key', filters.articleCreatedAtTo)}
+      ${filters.duplicateFlag ? 'AND serving.duplicate_flag = TRUE' : ''}
+      ${filters.conflictFlag ? 'AND serving.conflict_flag = TRUE' : ''}
+      ${getPromptAnswerPredicates(params, mode).join('\n')}
+      ${getSearchPredicate(filters, manifest)}
+  `)
+
+  return Number(row?.totalCount ?? 0)
 }
 
 const getArticleId = (row: ReviewServingArticleRow) => {
@@ -405,8 +525,17 @@ const getArticleResponseBase = (row: ReviewServingArticleRow) => {
     articleCreatedAt: getDateValue(row.sort_key),
     articleUpdatedAt: getDateValue(row.activity_sort_at),
     articleId: row.article_external_id ?? row.articleExternalId ?? null,
+    arxivId: row.arxiv_id ?? row.arxivId ?? null,
+    biorxivId: row.biorxiv_id ?? row.biorxivId ?? null,
+    canonicalArticleId: row.canonical_article_id ?? row.canonicalArticleId ?? null,
+    doi: row.doi ?? null,
+    fullTextPDF: row.full_text_pdf ?? row.fullTextPDF ?? null,
     journalTitle: row.journal_title ?? row.journalTitle ?? null,
+    medrxivId: row.medrxiv_id ?? row.medrxivId ?? null,
+    originalData: row.original_data ?? row.originalData ?? null,
+    pubmedId: row.pmid ?? null,
     selectedImportRouteId: row.selected_import_route_id ?? row.selectedImportRouteId ?? null,
+    sourceMetadata: row.source_metadata ?? row.sourceMetadata ?? null,
     url: row.url ?? null,
   }
 }

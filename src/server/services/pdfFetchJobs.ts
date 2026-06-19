@@ -241,6 +241,24 @@ const sumPdfFetchBatchStats = (stats: readonly PdfFetchBatchStats[]): PdfFetchBa
   }, emptyPdfFetchBatchStats())
 }
 
+const processRowsWithConcurrency = async (
+  rows: readonly PdfFetchRow[],
+  concurrency: number,
+): Promise<PdfFetchBatchStats> => {
+  const {chunk, rest} = splitFirstChunk([...rows], concurrency)
+  const stats = await Promise.all(
+    chunk.map((row) => {
+      return fetchAndStorePdfForRowSafe(row)
+    }),
+  )
+
+  return rest.length === 0
+    ? sumPdfFetchBatchStats(stats)
+    : processRowsWithConcurrency(rest, concurrency).then((restStats) => {
+        return sumPdfFetchBatchStats([...stats, restStats])
+      })
+}
+
 const fetchAndStoreForRowSafe = async (jobId: string, row: PdfFetchRow): Promise<void> => {
   const run = async () => {
     await fetchAndStoreForMapJob(jobId, row)
@@ -317,6 +335,7 @@ const processChunk = async (jobId: string, ids: string[], forceRefetch: boolean)
 
 export const processPdfFetchArticleIds = async (args: {
   articleIds: readonly string[]
+  concurrency?: number
   forceRefetch?: boolean
 }): Promise<PdfFetchBatchStats> => {
   const ids = normalizeArticleIds([...args.articleIds])
@@ -357,12 +376,7 @@ export const processPdfFetchArticleIds = async (args: {
     return !shouldSkipRow(row, Boolean(args.forceRefetch))
   })
   const skippedCount = rows.length - rowsToAttempt.length
-  const attemptStats = await Promise.all(
-    rowsToAttempt.map((row) => {
-      return fetchAndStorePdfForRowSafe(row)
-    }),
-  )
-  const stats = sumPdfFetchBatchStats(attemptStats)
+  const stats = await processRowsWithConcurrency(rowsToAttempt, args.concurrency ?? DEFAULT_CONCURRENCY)
 
   return {...stats, failed: stats.failed + missingCount, skipped: stats.skipped + skippedCount}
 }

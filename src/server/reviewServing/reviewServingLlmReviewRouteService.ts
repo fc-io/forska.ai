@@ -16,18 +16,34 @@ import {readReviewServingRows, type ReviewServingReaderDatabase} from './reviewS
 
 type ReviewServingArticleRow = {
   activity_sort_at?: unknown
+  arxiv_id?: string | null
+  arxivId?: string | null
   article_external_id?: string | null
   article_id?: string
   article_title?: string | null
   articleExternalId?: string | null
   articleId?: string
   articleTitle?: string | null
+  biorxiv_id?: string | null
+  biorxivId?: string | null
+  canonical_article_id?: string | null
+  canonicalArticleId?: string | null
+  doi?: string | null
+  full_text_pdf?: string | null
+  fullTextPDF?: string | null
   journal_title?: string | null
   journalTitle?: string | null
   llm_status_key?: string | null
   llmStatusKey?: string | null
+  medrxiv_id?: string | null
+  medrxivId?: string | null
+  original_data?: unknown
+  originalData?: unknown
+  pmid?: string | null
   selected_import_route_id?: string | null
   selectedImportRouteId?: string | null
+  source_metadata?: unknown
+  sourceMetadata?: unknown
   sort_key?: unknown
   url?: string | null
 }
@@ -177,6 +193,53 @@ const getCountState = (params: ArticlesReviewsParams, manifest: ReviewServingSna
   return {availability: 'ready' as const, filterKey, key, snapshotId: manifest.snapshotId, value: 0}
 }
 
+const getExclusiveDateToFilter = (value: unknown) => {
+  if (typeof value !== 'string' || !isDateOnlyFilter(value)) {
+    return typeof value === 'string' ? value : null
+  }
+
+  const date = new Date(`${value}T00:00:00.000Z`)
+  date.setUTCDate(date.getUTCDate() + 1)
+
+  return date.toISOString().slice(0, 10)
+}
+
+const isDateOnlyFilter = (value: string) => {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value)
+}
+
+const getDateToPredicate = (column: string, value: unknown) => {
+  const dateTo = getExclusiveDateToFilter(value)
+
+  return dateTo
+    ? `AND ${column} ${typeof value === 'string' && isDateOnlyFilter(value) ? '<' : '<='} TIMESTAMPTZ ${getSqlLiteral(dateTo)}`
+    : ''
+}
+
+const getPromptAnswerPredicates = (prompts: Record<string, string[]> | undefined) => {
+  return Object.entries(prompts ?? {})
+    .filter(([, values]) => {
+      return values.length > 0
+    })
+    .map(([promptId, values], index) => {
+      const filterValues = values.map((value) => {
+        return `review:promptAnswer:${promptId}:${value}`
+      })
+
+      return `AND EXISTS (
+        SELECT 1
+        FROM mart.review_article_filter_posting_serving_v4 prompt_filter_${index}
+        WHERE prompt_filter_${index}.project_id = serving.project_id
+          AND prompt_filter_${index}.review_config_hash = serving.review_config_hash
+          AND prompt_filter_${index}.snapshot_id = serving.snapshot_id
+          AND prompt_filter_${index}.list_mode_key = serving.list_mode_key
+          AND prompt_filter_${index}.article_id = serving.article_id
+          AND prompt_filter_${index}.filter_kind = 'promptAnswer'
+          AND prompt_filter_${index}.filter_value IN (SELECT unnest(${getSqlLiteral(filterValues)}::VARCHAR[]))
+      )`
+    })
+}
+
 const getCountValue = async (
   params: ArticlesReviewsParams,
   manifest: ReviewServingSnapshotManifest,
@@ -224,26 +287,8 @@ const getFilteredCountValue = async (
 ) => {
   const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
   const filters = getRouteFilters(params)
-  const promptAnswers = Array.isArray(filters.promptAnswer) ? filters.promptAnswer : []
   const llmStatusValue =
     filters.llmStatus === 'complete' ? 'answered' : filters.llmStatus === 'partial' ? 'unanswered' : null
-  const promptAnswerPredicate = promptAnswers.length
-    ? `AND EXISTS (
-        SELECT 1
-        FROM mart.review_article_filter_posting_serving_v4 prompt_filter
-        WHERE prompt_filter.project_id = serving.project_id
-          AND prompt_filter.review_config_hash = serving.review_config_hash
-          AND prompt_filter.snapshot_id = serving.snapshot_id
-          AND prompt_filter.list_mode_key = serving.list_mode_key
-          AND prompt_filter.article_id = serving.article_id
-          AND prompt_filter.filter_kind = 'promptAnswer'
-          AND prompt_filter.filter_value IN (SELECT unnest(${getSqlLiteral(
-            promptAnswers.map((value) => {
-              return `review:promptAnswer:${value}`
-            }),
-          )}::VARCHAR[]))
-      )`
-    : ''
   const searchPredicate = filters.searchTokenPrefix
     ? `AND EXISTS (
         SELECT 1
@@ -272,11 +317,11 @@ const getFilteredCountValue = async (
       AND serving.snapshot_id = ${getSqlLiteral(manifest.snapshotId)}
       AND serving.list_mode_key = 'llm'
       ${filters.articleCreatedAtFrom ? `AND serving.sort_key >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}` : ''}
-      ${filters.articleCreatedAtTo ? `AND serving.sort_key <= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtTo)}` : ''}
+      ${getDateToPredicate('serving.sort_key', filters.articleCreatedAtTo)}
       ${filters.duplicateFlag ? 'AND serving.duplicate_flag = TRUE' : ''}
       ${filters.conflictFlag ? 'AND serving.conflict_flag = TRUE' : ''}
       ${llmStatusValue ? `AND serving.llm_status_key = ${getSqlLiteral(llmStatusValue)}` : ''}
-      ${promptAnswerPredicate}
+      ${getPromptAnswerPredicates(params.prompts).join('\n')}
       ${searchPredicate}
   `)
 
@@ -345,8 +390,17 @@ const getResponseRows = (
       articleCreatedAt,
       articleUpdatedAt,
       articleId: getArticleExternalId(row),
+      arxivId: row.arxiv_id ?? row.arxivId ?? null,
+      biorxivId: row.biorxiv_id ?? row.biorxivId ?? null,
+      canonicalArticleId: row.canonical_article_id ?? row.canonicalArticleId ?? null,
+      doi: row.doi ?? null,
+      fullTextPDF: row.full_text_pdf ?? row.fullTextPDF ?? null,
       journalTitle: row.journal_title ?? row.journalTitle ?? null,
+      medrxivId: row.medrxiv_id ?? row.medrxivId ?? null,
+      originalData: row.original_data ?? row.originalData ?? null,
+      pubmedId: row.pmid ?? null,
       selectedImportRouteId: row.selected_import_route_id ?? row.selectedImportRouteId ?? null,
+      sourceMetadata: row.source_metadata ?? row.sourceMetadata ?? null,
       url: row.url ?? null,
       judgments,
       judgedPromptIds: judgments.map((judgment) => {

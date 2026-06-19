@@ -8,6 +8,7 @@ import {
 import {readReviewServingRows, type ReviewServingReaderDatabase} from '../../reviewServing/reviewServingReader.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
+import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
 import {syncPendingHumanJudgmentsForArticle} from './humanAssessmentPendingJudgments.ts'
 
 type InitResponse = {
@@ -29,9 +30,10 @@ const summaryModeBlockedMessage = 'Summary-mode projects do not support prompt-b
 
 const getNextHumanAssessmentArticleIdFromServing = async (projectId: string) => {
   const database = getAppDatabaseService() as ReviewServingManifestRepositoryDatabase & ReviewServingReaderDatabase
+  const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
   const manifest =
-    (await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash: null}, database))
-    ?? (await getLastKnownGoodReviewServingSnapshotManifest({projectId, reviewConfigHash: null}, database))
+    (await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash}, database))
+    ?? (await getLastKnownGoodReviewServingSnapshotManifest({projectId, reviewConfigHash}, database))
 
   if (!manifest) {
     return {articleId: null, error: 'Review serving snapshot is unavailable'}

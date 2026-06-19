@@ -114,6 +114,24 @@ const createReaderDatabase = () => {
           },
           {
             count_value: 1,
+            facet_key: 'promptAnswer',
+            facet_value: '5',
+            filter_kind: 'review',
+            option_payload_json: {filterType: 'numeric', promptId: 'prompt-2', value: '5'},
+            option_value_key: 'review:promptAnswer:prompt-2:5',
+            prompt_id: 'prompt-2',
+          },
+          {
+            count_value: 1,
+            facet_key: 'promptAnswer',
+            facet_value: '10',
+            filter_kind: 'review',
+            option_payload_json: {filterType: 'numeric', promptId: 'prompt-2', value: '10'},
+            option_value_key: 'review:promptAnswer:prompt-2:10',
+            prompt_id: 'prompt-2',
+          },
+          {
+            count_value: 1,
             facet_key: 'publicationYear',
             facet_value: '2026',
             filter_kind: 'review',
@@ -150,12 +168,25 @@ test('review filter route service reads facet and option contracts without raw f
     },
     mode: 'review',
     params: {covidenceConflicts: '1', covidenceDuplicates: '1', projectId: 'project-1', search: 'heart'},
-    promptRows: [{id: 'prompt-1', promptHeading: 'Prompt 1', originalText: 'Prompt one'}],
+    promptRows: [
+      {id: 'prompt-1', promptHeading: 'Prompt 1', originalText: 'Prompt one', type: 'string'},
+      {id: 'prompt-2', promptHeading: 'Prompt 2', originalText: 'Prompt two', type: "string.integer | 'unknown'"},
+    ],
   })
   const sql = reader.statements.join('\n')
 
   expect(response.filters).toEqual([
     {answeredOriginalValues: ['yes'], filterType: 'enum', promptId: 'prompt-1', promptName: 'Prompt 1'},
+    {
+      bins: [
+        {label: '5', max: 5, min: 5},
+        {label: '10', max: 10, min: 10},
+      ],
+      filterType: 'numeric',
+      promptId: 'prompt-2',
+      promptName: 'Prompt 2',
+      specialValues: ['unknown'],
+    },
   ])
   expect(response.facets[0]).toMatchObject({facet_key: 'promptAnswer', summary_identity: 'review.filter.promptAnswer'})
   expect(response.filterOptions[0]).toMatchObject({optionValueKey: 'review:promptAnswer:prompt-1:yes'})
@@ -195,7 +226,7 @@ test('human filter route service keeps summary-mode answer scope from serving op
     dependencies: {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
     mode: 'human',
     params: {projectId: 'project-1'},
-    promptRows: [{id: 'prompt-1', promptHeading: 'Prompt 1'}],
+    promptRows: [{id: 'prompt-1', originalText: 'Prompt 1', promptHeading: 'Prompt 1', type: 'string'}],
   })
 
   expect(response.filters).toEqual([
