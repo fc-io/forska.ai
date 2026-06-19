@@ -42,6 +42,7 @@ export type ReviewBulkOperationCriteria = {
   llmStatus?: string
   operation: 'addToProject' | 'export' | 'pdfFetch' | 'selectAll'
   prompts?: Record<string, readonly string[]>
+  reviewConfig?: ReviewServingIdentityValue
   requestId?: string
   search?: string
   selectionScope?: 'project'
