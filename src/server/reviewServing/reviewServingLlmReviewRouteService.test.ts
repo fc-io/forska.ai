@@ -111,14 +111,14 @@ const createManifestDatabase = (status: ReviewServingSnapshotStatus | 'missing')
   return database
 }
 
-const createReaderDatabase = () => {
+const createReaderDatabase = (totalCount = 1) => {
   const statements: string[] = []
   const database: ReviewServingReaderDatabase = {
     queryJson: async <T>(statement: string, _workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
       statements.push(statement)
 
       if (statement.includes('COUNT(DISTINCT serving.article_id)')) {
-        return [{totalCount: 1}] as T[]
+        return [{totalCount}] as T[]
       }
 
       if (statement.includes('FROM app.project')) {
@@ -166,12 +166,28 @@ const createReaderDatabase = () => {
         ] as T[]
       }
 
-      return [{availability: 'ready', count_value: 1}] as T[]
+      return [{availability: 'ready', count_value: totalCount}] as T[]
     },
   }
 
   return {database, statements}
 }
+
+test('LLM review route honors the largest offered page size', async () => {
+  const reader = createReaderDatabase(1001)
+  const result = await getLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 500, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+
+  expect(result.limit).toBe(500)
+  expect(result.totalPages).toBe(3)
+  expect(reader.statements.join('\n')).toContain('LIMIT 501')
+})
 
 test('LLM review list route service composes serving rows, judgments, and count without raw fallback SQL', async () => {
   const reader = createReaderDatabase()

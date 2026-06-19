@@ -91,7 +91,9 @@ const registerModuleMocks = () => {
   void mock.module(reviewServingManifestRepositoryModulePath, () => {
     return {
       getActiveReviewServingSnapshotManifest: async ({projectId}: {projectId: string}) => {
-        return activeSnapshotProjectIds.has(projectId) ? {projectId, snapshotId: `active-${projectId}`, status: 'active'} : null
+        return activeSnapshotProjectIds.has(projectId)
+          ? {projectId, snapshotId: `active-${projectId}`, status: 'active'}
+          : null
       },
       getReviewServingSnapshotManifest: async ({projectId, snapshotId}: {projectId: string; snapshotId: string}) => {
         return pinnedSnapshotProjectIds.has(projectId) ? {projectId, snapshotId, status: 'active'} : null
@@ -325,6 +327,30 @@ test('project export rejects cross-project jobs when a source latest snapshot is
     success: false,
   })
   expect(createReviewBulkOperationJobCalls).toHaveLength(0)
+})
+
+test('project export skips source snapshot preflight for explicit article IDs', async () => {
+  activeSnapshotProjectIds.delete('project-2')
+  queryJsonRef.current = async (statement) => {
+    return statement.includes('FROM app.project') ? [{id: 'project-1', name: 'Project 1'}] : []
+  }
+  const {projectExportRoutes} = await loadRoutes()
+  const app = new Elysia().use(projectExportRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/project-1/export', {
+      body: JSON.stringify({
+        articleIds: ['article-1'],
+        promptIds: ['prompt-1'],
+        sourceProjectIds: ['project-1', 'project-2'],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const jobRequest = createReviewBulkOperationJobCalls[0] as ExportJobRequest
+
+  expect(response.status).toBe(202)
+  expect(jobRequest.criteria).toMatchObject({articleIds: ['article-1'], sourceProjectIds: ['project-1', 'project-2']})
 })
 
 test('project export rejects cross-project jobs when a source pinned snapshot is not ready', async () => {

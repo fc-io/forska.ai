@@ -582,11 +582,9 @@ export const projectExportRoutes = new Elysia()
         return {error: 'Export sources must use the same review configuration', success: false}
       }
 
-      const missingSnapshotSourceProjectIds = await getMissingExportSnapshotSourceProjectIds({
-        reviewConfigHash,
-        snapshot,
-        sourceProjectIds,
-      })
+      const missingSnapshotSourceProjectIds = body.articleIds
+        ? []
+        : await getMissingExportSnapshotSourceProjectIds({reviewConfigHash, snapshot, sourceProjectIds})
 
       if (missingSnapshotSourceProjectIds.length > 0) {
         set.status = 400
