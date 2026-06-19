@@ -108,10 +108,10 @@ test('searchReviewServing serves token-prefix search from ready search contracts
   expect(result.status === 'ready' ? result.rows : []).toEqual([{article_id: 'article-1', token: 'heart'}])
   expect(searchDatabase.statements).toHaveLength(1)
   expect(searchDatabase.statements[0]).toContain('FROM mart.review_title_search_serving_v4')
-  expect(searchDatabase.statements[0]).toContain('search_identity = $searchIdentity')
-  expect(searchDatabase.statements[0]).toContain('project_scope_identity = $projectScopeIdentity')
-  expect(searchDatabase.statements[0]).toContain('snapshot_id = $snapshotId')
-  expect(searchDatabase.statements[0]).toContain('starts_with(token, $searchTokenPrefix)')
+  expect(searchDatabase.statements[0]).toContain("search_identity = 'search-identity'")
+  expect(searchDatabase.statements[0]).toContain("project_scope_identity = 'projectScope-identity'")
+  expect(searchDatabase.statements[0]).toContain("snapshot_id = 'active-snapshot'")
+  expect(searchDatabase.statements[0]).toContain("starts_with(token, 'hea')")
   expect(searchDatabase.statements[0]).not.toContain('LIKE')
   expect(searchDatabase.workloads[0]).toMatchObject({
     fallbackIntent: 'reject',
