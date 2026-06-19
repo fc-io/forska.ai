@@ -12,13 +12,25 @@ Final cutover completion happens only after Phases 0 through 4 are complete and 
 
 After final verification, normal product review paths must not reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
 
+## Phase 5 Readiness Review - 2026-06-19
+
+- Verdict: Phase 5 is not ready to start as a final hardening/release sweep. Phase 4 has advanced substantially, but closure gates remain open and Phase 5 must not treat mounted route inventory entries as equivalent to final semantic parity.
+- Stale assumption: Phase 5 previously assumed Phase 4 would arrive as a complete route/job/search/parity migration. Current code has mounted serving/job routes and durable workers, but route-specific parity fixtures and sampled current-behavior checks are not complete for every mounted route or flow.
+- Stale assumption: `reviewSearchService.ts` exists and supports token-prefix ready reads plus substring async/unavailable jobs, but production route calls to `searchReviewServing` were not found. Before Phase 5 benchmarks include search-service behavior, Phase 4 must either wire it into API/search flows or document that route services directly own token-prefix search and substring async state.
+- Dependency on Phase 4 gap: `projectsRoutesGetReviewsHealth.ts`, `projectsRoutesGetReviewsWarnings.ts`, `projectsRoutesPostArticleReviewDetails.ts`, and `projectsRoutesGetPromptPreview.ts` use serving reader contracts but still perform direct app-table reads for auxiliary metadata, project config, prompt/model/full-text, assessment, warning, or health details. Phase 5 deletion/static guards need an allowlist or new serving contracts for these reads before failing all direct app-table access.
+- Dependency on Phase 4 gap: `/api/projects/add_articles_by_ids` remains a capped synchronous explicit-ID mutation through `insertArticlesIntoProject`. Phase 5 should not require durable job semantics for this route unless Phase 4 reclassifies or migrates it.
+- Dependency on Phase 4 gap: `pdfFetchJobs.ts` still contains legacy in-memory job helpers while migrated PDF routes use durable `app.review_bulk_operation_job` lookup. Phase 5 should delete those helpers if unused, or explicitly classify any remaining caller as legacy/admin/debug-only.
+- Missing prerequisite: browser review-flow verification for stale/indexing/unavailable/failed/candidate/retired/missing snapshot diagnostics and desktop route-surface verification or targeted desktop build for shared runtime behavior.
+- Recommended adjustment: split Phase 5 into a short prerequisite audit gate before any benchmark or deletion sweep. That gate should require updated Phase 4 parity status, residual-read allowlist, search-service decision, explicit-ID add decision, legacy PDF helper decision, and browser/desktop verification evidence.
+
 ## Workstreams
 
 | Status | Theme | Implement First | Done When |
 |---|---|---|---|
-| [ ] | Final deletion sweep | Remove any remaining normal raw review fallback, old selected-import foreground joins, large-ID return paths, hidden `OFFSET` pagination, competing V4 serving writers, and obsolete intermediate state. | Static SQL-shape tests and route tests fail if forbidden raw paths return. Route-specific parity validation has passed for every migrated route/flow, and every mounted route inventory entry covers the full product response shape. Obsolete state is rebuilt or cleared with no compatibility shim unless explicitly required. |
+| [ ] | Phase 4 closure prerequisite audit | Before deletion or benchmark work, confirm route-specific parity coverage, residual direct-read decisions, search-service ownership, explicit-ID add behavior, legacy PDF helper status, and browser/desktop verification evidence. | Phase 5 has a concrete pass/fail checklist and does not confuse `mounted: true` inventory with final semantic parity. |
+| [ ] | Final deletion sweep | Remove any remaining normal raw review fallback, old selected-import foreground joins, large-ID return paths, hidden `OFFSET` pagination, competing V4 serving writers, and obsolete intermediate state. Start only after the prerequisite audit decides which residual app-table reads are allowed metadata/config reads versus raw fallback. | Static SQL-shape tests and route tests fail if forbidden raw paths return. Route-specific parity validation has passed for every migrated route/flow, and every mounted route inventory entry covers the full product response shape. Obsolete state is rebuilt or cleared with no compatibility shim unless explicitly required. |
 | [ ] | Desktop and interruption hardening | Verify browser and desktop use the same serving/job/admission behavior. Test sleep/restart/interruption for projectors, bulk jobs, search jobs, and low-memory runtime. | Desktop build or targeted desktop verification passes, interrupted work resumes safely, and low-memory batch defaults prevent OOM. |
-| [ ] | Final benchmark and release gate | Run the overlap benchmark and repo-native quality gates. | 10M/7-prompt benchmark passes under target memory limits, no foreground temp spill occurs for hot reads, article-set hydration and judgment payload paths are exercised, all targeted tests pass, lint passes, and `OOM_ERRORS.md` is updated with the implementation entry. |
+| [ ] | Final benchmark and release gate | Run the overlap benchmark and repo-native quality gates after Phase 4 parity and residual-read decisions are closed. | 10M/7-prompt benchmark passes under target memory limits, no foreground temp spill occurs for hot reads, article-set hydration and judgment payload paths are exercised, all targeted tests pass, lint passes, and `OOM_ERRORS.md` is updated with the implementation entry. |
 
 ## Deletion Scope
 
@@ -31,6 +43,8 @@ After final verification, normal product review paths must not reach raw fallbac
 - Keep admin/maintenance/debug-only raw reads only when named, route-classified, guarded, and excluded from normal product flows.
 
 ## Cutover Gate
+
+Prerequisite before evaluating this gate: close the 2026-06-19 Phase 4 audit gaps in `DUCK_CQRS_PLAN_PHASE_4.md`, or explicitly re-scope them with evidence.
 
 - Phase 0 contracts, module boundaries, static guards, and benchmark harness are complete.
 - Phase 1 schema and DuckDB workload-admission foundations are complete.
@@ -61,6 +75,10 @@ After final verification, normal product review paths must not reach raw fallbac
 - Serving reads, cursors, counts, search, and jobs include the narrow projection identities they depend on and reject mismatched identity state.
 - Foreground admission rejects mismatched search modes before DuckDB execution, and omitted search mode means no search.
 - Durable job contracts bind job kind, filter signature, search mode/text when relevant, and pinned or latest-snapshot semantics through job-table fields.
+- Search-service ownership is resolved: either production routes call `searchReviewServing` for the planned API boundary, or Phase 5 benchmark/search gates are rewritten around the route services that directly call `readReviewServingRows` with token-prefix and substring-async state.
+- Residual app-table reads in mounted health, warning, detail, and prompt-preview routes are either eliminated, covered by serving contracts, or explicitly allowed as bounded metadata/config reads with route parity evidence.
+- Explicit-ID add-to-project behavior is either migrated to durable article-ID-only job admission or kept as a capped synchronous mutation with an explicit out-of-serving classification.
+- Legacy process-local PDF job helpers are deleted or classified outside migrated PDF flows.
 - No normal browser or desktop review flow can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
 - Admin/maintenance/debug-only raw reads are named, route-classified, guarded, and excluded from normal product flows.
 
