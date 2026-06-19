@@ -13,6 +13,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0101_reviewServingFacetSummaryScope.sql',
   '../../db/duckdbMigrations/0102_reviewWriteOverlayReadSurface.sql',
   '../../db/duckdbMigrations/0103_reviewServingQueueIdentityPrimaryKey.sql',
+  '../../db/duckdbMigrations/0105_reviewServingArticleMetadataStatus.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -34,6 +35,8 @@ const filterOptionValueForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0100_reviewServingFilterOptionValueKey.sql']
 const facetSummaryScopeForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0101_reviewServingFacetSummaryScope.sql']
+const articleMetadataStatusForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0105_reviewServingArticleMetadataStatus.sql']
 
 const reviewServingPhase1Tables = [
   'app.import_run_article_delta',
@@ -190,6 +193,24 @@ test('Phase 1 schema migration keeps raw payloads out of import hot fields', () 
 
 test('Phase 1 payload serving schema preserves prompt preview article ordering', () => {
   expect(getMissingColumns('mart.review_article_serving_payload_v4', ['article_created_at', 'article_id'])).toEqual([])
+})
+
+test('Phase 1 article serving schema preserves review table display metadata', () => {
+  expect(
+    getMissingColumns('mart.review_article_serving_v4', [
+      'article_updated_at',
+      'arxiv_id',
+      'biorxiv_id',
+      'medrxiv_id',
+      'doi',
+      'pmid',
+      'full_text_fetched_at',
+      'full_text_conversion_status',
+    ]),
+  ).toEqual([])
+  expect(articleMetadataStatusForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_serving_v4 ADD COLUMN IF NOT EXISTS article_updated_at TIMESTAMPTZ;',
+  )
 })
 
 test('Phase 1 schema migration creates contract cursor and sort columns on non-job serving tables', () => {
