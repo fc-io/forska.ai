@@ -316,6 +316,9 @@ const getServingArticleBatchSql = (job: ReviewBulkOperationJobRow, cursor: strin
   const criteria = getCriteria(job)
   const sourceProjectIds = getSourceProjectIds(job, criteria)
   const searchTokens = getReviewServingTitleSearchTokens(criteria.search ?? null)
+  const searchIdentitySql = job.latestSnapshotSemantics
+    ? `(SELECT json_extract_string(component_state_json, '$.optional[0].projectionIdentity') FROM app.review_serving_snapshot_manifest WHERE project_id = s.project_id AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(job.reviewConfigHash)} AND snapshot_status = 'active' ORDER BY updated_at DESC, snapshot_id DESC LIMIT 1)`
+    : `(SELECT json_extract_string(component_state_json, '$.optional[0].projectionIdentity') FROM app.review_serving_snapshot_manifest WHERE project_id = s.project_id AND snapshot_id = ${getSqlLiteral(job.snapshotId)} LIMIT 1)`
   const snapshotPredicate = job.latestSnapshotSemantics
     ? `s.snapshot_id = (SELECT snapshot_id FROM app.review_serving_snapshot_manifest WHERE project_id = s.project_id AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(job.reviewConfigHash)} AND snapshot_status = 'active' ORDER BY updated_at DESC, snapshot_id DESC LIMIT 1)`
     : `s.snapshot_id = ${getSqlLiteral(job.snapshotId)}`
@@ -325,6 +328,8 @@ const getServingArticleBatchSql = (job: ReviewBulkOperationJobRow, cursor: strin
         SELECT 1
         FROM mart.review_title_search_serving_v4 search_${index}
         WHERE search_${index}.project_id = s.project_id
+          AND search_${index}.search_identity = ${searchIdentitySql}
+          AND search_${index}.project_scope_identity = s.project_scope_identity
           AND search_${index}.snapshot_id = s.snapshot_id
           AND search_${index}.article_id = s.article_id
           AND starts_with(search_${index}.token, ${getSqlLiteral(token)})

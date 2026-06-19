@@ -390,6 +390,7 @@ const getColumnFilterPredicates = (request: ReviewServingReaderRequest) => {
       : '',
     filters.duplicateFlag ? `duplicate_flag = TRUE` : '',
     filters.conflictFlag ? `conflict_flag = TRUE` : '',
+    filters.llmHasJudgment ? 'llm_judged_prompt_count > 0' : '',
     llmStatus ? 'llm_status_key = $llmStatusFilter' : '',
     typeof filters.humanStatus === 'string' ? 'human_status_key = $humanStatusFilter' : '',
   ].filter((predicate) => {

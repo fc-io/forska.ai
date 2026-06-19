@@ -41,6 +41,7 @@ type ExportArticleRow = {
   arxivId: string | null
   articleAuthors: unknown
   articleCreatedAt: unknown
+  articleExternalId: string | null
   articleId: string
   articleOriginalData: unknown
   articleSourceMetadata: unknown
@@ -81,6 +82,20 @@ const getExportContract = (criteriaJson: unknown): ExportContract => {
   return criteria && typeof criteria === 'object' && !Array.isArray(criteria) && 'exportContract' in criteria
     ? ((criteria as {exportContract?: ExportContract}).exportContract ?? {})
     : {}
+}
+
+const getExportSourceProjectIds = (criteriaJson: unknown) => {
+  const criteria = getJsonValue(criteriaJson)
+
+  return criteria && typeof criteria === 'object' && !Array.isArray(criteria)
+    ? getStringArray((criteria as {sourceProjectIds?: unknown}).sourceProjectIds)
+    : []
+}
+
+const getExportConfigProjectId = (input: {criteriaJson: unknown; projectId: string}) => {
+  const [sourceProjectId] = getExportSourceProjectIds(input.criteriaJson)
+
+  return sourceProjectId ?? input.projectId
 }
 
 const getExportArticleIds = (resultManifestJson: unknown) => {
@@ -255,6 +270,7 @@ const getExportArticles = async (articleIds: string[], selectedMetadata: Record<
   return appDatabaseService.queryJson<ExportArticleRow>(`
     SELECT
       a.id AS articleId,
+      a.article_id AS articleExternalId,
       a.arxiv_id AS arxivId,
       a.biorxiv_id AS biorxivId,
       a.doi AS doi,
@@ -342,7 +358,7 @@ const buildExportCsvRows = (input: {
     const articleAuthors = getJsonValue(article.articleAuthors)
     const row = [article.articleTitle || 'Untitled']
 
-    if (input.selectedMetadata.includeArticleId) row.push(article.articleId)
+    if (input.selectedMetadata.includeArticleId) row.push(article.articleExternalId ?? article.articleId)
     if (input.selectedMetadata.includeArticleLink) {
       row.push(
         getArticleUrl({
@@ -374,7 +390,11 @@ const buildExportCsvRows = (input: {
   })
 }
 
-const buildExportCsv = async (input: {articleIds: string[]; contract: ExportContract; projectId: string}) => {
+const buildExportCsv = async (input: {
+  articleIds: string[]
+  contract: ExportContract
+  projectConfigProjectId: string
+}) => {
   const promptOutput = input.contract.promptOutput ?? {}
   const selectedMetadata = input.contract.selectedMetadata ?? {}
   const promptIds = promptOutput.promptIds ?? []
@@ -389,7 +409,7 @@ const buildExportCsv = async (input: {articleIds: string[]; contract: ExportCont
 
     return prompt ? [prompt] : []
   })
-  const projectConfig = await getProjectReviewConfig(input.projectId)
+  const projectConfig = await getProjectReviewConfig(input.projectConfigProjectId)
   const batches = Array.from({length: Math.ceil(input.articleIds.length / exportBatchSize)}, (_, index) => {
     return input.articleIds.slice(index * exportBatchSize, (index + 1) * exportBatchSize)
   })
@@ -593,7 +613,7 @@ export const projectExportRoutes = new Elysia()
       const csv = await buildExportCsv({
         articleIds,
         contract: getExportContract(job.criteriaJson),
-        projectId: params.id,
+        projectConfigProjectId: getExportConfigProjectId({criteriaJson: job.criteriaJson, projectId: params.id}),
       })
       const filename = `${project.name.replace(/[^a-zA-Z0-9]/g, '_')}_export_${new Date().toISOString().slice(0, 10)}.csv`
 

@@ -210,7 +210,7 @@ test('LLM review route tokenizes title search like the title search projector an
   expect(sql).toContain('starts_with(search.token, search_prefix.token_prefix)')
 })
 
-test('LLM review count route service uses count serving state without row hydration', async () => {
+test('LLM review count route service requires reviewed LLM rows without row hydration', async () => {
   const reader = createReaderDatabase()
   const result = await countLlmReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
@@ -223,8 +223,8 @@ test('LLM review count route service uses count serving state without row hydrat
 
   expect(result).toEqual({totalCount: 1, totalPages: 1})
   expect(reader.statements).toHaveLength(1)
-  expect(reader.statements[0]).toContain('FROM mart.review_article_count_serving_v4')
-  expect(reader.statements[0]).toContain("count_kind = 'review.list.total'")
+  expect(reader.statements[0]).toContain('FROM mart.review_article_serving_v4')
+  expect(reader.statements[0]).toContain('serving.llm_judged_prompt_count > 0')
 })
 
 test('LLM review route service surfaces stale, indexing, and unavailable freshness without raw fallback', async () => {
@@ -239,7 +239,7 @@ test('LLM review route service surfaces stale, indexing, and unavailable freshne
   )
 
   expect(staleResult.totalCount).toBe(1)
-  expect(staleReader.statements.join('\n')).toContain('FROM mart.review_article_count_serving_v4')
+  expect(staleReader.statements.join('\n')).toContain('serving.llm_judged_prompt_count > 0')
   await countLlmReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
     {
