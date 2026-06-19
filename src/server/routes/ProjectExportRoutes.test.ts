@@ -316,7 +316,13 @@ test('project export allows metadata-only cross-project jobs with mixed review c
   const jobRequest = createReviewBulkOperationJobCalls[0] as ExportJobRequest
 
   expect(response.status).toBe(202)
-  expect(jobRequest).toMatchObject({criteria: {sourceProjectIds: ['project-1', 'project-2']}, reviewConfigHash: null})
+  expect(jobRequest).toMatchObject({
+    criteria: {
+      sourceProjectIds: ['project-1', 'project-2'],
+      sourceProjectReviewConfigHashes: {'project-1': 'config-1', 'project-2': 'config-2'},
+    },
+    reviewConfigHash: 'config-1',
+  })
 })
 
 test('project export stores cross-project jobs under the downloadable project', async () => {

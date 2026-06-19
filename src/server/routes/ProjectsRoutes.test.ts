@@ -530,7 +530,12 @@ test('project prompt preview uses the first project article and shared prompt bu
 
   await insertProjectFixture({connectionId: 'preview-connection-route', modelId: 'preview-model-route', projectId})
   await insertProjectPromptFixture({
-    contentHash: computePromptContentHash('Is this study about healthcare?', null, `'yes' | 'no' | 'unsure'`),
+    contentHash: computePromptContentHash(
+      'Is this study about healthcare?',
+      null,
+      'Healthcare',
+      `'yes' | 'no' | 'unsure'`,
+    ),
     originalText: 'Is this study about healthcare?',
     originProjectId: projectId,
     projectId,
@@ -667,6 +672,56 @@ test('project prompt preview uses the first project article and shared prompt bu
   expect(payload.data.userPrompt).not.toContain('First article title')
   expect(payload.data.previewText).toContain('## System Prompt')
   expect(payload.data.previewText).toContain('## User Prompt')
+})
+
+test('project prompt preview falls back to project articles while serving scope rebuilds', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = 'project-preview-app-fallback'
+  const promptId = 'prompt-preview-app-fallback'
+
+  await insertProjectFixture({
+    connectionId: 'preview-app-fallback-connection',
+    modelId: 'preview-app-fallback-model',
+    projectId,
+  })
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash('Is this study eligible?', null, 'Eligibility', `'yes' | 'no'`),
+    originalText: 'Is this study eligible?',
+    originProjectId: projectId,
+    projectId,
+    projectPromptId: 'project-prompt-preview-app-fallback',
+    promptHeading: 'Eligibility',
+    promptId,
+    type: `'yes' | 'no'`,
+  })
+  await insertProjectArticleFixture({
+    articleId: 'preview-app-fallback-second',
+    articleSeq: 2,
+    projectArticleId: 'project-article-preview-app-fallback-second',
+    projectId,
+    summary: 'Second fallback summary',
+    title: 'Second fallback title',
+  })
+  await insertProjectArticleFixture({
+    articleId: 'preview-app-fallback-first',
+    articleSeq: 1,
+    projectArticleId: 'project-article-preview-app-fallback-first',
+    projectId,
+    summary: 'First fallback summary',
+    title: 'First fallback title',
+  })
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/prompts/${promptId}/preview`),
+  )
+  const payload = (await response.json()) as {data: {articleId: string | null; status: 'ready' | 'unavailable'}}
+
+  expect(response.status).toBe(200)
+  expect(payload.data.status).toBe('ready')
+  expect(payload.data.articleId).toBe('preview-app-fallback-first')
 })
 
 test('archive route clears refresh state for archived projects without depending on the legacy queue', async () => {

@@ -515,18 +515,27 @@ const getProject = async (projectId: string) => {
 }
 
 const getSharedReviewConfigHash = async (sourceProjectIds: string[]) => {
-  const hashes = await Promise.all(
+  const hashEntries = await Promise.all(
     sourceProjectIds.map((sourceProjectId) => {
-      return getCurrentReviewConfigHash(sourceProjectId)
+      return getCurrentReviewConfigHash(sourceProjectId).then((reviewConfigHash) => {
+        return [sourceProjectId, reviewConfigHash] as const
+      })
     }),
   )
+  const hashes = hashEntries.map(([, reviewConfigHash]) => {
+    return reviewConfigHash
+  })
   const uniqueHashes = [...new Set(hashes)]
 
-  return uniqueHashes.length === 1 ? (uniqueHashes[0] ?? null) : null
+  return {
+    reviewConfigHash: uniqueHashes.length === 1 ? (uniqueHashes[0] ?? null) : null,
+    reviewConfigHashByProjectId: Object.fromEntries(hashEntries),
+  }
 }
 
 const getMissingExportSnapshotSourceProjectIds = async (input: {
   reviewConfigHash: string | null
+  reviewConfigHashByProjectId: Record<string, string | null>
   snapshot: {snapshotId: string; type: 'pinned'} | {type: 'latest'}
   sourceProjectIds: string[]
 }) => {
@@ -537,7 +546,7 @@ const getMissingExportSnapshotSourceProjectIds = async (input: {
           ? await getReviewServingSnapshotManifest({projectId: sourceProjectId, snapshotId: input.snapshot.snapshotId})
           : await getActiveReviewServingSnapshotManifest({
               projectId: sourceProjectId,
-              reviewConfigHash: input.reviewConfigHash,
+              reviewConfigHash: input.reviewConfigHashByProjectId[sourceProjectId] ?? input.reviewConfigHash,
             })
 
       return manifest?.status === 'active' ? null : sourceProjectId
@@ -618,19 +627,27 @@ export const projectExportRoutes = new Elysia()
         ? {expiresAt: body.snapshotPinExpiresAt, snapshotId: body.snapshotId, type: 'pinned' as const}
         : {type: 'latest' as const}
       const sourceProjectId = sourceProjectIds[0] ?? projectId
-      const reviewConfigHash = await getSharedReviewConfigHash(sourceProjectIds)
+      const {reviewConfigHash: sharedReviewConfigHash, reviewConfigHashByProjectId} =
+        await getSharedReviewConfigHash(sourceProjectIds)
       const listType = body.listType
       const requiresSharedReviewConfig = body.promptIds.length > 0 || Object.keys(prompts).length > 0
       const reviewConfig = body.promptIds.length > 0 ? await getProjectReviewConfig(sourceProjectId) : null
+      const reviewConfigHash = sharedReviewConfigHash ?? reviewConfigHashByProjectId[sourceProjectId] ?? null
+      const sourceProjectReviewConfigHashes = sharedReviewConfigHash ? undefined : reviewConfigHashByProjectId
 
-      if (requiresSharedReviewConfig && sourceProjectIds.length > 1 && reviewConfigHash === null) {
+      if (requiresSharedReviewConfig && sourceProjectIds.length > 1 && sharedReviewConfigHash === null) {
         set.status = 400
         return {error: 'Export sources must use the same review configuration', success: false}
       }
 
       const missingSnapshotSourceProjectIds = body.articleIds
         ? []
-        : await getMissingExportSnapshotSourceProjectIds({reviewConfigHash, snapshot, sourceProjectIds})
+        : await getMissingExportSnapshotSourceProjectIds({
+            reviewConfigHash,
+            reviewConfigHashByProjectId,
+            snapshot,
+            sourceProjectIds,
+          })
 
       if (missingSnapshotSourceProjectIds.length > 0) {
         set.status = 400
@@ -660,6 +677,7 @@ export const projectExportRoutes = new Elysia()
           selectionScope: listType ? undefined : 'project',
           sourceProjectId,
           sourceProjectIds,
+          ...(sourceProjectReviewConfigHashes ? {sourceProjectReviewConfigHashes} : {}),
         },
         filters: {listType, prompts, search: body.search},
         jobKind: 'review.export.selection',

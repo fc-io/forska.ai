@@ -56,6 +56,7 @@ type ReviewBulkOperationCriteria = {
   search?: string
   selectionScope?: 'project'
   sourceProjectIds?: readonly string[]
+  sourceProjectReviewConfigHashes?: Record<string, string | null>
   targetProjectId?: string
   to?: string
 }
@@ -197,6 +198,18 @@ const getSourceProjectIds = (job: ReviewBulkOperationJobRow, criteria: ReviewBul
   return criteria.sourceProjectIds && criteria.sourceProjectIds.length > 0 ? criteria.sourceProjectIds : [job.projectId]
 }
 
+const getServingReviewConfigHashSql = (job: ReviewBulkOperationJobRow, criteria: ReviewBulkOperationCriteria) => {
+  const hashEntries = Object.entries(criteria.sourceProjectReviewConfigHashes ?? {})
+
+  return hashEntries.length === 0
+    ? getSqlLiteral(job.reviewConfigHash)
+    : `CASE s.project_id ${hashEntries
+        .map(([projectId, reviewConfigHash]) => {
+          return `WHEN ${getSqlLiteral(projectId)} THEN ${getSqlLiteral(reviewConfigHash)}`
+        })
+        .join(' ')} ELSE ${getSqlLiteral(job.reviewConfigHash)} END`
+}
+
 const getTabStatusPredicates = (criteria: ReviewBulkOperationCriteria) => {
   if (criteria.selectionScope === 'project') {
     return ''
@@ -313,12 +326,13 @@ const getPostingFilterPredicates = (criteria: ReviewBulkOperationCriteria) => {
 const getServingArticleBatchSql = (job: ReviewBulkOperationJobRow, cursor: string | null, limit: number) => {
   const criteria = getCriteria(job)
   const sourceProjectIds = getSourceProjectIds(job, criteria)
+  const reviewConfigHashSql = getServingReviewConfigHashSql(job, criteria)
   const searchTokens = getReviewServingTitleSearchTokens(criteria.search ?? null)
   const searchIdentitySql = job.latestSnapshotSemantics
-    ? `(SELECT json_extract_string(component.value, '$.projectionIdentity') FROM app.review_serving_snapshot_manifest manifest, json_each(json_extract(manifest.component_state_json, '$.optional')) component WHERE manifest.project_id = s.project_id AND manifest.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(job.reviewConfigHash)} AND manifest.snapshot_status = 'active' AND json_extract_string(component.value, '$.component') = 'search' ORDER BY manifest.updated_at DESC, manifest.snapshot_id DESC LIMIT 1)`
+    ? `(SELECT json_extract_string(component.value, '$.projectionIdentity') FROM app.review_serving_snapshot_manifest manifest, json_each(json_extract(manifest.component_state_json, '$.optional')) component WHERE manifest.project_id = s.project_id AND manifest.review_config_hash IS NOT DISTINCT FROM ${reviewConfigHashSql} AND manifest.snapshot_status = 'active' AND json_extract_string(component.value, '$.component') = 'search' ORDER BY manifest.updated_at DESC, manifest.snapshot_id DESC LIMIT 1)`
     : `(SELECT json_extract_string(component.value, '$.projectionIdentity') FROM app.review_serving_snapshot_manifest manifest, json_each(json_extract(manifest.component_state_json, '$.optional')) component WHERE manifest.project_id = s.project_id AND manifest.snapshot_id = ${getSqlLiteral(job.snapshotId)} AND json_extract_string(component.value, '$.component') = 'search' LIMIT 1)`
   const snapshotPredicate = job.latestSnapshotSemantics
-    ? `s.snapshot_id = (SELECT snapshot_id FROM app.review_serving_snapshot_manifest WHERE project_id = s.project_id AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(job.reviewConfigHash)} AND snapshot_status = 'active' ORDER BY updated_at DESC, snapshot_id DESC LIMIT 1)`
+    ? `s.snapshot_id = (SELECT snapshot_id FROM app.review_serving_snapshot_manifest WHERE project_id = s.project_id AND review_config_hash IS NOT DISTINCT FROM ${reviewConfigHashSql} AND snapshot_status = 'active' ORDER BY updated_at DESC, snapshot_id DESC LIMIT 1)`
     : `s.snapshot_id = ${getSqlLiteral(job.snapshotId)}`
   const searchPredicate = searchTokens
     .map((token, index) => {
@@ -340,7 +354,7 @@ const getServingArticleBatchSql = (job: ReviewBulkOperationJobRow, cursor: strin
     FROM mart.review_article_serving_v4 s
     WHERE s.project_id IN (SELECT unnest(${getSqlLiteral(sourceProjectIds)}::VARCHAR[]))
       AND ${snapshotPredicate}
-      AND s.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(job.reviewConfigHash)}
+      AND s.review_config_hash IS NOT DISTINCT FROM ${reviewConfigHashSql}
       AND s.list_mode_key = ${getSqlLiteral(getListModeKey(criteria))}
       ${getTabStatusPredicates(criteria)}
       ${cursor ? `AND s.article_id > ${getSqlLiteral(cursor)}` : ''}
