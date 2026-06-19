@@ -734,6 +734,26 @@ export const projectExportRoutes = new Elysia()
     },
   )
   .get(
+    '/api/projects/:id/export/:jobId',
+    async ({params, set}) => {
+      await assertProjectIsActive(params.id)
+
+      const job = await getExportJob(params.id, params.jobId)
+
+      if (!job) {
+        set.status = 404
+        return {error: 'Export job not found', success: false}
+      }
+
+      return {
+        downloadUrl: job.status === 'completed' ? `/api/projects/${params.id}/export/${params.jobId}/download` : null,
+        job: {jobId: params.jobId, status: job.status},
+        success: true,
+      }
+    },
+    {params: t.Object({id: t.String(), jobId: t.String()})},
+  )
+  .get(
     '/api/projects/:id/export/:jobId/download',
     async ({params, set}) => {
       await assertProjectIsActive(params.id)

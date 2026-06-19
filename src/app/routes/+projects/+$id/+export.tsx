@@ -30,6 +30,7 @@ type ExportRequestBody = {
 
 type ExportPromptsRequestBody = {promptIds: string[]}
 type ExportJobResponse = {downloadUrl?: string; job?: {jobId?: string}; success?: boolean}
+type ExportJobStatusResponse = {downloadUrl?: string | null; job?: {jobId?: string; status?: string}; success?: boolean}
 
 const createProjectExportJob = async (projectId: string, body: ExportRequestBody): Promise<ExportJobResponse> => {
   const response = await fetch(getApiRequestUrl(`/api/projects/${projectId}/export`), {
@@ -44,6 +45,20 @@ const createProjectExportJob = async (projectId: string, body: ExportRequestBody
   }
 
   return (await response.json()) as ExportJobResponse
+}
+
+const fetchProjectExportJobStatus = async (projectId: string, jobId: string): Promise<ExportJobStatusResponse> => {
+  const response = await fetch(getApiRequestUrl(`/api/projects/${projectId}/export/${jobId}`), {credentials: 'include'})
+
+  if (!response.ok) {
+    throw new Error('Failed to load export job status')
+  }
+
+  return (await response.json()) as ExportJobStatusResponse
+}
+
+const shouldPollExportJob = (data?: ExportJobStatusResponse) => {
+  return data?.job?.status !== 'completed'
 }
 
 const parseArktypeOptions = (typeStr: string | null): string[] => {
@@ -283,6 +298,22 @@ const ExportData = () => {
     }
   })
 
+  const exportJobStatusQuery = useQuery(() => {
+    const jobId = exportJobId()
+
+    return {
+      enabled: jobId !== null,
+      queryFn: () => {
+        return fetchProjectExportJobStatus(projectId, jobId ?? '')
+      },
+      queryKey: ['project', projectId, 'export-job', jobId],
+      refetchInterval: (query: {state: {data?: ExportJobStatusResponse}}) => {
+        return shouldPollExportJob(query.state.data) ? 2_000 : false
+      },
+      suspense: false,
+    }
+  })
+
   const exportPromptsMutation = useMutation(() => {
     return {
       mutationFn: async (body: ExportPromptsRequestBody) => {
@@ -382,19 +413,32 @@ const ExportData = () => {
             </Show>
             <Show when={exportJobId()}>
               {(jobId) => {
+                const jobStatus = () => {
+                  return exportJobStatusQuery.data?.job?.status ?? 'queued'
+                }
+                const downloadUrl = () => {
+                  return exportJobStatusQuery.data?.downloadUrl ?? exportDownloadUrl()
+                }
+
                 return (
                   <div class="mb-4 p-3 bg-green-50 border border-green-200 rounded-md text-green-700 text-sm">
-                    Export job queued: {jobId()}
-                    <Show when={exportDownloadUrl()}>
-                      {(downloadUrl) => {
+                    Export job {jobStatus()}: {jobId()}
+                    <Show when={exportJobStatusQuery.isError}>
+                      <span class="ml-2 text-red-700">Unable to check export readiness.</span>
+                    </Show>
+                    <Show
+                      when={jobStatus() === 'completed' && downloadUrl()}
+                      fallback={<span class="ml-2">Preparing CSV...</span>}
+                    >
+                      {(readyDownloadUrl) => {
                         return (
                           <a
                             class="ml-2 underline"
-                            href={getApiRequestUrl(downloadUrl())}
+                            href={getApiRequestUrl(readyDownloadUrl())}
                             rel="noreferrer"
                             target="_blank"
                           >
-                            Download CSV when ready
+                            Download CSV
                           </a>
                         )
                       }}
