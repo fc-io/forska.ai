@@ -1,6 +1,7 @@
 import {hostname} from 'node:os'
 
 import {sleep} from '../../utils/sleep.ts'
+import {getReviewServingTitleSearchTokens} from '../reviewServing/reviewServingTitleSearchProjector.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
@@ -286,19 +287,22 @@ const getPostingFilterPredicates = (criteria: ReviewBulkOperationCriteria) => {
 const getServingArticleBatchSql = (job: ReviewBulkOperationJobRow, cursor: string | null, limit: number) => {
   const criteria = getCriteria(job)
   const sourceProjectIds = getSourceProjectIds(job, criteria)
+  const searchTokens = getReviewServingTitleSearchTokens(criteria.search ?? null)
   const snapshotPredicate = job.latestSnapshotSemantics
     ? `s.snapshot_id = (SELECT snapshot_id FROM app.review_serving_snapshot_manifest WHERE project_id = s.project_id AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(job.reviewConfigHash)} AND snapshot_status = 'active' ORDER BY updated_at DESC, snapshot_id DESC LIMIT 1)`
     : `s.snapshot_id = ${getSqlLiteral(job.snapshotId)}`
-  const searchPredicate = criteria.search
-    ? `AND EXISTS (
-      SELECT 1
-      FROM mart.review_title_search_serving_v4 search
-      WHERE search.project_id = s.project_id
-        AND search.snapshot_id = s.snapshot_id
-        AND search.article_id = s.article_id
-        AND starts_with(search.token, ${getSqlLiteral(criteria.search.trim().toLowerCase())})
-    )`
-    : ''
+  const searchPredicate = searchTokens
+    .map((token, index) => {
+      return `AND EXISTS (
+        SELECT 1
+        FROM mart.review_title_search_serving_v4 search_${index}
+        WHERE search_${index}.project_id = s.project_id
+          AND search_${index}.snapshot_id = s.snapshot_id
+          AND search_${index}.article_id = s.article_id
+          AND starts_with(search_${index}.token, ${getSqlLiteral(token)})
+      )`
+    })
+    .join('\n')
 
   return `
     SELECT DISTINCT s.article_id AS articleId

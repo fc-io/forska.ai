@@ -1,6 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
+import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {namedReviewFastCountDefinitions} from './reviewServingContracts.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
@@ -55,6 +55,7 @@ const filterOptionSummaryDefinitionVersions = {
 } as const
 
 export const getReviewServingFilterOptionIdentity = (input: {
+  activeFilters?: ReviewServingIdentityValue
   filterKeys: readonly string[]
   listModeKeys: readonly string[]
   optionMode: 'human' | 'review'
@@ -62,6 +63,7 @@ export const getReviewServingFilterOptionIdentity = (input: {
   summaryDefinitionVersions?: Record<string, string>
 }) => {
   return getStableReviewServingJson({
+    activeFilters: input.activeFilters ?? {},
     filterKeys: [...input.filterKeys].sort(),
     listModeKeys: [...input.listModeKeys].sort(),
     optionMode: input.optionMode,
