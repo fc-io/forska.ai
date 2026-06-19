@@ -48,6 +48,7 @@ export type ReviewBulkOperationCriteria = {
   selectionScope?: 'project'
   sourceProjectId?: string
   sourceProjectIds?: readonly string[]
+  sourceProjectReviewConfigHashes?: Record<string, string | null>
   targetProjectId?: string
   to?: string
 }

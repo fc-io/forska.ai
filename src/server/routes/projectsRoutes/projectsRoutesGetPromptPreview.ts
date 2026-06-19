@@ -64,6 +64,27 @@ const getFirstProjectArticleIdFromScope = async (projectId: string) => {
   return row?.articleId ?? null
 }
 
+const getFirstProjectArticleIdFromApp = async (projectId: string) => {
+  const [row] = await getAppDatabaseService().queryJson<{articleId: string}>(`
+    SELECT project_article.article_id AS articleId
+    FROM app.project_article project_article
+    LEFT JOIN app.project_article_ordinal article_ordinal
+      ON article_ordinal.project_id = project_article.project_id
+     AND article_ordinal.article_id = project_article.article_id
+    WHERE project_article.project_id = '${escapeSqlString(projectId)}'
+    ORDER BY article_ordinal.article_seq ASC NULLS LAST, project_article.article_id ASC
+    LIMIT 1
+  `)
+
+  return row?.articleId ?? null
+}
+
+const getFirstProjectArticleIdFromFallbacks = async (projectId: string) => {
+  const articleId = await getFirstProjectArticleIdFromScope(projectId)
+
+  return articleId ?? getFirstProjectArticleIdFromApp(projectId)
+}
+
 const getPromptPreviewArticleRecord = (article: PromptPreviewArticle): ArticleRecord => {
   return {
     ...article,
@@ -128,10 +149,9 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
 
     const reviewConfigHash = await getCurrentReviewConfigHash(params.id)
     const previewArticleRead = await getFirstProjectArticleFromServing(params.id, reviewConfigHash)
-    const firstArticleId =
-      previewArticleRead.status === 'accepted'
-        ? (previewArticleRead.rows[0]?.article_id ?? null)
-        : await getFirstProjectArticleIdFromScope(params.id)
+    const servingArticleId =
+      previewArticleRead.status === 'accepted' ? (previewArticleRead.rows[0]?.article_id ?? null) : null
+    const firstArticleId = servingArticleId ?? (await getFirstProjectArticleIdFromFallbacks(params.id))
 
     if (!firstArticleId) {
       return getUnavailablePromptPreview({

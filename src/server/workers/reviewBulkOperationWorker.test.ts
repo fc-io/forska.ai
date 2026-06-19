@@ -321,6 +321,31 @@ test('review bulk operation worker advances export jobs through bounded keyset s
   expect(joined).not.toContain('OFFSET')
 })
 
+test('review bulk operation worker scopes mixed-source metadata exports by source review config hash', async () => {
+  const harness = createWorkerHarness({
+    criteriaJson: {
+      exportContract: {
+        payloadBudgetBytes: 10_000_000,
+        selectedMetadata: {includeArticleId: true},
+        snapshotCursor: {mode: 'keyset', orderBy: ['article_id']},
+      },
+      operation: 'export',
+      selectionScope: 'project',
+      sourceProjectIds: ['project-1', 'project-2'],
+      sourceProjectReviewConfigHashes: {'project-1': 'config-1', 'project-2': 'config-2'},
+    },
+    jobKind: 'review.export.selection',
+  })
+
+  await runReviewBulkOperationWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  const joined = harness.statements.join('\n')
+
+  expect(joined).toContain("CASE s.project_id WHEN 'project-1' THEN 'config-1' WHEN 'project-2' THEN 'config-2'")
+  expect(joined).toContain('s.review_config_hash IS NOT DISTINCT FROM CASE s.project_id')
+  expect(joined).not.toContain('s.review_config_hash IS NOT DISTINCT FROM NULL')
+})
+
 test('review bulk operation worker tokenizes title search criteria for durable jobs', async () => {
   const harness = createWorkerHarness({
     criteriaJson: {
