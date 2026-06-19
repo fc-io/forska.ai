@@ -155,6 +155,8 @@ type ServingJudgmentDetailRow = {
   prompt_order?: number | null
 }
 
+type ReviewServingDetailRowsRequest = Parameters<typeof readReviewServingRows>[0]
+
 type ServingHumanJudgmentDetailRow = {
   answered_original?: string | null
   article_id?: string
@@ -224,6 +226,29 @@ const getStringPayloadValue = (value: unknown, fallback: string) => {
   return typeof value === 'string' ? value : fallback
 }
 
+const detailReaderPageSize = 512
+
+const readAllReviewServingRows = async <T>(
+  request: ReviewServingDetailRowsRequest,
+  cursor: string | null = null,
+  previousRows: T[] = [],
+): Promise<T[] | null> => {
+  const result = await readReviewServingRows<T>({...request, cursor, limit: detailReaderPageSize})
+
+  if (result.status === 'rejected') {
+    return null
+  }
+
+  const rows = [...previousRows, ...result.rows]
+  const lastRow = result.rows[result.rows.length - 1]
+  const nextCursor =
+    result.rows.length === detailReaderPageSize && lastRow
+      ? result.getCursorForRow(lastRow as Record<string, unknown>)
+      : null
+
+  return nextCursor ? readAllReviewServingRows(request, nextCursor, rows) : rows
+}
+
 const getPromptValue = (row: {promptOriginalText: string; promptHeading: string | null}) => {
   return {originalText: row.promptOriginalText, promptHeading: row.promptHeading}
 }
@@ -232,22 +257,22 @@ const getProjectReviewDetailJudgmentRows = async (params: {
   projectId: string
   articleId: string
   reviewConfigHash: string | null
+  projectReviewConfig: ProjectReviewConfig
 }): Promise<ProjectReviewDetailJudgmentRow[]> => {
-  const result = await readReviewServingRows<ServingJudgmentDetailRow>({
+  const rows = await readAllReviewServingRows<ServingJudgmentDetailRow>({
     allowStale: true,
     articleId: params.articleId,
     contractKey: 'review.detail.judgments',
-    limit: 512,
+    limit: detailReaderPageSize,
     projectId: params.projectId,
     reviewConfigHash: params.reviewConfigHash,
     searchMode: 'none',
   })
 
-  if (result.status === 'rejected') {
+  if (rows === null) {
     return []
   }
 
-  const rows = result.rows
   const promptIds = Array.from(
     new Set(
       rows
@@ -328,10 +353,10 @@ const getProjectReviewDetailJudgmentRows = async (params: {
         judgmentModelId: modelId,
         judgmentPromptId: promptId,
         judgmentProjectId: params.projectId,
-        judgmentUseTitle: null,
-        judgmentUseAbstract: null,
-        judgmentUseFulltext: null,
-        judgmentUseFulltextNoImages: null,
+        judgmentUseTitle: params.projectReviewConfig.useTitle,
+        judgmentUseAbstract: params.projectReviewConfig.useAbstract,
+        judgmentUseFulltext: params.projectReviewConfig.useFulltext,
+        judgmentUseFulltextNoImages: params.projectReviewConfig.useFulltextNoImages,
         judgmentChunkingStrategy: (payload.chunkingStrategy as string | null | undefined) ?? null,
         judgmentIsAnswered: (payload.isAnswered as boolean | null | undefined) ?? false,
         judgmentAnsweredOriginal: row.answered_original ?? null,
@@ -357,17 +382,17 @@ const getProjectReviewDetailHumanRows = async (params: {
   promptRows: ProjectPromptRow[]
   reviewConfigHash: string | null
 }) => {
-  const result = await readReviewServingRows<ServingHumanJudgmentDetailRow>({
+  const rows = await readAllReviewServingRows<ServingHumanJudgmentDetailRow>({
     allowStale: true,
     articleId: params.articleId,
     contractKey: 'review.detail.humanJudgments',
-    limit: 512,
+    limit: detailReaderPageSize,
     projectId: params.projectId,
     reviewConfigHash: params.reviewConfigHash,
     searchMode: 'none',
   })
 
-  if (result.status === 'rejected') {
+  if (rows === null) {
     return []
   }
 
@@ -377,7 +402,7 @@ const getProjectReviewDetailHumanRows = async (params: {
     }),
   )
 
-  return result.rows
+  return rows
     .map((row) => {
       const payload = getJsonObjectValue(row.judgment_payload_json)
       const promptId = row.prompt_id ?? ''
@@ -869,6 +894,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       const projectReviewDetailJudgmentRows = await getProjectReviewDetailJudgmentRows({
         projectId,
         articleId,
+        projectReviewConfig,
         reviewConfigHash,
       })
 
