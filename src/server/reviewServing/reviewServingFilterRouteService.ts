@@ -1,3 +1,5 @@
+import {buildNumericFilterResultFromValues} from '../routes/projectsRoutes/articlesReviewsFiltersNumeric.ts'
+import {analyzePromptTypes, extractSpecialValues} from '../routes/projectsRoutes/articlesReviewsFiltersUtils.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {getReviewServingFilterOptionIdentity} from './reviewServingFilterOptionProjector.ts'
@@ -15,7 +17,7 @@ import {
   type ReviewServingReaderRequest,
 } from './reviewServingReader.ts'
 
-type PromptRow = {id: string; originalText?: string | null; promptHeading?: string | null}
+type PromptRow = {id: string; originalText: string; promptHeading: string | null; type: string | null}
 type ReviewServingFilterMode = 'human' | 'review'
 type ReviewServingFilterRouteParams = {
   covidenceConflicts?: string
@@ -55,7 +57,15 @@ type ReviewServingFilterOptionRow = {
   option_value_key?: string | null
   prompt_id?: string | null
 }
-type PromptFilterResponse = {answeredOriginalValues: string[]; filterType: 'enum'; promptId: string; promptName: string}
+type PromptFilterResponse =
+  | {answeredOriginalValues: string[]; filterType: 'enum'; promptId: string; promptName: string}
+  | {
+      bins: Array<{label: string; min: number; max: number}>
+      filterType: 'numeric'
+      promptId: string
+      promptName: string
+      specialValues: string[]
+    }
 type ReviewFilterRouteResponse = {
   diagnostics: ReviewServingReaderDiagnostics[]
   facets: ReviewServingFacetRow[]
@@ -187,6 +197,23 @@ const getPromptName = (prompt: PromptRow) => {
   return prompt.promptHeading || prompt.originalText || prompt.id
 }
 
+const getNumericValuesByPrompt = (
+  optionRows: readonly (ReviewServingFilterOptionRow & {optionPayload: Record<string, unknown>})[],
+  mode: ReviewServingFilterMode,
+) => {
+  return optionRows.reduce<Record<string, number[]>>((acc, row) => {
+    const promptId = typeof row.optionPayload.promptId === 'string' ? row.optionPayload.promptId : row.prompt_id
+    const value =
+      typeof row.optionPayload.value === 'string' ? Number(row.optionPayload.value) : Number(row.facet_value)
+    const isPromptAnswer = row.facet_key === 'promptAnswer'
+    const isModeMatch = mode === 'human' ? row.filter_kind === 'human' : row.filter_kind === 'review'
+
+    return isPromptAnswer && isModeMatch && promptId && Number.isFinite(value)
+      ? {...acc, [promptId]: [...(acc[promptId] ?? []), value]}
+      : acc
+  }, {})
+}
+
 const getPromptFilters = (
   promptRows: readonly PromptRow[],
   optionRows: readonly (ReviewServingFilterOptionRow & {optionPayload: Record<string, unknown>})[],
@@ -202,7 +229,22 @@ const getPromptFilters = (
       ? {...acc, [promptId]: [...(acc[promptId] ?? []), value]}
       : acc
   }, {})
+  const numericValuesByPrompt = getNumericValuesByPrompt(optionRows, mode)
+  const promptStrategies = analyzePromptTypes([...promptRows])
   const promptFilters = promptRows.map((prompt) => {
+    const promptStrategy = promptStrategies.find((strategy) => {
+      return strategy.promptId === prompt.id
+    })
+
+    if (promptStrategy?.strategy === 'numeric') {
+      return buildNumericFilterResultFromValues(
+        prompt.id,
+        getPromptName(prompt),
+        numericValuesByPrompt[prompt.id] ?? [],
+        prompt.type ? extractSpecialValues(prompt.type) : [],
+      )
+    }
+
     return {
       answeredOriginalValues: [...new Set(valuesByPrompt[prompt.id] ?? [])],
       filterType: 'enum' as const,

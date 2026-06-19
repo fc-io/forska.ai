@@ -40,6 +40,7 @@ type ReviewBulkOperationJobRow = {
 
 type ReviewBulkOperationCriteria = {
   articleIds?: readonly string[]
+  concurrency?: number
   exportContract?: unknown
   forceRefetch?: boolean
   from?: string
@@ -203,6 +204,27 @@ const getSourceProjectIds = (job: ReviewBulkOperationJobRow, criteria: ReviewBul
   return criteria.sourceProjectIds && criteria.sourceProjectIds.length > 0 ? criteria.sourceProjectIds : [job.projectId]
 }
 
+const getExclusiveDateToFilter = (value: string) => {
+  if (!isDateOnlyFilter(value)) {
+    return value
+  }
+
+  const date = new Date(`${value}T00:00:00.000Z`)
+  date.setUTCDate(date.getUTCDate() + 1)
+
+  return date.toISOString().slice(0, 10)
+}
+
+const isDateOnlyFilter = (value: string) => {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value)
+}
+
+const getDateToPredicate = (column: string, value: string | undefined) => {
+  return value
+    ? `AND ${column} ${isDateOnlyFilter(value) ? '<' : '<='} TIMESTAMPTZ ${getSqlLiteral(getExclusiveDateToFilter(value))}`
+    : ''
+}
+
 const getPromptAnswerPredicates = (criteria: ReviewBulkOperationCriteria) => {
   const promptPrefix = getListModeKey(criteria) === 'human' ? 'human:promptAnswer:' : 'review:promptAnswer:'
 
@@ -255,7 +277,7 @@ const getPostingFilterPredicates = (criteria: ReviewBulkOperationCriteria) => {
   const datePredicate =
     criteria.from || criteria.to
       ? `${criteria.from ? `AND s.sort_key >= TIMESTAMPTZ ${getSqlLiteral(criteria.from)}` : ''}
-         ${criteria.to ? `AND s.sort_key <= TIMESTAMPTZ ${getSqlLiteral(criteria.to)}` : ''}`
+         ${getDateToPredicate('s.sort_key', criteria.to)}`
       : ''
 
   return [...simplePredicates, datePredicate, ...getPromptAnswerPredicates(criteria)].join('\n')
@@ -265,7 +287,7 @@ const getServingArticleBatchSql = (job: ReviewBulkOperationJobRow, cursor: strin
   const criteria = getCriteria(job)
   const sourceProjectIds = getSourceProjectIds(job, criteria)
   const snapshotPredicate = job.latestSnapshotSemantics
-    ? `s.snapshot_id = (SELECT snapshot_id FROM app.review_serving_snapshot_manifest WHERE project_id = s.project_id AND snapshot_status = 'active' ORDER BY updated_at DESC, snapshot_id DESC LIMIT 1)`
+    ? `s.snapshot_id = (SELECT snapshot_id FROM app.review_serving_snapshot_manifest WHERE project_id = s.project_id AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(job.reviewConfigHash)} AND snapshot_status = 'active' ORDER BY updated_at DESC, snapshot_id DESC LIMIT 1)`
     : `s.snapshot_id = ${getSqlLiteral(job.snapshotId)}`
   const searchPredicate = criteria.search
     ? `AND EXISTS (
@@ -283,6 +305,7 @@ const getServingArticleBatchSql = (job: ReviewBulkOperationJobRow, cursor: strin
     FROM mart.review_article_serving_v4 s
     WHERE s.project_id IN (SELECT unnest(${getSqlLiteral(sourceProjectIds)}::VARCHAR[]))
       AND ${snapshotPredicate}
+      AND s.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(job.reviewConfigHash)}
       AND s.list_mode_key = ${getSqlLiteral(getListModeKey(criteria))}
       ${cursor ? `AND s.article_id > ${getSqlLiteral(cursor)}` : ''}
       ${getPostingFilterPredicates(criteria)}
@@ -431,6 +454,7 @@ const executeDefaultBatch = async (input: {
   if (criteria.operation === 'pdfFetch') {
     const pdfStats = await processPdfFetchArticleIds({
       articleIds: input.articleIds,
+      concurrency: criteria.concurrency,
       forceRefetch: criteria.forceRefetch,
     })
 

@@ -189,7 +189,7 @@ test('human review route service uses serving rows, human payload hydration, and
   expect(sql).toContain('FROM mart.review_article_serving_v4')
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).toContain("payload_kind = 'human'")
-  expect(sql).toContain('FROM mart.review_article_count_serving_v4')
+  expect(sql).toContain('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
   expect(sql).toContain("article_id IN (SELECT unnest(['article-1']::VARCHAR[]))")
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)

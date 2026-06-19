@@ -312,7 +312,7 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
       articleCreatedAtTo: '2026-01-31',
       duplicateFlag: 'true',
       llmStatus: 'complete',
-      promptAnswer: ['prompt-1:yes'],
+      promptAnswer: ['prompt-1:yes', 'prompt-2:no'],
       searchTokenPrefix: 'heart',
     },
     searchTokenPrefix: 'heart',
@@ -352,10 +352,12 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
 
   expect(result.status).toBe('accepted')
   expect(sql).toContain("sort_key >= TIMESTAMPTZ '2026-01-01'")
-  expect(sql).toContain("sort_key <= TIMESTAMPTZ '2026-01-31'")
+  expect(sql).toContain("sort_key < TIMESTAMPTZ '2026-02-01'")
   expect(sql).toContain('duplicate_flag = TRUE')
   expect(sql).toContain("llm_status_key = 'answered'")
   expect(sql).toContain('review:promptAnswer:prompt-1:yes')
+  expect(sql).toContain('review:promptAnswer:prompt-2:no')
+  expect(sql.match(/FROM mart\.review_article_filter_posting_serving_v4 filter_/gu)?.length).toBe(2)
   expect(sql).toContain('EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search')
   expect(sql).toContain(
     "(sort_key < '2026-01-01') OR (sort_key IS NOT DISTINCT FROM '2026-01-01' AND article_id > 'article-1')",

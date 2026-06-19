@@ -230,7 +230,17 @@ const insertBulkOperationJob = async (input: {
       FALSE,
       0,
       NULL
-    ) ON CONFLICT (job_id) DO UPDATE SET updated_at = current_timestamp
+    ) ON CONFLICT (job_id) DO UPDATE SET
+      updated_at = current_timestamp,
+      cursor_json = EXCLUDED.cursor_json,
+      status = 'pending',
+      result_manifest_json = EXCLUDED.result_manifest_json,
+      processed_count = 0,
+      total_estimate = NULL,
+      completed_at = NULL,
+      cancel_requested = FALSE,
+      retry_count = 0,
+      last_error = NULL
   `)
 }
 

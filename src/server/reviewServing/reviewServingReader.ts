@@ -339,12 +339,38 @@ const getFilterString = (value: ReviewServingFilterSignatureValue | undefined) =
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
-const getPromptAnswerValues = (request: ReviewServingReaderRequest) => {
+const getPromptAnswerValueGroups = (request: ReviewServingReaderRequest) => {
   const prefix = getPostingFilterPrefix(request.listMode)
 
-  return getFilterValues(request.filters?.promptAnswer).map((value) => {
-    return `${prefix}${value}`
-  })
+  return getFilterValues(request.filters?.promptAnswer).reduce<string[][]>((groups, value) => {
+    const [promptId] = value.split(':')
+    const currentGroup = groups.find((group) => {
+      return group.some((entry) => {
+        return entry.startsWith(`${prefix}${promptId}:`)
+      })
+    })
+
+    return currentGroup
+      ? groups.map((group) => {
+          return group === currentGroup ? [...group, `${prefix}${value}`] : group
+        })
+      : [...groups, [`${prefix}${value}`]]
+  }, [])
+}
+
+const getExclusiveDateToFilter = (value: string | null) => {
+  if (!value || !isDateOnlyFilter(value)) {
+    return value
+  }
+
+  const date = new Date(`${value}T00:00:00.000Z`)
+  date.setUTCDate(date.getUTCDate() + 1)
+
+  return date.toISOString().slice(0, 10)
+}
+
+const isDateOnlyFilter = (value: string) => {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value)
 }
 
 const getColumnFilterPredicates = (request: ReviewServingReaderRequest) => {
@@ -356,7 +382,11 @@ const getColumnFilterPredicates = (request: ReviewServingReaderRequest) => {
 
   return [
     articleCreatedAtFrom ? 'sort_key >= TIMESTAMPTZ $articleCreatedAtFrom' : '',
-    articleCreatedAtTo ? 'sort_key <= TIMESTAMPTZ $articleCreatedAtTo' : '',
+    articleCreatedAtTo
+      ? isDateOnlyFilter(articleCreatedAtTo)
+        ? 'sort_key < TIMESTAMPTZ $articleCreatedAtTo'
+        : 'sort_key <= TIMESTAMPTZ $articleCreatedAtTo'
+      : '',
     filters.duplicateFlag ? `duplicate_flag = TRUE` : '',
     filters.conflictFlag ? `conflict_flag = TRUE` : '',
     llmStatus ? 'llm_status_key = $llmStatusFilter' : '',
@@ -383,8 +413,27 @@ const getPostingFilterPredicate = (input: {
         ` AND filter_${input.index}.list_mode_key = ${getSqlLiteral(input.request.listMode ?? input.contract.listMode)}`,
         ` AND filter_${input.index}.article_id = ${input.contract.servingTable}.article_id`,
         ` AND filter_${input.index}.filter_kind = $promptAnswerFilterKind`,
-        ` AND filter_${input.index}.filter_value IN (SELECT unnest($promptAnswerFilterValues)))`,
+        ` AND filter_${input.index}.filter_value IN (SELECT unnest(${getSqlLiteral(input.filterValues)})))`,
       ].join('')
+}
+
+const getPostingFilterPredicates = (input: {
+  contract: ReviewServingReadContract
+  request: ReviewServingReaderRequest
+}) => {
+  return getPromptAnswerValueGroups(input.request)
+    .map((filterValues, index) => {
+      return getPostingFilterPredicate({
+        contract: input.contract,
+        filterKind: 'promptAnswer',
+        filterValues,
+        index,
+        request: input.request,
+      })
+    })
+    .filter((predicate) => {
+      return predicate.length > 0
+    })
 }
 
 const getSearchFilterPredicate = (input: {
@@ -426,13 +475,7 @@ const getOrderedPrefixFilterPredicatesSql = (input: {
 
   const predicates = [
     ...getColumnFilterPredicates(input.request),
-    getPostingFilterPredicate({
-      contract: input.contract,
-      filterKind: 'promptAnswer',
-      filterValues: getPromptAnswerValues(input.request),
-      index: 0,
-      request: input.request,
-    }),
+    ...getPostingFilterPredicates({contract: input.contract, request: input.request}),
     getSearchFilterPredicate(input),
   ].filter((predicate) => {
     return predicate.length > 0
@@ -617,7 +660,7 @@ const bindReviewServingRowsSql = (
     articleId: request.articleId ?? null,
     articleIds: request.articleIds ?? null,
     articleCreatedAtFrom: getFilterString(request.filters?.articleCreatedAtFrom),
-    articleCreatedAtTo: getFilterString(request.filters?.articleCreatedAtTo),
+    articleCreatedAtTo: getExclusiveDateToFilter(getFilterString(request.filters?.articleCreatedAtTo)),
     countFilterKey: request.countFilterKey ?? null,
     displayIdentity: componentStates.display?.projectionIdentity,
     filterKind: request.filterKind ?? null,
@@ -632,7 +675,7 @@ const bindReviewServingRowsSql = (
     projectId: request.projectId ?? null,
     projectScopeIdentity: componentStates.projectScope?.projectionIdentity,
     promptAnswerFilterKind: 'promptAnswer',
-    promptAnswerFilterValues: getPromptAnswerValues(request),
+    promptAnswerFilterValues: [],
     queueKind: request.queueKind ?? null,
     reviewConfigHash: manifest.reviewConfigHash,
     searchIdentity: request.searchIdentity ?? componentStates.search?.projectionIdentity,

@@ -21,6 +21,7 @@ import {
 } from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
+import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
 import {getScopedArticleSourceRecordLookupClause} from '../../services/scopedArticleReadAdapter.ts'
 import {getSystemActor} from '../../utils/getSystemActor.ts'
 import {
@@ -230,6 +231,7 @@ const getPromptValue = (row: {promptOriginalText: string; promptHeading: string 
 const getProjectReviewDetailJudgmentRows = async (params: {
   projectId: string
   articleId: string
+  reviewConfigHash: string | null
 }): Promise<ProjectReviewDetailJudgmentRow[]> => {
   const result = await readReviewServingRows<ServingJudgmentDetailRow>({
     allowStale: true,
@@ -237,6 +239,7 @@ const getProjectReviewDetailJudgmentRows = async (params: {
     contractKey: 'review.detail.judgments',
     limit: 512,
     projectId: params.projectId,
+    reviewConfigHash: params.reviewConfigHash,
     searchMode: 'none',
   })
 
@@ -843,6 +846,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       const allArticleJudgmentsPromise: Promise<ArticleJudgmentRow[]> = getArticleJudgmentRows({articleId, projectId})
       const martFreshnessPromise: Promise<ProjectReviewDetailMartFreshness> =
         getProjectReviewDetailMartFreshness(projectId)
+      const reviewConfigHashPromise = getCurrentReviewConfigHash(projectId)
       const [projectPromptRows, projectReviewConfig, allArticleJudgments, martFreshness]: [
         ProjectPromptRow[],
         ProjectReviewConfig | null,
@@ -854,12 +858,17 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         allArticleJudgmentsPromise,
         martFreshnessPromise,
       ])
+      const reviewConfigHash = await reviewConfigHashPromise
 
       if (!projectReviewConfig) {
         throw new Error('Project not found')
       }
 
-      const projectReviewDetailJudgmentRows = await getProjectReviewDetailJudgmentRows({projectId, articleId})
+      const projectReviewDetailJudgmentRows = await getProjectReviewDetailJudgmentRows({
+        projectId,
+        articleId,
+        reviewConfigHash,
+      })
 
       const promptIds = projectPromptRows.map((p) => {
         return p.id
