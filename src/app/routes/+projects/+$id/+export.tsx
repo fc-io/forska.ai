@@ -29,7 +29,7 @@ type ExportRequestBody = {
 }
 
 type ExportPromptsRequestBody = {promptIds: string[]}
-type ExportJobResponse = {job?: {jobId?: string}; success?: boolean}
+type ExportJobResponse = {downloadUrl?: string; job?: {jobId?: string}; success?: boolean}
 
 const createProjectExportJob = async (projectId: string, body: ExportRequestBody): Promise<ExportJobResponse> => {
   const response = await fetch(getApiRequestUrl(`/api/projects/${projectId}/export`), {
@@ -93,6 +93,7 @@ const ExportData = () => {
   const [includePromptContent, setIncludePromptContent] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [exportJobId, setExportJobId] = createSignal<string | null>(null)
+  const [exportDownloadUrl, setExportDownloadUrl] = createSignal<string | null>(null)
   const [hasInitializedPrompts, setHasInitializedPrompts] = createSignal(false)
   const [promptAnswerFilters, setPromptAnswerFilters] = createSignal<Record<string, string[]>>({})
   const [hasInitializedFilters, setHasInitializedFilters] = createSignal(false)
@@ -273,6 +274,7 @@ const ExportData = () => {
       },
       onSuccess: (result) => {
         setExportJobId(result.job?.jobId ?? null)
+        setExportDownloadUrl(result.downloadUrl ?? null)
       },
       onError: (err) => {
         const message = err instanceof Error ? err.message : 'An unexpected error occurred'
@@ -302,6 +304,7 @@ const ExportData = () => {
   const handleExport = () => {
     setError(null)
     setExportJobId(null)
+    setExportDownloadUrl(null)
     const selectedPromptIds = Object.keys(selectedPrompts())
     const promptSelections = Object.entries(promptAnswerFilters())
       .filter(([_, types]) => {
@@ -382,6 +385,20 @@ const ExportData = () => {
                 return (
                   <div class="mb-4 p-3 bg-green-50 border border-green-200 rounded-md text-green-700 text-sm">
                     Export job queued: {jobId()}
+                    <Show when={exportDownloadUrl()}>
+                      {(downloadUrl) => {
+                        return (
+                          <a
+                            class="ml-2 underline"
+                            href={getApiRequestUrl(downloadUrl())}
+                            rel="noreferrer"
+                            target="_blank"
+                          >
+                            Download CSV when ready
+                          </a>
+                        )
+                      }}
+                    </Show>
                   </div>
                 )
               }}

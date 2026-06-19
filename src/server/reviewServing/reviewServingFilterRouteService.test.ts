@@ -240,6 +240,29 @@ test('human filter route service keeps summary-mode answer scope from serving op
   expect(statements.join('\n')).toContain("AND facet_kind = 'human'")
 })
 
+test('human filter route service keeps summary-mode filter when scoped options are empty', async () => {
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(): Promise<T[]> => {
+      return []
+    },
+  }
+  const response = await getReviewFiltersFromServing({
+    dependencies: {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
+    mode: 'human',
+    params: {projectId: 'project-1'},
+    promptRows: [{id: 'prompt-1', originalText: 'Prompt 1', promptHeading: 'Prompt 1', type: 'string'}],
+  })
+
+  expect(response.filters).toEqual([
+    {
+      answeredOriginalValues: [],
+      filterType: 'enum',
+      promptId: 'summary',
+      promptName: 'Overall human screening decision',
+    },
+  ])
+})
+
 test('filter contracts cover synchronous combinations with bounded serving access', async () => {
   const source = await readFile(new URL('./reviewServingReadContracts.ts', import.meta.url), 'utf8')
   const routeSource = await readFile(

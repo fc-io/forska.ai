@@ -271,6 +271,28 @@ test('review bulk operation worker advances export jobs through bounded keyset s
   expect(joined).not.toContain('OFFSET')
 })
 
+test('review bulk operation worker tokenizes title search criteria for durable jobs', async () => {
+  const harness = createWorkerHarness({
+    criteriaJson: {
+      listType: 'llm',
+      operation: 'export',
+      search: 'COVID-19 heart failure',
+      sourceProjectIds: ['project-1'],
+    },
+    jobKind: 'review.export.selection',
+  })
+
+  await runReviewBulkOperationWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  const joined = harness.statements.join('\n')
+
+  expect(joined).toContain("starts_with(search_0.token, 'covid')")
+  expect(joined).toContain("starts_with(search_1.token, '19')")
+  expect(joined).toContain("starts_with(search_2.token, 'heart')")
+  expect(joined).toContain("starts_with(search_3.token, 'failure')")
+  expect(joined).not.toContain("starts_with(search.token, 'covid-19 heart failure')")
+})
+
 test('review bulk operation worker completes terminally when the final batch is short', async () => {
   const harness = createWorkerHarness({batchRows: [{articleId: 'article-002'}]})
   const result = await runReviewBulkOperationWorkerOnce({workerId: 'worker-1'}, harness.dependencies)

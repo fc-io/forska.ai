@@ -100,7 +100,7 @@ type ReviewServingRowsPageInput = {
   request: Omit<ReviewServingReaderRequest, 'contractKey'> & {contractKey: string}
 }
 
-const maxReviewPageSize = 100
+const maxReviewPageSize = 500
 const defaultReviewLimit = 100
 const dynamicFilterKey = 'filter:dynamic'
 const listAllFilterKey = 'list:all'

@@ -6,6 +6,10 @@ const appQueryServiceModulePath = new URL('../services/getAppQueryService.ts', i
 const projectAccessGuardModulePath = new URL('./projectsRoutes/projectAccessGuard.ts', import.meta.url).pathname
 const reviewBulkOperationServiceModulePath = new URL('../reviewServing/reviewBulkOperationService.ts', import.meta.url)
   .pathname
+const reviewServingProjectConfigIdentityModulePath = new URL(
+  '../services/reviewServingProjectConfigIdentity.ts',
+  import.meta.url,
+).pathname
 
 type ExportJobRequest = {criteria: Record<string, unknown>} & Record<string, unknown>
 
@@ -15,6 +19,7 @@ const queryJsonRef = {
     return []
   },
 }
+const reviewConfigHashes = new Map<string, string | null>()
 const createReviewBulkOperationJobCalls: unknown[] = []
 
 const registerModuleMocks = () => {
@@ -76,6 +81,14 @@ const registerModuleMocks = () => {
       },
     }
   })
+
+  void mock.module(reviewServingProjectConfigIdentityModulePath, () => {
+    return {
+      getCurrentReviewConfigHash: async (projectId: string) => {
+        return reviewConfigHashes.get(projectId) ?? 'config-1'
+      },
+    }
+  })
 }
 
 const loadRoutes = async (): Promise<typeof import('./ProjectExportRoutes.ts')> => {
@@ -88,6 +101,7 @@ const loadRoutes = async (): Promise<typeof import('./ProjectExportRoutes.ts')> 
 afterEach(() => {
   queryStatements.length = 0
   createReviewBulkOperationJobCalls.length = 0
+  reviewConfigHashes.clear()
   mock.restore()
 })
 
@@ -187,4 +201,103 @@ test('project export preserves prompt-output filter semantics in durable criteri
       },
     },
   })
+})
+
+test('project export rejects mixed source review configs before queueing a durable job', async () => {
+  reviewConfigHashes.set('project-1', 'config-1')
+  reviewConfigHashes.set('project-2', 'config-2')
+  queryJsonRef.current = async (statement) => {
+    return statement.includes('FROM app.project') ? [{id: 'project-1', name: 'Project 1'}] : []
+  }
+  const {projectExportRoutes} = await loadRoutes()
+  const app = new Elysia().use(projectExportRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/project-1/export', {
+      body: JSON.stringify({promptIds: ['prompt-1'], sourceProjectIds: ['project-1', 'project-2']}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const json = (await response.json()) as unknown
+
+  expect(response.status).toBe(400)
+  expect(json).toMatchObject({error: 'Export sources must use the same review configuration', success: false})
+  expect(createReviewBulkOperationJobCalls).toHaveLength(0)
+})
+
+test('project export download hydrates completed durable job selection as CSV', async () => {
+  queryJsonRef.current = async (statement) => {
+    if (statement.includes('FROM app.project') && statement.includes('LIMIT 1') && statement.includes('id, name')) {
+      return [{id: 'project-1', name: 'Project 1'}]
+    }
+
+    if (statement.includes('FROM app.review_bulk_operation_job')) {
+      return [
+        {
+          criteriaJson: {
+            exportContract: {
+              promptOutput: {includeExplanation: true, includeQuotes: true, promptIds: ['prompt-1']},
+              selectedMetadata: {includeArticleId: true, includeSummary: true},
+            },
+          },
+          resultManifestJson: {batches: {'article-1': ['article-1']}},
+          reviewConfigHash: 'config-1',
+          status: 'completed',
+        },
+      ]
+    }
+
+    if (statement.includes('FROM app.prompt')) {
+      return [{id: 'prompt-1', originalText: 'Prompt text', promptHeading: 'Prompt 1', type: 'string'}]
+    }
+
+    if (statement.includes('model_id AS modelId')) {
+      return [{modelId: 'model-1', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}]
+    }
+
+    if (statement.includes('FROM app.article')) {
+      return [
+        {
+          articleAuthors: ['Author 1'],
+          articleCreatedAt: '2026-01-01T00:00:00.000Z',
+          articleId: 'article-1',
+          articleOriginalData: null,
+          articleSourceMetadata: null,
+          articleSummary: 'Summary 1',
+          articleTitle: 'Article 1',
+          articleUpdatedAt: '2026-01-02T00:00:00.000Z',
+          articleUrl: null,
+          arxivId: null,
+          biorxivId: null,
+          doi: null,
+          medrxivId: null,
+          pubmedId: null,
+        },
+      ]
+    }
+
+    if (statement.includes('FROM app.judgment')) {
+      return [
+        {
+          answeredOriginal: 'yes',
+          answeredOriginalAsArray: null,
+          articleId: 'article-1',
+          explanation: 'Because',
+          promptId: 'prompt-1',
+          quotes: ['Quote 1'],
+        },
+      ]
+    }
+
+    return []
+  }
+  const {projectExportRoutes} = await loadRoutes()
+  const app = new Elysia().use(projectExportRoutes)
+  const response = await app.handle(new Request('http://localhost/api/projects/project-1/export/export-job-1/download'))
+  const text = await response.text()
+
+  expect(response.status).toBe(200)
+  expect(response.headers.get('content-type')).toContain('text/csv')
+  expect(text).toContain('Title,Article ID,Abstract/Summary,Prompt 1,Prompt 1 - Explanation,Prompt 1 - Quotes')
+  expect(text).toContain('Article 1,article-1,Summary 1,yes,Because,Quote 1')
 })

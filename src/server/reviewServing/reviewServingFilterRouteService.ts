@@ -252,19 +252,16 @@ const getPromptFilters = (
       promptName: getPromptName(prompt),
     }
   })
-  const summaryFilter =
-    mode === 'human' && valuesByPrompt.summary
-      ? [
-          {
-            answeredOriginalValues: [...new Set(valuesByPrompt.summary)],
-            filterType: 'enum' as const,
-            promptId: 'summary',
-            promptName: 'Overall human screening decision',
-          },
-        ]
-      : []
+  const summaryFilter = [
+    {
+      answeredOriginalValues: [...new Set(valuesByPrompt.summary ?? [])],
+      filterType: 'enum' as const,
+      promptId: 'summary',
+      promptName: 'Overall human screening decision',
+    },
+  ]
 
-  return mode === 'human' && valuesByPrompt.summary ? summaryFilter : promptFilters
+  return mode === 'human' ? summaryFilter : promptFilters
 }
 
 const readFacetRows = async (
@@ -303,7 +300,9 @@ const readOptionRows = async (
   dependencies?: ReviewServingFilterRouteDependencies,
 ) => {
   const searchIdentity = getComponentIdentity(manifest, 'search')
+  const activeFilters = getRouteFilters(params)
   const filterOptionIdentity = getReviewServingFilterOptionIdentity({
+    activeFilters,
     filterKeys: mode === 'human' ? defaultHumanFilterOptionKeys : defaultReviewFilterOptionKeys,
     listModeKeys: mode === 'human' ? defaultHumanListModeKeys : defaultReviewListModeKeys,
     optionMode: mode,
