@@ -431,6 +431,7 @@ const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplay
           article_created_at = ${getSqlLiteral(row.articleCreatedAt)},
           article_title = ${getSqlLiteral(row.articleTitle)},
           full_text_pdf = ${getSqlLiteral(row.fullTextPdf)},
+          source_metadata = ${getSqlLiteral(row.sourceMetadata)},
           activity_sort_at = ${getSqlLiteral(row.activitySortAt)},
           sort_key = ${getSqlLiteral(row.sortKey)},
           url = ${getSqlLiteral(row.url)},

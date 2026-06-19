@@ -5,6 +5,10 @@ import {Elysia, t} from 'elysia'
 import {getArticleUrl} from '../../app/utils/getArticleUrl.ts'
 import {getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
 import {createReviewBulkOperationJob} from '../reviewServing/reviewBulkOperationService.ts'
+import {
+  getActiveReviewServingSnapshotManifest,
+  getReviewServingSnapshotManifest,
+} from '../reviewServing/reviewServingManifestRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   getAndClause,
@@ -474,7 +478,31 @@ const getSharedReviewConfigHash = async (sourceProjectIds: string[]) => {
   )
   const uniqueHashes = [...new Set(hashes)]
 
-  return uniqueHashes.length === 1 ? uniqueHashes[0] : null
+  return uniqueHashes.length === 1 ? (uniqueHashes[0] ?? null) : null
+}
+
+const getMissingExportSnapshotSourceProjectIds = async (input: {
+  reviewConfigHash: string | null
+  snapshot: {snapshotId: string; type: 'pinned'} | {type: 'latest'}
+  sourceProjectIds: string[]
+}) => {
+  const missingSourceProjectIds = await Promise.all(
+    input.sourceProjectIds.map(async (sourceProjectId) => {
+      const manifest =
+        input.snapshot.type === 'pinned'
+          ? await getReviewServingSnapshotManifest({projectId: sourceProjectId, snapshotId: input.snapshot.snapshotId})
+          : await getActiveReviewServingSnapshotManifest({
+              projectId: sourceProjectId,
+              reviewConfigHash: input.reviewConfigHash,
+            })
+
+      return manifest?.status === 'active' ? null : sourceProjectId
+    }),
+  )
+
+  return missingSourceProjectIds.filter((sourceProjectId): sourceProjectId is string => {
+    return sourceProjectId !== null
+  })
 }
 
 const getExportPromptFilters = async (promptSelections: Array<{promptId: string; types: string[]}>) => {
@@ -552,6 +580,20 @@ export const projectExportRoutes = new Elysia()
       if (sourceProjectIds.length > 1 && reviewConfigHash === null) {
         set.status = 400
         return {error: 'Export sources must use the same review configuration', success: false}
+      }
+
+      const missingSnapshotSourceProjectIds = await getMissingExportSnapshotSourceProjectIds({
+        reviewConfigHash,
+        snapshot,
+        sourceProjectIds,
+      })
+
+      if (missingSnapshotSourceProjectIds.length > 0) {
+        set.status = 400
+        return {
+          error: `Export sources are missing a ready review serving snapshot: ${missingSnapshotSourceProjectIds.join(', ')}`,
+          success: false,
+        }
       }
 
       const job = await createReviewBulkOperationJob({

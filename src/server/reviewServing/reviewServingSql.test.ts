@@ -313,7 +313,7 @@ test('buildReviewServingRowsSql covers judgment detail rows for article details'
   expect(sql).toContain('AND article_id = $articleId')
   expect(sql).toContain("AND payload_kind = 'llm'")
   expect(sql).toContain('QUALIFY CASE list_mode_key')
-  expect(sql).toContain('OVER (PARTITION BY prompt_id)')
+  expect(sql).toContain('OVER (PARTITION BY article_id, prompt_id)')
   expect(sql).toContain('ORDER BY CASE list_mode_key')
   expect(sql).toContain('prompt_order ASC NULLS LAST, prompt_id ASC')
   expect(sql).not.toContain('AND list_mode_key =')
