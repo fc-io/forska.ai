@@ -203,6 +203,37 @@ test('project export preserves prompt-output filter semantics in durable criteri
   })
 })
 
+test('project export treats selecting every enum answer as no prompt filter', async () => {
+  queryJsonRef.current = async (statement) => {
+    if (statement.includes('FROM app.project')) {
+      return [{id: 'project-1', name: 'Project 1'}]
+    }
+
+    if (statement.includes('FROM app.prompt')) {
+      return [{id: 'prompt-1', originalText: 'Prompt text', promptHeading: 'Prompt 1', type: "'yes' | 'maybe'"}]
+    }
+
+    return []
+  }
+  const {projectExportRoutes} = await loadRoutes()
+  const app = new Elysia().use(projectExportRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/project-1/export', {
+      body: JSON.stringify({
+        promptIds: ['prompt-1'],
+        promptSelections: [{promptId: 'prompt-1', types: ['yes', 'maybe']}],
+        sourceProjectIds: ['project-1'],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const jobRequest = createReviewBulkOperationJobCalls[0] as ExportJobRequest
+
+  expect(response.status).toBe(202)
+  expect(jobRequest).toMatchObject({criteria: {prompts: {}}, filters: {prompts: {}}})
+})
+
 test('project export rejects mixed source review configs before queueing a durable job', async () => {
   reviewConfigHashes.set('project-1', 'config-1')
   reviewConfigHashes.set('project-2', 'config-2')
@@ -259,9 +290,15 @@ test('project export download hydrates completed durable job selection as CSV', 
       return [
         {
           criteriaJson: {
+            sourceProjectIds: ['project-1'],
             exportContract: {
               promptOutput: {includeExplanation: true, includeQuotes: true, promptIds: ['prompt-1']},
-              selectedMetadata: {includeArticleId: true, includeSummary: true},
+              selectedMetadata: {
+                includeArticleId: true,
+                includeArticleLink: true,
+                includeJournal: true,
+                includeSummary: true,
+              },
             },
           },
           resultManifestJson: {batches: {'article-1': ['article-1']}},
@@ -322,6 +359,11 @@ test('project export download hydrates completed durable job selection as CSV', 
 
   expect(response.status).toBe(200)
   expect(response.headers.get('content-type')).toContain('text/csv')
-  expect(text).toContain('Title,Article ID,Abstract/Summary,Prompt 1,Prompt 1 - Explanation,Prompt 1 - Quotes')
-  expect(text).toContain('Article 1,article-1,Summary 1,yes,Because,Quote 1')
+  expect(text).toContain(
+    'Title,Article ID,Article Link,Abstract/Summary,Journal,Prompt 1,Prompt 1 - Explanation,Prompt 1 - Quotes',
+  )
+  expect(text).toContain('Article 1,article-1,,Summary 1,,yes,Because,Quote 1')
+  expect(queryStatements.join('\n')).toContain('FROM app.article_import_route air')
+  expect(queryStatements.join('\n')).toContain('COALESCE(scoped_import.raw_payload, a.original_data)')
+  expect(queryStatements.join('\n')).toContain('json_merge_patch')
 })

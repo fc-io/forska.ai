@@ -15,8 +15,15 @@ import {
   getSqlLiteral,
 } from '../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
+import {
+  getScopedArticleImportJoinSql,
+  getScopedArticleImportSelectionCteSql,
+  getScopedArticleMetadataExpression,
+  getScopedArticleOriginalDataExpression,
+} from '../services/scopedArticleReadAdapter.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
+import {parseArktypeOptions} from './projectsRoutes/articlesReviewsFiltersUtils.ts'
 import {assertProjectIsActive} from './projectsRoutes/projectAccessGuard.ts'
 
 type PromptDetails = {id: string; promptHeading: string | null; originalText: string | null; type: string | null}
@@ -266,11 +273,16 @@ const getExportHeaders = (input: {
   return headers
 }
 
-const getExportArticles = async (articleIds: string[], selectedMetadata: Record<string, boolean | undefined>) => {
+const getExportArticles = async (input: {
+  articleIds: string[]
+  selectedMetadata: Record<string, boolean | undefined>
+  sourceProjectIds: string[]
+}) => {
   return appDatabaseService.queryJson<ExportArticleRow>(`
+    WITH ${getScopedArticleImportSelectionCteSql({articleIds: input.articleIds, projectIds: input.sourceProjectIds})}
     SELECT
       a.id AS articleId,
-      a.article_id AS articleExternalId,
+      COALESCE(scoped_import.external_article_id, a.article_id) AS articleExternalId,
       a.arxiv_id AS arxivId,
       a.biorxiv_id AS biorxivId,
       a.doi AS doi,
@@ -282,10 +294,11 @@ const getExportArticles = async (articleIds: string[], selectedMetadata: Record<
       TO_JSON(a.article_authors) AS articleAuthors,
       a.article_created_at AS articleCreatedAt,
       a.article_updated_at AS articleUpdatedAt,
-      ${selectedMetadata.includeArticleLink ? 'TO_JSON(a.original_data)' : 'NULL'} AS articleOriginalData,
-      ${selectedMetadata.includeJournal || selectedMetadata.includeArticleLink ? 'TO_JSON(a.source_metadata)' : 'NULL'} AS articleSourceMetadata
+      ${input.selectedMetadata.includeArticleLink ? `TO_JSON(${getScopedArticleOriginalDataExpression({articleAlias: 'a'})})` : 'NULL'} AS articleOriginalData,
+      ${input.selectedMetadata.includeJournal || input.selectedMetadata.includeArticleLink ? `TO_JSON(${getScopedArticleMetadataExpression({articleAlias: 'a'})})` : 'NULL'} AS articleSourceMetadata
     FROM app.article a
-    WHERE a.id IN (${getQuotedStringList(articleIds).join(', ')})
+    ${getScopedArticleImportJoinSql({articleIdExpression: 'a.id'})}
+    WHERE a.id IN (${getQuotedStringList(input.articleIds).join(', ')})
     ORDER BY a.id ASC
   `)
 }
@@ -394,6 +407,7 @@ const buildExportCsv = async (input: {
   articleIds: string[]
   contract: ExportContract
   projectConfigProjectId: string
+  sourceProjectIds: string[]
 }) => {
   const promptOutput = input.contract.promptOutput ?? {}
   const selectedMetadata = input.contract.selectedMetadata ?? {}
@@ -416,7 +430,7 @@ const buildExportCsv = async (input: {
   const batchRows = await batches.reduce<Promise<string[]>>(async (rowsPromise, articleIds) => {
     const rows = await rowsPromise
     const [articles, judgments] = await Promise.all([
-      getExportArticles(articleIds, selectedMetadata),
+      getExportArticles({articleIds, selectedMetadata, sourceProjectIds: input.sourceProjectIds}),
       projectConfig
         ? getExportJudgments({articleIds, projectConfig, promptIds})
         : Promise.resolve([] as ExportJudgmentRow[]),
@@ -463,9 +477,29 @@ const getSharedReviewConfigHash = async (sourceProjectIds: string[]) => {
   return uniqueHashes.length === 1 ? uniqueHashes[0] : null
 }
 
-const getExportPromptFilters = (promptSelections: Array<{promptId: string; types: string[]}>) => {
+const getExportPromptFilters = async (promptSelections: Array<{promptId: string; types: string[]}>) => {
+  const promptDetails = await getPromptDetails(
+    promptSelections.map((selection) => {
+      return selection.promptId
+    }),
+  )
+  const answerOptionsByPromptId = new Map(
+    promptDetails.map((prompt) => {
+      return [prompt.id, parseArktypeOptions(prompt.type) ?? []]
+    }),
+  )
+
   return promptSelections.reduce<Record<string, string[]>>((filters, selection) => {
-    return selection.types.length > 0 ? {...filters, [selection.promptId]: selection.types} : filters
+    const answerOptions = answerOptionsByPromptId.get(selection.promptId) ?? []
+    const selectedAllOptions =
+      answerOptions.length > 0
+      && answerOptions.every((option) => {
+        return selection.types.includes(option)
+      })
+
+    return selection.types.length > 0 && !selectedAllOptions
+      ? {...filters, [selection.promptId]: selection.types}
+      : filters
   }, {})
 }
 
@@ -490,7 +524,7 @@ export const projectExportRoutes = new Elysia()
       }
 
       const promptSelections = body.promptSelections ?? []
-      const prompts = getExportPromptFilters(promptSelections)
+      const prompts = await getExportPromptFilters(promptSelections)
       const selectedMetadata = {
         includeArticleAuthors: body.includeArticleAuthors ?? false,
         includeArticleCreatedAt: body.includeArticleCreatedAt ?? false,
@@ -610,10 +644,12 @@ export const projectExportRoutes = new Elysia()
       }
 
       const articleIds = getExportArticleIds(job.resultManifestJson)
+      const sourceProjectIds = getExportSourceProjectIds(job.criteriaJson)
       const csv = await buildExportCsv({
         articleIds,
         contract: getExportContract(job.criteriaJson),
         projectConfigProjectId: getExportConfigProjectId({criteriaJson: job.criteriaJson, projectId: params.id}),
+        sourceProjectIds: sourceProjectIds.length > 0 ? sourceProjectIds : [params.id],
       })
       const filename = `${project.name.replace(/[^a-zA-Z0-9]/g, '_')}_export_${new Date().toISOString().slice(0, 10)}.csv`
 

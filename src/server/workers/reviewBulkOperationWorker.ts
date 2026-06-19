@@ -93,6 +93,7 @@ const defaultBatchSize = 500
 const defaultMaxRetries = 3
 const defaultPollIntervalMs = 2_000
 const defaultErrorBackoffMs = 10_000
+const staleRunningJobMinutes = 15
 const routeOrJobKey = 'reviewBulkOperation.worker'
 
 const getDatabase = () => {
@@ -142,12 +143,12 @@ const getClaimableJob = async (
       WHERE job_id = (
         SELECT job_id
         FROM app.review_bulk_operation_job
-        WHERE status = 'pending'
+        WHERE (status = 'pending' OR (status = 'running' AND updated_at < current_timestamp - INTERVAL ${staleRunningJobMinutes} MINUTE))
           AND completed_at IS NULL
         ORDER BY updated_at ASC, job_id ASC
         LIMIT 1
       )
-        AND status = 'pending'
+        AND (status = 'pending' OR (status = 'running' AND updated_at < current_timestamp - INTERVAL ${staleRunningJobMinutes} MINUTE))
         AND completed_at IS NULL
       RETURNING
         job_id AS jobId,
@@ -196,6 +197,8 @@ const getSourceProjectIds = (job: ReviewBulkOperationJobRow, criteria: ReviewBul
 
 const getTabStatusPredicates = (criteria: ReviewBulkOperationCriteria) => {
   const listMode = getListModeKey(criteria)
+  const shouldRequireLlmJudgment =
+    listMode === 'llm' && (!criteria.llmStatus || criteria.llmStatus === 'both' || criteria.llmStatus === 'partial')
   const humanStatusPredicate =
     listMode === 'human' || listMode === 'both'
       ? `AND s.human_status_key = ${getSqlLiteral(criteria.humanStatus ?? 'answered')}`
@@ -208,6 +211,7 @@ const getTabStatusPredicates = (criteria: ReviewBulkOperationCriteria) => {
         : criteria.llmStatus === 'partial'
           ? `AND s.llm_status_key = ${getSqlLiteral('unanswered')}`
           : ''
+  const llmHasJudgmentPredicate = shouldRequireLlmJudgment ? 'AND s.llm_judged_prompt_count > 0' : ''
   const queuePredicate =
     listMode === 'unassessed'
       ? `AND EXISTS (
@@ -221,7 +225,7 @@ const getTabStatusPredicates = (criteria: ReviewBulkOperationCriteria) => {
       )`
       : ''
 
-  return [humanStatusPredicate, llmStatusPredicate, queuePredicate].filter(Boolean).join('\n')
+  return [humanStatusPredicate, llmStatusPredicate, llmHasJudgmentPredicate, queuePredicate].filter(Boolean).join('\n')
 }
 
 const getExclusiveDateToFilter = (value: string) => {
