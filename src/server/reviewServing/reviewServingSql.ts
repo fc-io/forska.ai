@@ -573,7 +573,7 @@ const getReviewServingRowsSqlJobPredicate = (params: {
 
 const getReviewServingRowsSqlListModeDedupeQualifier = (contract: ReviewServingReadContract) => {
   return contract.servingTable === reviewServingJudgmentDetailTable
-    ? ` QUALIFY ${reviewServingListModePrioritySql} = min(${reviewServingListModePrioritySql}) OVER (PARTITION BY prompt_id)`
+    ? ` QUALIFY ${reviewServingListModePrioritySql} = min(${reviewServingListModePrioritySql}) OVER (PARTITION BY article_id, prompt_id)`
     : ''
 }
 

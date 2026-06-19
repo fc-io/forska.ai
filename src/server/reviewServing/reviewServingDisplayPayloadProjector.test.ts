@@ -80,6 +80,7 @@ test('display routine updates write component-narrow patches for only claimed ar
         fullTextPdf: 'https://example.test/article-1.pdf',
         journalTitle: null,
         publicationYear: null,
+        sourceMetadata: {covidence: {studyId: 'study-1'}},
         sortKey: '2026-01-01T00:00:00.000Z',
         tombstone: false,
         url: 'https://example.test/article-1',
@@ -128,6 +129,7 @@ test('display routine updates write component-narrow patches for only claimed ar
   expect(joined).toContain("article_created_at = '2026-01-01T00:00:00.000Z'")
   expect(joined).toContain("article_title = 'Updated title'")
   expect(joined).toContain("full_text_pdf = 'https://example.test/article-1.pdf'")
+  expect(joined).toContain("source_metadata = '{\"covidence\":{\"studyId\":\"study-1\"}}'")
   expect(joined).toContain("activity_sort_at = '2026-01-02T00:00:00.000Z'")
   expect(joined).toContain("snapshot_id = 'snapshot-1'")
   expect(joined).toContain("url = 'https://example.test/article-1'")
