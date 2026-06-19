@@ -34,16 +34,28 @@ const forbiddenSqlFragments = [
 
 const getComponentState = () => {
   return {
-    optional: [],
-    required: components.map((component) => {
-      return {
+    optional: [
+      {
         baseGeneration: '1',
-        component,
+        component: 'search' as const,
         patchWatermark: '2',
-        projectionIdentity: `${component}-identity`,
-        requirement: 'required' as const,
-      }
-    }),
+        projectionIdentity: 'search-identity',
+        requirement: 'optional' as const,
+      },
+    ],
+    required: components
+      .filter((component) => {
+        return component !== 'search'
+      })
+      .map((component) => {
+        return {
+          baseGeneration: '1',
+          component,
+          patchWatermark: '2',
+          projectionIdentity: `${component}-identity`,
+          requirement: 'required' as const,
+        }
+      }),
   }
 }
 
@@ -178,6 +190,24 @@ test('LLM review list route service composes serving rows, judgments, and count 
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })
+})
+
+test('LLM review route tokenizes title search like the title search projector and reads optional search identity for counts', async () => {
+  const reader = createReaderDatabase()
+  const result = await countLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}, search: 'COVID-19 heart failure'},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+  const sql = reader.statements.join('\n')
+
+  expect(result).toEqual({totalCount: 1, totalPages: 1})
+  expect(sql).toContain("unnest(['covid', '19', 'heart', 'failure']::VARCHAR[])")
+  expect(sql).toContain("search.search_identity = 'search-identity'")
+  expect(sql).toContain('starts_with(search.token, search_prefix.token_prefix)')
 })
 
 test('LLM review count route service uses count serving state without row hydration', async () => {

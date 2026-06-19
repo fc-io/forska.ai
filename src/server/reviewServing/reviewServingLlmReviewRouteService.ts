@@ -13,6 +13,7 @@ import {
   type ReviewServingSnapshotManifest,
 } from './reviewServingManifestRepository.ts'
 import {readReviewServingRows, type ReviewServingReaderDatabase} from './reviewServingReader.ts'
+import {getReviewServingTitleSearchTokens} from './reviewServingTitleSearchProjector.ts'
 
 type ReviewServingArticleRow = {
   activity_sort_at?: unknown
@@ -89,17 +90,18 @@ const getJsonValue = (value: unknown) => {
   return typeof value === 'string' ? (JSON.parse(value) as unknown) : value
 }
 
-const getSearchTokenPrefix = (search: string | null | undefined) => {
-  const [firstToken] =
-    search
-      ?.trim()
-      .toLowerCase()
-      .split(/\s+/u)
-      .filter((token) => {
-        return token.length > 0
-      }) ?? []
+const getSearchTokenPrefixes = (search: string | null | undefined) => {
+  return getReviewServingTitleSearchTokens(search ?? null)
+}
 
-  return firstToken ?? null
+const getSearchTokenPrefix = (search: string | null | undefined) => {
+  return getSearchTokenPrefixes(search)[0] ?? null
+}
+
+const getManifestComponentIdentity = (manifest: ReviewServingSnapshotManifest, component: string) => {
+  return [...manifest.componentState.required, ...manifest.componentState.optional].find((entry) => {
+    return entry.component === component
+  })?.projectionIdentity
 }
 
 const getManifest = async (projectId: string, dependencies?: ReviewServingLlmReviewRouteDependencies) => {
@@ -133,7 +135,7 @@ const getPromptAnswerFilters = (prompts: Record<string, string[]> | undefined) =
 
 const getRouteFilters = (params: ArticlesReviewsParams) => {
   const promptAnswer = getPromptAnswerFilters(params.prompts)
-  const searchTokenPrefix = getSearchTokenPrefix(params.search)
+  const searchTokenPrefixes = getSearchTokenPrefixes(params.search)
 
   return {
     ...(params.from ? {articleCreatedAtFrom: params.from} : {}),
@@ -142,7 +144,7 @@ const getRouteFilters = (params: ArticlesReviewsParams) => {
     ...(params.hasStudyDecisionConflict ? {conflictFlag: 'true'} : {}),
     ...(params.llmStatus ? {llmStatus: params.llmStatus} : {}),
     ...(promptAnswer.length > 0 ? {promptAnswer} : {}),
-    ...(searchTokenPrefix ? {searchTokenPrefix} : {}),
+    ...(searchTokenPrefixes.length > 0 ? {searchTokenPrefix: searchTokenPrefixes[0]} : {}),
   }
 }
 
@@ -182,6 +184,7 @@ const getBaseReaderRequest = (
       ? ({availability: 'ready' as const, snapshotId: manifest.snapshotId} as const)
       : null,
     searchTokenPrefix,
+    searchTokenPrefixes: getSearchTokenPrefixes(params.search),
     snapshotId: manifest.snapshotId,
   }
 }
@@ -289,26 +292,23 @@ const getFilteredCountValue = async (
   const filters = getRouteFilters(params)
   const llmStatusValue =
     filters.llmStatus === 'complete' ? 'answered' : filters.llmStatus === 'partial' ? 'unanswered' : null
-  const searchPredicate = filters.searchTokenPrefix
-    ? `AND EXISTS (
-        SELECT 1
-        FROM mart.review_title_search_serving_v4 search
-        WHERE search.project_id = serving.project_id
-          AND search.search_identity = ${getSqlLiteral(
-            manifest.componentState.required.find((entry) => {
-              return entry.component === 'search'
-            })?.projectionIdentity ?? '',
-          )}
-          AND search.project_scope_identity = ${getSqlLiteral(
-            manifest.componentState.required.find((entry) => {
-              return entry.component === 'projectScope'
-            })?.projectionIdentity ?? '',
-          )}
-          AND search.snapshot_id = serving.snapshot_id
-          AND search.article_id = serving.article_id
-          AND starts_with(search.token, ${getSqlLiteral(filters.searchTokenPrefix)})
+  const searchTokenPrefixes = getSearchTokenPrefixes(params.search)
+  const searchPredicate =
+    searchTokenPrefixes.length > 0
+      ? `AND NOT EXISTS (
+        SELECT 1 FROM (SELECT unnest(${getSqlLiteral(searchTokenPrefixes)}::VARCHAR[]) AS token_prefix) search_prefix
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM mart.review_title_search_serving_v4 search
+          WHERE search.project_id = serving.project_id
+            AND search.search_identity = ${getSqlLiteral(getManifestComponentIdentity(manifest, 'search') ?? '')}
+            AND search.project_scope_identity = ${getSqlLiteral(getManifestComponentIdentity(manifest, 'projectScope') ?? '')}
+            AND search.snapshot_id = serving.snapshot_id
+            AND search.article_id = serving.article_id
+            AND starts_with(search.token, search_prefix.token_prefix)
+        )
       )`
-    : ''
+      : ''
   const [row] = await database.queryJson<{totalCount: number}>(`
     SELECT COUNT(DISTINCT serving.article_id) AS totalCount
     FROM mart.review_article_serving_v4 serving

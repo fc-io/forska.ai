@@ -236,7 +236,8 @@ test('unassessed review route service pages filtered distinct article rows and q
   expect(reader.statements).toHaveLength(2)
   expect(reader.statements[0]).toContain('FROM mart.review_article_serving_v4')
   expect(reader.statements[0]).toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
-  expect(reader.statements[0]).toContain("starts_with(search.token, 'heart')")
+  expect(reader.statements[0]).toContain("unnest(['heart']::VARCHAR[])")
+  expect(reader.statements[0]).toContain('starts_with(search.token, search_prefix.token_prefix)')
   expect(reader.statements[1]).toContain("count_kind = 'review.queue.unassessedReady'")
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)

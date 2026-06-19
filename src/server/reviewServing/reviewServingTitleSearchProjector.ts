@@ -120,7 +120,7 @@ const getNormalizedTitleToken = (value: string) => {
     .toLowerCase()
 }
 
-const getTitleTokens = (title: string | null) => {
+export const getReviewServingTitleSearchTokens = (title: string | null) => {
   return [
     ...new Set(
       getNormalizedTitleToken(title ?? '')
@@ -247,7 +247,7 @@ export const getReviewServingSearchAvailabilityFromManifest = (input: {
 
 export const projectReviewServingTitleSearchRows = async (
   input: ProjectReviewServingTitleSearchInput,
-  database: ReviewServingTitleSearchProjectorDatabase = getAppDatabaseService(),
+  database: ReviewServingTitleSearchProjectorDatabase = getAppDatabaseService() as ReviewServingTitleSearchProjectorDatabase,
 ) => {
   const claims = input.claims ?? []
   const rows = await getTitleSearchRows(input, database)
@@ -256,7 +256,7 @@ export const projectReviewServingTitleSearchRows = async (
   const records = rows.flatMap((row) => {
     return row.tombstone
       ? []
-      : getTitleTokens(row.articleTitle).map((token) => {
+      : getReviewServingTitleSearchTokens(row.articleTitle).map((token) => {
           return getTitleSearchRecord(input, row, token)
         })
   })

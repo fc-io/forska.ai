@@ -19,6 +19,7 @@ import {
 import {storeImportedArticlesWithTx} from '../services/articleImportStoreService.ts'
 import {getAppQueryService} from '../services/getAppQueryService.ts'
 import {getPdfFetchJobFromDatabase} from '../services/pdfFetchJobs.ts'
+import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 type ArticleJudgmentRow = {
@@ -214,6 +215,7 @@ export const articlesRoutes = new Elysia()
   .post(
     '/api/articles/pdf-fetch-by-filter',
     async ({body, set}) => {
+      const reviewConfigHash = await getCurrentReviewConfigHash(body.sourceProjectId)
       const job = await createReviewBulkOperationJob({
         criteria: {
           concurrency: body.concurrency,
@@ -241,6 +243,7 @@ export const articlesRoutes = new Elysia()
         },
         jobKind: 'review.pdf.selection',
         projectId: body.sourceProjectId,
+        reviewConfigHash,
         searchMode: body.search ? 'substring' : 'none',
         searchText: body.search,
         snapshot: {type: 'latest'},
@@ -274,6 +277,8 @@ export const articlesRoutes = new Elysia()
         throw new Error('Project not found')
       }
 
+      const reviewConfigHash = await getCurrentReviewConfigHash(body.projectId)
+
       const job = await createReviewBulkOperationJob({
         criteria: {
           concurrency: body.concurrency,
@@ -295,6 +300,7 @@ export const articlesRoutes = new Elysia()
         },
         jobKind: 'review.pdf.selection',
         projectId: body.projectId,
+        reviewConfigHash,
         searchMode: body.search ? 'substring' : 'none',
         searchText: body.search,
         snapshot: {type: 'latest'},
