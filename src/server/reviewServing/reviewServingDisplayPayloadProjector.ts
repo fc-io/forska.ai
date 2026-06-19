@@ -70,10 +70,18 @@ type DisplayProjectionRow = {
   articleExternalId: string | null
   articleId: string
   articleTitle: string
+  articleUpdatedAt: Date | string | null
+  arxivId: string | null
+  biorxivId: string | null
   conflictFlag: boolean | null
+  doi: string | null
+  fullTextConversionStatus: string | null
+  fullTextFetchedAt: Date | string | null
   duplicateFlag: boolean | null
   fullTextPdf: string | null
   journalTitle: string | null
+  medrxivId: string | null
+  pmid: string | null
   publicationYear: number | null
   selectedImportRouteId: string | null
   selectedRankKey: string | null
@@ -88,8 +96,16 @@ type DisplayPatchRow = {
   articleExternalId: string | null
   articleId: string
   articleTitle: string | null
+  articleUpdatedAt: Date | string | null
+  arxivId: string | null
+  biorxivId: string | null
+  doi: string | null
+  fullTextConversionStatus: string | null
+  fullTextFetchedAt: Date | string | null
   fullTextPdf: string | null
   journalTitle: string | null
+  medrxivId: string | null
+  pmid: string | null
   publicationYear: number | null
   sourceMetadata: ReviewServingIdentityValue | null
   sortKey: Date | string | null
@@ -199,14 +215,22 @@ const getDisplayBaseRows = async (
     SELECT
       scope.article_id AS articleId,
       article.article_created_at AS articleCreatedAt,
+      article.article_updated_at AS articleUpdatedAt,
       COALESCE(article.article_created_at, scope.article_created_at, current_timestamp) AS sortKey,
       COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at, current_timestamp) AS activitySortAt,
       article.article_title AS articleTitle,
       article.article_id AS articleExternalId,
+      article.arxiv_id AS arxivId,
+      article.biorxiv_id AS biorxivId,
+      article.medrxiv_id AS medrxivId,
+      article.doi,
+      article.pubmed_id AS pmid,
       article.source_metadata AS sourceMetadata,
       selected.journal_title AS journalTitle,
       article.url,
       article.full_text_pdf AS fullTextPdf,
+      article.full_text_fetched_at AS fullTextFetchedAt,
+      article.full_text_conversion_status AS fullTextConversionStatus,
       selected.import_route_id AS selectedImportRouteId,
       selected.selected_rank_key AS selectedRankKey,
       selected.publication_year AS publicationYear,
@@ -241,12 +265,20 @@ const getDisplayPatchRows = async (
         SELECT
           dirty.article_id AS articleId,
           article.article_created_at AS articleCreatedAt,
+          article.article_updated_at AS articleUpdatedAt,
           COALESCE(article.article_created_at, current_timestamp) AS sortKey,
           COALESCE(article.article_updated_at, article.article_created_at, current_timestamp) AS activitySortAt,
           article.article_title AS articleTitle,
           article.article_id AS articleExternalId,
+          article.arxiv_id AS arxivId,
+          article.biorxiv_id AS biorxivId,
+          article.medrxiv_id AS medrxivId,
+          article.doi,
+          article.pubmed_id AS pmid,
           article.source_metadata AS sourceMetadata,
           article.full_text_pdf AS fullTextPdf,
+          article.full_text_fetched_at AS fullTextFetchedAt,
+          article.full_text_conversion_status AS fullTextConversionStatus,
           selected.journal_title AS journalTitle,
           article.url,
           selected.publication_year AS publicationYear,
@@ -312,10 +344,16 @@ const getDisplayBaseRecord = (
       article_external_id: row.articleExternalId,
       article_id: row.articleId,
       article_title: row.articleTitle,
+      article_updated_at: row.articleUpdatedAt,
+      arxiv_id: row.arxivId,
+      biorxiv_id: row.biorxivId,
       base_generation: input.baseGeneration,
       conflict_flag: row.conflictFlag ?? false,
       display_identity: input.displayIdentity,
+      doi: row.doi,
       duplicate_flag: row.duplicateFlag ?? false,
+      full_text_conversion_status: row.fullTextConversionStatus,
+      full_text_fetched_at: row.fullTextFetchedAt,
       enabled_prompt_count: 0,
       full_text_pdf: row.fullTextPdf,
       human_answered_prompt_count: 0,
@@ -324,8 +362,10 @@ const getDisplayBaseRecord = (
       list_mode_key: listModeKey,
       llm_judged_prompt_count: 0,
       llm_status_identity: input.llmStatusIdentity,
+      medrxiv_id: row.medrxivId,
       patch_watermark: 0,
       payload_identity: input.payloadIdentity,
+      pmid: row.pmid,
       posting_identity: input.postingIdentity,
       project_id: input.projectId,
       project_scope_identity: input.projectScopeIdentity,
@@ -358,12 +398,21 @@ const getDisplayPatchRecord = (
       article_created_at: row.tombstone ? null : row.articleCreatedAt,
       article_id: row.articleId,
       article_title: row.tombstone ? null : row.articleTitle,
+      article_updated_at: row.tombstone ? null : row.articleUpdatedAt,
+      arxiv_id: row.tombstone ? null : row.arxivId,
+      biorxiv_id: row.tombstone ? null : row.biorxivId,
       activity_sort_at: row.tombstone ? null : row.activitySortAt,
       base_generation: input.baseGeneration,
       display_identity: input.displayIdentity,
+      doi: row.tombstone ? null : row.doi,
+      full_text_conversion_status: row.tombstone ? null : row.fullTextConversionStatus,
+      full_text_fetched_at: row.tombstone ? null : row.fullTextFetchedAt,
+      full_text_pdf: row.tombstone ? null : row.fullTextPdf,
       journal_title: row.tombstone ? null : row.journalTitle,
+      medrxiv_id: row.tombstone ? null : row.medrxivId,
       patch_updated_at: new Date(),
       patch_watermark: getPatchWatermark(input.claims),
+      pmid: row.tombstone ? null : row.pmid,
       project_id: input.projectId,
       publication_year: row.tombstone ? null : row.publicationYear,
       source_metadata: row.tombstone ? null : row.sourceMetadata,
@@ -429,8 +478,16 @@ const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplay
         SET
           article_external_id = ${getSqlLiteral(row.articleExternalId)},
           article_created_at = ${getSqlLiteral(row.articleCreatedAt)},
+          article_updated_at = ${getSqlLiteral(row.articleUpdatedAt)},
           article_title = ${getSqlLiteral(row.articleTitle)},
+          arxiv_id = ${getSqlLiteral(row.arxivId)},
+          biorxiv_id = ${getSqlLiteral(row.biorxivId)},
+          medrxiv_id = ${getSqlLiteral(row.medrxivId)},
+          doi = ${getSqlLiteral(row.doi)},
+          pmid = ${getSqlLiteral(row.pmid)},
           full_text_pdf = ${getSqlLiteral(row.fullTextPdf)},
+          full_text_fetched_at = ${getSqlLiteral(row.fullTextFetchedAt)},
+          full_text_conversion_status = ${getSqlLiteral(row.fullTextConversionStatus)},
           source_metadata = ${getSqlLiteral(row.sourceMetadata)},
           activity_sort_at = ${getSqlLiteral(row.activitySortAt)},
           sort_key = ${getSqlLiteral(row.sortKey)},

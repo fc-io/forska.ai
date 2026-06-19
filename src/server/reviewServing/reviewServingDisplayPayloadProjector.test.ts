@@ -77,8 +77,16 @@ test('display routine updates write component-narrow patches for only claimed ar
         articleExternalId: 'NCT-1',
         articleId: 'article-1',
         articleTitle: 'Updated title',
+        articleUpdatedAt: null,
+        arxivId: '2401.00001',
+        biorxivId: null,
+        doi: '10.1000/example',
+        fullTextConversionStatus: 'converted',
+        fullTextFetchedAt: '2026-01-03T00:00:00.000Z',
         fullTextPdf: 'https://example.test/article-1.pdf',
         journalTitle: null,
+        medrxivId: null,
+        pmid: '12345',
         publicationYear: null,
         sourceMetadata: {covidence: {studyId: 'study-1'}},
         sortKey: '2026-01-01T00:00:00.000Z',
@@ -127,8 +135,14 @@ test('display routine updates write component-narrow patches for only claimed ar
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('UPDATE mart.review_article_serving_v4')
   expect(joined).toContain("article_created_at = '2026-01-01T00:00:00.000Z'")
+  expect(joined).toContain('article_updated_at = NULL')
   expect(joined).toContain("article_title = 'Updated title'")
+  expect(joined).toContain("arxiv_id = '2401.00001'")
+  expect(joined).toContain("doi = '10.1000/example'")
   expect(joined).toContain("full_text_pdf = 'https://example.test/article-1.pdf'")
+  expect(joined).toContain("full_text_fetched_at = '2026-01-03T00:00:00.000Z'")
+  expect(joined).toContain("full_text_conversion_status = 'converted'")
+  expect(joined).toContain("pmid = '12345'")
   expect(joined).toContain("source_metadata = '{\"covidence\":{\"studyId\":\"study-1\"}}'")
   expect(joined).toContain("activity_sort_at = '2026-01-02T00:00:00.000Z'")
   expect(joined).toContain("snapshot_id = 'snapshot-1'")
@@ -288,13 +302,22 @@ test('display base rows flow through writer with display fields and selected imp
     displayBaseRows: [
       {
         activitySortAt: '2026-01-02T00:00:00.000Z',
+        articleCreatedAt: '2026-01-01T00:00:00.000Z',
         articleExternalId: 'external-1',
         articleId: 'article-1',
         articleTitle: 'Title',
+        articleUpdatedAt: null,
+        arxivId: null,
+        biorxivId: null,
         conflictFlag: false,
+        doi: '10.1000/example',
         duplicateFlag: false,
+        fullTextConversionStatus: 'converted',
+        fullTextFetchedAt: '2026-01-03T00:00:00.000Z',
         fullTextPdf: 'file.pdf',
         journalTitle: 'Journal',
+        medrxivId: null,
+        pmid: '12345',
         publicationYear: 2026,
         selectedImportRouteId: 'import-route-1',
         selectedRankKey: 'rank-1',
@@ -333,7 +356,13 @@ test('display base rows flow through writer with display fields and selected imp
   expect(result).toEqual({rowCount: 2})
   expect(selectStatement).toContain('FROM mart.project_scope_article scope')
   expect(selectStatement).not.toContain('selected_scoped_article_import')
+  expect(selectStatement).toContain('article.article_updated_at AS articleUpdatedAt')
+  expect(selectStatement).toContain('article.doi')
+  expect(selectStatement).toContain('article.full_text_fetched_at AS fullTextFetchedAt')
   expect(inserts).toHaveLength(2)
   expect(inserts.join('\n')).toContain('article_title')
+  expect(inserts.join('\n')).toContain('article_updated_at')
+  expect(inserts.join('\n')).toContain('doi')
   expect(inserts.join('\n')).toContain('full_text_pdf')
+  expect(inserts.join('\n')).toContain('full_text_fetched_at')
 })

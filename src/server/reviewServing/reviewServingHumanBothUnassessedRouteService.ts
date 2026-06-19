@@ -34,12 +34,18 @@ type ReviewServingArticleRow = {
   articleCreatedAt?: unknown
   articleId?: string
   articleTitle?: string | null
+  article_updated_at?: unknown
+  articleUpdatedAt?: unknown
   biorxiv_id?: string | null
   biorxivId?: string | null
   canonical_article_id?: string | null
   canonicalArticleId?: string | null
   doi?: string | null
   full_text_pdf?: string | null
+  full_text_fetched_at?: unknown
+  full_text_conversion_status?: string | null
+  fullTextConversionStatus?: string | null
+  fullTextFetchedAt?: unknown
   fullTextPDF?: string | null
   journal_title?: string | null
   journalTitle?: string | null
@@ -602,12 +608,14 @@ const getArticleResponseBase = (row: ReviewServingArticleRow) => {
     id: getArticleId(row),
     articleTitle: row.article_title ?? row.articleTitle ?? null,
     articleCreatedAt: getDateValue(row.article_created_at ?? row.articleCreatedAt),
-    articleUpdatedAt: getDateValue(row.activity_sort_at),
+    articleUpdatedAt: getDateValue(row.article_updated_at ?? row.articleUpdatedAt),
     articleId: row.article_external_id ?? row.articleExternalId ?? null,
     arxivId: row.arxiv_id ?? row.arxivId ?? null,
     biorxivId: row.biorxiv_id ?? row.biorxivId ?? null,
     canonicalArticleId: row.canonical_article_id ?? row.canonicalArticleId ?? null,
     doi: row.doi ?? null,
+    fullTextConversionStatus: row.full_text_conversion_status ?? row.fullTextConversionStatus ?? null,
+    fullTextFetchedAt: getDateValue(row.full_text_fetched_at ?? row.fullTextFetchedAt),
     fullTextPDF: row.full_text_pdf ?? row.fullTextPDF ?? null,
     journalTitle: row.journal_title ?? row.journalTitle ?? null,
     medrxivId: row.medrxiv_id ?? row.medrxivId ?? null,

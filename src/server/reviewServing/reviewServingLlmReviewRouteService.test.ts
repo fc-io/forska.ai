@@ -120,9 +120,15 @@ const createArticleRows = (articleCount: number, enabledPromptCount?: number) =>
       article_created_at: null,
       article_external_id: `external-${articleNumber}`,
       article_title: `Article ${articleNumber}`,
+      article_updated_at: null,
+      arxiv_id: `2401.0000${articleNumber}`,
+      doi: `10.1000/article-${articleNumber}`,
       ...(enabledPromptCount ? {enabled_prompt_count: enabledPromptCount} : {}),
+      full_text_conversion_status: 'converted',
+      full_text_fetched_at: '2026-01-04T00:00:00.000Z',
       journal_title: 'Journal',
       llm_status_key: 'answered',
+      pmid: `1234${articleNumber}`,
       sort_key: `2026-01-01T00:00:00.${String(index).padStart(3, '0')}Z`,
       source_metadata: {covidence: {studyId: `study-${articleNumber}`}},
       activity_sort_at: '2026-01-02T00:00:00.000Z',
@@ -270,6 +276,12 @@ test('LLM review list route service composes serving rows, judgments, and count 
 
   expect(result.data[0]?.judgments[0]?.answeredOriginal).toBe('yes')
   expect(result.data[0]?.articleCreatedAt).toBeNull()
+  expect(result.data[0]?.articleUpdatedAt).toBeNull()
+  expect(result.data[0]?.arxivId).toBe('2401.00001')
+  expect(result.data[0]?.doi).toBe('10.1000/article-1')
+  expect(result.data[0]?.fullTextConversionStatus).toBe('converted')
+  expect(result.data[0]?.fullTextFetchedAt).toEqual(new Date('2026-01-04T00:00:00.000Z'))
+  expect(result.data[0]?.pubmedId).toBe('12341')
   expect(result.data[0]?.sourceMetadata).toEqual({covidence: {studyId: 'study-1'}})
   expect(result.data[0]?.judgments).toHaveLength(1)
   expect(result.data[0]?.judgedPromptIds).toEqual(['prompt-1'])
