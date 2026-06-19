@@ -486,6 +486,8 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
   ]),
   ...ownerDependentSensitive('ProjectExportRoutes.ts', 'Project article, judgment, prompt, and metadata exports.', [
     ['POST', '/api/projects/:id/export'],
+    ['GET', '/api/projects/:id/export/:jobId'],
+    ['GET', '/api/projects/:id/export/:jobId/download'],
     ['POST', '/api/projects/:id/export-prompts'],
   ]),
   ...ownerDependentProduct('ProjectsAddArticlesRoutes.ts', [
