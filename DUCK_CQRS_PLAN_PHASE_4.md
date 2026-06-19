@@ -31,9 +31,17 @@ Route-specific parity validation blocks that route migration on semantic mismatc
 - Parity evidence: `reviewServingRouteParityRunner.ts` and `reviewServingRouteParityRunner.test.ts` exist and block semantic fixture, sampled parity, cursor, freshness, named count, SQL-shape, forbidden foreground DuckDB, latency, and response-size mismatches. The audit did not find populated route-specific parity cases for every mounted production route.
 - Search evidence: `reviewSearchService.ts` supports token-prefix ready reads and substring async/unavailable job behavior, but current production route search handling calls title-token helpers and `readReviewServingRows` from route services. No production route call to `searchReviewServing` was found, so treat standalone search-service mounting as incomplete.
 - Adjacent route evidence: `reviewServingAdjacentRouteSurfaces.ts` classifies `/api/articles/search`, `/api/articles/latest`, `/api/projects/:id/articles`, judgment-job diagnostics, and HumanAssessment routes. Human assessment init is classified migrated-serving and submit migrated-admission; global article search/latest and project article membership reads are classified out of scope.
-- Residual gap evidence: `projectsRoutesGetReviewsHealth.ts`, `projectsRoutesGetReviewsWarnings.ts`, `projectsRoutesPostArticleReviewDetails.ts`, and `projectsRoutesGetPromptPreview.ts` use `readReviewServingRows` for serving data but still contain direct `getAppDatabaseService().queryJson` calls for auxiliary metadata, project config, prompt/model/full-text, assessment, warning, or health details. These need explicit parity acceptance or further serving contracts before Phase 4 is closed.
+- Residual gap evidence: `projectsRoutesGetArticlesReviewsFilters.ts` and `projectsRoutesGetArticlesReviewsHumanFilters.ts` call serving filter route services but still read project prompt/config metadata through `getAppQueryService`; `projectsRoutesGetReviewsHealth.ts`, `projectsRoutesGetReviewsWarnings.ts`, `projectsRoutesPostArticleReviewDetails.ts`, and `projectsRoutesGetPromptPreview.ts` use `readReviewServingRows` for serving data but still contain direct `getAppDatabaseService().queryJson` or app-query calls for auxiliary metadata, project config, prompt/model/full-text, assessment, warning, or health details. These need explicit parity acceptance, an allowlist as bounded metadata/config reads, or further serving contracts before Phase 4 is closed.
 - Residual legacy evidence: `src/server/services/pdfFetchJobs.ts` still contains the in-memory `jobs` map and legacy `startPdfFetchJob`/`getPdfFetchJob`; durable lookup exists for migrated PDF routes, but old in-memory helpers need deletion or classification before final hardening.
 - Explicit-ID add evidence: `/api/projects/add_articles_by_ids` in `ProjectsAddArticlesRoutes.ts` still calls `insertArticlesIntoProject` synchronously after cap checks. It is capped, but not durable article-ID-only job admission.
+
+### Second-Pass Validation - 2026-06-19
+
+- The first-pass Phase 4 verdict still matches current main: `reviewServingReadContractRouteInventory` has the same mounted production route shape, with only `/api/review-serving/filter-postings` left unmounted as an internal helper inventory row.
+- The documented search-service gap is still accurate. `searchReviewServing` is only exercised by `reviewSearchService.test.ts`; production route handlers and route services use serving reader/filter/title-token paths directly.
+- The residual-read gap needed one scope correction: mounted filter routes also depend on app-query project prompt/config metadata, so Phase 4 closure should classify those reads alongside health, warnings, detail, and prompt preview rather than treating filter routes as fully self-contained serving reads.
+- The explicit-ID job note should remain nuanced: `/api/articles/pdf-fetch-bulk` already creates a durable article-ID-only job with `assertArticleIdOnlyBulkOperationCaps`, while `/api/projects/add_articles_by_ids` only enforces the cap and remains a synchronous `insertArticlesIntoProject` mutation.
+- No code implementation change is required from this pass; the actionable Phase 4 update is to make residual-read classification and parity prerequisites more precise.
 
 ## Implementation Readiness Review - 2026-06-18
 
@@ -61,7 +69,7 @@ This section is retained as historical context. The 2026-06-19 audit supersedes 
 ## Missing Before Phase 4 Closure
 
 - Route-specific parity fixtures and sampled safe-size comparisons for every `mounted: true` production route and job flow. `reviewServingRouteParityRunner.ts` exists, but the audit did not find a complete per-route parity suite.
-- Explicit sign-off on residual route-local app-table reads in health, warnings, detail, and prompt-preview routes, or additional serving contracts that replace them where they affect normal review semantics.
+- Explicit sign-off on residual route-local app-table/app-query reads in filter, health, warnings, detail, and prompt-preview routes, or additional serving contracts that replace them where they affect normal review semantics.
 - Production API wiring for `reviewSearchService.ts`, or a documented decision that list/filter route-service token-prefix wiring is the final search boundary and `reviewSearchService.ts` remains internal/job-only.
 - Durable article-ID-only treatment for `/api/projects/add_articles_by_ids`, or a documented out-of-serving classification for the capped synchronous path.
 - Deletion or classification of legacy process-local PDF job helpers in `pdfFetchJobs.ts`; migrated PDF routes use durable jobs, but the old in-memory map still exists.
@@ -96,7 +104,7 @@ This section is retained as historical context. The 2026-06-19 audit supersedes 
 - Implemented: detail, warnings, health, prompt preview, human assessment init, PDF, add-by-filter, and export routes have mounted serving/job/admission entries or adjacent-route classifications.
 - Implemented: `reviewServingReadContracts.test.ts` scans mounted route files for forbidden OLAP/raw patterns and `OFFSET`.
 - Incomplete: route-specific parity cases are not complete for every mounted route or flow.
-- Incomplete: health, warnings, detail, and prompt-preview routes still include direct app-table reads for auxiliary semantics. Decide whether each is accepted metadata/config access or needs another serving contract.
+- Incomplete: filter, health, warnings, detail, and prompt-preview routes still include direct app-table or app-query reads for auxiliary semantics. Decide whether each is accepted metadata/config access or needs another serving contract.
 - Incomplete: `/api/projects/add_articles_by_ids` remains synchronous with capped explicit IDs rather than durable article-ID-only job admission.
 - Incomplete: `pdfFetchJobs.ts` still contains legacy in-memory job helpers, although migrated PDF route lookup now reads durable `app.review_bulk_operation_job` rows through `getPdfFetchJobFromDatabase`.
 - Clarified: `/api/articles/search`, `/api/articles/latest`, `/api/projects/:id/articles`, judgment-job diagnostics, and HumanAssessment routes are classified in `reviewServingAdjacentRouteSurfaces.ts`.
