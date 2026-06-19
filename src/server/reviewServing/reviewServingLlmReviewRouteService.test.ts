@@ -111,7 +111,26 @@ const createManifestDatabase = (status: ReviewServingSnapshotStatus | 'missing')
   return database
 }
 
-const createReaderDatabase = (totalCount = 1) => {
+const createArticleRows = (articleCount: number) => {
+  return Array.from({length: articleCount}, (_value, index) => {
+    const articleNumber = index + 1
+
+    return {
+      article_id: `article-${articleNumber}`,
+      article_created_at: null,
+      article_external_id: `external-${articleNumber}`,
+      article_title: `Article ${articleNumber}`,
+      journal_title: 'Journal',
+      llm_status_key: 'answered',
+      sort_key: `2026-01-01T00:00:00.${String(index).padStart(3, '0')}Z`,
+      source_metadata: {covidence: {studyId: `study-${articleNumber}`}},
+      activity_sort_at: '2026-01-02T00:00:00.000Z',
+      url: `https://example.test/article-${articleNumber}`,
+    }
+  })
+}
+
+const createReaderDatabase = (totalCount = 1, articleCount = 1) => {
   const statements: string[] = []
   const database: ReviewServingReaderDatabase = {
     queryJson: async <T>(statement: string, _workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
@@ -126,20 +145,7 @@ const createReaderDatabase = (totalCount = 1) => {
       }
 
       if (statement.includes('FROM mart.review_article_serving_v4')) {
-        return [
-          {
-            article_id: 'article-1',
-            article_created_at: null,
-            article_external_id: 'external-1',
-            article_title: 'Article 1',
-            journal_title: 'Journal',
-            llm_status_key: 'answered',
-            sort_key: '2026-01-01T00:00:00.000Z',
-            source_metadata: {covidence: {studyId: 'study-1'}},
-            activity_sort_at: '2026-01-02T00:00:00.000Z',
-            url: 'https://example.test/article-1',
-          },
-        ] as T[]
+        return createArticleRows(articleCount) as T[]
       }
 
       if (statement.includes('FROM mart.review_article_judgment_detail_serving_v4')) {
@@ -187,6 +193,31 @@ test('LLM review route honors the largest offered page size', async () => {
   expect(result.limit).toBe(500)
   expect(result.totalPages).toBe(3)
   expect(reader.statements.join('\n')).toContain('LIMIT 501')
+})
+
+test('LLM review route chunks judgment hydration above the reader article-set cap', async () => {
+  const reader = createReaderDatabase(250, 250)
+
+  await getLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 250, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+
+  const judgmentStatements = reader.statements.filter((statement) => {
+    return statement.includes('FROM mart.review_article_judgment_detail_serving_v4')
+  })
+
+  expect(judgmentStatements).toHaveLength(3)
+  expect(judgmentStatements[0]).toContain('article-100')
+  expect(judgmentStatements[0]).not.toContain('article-101')
+  expect(judgmentStatements[1]).toContain('article-101')
+  expect(judgmentStatements[1]).toContain('article-200')
+  expect(judgmentStatements[2]).toContain('article-201')
+  expect(judgmentStatements[2]).toContain('article-250')
 })
 
 test('LLM review list route service composes serving rows, judgments, and count without raw fallback SQL', async () => {

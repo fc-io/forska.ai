@@ -1,3 +1,4 @@
+import {Buffer} from 'node:buffer'
 import {readFile} from 'node:fs/promises'
 
 import {expect, test} from 'bun:test'
@@ -210,7 +211,7 @@ test('review filter route service reads facet and option contracts without raw f
 test('review filter route service tokenizes search text like row reads', async () => {
   const reader = createReaderDatabase()
 
-  await getReviewFiltersFromServing({
+  const response = await getReviewFiltersFromServing({
     dependencies: {
       currentReviewConfigHash: 'config-1',
       database: reader.database,
@@ -222,8 +223,12 @@ test('review filter route service tokenizes search text like row reads', async (
   })
 
   const sql = reader.statements.join('\n')
+  const filterSignatures = response.diagnostics.map((diagnostic) => {
+    return Buffer.from(diagnostic.filterSignature ?? '', 'base64url').toString('utf8')
+  })
 
   expect(sql).toContain('"activeFilters":{}')
+  expect(filterSignatures[0]).toContain('"searchTokenPrefixes":["19","covid","failure","heart"]')
   expect(sql).not.toContain('"searchTokenPrefix":"covid-19"')
 })
 

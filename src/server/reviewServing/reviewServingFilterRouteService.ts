@@ -112,8 +112,12 @@ const defaultHumanFilterOptionKeys = [
 const defaultHumanListModeKeys = ['human', 'both'] as const
 const defaultReviewListModeKeys = ['llm', 'human', 'both', 'unassessed'] as const
 
+const getSearchTokenPrefixes = (search: string | null | undefined) => {
+  return getReviewServingTitleSearchTokens(search ?? null)
+}
+
 const getSearchTokenPrefix = (search: string | null | undefined) => {
-  const [firstToken] = getReviewServingTitleSearchTokens(search ?? null)
+  const [firstToken] = getSearchTokenPrefixes(search)
 
   return firstToken ?? null
 }
@@ -172,6 +176,7 @@ const getBaseReaderRequest = (
     searchMode: searchTokenPrefix ? 'tokenPrefix' : 'none',
     searchState: searchTokenPrefix ? {availability: 'ready', snapshotId: manifest.snapshotId} : null,
     searchTokenPrefix,
+    searchTokenPrefixes: getSearchTokenPrefixes(params.search),
     snapshotId: manifest.snapshotId,
   }
 }
