@@ -111,7 +111,7 @@ const createManifestDatabase = (status: ReviewServingSnapshotStatus | 'missing')
   return database
 }
 
-const createArticleRows = (articleCount: number) => {
+const createArticleRows = (articleCount: number, enabledPromptCount?: number) => {
   return Array.from({length: articleCount}, (_value, index) => {
     const articleNumber = index + 1
 
@@ -120,6 +120,7 @@ const createArticleRows = (articleCount: number) => {
       article_created_at: null,
       article_external_id: `external-${articleNumber}`,
       article_title: `Article ${articleNumber}`,
+      ...(enabledPromptCount ? {enabled_prompt_count: enabledPromptCount} : {}),
       journal_title: 'Journal',
       llm_status_key: 'answered',
       sort_key: `2026-01-01T00:00:00.${String(index).padStart(3, '0')}Z`,
@@ -130,7 +131,7 @@ const createArticleRows = (articleCount: number) => {
   })
 }
 
-const createReaderDatabase = (totalCount = 1, articleCount = 1) => {
+const createReaderDatabase = (totalCount = 1, articleCount = 1, enabledPromptCount?: number) => {
   const statements: string[] = []
   const database: ReviewServingReaderDatabase = {
     queryJson: async <T>(statement: string, _workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
@@ -145,7 +146,7 @@ const createReaderDatabase = (totalCount = 1, articleCount = 1) => {
       }
 
       if (statement.includes('FROM mart.review_article_serving_v4')) {
-        return createArticleRows(articleCount) as T[]
+        return createArticleRows(articleCount, enabledPromptCount) as T[]
       }
 
       if (statement.includes('FROM mart.review_article_judgment_detail_serving_v4')) {
@@ -196,7 +197,7 @@ test('LLM review route honors the largest offered page size', async () => {
 })
 
 test('LLM review route chunks judgment hydration above the reader article-set cap', async () => {
-  const reader = createReaderDatabase(250, 250)
+  const reader = createReaderDatabase(250, 250, 100)
 
   await getLlmReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 250, prompts: {}},
@@ -218,6 +219,30 @@ test('LLM review route chunks judgment hydration above the reader article-set ca
   expect(judgmentStatements[1]).toContain('article-200')
   expect(judgmentStatements[2]).toContain('article-201')
   expect(judgmentStatements[2]).toContain('article-250')
+})
+
+test('LLM review route sizes judgment hydration chunks by enabled prompt count', async () => {
+  const reader = createReaderDatabase(51, 51, 200)
+
+  await getLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 51, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+
+  const judgmentStatements = reader.statements.filter((statement) => {
+    return statement.includes('FROM mart.review_article_judgment_detail_serving_v4')
+  })
+
+  expect(judgmentStatements).toHaveLength(2)
+  expect(judgmentStatements[0]).toContain('LIMIT 10000')
+  expect(judgmentStatements[0]).toContain('article-50')
+  expect(judgmentStatements[0]).not.toContain('article-51')
+  expect(judgmentStatements[1]).toContain('LIMIT 200')
+  expect(judgmentStatements[1]).toContain('article-51')
 })
 
 test('LLM review list route service composes serving rows, judgments, and count without raw fallback SQL', async () => {
