@@ -41,6 +41,8 @@ type ReviewServingArticleRow = {
   canonical_article_id?: string | null
   canonicalArticleId?: string | null
   doi?: string | null
+  enabled_prompt_count?: number | null
+  enabledPromptCount?: number | null
   full_text_pdf?: string | null
   full_text_fetched_at?: unknown
   full_text_conversion_status?: string | null
@@ -116,6 +118,8 @@ const defaultReviewLimit = 100
 const dynamicFilterKey = 'filter:dynamic'
 const listAllFilterKey = 'list:all'
 const maxJudgmentHydrationArticleIds = 100
+const maxJudgmentHydrationRows = 10_000
+const defaultJudgmentHydrationPromptCount = 128
 const queueReadyFilterKey = 'queue:ready'
 
 const getDateValue = (value: unknown) => {
@@ -521,9 +525,27 @@ const getLlmSummaryAnswer = (
   return answers.length === 0 ? null : answers.includes('no') ? 'no' : answers.includes('maybe') ? 'maybe' : 'yes'
 }
 
-const getArticleIdChunks = (articleIds: readonly string[]) => {
+const getJudgmentPromptCount = (rows: readonly ReviewServingArticleRow[]) => {
+  const promptCounts = rows
+    .map((row) => {
+      return row.enabled_prompt_count ?? row.enabledPromptCount ?? 0
+    })
+    .filter((promptCount) => {
+      return promptCount > 0
+    })
+
+  return promptCounts.length === 0 ? defaultJudgmentHydrationPromptCount : Math.max(...promptCounts)
+}
+
+const getMaxJudgmentHydrationArticleIds = (promptCount: number) => {
+  return Math.max(1, Math.min(maxJudgmentHydrationArticleIds, Math.floor(maxJudgmentHydrationRows / promptCount)))
+}
+
+const getArticleIdChunks = (articleIds: readonly string[], promptCount: number) => {
+  const maxArticleIds = getMaxJudgmentHydrationArticleIds(promptCount)
+
   return articleIds.reduce<string[][]>((chunks, articleId, index) => {
-    return index % maxJudgmentHydrationArticleIds === 0
+    return index % maxArticleIds === 0
       ? [...chunks, [articleId]]
       : chunks.map((chunk, chunkIndex) => {
           return chunkIndex === chunks.length - 1 ? [...chunk, articleId] : chunk
@@ -537,11 +559,14 @@ const readJudgmentChunk = async (
   mode: 'both' | 'human',
   articleIds: readonly string[],
   kind: 'human' | 'llm',
+  promptCount: number,
   dependencies?: ReviewServingRouteDependencies,
 ) => {
+  const limit = Math.min(articleIds.length * promptCount, maxJudgmentHydrationRows)
+
   return readReviewServingRows<ReviewServingJudgmentRow>(
     {
-      ...getBaseReaderRequest(params, manifest, Math.min(articleIds.length * 128, 10_000), mode),
+      ...getBaseReaderRequest(params, manifest, limit, mode),
       articleIds,
       contractKey:
         mode === 'both'
@@ -552,7 +577,7 @@ const readJudgmentChunk = async (
       estimatedHydratedPayloadBytes: articleIds.length * 10_000,
       estimatedResultBytes: articleIds.length * 20_000,
       filters: {},
-      limit: Math.min(articleIds.length * 128, 10_000),
+      limit,
       searchMode: 'none',
       searchState: null,
       searchTokenPrefix: null,
@@ -571,15 +596,18 @@ const readJudgments = async (
   params: ArticlesReviewsBothParams | ArticlesReviewsParams,
   manifest: ReviewServingSnapshotManifest,
   mode: 'both' | 'human',
-  articleIds: readonly string[],
+  rows: readonly ReviewServingArticleRow[],
   kind: 'human' | 'llm',
   dependencies?: ReviewServingRouteDependencies,
 ) => {
+  const articleIds = rows.map(getArticleId)
+  const promptCount = getJudgmentPromptCount(rows)
+
   return articleIds.length === 0
     ? []
     : Promise.all(
-        getArticleIdChunks(articleIds).map((chunk) => {
-          return readJudgmentChunk(params, manifest, mode, chunk, kind, dependencies)
+        getArticleIdChunks(articleIds, promptCount).map((chunk) => {
+          return readJudgmentChunk(params, manifest, mode, chunk, kind, promptCount, dependencies)
         }),
       ).then((chunks) => {
         return chunks.flat()
@@ -653,8 +681,7 @@ export const getHumanReviewArticlesFromServing = async (
   })
   const pageRows = pageResult.rows
 
-  const articleIds = pageRows.map(getArticleId)
-  const humanRows = await readJudgments(effectiveParams, manifest, 'human', articleIds, 'human', dependencies)
+  const humanRows = await readJudgments(effectiveParams, manifest, 'human', pageRows, 'human', dependencies)
   const judgmentsByArticleId = getHumanJudgmentsByArticleId(humanRows)
   const totalCount = await getCountValue(effectiveParams, manifest, 'human', {...dependencies, database})
   const data = pageRows.map((row) => {
@@ -712,10 +739,9 @@ export const getBothReviewArticlesFromServing = async (
   })
   const pageRows = pageResult.rows
 
-  const articleIds = pageRows.map(getArticleId)
   const [llmRows, humanRows] = await Promise.all([
-    readJudgments(effectiveParams, manifest, 'both', articleIds, 'llm', dependencies),
-    readJudgments(effectiveParams, manifest, 'both', articleIds, 'human', dependencies),
+    readJudgments(effectiveParams, manifest, 'both', pageRows, 'llm', dependencies),
+    readJudgments(effectiveParams, manifest, 'both', pageRows, 'human', dependencies),
   ])
   const llmJudgmentsByArticleId = getLlmJudgmentsByArticleId(llmRows)
   const humanJudgmentsByArticleId = getHumanJudgmentsByArticleId(humanRows)

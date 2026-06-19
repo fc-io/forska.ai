@@ -7,7 +7,13 @@ const reviewServingReaderModulePath = new URL('../../reviewServing/reviewServing
 const systemActorModulePath = new URL('../../utils/getSystemActor.ts', import.meta.url).pathname
 const projectAccessGuardModulePath = new URL('./projectAccessGuard.ts', import.meta.url).pathname
 
-type ReviewServingRouteTestRequest = {articleId?: string | null; contractKey: string; projectId?: string | null}
+type ReviewServingRouteTestRequest = {
+  articleId?: string | null
+  contractKey: string
+  cursor?: string | null
+  limit?: number
+  projectId?: string | null
+}
 
 const fullArticlesByIdsRef = {
   current: async (_articleIds: string[]): Promise<unknown[]> => {
@@ -30,7 +36,10 @@ const queryJsonRef = {
 const reviewServingRowsRef = {
   current: async (
     _request: ReviewServingRouteTestRequest,
-  ): Promise<{rows: unknown[]; status: 'accepted'} | {diagnostics: unknown; reason: string; status: 'rejected'}> => {
+  ): Promise<
+    | {getCursorForRow?: (row: Record<string, unknown>) => string; rows: unknown[]; status: 'accepted'}
+    | {diagnostics: unknown; reason: string; status: 'rejected'}
+  > => {
     return {rows: [], status: 'accepted'}
   },
 }
@@ -592,6 +601,40 @@ test('project review details merges serving detail rows, scoped extras, and plac
   expect(servingContractKeys).toContain('review.detail.humanJudgments')
 })
 
+test('project review details preserves project content settings on serving detail judgments', async () => {
+  fullArticlesByIdsRef.current = async () => {
+    return [{articleTitle: 'Article 1', id: 'article-1'}]
+  }
+  projectReviewConfigRef.current = async () => {
+    return {modelId: 'model-1', useAbstract: false, useFulltext: false, useFulltextNoImages: true, useTitle: false}
+  }
+  reviewServingRowsRef.current = async (request) => {
+    return request.contractKey === 'review.detail.judgments'
+      ? {rows: [getServingJudgmentRow({judgment_id: 'judgment-detail', prompt_id: 'prompt-1'})], status: 'accepted'}
+      : {rows: [], status: 'accepted'}
+  }
+  queryJsonRef.current = async (statement) => {
+    return statement.includes('FROM app.project_prompt pp')
+      ? [getPromptRow('prompt-1', 0)]
+      : statement.includes('FROM app.project_mart_refresh_state')
+        ? [getFreshnessRow()]
+        : []
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {
+    judgments: Array<{useAbstract: boolean; useFulltext: boolean; useFulltextNoImages: boolean; useTitle: boolean}>
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.judgments[0]).toMatchObject({
+    useAbstract: false,
+    useFulltext: false,
+    useFulltextNoImages: true,
+    useTitle: false,
+  })
+})
+
 test('project review details reuses project-visible raw judgments from another source project', async () => {
   fullArticlesByIdsRef.current = async () => {
     return [{articleTitle: 'Article 1', id: 'article-1'}]
@@ -871,6 +914,61 @@ test('project review details human prompt map is scoped to project and current p
     }),
   ).toBe(true)
   expect(body.humanAnswersByPrompt).toEqual({'prompt-1': [{answer: 'yes', userName: 'System'}]})
+})
+
+test('project review details pages human detail judgments beyond one reader page', async () => {
+  const promptRows = Array.from({length: 513}, (_, index) => {
+    return getPromptRow(`prompt-${index + 1}`, index)
+  })
+  const firstPageRows = promptRows.slice(0, 512).map((row) => {
+    return getServingHumanJudgmentRow({judgment_id: `human-${row.id}`, prompt_id: row.id, prompt_order: row.order})
+  })
+  const secondPageRows = [
+    getServingHumanJudgmentRow({judgment_id: 'human-prompt-513', prompt_id: 'prompt-513', prompt_order: 512}),
+  ]
+
+  fullArticlesByIdsRef.current = async () => {
+    return [{articleTitle: 'Article 1', id: 'article-1'}]
+  }
+  projectReviewConfigRef.current = async () => {
+    return {
+      humanJudgmentMode: 'prompt',
+      modelId: 'model-1',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }
+  }
+  reviewServingRowsRef.current = async (request) => {
+    return request.contractKey === 'review.detail.humanJudgments'
+      ? request.cursor
+        ? {rows: secondPageRows, status: 'accepted'}
+        : {
+            getCursorForRow: (row) => {
+              return String(row.prompt_id)
+            },
+            rows: firstPageRows,
+            status: 'accepted',
+          }
+      : {rows: [], status: 'accepted'}
+  }
+  queryJsonRef.current = async (statement) => {
+    return statement.includes('FROM app.project_prompt pp')
+      ? promptRows
+      : statement.includes('FROM app.project_mart_refresh_state')
+        ? [getFreshnessRow()]
+        : []
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {
+    humanAnswersByPrompt: Record<string, Array<{answer: string; userName: string}>>
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.humanAnswersByPrompt['prompt-1']).toEqual([{answer: 'yes', userName: 'System'}])
+  expect(body.humanAnswersByPrompt['prompt-513']).toEqual([{answer: 'yes', userName: 'System'}])
 })
 
 test('project review details treats rejected human serving rows as empty', async () => {
