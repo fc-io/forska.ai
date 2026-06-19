@@ -28,7 +28,9 @@ const queryJsonRef = {
 }
 
 const reviewServingRowsRef = {
-  current: async (_request: ReviewServingRouteTestRequest): Promise<{rows: unknown[]; status: 'accepted'}> => {
+  current: async (
+    _request: ReviewServingRouteTestRequest,
+  ): Promise<{rows: unknown[]; status: 'accepted'} | {diagnostics: unknown; reason: string; status: 'rejected'}> => {
     return {rows: [], status: 'accepted'}
   },
 }
@@ -214,12 +216,17 @@ const postReviewDetailsRequest = async () => {
   )
 }
 
-test('project review details falls back to app judgments when detail mart rows are missing', async () => {
+test('project review details falls back to app judgments when detail serving rows are unavailable', async () => {
   fullArticlesByIdsRef.current = async () => {
     return [{articleTitle: 'Article 1', id: 'article-1'}]
   }
   projectReviewConfigRef.current = async () => {
     return {modelId: 'model-1', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+  }
+  reviewServingRowsRef.current = async (request) => {
+    return request.contractKey === 'review.detail.judgments'
+      ? {diagnostics: {}, reason: 'snapshotUnavailable', status: 'rejected'}
+      : {rows: [], status: 'accepted'}
   }
   queryJsonRef.current = async (statement) => {
     return statement.includes('FROM app.project_prompt pp')

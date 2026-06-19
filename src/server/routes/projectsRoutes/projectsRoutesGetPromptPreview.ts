@@ -51,6 +51,19 @@ const getFirstProjectArticleFromServing = async (projectId: string, reviewConfig
   })
 }
 
+const getFirstProjectArticleIdFromScope = async (projectId: string) => {
+  const [row] = await getAppDatabaseService().queryJson<{articleId: string}>(`
+    SELECT scope.article_id AS articleId
+    FROM mart.project_scope_article scope
+    WHERE scope.project_id = '${escapeSqlString(projectId)}'
+      AND (scope.in_curated_scope OR scope.in_route_scope)
+    ORDER BY scope.article_created_at ASC NULLS LAST, scope.article_id ASC
+    LIMIT 1
+  `)
+
+  return row?.articleId ?? null
+}
+
 const getPromptPreviewArticleRecord = (article: PromptPreviewArticle): ArticleRecord => {
   return {
     ...article,
@@ -115,22 +128,17 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
 
     const reviewConfigHash = await getCurrentReviewConfigHash(params.id)
     const previewArticleRead = await getFirstProjectArticleFromServing(params.id, reviewConfigHash)
-
-    if (previewArticleRead.status === 'rejected') {
-      return getUnavailablePromptPreview({
-        articleId: null,
-        diagnostics: previewArticleRead.diagnostics,
-        reason: previewArticleRead.diagnostics.manifest.freshness,
-      })
-    }
-
-    const firstArticleId = previewArticleRead.rows[0]?.article_id ?? null
+    const firstArticleId =
+      previewArticleRead.status === 'accepted'
+        ? (previewArticleRead.rows[0]?.article_id ?? null)
+        : await getFirstProjectArticleIdFromScope(params.id)
 
     if (!firstArticleId) {
       return getUnavailablePromptPreview({
         articleId: null,
-        diagnostics: previewArticleRead.diagnostics,
-        reason: 'no_articles',
+        diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
+        reason:
+          previewArticleRead.status === 'accepted' ? 'no_articles' : previewArticleRead.diagnostics.manifest.freshness,
       })
     }
 
@@ -175,7 +183,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       return getUnavailablePromptPreview({
         articleId: firstArticle.id,
         articleTitle: firstArticle.articleTitle,
-        diagnostics: previewArticleRead.diagnostics,
+        diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
         reason: preparedArticle.skipReason,
       })
     }
@@ -184,7 +192,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       return getUnavailablePromptPreview({
         articleId: firstArticle.id,
         articleTitle: firstArticle.articleTitle,
-        diagnostics: previewArticleRead.diagnostics,
+        diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
         reason: 'transient_failure',
       })
     }
@@ -205,7 +213,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       data: {
         articleId: preparedArticle.article.id,
         articleTitle: preparedArticle.article.articleTitle,
-        diagnostics: previewArticleRead.diagnostics,
+        diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
         previewText: getSinglePromptJudgmentPreviewText({systemPrompt, userPrompt}),
         reason: null,
         status: 'ready' as const,

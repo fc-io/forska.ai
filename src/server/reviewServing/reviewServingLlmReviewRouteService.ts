@@ -21,9 +21,11 @@ type ReviewServingArticleRow = {
   arxiv_id?: string | null
   arxivId?: string | null
   article_external_id?: string | null
+  article_created_at?: unknown
   article_id?: string
   article_title?: string | null
   articleExternalId?: string | null
+  articleCreatedAt?: unknown
   articleId?: string
   articleTitle?: string | null
   biorxiv_id?: string | null
@@ -330,8 +332,8 @@ const getFilteredCountValue = async (
       AND serving.review_config_hash = ${getSqlLiteral(manifest.reviewConfigHash)}
       AND serving.snapshot_id = ${getSqlLiteral(manifest.snapshotId)}
       AND serving.list_mode_key = 'llm'
-      ${filters.articleCreatedAtFrom ? `AND serving.sort_key >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}` : ''}
-      ${getDateToPredicate('serving.sort_key', filters.articleCreatedAtTo)}
+      ${filters.articleCreatedAtFrom ? `AND serving.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}` : ''}
+      ${getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo)}
       ${filters.duplicateFlag ? 'AND serving.duplicate_flag = TRUE' : ''}
       ${filters.conflictFlag ? 'AND serving.conflict_flag = TRUE' : ''}
       ${filters.llmHasJudgment ? 'AND serving.llm_judged_prompt_count > 0' : ''}
@@ -403,7 +405,7 @@ const getResponseRows = (
 
   return rows.map((row) => {
     const articleId = getArticleId(row)
-    const articleCreatedAt = getDateValue(row.sort_key)
+    const articleCreatedAt = getDateValue(row.article_created_at ?? row.articleCreatedAt)
     const articleUpdatedAt = getDateValue(row.activity_sort_at)
     const judgments = judgmentsByArticleId.get(articleId) ?? []
 

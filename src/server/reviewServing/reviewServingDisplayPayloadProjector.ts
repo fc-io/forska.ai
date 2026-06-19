@@ -66,6 +66,7 @@ export type ProjectReviewServingPayloadInput = {
 
 type DisplayProjectionRow = {
   activitySortAt: Date | string
+  articleCreatedAt: Date | string | null
   articleExternalId: string | null
   articleId: string
   articleTitle: string
@@ -76,18 +77,21 @@ type DisplayProjectionRow = {
   publicationYear: number | null
   selectedImportRouteId: string | null
   selectedRankKey: string | null
+  sourceMetadata: ReviewServingIdentityValue | null
   sortKey: Date | string
   url: string | null
 }
 
 type DisplayPatchRow = {
   activitySortAt: Date | string | null
+  articleCreatedAt: Date | string | null
   articleExternalId: string | null
   articleId: string
   articleTitle: string | null
   fullTextPdf: string | null
   journalTitle: string | null
   publicationYear: number | null
+  sourceMetadata: ReviewServingIdentityValue | null
   sortKey: Date | string | null
   tombstone: boolean
   url: string | null
@@ -194,10 +198,12 @@ const getDisplayBaseRows = async (
   return database.queryJson<DisplayProjectionRow>(`
     SELECT
       scope.article_id AS articleId,
+      article.article_created_at AS articleCreatedAt,
       COALESCE(article.article_created_at, scope.article_created_at, current_timestamp) AS sortKey,
       COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at, current_timestamp) AS activitySortAt,
       article.article_title AS articleTitle,
       article.article_id AS articleExternalId,
+      article.source_metadata AS sourceMetadata,
       selected.journal_title AS journalTitle,
       article.url,
       article.full_text_pdf AS fullTextPdf,
@@ -234,10 +240,12 @@ const getDisplayPatchRows = async (
         ${getDirtyArticleCteSql(articleIds)}
         SELECT
           dirty.article_id AS articleId,
+          article.article_created_at AS articleCreatedAt,
           COALESCE(article.article_created_at, current_timestamp) AS sortKey,
           COALESCE(article.article_updated_at, article.article_created_at, current_timestamp) AS activitySortAt,
           article.article_title AS articleTitle,
           article.article_id AS articleExternalId,
+          article.source_metadata AS sourceMetadata,
           article.full_text_pdf AS fullTextPdf,
           selected.journal_title AS journalTitle,
           article.url,
@@ -300,6 +308,7 @@ const getDisplayBaseRecord = (
     table: 'mart.review_article_serving_v4',
     values: {
       activity_sort_at: row.activitySortAt,
+      article_created_at: row.articleCreatedAt,
       article_external_id: row.articleExternalId,
       article_id: row.articleId,
       article_title: row.articleTitle,
@@ -329,6 +338,7 @@ const getDisplayBaseRecord = (
       selected_rank_key: row.selectedRankKey,
       serving_updated_at: new Date(),
       snapshot_id: input.snapshotId,
+      source_metadata: row.sourceMetadata,
       sort_key: row.sortKey,
       summary_identity: input.summaryIdentity,
       url: row.url,
@@ -345,6 +355,7 @@ const getDisplayPatchRecord = (
     table: 'mart.review_article_display_patch_v4',
     values: {
       article_external_id: row.tombstone ? null : row.articleExternalId,
+      article_created_at: row.tombstone ? null : row.articleCreatedAt,
       article_id: row.articleId,
       article_title: row.tombstone ? null : row.articleTitle,
       activity_sort_at: row.tombstone ? null : row.activitySortAt,
@@ -355,6 +366,7 @@ const getDisplayPatchRecord = (
       patch_watermark: getPatchWatermark(input.claims),
       project_id: input.projectId,
       publication_year: row.tombstone ? null : row.publicationYear,
+      source_metadata: row.tombstone ? null : row.sourceMetadata,
       sort_key: row.tombstone ? null : row.sortKey,
       tombstone: row.tombstone,
       url: row.tombstone ? null : row.url,
