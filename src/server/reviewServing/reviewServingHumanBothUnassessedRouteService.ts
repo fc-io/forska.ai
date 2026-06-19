@@ -71,6 +71,14 @@ type UnassessedReviewArticlesResponse = {
   totalCount: number
   totalPages: number
 }
+type ReviewServingRowsPageInput = {
+  currentPage?: number
+  dependencies?: ReviewServingRouteDependencies
+  label: string
+  limit: number
+  page: number
+  request: Omit<ReviewServingReaderRequest, 'contractKey'> & {contractKey: string}
+}
 
 const maxReviewPageSize = 100
 const defaultReviewLimit = 100
@@ -340,6 +348,26 @@ const readJudgments = async (
       })
 }
 
+const readRowsPage = async <T>(input: ReviewServingRowsPageInput): Promise<T[]> => {
+  const currentPage = input.currentPage ?? 1
+  const rowsResult = await readReviewServingRows<T>(input.request, getReaderDependencies(input.dependencies))
+
+  if (rowsResult.status === 'rejected') {
+    throw new Error(`reviewServingReader rejected ${input.label}: ${rowsResult.reason}`)
+  }
+
+  const pageRows = rowsResult.rows.slice(0, input.limit)
+  const lastRow = pageRows[pageRows.length - 1]
+
+  return currentPage >= input.page || !lastRow || pageRows.length < input.limit
+    ? pageRows
+    : readRowsPage({
+        ...input,
+        currentPage: currentPage + 1,
+        request: {...input.request, cursor: rowsResult.getCursorForRow(lastRow as Record<string, unknown>)},
+      })
+}
+
 const getArticleResponseBase = (row: ReviewServingArticleRow) => {
   return {
     id: getArticleId(row),
@@ -365,20 +393,18 @@ export const getHumanReviewArticlesFromServing = async (
     throw new Error('Review serving snapshot is unavailable')
   }
 
-  const rowsResult = await readReviewServingRows<ReviewServingArticleRow>(
-    {
+  const pageRows = await readRowsPage<ReviewServingArticleRow>({
+    dependencies,
+    label: 'human review rows',
+    limit,
+    page,
+    request: {
       ...getBaseReaderRequest(params, manifest, limit, 'human'),
       contractKey: 'review.human.rows',
       cursor: params.cursor ?? null,
     },
-    getReaderDependencies(dependencies),
-  )
+  })
 
-  if (rowsResult.status === 'rejected') {
-    throw new Error(`reviewServingReader rejected human review rows: ${rowsResult.reason}`)
-  }
-
-  const pageRows = rowsResult.rows.slice(0, limit)
   const articleIds = pageRows.map(getArticleId)
   const humanRows = await readJudgments(params, manifest, 'human', articleIds, 'human', dependencies)
   const judgmentsByArticleId = getHumanJudgmentsByArticleId(humanRows)
@@ -423,16 +449,14 @@ export const getBothReviewArticlesFromServing = async (
     throw new Error('Review serving snapshot is unavailable')
   }
 
-  const rowsResult = await readReviewServingRows<ReviewServingArticleRow>(
-    {...getBaseReaderRequest(params, manifest, limit, 'both'), contractKey: 'review.both.rows'},
-    getReaderDependencies(dependencies),
-  )
+  const pageRows = await readRowsPage<ReviewServingArticleRow>({
+    dependencies,
+    label: 'both review rows',
+    limit,
+    page,
+    request: {...getBaseReaderRequest(params, manifest, limit, 'both'), contractKey: 'review.both.rows'},
+  })
 
-  if (rowsResult.status === 'rejected') {
-    throw new Error(`reviewServingReader rejected both review rows: ${rowsResult.reason}`)
-  }
-
-  const pageRows = rowsResult.rows.slice(0, limit)
   const articleIds = pageRows.map(getArticleId)
   const [llmRows, humanRows] = await Promise.all([
     readJudgments(params, manifest, 'both', articleIds, 'llm', dependencies),
@@ -474,22 +498,21 @@ export const getUnassessedReviewArticlesFromServing = async (
     throw new Error('Review serving snapshot is unavailable')
   }
 
-  const queueResult = await readReviewServingRows<ReviewServingQueueRow>(
-    {
+  const queueRows = await readRowsPage<ReviewServingQueueRow>({
+    dependencies,
+    label: 'unassessed queue rows',
+    limit,
+    page,
+    request: {
       ...getBaseReaderRequest(params, manifest, limit, 'unassessed'),
       contractKey: 'review.queue.unassessed',
       cursor: params.cursor ?? null,
     },
-    getReaderDependencies(dependencies),
-  )
-
-  if (queueResult.status === 'rejected') {
-    throw new Error(`reviewServingReader rejected unassessed queue rows: ${queueResult.reason}`)
-  }
+  })
 
   const articleIds = [
     ...new Set(
-      queueResult.rows.slice(0, limit).map((row) => {
+      queueRows.map((row) => {
         return row.article_id ?? ''
       }),
     ),

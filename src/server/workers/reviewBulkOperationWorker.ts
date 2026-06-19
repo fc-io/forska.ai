@@ -61,7 +61,7 @@ type ReviewBulkOperationBatchRow = {articleId: string}
 
 type ReviewBulkOperationWorkerOptions = {batchSize?: number; maxRetries?: number; now?: Date; workerId?: string}
 
-type ReviewBulkOperationBatchResult = {pdfStats?: PdfFetchBatchStats} | undefined
+type ReviewBulkOperationBatchResult = {exportArticleIds?: readonly string[]; pdfStats?: PdfFetchBatchStats} | undefined
 
 type ReviewBulkOperationWorkerLoopOptions = ReviewBulkOperationWorkerOptions & {
   errorBackoffMs?: number
@@ -133,7 +133,7 @@ const getClaimableJob = async (
     const [candidate] = await tx.queryJson<{jobId: string}>(`
       SELECT job_id AS jobId
       FROM app.review_bulk_operation_job
-      WHERE status IN ('pending', 'running')
+      WHERE status = 'pending'
         AND completed_at IS NULL
       ORDER BY updated_at ASC, job_id ASC
       LIMIT 1
@@ -147,7 +147,7 @@ const getClaimableJob = async (
       UPDATE app.review_bulk_operation_job
       SET status = 'running', updated_at = current_timestamp
       WHERE job_id = ${getSqlLiteral(candidate.jobId)}
-        AND status IN ('pending', 'running')
+        AND status = 'pending'
         AND completed_at IS NULL
     `)
 
@@ -196,24 +196,30 @@ const getListModeKey = (criteria: ReviewBulkOperationCriteria) => {
   return criteria.listType ?? 'llm'
 }
 
+const getSourceProjectIds = (job: ReviewBulkOperationJobRow, criteria: ReviewBulkOperationCriteria) => {
+  return criteria.sourceProjectIds && criteria.sourceProjectIds.length > 0 ? criteria.sourceProjectIds : [job.projectId]
+}
+
 const getPromptAnswerPredicates = (criteria: ReviewBulkOperationCriteria) => {
+  const promptPrefix = getListModeKey(criteria) === 'human' ? 'human:promptAnswer:' : 'review:promptAnswer:'
+
   return Object.entries(criteria.prompts ?? {})
     .filter(([, values]) => {
       return values.length > 0
     })
     .map(([promptId, values], index) => {
       const filterValues = values.map((value) => {
-        return `review:promptAnswer:${promptId}:${value}`
+        return `${promptPrefix}${promptId}:${value}`
       })
 
       return `AND EXISTS (
         SELECT 1
         FROM mart.review_article_filter_posting_serving_v4 prompt_filter_${index}
-        WHERE prompt_filter_${index}.project_id = p.project_id
-          AND prompt_filter_${index}.snapshot_id = p.snapshot_id
-          AND prompt_filter_${index}.review_config_hash = p.review_config_hash
-          AND prompt_filter_${index}.list_mode_key = p.list_mode_key
-          AND prompt_filter_${index}.article_id = p.article_id
+        WHERE prompt_filter_${index}.project_id = s.project_id
+          AND prompt_filter_${index}.snapshot_id = s.snapshot_id
+          AND prompt_filter_${index}.review_config_hash = s.review_config_hash
+          AND prompt_filter_${index}.list_mode_key = s.list_mode_key
+          AND prompt_filter_${index}.article_id = s.article_id
           AND prompt_filter_${index}.filter_kind = 'promptAnswer'
           AND prompt_filter_${index}.filter_value IN (SELECT unnest(${getSqlLiteral(filterValues)}::VARCHAR[]))
       )`
@@ -234,49 +240,51 @@ const getPostingFilterPredicates = (criteria: ReviewBulkOperationCriteria) => {
     return `AND EXISTS (
       SELECT 1
       FROM mart.review_article_filter_posting_serving_v4 filter_${index}
-      WHERE filter_${index}.project_id = p.project_id
-        AND filter_${index}.snapshot_id = p.snapshot_id
-        AND filter_${index}.review_config_hash = p.review_config_hash
-        AND filter_${index}.list_mode_key = p.list_mode_key
-        AND filter_${index}.article_id = p.article_id
+      WHERE filter_${index}.project_id = s.project_id
+        AND filter_${index}.snapshot_id = s.snapshot_id
+        AND filter_${index}.review_config_hash = s.review_config_hash
+        AND filter_${index}.list_mode_key = s.list_mode_key
+        AND filter_${index}.article_id = s.article_id
         AND filter_${index}.filter_kind = ${getSqlLiteral(filter.kind)}
         AND filter_${index}.filter_value = ${getSqlLiteral(filter.value)}
     )`
   })
-  const publicationYearPredicate =
+  const datePredicate =
     criteria.from || criteria.to
-      ? `AND EXISTS (
-        SELECT 1
-        FROM mart.review_article_filter_posting_serving_v4 year_filter
-        WHERE year_filter.project_id = p.project_id
-          AND year_filter.snapshot_id = p.snapshot_id
-          AND year_filter.review_config_hash = p.review_config_hash
-          AND year_filter.list_mode_key = p.list_mode_key
-          AND year_filter.article_id = p.article_id
-          AND year_filter.filter_kind = 'publicationYear'
-          ${criteria.from ? `AND TRY_CAST(year_filter.filter_value AS INTEGER) >= TRY_CAST(${getSqlLiteral(criteria.from)} AS INTEGER)` : ''}
-          ${criteria.to ? `AND TRY_CAST(year_filter.filter_value AS INTEGER) <= TRY_CAST(${getSqlLiteral(criteria.to)} AS INTEGER)` : ''}
-      )`
+      ? `${criteria.from ? `AND s.sort_key >= TIMESTAMPTZ ${getSqlLiteral(criteria.from)}` : ''}
+         ${criteria.to ? `AND s.sort_key <= TIMESTAMPTZ ${getSqlLiteral(criteria.to)}` : ''}`
       : ''
 
-  return [...simplePredicates, publicationYearPredicate, ...getPromptAnswerPredicates(criteria)].join('\n')
+  return [...simplePredicates, datePredicate, ...getPromptAnswerPredicates(criteria)].join('\n')
 }
 
 const getServingArticleBatchSql = (job: ReviewBulkOperationJobRow, cursor: string | null, limit: number) => {
   const criteria = getCriteria(job)
+  const sourceProjectIds = getSourceProjectIds(job, criteria)
   const snapshotPredicate = job.latestSnapshotSemantics
-    ? `p.snapshot_id = (SELECT snapshot_id FROM app.review_serving_snapshot_manifest WHERE project_id = ${getSqlLiteral(job.projectId)} AND snapshot_status = 'active' ORDER BY updated_at DESC, snapshot_id DESC LIMIT 1)`
-    : `p.snapshot_id = ${getSqlLiteral(job.snapshotId)}`
+    ? `s.snapshot_id = (SELECT snapshot_id FROM app.review_serving_snapshot_manifest WHERE project_id = s.project_id AND snapshot_status = 'active' ORDER BY updated_at DESC, snapshot_id DESC LIMIT 1)`
+    : `s.snapshot_id = ${getSqlLiteral(job.snapshotId)}`
+  const searchPredicate = criteria.search
+    ? `AND EXISTS (
+      SELECT 1
+      FROM mart.review_title_search_serving_v4 search
+      WHERE search.project_id = s.project_id
+        AND search.snapshot_id = s.snapshot_id
+        AND search.article_id = s.article_id
+        AND starts_with(search.token, ${getSqlLiteral(criteria.search.trim().toLowerCase())})
+    )`
+    : ''
 
   return `
-    SELECT DISTINCT p.article_id AS articleId
-    FROM mart.review_article_filter_posting_serving_v4 p
-    WHERE p.project_id = ${getSqlLiteral(job.projectId)}
+    SELECT DISTINCT s.article_id AS articleId
+    FROM mart.review_article_serving_v4 s
+    WHERE s.project_id IN (SELECT unnest(${getSqlLiteral(sourceProjectIds)}::VARCHAR[]))
       AND ${snapshotPredicate}
-      AND p.list_mode_key = ${getSqlLiteral(getListModeKey(criteria))}
-      ${cursor ? `AND p.article_id > ${getSqlLiteral(cursor)}` : ''}
+      AND s.list_mode_key = ${getSqlLiteral(getListModeKey(criteria))}
+      ${cursor ? `AND s.article_id > ${getSqlLiteral(cursor)}` : ''}
       ${getPostingFilterPredicates(criteria)}
-    ORDER BY p.article_id ASC
+      ${searchPredicate}
+    ORDER BY s.article_id ASC
     LIMIT ${getSqlLiteral(limit)}
   `
 }
@@ -291,7 +299,7 @@ const getArticleBatch = async (
   const cursor = getCursor(job).cursor ?? null
   const limit = getBatchLimit(job, options)
 
-  if (job.jobKind === 'review.bulk.substringSelection' || criteria.search) {
+  if (job.jobKind === 'review.bulk.substringSelection') {
     throw new Error('Substring bulk selection is waiting for async search results')
   }
 
@@ -328,6 +336,7 @@ const markProgress = async (input: {
   articleIds: readonly string[]
   database: ReviewBulkOperationWorkerDatabase
   job: ReviewBulkOperationJobRow
+  exportArticleIds?: readonly string[]
   pdfStats?: PdfFetchBatchStats
   workerId: string
 }) => {
@@ -342,7 +351,16 @@ const markProgress = async (input: {
         'lastArticleId', ${getSqlLiteral(lastArticleId)},
         'lastBatchSize', ${getSqlLiteral(input.articleIds.length)}
       )`
-    : `${getSqlLiteral({lastArticleId, lastBatchSize: input.articleIds.length})}::JSON`
+    : input.exportArticleIds
+      ? `json_object(
+        'batches', json_merge_patch(
+          COALESCE(json_extract(result_manifest_json, '$.batches'), '{}'::JSON),
+          json_object(${getSqlLiteral(lastArticleId ?? 'empty')}, ${getSqlLiteral(input.exportArticleIds)}::JSON)
+        ),
+        'lastArticleId', ${getSqlLiteral(lastArticleId)},
+        'lastBatchSize', ${getSqlLiteral(input.articleIds.length)}
+      )`
+      : `${getSqlLiteral({lastArticleId, lastBatchSize: input.articleIds.length})}::JSON`
 
   await input.database.run(
     `
@@ -404,6 +422,10 @@ const executeDefaultBatch = async (input: {
     return {pdfStats}
   }
 
+  if (criteria.operation === 'export') {
+    return {exportArticleIds: input.articleIds}
+  }
+
   if (criteria.operation !== 'addToProject' || !criteria.targetProjectId || input.articleIds.length === 0) {
     return
   }
@@ -446,7 +468,8 @@ export const runReviewBulkOperationWorkerOnce = async (
 
     const batchResult = await executeBatch({articleIds, database, job})
     const pdfStats = batchResult && 'pdfStats' in batchResult ? batchResult.pdfStats : undefined
-    await markProgress({articleIds, database, job, pdfStats, workerId})
+    const exportArticleIds = batchResult && 'exportArticleIds' in batchResult ? batchResult.exportArticleIds : undefined
+    await markProgress({articleIds, database, exportArticleIds, job, pdfStats, workerId})
 
     if (articleIds.length < getBatchLimit(job, options)) {
       await markCompleted(job.jobId, database, workerId)

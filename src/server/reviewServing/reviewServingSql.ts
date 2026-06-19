@@ -392,9 +392,7 @@ const getRequiredReviewServingRowsSqlParameter = (
 }
 
 const getReviewServingRowsSqlScopeColumn = (params: {contract: ReviewServingReadContract; field: string}) => {
-  return params.contract.physicalAccessStrategy === 'postingIntersection'
-    ? `${params.contract.servingTable}.${params.field}`
-    : params.field
+  return `${params.contract.servingTable}.${params.field}`
 }
 
 const getReviewServingRowsSqlArticlePredicate = (params: {
@@ -604,6 +602,7 @@ const getReviewServingRowsSqlPhysicalFilterPredicate = (params: {
     getReviewServingRowsSqlQueuePredicate(params),
     getReviewServingRowsSqlUnassessedQueuePredicate(params),
     getReviewServingRowsSqlJobPredicate(params),
+    params.filterPredicatesSql ?? '',
   ].join('')
 }
 
