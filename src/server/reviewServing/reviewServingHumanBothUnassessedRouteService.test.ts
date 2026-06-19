@@ -341,6 +341,8 @@ test('unassessed review route service pages filtered distinct article rows and q
   expect(servingStatement).toContain('starts_with(search.token, search_prefix.token_prefix)')
   expect(countStatement).toContain('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
   expect(countStatement).toContain("serving.list_mode_key = 'unassessed'")
+  expect(countStatement).toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(countStatement).toContain("queue.queue_kind = 'unassessed'")
   expect(countStatement).toContain('starts_with(search.token, search_prefix.token_prefix)')
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)

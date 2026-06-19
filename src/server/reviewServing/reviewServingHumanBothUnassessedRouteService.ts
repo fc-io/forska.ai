@@ -391,6 +391,20 @@ const getSearchPredicate = (
     : ''
 }
 
+const getUnassessedQueuePredicate = (mode: ReviewServingReviewMode) => {
+  return mode === 'unassessed'
+    ? `AND EXISTS (
+        SELECT 1
+        FROM mart.review_unassessed_queue_serving_v4 queue
+        WHERE queue.project_id = serving.project_id
+          AND queue.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+          AND queue.snapshot_id = serving.snapshot_id
+          AND queue.queue_kind = 'unassessed'
+          AND queue.article_id = serving.article_id
+      )`
+    : ''
+}
+
 const getFilteredCountValue = async (
   params: ArticlesReviewsBothParams | ArticlesReviewsParams,
   manifest: ReviewServingSnapshotManifest,
@@ -407,6 +421,7 @@ const getFilteredCountValue = async (
       AND serving.review_config_hash = ${getSqlLiteral(manifest.reviewConfigHash)}
       AND serving.snapshot_id = ${getSqlLiteral(manifest.snapshotId)}
       AND serving.list_mode_key = ${getSqlLiteral(mode)}
+      ${getUnassessedQueuePredicate(mode)}
       ${filters.articleCreatedAtFrom ? `AND serving.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}` : ''}
       ${getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo)}
       ${filters.duplicateFlag ? 'AND serving.duplicate_flag = TRUE' : ''}

@@ -303,8 +303,8 @@ const getPostingFilterPredicates = (criteria: ReviewBulkOperationCriteria) => {
   })
   const datePredicate =
     criteria.from || criteria.to
-      ? `${criteria.from ? `AND s.sort_key >= TIMESTAMPTZ ${getSqlLiteral(criteria.from)}` : ''}
-         ${getDateToPredicate('s.sort_key', criteria.to)}`
+      ? `${criteria.from ? `AND s.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(criteria.from)}` : ''}
+         ${getDateToPredicate('s.article_created_at', criteria.to)}`
       : ''
 
   return [...simplePredicates, datePredicate, ...getPromptAnswerPredicates(criteria)].join('\n')
