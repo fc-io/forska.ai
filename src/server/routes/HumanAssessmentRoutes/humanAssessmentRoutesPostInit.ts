@@ -7,7 +7,7 @@ import {
 } from '../../reviewServing/reviewServingManifestRepository.ts'
 import {readReviewServingRows, type ReviewServingReaderDatabase} from '../../reviewServing/reviewServingReader.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString} from '../../services/appQueryHelpers.ts'
+import {escapeSqlString, getDateValue} from '../../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
 import {syncPendingHumanJudgmentsForArticle} from './humanAssessmentPendingJudgments.ts'
 
@@ -25,10 +25,18 @@ type InitResponse = {
 }
 
 type HumanAssessmentQueueRow = {article_id?: string; articleId?: string}
+type ProjectDateBounds = {dateFrom: Date | null; dateTo: Date | null}
 
 const summaryModeBlockedMessage = 'Summary-mode projects do not support prompt-based human assessment'
 
-const getNextHumanAssessmentArticleIdFromServing = async (projectId: string) => {
+const getDateBoundFilters = (project: ProjectDateBounds) => {
+  return {
+    ...(project.dateFrom ? {articleCreatedAtFrom: project.dateFrom.toISOString()} : {}),
+    ...(project.dateTo ? {articleCreatedAtTo: project.dateTo.toISOString()} : {}),
+  }
+}
+
+const getNextHumanAssessmentArticleIdFromServing = async (projectId: string, project: ProjectDateBounds) => {
   const database = getAppDatabaseService() as ReviewServingManifestRepositoryDatabase & ReviewServingReaderDatabase
   const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
   const manifest =
@@ -43,7 +51,7 @@ const getNextHumanAssessmentArticleIdFromServing = async (projectId: string) => 
     {
       allowStale: false,
       contractKey: 'review.queue.unassessed',
-      filters: {queueKind: 'human-unreviewed'},
+      filters: {...getDateBoundFilters(project), queueKind: 'human-unreviewed'},
       limit: 1,
       listMode: 'unassessed',
       projectId,
@@ -71,6 +79,13 @@ const getNextHumanAssessmentArticleIdFromScope = async (projectId: string) => {
     SELECT scope_article.article_id AS articleId
     FROM mart.project_scope_article scope_article
     WHERE scope_article.project_id = '${escapeSqlString(projectId)}'
+      AND EXISTS (
+        SELECT 1
+        FROM app.project project
+        WHERE project.id = scope_article.project_id
+          AND (project.date_from IS NULL OR scope_article.article_created_at >= project.date_from)
+          AND (project.date_to IS NULL OR scope_article.article_created_at <= project.date_to)
+      )
       AND NOT EXISTS (
         SELECT 1
         FROM app.judgment_human judgment
@@ -87,11 +102,13 @@ const getNextHumanAssessmentArticleIdFromScope = async (projectId: string) => {
 
 export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {projectId: string}; set: Context['set']}) => {
   const [project] = await getAppDatabaseService().queryJson<{
+    dateFrom: unknown
+    dateTo: unknown
     humanJudgmentMode: 'prompt' | 'summary' | null
     id: string
     name: string
   }>(`
-    SELECT id, name, human_judgment_mode AS humanJudgmentMode
+    SELECT id, name, date_from AS dateFrom, date_to AS dateTo, human_judgment_mode AS humanJudgmentMode
     FROM app.project
     WHERE id = '${escapeSqlString(body.projectId)}'
     LIMIT 1
@@ -101,6 +118,7 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     return {data: null, error: 'Project not found'}
   }
   const humanJudgmentMode = project.humanJudgmentMode ?? 'prompt'
+  const projectDateBounds = {dateFrom: getDateValue(project.dateFrom), dateTo: getDateValue(project.dateTo)}
 
   if (humanJudgmentMode === 'summary') {
     set.status = 409
@@ -140,7 +158,7 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
   }
 
   if (!targetArticleId) {
-    const servingCandidate = await getNextHumanAssessmentArticleIdFromServing(body.projectId)
+    const servingCandidate = await getNextHumanAssessmentArticleIdFromServing(body.projectId, projectDateBounds)
 
     if (servingCandidate.error) {
       set.status = 503

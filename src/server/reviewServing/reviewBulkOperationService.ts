@@ -6,6 +6,7 @@ import {getStableReviewServingJson, type ReviewServingIdentityValue} from './rev
 import type {ReviewServingProjectionComponent, ReviewServingReadContractKey} from './reviewServingContracts.ts'
 import {getReviewServingFilterSignature, type ReviewServingFilterSignatureValue} from './reviewServingCursor.ts'
 import {
+  getActiveReviewServingSnapshotManifest,
   getReviewServingSnapshotManifest,
   type ReviewServingManifestRepositoryDatabase,
   type ReviewServingSnapshotManifest,
@@ -149,6 +150,16 @@ const getManifest = async (
       )
 }
 
+const getLatestRequiredManifest = async (
+  request: ReviewBulkOperationServiceRequest,
+  manifestDatabase: ReviewServingManifestRepositoryDatabase,
+  reviewConfigHash: string | null,
+) => {
+  return request.snapshot.type === 'latest' && !Array.isArray(request.criteria.articleIds)
+    ? getActiveReviewServingSnapshotManifest({projectId: request.projectId, reviewConfigHash}, manifestDatabase)
+    : null
+}
+
 const getPinnedSnapshotState = async (input: {
   database: ReviewBulkOperationServiceDatabase
   jobId: string
@@ -265,7 +276,7 @@ const verifyPersistedJobWithContract = async (input: {
   request: ReviewBulkOperationServiceRequest
   searchIdentity: string | null
 }) => {
-  await readReviewServingRows<{job_id: string}>(
+  const result = await readReviewServingRows<{job_id: string}>(
     {
       contractKey: input.request.jobKind as ReviewServingReadContractKey,
       jobFilterSignature: input.filterSignature,
@@ -293,6 +304,10 @@ const verifyPersistedJobWithContract = async (input: {
     },
     {database: input.database, diagnosticsDatabase: input.manifestDatabase, manifestDatabase: input.manifestDatabase},
   )
+
+  if (result.status === 'rejected') {
+    throw new Error(`Review bulk operation contract verification rejected: ${result.reason}`)
+  }
 }
 
 export const assertArticleIdOnlyBulkOperationCaps = (articleIds: readonly string[]) => {
@@ -328,7 +343,10 @@ export const createReviewBulkOperationJob = async (
   }
 
   const manifest = await getManifest(request, manifestDatabase)
-  const reviewConfigHash = await getRequestReviewConfigHash(request, manifest)
+  const pinnedReviewConfigHash = await getRequestReviewConfigHash(request, manifest)
+  const latestRequiredManifest = await getLatestRequiredManifest(request, manifestDatabase, pinnedReviewConfigHash)
+  const verificationManifest = manifest ?? latestRequiredManifest
+  const reviewConfigHash = await getRequestReviewConfigHash(request, verificationManifest)
   const jobRequest = {...request, reviewConfigHash}
   const jobId = getBulkOperationJobId({
     criteria: request.criteria,
@@ -346,23 +364,28 @@ export const createReviewBulkOperationJob = async (
     throw new Error('Review bulk operation snapshot is not ready')
   }
 
-  const searchIdentity = manifest ? getComponentIdentity(manifest, 'search') : null
-  const snapshotState = manifest
-    ? await getPinnedSnapshotState({database, jobId, manifest, request: jobRequest})
-    : getLatestSnapshotState()
+  if (request.snapshot.type === 'latest' && !Array.isArray(request.criteria.articleIds) && !latestRequiredManifest) {
+    throw new Error('Review bulk operation latest snapshot is not ready')
+  }
 
-  await insertBulkOperationJob({...snapshotState, database, filterSignature, jobId, request: jobRequest})
+  const searchIdentity = verificationManifest ? getComponentIdentity(verificationManifest, 'search') : null
 
-  if (manifest) {
+  if (verificationManifest) {
     await verifyPersistedJobWithContract({
       database,
       filterSignature,
-      manifest,
+      manifest: verificationManifest,
       manifestDatabase,
       request: jobRequest,
       searchIdentity,
     })
   }
+
+  const snapshotState = manifest
+    ? await getPinnedSnapshotState({database, jobId, manifest, request: jobRequest})
+    : getLatestSnapshotState()
+
+  await insertBulkOperationJob({...snapshotState, database, filterSignature, jobId, request: jobRequest})
 
   return {
     filterSignature,
