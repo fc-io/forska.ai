@@ -20,7 +20,10 @@ const getLastJsonLine = (value: string) => {
   return lastLine
 }
 
-const runStartBackgroundWork = (role: 'api' | 'judge-worker' | 'maintenance-worker') => {
+const runStartBackgroundWork = (input: {
+  canRunMartRefreshDrain?: boolean
+  role: 'api' | 'judge-worker' | 'maintenance-worker'
+}) => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -41,12 +44,12 @@ const runStartBackgroundWork = (role: 'api' | 'judge-worker' | 'maintenance-work
         const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
         const duckdbOwnerConnectionHeartbeatModulePath = getModulePath('./src/server/utils/duckdbOwnerConnectionHeartbeat.ts')
         const calls = []
-        const role = ${JSON.stringify(role)}
+        const input = ${JSON.stringify(input)}
 
         void mock.module(martRefreshDrainEligibilityModulePath, () => {
           return {
             shouldCurrentRuntimeRunMartRefreshDrain: () => {
-              return true
+              return input.canRunMartRefreshDrain ?? true
             },
           }
         })
@@ -71,6 +74,13 @@ const runStartBackgroundWork = (role: 'api' | 'judge-worker' | 'maintenance-work
             },
           }
         })
+        void mock.module(getModulePath('./src/server/utils/reviewBulkOperationWorkerHeartbeat.ts'), () => {
+          return {
+            startReviewBulkOperationWorkerHeartbeat: () => {
+              calls.push('reviewBulkOperationWorkerHeartbeat')
+            },
+          }
+        })
         void mock.module(requestAttemptCloseoutBackfillSchedulerModulePath, () => {
           return {
             startRequestAttemptCloseoutBackfillScheduler: () => {
@@ -81,7 +91,7 @@ const runStartBackgroundWork = (role: 'api' | 'judge-worker' | 'maintenance-work
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
             shouldCurrentServerRunMaintenanceLoops: () => {
-              return role === 'maintenance-worker'
+              return input.role === 'maintenance-worker'
             },
             startServerRuntimeRoleMonitor: () => {
               calls.push('serverRuntimeRoleMonitor')
@@ -112,20 +122,32 @@ const runStartBackgroundWork = (role: 'api' | 'judge-worker' | 'maintenance-work
 }
 
 test('startBackgroundWork starts shared infrastructure and maintenance work for maintenance-worker', () => {
-  const result = runStartBackgroundWork('maintenance-worker')
+  const result = runStartBackgroundWork({role: 'maintenance-worker'})
 
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
     'requestAttemptCloseoutBackfillScheduler',
+    'reviewBulkOperationWorkerHeartbeat',
     'projectMartRefreshWorkerHeartbeat',
     'projectMartLargeRebuildHeartbeat',
     'reviewServingProjectorWorkerHeartbeat',
   ])
 })
 
+test('startBackgroundWork starts bulk worker when mart refresh drain is disabled', () => {
+  const result = runStartBackgroundWork({canRunMartRefreshDrain: false, role: 'maintenance-worker'})
+
+  expect(result.calls).toEqual([
+    'serverRuntimeRoleMonitor',
+    'duckdbOwnerConnectionHeartbeat',
+    'requestAttemptCloseoutBackfillScheduler',
+    'reviewBulkOperationWorkerHeartbeat',
+  ])
+})
+
 test('startBackgroundWork skips maintenance work when the current role lacks maintenance capability', () => {
-  const result = runStartBackgroundWork('judge-worker')
+  const result = runStartBackgroundWork({role: 'judge-worker'})
 
   expect(result.calls).toEqual(['serverRuntimeRoleMonitor', 'duckdbOwnerConnectionHeartbeat'])
 })

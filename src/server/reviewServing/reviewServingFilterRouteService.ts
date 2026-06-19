@@ -301,9 +301,7 @@ const readOptionRows = async (
   dependencies?: ReviewServingFilterRouteDependencies,
 ) => {
   const searchIdentity = getComponentIdentity(manifest, 'search')
-  const activeFilters = getRouteFilters(params)
   const filterOptionIdentity = getReviewServingFilterOptionIdentity({
-    activeFilters,
     filterKeys: mode === 'human' ? defaultHumanFilterOptionKeys : defaultReviewFilterOptionKeys,
     listModeKeys: mode === 'human' ? defaultHumanListModeKeys : defaultReviewListModeKeys,
     optionMode: mode,

@@ -281,6 +281,27 @@ test('project export rejects mixed source review configs before queueing a durab
   expect(createReviewBulkOperationJobCalls).toHaveLength(0)
 })
 
+test('project export allows metadata-only cross-project jobs with mixed review configs', async () => {
+  reviewConfigHashes.set('project-1', 'config-1')
+  reviewConfigHashes.set('project-2', 'config-2')
+  queryJsonRef.current = async (statement) => {
+    return statement.includes('FROM app.project') ? [{id: 'project-1', name: 'Project 1'}] : []
+  }
+  const {projectExportRoutes} = await loadRoutes()
+  const app = new Elysia().use(projectExportRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/project-1/export', {
+      body: JSON.stringify({includeArticleId: true, promptIds: [], sourceProjectIds: ['project-1', 'project-2']}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const jobRequest = createReviewBulkOperationJobCalls[0] as ExportJobRequest
+
+  expect(response.status).toBe(202)
+  expect(jobRequest).toMatchObject({criteria: {sourceProjectIds: ['project-1', 'project-2']}, reviewConfigHash: null})
+})
+
 test('project export stores cross-project jobs under the downloadable project', async () => {
   queryJsonRef.current = async (statement) => {
     return statement.includes('FROM app.project') ? [{id: 'project-1', name: 'Project 1'}] : []
