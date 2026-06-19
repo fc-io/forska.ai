@@ -19,6 +19,7 @@ import {
   type ReviewServingReaderDatabase,
   type ReviewServingReaderRequest,
 } from './reviewServingReader.ts'
+import {getReviewServingTitleSearchTokens} from './reviewServingTitleSearchProjector.ts'
 
 type ReviewServingArticleRow = {
   activity_sort_at?: unknown
@@ -141,31 +142,28 @@ const getPromptAnswerFilters = (prompts: Record<string, string[]> | undefined) =
   })
 }
 
-const getSearchTokenPrefix = (search: string | null | undefined) => {
-  const [firstToken] =
-    search
-      ?.trim()
-      .toLowerCase()
-      .split(/\s+/u)
-      .filter((token) => {
-        return token.length > 0
-      }) ?? []
+const getSearchTokenPrefixes = (search: string | null | undefined) => {
+  return getReviewServingTitleSearchTokens(search ?? null)
+}
 
-  return firstToken ?? null
+const getSearchTokenPrefix = (search: string | null | undefined) => {
+  return getSearchTokenPrefixes(search)[0] ?? null
 }
 
 const getRouteFilters = (params: ArticlesReviewsBothParams | ArticlesReviewsParams, mode: ReviewServingReviewMode) => {
   const promptAnswer = getPromptAnswerFilters(params.prompts)
-  const searchTokenPrefix = getSearchTokenPrefix(params.search)
+  const searchTokenPrefixes = getSearchTokenPrefixes(params.search)
 
   return {
     ...(params.from ? {articleCreatedAtFrom: params.from} : {}),
     ...(params.to ? {articleCreatedAtTo: params.to} : {}),
     ...(params.hasDuplicateStudyRecords ? {duplicateFlag: 'true'} : {}),
     ...(params.hasStudyDecisionConflict ? {conflictFlag: 'true'} : {}),
+    ...(mode === 'both' ? {llmStatus: 'complete'} : {}),
+    ...(mode === 'human' || mode === 'both' ? {humanStatus: 'answered'} : {}),
     ...(mode === 'unassessed' ? {queueKind: 'unassessed'} : {}),
     ...(promptAnswer.length > 0 ? {promptAnswer} : {}),
-    ...(searchTokenPrefix ? {searchTokenPrefix} : {}),
+    ...(searchTokenPrefixes.length > 0 ? {searchTokenPrefix: searchTokenPrefixes[0]} : {}),
   }
 }
 
@@ -220,6 +218,7 @@ const getBaseReaderRequest = (
     searchMode: searchTokenPrefix ? 'tokenPrefix' : 'none',
     searchState: searchTokenPrefix ? {availability: 'ready', snapshotId: manifest.snapshotId} : null,
     searchTokenPrefix,
+    searchTokenPrefixes: getSearchTokenPrefixes(params.search),
     snapshotId: manifest.snapshotId,
   }
 }
@@ -343,17 +342,26 @@ const getManifestComponentIdentity = (manifest: ReviewServingSnapshotManifest, c
   })?.projectionIdentity
 }
 
-const getSearchPredicate = (filters: ReturnType<typeof getRouteFilters>, manifest: ReviewServingSnapshotManifest) => {
-  return filters.searchTokenPrefix
-    ? `AND EXISTS (
-        SELECT 1
-        FROM mart.review_title_search_serving_v4 search
-        WHERE search.project_id = serving.project_id
-          AND search.search_identity = ${getSqlLiteral(getManifestComponentIdentity(manifest, 'search') ?? '')}
-          AND search.project_scope_identity = ${getSqlLiteral(getManifestComponentIdentity(manifest, 'projectScope') ?? '')}
-          AND search.snapshot_id = serving.snapshot_id
-          AND search.article_id = serving.article_id
-          AND starts_with(search.token, ${getSqlLiteral(filters.searchTokenPrefix)})
+const getSearchPredicate = (
+  params: ArticlesReviewsBothParams | ArticlesReviewsParams,
+  filters: ReturnType<typeof getRouteFilters>,
+  manifest: ReviewServingSnapshotManifest,
+) => {
+  const searchTokenPrefixes = filters.searchTokenPrefix ? getSearchTokenPrefixes(params.search) : []
+
+  return searchTokenPrefixes.length > 0
+    ? `AND NOT EXISTS (
+        SELECT 1 FROM (SELECT unnest(${getSqlLiteral(searchTokenPrefixes)}::VARCHAR[]) AS token_prefix) search_prefix
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM mart.review_title_search_serving_v4 search
+          WHERE search.project_id = serving.project_id
+            AND search.search_identity = ${getSqlLiteral(getManifestComponentIdentity(manifest, 'search') ?? '')}
+            AND search.project_scope_identity = ${getSqlLiteral(getManifestComponentIdentity(manifest, 'projectScope') ?? '')}
+            AND search.snapshot_id = serving.snapshot_id
+            AND search.article_id = serving.article_id
+            AND starts_with(search.token, search_prefix.token_prefix)
+        )
       )`
     : ''
 }
@@ -366,6 +374,7 @@ const getFilteredCountValue = async (
 ) => {
   const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
   const filters = getRouteFilters(params, mode)
+  const llmStatusValue = filters.llmStatus === 'complete' ? 'answered' : null
   const [row] = await database.queryJson<{totalCount: number}>(`
     SELECT COUNT(DISTINCT serving.article_id) AS totalCount
     FROM mart.review_article_serving_v4 serving
@@ -377,8 +386,10 @@ const getFilteredCountValue = async (
       ${getDateToPredicate('serving.sort_key', filters.articleCreatedAtTo)}
       ${filters.duplicateFlag ? 'AND serving.duplicate_flag = TRUE' : ''}
       ${filters.conflictFlag ? 'AND serving.conflict_flag = TRUE' : ''}
+      ${llmStatusValue ? `AND serving.llm_status_key = ${getSqlLiteral(llmStatusValue)}` : ''}
+      ${typeof filters.humanStatus === 'string' ? `AND serving.human_status_key = ${getSqlLiteral(filters.humanStatus)}` : ''}
       ${getPromptAnswerPredicates(params, mode).join('\n')}
-      ${getSearchPredicate(filters, manifest)}
+      ${getSearchPredicate(params, filters, manifest)}
   `)
 
   return Number(row?.totalCount ?? 0)

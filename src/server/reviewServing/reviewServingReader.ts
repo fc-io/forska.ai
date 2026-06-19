@@ -71,6 +71,7 @@ export type ReviewServingReaderRequest = {
   searchState?: ReviewServingSearchState | null
   searchText?: string | null
   searchTokenPrefix?: string | null
+  searchTokenPrefixes?: readonly string[] | null
   snapshotId?: string | null
 }
 
@@ -442,16 +443,19 @@ const getSearchFilterPredicate = (input: {
   request: ReviewServingReaderRequest
 }) => {
   const componentStates = getComponentCursorStates(input.manifest)
+  const searchTokenPrefixes =
+    input.request.searchTokenPrefixes ?? (input.request.searchTokenPrefix ? [input.request.searchTokenPrefix] : [])
 
-  return input.request.searchTokenPrefix && componentStates.search?.projectionIdentity
+  return searchTokenPrefixes.length > 0 && componentStates.search?.projectionIdentity
     ? [
-        'EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search',
-        ` WHERE search.project_id = $projectId`,
-        ` AND search.search_identity = $searchIdentity`,
-        ` AND search.project_scope_identity = $projectScopeIdentity`,
-        ` AND search.snapshot_id = $snapshotId`,
+        'NOT EXISTS (SELECT 1 FROM (SELECT unnest($searchTokenPrefixes) AS token_prefix) search_prefix',
+        ' WHERE NOT EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search',
+        ' WHERE search.project_id = $projectId',
+        ' AND search.search_identity = $searchIdentity',
+        ' AND search.project_scope_identity = $projectScopeIdentity',
+        ' AND search.snapshot_id = $snapshotId',
         ` AND search.article_id = ${input.contract.servingTable}.article_id`,
-        ` AND starts_with(search.token, $searchTokenPrefix))`,
+        ' AND starts_with(search.token, search_prefix.token_prefix)))',
       ].join('')
     : ''
 }
@@ -496,6 +500,7 @@ const getFilterSignatureInput = (request: ReviewServingReaderRequest) => {
     queueKind: request.queueKind ?? undefined,
     searchText: request.searchText ?? undefined,
     searchTokenPrefix: request.searchTokenPrefix ?? undefined,
+    searchTokenPrefixes: request.searchTokenPrefixes ?? undefined,
   }
 }
 
@@ -681,6 +686,7 @@ const bindReviewServingRowsSql = (
     searchIdentity: request.searchIdentity ?? componentStates.search?.projectionIdentity,
     searchText: request.searchText ?? null,
     searchTokenPrefix: request.searchTokenPrefix ?? null,
+    searchTokenPrefixes: request.searchTokenPrefixes ?? (request.searchTokenPrefix ? [request.searchTokenPrefix] : []),
     snapshotId: manifest.snapshotId,
   }
 

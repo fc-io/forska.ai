@@ -5,6 +5,7 @@ import {Elysia, t} from 'elysia'
 import {createReviewBulkOperationJob} from '../reviewServing/reviewBulkOperationService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {assertProjectIsActive} from './projectsRoutes/projectAccessGuard.ts'
@@ -110,6 +111,8 @@ export const projectExportRoutes = new Elysia()
       const snapshot = body.snapshotId
         ? {expiresAt: body.snapshotPinExpiresAt, snapshotId: body.snapshotId, type: 'pinned' as const}
         : {type: 'latest' as const}
+      const sourceProjectId = sourceProjectIds[0] ?? projectId
+      const reviewConfigHash = await getCurrentReviewConfigHash(sourceProjectId)
       const job = await createReviewBulkOperationJob({
         batchSize: exportBatchSize,
         criteria: {
@@ -126,12 +129,13 @@ export const projectExportRoutes = new Elysia()
           prompts,
           requestId: randomUUID(),
           search: body.search,
-          sourceProjectId: sourceProjectIds[0] ?? projectId,
+          sourceProjectId,
           sourceProjectIds,
         },
         filters: {listType: body.listType ?? 'llm', prompts, search: body.search},
         jobKind: 'review.export.selection',
-        projectId: sourceProjectIds[0] ?? projectId,
+        projectId: sourceProjectId,
+        reviewConfigHash,
         searchMode: body.search ? 'substring' : 'none',
         searchText: body.search,
         snapshot,

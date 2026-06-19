@@ -5,6 +5,7 @@ import {
   createReviewBulkOperationJob,
 } from '../reviewServing/reviewBulkOperationService.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
+import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
 const projectsAddArticlesLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
@@ -21,6 +22,7 @@ export const projectsAddArticlesRoutes = new Elysia()
         }
       }
 
+      const reviewConfigHash = await getCurrentReviewConfigHash(body.sourceProjectId)
       const job = await createReviewBulkOperationJob({
         criteria: {
           from: body.from,
@@ -47,6 +49,7 @@ export const projectsAddArticlesRoutes = new Elysia()
         },
         jobKind: 'review.bulk.selection',
         projectId: body.sourceProjectId,
+        reviewConfigHash,
         searchMode: 'none',
         searchText: null,
         snapshot: {type: 'latest'},

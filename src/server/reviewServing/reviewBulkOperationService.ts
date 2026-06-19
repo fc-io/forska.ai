@@ -177,6 +177,13 @@ const getLatestSnapshotState = () => {
   return {composedIdentity: {snapshotSemantics: 'latest'}, snapshotId: null, snapshotPinId: null}
 }
 
+const getRequestReviewConfigHash = async (
+  request: ReviewBulkOperationServiceRequest,
+  manifest: ReviewServingSnapshotManifest | null,
+) => {
+  return request.reviewConfigHash ?? manifest?.reviewConfigHash ?? null
+}
+
 const insertBulkOperationJob = async (input: {
   composedIdentity: ReviewServingIdentityValue
   database: ReviewBulkOperationServiceDatabase
@@ -301,11 +308,22 @@ export const createReviewBulkOperationJob = async (
 ): Promise<ReviewBulkOperationJobResult> => {
   const database = dependencies?.database ?? getDatabase()
   const manifestDatabase = dependencies?.manifestDatabase ?? (database as ReviewServingManifestRepositoryDatabase)
-  const reviewConfigHash = request.reviewConfigHash ?? null
   const searchMode = request.searchMode ?? 'none'
   const searchText = request.searchText ?? null
   const filterSignature = getBulkOperationFilterSignature(request)
   const requestedSnapshotId = request.snapshot.type === 'pinned' ? request.snapshot.snapshotId : null
+
+  if (!hasText(request.projectId)) {
+    throw new Error('Review bulk operation projectId is required')
+  }
+
+  if (Array.isArray(request.criteria.articleIds)) {
+    assertArticleIdOnlyBulkOperationCaps(request.criteria.articleIds)
+  }
+
+  const manifest = await getManifest(request, manifestDatabase)
+  const reviewConfigHash = await getRequestReviewConfigHash(request, manifest)
+  const jobRequest = {...request, reviewConfigHash}
   const jobId = getBulkOperationJobId({
     criteria: request.criteria,
     filterSignature,
@@ -318,26 +336,16 @@ export const createReviewBulkOperationJob = async (
     snapshotSemantics: request.snapshot.type,
   })
 
-  if (!hasText(request.projectId)) {
-    throw new Error('Review bulk operation projectId is required')
-  }
-
-  if (Array.isArray(request.criteria.articleIds)) {
-    assertArticleIdOnlyBulkOperationCaps(request.criteria.articleIds)
-  }
-
-  const manifest = await getManifest(request, manifestDatabase)
-
   if (request.snapshot.type === 'pinned' && (!manifest || manifest.status !== 'active')) {
     throw new Error('Review bulk operation snapshot is not ready')
   }
 
   const searchIdentity = manifest ? getComponentIdentity(manifest, 'search') : null
   const snapshotState = manifest
-    ? await getPinnedSnapshotState({database, jobId, manifest, request})
+    ? await getPinnedSnapshotState({database, jobId, manifest, request: jobRequest})
     : getLatestSnapshotState()
 
-  await insertBulkOperationJob({...snapshotState, database, filterSignature, jobId, request})
+  await insertBulkOperationJob({...snapshotState, database, filterSignature, jobId, request: jobRequest})
 
   if (manifest) {
     await verifyPersistedJobWithContract({
@@ -345,7 +353,7 @@ export const createReviewBulkOperationJob = async (
       filterSignature,
       manifest,
       manifestDatabase,
-      request,
+      request: jobRequest,
       searchIdentity,
     })
   }
