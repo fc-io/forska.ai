@@ -126,12 +126,12 @@ test('normal foreground row contracts require ready snapshots and serving tables
   const bothRows = getReviewServingReadContract('review.both.rows')
 
   expect(llmRows?.freshnessBehavior).toBe('requireReadySnapshot')
-  expect(llmRows?.maxPageSize).toBe(500)
+  expect(llmRows?.maxPageSize).toBe(501)
   expect(humanRows?.servingTable).toBe('mart.review_article_serving_v4')
-  expect(humanRows?.maxPageSize).toBe(500)
+  expect(humanRows?.maxPageSize).toBe(501)
   expect(bothRows?.requiredComponents).toContain('humanStatus')
   expect(bothRows?.requiredComponents).toContain('llmStatus')
-  expect(bothRows?.maxPageSize).toBe(500)
+  expect(bothRows?.maxPageSize).toBe(501)
 })
 
 test('direct ordered row contracts advertise only migrated route filters', () => {
@@ -163,6 +163,7 @@ test('direct ordered row contracts advertise only migrated route filters', () =>
         'articleCreatedAtTo',
         'searchTokenPrefix',
         'conflictFlag',
+        'llmHasJudgment',
         'llmStatus',
         'promptAnswer',
       ],
@@ -496,6 +497,7 @@ test('filtered row routes have article-set hydration contracts', () => {
         'searchTokenPrefix',
         'articleId',
         'conflictFlag',
+        'llmHasJudgment',
         'llmStatus',
         'promptAnswer',
       ],

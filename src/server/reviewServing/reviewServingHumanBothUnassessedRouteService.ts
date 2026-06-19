@@ -24,12 +24,14 @@ import {getReviewServingTitleSearchTokens} from './reviewServingTitleSearchProje
 
 type ReviewServingArticleRow = {
   activity_sort_at?: unknown
+  article_created_at?: unknown
   arxiv_id?: string | null
   arxivId?: string | null
   article_external_id?: string | null
   article_id?: string
   article_title?: string | null
   articleExternalId?: string | null
+  articleCreatedAt?: unknown
   articleId?: string
   articleTitle?: string | null
   biorxiv_id?: string | null
@@ -405,8 +407,8 @@ const getFilteredCountValue = async (
       AND serving.review_config_hash = ${getSqlLiteral(manifest.reviewConfigHash)}
       AND serving.snapshot_id = ${getSqlLiteral(manifest.snapshotId)}
       AND serving.list_mode_key = ${getSqlLiteral(mode)}
-      ${filters.articleCreatedAtFrom ? `AND serving.sort_key >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}` : ''}
-      ${getDateToPredicate('serving.sort_key', filters.articleCreatedAtTo)}
+      ${filters.articleCreatedAtFrom ? `AND serving.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}` : ''}
+      ${getDateToPredicate('serving.article_created_at', filters.articleCreatedAtTo)}
       ${filters.duplicateFlag ? 'AND serving.duplicate_flag = TRUE' : ''}
       ${filters.conflictFlag ? 'AND serving.conflict_flag = TRUE' : ''}
       ${llmStatusValue ? `AND serving.llm_status_key = ${getSqlLiteral(llmStatusValue)}` : ''}
@@ -584,7 +586,7 @@ const getArticleResponseBase = (row: ReviewServingArticleRow) => {
   return {
     id: getArticleId(row),
     articleTitle: row.article_title ?? row.articleTitle ?? null,
-    articleCreatedAt: getDateValue(row.sort_key),
+    articleCreatedAt: getDateValue(row.article_created_at ?? row.articleCreatedAt),
     articleUpdatedAt: getDateValue(row.activity_sort_at),
     articleId: row.article_external_id ?? row.articleExternalId ?? null,
     arxivId: row.arxiv_id ?? row.arxivId ?? null,

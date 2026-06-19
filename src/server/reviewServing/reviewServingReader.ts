@@ -382,11 +382,11 @@ const getColumnFilterPredicates = (request: ReviewServingReaderRequest) => {
   const articleCreatedAtTo = getFilterString(filters.articleCreatedAtTo)
 
   return [
-    articleCreatedAtFrom ? 'sort_key >= TIMESTAMPTZ $articleCreatedAtFrom' : '',
+    articleCreatedAtFrom ? 'article_created_at >= TIMESTAMPTZ $articleCreatedAtFrom' : '',
     articleCreatedAtTo
       ? isDateOnlyFilter(articleCreatedAtTo)
-        ? 'sort_key < TIMESTAMPTZ $articleCreatedAtTo'
-        : 'sort_key <= TIMESTAMPTZ $articleCreatedAtTo'
+        ? 'article_created_at < TIMESTAMPTZ $articleCreatedAtTo'
+        : 'article_created_at <= TIMESTAMPTZ $articleCreatedAtTo'
       : '',
     filters.duplicateFlag ? `duplicate_flag = TRUE` : '',
     filters.conflictFlag ? `conflict_flag = TRUE` : '',
@@ -501,11 +501,11 @@ const getQueueOrderingFilterPredicatesSql = (input: {
   const articleCreatedAtFrom = getFilterString(filters.articleCreatedAtFrom)
   const articleCreatedAtTo = getFilterString(filters.articleCreatedAtTo)
   const predicates = [
-    articleCreatedAtFrom ? 'sort_key >= TIMESTAMPTZ $articleCreatedAtFrom' : '',
+    articleCreatedAtFrom ? 'article_created_at >= TIMESTAMPTZ $articleCreatedAtFrom' : '',
     articleCreatedAtTo
       ? isDateOnlyFilter(articleCreatedAtTo)
-        ? 'sort_key < TIMESTAMPTZ $articleCreatedAtTo'
-        : 'sort_key <= TIMESTAMPTZ $articleCreatedAtTo'
+        ? 'article_created_at < TIMESTAMPTZ $articleCreatedAtTo'
+        : 'article_created_at <= TIMESTAMPTZ $articleCreatedAtTo'
       : '',
   ].filter((predicate) => {
     return predicate.length > 0

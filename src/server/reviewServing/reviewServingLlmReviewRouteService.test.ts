@@ -129,11 +129,13 @@ const createReaderDatabase = () => {
         return [
           {
             article_id: 'article-1',
+            article_created_at: null,
             article_external_id: 'external-1',
             article_title: 'Article 1',
             journal_title: 'Journal',
             llm_status_key: 'answered',
             sort_key: '2026-01-01T00:00:00.000Z',
+            source_metadata: {covidence: {studyId: 'study-1'}},
             activity_sort_at: '2026-01-02T00:00:00.000Z',
             url: 'https://example.test/article-1',
           },
@@ -195,6 +197,8 @@ test('LLM review list route service composes serving rows, judgments, and count 
   const sql = reader.statements.join('\n')
 
   expect(result.data[0]?.judgments[0]?.answeredOriginal).toBe('yes')
+  expect(result.data[0]?.articleCreatedAt).toBeNull()
+  expect(result.data[0]?.sourceMetadata).toEqual({covidence: {studyId: 'study-1'}})
   expect(result.data[0]?.judgments).toHaveLength(1)
   expect(result.data[0]?.judgedPromptIds).toEqual(['prompt-1'])
   expect(result.data[0]?.isFullyJudged).toBe(true)
@@ -203,8 +207,8 @@ test('LLM review list route service composes serving rows, judgments, and count 
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).toContain('COUNT(DISTINCT serving.article_id)')
   expect(sql).toContain("article_id IN (SELECT unnest(['article-1']::VARCHAR[]))")
-  expect(sql).toContain("sort_key >= TIMESTAMPTZ '2026-01-10T00:00:00.000Z'")
-  expect(sql).toContain("sort_key <= TIMESTAMPTZ '2026-01-20T00:00:00.000Z'")
+  expect(sql).toContain("article_created_at >= TIMESTAMPTZ '2026-01-10T00:00:00.000Z'")
+  expect(sql).toContain("article_created_at <= TIMESTAMPTZ '2026-01-20T00:00:00.000Z'")
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })

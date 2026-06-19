@@ -115,10 +115,12 @@ const createReaderDatabase = () => {
         return [
           {
             activity_sort_at: '2026-01-02T00:00:00.000Z',
+            article_created_at: null,
             article_external_id: 'external-1',
             article_id: 'article-1',
             article_title: 'Article 1',
             journal_title: 'Journal',
+            source_metadata: {covidence: {studyId: 'study-1'}},
             sort_key: '2026-01-01T00:00:00.000Z',
             url: 'https://example.test/article-1',
           },
@@ -224,8 +226,16 @@ test('human review route service uses serving rows, human payload hydration, and
   )
   const sql = reader.statements.join('\n')
 
-  expect((result.data[0] as {judgments: {answer: string | null}[]}).judgments[0]?.answer).toBe('yes')
-  expect(reader.statements).toHaveLength(3)
+  const [firstRow] = result.data as Array<{
+    articleCreatedAt: Date | null
+    judgments: {answer: string | null}[]
+    sourceMetadata: unknown
+  }>
+
+  expect(firstRow?.judgments[0]?.answer).toBe('yes')
+  expect(firstRow?.articleCreatedAt).toBeNull()
+  expect(firstRow?.sourceMetadata).toEqual({covidence: {studyId: 'study-1'}})
+  expect(reader.statements).toHaveLength(4)
   expect(sql).toContain('FROM mart.review_article_serving_v4')
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).toContain("payload_kind = 'human'")
@@ -234,6 +244,25 @@ test('human review route service uses serving rows, human payload hydration, and
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })
+})
+
+test('human review route service allows the 500-row page cursor probe within the reader contract', async () => {
+  const reader = createChunkedHydrationReaderDatabase(501)
+
+  await getHumanReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 500, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+
+  expect(
+    reader.statements.find((statement) => {
+      return statement.includes('FROM mart.review_article_serving_v4')
+    }),
+  ).toContain('LIMIT 501')
 })
 
 test('both review route service hydrates LLM and human payloads in bounded article-set reads', async () => {
@@ -251,7 +280,7 @@ test('both review route service hydrates LLM and human payloads in bounded artic
   expect(result.data[0]?.judgments[0]?.answeredOriginal).toBe('yes')
   expect(result.data[0]?.judgments).toHaveLength(1)
   expect(result.data[0]?.humanAnswersByPrompt?.['prompt-1']).toEqual(['yes'])
-  expect(reader.statements).toHaveLength(4)
+  expect(reader.statements).toHaveLength(5)
   expect(sql.match(/article_id IN \(SELECT unnest\(\['article-1'\]::VARCHAR\[\]\)\)/gu)?.length).toBe(2)
   expect(sql).toContain("list_mode_key = 'both'")
   expect(sql).toContain("payload_kind = 'llm'")
@@ -298,14 +327,21 @@ test('unassessed review route service pages filtered distinct article rows and q
   const sql = reader.statements.join('\n')
 
   expect(result.data).toHaveLength(1)
-  expect(reader.statements).toHaveLength(2)
-  expect(reader.statements[0]).toContain('FROM mart.review_article_serving_v4')
-  expect(reader.statements[0]).toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
-  expect(reader.statements[0]).toContain("unnest(['heart']::VARCHAR[])")
-  expect(reader.statements[0]).toContain('starts_with(search.token, search_prefix.token_prefix)')
-  expect(reader.statements[1]).toContain('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
-  expect(reader.statements[1]).toContain("serving.list_mode_key = 'unassessed'")
-  expect(reader.statements[1]).toContain('starts_with(search.token, search_prefix.token_prefix)')
+  const servingStatement = reader.statements.find((statement) => {
+    return statement.includes('FROM mart.review_article_serving_v4')
+  })
+  const countStatement = reader.statements.find((statement) => {
+    return statement.includes('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
+  })
+
+  expect(reader.statements).toHaveLength(3)
+  expect(servingStatement).toContain('FROM mart.review_article_serving_v4')
+  expect(servingStatement).toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(servingStatement).toContain("unnest(['heart']::VARCHAR[])")
+  expect(servingStatement).toContain('starts_with(search.token, search_prefix.token_prefix)')
+  expect(countStatement).toContain('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
+  expect(countStatement).toContain("serving.list_mode_key = 'unassessed'")
+  expect(countStatement).toContain('starts_with(search.token, search_prefix.token_prefix)')
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })
@@ -343,9 +379,9 @@ test('human, both, and unassessed routes read one cursor page for numeric direct
   expect(humanResult.page).toBe(1)
   expect(bothResult.page).toBe(1)
   expect(unassessedResult.page).toBe(1)
-  expect(humanReader.statements).toHaveLength(3)
-  expect(bothReader.statements).toHaveLength(4)
-  expect(unassessedReader.statements).toHaveLength(2)
+  expect(humanReader.statements).toHaveLength(4)
+  expect(bothReader.statements).toHaveLength(5)
+  expect(unassessedReader.statements).toHaveLength(3)
 })
 
 test('human, both, and unassessed services surface stale and unavailable freshness without raw fallback', async () => {

@@ -244,7 +244,7 @@ const getProjectReviewDetailJudgmentRows = async (params: {
   })
 
   if (result.status === 'rejected') {
-    throw new Error(`Review detail judgments are unavailable: ${result.reason}`)
+    return []
   }
 
   const rows = result.rows
