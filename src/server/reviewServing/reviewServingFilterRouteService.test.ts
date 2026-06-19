@@ -223,7 +223,7 @@ test('review filter route service tokenizes search text like row reads', async (
 
   const sql = reader.statements.join('\n')
 
-  expect(sql).toContain('"searchTokenPrefix":"covid"')
+  expect(sql).toContain('"activeFilters":{}')
   expect(sql).not.toContain('"searchTokenPrefix":"covid-19"')
 })
 

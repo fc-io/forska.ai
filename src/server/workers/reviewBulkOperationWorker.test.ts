@@ -339,7 +339,21 @@ test('review bulk operation worker tokenizes title search criteria for durable j
   expect(joined).toContain("starts_with(search_1.token, '19')")
   expect(joined).toContain("starts_with(search_2.token, 'heart')")
   expect(joined).toContain("starts_with(search_3.token, 'failure')")
+  expect(joined).toContain("json_extract_string(component.value, '$.component') = 'search'")
+  expect(joined).not.toContain('$.optional[0].projectionIdentity')
   expect(joined).not.toContain("starts_with(search.token, 'covid-19 heart failure')")
+})
+
+test('review bulk operation worker heartbeats running jobs while executing batches', async () => {
+  const harness = createWorkerHarness()
+
+  await runReviewBulkOperationWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  const joined = harness.statements.join('\n')
+
+  expect(joined).toContain('SET updated_at = current_timestamp')
+  expect(joined).toContain("AND status = 'running'")
+  expect(joined).toContain('AND completed_at IS NULL')
 })
 
 test('review bulk operation worker completes terminally when the final batch is short', async () => {

@@ -12,6 +12,7 @@ import {
   type ReviewServingManifestRepositoryDatabase,
   type ReviewServingSnapshotManifest,
 } from './reviewServingManifestRepository.ts'
+import {getEffectiveReviewServingDateFilters} from './reviewServingProjectDateBounds.ts'
 import {readReviewServingRows, type ReviewServingReaderDatabase} from './reviewServingReader.ts'
 import {getReviewServingTitleSearchTokens} from './reviewServingTitleSearchProjector.ts'
 
@@ -150,6 +151,15 @@ const getRouteFilters = (params: ArticlesReviewsParams) => {
     ...(promptAnswer.length > 0 ? {promptAnswer} : {}),
     ...(searchTokenPrefixes.length > 0 ? {searchTokenPrefix: searchTokenPrefixes[0]} : {}),
   }
+}
+
+const getParamsWithEffectiveDateFilters = async (
+  params: ArticlesReviewsParams,
+  database: ReviewServingReaderDatabase,
+) => {
+  const dates = await getEffectiveReviewServingDateFilters(params, database)
+
+  return {...params, from: dates.from, to: dates.to}
 }
 
 const hasDynamicFilters = (params: ArticlesReviewsParams) => {
@@ -428,9 +438,11 @@ export const getLlmReviewArticlesFromServing = async (
   params: ArticlesReviewsParams,
   dependencies?: ReviewServingLlmReviewRouteDependencies,
 ): Promise<ArticlesReviewsResponse> => {
+  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const effectiveParams = await getParamsWithEffectiveDateFilters(params, database)
   const manifest = await getManifest(params.projectId, dependencies)
-  const page = getPage(params.page)
-  const limit = getLimit(params.limit)
+  const page = getPage(effectiveParams.page)
+  const limit = getLimit(effectiveParams.limit)
 
   if (!manifest) {
     throw new Error('Review serving snapshot is unavailable')
@@ -438,9 +450,9 @@ export const getLlmReviewArticlesFromServing = async (
 
   const rowsResult = await readReviewServingRows<ReviewServingArticleRow>(
     {
-      ...getBaseReaderRequest(params, manifest, limit + 1),
+      ...getBaseReaderRequest(effectiveParams, manifest, limit + 1),
       contractKey: 'review.llm.rows',
-      cursor: params.cursor ?? null,
+      cursor: effectiveParams.cursor ?? null,
     },
     getReaderDependencies(dependencies),
   )
@@ -456,7 +468,7 @@ export const getLlmReviewArticlesFromServing = async (
       ? null
       : await readReviewServingRows<ReviewServingJudgmentRow>(
           {
-            ...getBaseReaderRequest(params, manifest, Math.min(articleIds.length * 128, 10_000)),
+            ...getBaseReaderRequest(effectiveParams, manifest, Math.min(articleIds.length * 128, 10_000)),
             articleIds,
             contractKey: 'review.llm.list.judgments',
             estimatedHydratedPayloadBytes: articleIds.length * 10_000,
@@ -474,7 +486,7 @@ export const getLlmReviewArticlesFromServing = async (
     throw new Error(`reviewServingReader rejected LLM review judgments: ${judgmentsResult.reason}`)
   }
 
-  const totalCount = await getCountValue(params, manifest, dependencies)
+  const totalCount = await getCountValue(effectiveParams, manifest, {...dependencies, database})
   const lastRow = pageRows[pageRows.length - 1]
   const hasNextPage = rowsResult.rows.length > limit
 
@@ -492,14 +504,16 @@ export const countLlmReviewArticlesFromServing = async (
   params: ArticlesReviewsParams,
   dependencies?: ReviewServingLlmReviewRouteDependencies,
 ): Promise<ArticlesReviewsCountResponse> => {
+  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const effectiveParams = await getParamsWithEffectiveDateFilters(params, database)
   const manifest = await getManifest(params.projectId, dependencies)
-  const limit = getLimit(params.limit)
+  const limit = getLimit(effectiveParams.limit)
 
   if (!manifest) {
     throw new Error('Review serving snapshot is unavailable')
   }
 
-  const totalCount = await getCountValue({...params, limit, page: 1}, manifest, dependencies)
+  const totalCount = await getCountValue({...effectiveParams, limit, page: 1}, manifest, {...dependencies, database})
 
   return {totalCount, totalPages: Math.ceil(totalCount / limit)}
 }

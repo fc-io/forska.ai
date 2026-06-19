@@ -66,6 +66,25 @@ const getNextHumanAssessmentArticleIdFromServing = async (projectId: string) => 
   return {articleId: row?.article_id ?? row?.articleId ?? null, error: null}
 }
 
+const getNextHumanAssessmentArticleIdFromScope = async (projectId: string) => {
+  const [row] = await getAppDatabaseService().queryJson<{articleId: string}>(`
+    SELECT scope_article.article_id AS articleId
+    FROM mart.project_scope_article scope_article
+    WHERE scope_article.project_id = '${escapeSqlString(projectId)}'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.judgment_human judgment
+        WHERE judgment.project_id = scope_article.project_id
+          AND judgment.article_id = scope_article.article_id
+          AND judgment.is_answered = TRUE
+      )
+    ORDER BY scope_article.article_created_at ASC NULLS LAST, scope_article.article_id ASC
+    LIMIT 1
+  `)
+
+  return row?.articleId ?? null
+}
+
 export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {projectId: string}; set: Context['set']}) => {
   const [project] = await getAppDatabaseService().queryJson<{
     humanJudgmentMode: 'prompt' | 'summary' | null
@@ -128,7 +147,10 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
       return {data: null, error: servingCandidate.error}
     }
 
-    if (!servingCandidate.articleId) {
+    const candidateArticleId =
+      servingCandidate.articleId ?? (await getNextHumanAssessmentArticleIdFromScope(body.projectId))
+
+    if (!candidateArticleId) {
       set.status = 404
       return {data: null, error: 'No articles left to judge'}
     }
@@ -140,7 +162,7 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     }>(`
       SELECT id, article_title AS articleTitle, article_summary AS articleSummary
       FROM app.article
-      WHERE id = '${escapeSqlString(servingCandidate.articleId)}'
+      WHERE id = '${escapeSqlString(candidateArticleId)}'
       LIMIT 1
     `)
 

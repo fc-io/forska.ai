@@ -121,6 +121,10 @@ const createReaderDatabase = () => {
         return [{totalCount: 1}] as T[]
       }
 
+      if (statement.includes('FROM app.project')) {
+        return [{dateFrom: '2026-01-10T00:00:00.000Z', dateTo: '2026-01-20T00:00:00.000Z'}] as T[]
+      }
+
       if (statement.includes('FROM mart.review_article_serving_v4')) {
         return [
           {
@@ -194,11 +198,13 @@ test('LLM review list route service composes serving rows, judgments, and count 
   expect(result.data[0]?.judgments).toHaveLength(1)
   expect(result.data[0]?.judgedPromptIds).toEqual(['prompt-1'])
   expect(result.data[0]?.isFullyJudged).toBe(true)
-  expect(reader.statements).toHaveLength(3)
+  expect(reader.statements).toHaveLength(4)
   expect(sql).toContain('FROM mart.review_article_serving_v4')
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).toContain('COUNT(DISTINCT serving.article_id)')
   expect(sql).toContain("article_id IN (SELECT unnest(['article-1']::VARCHAR[]))")
+  expect(sql).toContain("sort_key >= TIMESTAMPTZ '2026-01-10T00:00:00.000Z'")
+  expect(sql).toContain("sort_key <= TIMESTAMPTZ '2026-01-20T00:00:00.000Z'")
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })
@@ -234,9 +240,9 @@ test('LLM review count route service requires reviewed LLM rows without row hydr
   )
 
   expect(result).toEqual({totalCount: 1, totalPages: 1})
-  expect(reader.statements).toHaveLength(1)
-  expect(reader.statements[0]).toContain('FROM mart.review_article_serving_v4')
-  expect(reader.statements[0]).toContain('serving.llm_judged_prompt_count > 0')
+  expect(reader.statements).toHaveLength(2)
+  expect(reader.statements[1]).toContain('FROM mart.review_article_serving_v4')
+  expect(reader.statements[1]).toContain('serving.llm_judged_prompt_count > 0')
 })
 
 test('LLM review route service surfaces stale, indexing, and unavailable freshness without raw fallback', async () => {

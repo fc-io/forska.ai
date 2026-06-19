@@ -4,6 +4,7 @@ import {createEffect, createSignal, Show, Suspense} from 'solid-js'
 
 import {createArticlesBothReviewsQueryOptions} from '../../projects/projectsArticlesBothReviewsQuery.ts'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
+import type {ArticleWithJudgments} from './reviewsArticlesTable.tsx'
 import {ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
 
 interface ReviewsArticlesBothTableContainerProps {
@@ -23,6 +24,9 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
   const [rowSelection, setRowSelection] = createSignal<Record<string, boolean>>({})
   const [selectAllMatching, setSelectAllMatching] = createSignal<boolean>(false)
   const [pageCursors, setPageCursors] = createSignal<Record<number, string | null>>({1: null})
+  const [loadedPages, setLoadedPages] = createSignal<
+    Record<number, {data: ArticleWithJudgments[]; nextCursor?: string | null}>
+  >({})
   // Reset selection when filters/date/search/page size change
   createEffect(() => {
     // Access to track dependencies
@@ -36,6 +40,7 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
     setRowSelection({})
     setSelectAllMatching(false)
     setPageCursors({1: null})
+    setLoadedPages({})
   })
   const articlesQuery = useQuery(() => {
     return createArticlesBothReviewsQueryOptions(
@@ -66,10 +71,30 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
     })
   })
   createEffect(() => {
+    const response = articlesQuery.data
+
+    if (!response || typeof response !== 'object' || !Array.isArray(response.data)) {
+      return
+    }
+
+    const page = props.currentPage()
+    const loadedPage = {data: response.data as ArticleWithJudgments[], nextCursor: response.nextCursor}
+    setLoadedPages((prev) => {
+      return prev[page]?.data === response.data ? prev : {...prev, [page]: loadedPage}
+    })
+  })
+  createEffect(() => {
     if (props.currentPage() > 1 && pageCursors()[props.currentPage()] == null) {
       props.setCurrentPage(1)
     }
   })
+  const loadedArticles = () => {
+    const pages = loadedPages()
+
+    return Array.from({length: props.currentPage()}, (_, index) => {
+      return pages[index + 1]?.data ?? []
+    }).flat()
+  }
 
   return (
     <Suspense>
@@ -88,13 +113,17 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
 
         <Show when={articlesQuery.data}>
           {(response) => {
+            const articles = () => {
+              return loadedArticles()
+            }
+
             return (
               <div class="space-y-4">
                 <div class="p-4 bg-white rounded-lg shadow">
                   <h3 class="text-lg font-semibold mb-2">
                     Articles Assessed by Both (
                     {response().totalCount > 0
-                      ? `Showing ${Math.min((response().page - 1) * props.pageLimit() + 1, response().totalCount)}-${Math.min(response().page * props.pageLimit(), response().totalCount)} of ${response().totalCount}`
+                      ? `Showing 1-${Math.min(articles().length, response().totalCount)} of ${response().totalCount}`
                       : '0'}
                     )
                   </h3>
@@ -113,7 +142,7 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                   setCurrentPage={props.setCurrentPage}
                   useCursorPagination
                   hasNextPage={Boolean(response().nextCursor)}
-                  currentPageRowIds={response().data.map((a) => {
+                  currentPageRowIds={articles().map((a) => {
                     return a.id
                   })}
                   rowSelection={rowSelection}
@@ -153,7 +182,7 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                 />
 
                 <Show
-                  when={response().data.length > 0}
+                  when={articles().length > 0}
                   fallback={
                     <div class="p-8 text-center text-gray-500">
                       No articles found assessed by both
@@ -166,7 +195,7 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                 >
                   <ReviewsArticlesTable
                     projectId={props.projectId}
-                    articles={response().data}
+                    articles={articles()}
                     rowSelection={rowSelection}
                     setRowSelection={setRowSelection}
                   />
@@ -178,7 +207,7 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                   setCurrentPage={props.setCurrentPage}
                   useCursorPagination
                   hasNextPage={Boolean(response().nextCursor)}
-                  currentPageRowIds={response().data.map((a) => {
+                  currentPageRowIds={articles().map((a) => {
                     return a.id
                   })}
                   rowSelection={rowSelection}

@@ -13,15 +13,7 @@ const projectsAddArticlesLogger = createRateLimitedLogger({sink: 'file-only', wi
 export const projectsAddArticlesRoutes = new Elysia()
   .post(
     '/api/projects/add_articles_by_filter',
-    async ({body, set}) => {
-      if (body.search) {
-        set.status = 400
-        return {
-          success: false,
-          error: 'Adding all matching articles with a title search is not supported yet. Clear the search and retry.',
-        }
-      }
-
+    async ({body}) => {
       const reviewConfigHash = await getCurrentReviewConfigHash(body.sourceProjectId)
       const job = await createReviewBulkOperationJob({
         criteria: {
@@ -50,8 +42,8 @@ export const projectsAddArticlesRoutes = new Elysia()
         jobKind: 'review.bulk.selection',
         projectId: body.sourceProjectId,
         reviewConfigHash,
-        searchMode: 'none',
-        searchText: null,
+        searchMode: body.search ? 'tokenPrefix' : 'none',
+        searchText: body.search ?? null,
         snapshot: {type: 'latest'},
       })
 

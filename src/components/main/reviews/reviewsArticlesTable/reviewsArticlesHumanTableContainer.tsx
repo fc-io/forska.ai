@@ -24,6 +24,9 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
   const [rowSelection, setRowSelection] = createSignal<Record<string, boolean>>({})
   const [selectAllMatching, setSelectAllMatching] = createSignal<boolean>(false)
   const [pageCursors, setPageCursors] = createSignal<Record<number, string | null>>({1: null})
+  const [loadedPages, setLoadedPages] = createSignal<
+    Record<number, {data: ArticleWithHumanJudgments[]; nextCursor?: string | null}>
+  >({})
   // Reset selection when filters/date/search/page size change
   createEffect(() => {
     // Access to track dependencies
@@ -37,6 +40,7 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
     setRowSelection({})
     setSelectAllMatching(false)
     setPageCursors({1: null})
+    setLoadedPages({})
   })
   const articlesQuery = useQuery(() => {
     return createArticlesHumanReviewsQueryOptions(
@@ -67,10 +71,30 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
     })
   })
   createEffect(() => {
+    const response = articlesQuery.data
+
+    if (!response || typeof response !== 'object' || !Array.isArray(response.data)) {
+      return
+    }
+
+    const page = props.currentPage()
+    const loadedPage = {data: response.data as ArticleWithHumanJudgments[], nextCursor: response.nextCursor}
+    setLoadedPages((prev) => {
+      return prev[page]?.data === response.data ? prev : {...prev, [page]: loadedPage}
+    })
+  })
+  createEffect(() => {
     if (props.currentPage() > 1 && pageCursors()[props.currentPage()] == null) {
       props.setCurrentPage(1)
     }
   })
+  const loadedArticles = () => {
+    const pages = loadedPages()
+
+    return Array.from({length: props.currentPage()}, (_, index) => {
+      return pages[index + 1]?.data ?? []
+    }).flat()
+  }
 
   return (
     <Suspense>
@@ -90,7 +114,7 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
         <Show when={articlesQuery.data}>
           {(response) => {
             const articles = () => {
-              return response().data as ArticleWithHumanJudgments[]
+              return loadedArticles()
             }
 
             return (
@@ -101,7 +125,7 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
                       ? 'Articles with Overall Human Answers ('
                       : 'Articles with Human Judgments ('}
                     {response().totalCount > 0
-                      ? `Showing ${Math.min((response().page - 1) * props.pageLimit() + 1, response().totalCount)}-${Math.min(response().page * props.pageLimit(), response().totalCount)} of ${response().totalCount}`
+                      ? `Showing 1-${Math.min(articles().length, response().totalCount)} of ${response().totalCount}`
                       : '0'}
                     )
                   </h3>
@@ -162,7 +186,7 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
                 />
 
                 <Show
-                  when={response().data.length > 0}
+                  when={articles().length > 0}
                   fallback={
                     <div class="p-8 text-center text-gray-500">
                       {response().humanJudgmentMode === 'summary'
