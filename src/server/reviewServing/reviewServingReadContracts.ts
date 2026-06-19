@@ -188,7 +188,7 @@ const filterFacetContract = (input: {
 
 export const reviewServingReadContractList = [
   rowContract({
-    allowedFilters: [...defaultRowFilters, 'conflictFlag', 'llmStatus', 'promptAnswer'],
+    allowedFilters: [...defaultRowFilters, 'conflictFlag', 'llmHasJudgment', 'llmStatus', 'promptAnswer'],
     key: 'review.llm.rows',
     listMode: 'llm',
     namedFastCounts: [...defaultReviewCounts, 'review.llm.assessedByPrompt'],
@@ -197,14 +197,14 @@ export const reviewServingReadContractList = [
     searchMode: 'tokenPrefix',
   }),
   rowByArticleSetContract({
-    allowedFilters: [...defaultRowFilters, 'articleId', 'conflictFlag', 'llmStatus', 'promptAnswer'],
+    allowedFilters: [...defaultRowFilters, 'articleId', 'conflictFlag', 'llmHasJudgment', 'llmStatus', 'promptAnswer'],
     key: 'review.llm.rowsByArticleSet',
     listMode: 'llm',
     namedFastCounts: [...defaultReviewCounts, 'review.llm.assessedByPrompt'],
     requiredComponents: llmComponents,
   }),
   defineContract({
-    allowedFilters: [...defaultCountFilters, 'llmStatus', 'promptAnswer', 'searchTokenPrefix'],
+    allowedFilters: [...defaultCountFilters, 'llmHasJudgment', 'llmStatus', 'promptAnswer', 'searchTokenPrefix'],
     cursorFields: [],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.llm.count',

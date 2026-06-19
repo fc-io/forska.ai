@@ -82,6 +82,7 @@ export const reviewServingFilterKeys = [
   'conflictFlag',
   'humanStatus',
   'importRoute',
+  'llmHasJudgment',
   'llmStatus',
   'promptAnswer',
   'promptId',

@@ -207,6 +207,26 @@ test('review filter route service reads facet and option contracts without raw f
   })
 })
 
+test('review filter route service tokenizes search text like row reads', async () => {
+  const reader = createReaderDatabase()
+
+  await getReviewFiltersFromServing({
+    dependencies: {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+    mode: 'review',
+    params: {projectId: 'project-1', search: 'COVID-19 heart failure'},
+    promptRows: [],
+  })
+
+  const sql = reader.statements.join('\n')
+
+  expect(sql).toContain('"searchTokenPrefix":"covid"')
+  expect(sql).not.toContain('"searchTokenPrefix":"covid-19"')
+})
+
 test('human filter route service keeps summary-mode answer scope from serving options', async () => {
   const statements: string[] = []
   const database: ReviewServingReaderDatabase = {

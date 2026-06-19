@@ -106,6 +106,7 @@ const maxReviewPageSize = 500
 const defaultReviewLimit = 100
 const dynamicFilterKey = 'filter:dynamic'
 const listAllFilterKey = 'list:all'
+const maxJudgmentHydrationArticleIds = 100
 const queueReadyFilterKey = 'queue:ready'
 
 const getDateValue = (value: unknown) => {
@@ -487,6 +488,52 @@ const getLlmSummaryAnswer = (
   return answers.length === 0 ? null : answers.includes('no') ? 'no' : answers.includes('maybe') ? 'maybe' : 'yes'
 }
 
+const getArticleIdChunks = (articleIds: readonly string[]) => {
+  return articleIds.reduce<string[][]>((chunks, articleId, index) => {
+    return index % maxJudgmentHydrationArticleIds === 0
+      ? [...chunks, [articleId]]
+      : chunks.map((chunk, chunkIndex) => {
+          return chunkIndex === chunks.length - 1 ? [...chunk, articleId] : chunk
+        })
+  }, [])
+}
+
+const readJudgmentChunk = async (
+  params: ArticlesReviewsBothParams | ArticlesReviewsParams,
+  manifest: ReviewServingSnapshotManifest,
+  mode: 'both' | 'human',
+  articleIds: readonly string[],
+  kind: 'human' | 'llm',
+  dependencies?: ReviewServingRouteDependencies,
+) => {
+  return readReviewServingRows<ReviewServingJudgmentRow>(
+    {
+      ...getBaseReaderRequest(params, manifest, Math.min(articleIds.length * 128, 10_000), mode),
+      articleIds,
+      contractKey:
+        mode === 'both'
+          ? kind === 'human'
+            ? 'review.both.list.humanJudgments'
+            : 'review.both.list.judgments'
+          : 'review.human.list.judgments',
+      estimatedHydratedPayloadBytes: articleIds.length * 10_000,
+      estimatedResultBytes: articleIds.length * 20_000,
+      filters: {},
+      limit: Math.min(articleIds.length * 128, 10_000),
+      searchMode: 'none',
+      searchState: null,
+      searchTokenPrefix: null,
+    },
+    getReaderDependencies(dependencies),
+  ).then((result) => {
+    if (result.status === 'rejected') {
+      throw new Error(`reviewServingReader rejected ${mode} ${kind} judgments: ${result.reason}`)
+    }
+
+    return result.rows
+  })
+}
+
 const readJudgments = async (
   params: ArticlesReviewsBothParams | ArticlesReviewsParams,
   manifest: ReviewServingSnapshotManifest,
@@ -497,31 +544,12 @@ const readJudgments = async (
 ) => {
   return articleIds.length === 0
     ? []
-    : readReviewServingRows<ReviewServingJudgmentRow>(
-        {
-          ...getBaseReaderRequest(params, manifest, Math.min(articleIds.length * 128, 10_000), mode),
-          articleIds,
-          contractKey:
-            mode === 'both'
-              ? kind === 'human'
-                ? 'review.both.list.humanJudgments'
-                : 'review.both.list.judgments'
-              : 'review.human.list.judgments',
-          estimatedHydratedPayloadBytes: articleIds.length * 10_000,
-          estimatedResultBytes: articleIds.length * 20_000,
-          filters: {},
-          limit: Math.min(articleIds.length * 128, 10_000),
-          searchMode: 'none',
-          searchState: null,
-          searchTokenPrefix: null,
-        },
-        getReaderDependencies(dependencies),
-      ).then((result) => {
-        if (result.status === 'rejected') {
-          throw new Error(`reviewServingReader rejected ${mode} ${kind} judgments: ${result.reason}`)
-        }
-
-        return result.rows
+    : Promise.all(
+        getArticleIdChunks(articleIds).map((chunk) => {
+          return readJudgmentChunk(params, manifest, mode, chunk, kind, dependencies)
+        }),
+      ).then((chunks) => {
+        return chunks.flat()
       })
 }
 

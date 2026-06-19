@@ -16,6 +16,7 @@ import {
   type ReviewServingReaderFilterInput,
   type ReviewServingReaderRequest,
 } from './reviewServingReader.ts'
+import {getReviewServingTitleSearchTokens} from './reviewServingTitleSearchProjector.ts'
 
 type PromptRow = {id: string; originalText: string; promptHeading: string | null; type: string | null}
 type ReviewServingFilterMode = 'human' | 'review'
@@ -112,14 +113,7 @@ const defaultHumanListModeKeys = ['human', 'both'] as const
 const defaultReviewListModeKeys = ['llm', 'human', 'both', 'unassessed'] as const
 
 const getSearchTokenPrefix = (search: string | null | undefined) => {
-  const [firstToken] =
-    search
-      ?.trim()
-      .toLowerCase()
-      .split(/\s+/u)
-      .filter((token) => {
-        return token.length > 0
-      }) ?? []
+  const [firstToken] = getReviewServingTitleSearchTokens(search ?? null)
 
   return firstToken ?? null
 }

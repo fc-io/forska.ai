@@ -43,6 +43,7 @@ export type ReviewBulkOperationCriteria = {
   prompts?: Record<string, readonly string[]>
   requestId?: string
   search?: string
+  selectionScope?: 'project'
   sourceProjectId?: string
   sourceProjectIds?: readonly string[]
   targetProjectId?: string
