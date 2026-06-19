@@ -73,6 +73,7 @@ test('display routine updates write component-narrow patches for only claimed ar
     displayPatchRows: [
       {
         activitySortAt: '2026-01-02T00:00:00.000Z',
+        articleCreatedAt: '2026-01-01T00:00:00.000Z',
         articleExternalId: 'NCT-1',
         articleId: 'article-1',
         articleTitle: 'Updated title',
@@ -124,6 +125,7 @@ test('display routine updates write component-narrow patches for only claimed ar
   )
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('UPDATE mart.review_article_serving_v4')
+  expect(joined).toContain("article_created_at = '2026-01-01T00:00:00.000Z'")
   expect(joined).toContain("article_title = 'Updated title'")
   expect(joined).toContain("full_text_pdf = 'https://example.test/article-1.pdf'")
   expect(joined).toContain("activity_sort_at = '2026-01-02T00:00:00.000Z'")

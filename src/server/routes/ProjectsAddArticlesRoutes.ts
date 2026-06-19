@@ -1,3 +1,5 @@
+import {randomUUID} from 'node:crypto'
+
 import {Elysia, t} from 'elysia'
 
 import {
@@ -24,6 +26,7 @@ export const projectsAddArticlesRoutes = new Elysia()
           llmStatus: body.llmStatus,
           operation: 'addToProject',
           prompts: body.prompts,
+          requestId: randomUUID(),
           search: body.search,
           sourceProjectId: body.sourceProjectId,
           targetProjectId: body.targetProjectId,

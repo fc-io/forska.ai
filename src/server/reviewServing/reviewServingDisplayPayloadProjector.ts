@@ -428,6 +428,7 @@ const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplay
     : `UPDATE mart.review_article_serving_v4
         SET
           article_external_id = ${getSqlLiteral(row.articleExternalId)},
+          article_created_at = ${getSqlLiteral(row.articleCreatedAt)},
           article_title = ${getSqlLiteral(row.articleTitle)},
           full_text_pdf = ${getSqlLiteral(row.fullTextPdf)},
           activity_sort_at = ${getSqlLiteral(row.activitySortAt)},
