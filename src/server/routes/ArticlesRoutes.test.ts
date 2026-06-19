@@ -9,6 +9,8 @@ const reviewServingProjectConfigIdentityModulePath = new URL(
   '../services/reviewServingProjectConfigIdentity.ts',
   import.meta.url,
 ).pathname
+const reviewBulkOperationServiceModulePath = new URL('../reviewServing/reviewBulkOperationService.ts', import.meta.url)
+  .pathname
 
 const queryJsonRef = {
   current: async (_statement: string): Promise<unknown[]> => {
@@ -199,8 +201,8 @@ test('PDF explicit bulk route admits durable article-id-only jobs', async () => 
   expect(joined).toContain('requestId')
 })
 
-test('PDF project route preserves date-only upper bounds in durable criteria', async () => {
-  const statements: string[] = []
+test('PDF project route preserves date-only upper bounds and request identity in criteria', async () => {
+  const jobRequests: unknown[] = []
 
   void mock.module(appDatabaseServiceModulePath, () => {
     return {
@@ -209,8 +211,8 @@ test('PDF project route preserves date-only upper bounds in durable criteria', a
           queryJson: async () => {
             return []
           },
-          run: async (statement: string) => {
-            statements.push(statement)
+          run: async () => {
+            return undefined
           },
           transaction: async <T>(callback: (tx: unknown) => Promise<T>) => {
             return callback({})
@@ -240,6 +242,17 @@ test('PDF project route preserves date-only upper bounds in durable criteria', a
       },
     }
   })
+  void mock.module(reviewBulkOperationServiceModulePath, () => {
+    return {
+      assertArticleIdOnlyBulkOperationCaps: () => {
+        return undefined
+      },
+      createReviewBulkOperationJob: async (request: unknown) => {
+        jobRequests.push(request)
+        return {jobKind: 'review.pdf.selection', latestSnapshotSemantics: true, status: 'pending'}
+      },
+    }
+  })
 
   const routesModule = (await import(
     `./ArticlesRoutes.ts?test=pdf-project-${Date.now()}-${Math.random()}`
@@ -252,9 +265,68 @@ test('PDF project route preserves date-only upper bounds in durable criteria', a
       method: 'POST',
     }),
   )
-  const joined = statements.join('\n')
+  const jobRequest = jobRequests[0] as {criteria: {requestId?: string; to?: string}}
 
   expect(response.status).toBe(202)
-  expect(joined).toContain('"to":"2026-01-31"')
-  expect(joined).not.toContain('"to":"2026-01-31T00:00:00.000Z"')
+  expect(jobRequest.criteria.to).toBe('2026-01-31')
+  expect(jobRequest.criteria.requestId).toEqual(expect.any(String))
+})
+
+test('PDF filter route gives repeated filter jobs durable request identities', async () => {
+  const jobRequests: unknown[] = []
+
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          queryJson: async () => {
+            return []
+          },
+          run: async () => {
+            return undefined
+          },
+          transaction: async <T>(callback: (tx: unknown) => Promise<T>) => {
+            return callback({})
+          },
+        }
+      },
+    }
+  })
+  void mock.module(articleImportStoreServiceModulePath, () => {
+    return {storeImportedArticlesWithTx: storeImportedArticlesWithTxRef.current}
+  })
+  void mock.module(reviewServingProjectConfigIdentityModulePath, () => {
+    return {
+      getCurrentReviewConfigHash: async () => {
+        return 'config-1'
+      },
+    }
+  })
+  void mock.module(reviewBulkOperationServiceModulePath, () => {
+    return {
+      assertArticleIdOnlyBulkOperationCaps: () => {
+        return undefined
+      },
+      createReviewBulkOperationJob: async (request: unknown) => {
+        jobRequests.push(request)
+        return {jobKind: 'review.pdf.selection', latestSnapshotSemantics: true, status: 'pending'}
+      },
+    }
+  })
+
+  const routesModule = (await import(
+    `./ArticlesRoutes.ts?test=pdf-filter-${Date.now()}-${Math.random()}`
+  )) as typeof import('./ArticlesRoutes.ts')
+  const app = new Elysia().use(routesModule.articlesRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/articles/pdf-fetch-by-filter', {
+      body: JSON.stringify({listType: 'llm', search: 'heart', sourceProjectId: 'project-1'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const jobRequest = jobRequests[0] as {criteria: {requestId?: string}}
+
+  expect(response.status).toBe(202)
+  expect(jobRequest.criteria.requestId).toEqual(expect.any(String))
 })

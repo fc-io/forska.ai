@@ -158,7 +158,7 @@ test('human assessment init inserts project id before the answered flag', async 
           ? []
           : statement.includes('FROM app.article')
             ? [{articleSummary: 'Summary 1', articleTitle: 'Article 1', id: 'article-1'}]
-            : statement.includes('FROM app.project_article')
+            : statement.includes('FROM mart.project_scope_article')
               ? [{articleId: 'article-1'}]
               : statement.includes('INSERT INTO app.judgment_human')
                 ? [{id: 'judgment-human-1', promptId: 'prompt-1'}]
@@ -278,4 +278,77 @@ test('human assessment init falls back to scoped articles when serving human que
   expect(set.status).toBe(200)
   expect(response.data?.article.id).toBe('article-2')
   expect(statements.join('\n')).toContain('FROM mart.project_scope_article')
+})
+
+test('human assessment init falls back to scoped articles when serving snapshot is unavailable', async () => {
+  const statements: string[] = []
+  activeManifestRef.current = async () => {
+    return null
+  }
+  queryJsonRef.current = async (statement) => {
+    statements.push(statement)
+
+    return statement.includes("WHERE id = 'project-1'")
+      ? [{humanJudgmentMode: 'prompt', id: 'project-1', name: 'Project 1'}]
+      : statement.includes('FROM app.project_prompt pp')
+        ? [{id: 'prompt-1', originalText: 'Prompt 1', promptHeading: 'Heading 1', order: 0, type: 'string'}]
+        : statement.includes('ORDER BY created_at DESC')
+          ? []
+          : statement.includes('FROM mart.project_scope_article')
+            ? [{articleId: 'article-2'}]
+            : statement.includes('FROM app.article')
+              ? [{articleSummary: 'Summary 2', articleTitle: 'Article 2', id: 'article-2'}]
+              : statement.includes('INSERT INTO app.judgment_human')
+                ? [{id: 'judgment-human-2', promptId: 'prompt-1'}]
+                : []
+  }
+
+  const {humanAssessmentRoutesPostInit} = await loadHandler()
+  const set: {status: number} = {status: 200}
+  const response = await humanAssessmentRoutesPostInit({body: {projectId: 'project-1'}, set: set as never})
+
+  expect(set.status).toBe(200)
+  expect(response.data?.article.id).toBe('article-2')
+  expect(statements.join('\n')).toContain('FROM mart.project_scope_article')
+})
+
+test('human assessment init checks dated scope without sending date filters to serving queue', async () => {
+  const readerRequests: unknown[] = []
+  const statements: string[] = []
+  queryJsonRef.current = async (statement) => {
+    statements.push(statement)
+
+    return statement.includes("WHERE id = 'project-1'")
+      ? [{humanJudgmentMode: 'prompt', id: 'project-1', name: 'Project 1'}]
+      : statement.includes('FROM app.project_prompt pp')
+        ? [{id: 'prompt-1', originalText: 'Prompt 1', promptHeading: 'Heading 1', order: 0, type: 'string'}]
+        : statement.includes('ORDER BY created_at DESC')
+          ? []
+          : statement.includes("AND scope_article.article_id = 'article-1'")
+            ? [{articleId: 'article-1'}]
+            : statement.includes('FROM app.article')
+              ? [{articleSummary: 'Summary 1', articleTitle: 'Article 1', id: 'article-1'}]
+              : statement.includes('INSERT INTO app.judgment_human')
+                ? [{id: 'judgment-human-1', promptId: 'prompt-1'}]
+                : []
+  }
+  readReviewServingRowsRef.current = async (request) => {
+    readerRequests.push(request)
+    return {rows: [{article_id: 'article-1'}], status: 'ready'}
+  }
+
+  const {humanAssessmentRoutesPostInit} = await loadHandler()
+  const set: {status: number} = {status: 200}
+  const response = await humanAssessmentRoutesPostInit({body: {projectId: 'project-1'}, set: set as never})
+
+  expect(set.status).toBe(200)
+  expect(response.data?.article.id).toBe('article-1')
+  expect(readerRequests).toEqual([
+    expect.objectContaining({
+      filters: {queueKind: 'human-unreviewed'},
+    }),
+  ])
+  expect(statements.join('\n')).toContain("AND scope_article.article_id = 'article-1'")
+  expect(statements.join('\n')).toContain('scope_article.article_created_at >= project.date_from')
+  expect(statements.join('\n')).toContain('scope_article.article_created_at <= project.date_to')
 })
