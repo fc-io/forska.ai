@@ -287,6 +287,9 @@ test('buildReviewServingRowsSql does not pin detail article lookups to a list mo
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('AND article_id = $articleId')
   expect(sql).toContain(
+    "SELECT *, CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END AS list_mode_priority",
+  )
+  expect(sql).toContain(
     "ORDER BY CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END ASC, article_id ASC",
   )
   expect(sql).not.toContain('AND list_mode_key =')
@@ -310,6 +313,9 @@ test('buildReviewServingRowsSql covers judgment detail rows for article details'
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
+  expect(sql).toContain(
+    "SELECT *, CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END AS list_mode_priority",
+  )
   expect(sql).toContain('AND article_id = $articleId')
   expect(sql).toContain("AND payload_kind = 'llm'")
   expect(sql).toContain('QUALIFY CASE list_mode_key')

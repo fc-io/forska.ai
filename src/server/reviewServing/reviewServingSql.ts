@@ -218,6 +218,7 @@ const reviewServingFilterOptionTable = 'mart.review_filter_option_serving_v4'
 const reviewServingJudgmentDetailTable = 'mart.review_article_judgment_detail_serving_v4'
 const reviewServingListModePrioritySql =
   "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
+const reviewServingListModePriorityAlias = 'list_mode_priority'
 
 const getReviewServingRowsSqlIdentityPredicates = (params: {
   contract: ReviewServingReadContract
@@ -577,6 +578,14 @@ const getReviewServingRowsSqlListModeDedupeQualifier = (contract: ReviewServingR
     : ''
 }
 
+const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
+  return contract.sort.fields.some((field) => {
+    return field.includes(reviewServingListModePrioritySql)
+  })
+    ? `SELECT *, ${reviewServingListModePrioritySql} AS ${reviewServingListModePriorityAlias}`
+    : 'SELECT *'
+}
+
 const getReviewServingRowsSqlPhysicalFilterPredicate = (params: {
   articleIdParameter?: string | null
   articleIdsParameter?: string | null
@@ -639,12 +648,13 @@ export const buildReviewServingRowsSql = (params: {
   const facetVersionPredicate = getReviewServingRowsSqlFacetVersionPredicate(params)
   const physicalFilterPredicate = getReviewServingRowsSqlPhysicalFilterPredicate(params)
   const listModeDedupeQualifier = getReviewServingRowsSqlListModeDedupeQualifier(params.contract)
+  const selectSql = getReviewServingRowsSqlSelect(params.contract)
   const sortSql = getSortSql(params.contract)
 
   const projectIdColumn = getReviewServingRowsSqlScopeColumn({contract: params.contract, field: 'project_id'})
 
   return [
-    `SELECT * FROM ${params.contract.servingTable} WHERE ${projectIdColumn} = ${params.projectIdParameter}`,
+    `${selectSql} FROM ${params.contract.servingTable} WHERE ${projectIdColumn} = ${params.projectIdParameter}`,
     identityPredicates,
     listModePredicate,
     judgmentPayloadKindPredicate,

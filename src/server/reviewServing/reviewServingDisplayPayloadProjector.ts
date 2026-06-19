@@ -266,8 +266,8 @@ const getDisplayPatchRows = async (
           dirty.article_id AS articleId,
           article.article_created_at AS articleCreatedAt,
           article.article_updated_at AS articleUpdatedAt,
-          COALESCE(article.article_created_at, current_timestamp) AS sortKey,
-          COALESCE(article.article_updated_at, article.article_created_at, current_timestamp) AS activitySortAt,
+          COALESCE(article.article_created_at, scope.article_created_at, current_timestamp) AS sortKey,
+          COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at, current_timestamp) AS activitySortAt,
           article.article_title AS articleTitle,
           article.article_id AS articleExternalId,
           article.arxiv_id AS arxivId,
@@ -286,6 +286,10 @@ const getDisplayPatchRows = async (
         FROM dirty_article dirty
         LEFT JOIN app."article" article
           ON article.id = dirty.article_id
+        LEFT JOIN mart.project_scope_article scope
+          ON scope.project_id = ${getSqlLiteral(input.projectId)}
+          AND scope.article_id = dirty.article_id
+          AND (scope.in_curated_scope OR scope.in_route_scope)
         LEFT JOIN app.review_selected_article_import_v4 selected
           ON selected.project_id = ${getSqlLiteral(input.projectId)}
           AND selected.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
