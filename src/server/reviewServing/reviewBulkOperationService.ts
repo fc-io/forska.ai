@@ -132,6 +132,10 @@ const getJsonSql = (value: unknown) => {
   return `${getSqlLiteral(getStableReviewServingJson(value as ReviewServingIdentityValue))}::JSON`
 }
 
+const getTotalEstimateSql = (request: ReviewBulkOperationServiceRequest) => {
+  return Array.isArray(request.criteria.articleIds) ? getSqlLiteral(request.criteria.articleIds.length) : 'NULL'
+}
+
 const getManifest = async (
   request: ReviewBulkOperationServiceRequest,
   manifestDatabase: ReviewServingManifestRepositoryDatabase,
@@ -195,6 +199,7 @@ const insertBulkOperationJob = async (input: {
 }) => {
   const latestSnapshotSemantics = input.request.snapshot.type === 'latest'
   const batchSize = input.request.batchSize ?? defaultBatchSize
+  const totalEstimateSql = getTotalEstimateSql(input.request)
 
   await input.database.run(`
     INSERT INTO app.review_bulk_operation_job (
@@ -233,7 +238,7 @@ const insertBulkOperationJob = async (input: {
       'pending',
       ${getJsonSql({articleIdOnly: Array.isArray(input.request.criteria.articleIds), operation: input.request.criteria.operation})},
       0,
-      NULL,
+      ${totalEstimateSql},
       FALSE,
       0,
       NULL
@@ -243,7 +248,7 @@ const insertBulkOperationJob = async (input: {
       status = 'pending',
       result_manifest_json = EXCLUDED.result_manifest_json,
       processed_count = 0,
-      total_estimate = NULL,
+      total_estimate = ${totalEstimateSql},
       completed_at = NULL,
       cancel_requested = FALSE,
       retry_count = 0,

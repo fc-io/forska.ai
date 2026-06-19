@@ -4,6 +4,11 @@ import {Elysia} from 'elysia'
 const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
 const articleImportStoreServiceModulePath = new URL('../services/articleImportStoreService.ts', import.meta.url)
   .pathname
+const appQueryServiceModulePath = new URL('../services/getAppQueryService.ts', import.meta.url).pathname
+const reviewServingProjectConfigIdentityModulePath = new URL(
+  '../services/reviewServingProjectConfigIdentity.ts',
+  import.meta.url,
+).pathname
 
 const queryJsonRef = {
   current: async (_statement: string): Promise<unknown[]> => {
@@ -46,6 +51,26 @@ const registerModuleMocks = () => {
     return {
       storeImportedArticlesWithTx: (tx: unknown, rows: unknown[]) => {
         return storeImportedArticlesWithTxRef.current(tx, rows)
+      },
+    }
+  })
+
+  void mock.module(appQueryServiceModulePath, () => {
+    return {
+      getAppQueryService: () => {
+        return {
+          getProjectReviewConfig: async () => {
+            return {dateFrom: '2026-01-01', dateTo: '2026-12-31'}
+          },
+        }
+      },
+    }
+  })
+
+  void mock.module(reviewServingProjectConfigIdentityModulePath, () => {
+    return {
+      getCurrentReviewConfigHash: async () => {
+        return 'config-1'
       },
     }
   })
@@ -170,5 +195,66 @@ test('PDF explicit bulk route admits durable article-id-only jobs', async () => 
   expect(joined).toContain("'review.pdf.selection'")
   expect(joined).toContain('article-id-only')
   expect(joined).toContain('article-1')
+  expect(joined).toContain('      2,\n      FALSE,')
   expect(joined).toContain('requestId')
+})
+
+test('PDF project route preserves date-only upper bounds in durable criteria', async () => {
+  const statements: string[] = []
+
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          queryJson: async () => {
+            return []
+          },
+          run: async (statement: string) => {
+            statements.push(statement)
+          },
+          transaction: async <T>(callback: (tx: unknown) => Promise<T>) => {
+            return callback({})
+          },
+        }
+      },
+    }
+  })
+  void mock.module(articleImportStoreServiceModulePath, () => {
+    return {storeImportedArticlesWithTx: storeImportedArticlesWithTxRef.current}
+  })
+  void mock.module(appQueryServiceModulePath, () => {
+    return {
+      getAppQueryService: () => {
+        return {
+          getProjectReviewConfig: async () => {
+            return {dateFrom: '2026-01-01', dateTo: '2026-12-31'}
+          },
+        }
+      },
+    }
+  })
+  void mock.module(reviewServingProjectConfigIdentityModulePath, () => {
+    return {
+      getCurrentReviewConfigHash: async () => {
+        return 'config-1'
+      },
+    }
+  })
+
+  const routesModule = (await import(
+    `./ArticlesRoutes.ts?test=pdf-project-${Date.now()}-${Math.random()}`
+  )) as typeof import('./ArticlesRoutes.ts')
+  const app = new Elysia().use(routesModule.articlesRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/articles/pdf-fetch-by-project', {
+      body: JSON.stringify({projectId: 'project-1', to: '2026-01-31'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const joined = statements.join('\n')
+
+  expect(response.status).toBe(202)
+  expect(joined).toContain('"to":"2026-01-31"')
+  expect(joined).not.toContain('"to":"2026-01-31T00:00:00.000Z"')
 })
