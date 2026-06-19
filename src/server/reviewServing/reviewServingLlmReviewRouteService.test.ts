@@ -105,6 +105,10 @@ const createReaderDatabase = () => {
     queryJson: async <T>(statement: string, _workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
       statements.push(statement)
 
+      if (statement.includes('COUNT(DISTINCT serving.article_id)')) {
+        return [{totalCount: 1}] as T[]
+      }
+
       if (statement.includes('FROM mart.review_article_serving_v4')) {
         return [
           {
@@ -112,6 +116,7 @@ const createReaderDatabase = () => {
             article_external_id: 'external-1',
             article_title: 'Article 1',
             journal_title: 'Journal',
+            llm_status_key: 'answered',
             sort_key: '2026-01-01T00:00:00.000Z',
             activity_sort_at: '2026-01-02T00:00:00.000Z',
             url: 'https://example.test/article-1',
@@ -155,17 +160,21 @@ test('LLM review list route service composes serving rows, judgments, and count 
       prompts: {'prompt-1': ['yes']},
       llmStatus: 'complete',
     },
-    {database: reader.database, manifestDatabase: createManifestDatabase('active')},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
   )
   const sql = reader.statements.join('\n')
 
   expect(result.data[0]?.judgments[0]?.answeredOriginal).toBe('yes')
+  expect(result.data[0]?.isFullyJudged).toBe(true)
   expect(reader.statements).toHaveLength(3)
   expect(sql).toContain('FROM mart.review_article_serving_v4')
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
-  expect(sql).toContain('FROM mart.review_article_count_serving_v4')
-  expect(sql).toContain('article_id IN (SELECT unnest($articleIds))')
-  expect(sql).toContain("count_kind = 'review.list.filteredTotal'")
+  expect(sql).toContain('COUNT(DISTINCT serving.article_id)')
+  expect(sql).toContain("article_id IN (SELECT unnest(['article-1']::VARCHAR[]))")
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })
@@ -175,7 +184,11 @@ test('LLM review count route service uses count serving state without row hydrat
   const reader = createReaderDatabase()
   const result = await countLlmReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
-    {database: reader.database, manifestDatabase: createManifestDatabase('active')},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
   )
 
   expect(result).toEqual({totalCount: 1, totalPages: 1})
@@ -188,14 +201,22 @@ test('LLM review route service surfaces stale, indexing, and unavailable freshne
   const staleReader = createReaderDatabase()
   const staleResult = await countLlmReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
-    {database: staleReader.database, manifestDatabase: createManifestDatabase('retired')},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: staleReader.database,
+      manifestDatabase: createManifestDatabase('retired'),
+    },
   )
 
   expect(staleResult.totalCount).toBe(1)
   expect(staleReader.statements.join('\n')).toContain('FROM mart.review_article_count_serving_v4')
   await countLlmReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
-    {database: createReaderDatabase().database, manifestDatabase: createManifestDatabase('candidate')},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: createReaderDatabase().database,
+      manifestDatabase: createManifestDatabase('candidate'),
+    },
   )
     .then(() => {
       throw new Error('expected indexing freshness to reject')
@@ -206,7 +227,11 @@ test('LLM review route service surfaces stale, indexing, and unavailable freshne
     })
   await countLlmReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
-    {database: createReaderDatabase().database, manifestDatabase: createManifestDatabase('missing')},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: createReaderDatabase().database,
+      manifestDatabase: createManifestDatabase('missing'),
+    },
   )
     .then(() => {
       throw new Error('expected unavailable freshness to reject')

@@ -4,6 +4,8 @@ import type {
   ArticlesReviewsParams,
 } from '../../services/olap/olapTypes.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
+import {normalizeSummaryAnswerValue} from '../utils/judgmentAnswers.ts'
 import type {NamedReviewFastCountKey} from './reviewServingContracts.ts'
 import {
   getActiveReviewServingSnapshotManifest,
@@ -44,7 +46,6 @@ type ReviewServingJudgmentRow = {
   prompt_id?: string
 }
 
-type ReviewServingQueueRow = {article_id?: string; activity_sort_at?: unknown; priority_bucket?: number | null}
 type ReviewServingCountRow = {
   availability?: string
   count_value?: number | null
@@ -53,6 +54,7 @@ type ReviewServingCountRow = {
 }
 type ReviewServingReviewMode = 'both' | 'human' | 'unassessed'
 type ReviewServingRouteDependencies = {
+  currentReviewConfigHash?: string | null
   database?: ReviewServingReaderDatabase
   manifestDatabase?: ReviewServingManifestRepositoryDatabase
 }
@@ -122,9 +124,22 @@ const getPromptAnswerFilters = (prompts: Record<string, string[]> | undefined) =
   })
 }
 
+const getSearchTokenPrefix = (search: string | null | undefined) => {
+  const [firstToken] =
+    search
+      ?.trim()
+      .toLowerCase()
+      .split(/\s+/u)
+      .filter((token) => {
+        return token.length > 0
+      }) ?? []
+
+  return firstToken ?? null
+}
+
 const getRouteFilters = (params: ArticlesReviewsBothParams | ArticlesReviewsParams, mode: ReviewServingReviewMode) => {
   const promptAnswer = getPromptAnswerFilters(params.prompts)
-  const searchTokenPrefix = typeof params.search === 'string' && params.search.trim() ? params.search.trim() : undefined
+  const searchTokenPrefix = getSearchTokenPrefix(params.search)
 
   return {
     ...(params.from ? {articleCreatedAtFrom: params.from} : {}),
@@ -154,9 +169,10 @@ const hasDynamicFilters = (
 const getManifest = async (projectId: string, dependencies?: ReviewServingRouteDependencies) => {
   const manifestDatabase =
     dependencies?.manifestDatabase ?? (getAppDatabaseService() as ReviewServingManifestRepositoryDatabase)
-  const active = await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash: null}, manifestDatabase)
+  const reviewConfigHash = dependencies?.currentReviewConfigHash ?? (await getCurrentReviewConfigHash(projectId))
+  const active = await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash}, manifestDatabase)
 
-  return active ?? getLastKnownGoodReviewServingSnapshotManifest({projectId, reviewConfigHash: null}, manifestDatabase)
+  return active ?? getLastKnownGoodReviewServingSnapshotManifest({projectId, reviewConfigHash}, manifestDatabase)
 }
 
 const getReaderDependencies = (dependencies?: ReviewServingRouteDependencies) => {
@@ -174,7 +190,7 @@ const getBaseReaderRequest = (
   limit: number,
   mode: ReviewServingReviewMode,
 ): Omit<ReviewServingReaderRequest, 'contractKey'> => {
-  const searchTokenPrefix = typeof params.search === 'string' && params.search.trim() ? params.search.trim() : null
+  const searchTokenPrefix = getSearchTokenPrefix(params.search)
 
   return {
     allowStale: true,
@@ -308,6 +324,20 @@ const getHumanAnswersByPrompt = (judgments: readonly {answer: string | null; pro
 
 const getSummaryAnswer = (value: string | null | undefined): 'maybe' | 'no' | 'yes' | null => {
   return value === 'yes' || value === 'no' || value === 'maybe' ? value : null
+}
+
+const getLlmSummaryAnswer = (
+  judgments: ArticlesReviewsBothResponse['data'][number]['judgments'],
+): 'maybe' | 'no' | 'yes' | null => {
+  const answers = judgments
+    .map((judgment) => {
+      return normalizeSummaryAnswerValue(judgment.answeredOriginal)
+    })
+    .filter((answer): answer is 'maybe' | 'no' | 'yes' => {
+      return answer !== null
+    })
+
+  return answers.length === 0 ? null : answers.includes('no') ? 'no' : answers.includes('maybe') ? 'maybe' : 'yes'
 }
 
 const readJudgments = async (
@@ -478,7 +508,7 @@ export const getBothReviewArticlesFromServing = async (
       judgments,
       humanJudgmentMode: summaryJudgment ? ('summary' as const) : ('prompt' as const),
       humanSummaryAnswer: getSummaryAnswer(summaryJudgment?.answer),
-      llmSummaryAnswer: getSummaryAnswer(judgments[0]?.answeredOriginal),
+      llmSummaryAnswer: getLlmSummaryAnswer(judgments),
       ...(summaryJudgment ? {} : {humanAnswersByPrompt: getHumanAnswersByPrompt(humanJudgments)}),
     }
   })
@@ -498,60 +528,20 @@ export const getUnassessedReviewArticlesFromServing = async (
     throw new Error('Review serving snapshot is unavailable')
   }
 
-  const queueRows = await readRowsPage<ReviewServingQueueRow>({
+  const pageRows = await readRowsPage<ReviewServingArticleRow>({
     dependencies,
-    label: 'unassessed queue rows',
+    label: 'unassessed article rows',
     limit,
     page,
     request: {
       ...getBaseReaderRequest(params, manifest, limit, 'unassessed'),
-      contractKey: 'review.queue.unassessed',
+      contractKey: 'review.unassessed.rows',
       cursor: params.cursor ?? null,
     },
   })
-
-  const articleIds = [
-    ...new Set(
-      queueRows.map((row) => {
-        return row.article_id ?? ''
-      }),
-    ),
-  ].filter((articleId) => {
-    return articleId.length > 0
-  })
-  const rowsResult =
-    articleIds.length === 0
-      ? null
-      : await readReviewServingRows<ReviewServingArticleRow>(
-          {
-            ...getBaseReaderRequest(params, manifest, articleIds.length, 'unassessed'),
-            articleIds,
-            contractKey: 'review.unassessed.rowsByArticleSet',
-            estimatedHydratedPayloadBytes: articleIds.length * 10_000,
-            estimatedResultBytes: articleIds.length * 20_000,
-            filters: {},
-            limit: articleIds.length,
-            searchMode: 'none',
-            searchState: null,
-            searchTokenPrefix: null,
-          },
-          getReaderDependencies(dependencies),
-        )
-
-  if (rowsResult?.status === 'rejected') {
-    throw new Error(`reviewServingReader rejected unassessed article rows: ${rowsResult.reason}`)
-  }
-
-  const rowsByArticleId = new Map(
-    (rowsResult?.rows ?? []).map((row) => {
-      return [getArticleId(row), row]
-    }),
-  )
   const totalCount = await getCountValue(params, manifest, 'unassessed', dependencies)
-  const data = articleIds.flatMap((articleId) => {
-    const row = rowsByArticleId.get(articleId)
-
-    return row ? [{...getArticleResponseBase(row), judgments: [], judgedPromptIds: [], isFullyJudged: false}] : []
+  const data = pageRows.map((row) => {
+    return {...getArticleResponseBase(row), judgments: [], judgedPromptIds: [], isFullyJudged: false}
   })
 
   return {data, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}

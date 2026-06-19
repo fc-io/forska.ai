@@ -176,7 +176,11 @@ test('human review route service uses serving rows, human payload hydration, and
       hasStudyDecisionConflict: true,
       prompts: {'prompt-1': ['yes']},
     },
-    {database: reader.database, manifestDatabase: createManifestDatabase('active')},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
   )
   const sql = reader.statements.join('\n')
 
@@ -186,7 +190,7 @@ test('human review route service uses serving rows, human payload hydration, and
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).toContain("payload_kind = 'human'")
   expect(sql).toContain('FROM mart.review_article_count_serving_v4')
-  expect(sql).toContain('article_id IN (SELECT unnest($articleIds))')
+  expect(sql).toContain("article_id IN (SELECT unnest(['article-1']::VARCHAR[]))")
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })
@@ -196,14 +200,18 @@ test('both review route service hydrates LLM and human payloads in bounded artic
   const reader = createReaderDatabase()
   const result = await getBothReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 50, prompts: {'prompt-1': ['yes']}},
-    {database: reader.database, manifestDatabase: createManifestDatabase('active')},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
   )
   const sql = reader.statements.join('\n')
 
   expect(result.data[0]?.judgments[0]?.answeredOriginal).toBe('yes')
   expect(result.data[0]?.humanAnswersByPrompt?.['prompt-1']).toEqual(['yes'])
   expect(reader.statements).toHaveLength(4)
-  expect(sql.match(/article_id IN \(SELECT unnest\(\$articleIds\)\)/gu)?.length).toBe(2)
+  expect(sql.match(/article_id IN \(SELECT unnest\(\['article-1'\]::VARCHAR\[\]\)\)/gu)?.length).toBe(2)
   expect(sql).toContain("list_mode_key = 'both'")
   expect(sql).toContain("payload_kind = 'llm'")
   expect(sql).toContain("payload_kind = 'human'")
@@ -212,24 +220,24 @@ test('both review route service hydrates LLM and human payloads in bounded artic
   })
 })
 
-test('unassessed review route service reads queue ordering then capped companion rows and queue count', async () => {
+test('unassessed review route service pages filtered distinct article rows and queue count', async () => {
   const reader = createReaderDatabase()
   const result = await getUnassessedReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 25, search: 'heart', prompts: {}},
-    {database: reader.database, manifestDatabase: createManifestDatabase('active')},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
   )
   const sql = reader.statements.join('\n')
 
   expect(result.data).toHaveLength(1)
-  expect(reader.statements).toHaveLength(3)
-  expect(reader.statements[0]).toContain('FROM mart.review_unassessed_queue_serving_v4')
-  expect(reader.statements[0]).toContain('queue_kind = $queueKind')
-  expect(reader.statements[0]).toContain(
-    'ORDER BY priority_bucket DESC, activity_sort_at DESC, article_id DESC, prompt_id DESC, queue_identity DESC LIMIT $limit',
-  )
-  expect(reader.statements[1]).toContain('FROM mart.review_article_serving_v4')
-  expect(reader.statements[1]).toContain('article_id IN (SELECT unnest($articleIds))')
-  expect(reader.statements[2]).toContain("count_kind = 'review.queue.unassessedReady'")
+  expect(reader.statements).toHaveLength(2)
+  expect(reader.statements[0]).toContain('FROM mart.review_article_serving_v4')
+  expect(reader.statements[0]).toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(reader.statements[0]).toContain("starts_with(search.token, 'heart')")
+  expect(reader.statements[1]).toContain("count_kind = 'review.queue.unassessedReady'")
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })
@@ -239,7 +247,11 @@ test('human, both, and unassessed services surface stale and unavailable freshne
   const staleReader = createReaderDatabase()
   const staleResult = await getUnassessedReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
-    {database: staleReader.database, manifestDatabase: createManifestDatabase('retired')},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: staleReader.database,
+      manifestDatabase: createManifestDatabase('retired'),
+    },
   )
 
   expect(staleResult.totalCount).toBe(1)
@@ -247,7 +259,11 @@ test('human, both, and unassessed services surface stale and unavailable freshne
 
   await getHumanReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
-    {database: createReaderDatabase().database, manifestDatabase: createManifestDatabase('candidate')},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: createReaderDatabase().database,
+      manifestDatabase: createManifestDatabase('candidate'),
+    },
   )
     .then(() => {
       throw new Error('expected indexing freshness to reject')
@@ -258,7 +274,11 @@ test('human, both, and unassessed services surface stale and unavailable freshne
     })
   await getBothReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
-    {database: createReaderDatabase().database, manifestDatabase: createManifestDatabase('missing')},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: createReaderDatabase().database,
+      manifestDatabase: createManifestDatabase('missing'),
+    },
   )
     .then(() => {
       throw new Error('expected unavailable freshness to reject')

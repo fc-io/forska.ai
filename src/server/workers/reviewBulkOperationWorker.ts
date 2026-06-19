@@ -3,6 +3,7 @@ import {hostname} from 'node:os'
 import {sleep} from '../../utils/sleep.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
 import {type PdfFetchBatchStats, processPdfFetchArticleIds} from '../services/pdfFetchJobs.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 
@@ -73,9 +74,11 @@ export type ReviewBulkOperationWorkerDependencies = {
   executeBatch?: (input: {
     articleIds: readonly string[]
     database: ReviewBulkOperationWorkerDatabase
+    insertArticles?: typeof insertArticlesIntoProject
     job: ReviewBulkOperationJobRow
   }) => Promise<ReviewBulkOperationBatchResult>
   getDatabase?: () => ReviewBulkOperationWorkerDatabase
+  insertArticles?: typeof insertArticlesIntoProject
   sleep?: typeof sleep
 }
 
@@ -332,6 +335,17 @@ const markCompleted = async (jobId: string, database: ReviewBulkOperationWorkerD
   )
 }
 
+const markPending = async (jobId: string, database: ReviewBulkOperationWorkerDatabase, workerId: string) => {
+  await database.run(
+    `
+      UPDATE app.review_bulk_operation_job
+      SET status = 'pending', updated_at = current_timestamp, last_error = NULL
+      WHERE job_id = ${getSqlLiteral(jobId)}
+    `,
+    getWorkloadContext(workerId),
+  )
+}
+
 const markProgress = async (input: {
   articleIds: readonly string[]
   database: ReviewBulkOperationWorkerDatabase
@@ -409,6 +423,7 @@ const markFailed = async (input: {
 const executeDefaultBatch = async (input: {
   articleIds: readonly string[]
   database: ReviewBulkOperationWorkerDatabase
+  insertArticles?: typeof insertArticlesIntoProject
   job: ReviewBulkOperationJobRow
 }): Promise<ReviewBulkOperationBatchResult> => {
   const criteria = getCriteria(input.job)
@@ -430,16 +445,11 @@ const executeDefaultBatch = async (input: {
     return
   }
 
-  await input.database.run(`
-    INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
-    SELECT
-      'review-bulk:' || ${getSqlLiteral(input.job.jobId)} || ':' || article_id,
-      ${getSqlLiteral(criteria.targetProjectId)},
-      article_id,
-      ${getSqlLiteral(input.job.projectId)}
-    FROM (SELECT unnest(${getSqlLiteral(input.articleIds)}::VARCHAR[]) AS article_id)
-    ON CONFLICT(project_id, article_id) DO NOTHING
-  `)
+  await (input.insertArticles ?? insertArticlesIntoProject)(
+    criteria.targetProjectId,
+    [...input.articleIds],
+    input.job.projectId,
+  )
 }
 
 export const runReviewBulkOperationWorkerOnce = async (
@@ -466,7 +476,7 @@ export const runReviewBulkOperationWorkerOnce = async (
     })
     const executeBatch = dependencies.executeBatch ?? executeDefaultBatch
 
-    const batchResult = await executeBatch({articleIds, database, job})
+    const batchResult = await executeBatch({articleIds, database, insertArticles: dependencies.insertArticles, job})
     const pdfStats = batchResult && 'pdfStats' in batchResult ? batchResult.pdfStats : undefined
     const exportArticleIds = batchResult && 'exportArticleIds' in batchResult ? batchResult.exportArticleIds : undefined
     await markProgress({articleIds, database, exportArticleIds, job, pdfStats, workerId})
@@ -476,6 +486,7 @@ export const runReviewBulkOperationWorkerOnce = async (
       return {jobId: job.jobId, processedCount: job.processedCount + articleIds.length, status: 'completed', workerId}
     }
 
+    await markPending(job.jobId, database, workerId)
     return {jobId: job.jobId, processedCount: job.processedCount + articleIds.length, status: 'partial', workerId}
   } catch (error) {
     const status = await markFailed({
