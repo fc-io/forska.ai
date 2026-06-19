@@ -186,7 +186,7 @@ test('project export preserves prompt-output filter semantics in durable criteri
   expect(jobRequest).toMatchObject({
     criteria: {prompts: {'prompt-1': ['yes', 'maybe']}, search: 'screening'},
     filters: {prompts: {'prompt-1': ['yes', 'maybe']}, search: 'screening'},
-    searchMode: 'substring',
+    searchMode: 'tokenPrefix',
     searchText: 'screening',
   })
   expect(jobRequest.criteria).toMatchObject({
