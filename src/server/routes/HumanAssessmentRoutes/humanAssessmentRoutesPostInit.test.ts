@@ -247,3 +247,35 @@ test('human assessment init rejects summary-mode projects before creating pendin
     }),
   ).toBe(false)
 })
+
+test('human assessment init falls back to scoped articles when serving human queue is empty', async () => {
+  const statements: string[] = []
+  queryJsonRef.current = async (statement) => {
+    statements.push(statement)
+
+    return statement.includes("WHERE id = 'project-1'")
+      ? [{humanJudgmentMode: 'prompt', id: 'project-1', name: 'Project 1'}]
+      : statement.includes('FROM app.project_prompt pp')
+        ? [{id: 'prompt-1', originalText: 'Prompt 1', promptHeading: 'Heading 1', order: 0, type: 'string'}]
+        : statement.includes('ORDER BY created_at DESC')
+          ? []
+          : statement.includes('FROM mart.project_scope_article')
+            ? [{articleId: 'article-2'}]
+            : statement.includes('FROM app.article')
+              ? [{articleSummary: 'Summary 2', articleTitle: 'Article 2', id: 'article-2'}]
+              : statement.includes('INSERT INTO app.judgment_human')
+                ? [{id: 'judgment-human-2', promptId: 'prompt-1'}]
+                : []
+  }
+  readReviewServingRowsRef.current = async () => {
+    return {rows: [], status: 'accepted'}
+  }
+
+  const {humanAssessmentRoutesPostInit} = await loadHandler()
+  const set: {status: number} = {status: 200}
+  const response = await humanAssessmentRoutesPostInit({body: {projectId: 'project-1'}, set: set as never})
+
+  expect(set.status).toBe(200)
+  expect(response.data?.article.id).toBe('article-2')
+  expect(statements.join('\n')).toContain('FROM mart.project_scope_article')
+})

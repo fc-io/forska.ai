@@ -30,6 +30,9 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
   const [rowSelection, setRowSelection] = createSignal<Record<string, boolean>>({})
   const [selectAllMatching, setSelectAllMatching] = createSignal<boolean>(false)
   const [pageCursors, setPageCursors] = createSignal<Record<number, string | null>>({1: null})
+  const [loadedPages, setLoadedPages] = createSignal<
+    Record<number, {data: ArticleWithJudgments[]; nextCursor?: string | null}>
+  >({})
   // Reset selection when date/search/page size change
   createEffect(() => {
     // Access to track dependencies
@@ -42,6 +45,7 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
     setRowSelection({})
     setSelectAllMatching(false)
     setPageCursors({1: null})
+    setLoadedPages({})
   })
   const articlesQuery = useQuery(() => {
     return createArticlesUnassessedQueryOptions(
@@ -71,10 +75,30 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
     })
   })
   createEffect(() => {
+    const response = articlesQuery.data
+
+    if (!response || typeof response !== 'object' || !Array.isArray(response.data)) {
+      return
+    }
+
+    const page = props.currentPage()
+    const loadedPage = {data: response.data as ArticleWithJudgments[], nextCursor: response.nextCursor}
+    setLoadedPages((prev) => {
+      return prev[page]?.data === response.data ? prev : {...prev, [page]: loadedPage}
+    })
+  })
+  createEffect(() => {
     if (props.currentPage() > 1 && pageCursors()[props.currentPage()] == null) {
       props.setCurrentPage(1)
     }
   })
+  const loadedArticles = () => {
+    const pages = loadedPages()
+
+    return Array.from({length: props.currentPage()}, (_, index) => {
+      return pages[index + 1]?.data ?? []
+    }).flat()
+  }
   const warningsQuery = useQuery(() => {
     return createReviewsWarningsQueryOptions(props.projectId)
   })
@@ -127,7 +151,7 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
         <Show when={articlesQuery.data}>
           {(response) => {
             const articles = () => {
-              return response().data as ArticleWithJudgments[]
+              return loadedArticles()
             }
 
             return (
@@ -136,7 +160,7 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                   <h3 class="text-lg font-semibold mb-2">
                     Articles with No Judgments (
                     {response().totalCount > 0
-                      ? `Showing ${Math.min((response().page - 1) * props.pageLimit() + 1, response().totalCount)}-${Math.min(response().page * props.pageLimit(), response().totalCount)} of ${formatThousandSeparatedNumber(response().totalCount)}`
+                      ? `Showing 1-${Math.min(articles().length, response().totalCount)} of ${formatThousandSeparatedNumber(response().totalCount)}`
                       : '0'}
                     )
                   </h3>
@@ -182,7 +206,7 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                 />
 
                 <Show
-                  when={response().data.length > 0}
+                  when={articles().length > 0}
                   fallback={
                     <div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center">
                       <p class="font-medium text-slate-800">{emptyState().title}</p>

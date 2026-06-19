@@ -95,6 +95,7 @@ const defaultMaxRetries = 3
 const defaultPollIntervalMs = 2_000
 const defaultErrorBackoffMs = 10_000
 const staleRunningJobMinutes = 15
+const runningJobHeartbeatMs = 5 * 60 * 1000
 const routeOrJobKey = 'reviewBulkOperation.worker'
 
 const getDatabase = () => {
@@ -314,8 +315,8 @@ const getServingArticleBatchSql = (job: ReviewBulkOperationJobRow, cursor: strin
   const sourceProjectIds = getSourceProjectIds(job, criteria)
   const searchTokens = getReviewServingTitleSearchTokens(criteria.search ?? null)
   const searchIdentitySql = job.latestSnapshotSemantics
-    ? `(SELECT json_extract_string(component_state_json, '$.optional[0].projectionIdentity') FROM app.review_serving_snapshot_manifest WHERE project_id = s.project_id AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(job.reviewConfigHash)} AND snapshot_status = 'active' ORDER BY updated_at DESC, snapshot_id DESC LIMIT 1)`
-    : `(SELECT json_extract_string(component_state_json, '$.optional[0].projectionIdentity') FROM app.review_serving_snapshot_manifest WHERE project_id = s.project_id AND snapshot_id = ${getSqlLiteral(job.snapshotId)} LIMIT 1)`
+    ? `(SELECT json_extract_string(component.value, '$.projectionIdentity') FROM app.review_serving_snapshot_manifest manifest, json_each(json_extract(manifest.component_state_json, '$.optional')) component WHERE manifest.project_id = s.project_id AND manifest.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(job.reviewConfigHash)} AND manifest.snapshot_status = 'active' AND json_extract_string(component.value, '$.component') = 'search' ORDER BY manifest.updated_at DESC, manifest.snapshot_id DESC LIMIT 1)`
+    : `(SELECT json_extract_string(component.value, '$.projectionIdentity') FROM app.review_serving_snapshot_manifest manifest, json_each(json_extract(manifest.component_state_json, '$.optional')) component WHERE manifest.project_id = s.project_id AND manifest.snapshot_id = ${getSqlLiteral(job.snapshotId)} AND json_extract_string(component.value, '$.component') = 'search' LIMIT 1)`
   const snapshotPredicate = job.latestSnapshotSemantics
     ? `s.snapshot_id = (SELECT snapshot_id FROM app.review_serving_snapshot_manifest WHERE project_id = s.project_id AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(job.reviewConfigHash)} AND snapshot_status = 'active' ORDER BY updated_at DESC, snapshot_id DESC LIMIT 1)`
     : `s.snapshot_id = ${getSqlLiteral(job.snapshotId)}`
@@ -449,6 +450,38 @@ const markProgress = async (input: {
   )
 }
 
+const markHeartbeat = async (jobId: string, database: ReviewBulkOperationWorkerDatabase, workerId: string) => {
+  await database.run(
+    `
+      UPDATE app.review_bulk_operation_job
+      SET updated_at = current_timestamp
+      WHERE job_id = ${getSqlLiteral(jobId)}
+        AND status = 'running'
+        AND completed_at IS NULL
+    `,
+    getWorkloadContext(workerId),
+  )
+}
+
+const runWithHeartbeat = async <T>(input: {
+  database: ReviewBulkOperationWorkerDatabase
+  jobId: string
+  operation: () => Promise<T>
+  workerId: string
+}) => {
+  const heartbeat = setInterval(() => {
+    void markHeartbeat(input.jobId, input.database, input.workerId).catch(() => {})
+  }, runningJobHeartbeatMs)
+  heartbeat.unref?.()
+
+  try {
+    await markHeartbeat(input.jobId, input.database, input.workerId)
+    return await input.operation()
+  } finally {
+    clearInterval(heartbeat)
+  }
+}
+
 const markFailed = async (input: {
   database: ReviewBulkOperationWorkerDatabase
   error: unknown
@@ -535,7 +568,14 @@ export const runReviewBulkOperationWorkerOnce = async (
     })
     const executeBatch = dependencies.executeBatch ?? executeDefaultBatch
 
-    const batchResult = await executeBatch({articleIds, database, insertArticles: dependencies.insertArticles, job})
+    const batchResult = await runWithHeartbeat({
+      database,
+      jobId: job.jobId,
+      operation: () => {
+        return executeBatch({articleIds, database, insertArticles: dependencies.insertArticles, job})
+      },
+      workerId,
+    })
     const pdfStats = batchResult && 'pdfStats' in batchResult ? batchResult.pdfStats : undefined
     const exportArticleIds = batchResult && 'exportArticleIds' in batchResult ? batchResult.exportArticleIds : undefined
     await markProgress({articleIds, database, exportArticleIds, job, pdfStats, workerId})
