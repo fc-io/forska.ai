@@ -6,7 +6,6 @@ import {
   assertArticleIdOnlyBulkOperationCaps,
   createReviewBulkOperationJob,
 } from '../reviewServing/reviewBulkOperationService.ts'
-import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
@@ -93,16 +92,35 @@ export const projectsAddArticlesRoutes = new Elysia()
     async ({body}) => {
       const ids = Array.isArray(body.articleIds) ? body.articleIds : [body.articleIds]
       assertArticleIdOnlyBulkOperationCaps(ids)
-      const result = await insertArticlesIntoProject(body.targetProjectId, ids, body.sourceProjectId)
-
-      projectsAddArticlesLogger.force('projects.add-articles.applied-ids-summary', 'Articles added by ids', 'log', {
-        targetProjectId: body.targetProjectId,
-        sourceProjectId: body.sourceProjectId,
-        providedTotal: ids.length,
-        ...result,
+      const job = await createReviewBulkOperationJob({
+        criteria: {
+          articleIds: ids,
+          operation: 'addToProject',
+          requestId: randomUUID(),
+          sourceProjectId: body.sourceProjectId,
+          targetProjectId: body.targetProjectId,
+        },
+        filters: {},
+        jobKind: 'review.bulk.selection',
+        projectId: body.sourceProjectId,
+        searchMode: 'none',
+        searchText: null,
+        snapshot: {type: 'latest'},
       })
 
-      return {success: true, targetProjectId: body.targetProjectId, providedTotal: ids.length, ...result}
+      projectsAddArticlesLogger.force(
+        'projects.add-articles.applied-ids-summary',
+        'Articles add-by-ids job created',
+        'log',
+        {
+          targetProjectId: body.targetProjectId,
+          sourceProjectId: body.sourceProjectId,
+          providedTotal: ids.length,
+          jobId: job.jobId,
+        },
+      )
+
+      return {success: true, job, targetProjectId: body.targetProjectId, providedTotal: ids.length}
     },
     {
       body: t.Object({
