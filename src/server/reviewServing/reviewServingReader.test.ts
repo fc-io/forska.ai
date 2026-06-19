@@ -366,6 +366,31 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
   expect(sql).not.toContain('$cursor0')
 })
 
+test('readReviewServingRows binds placeholders in a single pass', async () => {
+  const reader = createReaderDatabase()
+  const manifestDatabase = createManifestDatabase({
+    bySnapshot: {'active-snapshot': getSnapshotRow({snapshotId: 'active-snapshot', status: 'active'})},
+  })
+  const result = await readReviewServingRows(
+    {
+      ...readyRequest,
+      contractKey: 'review.search.substringAsync',
+      jobFilterSignature: 'filters:1',
+      limit: 1,
+      searchMode: 'substringAsync',
+      searchState: {availability: 'async' as const, jobId: 'search-job-1', reason: 'substring search runs async'},
+      searchText: '$projectId',
+    },
+    {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase},
+  )
+  const sql = reader.statements[0] ?? ''
+
+  expect(result.status).toBe('accepted')
+  expect(sql).toContain("'$projectId'")
+  expect(sql).toContain("project_id = 'project-1'")
+  expect(sql).not.toContain("''project-1''")
+})
+
 test('readReviewServingRows rejects unsupported filters before DuckDB execution', async () => {
   const reader = createReaderDatabase()
   const manifestDatabase = createManifestDatabase({

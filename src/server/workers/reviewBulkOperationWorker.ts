@@ -47,6 +47,7 @@ type ReviewBulkOperationCriteria = {
   from?: string
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
+  humanStatus?: string
   listType?: string
   llmStatus?: string
   operation?: string
@@ -205,6 +206,36 @@ const getSourceProjectIds = (job: ReviewBulkOperationJobRow, criteria: ReviewBul
   return criteria.sourceProjectIds && criteria.sourceProjectIds.length > 0 ? criteria.sourceProjectIds : [job.projectId]
 }
 
+const getTabStatusPredicates = (criteria: ReviewBulkOperationCriteria) => {
+  const listMode = getListModeKey(criteria)
+  const humanStatusPredicate =
+    listMode === 'human' || listMode === 'both'
+      ? `AND s.human_status_key = ${getSqlLiteral(criteria.humanStatus ?? 'answered')}`
+      : ''
+  const llmStatusPredicate =
+    listMode === 'both'
+      ? `AND s.llm_status_key = ${getSqlLiteral('answered')}`
+      : criteria.llmStatus === 'complete'
+        ? `AND s.llm_status_key = ${getSqlLiteral('answered')}`
+        : criteria.llmStatus === 'partial'
+          ? `AND s.llm_status_key = ${getSqlLiteral('unanswered')}`
+          : ''
+  const queuePredicate =
+    listMode === 'unassessed'
+      ? `AND EXISTS (
+        SELECT 1
+        FROM mart.review_unassessed_queue_serving_v4 queue
+        WHERE queue.project_id = s.project_id
+          AND queue.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
+          AND queue.snapshot_id = s.snapshot_id
+          AND queue.queue_kind = ${getSqlLiteral('unassessed')}
+          AND queue.article_id = s.article_id
+      )`
+      : ''
+
+  return [humanStatusPredicate, llmStatusPredicate, queuePredicate].filter(Boolean).join('\n')
+}
+
 const getExclusiveDateToFilter = (value: string) => {
   if (!isDateOnlyFilter(value)) {
     return value
@@ -253,12 +284,9 @@ const getPromptAnswerPredicates = (criteria: ReviewBulkOperationCriteria) => {
 }
 
 const getPostingFilterPredicates = (criteria: ReviewBulkOperationCriteria) => {
-  const llmStatusValue =
-    criteria.llmStatus === 'complete' ? 'answered' : criteria.llmStatus === 'partial' ? 'unanswered' : null
   const simpleFilters = [
     criteria.hasDuplicateStudyRecords ? {kind: 'duplicateFlag', value: 'true'} : null,
     criteria.hasStudyDecisionConflict ? {kind: 'conflictFlag', value: 'true'} : null,
-    llmStatusValue ? {kind: 'llmStatus', value: llmStatusValue} : null,
   ].filter((filter): filter is {kind: string; value: string} => {
     return filter !== null
   })
@@ -311,6 +339,7 @@ const getServingArticleBatchSql = (job: ReviewBulkOperationJobRow, cursor: strin
       AND ${snapshotPredicate}
       AND s.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(job.reviewConfigHash)}
       AND s.list_mode_key = ${getSqlLiteral(getListModeKey(criteria))}
+      ${getTabStatusPredicates(criteria)}
       ${cursor ? `AND s.article_id > ${getSqlLiteral(cursor)}` : ''}
       ${getPostingFilterPredicates(criteria)}
       ${searchPredicate}

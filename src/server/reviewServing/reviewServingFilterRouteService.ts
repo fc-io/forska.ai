@@ -19,6 +19,7 @@ import {
 
 type PromptRow = {id: string; originalText: string; promptHeading: string | null; type: string | null}
 type ReviewServingFilterMode = 'human' | 'review'
+type HumanJudgmentMode = 'prompt' | 'summary'
 type ReviewServingFilterRouteParams = {
   covidenceConflicts?: string
   covidenceDuplicates?: string
@@ -146,7 +147,7 @@ const getComponentIdentity = (manifest: ReviewServingSnapshotManifest, component
     return entry.component === component
   })
 
-  return state?.projectionIdentity ?? '$missingIdentity'
+  return state?.projectionIdentity ?? ''
 }
 
 const getRouteFilters = (params: ReviewServingFilterRouteParams): ReviewServingReaderFilterInput => {
@@ -218,6 +219,7 @@ const getPromptFilters = (
   promptRows: readonly PromptRow[],
   optionRows: readonly (ReviewServingFilterOptionRow & {optionPayload: Record<string, unknown>})[],
   mode: ReviewServingFilterMode,
+  humanJudgmentMode: HumanJudgmentMode = 'summary',
 ) => {
   const valuesByPrompt = optionRows.reduce<Record<string, string[]>>((acc, row) => {
     const promptId = typeof row.optionPayload.promptId === 'string' ? row.optionPayload.promptId : row.prompt_id
@@ -261,7 +263,7 @@ const getPromptFilters = (
     },
   ]
 
-  return mode === 'human' ? summaryFilter : promptFilters
+  return mode === 'human' && humanJudgmentMode === 'summary' ? summaryFilter : promptFilters
 }
 
 const readFacetRows = async (
@@ -329,6 +331,7 @@ const readOptionRows = async (
 
 export const getReviewFiltersFromServing = async (input: {
   dependencies?: ReviewServingFilterRouteDependencies
+  humanJudgmentMode?: HumanJudgmentMode
   mode: ReviewServingFilterMode
   params: ReviewServingFilterRouteParams
   promptRows: readonly PromptRow[]
@@ -356,7 +359,7 @@ export const getReviewFiltersFromServing = async (input: {
     diagnostics: [...facetDiagnostics, ...optionResult.diagnostics],
     facets,
     filterOptions: optionResult.filterOptions,
-    filters: getPromptFilters(input.promptRows, optionResult.filterOptions, input.mode),
+    filters: getPromptFilters(input.promptRows, optionResult.filterOptions, input.mode, input.humanJudgmentMode),
     searchScope: {
       availability: 'ready',
       mode: searchText ? 'tokenPrefix' : 'none',

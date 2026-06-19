@@ -225,6 +225,30 @@ test('project export rejects mixed source review configs before queueing a durab
   expect(createReviewBulkOperationJobCalls).toHaveLength(0)
 })
 
+test('project export stores cross-project jobs under the downloadable project', async () => {
+  queryJsonRef.current = async (statement) => {
+    return statement.includes('FROM app.project') ? [{id: 'project-1', name: 'Project 1'}] : []
+  }
+  const {projectExportRoutes} = await loadRoutes()
+  const app = new Elysia().use(projectExportRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/project-1/export', {
+      body: JSON.stringify({promptIds: ['prompt-1'], sourceProjectIds: ['project-2', 'project-1']}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const jobRequest = createReviewBulkOperationJobCalls[0] as ExportJobRequest
+  const json = (await response.json()) as {downloadUrl?: string}
+
+  expect(response.status).toBe(202)
+  expect(jobRequest).toMatchObject({
+    criteria: {sourceProjectId: 'project-2', sourceProjectIds: ['project-2', 'project-1']},
+    projectId: 'project-1',
+  })
+  expect(json.downloadUrl).toBe('/api/projects/project-1/export/export-job-1/download')
+})
+
 test('project export download hydrates completed durable job selection as CSV', async () => {
   queryJsonRef.current = async (statement) => {
     if (statement.includes('FROM app.project') && statement.includes('LIMIT 1') && statement.includes('id, name')) {
