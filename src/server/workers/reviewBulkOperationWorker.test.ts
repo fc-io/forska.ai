@@ -38,6 +38,7 @@ const jobRow = {
 const createWorkerHarness = (input?: {
   batchRows?: readonly {articleId: string}[]
   cancelRequested?: boolean
+  claimed?: boolean
   criteriaJson?: unknown
   executeThrows?: boolean
   jobKind?: string
@@ -61,6 +62,10 @@ const createWorkerHarness = (input?: {
         statement.includes('FROM app.review_bulk_operation_job')
         && statement.includes('criteria_json AS criteriaJson')
       ) {
+        if (input?.claimed === false) {
+          return []
+        }
+
         return [
           {
             ...jobRow,
@@ -129,6 +134,18 @@ test('review bulk operation worker claims and advances bounded keyset progress d
       return context.fallbackIntent === 'reject' && context.workloadClass === 'bulkReviewJob'
     }),
   ).toBe(true)
+})
+
+test('review bulk operation worker skips a job when the conditional claim loses a race', async () => {
+  const harness = createWorkerHarness({claimed: false})
+  const result = await runReviewBulkOperationWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+  const joined = harness.statements.join('\n')
+
+  expect(result).toEqual({jobId: null, status: 'idle', workerId: 'worker-1'})
+  expect(harness.executedBatches).toEqual([])
+  expect(joined).toContain('UPDATE app.review_bulk_operation_job')
+  expect(joined).toContain('RETURNING')
+  expect(joined).not.toContain('processed_count = processed_count + 2')
 })
 
 test('review bulk operation worker uses insertion service side effects for add-to-project batches', async () => {

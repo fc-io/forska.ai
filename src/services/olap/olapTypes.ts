@@ -92,6 +92,7 @@ export type ArticlesReviewsBothParams = {
   projectId: string
   page: number
   limit: number
+  cursor?: string | null
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
   from?: string | null
@@ -152,6 +153,7 @@ export type ArticlesReviewsBothResponse = {
   page: number
   limit: number
   totalPages: number
+  nextCursor?: string | null
 }
 
 export type DatabaseFilterResult = {promptId: string; promptName: string; answeredOriginalValues: string[]}

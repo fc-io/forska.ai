@@ -10,6 +10,7 @@ export const createArticlesHumanReviewsQueryOptions = (
   covidenceConflictsOnly: Accessor<boolean>,
   promptFilters: Accessor<Record<string, string[] | null>>,
   currentPage: Accessor<number>,
+  currentCursor: Accessor<string | null | undefined>,
   pageLimit: Accessor<number>,
   fromDateStr: Accessor<string>,
   toDateStr: Accessor<string>,
@@ -37,6 +38,7 @@ export const createArticlesHumanReviewsQueryOptions = (
       covidenceConflictsOnly(),
       promptFilters(),
       currentPage(),
+      currentCursor() ?? null,
       pageLimit(),
       validFrom(),
       validTo(),
@@ -58,6 +60,7 @@ export const createArticlesHumanReviewsQueryOptions = (
 
       const response = await apiClient.api.articlesreviewshuman.post({
         page: String(currentPage()),
+        cursor: currentCursor() ?? undefined,
         limit: String(pageLimit()),
         projectId,
         hasDuplicateStudyRecords: covidenceDuplicatesOnly() ? true : undefined,

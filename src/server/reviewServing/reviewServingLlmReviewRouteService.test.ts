@@ -147,6 +147,16 @@ const createReaderDatabase = () => {
             answered_original_as_array: ['yes'],
             judgment_payload_json: {createdAt: '2026-01-03T00:00:00.000Z', explanation: 'because', quotes: []},
           },
+          {
+            article_id: 'article-1',
+            prompt_id: 'prompt-2',
+            model_id: 'model-1',
+            judgment_id: null,
+            answered_original: null,
+            answered_original_as_array: [],
+            judgment_payload_json: null,
+            placeholder_kind: 'llm.unanswered',
+          },
         ] as T[]
       }
 
@@ -181,6 +191,8 @@ test('LLM review list route service composes serving rows, judgments, and count 
   const sql = reader.statements.join('\n')
 
   expect(result.data[0]?.judgments[0]?.answeredOriginal).toBe('yes')
+  expect(result.data[0]?.judgments).toHaveLength(1)
+  expect(result.data[0]?.judgedPromptIds).toEqual(['prompt-1'])
   expect(result.data[0]?.isFullyJudged).toBe(true)
   expect(reader.statements).toHaveLength(3)
   expect(sql).toContain('FROM mart.review_article_serving_v4')

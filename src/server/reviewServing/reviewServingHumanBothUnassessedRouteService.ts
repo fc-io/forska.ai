@@ -61,6 +61,8 @@ type ReviewServingJudgmentRow = {
   judgment_id?: string | null
   judgment_payload_json?: unknown
   model_id?: string | null
+  placeholder_kind?: string | null
+  placeholderKind?: string | null
   prompt_id?: string
 }
 
@@ -80,6 +82,7 @@ type HumanReviewArticlesResponse = {
   data: unknown[]
   humanJudgmentMode: 'prompt' | 'summary'
   limit: number
+  nextCursor?: string | null
   page: number
   totalCount: number
   totalPages: number
@@ -87,16 +90,15 @@ type HumanReviewArticlesResponse = {
 type UnassessedReviewArticlesResponse = {
   data: unknown[]
   limit: number
+  nextCursor?: string | null
   page: number
   totalCount: number
   totalPages: number
 }
 type ReviewServingRowsPageInput = {
-  currentPage?: number
   dependencies?: ReviewServingRouteDependencies
   label: string
   limit: number
-  page: number
   request: Omit<ReviewServingReaderRequest, 'contractKey'> & {contractKey: string}
 }
 
@@ -228,16 +230,26 @@ const getCountState = (
   manifest: ReviewServingSnapshotManifest,
   mode: ReviewServingReviewMode,
 ) => {
-  const filterKey =
-    mode === 'unassessed' ? queueReadyFilterKey : hasDynamicFilters(params, mode) ? dynamicFilterKey : listAllFilterKey
-  const key: NamedReviewFastCountKey =
-    mode === 'unassessed'
+  const filterKey = hasDynamicFilters(params, mode)
+    ? dynamicFilterKey
+    : mode === 'unassessed'
+      ? queueReadyFilterKey
+      : listAllFilterKey
+  const key: NamedReviewFastCountKey = hasDynamicFilters(params, mode)
+    ? 'review.list.filteredTotal'
+    : mode === 'unassessed'
       ? 'review.queue.unassessedReady'
-      : hasDynamicFilters(params, mode)
-        ? 'review.list.filteredTotal'
-        : 'review.list.total'
+      : 'review.list.total'
 
   return {availability: 'ready' as const, filterKey, key, snapshotId: manifest.snapshotId, value: 0}
+}
+
+const getResponsePage = (params: ArticlesReviewsBothParams | ArticlesReviewsParams) => {
+  return 'cursor' in params && params.cursor ? getPage(params.page) : 1
+}
+
+const isLlmPlaceholderRow = (row: ReviewServingJudgmentRow) => {
+  return (row.placeholder_kind ?? row.placeholderKind ?? null) !== null
 }
 
 const getCountValue = async (
@@ -246,7 +258,7 @@ const getCountValue = async (
   mode: ReviewServingReviewMode,
   dependencies?: ReviewServingRouteDependencies,
 ) => {
-  if (mode !== 'unassessed' && hasDynamicFilters(params, mode)) {
+  if (hasDynamicFilters(params, mode)) {
     return getFilteredCountValue(params, manifest, mode, dependencies)
   }
 
@@ -369,7 +381,7 @@ const getSearchPredicate = (
 const getFilteredCountValue = async (
   params: ArticlesReviewsBothParams | ArticlesReviewsParams,
   manifest: ReviewServingSnapshotManifest,
-  mode: Exclude<ReviewServingReviewMode, 'unassessed'>,
+  mode: ReviewServingReviewMode,
   dependencies?: ReviewServingRouteDependencies,
 ) => {
   const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
@@ -404,24 +416,28 @@ const getJudgmentPayload = (row: ReviewServingJudgmentRow) => {
 }
 
 const getLlmJudgmentsByArticleId = (rows: readonly ReviewServingJudgmentRow[]) => {
-  return rows.reduce((acc, row) => {
-    const articleId = row.article_id ?? ''
-    const payload = getJudgmentPayload(row)
-    const judgment = {
-      id: row.judgment_id ?? getPayloadString(payload?.id),
-      createdAt: getPayloadString(payload?.createdAt) || getPayloadString(row.detail_updated_at),
-      articleId,
-      promptId: row.prompt_id ?? '',
-      modelId: row.model_id ?? getPayloadString(payload?.modelId),
-      answeredOriginal: row.answered_original ?? (payload?.answeredOriginal as string | null) ?? null,
-      answeredOriginalAsArray: row.answered_original_as_array ?? [],
-      explanation: (payload?.explanation as string | null) ?? null,
-      quotes: payload?.quotes ?? null,
-    }
-    const existing = acc.get(articleId) ?? []
+  return rows
+    .filter((row) => {
+      return !isLlmPlaceholderRow(row)
+    })
+    .reduce((acc, row) => {
+      const articleId = row.article_id ?? ''
+      const payload = getJudgmentPayload(row)
+      const judgment = {
+        id: row.judgment_id ?? getPayloadString(payload?.id),
+        createdAt: getPayloadString(payload?.createdAt) || getPayloadString(row.detail_updated_at),
+        articleId,
+        promptId: row.prompt_id ?? '',
+        modelId: row.model_id ?? getPayloadString(payload?.modelId),
+        answeredOriginal: row.answered_original ?? (payload?.answeredOriginal as string | null) ?? null,
+        answeredOriginalAsArray: row.answered_original_as_array ?? [],
+        explanation: (payload?.explanation as string | null) ?? null,
+        quotes: payload?.quotes ?? null,
+      }
+      const existing = acc.get(articleId) ?? []
 
-    return acc.set(articleId, [...existing, judgment])
-  }, new Map<string, ArticlesReviewsBothResponse['data'][number]['judgments']>())
+      return acc.set(articleId, [...existing, judgment])
+    }, new Map<string, ArticlesReviewsBothResponse['data'][number]['judgments']>())
 }
 
 const getHumanJudgmentsByArticleId = (rows: readonly ReviewServingJudgmentRow[]) => {
@@ -509,24 +525,21 @@ const readJudgments = async (
       })
 }
 
-const readRowsPage = async <T>(input: ReviewServingRowsPageInput): Promise<T[]> => {
-  const currentPage = input.currentPage ?? 1
+const readRowsPage = async <T>(input: ReviewServingRowsPageInput): Promise<{nextCursor: string | null; rows: T[]}> => {
   const rowsResult = await readReviewServingRows<T>(input.request, getReaderDependencies(input.dependencies))
 
   if (rowsResult.status === 'rejected') {
     throw new Error(`reviewServingReader rejected ${input.label}: ${rowsResult.reason}`)
   }
 
-  const pageRows = rowsResult.rows.slice(0, input.limit)
-  const lastRow = pageRows[pageRows.length - 1]
+  const rows = rowsResult.rows.slice(0, input.limit)
+  const lastRow = rows[rows.length - 1]
+  const nextCursor =
+    rowsResult.rows.length > input.limit && lastRow
+      ? rowsResult.getCursorForRow(lastRow as Record<string, unknown>)
+      : null
 
-  return currentPage >= input.page || !lastRow || pageRows.length < input.limit
-    ? pageRows
-    : readRowsPage({
-        ...input,
-        currentPage: currentPage + 1,
-        request: {...input.request, cursor: rowsResult.getCursorForRow(lastRow as Record<string, unknown>)},
-      })
+  return {nextCursor, rows}
 }
 
 const getArticleResponseBase = (row: ReviewServingArticleRow) => {
@@ -556,24 +569,24 @@ export const getHumanReviewArticlesFromServing = async (
   dependencies?: ReviewServingRouteDependencies,
 ): Promise<HumanReviewArticlesResponse> => {
   const manifest = await getManifest(params.projectId, dependencies)
-  const page = getPage(params.page)
+  const page = getResponsePage(params)
   const limit = getLimit(params.limit)
 
   if (!manifest) {
     throw new Error('Review serving snapshot is unavailable')
   }
 
-  const pageRows = await readRowsPage<ReviewServingArticleRow>({
+  const pageResult = await readRowsPage<ReviewServingArticleRow>({
     dependencies,
     label: 'human review rows',
     limit,
-    page,
     request: {
-      ...getBaseReaderRequest(params, manifest, limit, 'human'),
+      ...getBaseReaderRequest(params, manifest, limit + 1, 'human'),
       contractKey: 'review.human.rows',
       cursor: params.cursor ?? null,
     },
   })
+  const pageRows = pageResult.rows
 
   const articleIds = pageRows.map(getArticleId)
   const humanRows = await readJudgments(params, manifest, 'human', articleIds, 'human', dependencies)
@@ -604,6 +617,7 @@ export const getHumanReviewArticlesFromServing = async (
     page,
     limit,
     totalPages: Math.ceil(totalCount / limit),
+    nextCursor: pageResult.nextCursor,
   }
 }
 
@@ -612,20 +626,24 @@ export const getBothReviewArticlesFromServing = async (
   dependencies?: ReviewServingRouteDependencies,
 ): Promise<ArticlesReviewsBothResponse> => {
   const manifest = await getManifest(params.projectId, dependencies)
-  const page = getPage(params.page)
+  const page = getResponsePage(params)
   const limit = getLimit(params.limit)
 
   if (!manifest) {
     throw new Error('Review serving snapshot is unavailable')
   }
 
-  const pageRows = await readRowsPage<ReviewServingArticleRow>({
+  const pageResult = await readRowsPage<ReviewServingArticleRow>({
     dependencies,
     label: 'both review rows',
     limit,
-    page,
-    request: {...getBaseReaderRequest(params, manifest, limit, 'both'), contractKey: 'review.both.rows'},
+    request: {
+      ...getBaseReaderRequest(params, manifest, limit + 1, 'both'),
+      contractKey: 'review.both.rows',
+      cursor: params.cursor ?? null,
+    },
   })
+  const pageRows = pageResult.rows
 
   const articleIds = pageRows.map(getArticleId)
   const [llmRows, humanRows] = await Promise.all([
@@ -653,7 +671,7 @@ export const getBothReviewArticlesFromServing = async (
     }
   })
 
-  return {data, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}
+  return {data, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit), nextCursor: pageResult.nextCursor}
 }
 
 export const getUnassessedReviewArticlesFromServing = async (
@@ -661,28 +679,28 @@ export const getUnassessedReviewArticlesFromServing = async (
   dependencies?: ReviewServingRouteDependencies,
 ): Promise<UnassessedReviewArticlesResponse> => {
   const manifest = await getManifest(params.projectId, dependencies)
-  const page = getPage(params.page)
+  const page = getResponsePage(params)
   const limit = getLimit(params.limit)
 
   if (!manifest) {
     throw new Error('Review serving snapshot is unavailable')
   }
 
-  const pageRows = await readRowsPage<ReviewServingArticleRow>({
+  const pageResult = await readRowsPage<ReviewServingArticleRow>({
     dependencies,
     label: 'unassessed article rows',
     limit,
-    page,
     request: {
-      ...getBaseReaderRequest(params, manifest, limit, 'unassessed'),
+      ...getBaseReaderRequest(params, manifest, limit + 1, 'unassessed'),
       contractKey: 'review.unassessed.rows',
       cursor: params.cursor ?? null,
     },
   })
+  const pageRows = pageResult.rows
   const totalCount = await getCountValue(params, manifest, 'unassessed', dependencies)
   const data = pageRows.map((row) => {
     return {...getArticleResponseBase(row), judgments: [], judgedPromptIds: [], isFullyJudged: false}
   })
 
-  return {data, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}
+  return {data, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit), nextCursor: pageResult.nextCursor}
 }

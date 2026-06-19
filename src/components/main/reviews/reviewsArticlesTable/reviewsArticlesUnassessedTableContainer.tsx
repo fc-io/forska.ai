@@ -29,6 +29,7 @@ interface ReviewsArticlesUnassessedTableContainerProps {
 export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUnassessedTableContainerProps) => {
   const [rowSelection, setRowSelection] = createSignal<Record<string, boolean>>({})
   const [selectAllMatching, setSelectAllMatching] = createSignal<boolean>(false)
+  const [pageCursors, setPageCursors] = createSignal<Record<number, string | null>>({1: null})
   // Reset selection when date/search/page size change
   createEffect(() => {
     // Access to track dependencies
@@ -38,9 +39,9 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
     props.covidenceConflictsOnly()
     props.searchTitle()
     props.pageLimit()
-    props.currentPage()
     setRowSelection({})
     setSelectAllMatching(false)
+    setPageCursors({1: null})
   })
   const articlesQuery = useQuery(() => {
     return createArticlesUnassessedQueryOptions(
@@ -48,11 +49,31 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
       props.covidenceDuplicatesOnly,
       props.covidenceConflictsOnly,
       props.currentPage,
+      () => {
+        return pageCursors()[props.currentPage()]
+      },
       props.pageLimit,
       props.fromDate,
       props.toDate,
       props.searchTitle,
     )
+  })
+  createEffect(() => {
+    const nextCursor = articlesQuery.data?.nextCursor
+
+    if (typeof nextCursor !== 'string' || nextCursor === '') {
+      return
+    }
+
+    const nextPage = props.currentPage() + 1
+    setPageCursors((prev) => {
+      return prev[nextPage] === nextCursor ? prev : {...prev, [nextPage]: nextCursor}
+    })
+  })
+  createEffect(() => {
+    if (props.currentPage() > 1 && pageCursors()[props.currentPage()] == null) {
+      props.setCurrentPage(1)
+    }
   })
   const warningsQuery = useQuery(() => {
     return createReviewsWarningsQueryOptions(props.projectId)
@@ -128,6 +149,8 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                   page={props.currentPage()}
                   totalPages={response().totalPages}
                   setCurrentPage={props.setCurrentPage}
+                  useCursorPagination
+                  hasNextPage={Boolean(response().nextCursor)}
                   currentPageRowIds={articles().map((a) => {
                     return String(a.id)
                   })}
@@ -184,6 +207,8 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                   page={props.currentPage()}
                   totalPages={response().totalPages}
                   setCurrentPage={props.setCurrentPage}
+                  useCursorPagination
+                  hasNextPage={Boolean(response().nextCursor)}
                   currentPageRowIds={articles().map((a) => {
                     return String(a.id)
                   })}

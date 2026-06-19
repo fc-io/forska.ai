@@ -136,29 +136,20 @@ const getClaimableJob = async (
   const workloadContext = getWorkloadContext(workerId)
 
   return database.transaction(async (tx) => {
-    const [candidate] = await tx.queryJson<{jobId: string}>(`
-      SELECT job_id AS jobId
-      FROM app.review_bulk_operation_job
-      WHERE status = 'pending'
-        AND completed_at IS NULL
-      ORDER BY updated_at ASC, job_id ASC
-      LIMIT 1
-    `)
-
-    if (!candidate) {
-      return null
-    }
-
-    await tx.run(`
+    const [job] = await tx.queryJson<ReviewBulkOperationJobRow>(`
       UPDATE app.review_bulk_operation_job
       SET status = 'running', updated_at = current_timestamp
-      WHERE job_id = ${getSqlLiteral(candidate.jobId)}
+      WHERE job_id = (
+        SELECT job_id
+        FROM app.review_bulk_operation_job
+        WHERE status = 'pending'
+          AND completed_at IS NULL
+        ORDER BY updated_at ASC, job_id ASC
+        LIMIT 1
+      )
         AND status = 'pending'
         AND completed_at IS NULL
-    `)
-
-    const [job] = await tx.queryJson<ReviewBulkOperationJobRow>(`
-      SELECT
+      RETURNING
         job_id AS jobId,
         job_kind AS jobKind,
         project_id AS projectId,
@@ -173,9 +164,6 @@ const getClaimableJob = async (
         total_estimate AS totalEstimate,
         cancel_requested AS cancelRequested,
         retry_count AS retryCount
-      FROM app.review_bulk_operation_job
-      WHERE job_id = ${getSqlLiteral(candidate.jobId)}
-      LIMIT 1
     `)
 
     return job ?? null
