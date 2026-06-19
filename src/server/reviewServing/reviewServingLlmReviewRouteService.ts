@@ -281,7 +281,11 @@ export const getLlmReviewArticlesFromServing = async (
   }
 
   const rowsResult = await readReviewServingRows<ReviewServingArticleRow>(
-    {...getBaseReaderRequest(params, manifest, limit), contractKey: 'review.llm.rows', cursor: params.cursor ?? null},
+    {
+      ...getBaseReaderRequest(params, manifest, limit + 1),
+      contractKey: 'review.llm.rows',
+      cursor: params.cursor ?? null,
+    },
     getReaderDependencies(dependencies),
   )
 
@@ -316,6 +320,7 @@ export const getLlmReviewArticlesFromServing = async (
 
   const totalCount = await getCountValue(params, manifest, dependencies)
   const lastRow = pageRows[pageRows.length - 1]
+  const hasNextPage = rowsResult.rows.length > limit
 
   return {
     data: getResponseRows(pageRows, judgmentsResult?.rows ?? []),
@@ -323,7 +328,7 @@ export const getLlmReviewArticlesFromServing = async (
     page,
     limit,
     totalPages: Math.ceil(totalCount / limit),
-    nextCursor: rowsResult.rows.length > limit && lastRow ? rowsResult.diagnostics.filterSignature : null,
+    nextCursor: hasNextPage && lastRow ? rowsResult.getCursorForRow(lastRow as Record<string, unknown>) : null,
   }
 }
 

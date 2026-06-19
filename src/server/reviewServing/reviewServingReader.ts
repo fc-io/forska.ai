@@ -18,6 +18,7 @@ import {
 } from './reviewServingContracts.ts'
 import {
   decodeAndValidateReviewServingCursor,
+  encodeReviewServingCursor,
   getReviewServingCursorSortKey,
   getReviewServingFilterSignature,
   type ReviewServingCursorComponentState,
@@ -108,6 +109,7 @@ export type ReviewServingReaderResult<T> =
   | {
       contract: ReviewServingReadContract
       diagnostics: ReviewServingReaderDiagnostics
+      getCursorForRow: (row: Record<string, unknown>) => string
       rows: T[]
       sql: string
       status: 'accepted'
@@ -240,20 +242,203 @@ const hasValidArticleSetBounds = (contract: ReviewServingReadContract, request: 
   )
 }
 
+const getCursorFieldName = (field: string) => {
+  return field.replace(/\s+(?:asc|desc)\b[\s\S]*$/iu, '').trim()
+}
+
+const getCursorFieldDirection = (field: string, contract: ReviewServingReadContract) => {
+  const direction = field.match(/\s+(asc|desc)\b/iu)?.[1]?.toLowerCase()
+
+  return direction === 'asc' || direction === 'desc' ? direction : contract.sort.direction
+}
+
+const getCursorPredicatePart = (input: {
+  contract: ReviewServingReadContract
+  cursorValues: readonly (null | number | string)[]
+  index: number
+}) => {
+  const equalPredicates = input.contract.cursorFields.slice(0, input.index).map((field, fieldIndex) => {
+    return `${getCursorFieldName(field)} IS NOT DISTINCT FROM $cursor${fieldIndex}`
+  })
+  const field = input.contract.cursorFields[input.index] ?? ''
+  const fieldName = getCursorFieldName(field)
+  const direction = getCursorFieldDirection(field, input.contract)
+  const operator = direction === 'asc' ? '>' : '<'
+  const comparison = `${fieldName} ${operator} $cursor${input.index}`
+
+  return [...equalPredicates, comparison].join(' AND ')
+}
+
 const getCursorPredicate = (contract: ReviewServingReadContract, cursorValues: readonly (null | number | string)[]) => {
   if (cursorValues.length === 0 || contract.cursorFields.length === 0) {
     return undefined
   }
 
-  const fields = contract.cursorFields.join(', ')
-  const values = cursorValues
+  return cursorValues
     .map((_value, index) => {
-      return `$cursor${index}`
+      return `(${getCursorPredicatePart({contract, cursorValues, index})})`
     })
-    .join(', ')
-  const operator = contract.sort.direction === 'asc' ? '>' : '<'
+    .join(' OR ')
+}
 
-  return `(${fields}) ${operator} (${values})`
+const getCursorSqlParameters = (cursorValues: readonly (null | number | string)[] | null) => {
+  return (cursorValues ?? []).reduce<Record<string, null | number | string>>((acc, value, index) => {
+    return {...acc, [`cursor${index}`]: value}
+  }, {})
+}
+
+const getCursorSortValue = (value: unknown): null | number | string => {
+  if (value instanceof Date) {
+    return value.toISOString()
+  }
+
+  return value === null || typeof value === 'number' || typeof value === 'string' ? value : null
+}
+
+const createCursorForRow = (input: {
+  contract: ReviewServingReadContract
+  filterSignature: string
+  manifest: ReviewServingSnapshotManifest
+  row: Record<string, unknown>
+}) => {
+  const sortValues = input.contract.cursorFields.map((field) => {
+    return getCursorSortValue(input.row[getCursorFieldName(field)])
+  })
+  const articleIdValue = input.row.article_id ?? input.row.articleId
+  const articleId = typeof articleIdValue === 'string' ? articleIdValue : ''
+
+  return encodeReviewServingCursor({
+    articleId,
+    componentStates: getComponentCursorStates(input.manifest),
+    contractKey: input.contract.key,
+    filterSignature: input.filterSignature,
+    reviewConfigHash: input.manifest.reviewConfigHash,
+    snapshotId: input.manifest.snapshotId,
+    sortDirection: input.contract.sort.direction,
+    sortKey: getReviewServingCursorSortKey(input.contract.cursorFields),
+    sortValues,
+    version: 1,
+  })
+}
+
+const getPostingFilterPrefix = (listMode: ReviewServingListMode | null | undefined) => {
+  return listMode === 'human' ? 'human:promptAnswer:' : 'review:promptAnswer:'
+}
+
+const getFilterValues = (value: ReviewServingFilterSignatureValue | undefined) => {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => {
+        return typeof entry === 'string' && entry.length > 0
+      })
+    : typeof value === 'string' && value.length > 0
+      ? [value]
+      : []
+}
+
+const getFilterString = (value: ReviewServingFilterSignatureValue | undefined) => {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+const getPromptAnswerValues = (request: ReviewServingReaderRequest) => {
+  const prefix = getPostingFilterPrefix(request.listMode)
+
+  return getFilterValues(request.filters?.promptAnswer).map((value) => {
+    return `${prefix}${value}`
+  })
+}
+
+const getColumnFilterPredicates = (request: ReviewServingReaderRequest) => {
+  const filters = request.filters ?? {}
+  const llmStatus =
+    filters.llmStatus === 'complete' ? 'answered' : filters.llmStatus === 'partial' ? 'unanswered' : null
+  const articleCreatedAtFrom = getFilterString(filters.articleCreatedAtFrom)
+  const articleCreatedAtTo = getFilterString(filters.articleCreatedAtTo)
+
+  return [
+    articleCreatedAtFrom ? 'sort_key >= TIMESTAMPTZ $articleCreatedAtFrom' : '',
+    articleCreatedAtTo ? 'sort_key <= TIMESTAMPTZ $articleCreatedAtTo' : '',
+    filters.duplicateFlag ? `duplicate_flag = TRUE` : '',
+    filters.conflictFlag ? `conflict_flag = TRUE` : '',
+    llmStatus ? 'llm_status_key = $llmStatusFilter' : '',
+    typeof filters.humanStatus === 'string' ? 'human_status_key = $humanStatusFilter' : '',
+  ].filter((predicate) => {
+    return predicate.length > 0
+  })
+}
+
+const getPostingFilterPredicate = (input: {
+  contract: ReviewServingReadContract
+  filterKind: string
+  filterValues: readonly string[]
+  index: number
+  request: ReviewServingReaderRequest
+}) => {
+  return input.filterValues.length === 0
+    ? ''
+    : [
+        `EXISTS (SELECT 1 FROM mart.review_article_filter_posting_serving_v4 filter_${input.index}`,
+        ` WHERE filter_${input.index}.project_id = $projectId`,
+        ` AND filter_${input.index}.snapshot_id = $snapshotId`,
+        ` AND filter_${input.index}.review_config_hash = $reviewConfigHash`,
+        ` AND filter_${input.index}.list_mode_key = ${getSqlLiteral(input.request.listMode ?? input.contract.listMode)}`,
+        ` AND filter_${input.index}.article_id = ${input.contract.servingTable}.article_id`,
+        ` AND filter_${input.index}.filter_kind = $promptAnswerFilterKind`,
+        ` AND filter_${input.index}.filter_value IN (SELECT unnest($promptAnswerFilterValues)))`,
+      ].join('')
+}
+
+const getSearchFilterPredicate = (input: {
+  contract: ReviewServingReadContract
+  manifest: ReviewServingSnapshotManifest
+  request: ReviewServingReaderRequest
+}) => {
+  const componentStates = getComponentCursorStates(input.manifest)
+
+  return input.request.searchTokenPrefix && componentStates.search?.projectionIdentity
+    ? [
+        'EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search',
+        ` WHERE search.project_id = $projectId`,
+        ` AND search.search_identity = $searchIdentity`,
+        ` AND search.project_scope_identity = $projectScopeIdentity`,
+        ` AND search.snapshot_id = $snapshotId`,
+        ` AND search.article_id = ${input.contract.servingTable}.article_id`,
+        ` AND starts_with(search.token, $searchTokenPrefix))`,
+      ].join('')
+    : ''
+}
+
+const getLlmStatusFilterValue = (request: ReviewServingReaderRequest) => {
+  return request.filters?.llmStatus === 'complete'
+    ? 'answered'
+    : request.filters?.llmStatus === 'partial'
+      ? 'unanswered'
+      : null
+}
+
+const getOrderedPrefixFilterPredicatesSql = (input: {
+  contract: ReviewServingReadContract
+  manifest: ReviewServingSnapshotManifest
+  request: ReviewServingReaderRequest
+}) => {
+  if (input.contract.physicalAccessStrategy !== 'orderedPrefix') {
+    return null
+  }
+
+  const predicates = [
+    ...getColumnFilterPredicates(input.request),
+    getPostingFilterPredicate({
+      contract: input.contract,
+      filterKind: 'promptAnswer',
+      filterValues: getPromptAnswerValues(input.request),
+      index: 0,
+      request: input.request,
+    }),
+    getSearchFilterPredicate(input),
+  ].filter((predicate) => {
+    return predicate.length > 0
+  })
+
+  return predicates.length > 0 ? ` AND ${predicates.join(' AND ')}` : null
 }
 
 const getFilterSignatureInput = (request: ReviewServingReaderRequest) => {
@@ -382,6 +567,7 @@ const getSql = (input: {
     filterKindParameter: input.request.filterKind ? '$filterKind' : null,
     filterOptionIdentityParameter: input.request.filterOptionIdentity ? '$filterOptionIdentity' : null,
     filterValueParameter: input.request.filterValue ? '$filterValue' : null,
+    filterPredicatesSql: getOrderedPrefixFilterPredicatesSql(input),
     jobFilterSignatureParameter: input.request.jobFilterSignature ? '$jobFilterSignature' : null,
     limitParameter: '$limit',
     listModeParameter: '$listMode',
@@ -424,11 +610,14 @@ const bindReviewServingRowsSql = (
   sql: string,
   request: ReviewServingReaderRequest,
   manifest: ReviewServingSnapshotManifest,
+  cursorValues: readonly (null | number | string)[] | null,
 ) => {
   const componentStates = getComponentCursorStates(manifest)
   const parameters: Record<string, null | number | readonly string[] | string | undefined> = {
     articleId: request.articleId ?? null,
     articleIds: request.articleIds ?? null,
+    articleCreatedAtFrom: getFilterString(request.filters?.articleCreatedAtFrom),
+    articleCreatedAtTo: getFilterString(request.filters?.articleCreatedAtTo),
     countFilterKey: request.countFilterKey ?? null,
     displayIdentity: componentStates.display?.projectionIdentity,
     filterKind: request.filterKind ?? null,
@@ -437,9 +626,13 @@ const bindReviewServingRowsSql = (
     jobFilterSignature: request.jobFilterSignature ?? null,
     limit: request.limit,
     listMode: request.listMode ?? null,
+    llmStatusFilter: getLlmStatusFilterValue(request),
+    humanStatusFilter: getFilterString(request.filters?.humanStatus),
     payloadIdentity: componentStates.payload?.projectionIdentity,
     projectId: request.projectId ?? null,
     projectScopeIdentity: componentStates.projectScope?.projectionIdentity,
+    promptAnswerFilterKind: 'promptAnswer',
+    promptAnswerFilterValues: getPromptAnswerValues(request),
     queueKind: request.queueKind ?? null,
     reviewConfigHash: manifest.reviewConfigHash,
     searchIdentity: request.searchIdentity ?? componentStates.search?.projectionIdentity,
@@ -448,7 +641,9 @@ const bindReviewServingRowsSql = (
     snapshotId: manifest.snapshotId,
   }
 
-  return Object.entries(parameters)
+  const cursorParameters = getCursorSqlParameters(cursorValues)
+
+  return Object.entries({...parameters, ...cursorParameters})
     .sort(([left], [right]) => {
       return right.length - left.length
     })
@@ -635,7 +830,12 @@ export const readReviewServingRows = async <T>(
   }
 
   const database = dependencies?.database ?? getReaderDatabase()
-  const executableSql = dependencies?.database ? sql : bindReviewServingRowsSql(sql, request, manifest)
+  const executableSql = bindReviewServingRowsSql(
+    sql,
+    request,
+    manifest,
+    cursor?.valid ? cursor.payload.sortValues : null,
+  )
   const rows = await database.queryJson<T>(executableSql, admission.workloadContext)
 
   return {
@@ -648,6 +848,9 @@ export const readReviewServingRows = async <T>(
       manifest,
       rejectionReason: null,
     }),
+    getCursorForRow: (row) => {
+      return createCursorForRow({contract, filterSignature: filterSignature as string, manifest, row})
+    },
     rows,
     sql,
     status: 'accepted',

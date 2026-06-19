@@ -69,7 +69,7 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain(
-    "WHERE project_id = $projectId AND review_config_hash = $reviewConfigHash AND snapshot_id = $snapshotId AND list_mode_key = 'llm'",
+    "WHERE mart.review_article_serving_v4.project_id = $projectId AND review_config_hash = $reviewConfigHash AND mart.review_article_serving_v4.snapshot_id = $snapshotId AND list_mode_key = 'llm'",
   )
 })
 
@@ -90,7 +90,7 @@ test('buildReviewServingRowsSql uses payload identities for payload serving tabl
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain(
-    'WHERE project_id = $projectId AND display_identity = $displayIdentity AND payload_identity = $payloadIdentity AND snapshot_id = $snapshotId',
+    'WHERE mart.review_article_serving_payload_v4.project_id = $projectId AND display_identity = $displayIdentity AND payload_identity = $payloadIdentity AND snapshot_id = $snapshotId',
   )
   expect(sql).not.toContain('review_config_hash')
   expect(sql).not.toContain('AND list_mode_key =')
@@ -116,7 +116,7 @@ test('buildReviewServingRowsSql uses search identities for search serving tables
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain(
-    'WHERE project_id = $projectId AND search_identity = $searchIdentity AND project_scope_identity = $projectScopeIdentity AND snapshot_id = $snapshotId',
+    'WHERE mart.review_title_search_serving_v4.project_id = $projectId AND search_identity = $searchIdentity AND project_scope_identity = $projectScopeIdentity AND snapshot_id = $snapshotId',
   )
   expect(sql).toContain('AND starts_with(token, $searchTokenPrefix)')
   expect(sql).not.toContain('review_config_hash')
@@ -140,7 +140,7 @@ test('buildReviewServingRowsSql scopes filter option rows by search identity', (
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain(
-    'WHERE project_id = $projectId AND review_config_hash = $reviewConfigHash AND snapshot_id = $snapshotId AND search_identity = $searchIdentity AND filter_option_identity = $filterOptionIdentity',
+    'WHERE mart.review_filter_option_serving_v4.project_id = $projectId AND review_config_hash = $reviewConfigHash AND snapshot_id = $snapshotId AND search_identity = $searchIdentity AND filter_option_identity = $filterOptionIdentity',
   )
   expect(sql).toContain('ORDER BY filter_kind ASC, facet_key ASC, option_value_key ASC')
 })
@@ -234,7 +234,7 @@ test('buildReviewServingRowsSql pins snapshot manifests to the active review con
 
   expect(assertReviewServingSqlShape(sql, {requireSnapshotScope: false})).toEqual({ok: true, violations: []})
   expect(sql).toContain(
-    "WHERE project_id = $projectId AND review_config_hash IS NOT DISTINCT FROM $reviewConfigHash AND snapshot_status IN ('active', 'retired') ORDER BY updated_at DESC, snapshot_id DESC",
+    "WHERE app.review_serving_snapshot_manifest.project_id = $projectId AND review_config_hash IS NOT DISTINCT FROM $reviewConfigHash AND snapshot_status IN ('active', 'retired') ORDER BY updated_at DESC, snapshot_id DESC",
   )
   expect(sql).not.toContain(' AND status IN ')
   expect(sql).not.toContain('$snapshotId')
@@ -258,7 +258,7 @@ test('buildReviewServingRowsSql only emits list-mode predicates for list-mode ta
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain(
-    'WHERE project_id = $projectId AND review_config_hash = $reviewConfigHash AND snapshot_id = $snapshotId',
+    'WHERE mart.review_unassessed_queue_serving_v4.project_id = $projectId AND review_config_hash = $reviewConfigHash AND mart.review_unassessed_queue_serving_v4.snapshot_id = $snapshotId',
   )
   expect(sql).not.toContain('list_mode_key')
   expect(sql).toContain('AND queue_kind = $queueKind')
@@ -699,7 +699,7 @@ test('buildReviewServingRowsSql constrains durable job lookups by criteria', () 
   )
   expect(bulkSql).toContain("AND job_kind = 'review.bulk.selection' AND filter_signature = $filterSignature")
   expect(assertReviewServingSqlShape(searchSql, {requireSnapshotScope: false})).toEqual({ok: true, violations: []})
-  expect(searchSql).toContain('WHERE project_id = $projectId')
+  expect(searchSql).toContain('WHERE app.review_search_job.project_id = $projectId')
   expect(searchSql).toContain('AND search_identity IS NOT DISTINCT FROM $searchIdentity')
   expect(searchSql).toContain('AND project_scope_identity = $projectScopeIdentity')
   expect(searchSql).toContain('AND review_config_hash IS NOT DISTINCT FROM $reviewConfigHash')
@@ -726,7 +726,7 @@ test('buildReviewServingRowsSql supports article-set list judgment lookups', () 
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('AND review_config_hash = $reviewConfigHash')
-  expect(sql).toContain('AND snapshot_id = $snapshotId')
+  expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.snapshot_id = $snapshotId')
   expect(sql).toContain("AND list_mode_key = 'both'")
   expect(sql).toContain("AND payload_kind = 'llm'")
   expect(sql).toContain('AND article_id IN (SELECT unnest($articleIds))')
