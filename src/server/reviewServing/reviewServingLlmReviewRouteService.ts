@@ -57,6 +57,8 @@ type ReviewServingJudgmentRow = {
   judgment_id?: string | null
   judgment_payload_json?: unknown
   model_id?: string | null
+  placeholder_kind?: string | null
+  placeholderKind?: string | null
   prompt_id?: string
 }
 
@@ -347,32 +349,40 @@ const getPayloadString = (value: unknown) => {
   return typeof value === 'string' ? value : ''
 }
 
-const getJudgmentRowsByArticleId = (rows: readonly ReviewServingJudgmentRow[]) => {
-  return rows.reduce((acc, row) => {
-    const articleId = row.article_id ?? ''
-    const payload = getJudgmentPayload(row)
-    const judgment = {
-      id: row.judgment_id ?? getPayloadString(payload?.id),
-      createdAt: getPayloadString(payload?.createdAt) || getPayloadString(row.detail_updated_at),
-      articleId,
-      articleTitle: '',
-      articleCreatedAt: null,
-      articleUpdatedAt: null,
-      articleCreatedYear: null,
-      articleUpdatedYear: null,
-      articleImportRoute: null,
-      articleImportedBy: null,
-      promptId: row.prompt_id ?? getPayloadString(payload?.promptId),
-      modelId: row.model_id ?? getPayloadString(payload?.modelId),
-      answeredOriginal: row.answered_original ?? (payload?.answeredOriginal as string | null) ?? null,
-      answeredOriginalAsArray: row.answered_original_as_array ?? [],
-      explanation: (payload?.explanation as string | null) ?? null,
-      quotes: payload?.quotes ?? null,
-    }
-    const existing = acc.get(articleId) ?? []
+const isPlaceholderJudgmentRow = (row: ReviewServingJudgmentRow) => {
+  return (row.placeholder_kind ?? row.placeholderKind ?? null) !== null
+}
 
-    return acc.set(articleId, [...existing, judgment])
-  }, new Map<string, ArticlesReviewsResponse['data'][number]['judgments']>())
+const getJudgmentRowsByArticleId = (rows: readonly ReviewServingJudgmentRow[]) => {
+  return rows
+    .filter((row) => {
+      return !isPlaceholderJudgmentRow(row)
+    })
+    .reduce((acc, row) => {
+      const articleId = row.article_id ?? ''
+      const payload = getJudgmentPayload(row)
+      const judgment = {
+        id: row.judgment_id ?? getPayloadString(payload?.id),
+        createdAt: getPayloadString(payload?.createdAt) || getPayloadString(row.detail_updated_at),
+        articleId,
+        articleTitle: '',
+        articleCreatedAt: null,
+        articleUpdatedAt: null,
+        articleCreatedYear: null,
+        articleUpdatedYear: null,
+        articleImportRoute: null,
+        articleImportedBy: null,
+        promptId: row.prompt_id ?? getPayloadString(payload?.promptId),
+        modelId: row.model_id ?? getPayloadString(payload?.modelId),
+        answeredOriginal: row.answered_original ?? (payload?.answeredOriginal as string | null) ?? null,
+        answeredOriginalAsArray: row.answered_original_as_array ?? [],
+        explanation: (payload?.explanation as string | null) ?? null,
+        quotes: payload?.quotes ?? null,
+      }
+      const existing = acc.get(articleId) ?? []
+
+      return acc.set(articleId, [...existing, judgment])
+    }, new Map<string, ArticlesReviewsResponse['data'][number]['judgments']>())
 }
 
 const getResponseRows = (

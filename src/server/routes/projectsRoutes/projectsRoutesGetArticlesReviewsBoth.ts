@@ -12,6 +12,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
     await assertProjectIsActive(body.projectId)
 
     return getBothReviewArticlesFromServing({
+      cursor: body.cursor,
       hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
       hasStudyDecisionConflict: body.hasStudyDecisionConflict,
       projectId: body.projectId,
@@ -25,6 +26,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
   },
   {
     body: t.Object({
+      cursor: t.Optional(t.String()),
       from: t.Optional(t.String()),
       hasDuplicateStudyRecords: t.Optional(t.Boolean()),
       hasStudyDecisionConflict: t.Optional(t.Boolean()),

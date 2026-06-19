@@ -12,6 +12,7 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
   },
   {
     body: t.Object({
+      cursor: t.Optional(t.String()),
       from: t.Optional(t.String()),
       hasDuplicateStudyRecords: t.Optional(t.Boolean()),
       hasStudyDecisionConflict: t.Optional(t.Boolean()),

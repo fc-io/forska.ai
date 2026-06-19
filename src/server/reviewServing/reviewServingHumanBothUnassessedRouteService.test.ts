@@ -152,6 +152,16 @@ const createReaderDatabase = () => {
             answered_original_as_array: ['yes'],
             judgment_payload_json: {createdAt: '2026-01-03T00:00:00.000Z', explanation: 'because', quotes: []},
           },
+          {
+            article_id: 'article-1',
+            prompt_id: 'prompt-2',
+            model_id: 'model-1',
+            judgment_id: null,
+            answered_original: null,
+            answered_original_as_array: [],
+            judgment_payload_json: null,
+            placeholder_kind: 'llm.unanswered',
+          },
         ] as T[]
       }
 
@@ -209,6 +219,7 @@ test('both review route service hydrates LLM and human payloads in bounded artic
   const sql = reader.statements.join('\n')
 
   expect(result.data[0]?.judgments[0]?.answeredOriginal).toBe('yes')
+  expect(result.data[0]?.judgments).toHaveLength(1)
   expect(result.data[0]?.humanAnswersByPrompt?.['prompt-1']).toEqual(['yes'])
   expect(reader.statements).toHaveLength(4)
   expect(sql.match(/article_id IN \(SELECT unnest\(\['article-1'\]::VARCHAR\[\]\)\)/gu)?.length).toBe(2)
@@ -238,10 +249,49 @@ test('unassessed review route service pages filtered distinct article rows and q
   expect(reader.statements[0]).toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
   expect(reader.statements[0]).toContain("unnest(['heart']::VARCHAR[])")
   expect(reader.statements[0]).toContain('starts_with(search.token, search_prefix.token_prefix)')
-  expect(reader.statements[1]).toContain("count_kind = 'review.queue.unassessedReady'")
+  expect(reader.statements[1]).toContain('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
+  expect(reader.statements[1]).toContain("serving.list_mode_key = 'unassessed'")
+  expect(reader.statements[1]).toContain('starts_with(search.token, search_prefix.token_prefix)')
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })
+})
+
+test('human, both, and unassessed routes read one cursor page for numeric direct page jumps', async () => {
+  const humanReader = createReaderDatabase()
+  const humanResult = await getHumanReviewArticlesFromServing(
+    {projectId: 'project-1', page: 99, limit: 25, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: humanReader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+  const bothReader = createReaderDatabase()
+  const bothResult = await getBothReviewArticlesFromServing(
+    {projectId: 'project-1', page: 99, limit: 25, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: bothReader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+  const unassessedReader = createReaderDatabase()
+  const unassessedResult = await getUnassessedReviewArticlesFromServing(
+    {projectId: 'project-1', page: 99, limit: 25, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: unassessedReader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+
+  expect(humanResult.page).toBe(1)
+  expect(bothResult.page).toBe(1)
+  expect(unassessedResult.page).toBe(1)
+  expect(humanReader.statements).toHaveLength(3)
+  expect(bothReader.statements).toHaveLength(4)
+  expect(unassessedReader.statements).toHaveLength(2)
 })
 
 test('human, both, and unassessed services surface stale and unavailable freshness without raw fallback', async () => {

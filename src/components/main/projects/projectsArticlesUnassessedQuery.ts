@@ -9,6 +9,7 @@ export const createArticlesUnassessedQueryOptions = (
   covidenceDuplicatesOnly: Accessor<boolean>,
   covidenceConflictsOnly: Accessor<boolean>,
   currentPage: Accessor<number>,
+  currentCursor: Accessor<string | null | undefined>,
   pageLimit: Accessor<number>,
   fromDateStr: Accessor<string>,
   toDateStr: Accessor<string>,
@@ -36,6 +37,7 @@ export const createArticlesUnassessedQueryOptions = (
       covidenceDuplicatesOnly(),
       covidenceConflictsOnly(),
       currentPage(),
+      currentCursor() ?? null,
       pageLimit(),
       validFrom(),
       validTo(),
@@ -48,6 +50,7 @@ export const createArticlesUnassessedQueryOptions = (
 
       const response = await apiClient.api.articlesreviewsunassessed.post({
         page: String(currentPage()),
+        cursor: currentCursor() ?? undefined,
         limit: String(pageLimit()),
         projectId,
         hasDuplicateStudyRecords: covidenceDuplicatesOnly() ? true : undefined,
