@@ -1,4 +1,5 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {getReviewServingFilterOptionIdentity} from './reviewServingFilterOptionProjector.ts'
 import {
   getActiveReviewServingSnapshotManifest,
@@ -25,6 +26,7 @@ type ReviewServingFilterRouteParams = {
   to?: string
 }
 type ReviewServingFilterRouteDependencies = {
+  currentReviewConfigHash?: string | null
   database?: ReviewServingReaderDatabase
   manifestDatabase?: ReviewServingManifestRepositoryDatabase
 }
@@ -76,13 +78,48 @@ const reviewFacetSummaryIdentities = [
 const humanFacetSummaryIdentities = ['review.human.filter.promptAnswer', 'review.human.filter.summaryAnswer'] as const
 const filterOptionRouteLimit = 512
 const filterFacetRouteLimit = 128
+const defaultReviewFilterOptionKeys = [
+  'conflictFlag',
+  'duplicateFlag',
+  'humanStatus',
+  'importRoute',
+  'llmStatus',
+  'promptAnswer',
+  'publicationYear',
+  'searchTokenPrefix',
+] as const
+const defaultHumanFilterOptionKeys = [
+  'conflictFlag',
+  'duplicateFlag',
+  'humanStatus',
+  'importRoute',
+  'promptAnswer',
+  'publicationYear',
+  'searchTokenPrefix',
+] as const
+const defaultHumanListModeKeys = ['human', 'both'] as const
+const defaultReviewListModeKeys = ['llm', 'human', 'both', 'unassessed'] as const
+
+const getSearchTokenPrefix = (search: string | null | undefined) => {
+  const [firstToken] =
+    search
+      ?.trim()
+      .toLowerCase()
+      .split(/\s+/u)
+      .filter((token) => {
+        return token.length > 0
+      }) ?? []
+
+  return firstToken ?? null
+}
 
 const getManifest = async (projectId: string, dependencies?: ReviewServingFilterRouteDependencies) => {
   const manifestDatabase =
     dependencies?.manifestDatabase ?? (getAppDatabaseService() as ReviewServingManifestRepositoryDatabase)
-  const active = await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash: null}, manifestDatabase)
+  const reviewConfigHash = dependencies?.currentReviewConfigHash ?? (await getCurrentReviewConfigHash(projectId))
+  const active = await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash}, manifestDatabase)
 
-  return active ?? getLastKnownGoodReviewServingSnapshotManifest({projectId, reviewConfigHash: null}, manifestDatabase)
+  return active ?? getLastKnownGoodReviewServingSnapshotManifest({projectId, reviewConfigHash}, manifestDatabase)
 }
 
 const getReaderDependencies = (dependencies?: ReviewServingFilterRouteDependencies) => {
@@ -103,7 +140,7 @@ const getComponentIdentity = (manifest: ReviewServingSnapshotManifest, component
 }
 
 const getRouteFilters = (params: ReviewServingFilterRouteParams): ReviewServingReaderFilterInput => {
-  const searchTokenPrefix = typeof params.search === 'string' && params.search.trim() ? params.search.trim() : undefined
+  const searchTokenPrefix = getSearchTokenPrefix(params.search)
 
   return {
     ...(params.from ? {articleCreatedAtFrom: params.from} : {}),
@@ -119,7 +156,7 @@ const getBaseReaderRequest = (
   manifest: ReviewServingSnapshotManifest,
   limit: number,
 ): Omit<ReviewServingReaderRequest, 'contractKey'> => {
-  const searchTokenPrefix = typeof params.search === 'string' && params.search.trim() ? params.search.trim() : null
+  const searchTokenPrefix = getSearchTokenPrefix(params.search)
 
   return {
     allowStale: true,
@@ -225,8 +262,8 @@ const readOptionRows = async (
 ) => {
   const searchIdentity = getComponentIdentity(manifest, 'search')
   const filterOptionIdentity = getReviewServingFilterOptionIdentity({
-    filterKeys: Object.keys(getRouteFilters(params)),
-    listModeKeys: [mode === 'human' ? 'human' : 'llm'],
+    filterKeys: mode === 'human' ? defaultHumanFilterOptionKeys : defaultReviewFilterOptionKeys,
+    listModeKeys: mode === 'human' ? defaultHumanListModeKeys : defaultReviewListModeKeys,
     optionMode: mode,
     searchIdentity,
   })

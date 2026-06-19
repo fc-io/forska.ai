@@ -4,6 +4,8 @@ import type {
   ArticlesReviewsResponse,
 } from '../../services/olap/olapTypes.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {
   getActiveReviewServingSnapshotManifest,
   getLastKnownGoodReviewServingSnapshotManifest,
@@ -22,6 +24,8 @@ type ReviewServingArticleRow = {
   articleTitle?: string | null
   journal_title?: string | null
   journalTitle?: string | null
+  llm_status_key?: string | null
+  llmStatusKey?: string | null
   selected_import_route_id?: string | null
   selectedImportRouteId?: string | null
   sort_key?: unknown
@@ -47,6 +51,7 @@ type ReviewServingCountRow = {
 }
 
 type ReviewServingLlmReviewRouteDependencies = {
+  currentReviewConfigHash?: string | null
   database?: ReviewServingReaderDatabase
   manifestDatabase?: ReviewServingManifestRepositoryDatabase
 }
@@ -68,12 +73,26 @@ const getJsonValue = (value: unknown) => {
   return typeof value === 'string' ? (JSON.parse(value) as unknown) : value
 }
 
+const getSearchTokenPrefix = (search: string | null | undefined) => {
+  const [firstToken] =
+    search
+      ?.trim()
+      .toLowerCase()
+      .split(/\s+/u)
+      .filter((token) => {
+        return token.length > 0
+      }) ?? []
+
+  return firstToken ?? null
+}
+
 const getManifest = async (projectId: string, dependencies?: ReviewServingLlmReviewRouteDependencies) => {
   const manifestDatabase =
     dependencies?.manifestDatabase ?? (getAppDatabaseService() as ReviewServingManifestRepositoryDatabase)
-  const active = await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash: null}, manifestDatabase)
+  const reviewConfigHash = dependencies?.currentReviewConfigHash ?? (await getCurrentReviewConfigHash(projectId))
+  const active = await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash}, manifestDatabase)
 
-  return active ?? getLastKnownGoodReviewServingSnapshotManifest({projectId, reviewConfigHash: null}, manifestDatabase)
+  return active ?? getLastKnownGoodReviewServingSnapshotManifest({projectId, reviewConfigHash}, manifestDatabase)
 }
 
 const getLimit = (value: number | string) => {
@@ -98,7 +117,7 @@ const getPromptAnswerFilters = (prompts: Record<string, string[]> | undefined) =
 
 const getRouteFilters = (params: ArticlesReviewsParams) => {
   const promptAnswer = getPromptAnswerFilters(params.prompts)
-  const searchTokenPrefix = typeof params.search === 'string' && params.search.trim() ? params.search.trim() : undefined
+  const searchTokenPrefix = getSearchTokenPrefix(params.search)
 
   return {
     ...(params.from ? {articleCreatedAtFrom: params.from} : {}),
@@ -133,7 +152,7 @@ const getBaseReaderRequest = (
   manifest: ReviewServingSnapshotManifest,
   limit: number,
 ) => {
-  const searchTokenPrefix = typeof params.search === 'string' && params.search.trim() ? params.search.trim() : null
+  const searchTokenPrefix = getSearchTokenPrefix(params.search)
 
   return {
     allowStale: true,
@@ -163,6 +182,10 @@ const getCountValue = async (
   manifest: ReviewServingSnapshotManifest,
   dependencies?: ReviewServingLlmReviewRouteDependencies,
 ) => {
+  if (hasDynamicFilters(params)) {
+    return getFilteredCountValue(params, manifest, dependencies)
+  }
+
   const limit = 1
   const filterKey = getCountFilterKey(params)
   const namedCountKey = hasDynamicFilters(params) ? 'review.list.filteredTotal' : 'review.list.total'
@@ -192,6 +215,72 @@ const getCountValue = async (
   }
 
   return Number(countRow?.count_value ?? countRow?.countValue ?? 0)
+}
+
+const getFilteredCountValue = async (
+  params: ArticlesReviewsParams,
+  manifest: ReviewServingSnapshotManifest,
+  dependencies?: ReviewServingLlmReviewRouteDependencies,
+) => {
+  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const filters = getRouteFilters(params)
+  const promptAnswers = Array.isArray(filters.promptAnswer) ? filters.promptAnswer : []
+  const llmStatusValue =
+    filters.llmStatus === 'complete' ? 'answered' : filters.llmStatus === 'partial' ? 'unanswered' : null
+  const promptAnswerPredicate = promptAnswers.length
+    ? `AND EXISTS (
+        SELECT 1
+        FROM mart.review_article_filter_posting_serving_v4 prompt_filter
+        WHERE prompt_filter.project_id = serving.project_id
+          AND prompt_filter.review_config_hash = serving.review_config_hash
+          AND prompt_filter.snapshot_id = serving.snapshot_id
+          AND prompt_filter.list_mode_key = serving.list_mode_key
+          AND prompt_filter.article_id = serving.article_id
+          AND prompt_filter.filter_kind = 'promptAnswer'
+          AND prompt_filter.filter_value IN (SELECT unnest(${getSqlLiteral(
+            promptAnswers.map((value) => {
+              return `review:promptAnswer:${value}`
+            }),
+          )}::VARCHAR[]))
+      )`
+    : ''
+  const searchPredicate = filters.searchTokenPrefix
+    ? `AND EXISTS (
+        SELECT 1
+        FROM mart.review_title_search_serving_v4 search
+        WHERE search.project_id = serving.project_id
+          AND search.search_identity = ${getSqlLiteral(
+            manifest.componentState.required.find((entry) => {
+              return entry.component === 'search'
+            })?.projectionIdentity ?? '',
+          )}
+          AND search.project_scope_identity = ${getSqlLiteral(
+            manifest.componentState.required.find((entry) => {
+              return entry.component === 'projectScope'
+            })?.projectionIdentity ?? '',
+          )}
+          AND search.snapshot_id = serving.snapshot_id
+          AND search.article_id = serving.article_id
+          AND starts_with(search.token, ${getSqlLiteral(filters.searchTokenPrefix)})
+      )`
+    : ''
+  const [row] = await database.queryJson<{totalCount: number}>(`
+    SELECT COUNT(DISTINCT serving.article_id) AS totalCount
+    FROM mart.review_article_serving_v4 serving
+    WHERE serving.project_id = ${getSqlLiteral(params.projectId)}
+      AND serving.review_config_hash = ${getSqlLiteral(manifest.reviewConfigHash)}
+      AND serving.snapshot_id = ${getSqlLiteral(manifest.snapshotId)}
+      AND serving.list_mode_key = 'llm'
+      ${filters.articleCreatedAtFrom ? `AND serving.sort_key >= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtFrom)}` : ''}
+      ${filters.articleCreatedAtTo ? `AND serving.sort_key <= TIMESTAMPTZ ${getSqlLiteral(filters.articleCreatedAtTo)}` : ''}
+      ${filters.duplicateFlag ? 'AND serving.duplicate_flag = TRUE' : ''}
+      ${filters.conflictFlag ? 'AND serving.conflict_flag = TRUE' : ''}
+      ${llmStatusValue ? `AND serving.llm_status_key = ${getSqlLiteral(llmStatusValue)}` : ''}
+      ${promptAnswerPredicate}
+      ${searchPredicate}
+  `)
+
+  return Number(row?.totalCount ?? 0)
 }
 
 const getArticleId = (row: ReviewServingArticleRow) => {
@@ -263,7 +352,7 @@ const getResponseRows = (
       judgedPromptIds: judgments.map((judgment) => {
         return judgment.promptId
       }),
-      isFullyJudged: false,
+      isFullyJudged: (row.llm_status_key ?? row.llmStatusKey) === 'answered',
     }
   })
 }

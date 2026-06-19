@@ -123,11 +123,40 @@ test('review bulk operation worker claims and advances bounded keyset progress d
   expect(joined).toContain('processed_count = processed_count + 2')
   expect(joined).toContain('"cursor":"article-003"')
   expect(joined).toContain('"jobId":"job-1"')
+  expect(joined).toContain("SET status = 'pending'")
   expect(
     harness.workloadContexts.some((context) => {
       return context.fallbackIntent === 'reject' && context.workloadClass === 'bulkReviewJob'
     }),
   ).toBe(true)
+})
+
+test('review bulk operation worker uses insertion service side effects for add-to-project batches', async () => {
+  const harness = createWorkerHarness()
+  const inserted: Array<{articleIds: string[]; importedFromProjectId?: string | null; projectId: string}> = []
+  const dependencies: ReviewBulkOperationWorkerDependencies = {
+    getDatabase: harness.dependencies.getDatabase,
+    insertArticles: async (projectId, articleIds, importedFromProjectId) => {
+      inserted.push({articleIds, importedFromProjectId, projectId})
+      return {
+        existingAssociations: 0,
+        insertedCount: articleIds.length,
+        invalidIds: [],
+        linkedPrompts: 0,
+        projectId,
+        totalProvided: articleIds.length,
+        totalValid: articleIds.length,
+      }
+    },
+  }
+
+  const result = await runReviewBulkOperationWorkerOnce({workerId: 'worker-1'}, dependencies)
+
+  expect(result.status).toBe('partial')
+  expect(inserted).toEqual([
+    {articleIds: ['article-002', 'article-003'], importedFromProjectId: 'project-1', projectId: 'target-project-1'},
+  ])
+  expect(harness.statements.join('\n')).not.toContain('INSERT INTO app.project_article')
 })
 
 test('review bulk operation worker selects add-to-project batches from persisted filter criteria', async () => {

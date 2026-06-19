@@ -143,7 +143,11 @@ const createReaderDatabase = () => {
 test('review filter route service reads facet and option contracts without raw fallback SQL', async () => {
   const reader = createReaderDatabase()
   const response = await getReviewFiltersFromServing({
-    dependencies: {database: reader.database, manifestDatabase: createManifestDatabase('active')},
+    dependencies: {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
     mode: 'review',
     params: {covidenceConflicts: '1', covidenceDuplicates: '1', projectId: 'project-1', search: 'heart'},
     promptRows: [{id: 'prompt-1', promptHeading: 'Prompt 1', originalText: 'Prompt one'}],
@@ -188,7 +192,7 @@ test('human filter route service keeps summary-mode answer scope from serving op
     },
   }
   const response = await getReviewFiltersFromServing({
-    dependencies: {database, manifestDatabase: createManifestDatabase('active')},
+    dependencies: {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
     mode: 'human',
     params: {projectId: 'project-1'},
     promptRows: [{id: 'prompt-1', promptHeading: 'Prompt 1'}],
