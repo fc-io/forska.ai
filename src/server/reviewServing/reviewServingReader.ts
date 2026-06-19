@@ -489,6 +489,39 @@ const getOrderedPrefixFilterPredicatesSql = (input: {
   return predicates.length > 0 ? ` AND ${predicates.join(' AND ')}` : null
 }
 
+const getQueueOrderingFilterPredicatesSql = (input: {
+  contract: ReviewServingReadContract
+  request: ReviewServingReaderRequest
+}) => {
+  if (input.contract.physicalAccessStrategy !== 'queueOrdering') {
+    return null
+  }
+
+  const filters = input.request.filters ?? {}
+  const articleCreatedAtFrom = getFilterString(filters.articleCreatedAtFrom)
+  const articleCreatedAtTo = getFilterString(filters.articleCreatedAtTo)
+  const predicates = [
+    articleCreatedAtFrom ? 'sort_key >= TIMESTAMPTZ $articleCreatedAtFrom' : '',
+    articleCreatedAtTo
+      ? isDateOnlyFilter(articleCreatedAtTo)
+        ? 'sort_key < TIMESTAMPTZ $articleCreatedAtTo'
+        : 'sort_key <= TIMESTAMPTZ $articleCreatedAtTo'
+      : '',
+  ].filter((predicate) => {
+    return predicate.length > 0
+  })
+
+  return predicates.length > 0 ? ` AND ${predicates.join(' AND ')}` : null
+}
+
+const getFilterPredicatesSql = (input: {
+  contract: ReviewServingReadContract
+  manifest: ReviewServingSnapshotManifest
+  request: ReviewServingReaderRequest
+}) => {
+  return getOrderedPrefixFilterPredicatesSql(input) ?? getQueueOrderingFilterPredicatesSql(input)
+}
+
 const getFilterSignatureInput = (request: ReviewServingReaderRequest) => {
   return {
     articleId: request.articleId ?? undefined,
@@ -616,7 +649,7 @@ const getSql = (input: {
     filterKindParameter: input.request.filterKind ? '$filterKind' : null,
     filterOptionIdentityParameter: input.request.filterOptionIdentity ? '$filterOptionIdentity' : null,
     filterValueParameter: input.request.filterValue ? '$filterValue' : null,
-    filterPredicatesSql: getOrderedPrefixFilterPredicatesSql(input),
+    filterPredicatesSql: getFilterPredicatesSql(input),
     jobFilterSignatureParameter: input.request.jobFilterSignature ? '$jobFilterSignature' : null,
     limitParameter: '$limit',
     listModeParameter: '$listMode',

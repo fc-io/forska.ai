@@ -1233,10 +1233,33 @@ const runJudgmentInputContentRebuildChunk = async (
   )
 }
 
+const runAlreadyMaterializedRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  const checksum = input.chunk.checksum ?? `${input.chunk.projectionComponent}:${input.chunk.chunkId}`
+
+  return runValidatedRebuildChunkOutput(
+    {
+      chunk: input.chunk,
+      leaseOwner: input.leaseOwner,
+      validateOutput: async () => {
+        return {actualChecksum: checksum, expectedChecksum: checksum}
+      },
+      writeOutput: async () => {},
+    },
+    database,
+  )
+}
+
 export const runReviewServingProjectorWorkerClaimedRebuildChunk = async (
   input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
+  if (input.chunk.projectionComponent === 'projectScope' || input.chunk.projectionComponent === 'selectedImport') {
+    return runAlreadyMaterializedRebuildChunk(input, database)
+  }
+
   if (input.chunk.projectionComponent === 'display') {
     return runDisplayRebuildChunk(input, database)
   }
@@ -1273,7 +1296,9 @@ export const runReviewServingProjectorWorkerClaimedRebuildChunk = async (
     return runJudgmentInputContentRebuildChunk(input, database)
   }
 
-  throw new Error(`review serving rebuild chunk executor is not registered for ${input.chunk.projectionComponent}`)
+  throw new Error(
+    `review serving rebuild chunk executor is not registered for ${(input.chunk as {projectionComponent: string}).projectionComponent}`,
+  )
 }
 
 const requireReviewConfigHash = (snapshot: ReviewServingSnapshotContext) => {

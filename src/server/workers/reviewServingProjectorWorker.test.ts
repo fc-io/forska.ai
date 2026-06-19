@@ -867,21 +867,29 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   expect(joined).toContain("article_id <= 'article-099'")
 })
 
-test('unsupported rebuild chunk executors fail explicitly', async () => {
-  const harness = createWorkerHarness()
-  const unsupportedChunk = {...chunkManifest, projectionComponent: 'projectScope' as const}
-  const result = runReviewServingProjectorWorkerClaimedRebuildChunk(
-    {chunk: unsupportedChunk, leaseOwner: 'worker-1'},
-    harness.database,
+test('base rebuild chunks complete without being retried as unsupported', async () => {
+  const runningChunk = {
+    ...chunkManifest,
+    checksum: 'checksum-project-scope',
+    projectionComponent: 'projectScope' as const,
+  }
+  const statements: string[] = []
+  const database: TestDatabase = {
+    queryJson: async <T>() => {
+      return [runningChunk] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: runningChunk, leaseOwner: 'worker-1'},
+    database,
   )
 
-  await result.then(
-    () => {
-      expect(true).toBe(false)
-    },
-    (error: unknown) => {
-      expect(error).toBeInstanceOf(Error)
-      expect(String(error)).toContain('review serving rebuild chunk executor is not registered for projectScope')
-    },
-  )
+  expect(result).toEqual({status: 'completed'})
+  expect(statements.join('\n')).toContain("status = 'completed'")
 })

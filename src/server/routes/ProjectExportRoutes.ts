@@ -547,6 +547,7 @@ export const projectExportRoutes = new Elysia()
         : {type: 'latest' as const}
       const sourceProjectId = sourceProjectIds[0] ?? projectId
       const reviewConfigHash = await getSharedReviewConfigHash(sourceProjectIds)
+      const listType = body.listType
 
       if (sourceProjectIds.length > 1 && reviewConfigHash === null) {
         set.status = 400
@@ -564,15 +565,16 @@ export const projectExportRoutes = new Elysia()
             selectedMetadata,
             snapshotCursor: {mode: 'keyset', orderBy: ['article_id']},
           },
-          listType: body.listType ?? 'llm',
+          listType,
           operation: 'export',
           prompts,
           requestId: randomUUID(),
           search: body.search,
+          selectionScope: listType ? undefined : 'project',
           sourceProjectId,
           sourceProjectIds,
         },
-        filters: {listType: body.listType ?? 'llm', prompts, search: body.search},
+        filters: {listType, prompts, search: body.search},
         jobKind: 'review.export.selection',
         projectId,
         reviewConfigHash,
@@ -584,7 +586,7 @@ export const projectExportRoutes = new Elysia()
       projectExportLogger.force('project.export.job-created', 'Project export job created', 'log', {
         articleIdCount: body.articleIds?.length ?? null,
         jobId: job.jobId,
-        listType: body.listType ?? 'llm',
+        listType: listType ?? 'project',
         projectId,
         promptCount: body.promptIds.length,
         promptFilterCount: promptSelections.length,

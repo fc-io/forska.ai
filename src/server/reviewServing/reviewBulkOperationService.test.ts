@@ -63,7 +63,7 @@ const createManifestDatabase = (bySnapshot: Record<string, unknown>) => {
       }
 
       const match = statement.match(/snapshot_id = '([^']+)'/u)
-      const snapshot = match ? bySnapshot[match[1] ?? ''] : null
+      const snapshot = match ? bySnapshot[match[1] ?? ''] : bySnapshot.active
 
       return snapshot ? ([snapshot] as T[]) : []
     },
@@ -174,7 +174,8 @@ test('createReviewBulkOperationJob persists pinned PDF criteria and verifies thr
 
 test('createReviewBulkOperationJob persists latest-snapshot add-by-filter criteria without selecting article ids', async () => {
   const bulkDatabase = createBulkOperationDatabase()
-  const manifestDatabase = createManifestDatabase({})
+  const activeSnapshot = getSnapshotRow({snapshotId: 'active-snapshot', status: 'active'})
+  const manifestDatabase = createManifestDatabase({active: activeSnapshot, 'active-snapshot': activeSnapshot})
   const result = await createReviewBulkOperationJob(
     {
       criteria: {
@@ -206,6 +207,75 @@ test('createReviewBulkOperationJob persists latest-snapshot add-by-filter criter
       return statement.includes('app.article')
     }),
   ).toBe(false)
+})
+
+test('createReviewBulkOperationJob rejects latest criteria jobs without an active snapshot', async () => {
+  const bulkDatabase = createBulkOperationDatabase()
+  const manifestDatabase = createManifestDatabase({})
+
+  const result = await createReviewBulkOperationJob(
+    {
+      criteria: {
+        listType: 'llm',
+        operation: 'addToProject',
+        sourceProjectId: 'project-1',
+        targetProjectId: 'target-project-1',
+      },
+      filters: {listType: 'llm'},
+      jobKind: 'review.bulk.selection',
+      projectId: 'project-1',
+      reviewConfigHash: 'config-1',
+      snapshot: {type: 'latest'},
+    },
+    {database: bulkDatabase.database, manifestDatabase},
+  ).then(
+    () => {
+      return 'resolved'
+    },
+    (error: unknown) => {
+      return String(error)
+    },
+  )
+
+  expect(result).toContain('Review bulk operation latest snapshot is not ready')
+
+  expect(bulkDatabase.runs).toEqual([])
+})
+
+test('createReviewBulkOperationJob rejects pinned jobs when contract verification rejects', async () => {
+  const bulkDatabase = createBulkOperationDatabase()
+  const manifestDatabase = createManifestDatabase({
+    'active-snapshot': getSnapshotRow({
+      components: ['projectScope', 'posting', 'payload'],
+      snapshotId: 'active-snapshot',
+      status: 'active',
+    }),
+  })
+
+  const result = await createReviewBulkOperationJob(
+    {
+      criteria: {forceRefetch: true, operation: 'pdfFetch', search: 'heart failure', sourceProjectId: 'project-1'},
+      filters: {search: 'heart failure'},
+      jobKind: 'review.pdf.selection',
+      projectId: 'project-1',
+      reviewConfigHash: 'config-1',
+      searchMode: 'tokenPrefix',
+      searchText: 'heart failure',
+      snapshot: {snapshotId: 'active-snapshot', type: 'pinned'},
+    },
+    {database: bulkDatabase.database, manifestDatabase},
+  ).then(
+    () => {
+      return 'resolved'
+    },
+    (error: unknown) => {
+      return String(error)
+    },
+  )
+
+  expect(result).toContain('Review bulk operation contract verification rejected')
+
+  expect(bulkDatabase.runs).toEqual([])
 })
 
 test('article-id-only bulk operations enforce a foreground cap', () => {
