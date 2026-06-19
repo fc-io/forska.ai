@@ -18,7 +18,12 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
       const projectConfig = await getAppQueryService().getProjectReviewConfig(query.projectId)
       const humanJudgmentMode = projectConfig?.humanJudgmentMode ?? 'prompt'
       const projectPromptRows = await getAppQueryService().getProjectPromptRows(query.projectId)
-      const result = await getReviewFiltersFromServing({mode: 'human', params: query, promptRows: projectPromptRows})
+      const result = await getReviewFiltersFromServing({
+        humanJudgmentMode,
+        mode: 'human',
+        params: query,
+        promptRows: projectPromptRows,
+      })
 
       return {...result, humanJudgmentMode}
     } catch (error) {

@@ -393,26 +393,27 @@ const buildExportCsv = async (input: {articleIds: string[]; contract: ExportCont
   const batches = Array.from({length: Math.ceil(input.articleIds.length / exportBatchSize)}, (_, index) => {
     return input.articleIds.slice(index * exportBatchSize, (index + 1) * exportBatchSize)
   })
-  const batchRows = await Promise.all(
-    batches.map(async (articleIds) => {
-      const [articles, judgments] = await Promise.all([
-        getExportArticles(articleIds, selectedMetadata),
-        projectConfig
-          ? getExportJudgments({articleIds, projectConfig, promptIds})
-          : Promise.resolve([] as ExportJudgmentRow[]),
-      ])
+  const batchRows = await batches.reduce<Promise<string[]>>(async (rowsPromise, articleIds) => {
+    const rows = await rowsPromise
+    const [articles, judgments] = await Promise.all([
+      getExportArticles(articleIds, selectedMetadata),
+      projectConfig
+        ? getExportJudgments({articleIds, projectConfig, promptIds})
+        : Promise.resolve([] as ExportJudgmentRow[]),
+    ])
 
-      return buildExportCsvRows({
-        articles,
-        judgments,
-        orderedPromptIds: orderedPromptDetails.map((prompt) => {
-          return prompt.id
-        }),
-        promptOutput,
-        selectedMetadata,
-      })
-    }),
-  )
+    const batchCsvRows = buildExportCsvRows({
+      articles,
+      judgments,
+      orderedPromptIds: orderedPromptDetails.map((prompt) => {
+        return prompt.id
+      }),
+      promptOutput,
+      selectedMetadata,
+    })
+
+    return [...rows, ...batchCsvRows]
+  }, Promise.resolve([]))
   const headerRow = getExportHeaders({contract: input.contract, orderedPromptDetails, selectedMetadata})
     .map(escapeCSV)
     .join(',')
@@ -519,7 +520,7 @@ export const projectExportRoutes = new Elysia()
         },
         filters: {listType: body.listType ?? 'llm', prompts, search: body.search},
         jobKind: 'review.export.selection',
-        projectId: sourceProjectId,
+        projectId,
         reviewConfigHash,
         searchMode: body.search ? 'substring' : 'none',
         searchText: body.search,

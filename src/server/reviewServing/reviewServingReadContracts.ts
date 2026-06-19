@@ -119,7 +119,7 @@ const rowContract = (input: {
     freshnessBehavior: 'requireReadySnapshot',
     key: input.key,
     listMode: input.listMode,
-    maxPageSize: 101,
+    maxPageSize: 500,
     namedFastCounts: input.namedFastCounts,
     optionalComponents: input.optionalComponents ?? [],
     physicalAccessStrategy: 'orderedPrefix',

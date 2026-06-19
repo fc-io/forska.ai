@@ -28,10 +28,10 @@ const forbiddenSqlFragments = [
   'json_extract_string',
 ]
 
-const getComponentState = () => {
+const getComponentState = (inputComponents: readonly ReviewServingProjectionComponent[] = components) => {
   return {
     optional: [],
-    required: components.map((component) => {
+    required: inputComponents.map((component) => {
       return {
         baseGeneration: '1',
         component,
@@ -43,15 +43,18 @@ const getComponentState = () => {
   }
 }
 
-const getSnapshotRow = (status: ReviewServingSnapshotStatus) => {
+const getSnapshotRow = (
+  status: ReviewServingSnapshotStatus,
+  inputComponents: readonly ReviewServingProjectionComponent[] = components,
+) => {
   return {
-    componentStateJson: getComponentState(),
+    componentStateJson: getComponentState(inputComponents),
     composedIdentityJson: {snapshot: `${status}-snapshot`},
     lastError: status === 'failed' ? 'projection failed' : null,
     lastKnownGoodSnapshotId: status === 'active' ? 'retired-snapshot' : null,
     optionalComponentsJson: [],
     projectId: 'project-1',
-    requiredComponentsJson: components,
+    requiredComponentsJson: inputComponents,
     reviewConfigHash: 'config-1',
     selectedImportSnapshotId: 'selected-import-snapshot-1',
     snapshotId: `${status}-snapshot`,
@@ -61,7 +64,10 @@ const getSnapshotRow = (status: ReviewServingSnapshotStatus) => {
   }
 }
 
-const createManifestDatabase = (status: ReviewServingSnapshotStatus | 'missing') => {
+const createManifestDatabase = (
+  status: ReviewServingSnapshotStatus | 'missing',
+  inputComponents: readonly ReviewServingProjectionComponent[] = components,
+) => {
   const database: ReviewServingManifestRepositoryDatabase = {
     queryJson: async <T>(statement: string): Promise<T[]> => {
       if (!statement.includes('FROM app.review_serving_snapshot_manifest')) {
@@ -73,18 +79,18 @@ const createManifestDatabase = (status: ReviewServingSnapshotStatus | 'missing')
       }
 
       if (statement.includes('snapshot_id =')) {
-        return [getSnapshotRow(status)] as T[]
+        return [getSnapshotRow(status, inputComponents)] as T[]
       }
 
       if (statement.includes("snapshot_status = 'active'")) {
-        return status === 'active' ? ([getSnapshotRow('active')] as T[]) : []
+        return status === 'active' ? ([getSnapshotRow('active', inputComponents)] as T[]) : []
       }
 
       if (statement.includes("snapshot_status = 'retired'")) {
-        return status === 'retired' ? ([getSnapshotRow('retired')] as T[]) : []
+        return status === 'retired' ? ([getSnapshotRow('retired', inputComponents)] as T[]) : []
       }
 
-      return [getSnapshotRow(status)] as T[]
+      return [getSnapshotRow(status, inputComponents)] as T[]
     },
     run: async () => {},
     transaction: async (operation) => {
@@ -261,6 +267,65 @@ test('human filter route service keeps summary-mode filter when scoped options a
       promptName: 'Overall human screening decision',
     },
   ])
+})
+
+test('human filter route service keeps prompt filters for prompt-mode projects', async () => {
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      return statement.includes('FROM mart.review_filter_option_serving_v4')
+        ? ([
+            {
+              count_value: 2,
+              facet_key: 'promptAnswer',
+              facet_value: 'include',
+              filter_kind: 'human',
+              option_payload_json: {filterType: 'enum', promptId: 'prompt-1', value: 'include'},
+              option_value_key: 'human:promptAnswer:prompt-1:include',
+              prompt_id: 'prompt-1',
+            },
+          ] as T[])
+        : ([] as T[])
+    },
+  }
+  const response = await getReviewFiltersFromServing({
+    dependencies: {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
+    humanJudgmentMode: 'prompt',
+    mode: 'human',
+    params: {projectId: 'project-1'},
+    promptRows: [{id: 'prompt-1', originalText: 'Prompt 1', promptHeading: 'Prompt 1', type: 'string'}],
+  })
+
+  expect(response.filters).toEqual([
+    {answeredOriginalValues: ['include'], filterType: 'enum', promptId: 'prompt-1', promptName: 'Prompt 1'},
+  ])
+})
+
+test('filter route service uses no-search identity when search component is absent', async () => {
+  const statements: string[] = []
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      return [] as T[]
+    },
+  }
+  const componentsWithoutSearch = components.filter((component) => {
+    return component !== 'search'
+  })
+  const response = await getReviewFiltersFromServing({
+    dependencies: {
+      currentReviewConfigHash: 'config-1',
+      database,
+      manifestDatabase: createManifestDatabase('active', componentsWithoutSearch),
+    },
+    mode: 'review',
+    params: {projectId: 'project-1'},
+    promptRows: [],
+  })
+
+  expect(response.searchScope.searchIdentity).toBe('')
+  expect(statements.join('\n')).toContain("search_identity = ''")
+  expect(statements.join('\n')).not.toContain('$missingIdentity')
 })
 
 test('filter contracts cover synchronous combinations with bounded serving access', async () => {

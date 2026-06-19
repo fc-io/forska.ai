@@ -123,6 +123,11 @@ test('articles reviews human filters returns overall summary filter in summary m
     ],
     humanJudgmentMode: 'summary',
     searchScope: {mode: 'none'},
-    serviceInput: {mode: 'human', params: {covidenceDuplicates: '1', projectId: 'project-1'}, promptRows: []},
+    serviceInput: {
+      humanJudgmentMode: 'summary',
+      mode: 'human',
+      params: {covidenceDuplicates: '1', projectId: 'project-1'},
+      promptRows: [],
+    },
   })
 })

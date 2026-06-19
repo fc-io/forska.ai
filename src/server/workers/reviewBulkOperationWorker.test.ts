@@ -180,9 +180,10 @@ test('review bulk operation worker selects add-to-project batches from persisted
 
   expect(joined).toContain('FROM mart.review_article_serving_v4 s')
   expect(joined).toContain("s.list_mode_key = 'both'")
+  expect(joined).toContain("s.human_status_key = 'answered'")
+  expect(joined).toContain("s.llm_status_key = 'answered'")
   expect(joined).toContain("filter_0.filter_kind = 'duplicateFlag'")
   expect(joined).toContain("filter_1.filter_kind = 'conflictFlag'")
-  expect(joined).toContain("filter_2.filter_kind = 'llmStatus'")
   expect(joined).toContain("s.sort_key >= TIMESTAMPTZ '2010'")
   expect(joined).toContain("s.sort_key <= TIMESTAMPTZ '2020'")
   expect(joined).toContain("prompt_filter_0.filter_kind = 'promptAnswer'")
@@ -190,6 +191,18 @@ test('review bulk operation worker selects add-to-project batches from persisted
   expect(joined).toContain('ORDER BY s.article_id ASC')
   expect(joined).toContain('LIMIT 2')
   expect(joined).not.toContain('FROM app.article')
+})
+
+test('review bulk operation worker applies unassessed queue scope for filter criteria', async () => {
+  const harness = createWorkerHarness({criteriaJson: {listType: 'unassessed', operation: 'export'}})
+
+  await runReviewBulkOperationWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  const joined = harness.statements.join('\n')
+
+  expect(joined).toContain("s.list_mode_key = 'unassessed'")
+  expect(joined).toContain('FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(joined).toContain("queue.queue_kind = 'unassessed'")
 })
 
 test('review bulk operation worker leaves substring add-to-project jobs on async search semantics', async () => {

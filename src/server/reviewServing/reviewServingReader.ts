@@ -654,6 +654,10 @@ const getSqlLiteral = (value: null | number | readonly string[] | string | undef
   return `'${value.replaceAll("'", "''")}'`
 }
 
+const escapeRegExp = (value: string) => {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+}
+
 const bindReviewServingRowsSql = (
   sql: string,
   request: ReviewServingReaderRequest,
@@ -692,13 +696,22 @@ const bindReviewServingRowsSql = (
 
   const cursorParameters = getCursorSqlParameters(cursorValues)
 
-  return Object.entries({...parameters, ...cursorParameters})
-    .sort(([left], [right]) => {
-      return right.length - left.length
-    })
-    .reduce((boundSql, [key, value]) => {
-      return boundSql.replaceAll(`$${key}`, getSqlLiteral(value))
-    }, sql)
+  const parameterEntries = Object.entries({...parameters, ...cursorParameters}).sort(([left], [right]) => {
+    return right.length - left.length
+  })
+  const parameterValues = new Map(parameterEntries)
+  const parameterPattern = new RegExp(
+    `\\$(${parameterEntries
+      .map(([key]) => {
+        return escapeRegExp(key)
+      })
+      .join('|')})(?![A-Za-z0-9_])`,
+    'gu',
+  )
+
+  return sql.replace(parameterPattern, (_match, key: string) => {
+    return getSqlLiteral(parameterValues.get(key))
+  })
 }
 
 export const readReviewServingRows = async <T>(
