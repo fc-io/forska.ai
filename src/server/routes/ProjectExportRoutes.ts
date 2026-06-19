@@ -578,7 +578,7 @@ export const projectExportRoutes = new Elysia()
         jobKind: 'review.export.selection',
         projectId,
         reviewConfigHash,
-        searchMode: body.search ? 'substring' : 'none',
+        searchMode: body.search ? 'tokenPrefix' : 'none',
         searchText: body.search,
         snapshot,
       })

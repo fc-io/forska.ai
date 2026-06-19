@@ -274,7 +274,7 @@ export const articlesRoutes = new Elysia()
         jobKind: 'review.pdf.selection',
         projectId: body.sourceProjectId,
         reviewConfigHash,
-        searchMode: body.search ? 'substring' : 'none',
+        searchMode: body.search ? 'tokenPrefix' : 'none',
         searchText: body.search,
         snapshot: {type: 'latest'},
       })
@@ -334,7 +334,7 @@ export const articlesRoutes = new Elysia()
         jobKind: 'review.pdf.selection',
         projectId: body.projectId,
         reviewConfigHash,
-        searchMode: body.search ? 'substring' : 'none',
+        searchMode: body.search ? 'tokenPrefix' : 'none',
         searchText: body.search,
         snapshot: {type: 'latest'},
       })
