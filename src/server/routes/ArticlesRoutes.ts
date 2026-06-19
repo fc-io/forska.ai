@@ -320,6 +320,7 @@ export const articlesRoutes = new Elysia()
           hasStudyDecisionConflict: body.hasStudyDecisionConflict,
           operation: 'pdfFetch',
           search: body.search,
+          selectionScope: 'project',
           sourceProjectId: body.projectId,
           to: effectiveTo,
         },

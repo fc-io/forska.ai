@@ -54,6 +54,7 @@ type ReviewBulkOperationCriteria = {
   prompts?: Record<string, readonly string[]>
   requestId?: string
   search?: string
+  selectionScope?: 'project'
   sourceProjectIds?: readonly string[]
   targetProjectId?: string
   to?: string
@@ -196,6 +197,10 @@ const getSourceProjectIds = (job: ReviewBulkOperationJobRow, criteria: ReviewBul
 }
 
 const getTabStatusPredicates = (criteria: ReviewBulkOperationCriteria) => {
+  if (criteria.selectionScope === 'project') {
+    return ''
+  }
+
   const listMode = getListModeKey(criteria)
   const shouldRequireLlmJudgment =
     listMode === 'llm' && (!criteria.llmStatus || criteria.llmStatus === 'both' || criteria.llmStatus === 'partial')

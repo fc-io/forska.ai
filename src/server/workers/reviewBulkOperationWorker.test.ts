@@ -271,6 +271,23 @@ test('review bulk operation worker advances PDF jobs with durable article-id cri
   expect(joined).toContain('"jobId":"job-1"')
 })
 
+test('review bulk operation worker keeps project PDF jobs out of review-tab defaults', async () => {
+  const harness = createWorkerHarness({
+    criteriaJson: {operation: 'pdfFetch', selectionScope: 'project', sourceProjectId: 'project-1'},
+    jobKind: 'review.pdf.selection',
+  })
+
+  await runReviewBulkOperationWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  const joined = harness.statements.join('\n')
+
+  expect(joined).toContain('FROM mart.review_article_serving_v4 s')
+  expect(joined).toContain("s.list_mode_key = 'llm'")
+  expect(joined).not.toContain('s.llm_judged_prompt_count > 0')
+  expect(joined).not.toContain('s.llm_status_key')
+  expect(joined).not.toContain('s.human_status_key')
+})
+
 test('review bulk operation worker advances export jobs through bounded keyset selection', async () => {
   const harness = createWorkerHarness({
     criteriaJson: {

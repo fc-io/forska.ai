@@ -172,6 +172,36 @@ const createReaderDatabase = () => {
   return {database, statements}
 }
 
+const createChunkedHydrationReaderDatabase = (articleCount: number) => {
+  const statements: string[] = []
+  const articleIds = Array.from({length: articleCount}, (_, index) => {
+    return `article-${String(index + 1).padStart(3, '0')}`
+  })
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string, _workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
+      statements.push(statement)
+
+      if (statement.includes('COUNT(DISTINCT serving.article_id)')) {
+        return [{totalCount: articleCount}] as T[]
+      }
+
+      if (statement.includes('FROM mart.review_article_serving_v4')) {
+        return articleIds.map((articleId) => {
+          return {article_id: articleId, article_title: articleId, sort_key: '2026-01-01T00:00:00.000Z'}
+        }) as T[]
+      }
+
+      if (statement.includes('FROM mart.review_article_judgment_detail_serving_v4')) {
+        return [] as T[]
+      }
+
+      return [{availability: 'ready', count_value: articleCount}] as T[]
+    },
+  }
+
+  return {database, statements}
+}
+
 test('human review route service uses serving rows, human payload hydration, and count without raw fallback', async () => {
   const reader = createReaderDatabase()
   const result = await getHumanReviewArticlesFromServing(
@@ -229,6 +259,30 @@ test('both review route service hydrates LLM and human payloads in bounded artic
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })
+})
+
+test('both review route service chunks judgment hydration at reader article-set bounds', async () => {
+  const reader = createChunkedHydrationReaderDatabase(250)
+
+  await getBothReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 250, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+
+  const judgmentStatements = reader.statements.filter((statement) => {
+    return statement.includes('FROM mart.review_article_judgment_detail_serving_v4')
+  })
+
+  expect(judgmentStatements).toHaveLength(6)
+  expect(judgmentStatements[0]).toContain('article-100')
+  expect(judgmentStatements[0]).not.toContain('article-101')
+  expect(judgmentStatements[1]).toContain('article-200')
+  expect(judgmentStatements[1]).not.toContain('article-201')
+  expect(judgmentStatements[2]).toContain('article-250')
 })
 
 test('unassessed review route service pages filtered distinct article rows and queue count', async () => {
