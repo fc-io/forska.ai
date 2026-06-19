@@ -28,6 +28,22 @@ const activeSnapshotProjectIds = new Set<string>(['project-1', 'project-2'])
 const pinnedSnapshotProjectIds = new Set<string>(['project-1', 'project-2'])
 const createReviewBulkOperationJobCalls: unknown[] = []
 
+const projectReviewConfigRow = {
+  modelId: null,
+  useAbstract: true,
+  useFulltext: false,
+  useFulltextNoImages: false,
+  useTitle: true,
+}
+
+const getProjectQueryRows = (statement: string) => {
+  if (statement.includes('model_id AS modelId')) {
+    return [projectReviewConfigRow]
+  }
+
+  return statement.includes('FROM app.project') ? [{id: 'project-1', name: 'Project 1'}] : []
+}
+
 const registerModuleMocks = () => {
   void mock.module(appDatabaseServiceModulePath, () => {
     return {
@@ -132,7 +148,7 @@ afterEach(() => {
 
 test('project export creates a durable serving export job with explicit IDs and metadata contract', async () => {
   queryJsonRef.current = async (statement) => {
-    return statement.includes('FROM app.project') ? [{id: 'project-1', name: 'Project 1'}] : []
+    return getProjectQueryRows(statement)
   }
   const {projectExportRoutes} = await loadRoutes()
   const app = new Elysia().use(projectExportRoutes)
@@ -178,6 +194,7 @@ test('project export creates a durable serving export job with explicit IDs and 
       selectedMetadata: {includeArticleAuthors: true, includeArticleId: true},
       snapshotCursor: {mode: 'keyset', orderBy: ['article_id']},
     },
+    reviewConfig: {modelId: null, useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
   })
   expect(queryStatements.join('\n')).not.toContain('FROM app.judgment')
   expect(queryStatements.join('\n')).not.toContain('OFFSET')
@@ -185,7 +202,7 @@ test('project export creates a durable serving export job with explicit IDs and 
 
 test('project export preserves prompt-output filter semantics in durable criteria', async () => {
   queryJsonRef.current = async (statement) => {
-    return statement.includes('FROM app.project') ? [{id: 'project-1', name: 'Project 1'}] : []
+    return getProjectQueryRows(statement)
   }
   const {projectExportRoutes} = await loadRoutes()
   const app = new Elysia().use(projectExportRoutes)
@@ -230,8 +247,8 @@ test('project export preserves prompt-output filter semantics in durable criteri
 
 test('project export treats selecting every enum answer as no prompt filter', async () => {
   queryJsonRef.current = async (statement) => {
-    if (statement.includes('FROM app.project')) {
-      return [{id: 'project-1', name: 'Project 1'}]
+    if (statement.includes('model_id AS modelId') || statement.includes('FROM app.project')) {
+      return getProjectQueryRows(statement)
     }
 
     if (statement.includes('FROM app.prompt')) {
@@ -263,7 +280,7 @@ test('project export rejects mixed source review configs before queueing a durab
   reviewConfigHashes.set('project-1', 'config-1')
   reviewConfigHashes.set('project-2', 'config-2')
   queryJsonRef.current = async (statement) => {
-    return statement.includes('FROM app.project') ? [{id: 'project-1', name: 'Project 1'}] : []
+    return getProjectQueryRows(statement)
   }
   const {projectExportRoutes} = await loadRoutes()
   const app = new Elysia().use(projectExportRoutes)
@@ -285,7 +302,7 @@ test('project export allows metadata-only cross-project jobs with mixed review c
   reviewConfigHashes.set('project-1', 'config-1')
   reviewConfigHashes.set('project-2', 'config-2')
   queryJsonRef.current = async (statement) => {
-    return statement.includes('FROM app.project') ? [{id: 'project-1', name: 'Project 1'}] : []
+    return getProjectQueryRows(statement)
   }
   const {projectExportRoutes} = await loadRoutes()
   const app = new Elysia().use(projectExportRoutes)
@@ -304,7 +321,7 @@ test('project export allows metadata-only cross-project jobs with mixed review c
 
 test('project export stores cross-project jobs under the downloadable project', async () => {
   queryJsonRef.current = async (statement) => {
-    return statement.includes('FROM app.project') ? [{id: 'project-1', name: 'Project 1'}] : []
+    return getProjectQueryRows(statement)
   }
   const {projectExportRoutes} = await loadRoutes()
   const app = new Elysia().use(projectExportRoutes)
@@ -329,7 +346,7 @@ test('project export stores cross-project jobs under the downloadable project', 
 test('project export rejects cross-project jobs when a source latest snapshot is not ready', async () => {
   activeSnapshotProjectIds.delete('project-2')
   queryJsonRef.current = async (statement) => {
-    return statement.includes('FROM app.project') ? [{id: 'project-1', name: 'Project 1'}] : []
+    return getProjectQueryRows(statement)
   }
   const {projectExportRoutes} = await loadRoutes()
   const app = new Elysia().use(projectExportRoutes)
@@ -353,7 +370,7 @@ test('project export rejects cross-project jobs when a source latest snapshot is
 test('project export skips source snapshot preflight for explicit article IDs', async () => {
   activeSnapshotProjectIds.delete('project-2')
   queryJsonRef.current = async (statement) => {
-    return statement.includes('FROM app.project') ? [{id: 'project-1', name: 'Project 1'}] : []
+    return getProjectQueryRows(statement)
   }
   const {projectExportRoutes} = await loadRoutes()
   const app = new Elysia().use(projectExportRoutes)
@@ -377,7 +394,7 @@ test('project export skips source snapshot preflight for explicit article IDs', 
 test('project export rejects cross-project jobs when a source pinned snapshot is not ready', async () => {
   pinnedSnapshotProjectIds.delete('project-2')
   queryJsonRef.current = async (statement) => {
-    return statement.includes('FROM app.project') ? [{id: 'project-1', name: 'Project 1'}] : []
+    return getProjectQueryRows(statement)
   }
   const {projectExportRoutes} = await loadRoutes()
   const app = new Elysia().use(projectExportRoutes)
@@ -421,6 +438,13 @@ test('project export download hydrates completed durable job selection as CSV', 
                 includeJournal: true,
                 includeSummary: true,
               },
+            },
+            reviewConfig: {
+              modelId: 'queued-model',
+              useAbstract: false,
+              useFulltext: true,
+              useFulltextNoImages: true,
+              useTitle: false,
             },
           },
           resultManifestJson: {batches: {'article-1': ['article-1']}},
@@ -488,4 +512,10 @@ test('project export download hydrates completed durable job selection as CSV', 
   expect(queryStatements.join('\n')).toContain('FROM app.article_import_route air')
   expect(queryStatements.join('\n')).toContain('COALESCE(scoped_import.raw_payload, a.original_data)')
   expect(queryStatements.join('\n')).toContain('json_merge_patch')
+  expect(queryStatements.join('\n')).not.toContain('model_id AS modelId')
+  expect(queryStatements.join('\n')).toContain("j.model_id = 'queued-model'")
+  expect(queryStatements.join('\n')).toContain('j.use_title = FALSE')
+  expect(queryStatements.join('\n')).toContain('j.use_abstract = FALSE')
+  expect(queryStatements.join('\n')).toContain('j.use_fulltext = TRUE')
+  expect(queryStatements.join('\n')).toContain('j.use_fulltext_no_images = TRUE')
 })

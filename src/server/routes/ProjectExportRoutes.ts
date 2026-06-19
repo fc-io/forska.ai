@@ -48,6 +48,13 @@ type ExportContract = {
   }
   selectedMetadata?: Record<string, boolean | undefined>
 }
+type ExportReviewConfig = {
+  modelId: string | null
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
 type ExportArticleRow = {
   arxivId: string | null
   articleAuthors: unknown
@@ -158,13 +165,7 @@ const buildPromptHeaderLabel = (
 }
 
 const getProjectReviewConfig = async (projectId: string) => {
-  const [project] = await appDatabaseService.queryJson<{
-    modelId: string | null
-    useAbstract: boolean
-    useFulltext: boolean
-    useFulltextNoImages: boolean
-    useTitle: boolean
-  }>(`
+  const [project] = await appDatabaseService.queryJson<ExportReviewConfig>(`
     SELECT
       model_id AS modelId,
       use_title AS useTitle,
@@ -177,6 +178,33 @@ const getProjectReviewConfig = async (projectId: string) => {
   `)
 
   return project ?? null
+}
+
+const isExportReviewConfig = (value: unknown): value is ExportReviewConfig => {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && ('modelId' in value ? typeof value.modelId === 'string' || value.modelId === null : false)
+    && 'useTitle' in value
+    && typeof value.useTitle === 'boolean'
+    && 'useAbstract' in value
+    && typeof value.useAbstract === 'boolean'
+    && 'useFulltext' in value
+    && typeof value.useFulltext === 'boolean'
+    && 'useFulltextNoImages' in value
+    && typeof value.useFulltextNoImages === 'boolean',
+  )
+}
+
+const getExportReviewConfig = (criteriaJson: unknown) => {
+  const criteria = getJsonValue(criteriaJson)
+  const reviewConfig =
+    criteria && typeof criteria === 'object' && !Array.isArray(criteria)
+      ? (criteria as {reviewConfig?: unknown}).reviewConfig
+      : null
+
+  return isExportReviewConfig(reviewConfig) ? reviewConfig : null
 }
 
 const getExportJob = async (projectId: string, jobId: string) => {
@@ -411,6 +439,7 @@ const buildExportCsvStream = (input: {
   articleIds: string[]
   contract: ExportContract
   projectConfigProjectId: string
+  reviewConfig: ExportReviewConfig | null
   sourceProjectIds: string[]
 }) => {
   const encoder = new TextEncoder()
@@ -432,7 +461,10 @@ const buildExportCsvStream = (input: {
 
           return prompt ? [prompt] : []
         })
-        const projectConfig = promptIds.length > 0 ? await getProjectReviewConfig(input.projectConfigProjectId) : null
+        const projectConfig =
+          promptIds.length > 0
+            ? (input.reviewConfig ?? (await getProjectReviewConfig(input.projectConfigProjectId)))
+            : null
         const batches = Array.from({length: Math.ceil(input.articleIds.length / exportBatchSize)}, (_, index) => {
           return input.articleIds.slice(index * exportBatchSize, (index + 1) * exportBatchSize)
         })
@@ -589,6 +621,7 @@ export const projectExportRoutes = new Elysia()
       const reviewConfigHash = await getSharedReviewConfigHash(sourceProjectIds)
       const listType = body.listType
       const requiresSharedReviewConfig = body.promptIds.length > 0 || Object.keys(prompts).length > 0
+      const reviewConfig = body.promptIds.length > 0 ? await getProjectReviewConfig(sourceProjectId) : null
 
       if (requiresSharedReviewConfig && sourceProjectIds.length > 1 && reviewConfigHash === null) {
         set.status = 400
@@ -621,6 +654,7 @@ export const projectExportRoutes = new Elysia()
           listType,
           operation: 'export',
           prompts,
+          reviewConfig,
           requestId: randomUUID(),
           search: body.search,
           selectionScope: listType ? undefined : 'project',
@@ -704,6 +738,7 @@ export const projectExportRoutes = new Elysia()
         articleIds,
         contract: getExportContract(job.criteriaJson),
         projectConfigProjectId: getExportConfigProjectId({criteriaJson: job.criteriaJson, projectId: params.id}),
+        reviewConfig: getExportReviewConfig(job.criteriaJson),
         sourceProjectIds: sourceProjectIds.length > 0 ? sourceProjectIds : [params.id],
       })
       const filename = `${project.name.replace(/[^a-zA-Z0-9]/g, '_')}_export_${new Date().toISOString().slice(0, 10)}.csv`
