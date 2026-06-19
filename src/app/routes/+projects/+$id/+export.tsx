@@ -32,6 +32,8 @@ type ExportPromptsRequestBody = {promptIds: string[]}
 type ExportJobResponse = {downloadUrl?: string; job?: {jobId?: string}; success?: boolean}
 type ExportJobStatusResponse = {downloadUrl?: string | null; job?: {jobId?: string; status?: string}; success?: boolean}
 
+const terminalExportJobStatuses = new Set(['cancelled', 'completed', 'failed'])
+
 const createProjectExportJob = async (projectId: string, body: ExportRequestBody): Promise<ExportJobResponse> => {
   const response = await fetch(getApiRequestUrl(`/api/projects/${projectId}/export`), {
     body: JSON.stringify(body),
@@ -58,7 +60,13 @@ const fetchProjectExportJobStatus = async (projectId: string, jobId: string): Pr
 }
 
 const shouldPollExportJob = (data?: ExportJobStatusResponse) => {
-  return data?.job?.status !== 'completed'
+  const status = data?.job?.status
+
+  return status === undefined || !terminalExportJobStatuses.has(status)
+}
+
+const isFailedExportJobStatus = (status: string) => {
+  return status === 'failed' || status === 'cancelled'
 }
 
 const parseArktypeOptions = (typeStr: string | null): string[] => {
@@ -419,16 +427,28 @@ const ExportData = () => {
                 const downloadUrl = () => {
                   return exportJobStatusQuery.data?.downloadUrl ?? exportDownloadUrl()
                 }
+                const hasFailed = () => {
+                  return isFailedExportJobStatus(jobStatus())
+                }
 
                 return (
-                  <div class="mb-4 p-3 bg-green-50 border border-green-200 rounded-md text-green-700 text-sm">
+                  <div
+                    class={`mb-4 p-3 rounded-md text-sm ${hasFailed() ? 'bg-red-50 border border-red-200 text-red-700' : 'bg-green-50 border border-green-200 text-green-700'}`}
+                  >
                     Export job {jobStatus()}: {jobId()}
                     <Show when={exportJobStatusQuery.isError}>
                       <span class="ml-2 text-red-700">Unable to check export readiness.</span>
                     </Show>
+                    <Show when={hasFailed()}>
+                      <span class="ml-2">CSV export did not complete. Start a new export and try again.</span>
+                    </Show>
                     <Show
-                      when={jobStatus() === 'completed' && downloadUrl()}
-                      fallback={<span class="ml-2">Preparing CSV...</span>}
+                      when={!hasFailed() && jobStatus() === 'completed' && downloadUrl()}
+                      fallback={
+                        <Show when={!hasFailed()}>
+                          <span class="ml-2">Preparing CSV...</span>
+                        </Show>
+                      }
                     >
                       {(readyDownloadUrl) => {
                         return (

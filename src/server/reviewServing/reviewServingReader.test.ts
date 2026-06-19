@@ -3,6 +3,7 @@ import {expect, test} from 'bun:test'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import type {ReviewServingProjectionComponent, ReviewServingSnapshotStatus} from './reviewServingContracts.ts'
 import {
+  decodeReviewServingCursor,
   encodeReviewServingCursor,
   getReviewServingCursorSortKey,
   getReviewServingFilterSignature,
@@ -364,6 +365,37 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
   )
   expect(sql).not.toContain('(sort_key DESC')
   expect(sql).not.toContain('$cursor0')
+})
+
+test('readReviewServingRows serializes aliased detail list-mode priority cursors', async () => {
+  const reader = createReaderDatabase([
+    {article_id: 'article-2', list_mode_priority: 1, prompt_id: 'prompt-2', prompt_order: 2},
+  ])
+  const detailComponents: readonly ReviewServingProjectionComponent[] = [
+    'humanStatus',
+    'llmStatus',
+    'summary',
+    'payload',
+  ]
+  const manifestDatabase = createManifestDatabase({
+    bySnapshot: {
+      'active-snapshot': getSnapshotRow({
+        components: detailComponents,
+        snapshotId: 'active-snapshot',
+        status: 'active',
+      }),
+    },
+  })
+  const result = await readReviewServingRows(
+    {...readyRequest, articleId: 'article-2', contractKey: 'review.detail.judgments'},
+    {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase},
+  )
+  const cursor = result.status === 'accepted' ? result.getCursorForRow(result.rows[0] as Record<string, unknown>) : null
+  const decoded = decodeReviewServingCursor(cursor)
+
+  expect(result.status).toBe('accepted')
+  expect(reader.statements[0]).toContain('AS list_mode_priority')
+  expect(decoded.valid ? decoded.payload.sortValues : []).toEqual([1, 2, 'prompt-2'])
 })
 
 test('readReviewServingRows binds placeholders in a single pass', async () => {

@@ -123,11 +123,14 @@ test('display routine updates write component-narrow patches for only claimed ar
 
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 6})
   expect(selectStatement).toContain("VALUES ('article-1')")
-  expect(selectStatement).toContain('COALESCE(article.article_created_at, current_timestamp) AS sortKey')
   expect(selectStatement).toContain(
-    'COALESCE(article.article_updated_at, article.article_created_at, current_timestamp) AS activitySortAt',
+    'COALESCE(article.article_created_at, scope.article_created_at, current_timestamp) AS sortKey',
+  )
+  expect(selectStatement).toContain(
+    'COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at, current_timestamp) AS activitySortAt',
   )
   expect(selectStatement).toContain('FROM dirty_article dirty')
+  expect(selectStatement).toContain('LEFT JOIN mart.project_scope_article scope')
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
   expect(insertStatement).toContain(
     'ON CONFLICT(project_id, display_identity, base_generation, patch_watermark, article_id)',
@@ -143,7 +146,7 @@ test('display routine updates write component-narrow patches for only claimed ar
   expect(joined).toContain("full_text_fetched_at = '2026-01-03T00:00:00.000Z'")
   expect(joined).toContain("full_text_conversion_status = 'converted'")
   expect(joined).toContain("pmid = '12345'")
-  expect(joined).toContain("source_metadata = '{\"covidence\":{\"studyId\":\"study-1\"}}'")
+  expect(joined).toContain('source_metadata = \'{"covidence":{"studyId":"study-1"}}\'')
   expect(joined).toContain("activity_sort_at = '2026-01-02T00:00:00.000Z'")
   expect(joined).toContain("snapshot_id = 'snapshot-1'")
   expect(joined).toContain("url = 'https://example.test/article-1'")

@@ -247,6 +247,12 @@ const getCursorFieldName = (field: string) => {
   return field.replace(/\s+(?:asc|desc)\b[\s\S]*$/iu, '').trim()
 }
 
+const getCursorRowFieldName = (field: string) => {
+  const fieldName = getCursorFieldName(field)
+
+  return fieldName.startsWith('CASE list_mode_key ') ? 'list_mode_priority' : fieldName
+}
+
 const getCursorFieldDirection = (field: string, contract: ReviewServingReadContract) => {
   const direction = field.match(/\s+(asc|desc)\b/iu)?.[1]?.toLowerCase()
 
@@ -303,7 +309,7 @@ const createCursorForRow = (input: {
   row: Record<string, unknown>
 }) => {
   const sortValues = input.contract.cursorFields.map((field) => {
-    return getCursorSortValue(input.row[getCursorFieldName(field)])
+    return getCursorSortValue(input.row[getCursorRowFieldName(field)])
   })
   const articleIdValue = input.row.article_id ?? input.row.articleId
   const articleId = typeof articleIdValue === 'string' ? articleIdValue : ''
