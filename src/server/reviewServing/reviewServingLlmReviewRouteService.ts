@@ -136,12 +136,14 @@ const getPromptAnswerFilters = (prompts: Record<string, string[]> | undefined) =
 const getRouteFilters = (params: ArticlesReviewsParams) => {
   const promptAnswer = getPromptAnswerFilters(params.prompts)
   const searchTokenPrefixes = getSearchTokenPrefixes(params.search)
+  const shouldRequireLlmJudgment = !params.llmStatus || params.llmStatus === 'both' || params.llmStatus === 'partial'
 
   return {
     ...(params.from ? {articleCreatedAtFrom: params.from} : {}),
     ...(params.to ? {articleCreatedAtTo: params.to} : {}),
     ...(params.hasDuplicateStudyRecords ? {duplicateFlag: 'true'} : {}),
     ...(params.hasStudyDecisionConflict ? {conflictFlag: 'true'} : {}),
+    ...(shouldRequireLlmJudgment ? {llmHasJudgment: true} : {}),
     ...(params.llmStatus ? {llmStatus: params.llmStatus} : {}),
     ...(promptAnswer.length > 0 ? {promptAnswer} : {}),
     ...(searchTokenPrefixes.length > 0 ? {searchTokenPrefix: searchTokenPrefixes[0]} : {}),
@@ -320,6 +322,7 @@ const getFilteredCountValue = async (
       ${getDateToPredicate('serving.sort_key', filters.articleCreatedAtTo)}
       ${filters.duplicateFlag ? 'AND serving.duplicate_flag = TRUE' : ''}
       ${filters.conflictFlag ? 'AND serving.conflict_flag = TRUE' : ''}
+      ${filters.llmHasJudgment ? 'AND serving.llm_judged_prompt_count > 0' : ''}
       ${llmStatusValue ? `AND serving.llm_status_key = ${getSqlLiteral(llmStatusValue)}` : ''}
       ${getPromptAnswerPredicates(params.prompts).join('\n')}
       ${searchPredicate}

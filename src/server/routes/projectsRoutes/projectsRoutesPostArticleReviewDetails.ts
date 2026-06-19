@@ -355,6 +355,7 @@ const getProjectReviewDetailHumanRows = async (params: {
   articleId: string
   projectId: string
   promptRows: ProjectPromptRow[]
+  reviewConfigHash: string | null
 }) => {
   const result = await readReviewServingRows<ServingHumanJudgmentDetailRow>({
     allowStale: true,
@@ -362,6 +363,7 @@ const getProjectReviewDetailHumanRows = async (params: {
     contractKey: 'review.detail.humanJudgments',
     limit: 512,
     projectId: params.projectId,
+    reviewConfigHash: params.reviewConfigHash,
     searchMode: 'none',
   })
 
@@ -1078,7 +1080,12 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       const systemActor = getSystemActor()
 
-      const humanRows = await getProjectReviewDetailHumanRows({articleId, projectId, promptRows: projectPromptRows})
+      const humanRows = await getProjectReviewDetailHumanRows({
+        articleId,
+        projectId,
+        promptRows: projectPromptRows,
+        reviewConfigHash,
+      })
 
       const humanAssessmentsByUser =
         humanRows.length === 0

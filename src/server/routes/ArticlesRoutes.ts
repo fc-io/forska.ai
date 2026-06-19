@@ -52,6 +52,26 @@ type ArticleJudgmentRow = {
   modelVersion: string | null
 }
 
+const getDateFilterValue = (value: Date | string | undefined | null) => {
+  const date = getDateValue(value)
+
+  return date ? date.toISOString() : undefined
+}
+
+const getLaterDateFilter = (left: Date | string | undefined | null, right: Date | string | undefined | null) => {
+  const leftDate = getDateValue(left)
+  const rightDate = getDateValue(right)
+
+  return !leftDate || (rightDate && rightDate > leftDate) ? getDateFilterValue(rightDate) : getDateFilterValue(leftDate)
+}
+
+const getEarlierDateFilter = (left: Date | string | undefined | null, right: Date | string | undefined | null) => {
+  const leftDate = getDateValue(left)
+  const rightDate = getDateValue(right)
+
+  return !leftDate || (rightDate && rightDate < leftDate) ? getDateFilterValue(rightDate) : getDateFilterValue(leftDate)
+}
+
 const getArticleJudgmentValue = (row: ArticleJudgmentRow) => {
   const answeredOriginalAsArray = getJsonValue(row.judgmentAnsweredOriginalAsArray)
   const quotes = getJsonValue(row.judgmentQuotes)
@@ -278,25 +298,27 @@ export const articlesRoutes = new Elysia()
       }
 
       const reviewConfigHash = await getCurrentReviewConfigHash(body.projectId)
+      const effectiveFrom = getLaterDateFilter(body.from, projectBounds.dateFrom)
+      const effectiveTo = getEarlierDateFilter(body.to, projectBounds.dateTo)
 
       const job = await createReviewBulkOperationJob({
         criteria: {
           concurrency: body.concurrency,
           forceRefetch: body.forceRefetch,
-          from: body.from,
+          from: effectiveFrom,
           hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
           hasStudyDecisionConflict: body.hasStudyDecisionConflict,
           operation: 'pdfFetch',
           search: body.search,
           sourceProjectId: body.projectId,
-          to: body.to,
+          to: effectiveTo,
         },
         filters: {
-          from: body.from,
+          from: effectiveFrom,
           hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
           hasStudyDecisionConflict: body.hasStudyDecisionConflict,
           search: body.search,
-          to: body.to,
+          to: effectiveTo,
         },
         jobKind: 'review.pdf.selection',
         projectId: body.projectId,
