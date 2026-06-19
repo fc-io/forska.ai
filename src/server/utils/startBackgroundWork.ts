@@ -13,6 +13,7 @@ const startMaintenanceBackgroundWork = () => {
   }
 
   startRequestAttemptCloseoutBackfillScheduler()
+  startReviewBulkOperationWorkerHeartbeat()
 
   if (!shouldCurrentRuntimeRunMartRefreshDrain()) {
     return
@@ -20,7 +21,6 @@ const startMaintenanceBackgroundWork = () => {
 
   startProjectMartRefreshWorkerHeartbeat()
   startProjectMartLargeRebuildHeartbeat()
-  startReviewBulkOperationWorkerHeartbeat()
   startReviewServingProjectorWorkerHeartbeat()
 }
 

@@ -407,56 +407,68 @@ const buildExportCsvRows = (input: {
   })
 }
 
-const buildExportCsv = async (input: {
+const buildExportCsvStream = (input: {
   articleIds: string[]
   contract: ExportContract
   projectConfigProjectId: string
   sourceProjectIds: string[]
 }) => {
-  const promptOutput = input.contract.promptOutput ?? {}
-  const selectedMetadata = input.contract.selectedMetadata ?? {}
-  const promptIds = promptOutput.promptIds ?? []
-  const promptDetails = await getPromptDetails(promptIds)
-  const promptDetailsById = new Map(
-    promptDetails.map((prompt) => {
-      return [prompt.id, prompt]
-    }),
-  )
-  const orderedPromptDetails = promptIds.flatMap((promptId) => {
-    const prompt = promptDetailsById.get(promptId)
+  const encoder = new TextEncoder()
 
-    return prompt ? [prompt] : []
+  return new ReadableStream<Uint8Array>({
+    start: async (controller) => {
+      try {
+        const promptOutput = input.contract.promptOutput ?? {}
+        const selectedMetadata = input.contract.selectedMetadata ?? {}
+        const promptIds = promptOutput.promptIds ?? []
+        const promptDetails = await getPromptDetails(promptIds)
+        const promptDetailsById = new Map(
+          promptDetails.map((prompt) => {
+            return [prompt.id, prompt]
+          }),
+        )
+        const orderedPromptDetails = promptIds.flatMap((promptId) => {
+          const prompt = promptDetailsById.get(promptId)
+
+          return prompt ? [prompt] : []
+        })
+        const projectConfig = promptIds.length > 0 ? await getProjectReviewConfig(input.projectConfigProjectId) : null
+        const batches = Array.from({length: Math.ceil(input.articleIds.length / exportBatchSize)}, (_, index) => {
+          return input.articleIds.slice(index * exportBatchSize, (index + 1) * exportBatchSize)
+        })
+        const headerRow = getExportHeaders({contract: input.contract, orderedPromptDetails, selectedMetadata})
+          .map(escapeCSV)
+          .join(',')
+
+        controller.enqueue(encoder.encode(headerRow + '\n'))
+
+        await batches.reduce<Promise<void>>(async (previousBatch, articleIds) => {
+          await previousBatch
+          const [articles, judgments] = await Promise.all([
+            getExportArticles({articleIds, selectedMetadata, sourceProjectIds: input.sourceProjectIds}),
+            projectConfig
+              ? getExportJudgments({articleIds, projectConfig, promptIds})
+              : Promise.resolve([] as ExportJudgmentRow[]),
+          ])
+          const batchCsvRows = buildExportCsvRows({
+            articles,
+            judgments,
+            orderedPromptIds: orderedPromptDetails.map((prompt) => {
+              return prompt.id
+            }),
+            promptOutput,
+            selectedMetadata,
+          })
+
+          controller.enqueue(encoder.encode(batchCsvRows.join('\n') + (batchCsvRows.length > 0 ? '\n' : '')))
+        }, Promise.resolve())
+
+        controller.close()
+      } catch (error) {
+        controller.error(error)
+      }
+    },
   })
-  const projectConfig = await getProjectReviewConfig(input.projectConfigProjectId)
-  const batches = Array.from({length: Math.ceil(input.articleIds.length / exportBatchSize)}, (_, index) => {
-    return input.articleIds.slice(index * exportBatchSize, (index + 1) * exportBatchSize)
-  })
-  const batchRows = await batches.reduce<Promise<string[]>>(async (rowsPromise, articleIds) => {
-    const rows = await rowsPromise
-    const [articles, judgments] = await Promise.all([
-      getExportArticles({articleIds, selectedMetadata, sourceProjectIds: input.sourceProjectIds}),
-      projectConfig
-        ? getExportJudgments({articleIds, projectConfig, promptIds})
-        : Promise.resolve([] as ExportJudgmentRow[]),
-    ])
-
-    const batchCsvRows = buildExportCsvRows({
-      articles,
-      judgments,
-      orderedPromptIds: orderedPromptDetails.map((prompt) => {
-        return prompt.id
-      }),
-      promptOutput,
-      selectedMetadata,
-    })
-
-    return [...rows, ...batchCsvRows]
-  }, Promise.resolve([]))
-  const headerRow = getExportHeaders({contract: input.contract, orderedPromptDetails, selectedMetadata})
-    .map(escapeCSV)
-    .join(',')
-
-  return [headerRow, ...batchRows.flat()].join('\n') + '\n'
 }
 
 const getProject = async (projectId: string) => {
@@ -576,8 +588,9 @@ export const projectExportRoutes = new Elysia()
       const sourceProjectId = sourceProjectIds[0] ?? projectId
       const reviewConfigHash = await getSharedReviewConfigHash(sourceProjectIds)
       const listType = body.listType
+      const requiresSharedReviewConfig = body.promptIds.length > 0 || Object.keys(prompts).length > 0
 
-      if (sourceProjectIds.length > 1 && reviewConfigHash === null) {
+      if (requiresSharedReviewConfig && sourceProjectIds.length > 1 && reviewConfigHash === null) {
         set.status = 400
         return {error: 'Export sources must use the same review configuration', success: false}
       }
@@ -687,7 +700,7 @@ export const projectExportRoutes = new Elysia()
 
       const articleIds = getExportArticleIds(job.resultManifestJson)
       const sourceProjectIds = getExportSourceProjectIds(job.criteriaJson)
-      const csv = await buildExportCsv({
+      const csv = buildExportCsvStream({
         articleIds,
         contract: getExportContract(job.criteriaJson),
         projectConfigProjectId: getExportConfigProjectId({criteriaJson: job.criteriaJson, projectId: params.id}),
