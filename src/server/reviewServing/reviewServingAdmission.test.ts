@@ -55,19 +55,22 @@ test('admitReviewServingRequest rejects unregistered and unclassified foreground
 test('admitReviewServingRequest rejects over-budget foreground work before SQL execution', () => {
   const pageSizeResult = admitReviewServingRequest({
     contractKey: 'review.llm.rows',
-    pageSize: 101,
+    pageSize: 502,
+    ...readyServingIdentity,
     snapshotFreshness: 'ready',
     workloadClass: 'foregroundReviewRows',
   })
   const bytesResult = admitReviewServingRequest({
     contractKey: 'review.llm.rows',
     estimatedResultBytes: 3_000_000,
+    ...readyServingIdentity,
     snapshotFreshness: 'ready',
     workloadClass: 'foregroundReviewRows',
   })
   const rowsResult = admitReviewServingRequest({
     contractKey: 'review.llm.rows',
-    estimatedResultRows: 101,
+    estimatedResultRows: 502,
+    ...readyServingIdentity,
     snapshotFreshness: 'ready',
     workloadClass: 'foregroundReviewRows',
   })
@@ -78,9 +81,9 @@ test('admitReviewServingRequest rejects over-budget foreground work before SQL e
   expect(pageSizeResult.diagnostics.routeBudget.pageSize).toEqual({
     accepted: false,
     budgetKey: 'maxPageSize',
-    limit: 100,
+    limit: 501,
     rejectionReason: 'pageSizeOverLimit',
-    requested: 101,
+    requested: 502,
   })
 })
 
@@ -117,7 +120,7 @@ test('admitReviewServingRequest rejects invalid numeric budgets before SQL execu
   expect(negativePageSize.diagnostics.routeBudget.pageSize).toEqual({
     accepted: false,
     budgetKey: 'maxPageSize',
-    limit: 100,
+    limit: 501,
     rejectionReason: 'invalidBudgetValue',
     requested: -1,
   })
@@ -559,7 +562,7 @@ test('admitReviewServingDuckdbWorkload maps an admitted contract to generic Duck
     allowsTempSpill: false,
     fallbackIntent: 'reject',
     maxResultBytes: 2_000_000,
-    maxResultRows: 100,
+    maxResultRows: 501,
     projectId: 'project-a',
     routeOrJobKey: 'review.llm.rows',
     searchMode: 'tokenPrefix',

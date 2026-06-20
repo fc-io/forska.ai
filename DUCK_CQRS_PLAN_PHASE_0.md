@@ -101,3 +101,46 @@ certify partial route coverage as a safe migration.
 - [ ] SQL-shape tests prove new serving SQL cannot include raw fallback shapes.
 - [ ] SQL-shape tests prove multi-table serving reads qualify scope predicates and reject scope hidden in `ORDER BY`, literals, cursor-only clauses, or `QUALIFY`.
 - [ ] Benchmark smoke harness can run without requiring completed schema/projectors and validates request dimensions, queue kind, list mode, count keys, search modes, row targets, scanned-row ceilings, zero temp spill, latency, and memory targets.
+
+## 2026-06-20 Phase 0 Audit Status
+
+Audited branch: `opencode/duck-cqrs-plan-sequential-audit-20260620-1920`.
+
+Scope: Phase 0 only. Later-phase serving implementation exists in the tree, so this audit checks whether the Phase 0 contracts, guardrails, and harness still support those later phases without re-auditing later-phase correctness.
+
+| Status | Item | Evidence |
+|---|---|---|
+| [x] | Required `reviewServing` contract artifacts exist. | `src/server/reviewServing/reviewServingContracts.ts`, `reviewProjectionIdentity.ts`, `reviewServingInvalidationRegistry.ts`, `reviewServingReadContracts.ts`, `reviewServingCursor.ts`, `reviewServingAdmission.ts`, `reviewServingSql.ts`, and `reviewServingSqlForbiddenPatterns.ts`. |
+| [x] | Every registered hot read key has a complete contract entry. | `src/server/reviewServing/reviewServingReadContracts.ts`; covered by `reviewServingReadContracts.test.ts` tests `review serving read contracts cover every registered hot read key` and `review serving read contracts declare every static registry field`. |
+| [x] | Route inventory uses real product routes and keeps helper-only coverage unmounted. | `reviewServingReadContractRouteInventory` in `reviewServingReadContracts.ts`; covered by `reviewServingReadContracts.test.ts` tests `US-017 migrated review route inventory rows are mounted or explicitly internal`, `review serving migration inventory maps contracts to product routes and planned surfaces`, and route-specific inventory tests for detail, count, bulk/PDF/export, filters, and list reads. |
+| [x] | Filtered reads are represented by posting/search selection plus article-set hydration contracts. | `review.filters.postings`, `review.search.tokenPrefix`, `review.search.substringAsync`, and `*.rowsByArticleSet` entries in `reviewServingReadContracts.ts`; covered by `reviewServingReadContracts.test.ts` tests `filtered row routes have article-set hydration contracts` and `filtered row product routes include posting-intersection coverage`. |
+| [x] | List/detail judgment payload contracts distinguish LLM, human, both-list, and payload kind. | `review.detail.judgments`, `review.detail.humanJudgments`, `review.llm.list.judgments`, `review.human.list.judgments`, `review.both.list.judgments`, and `review.both.list.humanJudgments` in `reviewServingReadContracts.ts`; covered by `reviewServingReadContracts.test.ts` test `human payload contracts cover list and detail response judgments` and `reviewServingSql.test.ts` payload-kind SQL tests. |
+| [x] | Filter vocabulary includes explicit date ranges, duplicate/conflict/import-route scope, prompt/human/LLM filters, queue kind, and token-prefix search scope. | `reviewServingFilterKeys` in `reviewServingContracts.ts`; contract use covered by `reviewServingReadContracts.test.ts` tests `review serving contracts represent article-created date ranges explicitly`, count/filter/queue tests, and human facet tests. |
+| [x] | Count contracts use named fast count keys and derive list mode from the named count key. | `namedReviewFastCountKeys`, `namedReviewFastCountDefinitions`, and count contracts in `reviewServingContracts.ts` and `reviewServingReadContracts.ts`; SQL behavior in `reviewServingSql.ts`; covered by `reviewServingReadContracts.test.ts` count dependency tests and `reviewServingSql.test.ts` count-shape tests. |
+| [x] | Job criteria contracts declare job-table cursor/sort fields and search/job identities. | `review.bulk.selection`, `review.bulk.substringSelection`, `review.export.selection`, `review.pdf.selection`, and `review.search.substringAsync` in `reviewServingReadContracts.ts`; covered by `reviewServingReadContracts.test.ts` test `job criteria contracts use job-table cursor and sort columns` and benchmark operation shape tests. |
+| [x] | Manifest reads select usable statuses explicitly. | `buildReviewServingRowsSql` in `reviewServingSql.ts` emits `snapshot_status IN ('active', 'retired')`; covered by `reviewServingSql.test.ts` test `buildReviewServingRowsSql pins snapshot manifests to the active review config`. |
+| [x] | Foreground admission is registry-based and rejects mismatched search modes before DuckDB execution. | `reviewServingAdmission.ts`; covered by `reviewServingAdmission.test.ts` tests for unregistered work, budget checks, search-mode mismatch, count shape, readiness, serving identity, and DuckDB workload context mapping. |
+| [x] | Every declared change kind has an invalidation registry entry and unknown kinds are not broadened. | `reviewServingChangeKinds` in `reviewServingContracts.ts` and `reviewServingInvalidationRegistry.ts`; covered by `reviewServingInvalidationRegistry.test.ts`. |
+| [x] | SQL-shape guard rejects new serving SQL raw fallback shapes and hidden/unbounded scope patterns. | `reviewServingSqlForbiddenPatterns.ts` and `reviewServingSql.ts`; covered by `reviewServingSql.test.ts`, including static source scans and bound project/snapshot predicate tests. |
+| [x] | Benchmark harness scaffold, smoke fixture, 10M/7-prompt workload definition, and metrics/release report shapes exist. | `reviewServingBenchmark.ts`, `reviewServingBenchmark.test.ts`, and `reviewServingBenchmark.md`; smoke run covered by `reviewServingBenchmark.test.ts` test `review-serving smoke benchmark runs against mocked inputs without completed schema or projectors`. |
+
+### Stale Assumptions And Gaps
+
+- Phase 0's original cut line says product routes must not switch. That statement is stale for the current branch because later phases have already mounted serving-backed product routes. For Phase 0 dependency purposes, the relevant invariant is now that the contract inventory and static guards still describe and protect the mounted routes.
+- The full 10M DuckDB benchmark remains a Phase 5 release gate. Phase 0 has a smokeable harness and full workload definition only; it does not provide physical 10M scan/temp/RSS evidence.
+- The SQL static source guard intentionally excludes projector, diagnostics, retention, review-config, and residual-read allowlist files. Those files are not foreground serving SQL builders and are covered by later-phase route/residual-read tests where applicable.
+
+### Fixes Made During This Audit
+
+- Updated `reviewServingAdmission.test.ts` to match the current `review.llm.rows` page/result budget of `501` and to include serving identity in over-budget cases so the tests actually prove budget rejection precedence.
+- Updated `reviewServingSql.test.ts` to exclude `reviewServingResidualReadAllowlist.ts` from the static serving-SQL source scan, because that file contains audited marker strings such as `INNER JOIN app.judgment judgment`, not executable serving SQL.
+- Updated `reviewServingHookInventory.test.ts` so the add-articles route inventory tracks the current bulk job seam, `createReviewBulkOperationJob`, instead of the old direct `insertArticlesIntoProject` fan-in.
+- Updated `reviewServingFilterRouteService.test.ts` so tokenization coverage asserts normalized search-token diagnostics and search scope, not obsolete SQL text embedding.
+
+### Audit Verification
+
+- `bun test src/server/reviewServing/reviewServingAdmission.test.ts src/server/reviewServing/reviewServingReadContracts.test.ts src/server/reviewServing/reviewServingSql.test.ts src/server/reviewServing/reviewServingBenchmark.test.ts src/server/reviewServing/reviewServingInvalidationRegistry.test.ts src/server/reviewServing/reviewProjectionIdentity.test.ts src/server/reviewServing/reviewServingCursor.test.ts src/server/reviewServing/reviewServingContracts.test.ts`
+- `bun test src/server/reviewServing`
+- `bunx eslint src/server/reviewServing` failed on pre-existing prettier issues in untouched files: `reviewServingAdjacentRouteSurfaces.ts`, `reviewServingBenchmark.test.ts`, and `reviewServingBenchmark.ts`.
+- `bunx eslint src/server/reviewServing/reviewServingAdmission.test.ts src/server/reviewServing/reviewServingFilterRouteService.test.ts src/server/reviewServing/reviewServingHookInventory.test.ts src/server/reviewServing/reviewServingSql.test.ts`
+- `git diff --check`

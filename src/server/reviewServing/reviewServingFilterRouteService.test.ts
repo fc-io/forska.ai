@@ -227,7 +227,7 @@ test('review filter route service tokenizes search text like row reads', async (
     return Buffer.from(diagnostic.filterSignature ?? '', 'base64url').toString('utf8')
   })
 
-  expect(sql).toContain('"searchTokenPrefix":"covid"')
+  expect(response.searchScope).toMatchObject({mode: 'tokenPrefix', text: 'COVID-19 heart failure'})
   expect(filterSignatures[0]).toContain('"searchTokenPrefixes":["19","covid","failure","heart"]')
   expect(sql).not.toContain('"searchTokenPrefix":"covid-19"')
 })
