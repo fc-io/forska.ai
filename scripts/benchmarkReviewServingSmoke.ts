@@ -7,6 +7,7 @@ console.log(
     {
       fixture: result.fixture,
       metrics: result.metrics,
+      releaseReport: result.releaseReport,
       sampleCount: result.samples.length,
       workload: result.workload,
     },

@@ -5,6 +5,9 @@ import {
   getReviewServingBenchmarkCoverageViolations,
   getReviewServingBenchmarkMetrics,
   getReviewServingBenchmarkPerformanceViolations,
+  getReviewServingBenchmarkReleaseReport,
+  getReviewServingBenchmarkReleaseReportViolations,
+  getReviewServingBenchmarkReleaseScopeViolations,
   getReviewServingBenchmarkRequestCountViolations,
   getReviewServingBenchmarkRowsReturnedLimitViolations,
   getReviewServingBenchmarkRowsScannedViolations,
@@ -81,7 +84,7 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
       )
     }),
   ).toBe(true)
-  expect(reviewServingBenchmarkOverlapWorkloadDefinition.operations).toHaveLength(28)
+  expect(reviewServingBenchmarkOverlapWorkloadDefinition.operations).toHaveLength(31)
   expect(
     reviewServingBenchmarkOverlapWorkloadDefinition.operations.map((operation) => {
       return {contractKey: operation.contractKey, key: operation.key}
@@ -110,12 +113,16 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
     {contractKey: 'review.both.count', key: 'bothPromptOverlapCounts'},
     {contractKey: 'review.unassessed.count', key: 'unassessedPromptOverlapCounts'},
     {contractKey: 'review.bulk.selection', key: 'bulkOverlapSelectionJob'},
+    {contractKey: 'review.bulk.substringSelection', key: 'bulkSubstringOverlapSelectionJob'},
     {contractKey: 'review.export.selection', key: 'exportOverlapSelectionJob'},
     {contractKey: 'review.pdf.selection', key: 'pdfOverlapSelectionJob'},
     {contractKey: 'review.search.substringAsync', key: 'substringOverlapSearchJob'},
     {contractKey: 'review.queue.unassessed', key: 'unassessedOverlapQueue'},
     {contractKey: 'review.search.tokenPrefix', key: 'titlePrefixOverlapSearch'},
+    {contractKey: 'review.health.snapshot', key: 'importAppendServingRefreshCheckpoint'},
+    {contractKey: 'review.warning.snapshot', key: 'dirtyMaterializationResumeCheckpoint'},
   ])
+  expect(getReviewServingBenchmarkReleaseScopeViolations(reviewServingBenchmarkOverlapWorkloadDefinition)).toEqual([])
   expect(getBenchmarkOperation('llmPromptOverlapRows')).toMatchObject({
     maxRowsScannedPerRequest: 300,
     minimumDistinctRequestSlices: 7_000,
@@ -254,15 +261,20 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
     workloadClass: 'foregroundReviewQueue',
   })
   expect(
-    ['bulkOverlapSelectionJob', 'exportOverlapSelectionJob', 'pdfOverlapSelectionJob', 'substringOverlapSearchJob'].map(
-      (operationKey) => {
-        const operation = getBenchmarkOperation(operationKey)
+    [
+      'bulkOverlapSelectionJob',
+      'bulkSubstringOverlapSelectionJob',
+      'exportOverlapSelectionJob',
+      'pdfOverlapSelectionJob',
+      'substringOverlapSearchJob',
+    ].map((operationKey) => {
+      const operation = getBenchmarkOperation(operationKey)
 
-        return {key: operation.key, targetRowsReturnedPerRequest: operation.targetRowsReturnedPerRequest}
-      },
-    ),
+      return {key: operation.key, targetRowsReturnedPerRequest: operation.targetRowsReturnedPerRequest}
+    }),
   ).toEqual([
     {key: 'bulkOverlapSelectionJob', targetRowsReturnedPerRequest: 1},
+    {key: 'bulkSubstringOverlapSelectionJob', targetRowsReturnedPerRequest: 1},
     {key: 'exportOverlapSelectionJob', targetRowsReturnedPerRequest: 1},
     {key: 'pdfOverlapSelectionJob', targetRowsReturnedPerRequest: 1},
     {key: 'substringOverlapSearchJob', targetRowsReturnedPerRequest: 1},
@@ -270,6 +282,15 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
   expect(
     reviewServingBenchmarkOverlapWorkloadDefinition.operations.some((operation) => {
       return operation.contractKey === 'review.bulk.selection' && operation.jobKind === 'review.bulk.selection'
+    }),
+  ).toBe(true)
+  expect(
+    reviewServingBenchmarkOverlapWorkloadDefinition.operations.some((operation) => {
+      return (
+        operation.contractKey === 'review.bulk.substringSelection'
+        && operation.searchMode === 'substringAsync'
+        && operation.searchTextPrefix === 'overlap '
+      )
     }),
   ).toBe(true)
   expect(
@@ -299,7 +320,7 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
       return operation.requestCount
     }),
   ).toEqual(
-    Array.from({length: 28}, () => {
+    Array.from({length: 31}, () => {
       return 1
     }),
   )
@@ -308,17 +329,26 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
       return sample.admissionStatus
     }),
   ).toEqual(
-    Array.from({length: 28}, () => {
+    Array.from({length: 31}, () => {
       return 'accepted'
     }),
   )
   expect(result.metrics).toMatchObject({
-    latency: {p50Ms: 10, p95Ms: 20, p99Ms: 20, sampleCount: 28},
-    queueDepth: {average: 1.25, peak: 3},
-    rows: {rowsReturned: 159, rowsScanned: 356},
+    latency: {p50Ms: 10, p95Ms: 20, p99Ms: 20, sampleCount: 31},
+    queueDepth: {average: 1.16, peak: 3},
+    rows: {rowsReturned: 169, rowsScanned: 366},
     tempUsage: {peakBytes: 0, totalBytes: 0},
-    work: {admitted: 28, rejected: 0, total: 28},
+    work: {admitted: 31, rejected: 0, total: 31},
   })
+  expect(result.releaseReport).toMatchObject({
+    benchmarkRunKind: 'syntheticValidation',
+    fixture: {kind: 'smoke'},
+    metrics: result.metrics,
+    releaseGatePhase: 'Phase 5',
+    tempDirGrowthBytes: 0,
+    workloadKey: 'reviewServing.smokeOverlap.v1',
+  })
+  expect(getReviewServingBenchmarkReleaseReportViolations(result.releaseReport)).toEqual([])
   expect(result.metrics.memory.peakRssBytes).toBeGreaterThanOrEqual(result.metrics.memory.startRssBytes)
 })
 
@@ -364,6 +394,75 @@ test('review-serving benchmark metrics shape keeps latency, memory, temp, queue,
     tempUsage: {peakBytes: 20, totalBytes: 20},
     work: {admitted: 1, rejected: 1, total: 2},
   })
+})
+
+test('review-serving benchmark release report requires memory, temp, row, queue, work, and identity fields', () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const metrics = getReviewServingBenchmarkMetrics({
+    endRssBytes: 115,
+    samples: [
+      {
+        admissionStatus: 'accepted',
+        contractKey: 'review.llm.rows',
+        key: 'sample-1',
+        latencyMs: 10,
+        memoryRssBytes: 110,
+        operationKey: 'llmPromptOverlapRows',
+        queueDepth: 2,
+        rejectionReason: null,
+        rowsReturned: 5,
+        rowsScanned: 10,
+        tempUsageBytes: 0,
+      },
+    ],
+    startRssBytes: 100,
+  })
+  const releaseReport = getReviewServingBenchmarkReleaseReport({
+    fixture: input.fixture,
+    metrics,
+    releaseContext: {
+      activeSnapshotIdentity: {
+        countIdentity: 'count-v1',
+        manifestIdentity: 'manifest-v1',
+        projectId: 'project-1',
+        reviewConfigHash: 'review-config-1',
+        searchIdentity: 'search-v1',
+        snapshotId: 'snapshot-1',
+      },
+      benchmarkRunKind: 'releaseScaleDuckDb',
+      duckdbMemoryLimit: '6400MiB',
+      tempDirGrowthBytes: 0,
+    },
+    workload: input.workload,
+  })
+
+  expect(releaseReport).toMatchObject({
+    activeSnapshotIdentity: {
+      countIdentity: 'count-v1',
+      manifestIdentity: 'manifest-v1',
+      projectId: 'project-1',
+      reviewConfigHash: 'review-config-1',
+      searchIdentity: 'search-v1',
+      snapshotId: 'snapshot-1',
+    },
+    benchmarkRunKind: 'releaseScaleDuckDb',
+    duckdbMemoryLimit: '6400MiB',
+    metrics,
+    tempDirGrowthBytes: 0,
+  })
+  expect(getReviewServingBenchmarkReleaseReportViolations(releaseReport)).toEqual([])
+  expect(
+    getReviewServingBenchmarkReleaseReportViolations({
+      ...releaseReport,
+      activeSnapshotIdentity: {...releaseReport.activeSnapshotIdentity, searchIdentity: ''},
+      duckdbMemoryLimit: '',
+      tempDirGrowthBytes: -1,
+    }),
+  ).toEqual([
+    {field: 'activeSnapshotIdentity.searchIdentity', reason: 'missing'},
+    {field: 'duckdbMemoryLimit', reason: 'missing'},
+    {field: 'tempDirGrowthBytes', reason: 'negative'},
+  ])
 })
 
 test('review-serving benchmark runner can use an injected executor for later real workload phases', async () => {
@@ -414,11 +513,14 @@ test('review-serving benchmark rejects runs that do not satisfy operation reques
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'bothPromptOverlapCounts'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'unassessedPromptOverlapCounts'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'bulkOverlapSelectionJob'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'bulkSubstringOverlapSelectionJob'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'exportOverlapSelectionJob'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'pdfOverlapSelectionJob'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'substringOverlapSearchJob'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'unassessedOverlapQueue'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'titlePrefixOverlapSearch'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'importAppendServingRefreshCheckpoint'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'dirtyMaterializationResumeCheckpoint'},
   ])
   const failureMessage = await getBenchmarkRunFailureMessage(underSampledInput)
 

@@ -158,16 +158,33 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - Physical read-shape evidence for hot routes: row groups/rows scanned, temp spill, response bytes, and ordered snapshot/filter prefix use.
 - Work-item shape evidence: expected list mode, queue kind, count key/filter prefix, search mode/text, job kind/filter signature, and request-slice diversity are all validated before a release run can pass.
 
+### Part 3 Final Benchmark And Release Gate Status - 2026-06-20
+
+- Status: completed as repo-native synthetic/release-report validation. A true local 10M DuckDB benchmark run was not executed in this environment; the harness now makes that explicit instead of treating smoke output as release-scale evidence.
+- Fixture and scope: `reviewServingBenchmark.ts` documents the `synthetic10m7PromptOverlap` fixture at 10,000,000 articles, 7 prompts, and 70,000,000 article-prompt overlap rows. The release workload now includes 31 operations and explicit scope tags for import, dirty materialization, serving refresh, review list, filters, counts, token-prefix search, async substring state, bulk jobs, bulk substring selection, export/PDF jobs, article-set hydration, list/detail payloads, human facets/options, queue reads, and desktop-style interruption/resume.
+- Deterministic release-gate validation: the benchmark runner and tests fail on missing canonical fixture/workload dimensions, insufficient request-slice diversity, wrong count key/filter prefix, wrong job/search shape, over-page returned rows, over-wide rows scanned, accepted temp spill, p95/p99 latency breach, RSS breach, missing active snapshot/identity fields, missing DuckDB memory limit, or negative temp-dir growth.
+- Release report shape: smoke and future real runs emit a release report containing p50/p95/p99, peak RSS, DuckDB memory limit, temp-dir growth, queue depth, admitted/rejected counts, rows scanned/returned, and active project/snapshot/review-config/manifest/count/search identity state. Real release-scale runs must set `benchmarkRunKind: "releaseScaleDuckDb"`; smoke output remains `syntheticValidation`.
+- Repo-native gate: `bun run bench:review-serving-release-gate` runs the focused benchmark tests and smoke benchmark report emission. `src/server/reviewServing/reviewServingBenchmark.md` documents both the smoke command and the release-gate validation command.
+- Remaining risks: no physical 10M run, DuckDB row-group scan profile, RSS profile, or temp-dir growth profile was collected on this machine. The deterministic gate blocks incomplete or malformed release reports, but final cutover still needs an actual release-scale DuckDB run under the target memory limit and temp-dir location.
+
+Part 3 checklist:
+
+- [x] 10M/7-prompt synthetic equivalent is available and documented.
+- [x] Repo-native validation covers the full requested benchmark scope and release-report fields.
+- [x] Release validation rejects missing dimensions, request-slice diversity gaps, bad count/search/job dimensions, over-wide scans, temp spill, latency/RSS breaches, and malformed memory/temp/snapshot identity evidence.
+- [x] Repo-native release-gate command is wired for focused benchmark validation and smoke report emission.
+- [ ] True 10M DuckDB run under target memory limits with physical scan/temp/RSS evidence remains to be executed before final cutover.
+
 ## Quality Gates
 
-- [ ] 10M-article/7-prompt benchmark fixture or synthetic equivalent is available and documented.
+- [x] 10M-article/7-prompt benchmark fixture or synthetic equivalent is available and documented.
 - [ ] Overlap benchmark passes under target DuckDB memory limits with import, dirty materialization, serving refresh, review list, filters, counts, bulk jobs, export/PDF jobs, and desktop-style interruption/resume.
-- [ ] Benchmark records p50/p95/p99 latency, peak process memory, DuckDB memory limit, temp-dir growth, queue depth, admitted/rejected query counts, rows scanned, rows returned, and active snapshot/identity state.
-- [ ] Benchmark proves foreground review reads are bounded by page size, selected filter postings, or precomputed summary rows, not total project article/judgment/import-route count.
-- [ ] Benchmark includes article-set hydration operations for LLM, human, both, and unassessed filtered rows.
-- [ ] Benchmark includes list/detail judgment payload operations with prompt-overlap row targets for LLM, human, both LLM, and both human payloads.
-- [ ] Benchmark includes human-specific facet and filter-option operations, named count operations for all list modes, queue-kind operations, token-prefix search, async substring search, bulk substring selection, and bulk/export/PDF job lookups.
-- [ ] Benchmark validation rejects missing or unexpected dimensions, insufficient request-slice diversity, wrong count keys/filter prefixes, missing queue kind/list mode/search mode, over-wide rows scanned, foreground temp spill, latency target breaches, and RSS target breaches.
+- [x] Benchmark records p50/p95/p99 latency, peak process memory, DuckDB memory limit, temp-dir growth, queue depth, admitted/rejected query counts, rows scanned, rows returned, and active snapshot/identity state.
+- [x] Benchmark proves foreground review reads are bounded by page size, selected filter postings, or precomputed summary rows, not total project article/judgment/import-route count.
+- [x] Benchmark includes article-set hydration operations for LLM, human, both, and unassessed filtered rows.
+- [x] Benchmark includes list/detail judgment payload operations with prompt-overlap row targets for LLM, human, both LLM, and both human payloads.
+- [x] Benchmark includes human-specific facet and filter-option operations, named count operations for all list modes, queue-kind operations, token-prefix search, async substring search, bulk substring selection, and bulk/export/PDF job lookups.
+- [x] Benchmark validation rejects missing or unexpected dimensions, insufficient request-slice diversity, wrong count keys/filter prefixes, missing queue kind/list mode/search mode, over-wide rows scanned, foreground temp spill, latency target breaches, and RSS target breaches.
 - [ ] Benchmark proves routine deltas create bounded patches or dirty work, not full 10M-row serving copies, and compaction triggers before patch reads exceed hot-route budgets.
 - [ ] Static SQL-shape tests fail if forbidden raw paths return.
 - [ ] Route tests fail if normal product flows can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
