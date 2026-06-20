@@ -144,6 +144,8 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
   const hasMultipleReferences = tableReferences.length > 1
   const scopedPredicateClause =
     sql.match(/\bfrom\b([\s\S]*?)(?:\bqualify\b|\border\s+by\b|\blimit\b|\bgroup\s+by\b|\bhaving\b|$)/iu)?.[1] ?? ''
+  const wherePredicateClause =
+    sql.match(/\bwhere\b([\s\S]*?)(?:\bqualify\b|\border\s+by\b|\blimit\b|\bgroup\s+by\b|\bhaving\b|$)/iu)?.[1] ?? ''
   const bindOperandPattern = '(?:\\?|[$:@](?:[a-z_][\\w.]*|[0-9]+))'
   const getQualifierPattern = (tableReference: ReviewServingSqlTableReference) => {
     if (tableReference.alias) {
@@ -166,8 +168,10 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
   const getScopeViolations = (field: 'project_id' | 'snapshot_id', label: string, required: boolean) => {
     return required
       ? tableReferences
-          .filter((tableReference) => {
-            return !getScopePredicatePattern(tableReference, field).test(scopedPredicateClause)
+          .filter((tableReference, tableReferenceIndex) => {
+            const predicateClause = tableReferenceIndex === 0 ? wherePredicateClause : scopedPredicateClause
+
+            return !getScopePredicatePattern(tableReference, field).test(predicateClause)
           })
           .map((tableReference) => {
             const scopedLabel = tableReference.alias ?? tableReference.table
