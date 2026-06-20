@@ -2,7 +2,12 @@ import {existsSync} from 'node:fs'
 
 import {expect, mock, test} from 'bun:test'
 
-import type {ReviewServingProjectionComponent, ReviewServingReadContract} from './reviewServingContracts.ts'
+import {
+  namedReviewFastCountDefinitions,
+  type NamedReviewFastCountKey,
+  type ReviewServingProjectionComponent,
+  type ReviewServingReadContract,
+} from './reviewServingContracts.ts'
 import type {ReviewServingReaderRequest} from './reviewServingReader.ts'
 
 const components: readonly ReviewServingProjectionComponent[] = [
@@ -81,6 +86,91 @@ const containsSql = (statement: string, value: string) => {
   return statement.includes(value)
 }
 
+const countListModeByKey: Partial<Record<NamedReviewFastCountKey, string>> = {
+  'review.both.conflictByPrompt': 'both',
+  'review.human.reviewedByPrompt': 'human',
+  'review.llm.assessedByPrompt': 'llm',
+  'review.llm.unassessedByPrompt': 'unassessed',
+  'review.queue.unassessedReady': 'unassessed',
+}
+
+const getNamedCountSqlMatch = (
+  statement: string,
+  contract: ReviewServingReadContract,
+  request: ReviewServingReaderRequest,
+) => {
+  if (contract.servingTable !== 'mart.review_article_count_serving_v4' || !request.namedCountKey) {
+    return true
+  }
+
+  const summaryDefinition = namedReviewFastCountDefinitions[request.namedCountKey]
+  const listModeKey = countListModeByKey[request.namedCountKey] ?? contract.listMode ?? 'global'
+
+  return [
+    containsSql(statement, `list_mode_key = '${listModeKey}'`),
+    containsSql(statement, `count_kind = '${request.namedCountKey}'`),
+    containsSql(statement, `summary_definition_version = '${summaryDefinition.summaryDefinitionVersion}'`),
+    containsSql(statement, `filter_key = '${request.countFilterKey}'`),
+  ].every((check) => {
+    return check
+  })
+}
+
+const getFacetSqlMatch = (
+  statement: string,
+  contract: ReviewServingReadContract,
+  request: ReviewServingReaderRequest,
+) => {
+  if (contract.servingTable !== 'mart.review_filter_facet_serving_v4') {
+    return true
+  }
+
+  const facetDefinitionVersions = contract.namedFastCounts
+    .map((countKey) => {
+      return namedReviewFastCountDefinitions[countKey]
+    })
+    .filter((definition) => {
+      return definition.kind === 'facet'
+    })
+    .map((definition) => {
+      return definition.summaryDefinitionVersion
+    })
+  const facetKind = contract.key === 'review.human.filters.facets' ? 'human' : 'review'
+
+  return [
+    containsSql(statement, `facet_kind = '${facetKind}'`),
+    containsSql(statement, `summary_identity = '${request.countFilterKey}'`),
+    containsSql(statement, 'summary_definition_version'),
+    facetDefinitionVersions.every((version) => {
+      return containsSql(statement, `'${version}'`)
+    }),
+  ].every((check) => {
+    return check
+  })
+}
+
+const getAsyncSearchSqlMatch = (
+  statement: string,
+  contract: ReviewServingReadContract,
+  request: ReviewServingReaderRequest,
+) => {
+  if (contract.servingTable !== 'app.review_search_job') {
+    return true
+  }
+
+  return [
+    containsSql(statement, `search_mode = '${contract.searchMode}'`),
+    containsSql(statement, `search_text = '${request.searchText}'`),
+    containsSql(statement, `filter_signature = '${request.jobFilterSignature}'`),
+    containsSql(statement, `search_identity IS NOT DISTINCT FROM 'search-identity'`),
+    containsSql(statement, `project_scope_identity = 'projectScope-identity'`),
+    containsSql(statement, `review_config_hash IS NOT DISTINCT FROM '${request.reviewConfigHash}'`),
+    containsSql(statement, `snapshot_id IS NOT DISTINCT FROM '${request.snapshotId}'`),
+  ].every((check) => {
+    return check
+  })
+}
+
 const getPayloadKindSqlMatch = (statement: string, contract: ReviewServingReadContract) => {
   if (
     contract.key === 'review.detail.humanJudgments'
@@ -111,18 +201,9 @@ const getContractSqlMatch = (
     contract.servingTable === 'app.review_bulk_operation_job'
       ? containsSql(statement, `job_kind = '${contract.key}'`)
       : true,
-    contract.servingTable === 'app.review_search_job'
-      ? containsSql(statement, `search_mode = '${contract.searchMode}'`)
-      : true,
-    contract.servingTable === 'mart.review_article_count_serving_v4' && request.namedCountKey
-      ? containsSql(statement, `count_kind = '${request.namedCountKey}'`)
-      : true,
-    contract.servingTable === 'mart.review_filter_facet_serving_v4'
-      ? containsSql(
-          statement,
-          contract.key === 'review.human.filters.facets' ? "facet_kind = 'human'" : "facet_kind = 'review'",
-        )
-      : true,
+    getAsyncSearchSqlMatch(statement, contract, request),
+    getNamedCountSqlMatch(statement, contract, request),
+    getFacetSqlMatch(statement, contract, request),
     contract.servingTable === 'mart.review_filter_option_serving_v4' && request.filterOptionIdentity
       ? containsSql(statement, `'${request.filterOptionIdentity}'`)
       : true,
