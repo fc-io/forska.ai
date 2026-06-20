@@ -493,6 +493,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
   ...ownerDependentProduct('ProjectsAddArticlesRoutes.ts', [
     ['POST', '/api/projects/add_articles_by_filter'],
     ['POST', '/api/projects/add_articles_by_ids'],
+    ['GET', '/api/projects/add_articles_jobs'],
   ]),
   ...ownerDependentProduct('ProjectArticlesRoutes.ts', [
     ['GET', '/api/projects/:id/articles'],
