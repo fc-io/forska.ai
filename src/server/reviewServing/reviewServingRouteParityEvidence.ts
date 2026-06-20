@@ -72,7 +72,7 @@ const getRequest = (contractKey: ReviewServingReaderRequest['contractKey']): Rev
       : null,
     estimatedHydratedPayloadBytes: 1_000,
     filterKind: 'importRoute',
-    filterOptionIdentity: 'filter-option-identity',
+    filterOptionIdentity: `filter-option-identity:${contractKey}`,
     filterValue: 'pubmed',
     jobFilterSignature: 'filters:project-1',
     limit,
@@ -85,8 +85,8 @@ const getRequest = (contractKey: ReviewServingReaderRequest['contractKey']): Rev
   }
 }
 
-export const getReviewServingRouteParityEvidenceRows = (_routeKey: string, _contractKey: string) => {
-  return [{articleId: 'article-1', semantic: 'current-behavior-sample'}]
+export const getReviewServingRouteParityEvidenceRows = (_routeKey: string, contractKey: string) => {
+  return [{articleId: 'article-1', semantic: contractKey}]
 }
 
 const getExpectedNamedCountState = (request: ReviewServingReaderRequest) => {

@@ -7,11 +7,7 @@ import {
 import {getReviewServingSqlShapeViolations} from './reviewServingSql.ts'
 import {reviewServingSqlForbiddenPatterns} from './reviewServingSqlForbiddenPatterns.ts'
 
-const snapshotScopedTables = new Set([
-  'app.review_bulk_operation_job',
-  'app.review_search_job',
-  'app.review_serving_snapshot_manifest',
-])
+const snapshotScopedTables = new Set(['app.review_serving_snapshot_manifest'])
 
 export type ReviewServingRouteParityMismatchKind =
   | 'cursor'
