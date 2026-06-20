@@ -57,6 +57,10 @@ Route-specific parity validation blocks that route migration on semantic mismatc
 - Documentation fix in this pass: corrected stale unchecked Phase 4 quality gates to `[x]` only where current tests or the commands run in this pass provide evidence. Kept `bun run lint` unchecked because broad lint was not run in this focused audit and prior notes record unrelated broad lint failures.
 - Verification run in this pass: `bun test src/server/reviewServing/reviewServingReadContracts.test.ts src/server/reviewServing/reviewServingRouteParityCoverage.test.ts src/server/reviewServing/reviewServingRouteParityRunner.test.ts src/server/reviewServing/reviewServingRouteParityEvidence.test.ts src/server/reviewServing/reviewServingResidualReadAllowlist.test.ts src/server/reviewServing/reviewServingSearchOwnership.test.ts src/server/reviewServing/reviewSearchService.test.ts src/server/reviewServing/reviewBulkOperationService.test.ts src/server/workers/reviewBulkOperationWorker.test.ts src/server/routes/ProjectsAddArticlesRoutes.test.ts src/server/services/pdfFetchJobs.test.ts src/server/reviewServing/reviewServingAdmission.test.ts src/server/reviewServing/reviewServingRetentionService.test.ts src/server/reviewServing/reviewServingLlmReviewRouteService.test.ts src/server/reviewServing/reviewServingHumanBothUnassessedRouteService.test.ts src/server/reviewServing/reviewServingFilterRouteService.test.ts` passed, 139 tests. `bun test src/services/olap/duckdbOlap.test.ts` passed, 71 tests. `bunx vitest run src/components/main/reviews/reviewsProjectWarnings.vitest.tsx` passed, 10 tests. `bun test src/server/reviewServing` passed, 467 tests.
 
+### Final Cross-Phase Audit Note - 2026-06-20
+
+- The unchecked Phase 4 `bun run lint` quality gate is now evidence-backed by the later Phase 5 supervisor verification and this final cross-phase audit. Phase 4 remains closed for route/job migration purposes; final cutover still depends on Phase 5 release-scale physical evidence.
+
 ### Implementation Cycle 1 - 2026-06-19
 
 - Re-read verdict: Phase 4 remained incomplete because legacy process-local PDF helpers still existed alongside durable PDF job routes.
@@ -289,4 +293,4 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - [x] Targeted tests prove route-specific parity validation blocks route migration on semantic fixture, invariant, sampled parity, cursor, freshness-state, SQL-shape, latency, or response-size mismatches.
 - [x] Browser review-flow verification for stale, indexing, and unavailable freshness states plus failed, candidate, retired, and missing snapshot diagnostics.
 - [x] Desktop route-surface verification or targeted desktop build when shared runtime paths change.
-- [ ] `bun run lint`
+- [x] `bun run lint`
