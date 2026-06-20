@@ -102,6 +102,7 @@ export type ReviewServingBenchmarkObservation = {
 }
 
 export type ReviewServingBenchmarkWorkItem = {
+  activeSnapshotIdentity?: ReviewServingBenchmarkReleaseContext['activeSnapshotIdentity']
   admissionRequest: ReviewServingAdmissionRequest
   cursor?: string
   filterSignature?: string
@@ -252,7 +253,14 @@ export type ReviewServingBenchmarkReleaseReportViolation = {
     | 'metrics.work.admitted'
     | 'metrics.work.rejected'
     | 'tempDirGrowthBytes'
-  reason: 'missing' | 'negative'
+  reason: 'invalid' | 'missing' | 'negative'
+}
+
+export type ReviewServingBenchmarkReleaseIdentityViolation = {
+  actual: string | null
+  expected: string
+  field: keyof ReviewServingBenchmarkReleaseContext['activeSnapshotIdentity']
+  key: string
 }
 
 export type ReviewServingBenchmarkTempSpillViolation = {key: string; operationKey: string; tempUsageBytes: number}
@@ -605,8 +613,10 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       jobKind: 'review.export.selection',
       key: 'exportOverlapSelectionJob',
       maxRowsScannedPerRequest: 10,
+      minimumDistinctRequestSlices: 70,
       pageSize: 1,
       requestCount: 70,
+      requestSliceFields: ['jobFilterSignature'],
       searchMode: 'tokenPrefix',
       scopes: ['bulkJobs', 'exportPdfJobs', 'tokenPrefixSearch'],
       targetRowsReturnedPerRequest: 1,
@@ -618,8 +628,10 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       jobKind: 'review.pdf.selection',
       key: 'pdfOverlapSelectionJob',
       maxRowsScannedPerRequest: 10,
+      minimumDistinctRequestSlices: 70,
       pageSize: 1,
       requestCount: 70,
+      requestSliceFields: ['jobFilterSignature'],
       searchMode: 'tokenPrefix',
       scopes: ['bulkJobs', 'exportPdfJobs', 'tokenPrefixSearch'],
       targetRowsReturnedPerRequest: 1,
@@ -968,6 +980,65 @@ export const getReviewServingBenchmarkCoverageViolations = (
     })
 }
 
+const getReviewServingBenchmarkWorkItemReleaseIdentityViolations = (
+  workItem: ReviewServingBenchmarkWorkItem,
+  expectedIdentity: ReviewServingBenchmarkReleaseContext['activeSnapshotIdentity'],
+): ReviewServingBenchmarkReleaseIdentityViolation[] => {
+  const requestIdentityEntries: ReadonlyArray<
+    [ReviewServingBenchmarkReleaseIdentityViolation['field'], string | null | undefined, string]
+  > = [
+    ['projectId', workItem.admissionRequest.projectId, expectedIdentity.projectId],
+    ['snapshotId', workItem.admissionRequest.snapshotId, expectedIdentity.snapshotId],
+  ]
+  const activeSnapshotIdentityEntries: ReadonlyArray<
+    [ReviewServingBenchmarkReleaseIdentityViolation['field'], string | null | undefined, string]
+  > = [
+    ['countIdentity', workItem.activeSnapshotIdentity?.countIdentity, expectedIdentity.countIdentity],
+    ['manifestIdentity', workItem.activeSnapshotIdentity?.manifestIdentity, expectedIdentity.manifestIdentity],
+    ['projectId', workItem.activeSnapshotIdentity?.projectId, expectedIdentity.projectId],
+    ['reviewConfigHash', workItem.activeSnapshotIdentity?.reviewConfigHash, expectedIdentity.reviewConfigHash],
+    ['searchIdentity', workItem.activeSnapshotIdentity?.searchIdentity, expectedIdentity.searchIdentity],
+    ['snapshotId', workItem.activeSnapshotIdentity?.snapshotId, expectedIdentity.snapshotId],
+  ]
+  const presentActiveSnapshotIdentityEntries = workItem.activeSnapshotIdentity ? activeSnapshotIdentityEntries : []
+
+  return [...requestIdentityEntries, ...presentActiveSnapshotIdentityEntries]
+    .map(([field, actual, expected]) => {
+      return {actual: actual ?? null, expected, field, key: workItem.key}
+    })
+    .filter((violation) => {
+      return violation.actual !== null && violation.actual !== violation.expected
+    })
+}
+
+export const getReviewServingBenchmarkReleaseIdentityViolations = (
+  input: Pick<ReviewServingBenchmarkRunInput, 'fixture' | 'workItems'>,
+  releaseContext: ReviewServingBenchmarkReleaseContext,
+) => {
+  if (input.fixture.kind === 'smoke' || releaseContext.benchmarkRunKind !== 'releaseScaleDuckDb') {
+    return []
+  }
+
+  const matchingWorkItemViolations = input.workItems.flatMap((workItem) => {
+    return getReviewServingBenchmarkWorkItemReleaseIdentityViolations(workItem, releaseContext.activeSnapshotIdentity)
+  })
+  const hasSnapshotIdentityEvidence = input.workItems.some((workItem) => {
+    return workItem.activeSnapshotIdentity !== undefined
+  })
+  const evidenceViolations: ReviewServingBenchmarkReleaseIdentityViolation[] = hasSnapshotIdentityEvidence
+    ? []
+    : [
+        {
+          actual: null,
+          expected: releaseContext.activeSnapshotIdentity.reviewConfigHash,
+          field: 'reviewConfigHash',
+          key: 'releaseContext.activeSnapshotIdentity',
+        },
+      ]
+
+  return [...matchingWorkItemViolations, ...evidenceViolations]
+}
+
 export const getReviewServingBenchmarkReleaseScopeViolations = (workload: ReviewServingBenchmarkWorkloadDefinition) => {
   const coveredScopes = new Set(
     workload.operations.flatMap((operation) => {
@@ -1010,6 +1081,16 @@ const getReviewServingBenchmarkWorkItemShapeViolationMessage = (
   return violations
     .map((violation) => {
       return `${violation.key}.${violation.field}: expected ${violation.expected}, got ${violation.actual}`
+    })
+    .join('; ')
+}
+
+const getReviewServingBenchmarkReleaseIdentityViolationMessage = (
+  violations: readonly ReviewServingBenchmarkReleaseIdentityViolation[],
+) => {
+  return violations
+    .map((violation) => {
+      return `${violation.key}.${violation.field}: expected ${violation.expected}, got ${violation.actual ?? 'missing'}`
     })
     .join('; ')
 }
@@ -1333,6 +1414,21 @@ const validateReviewServingBenchmarkRequestCounts = (input: ReviewServingBenchma
       )
 }
 
+const validateReviewServingBenchmarkReleaseIdentity = (
+  input: ReviewServingBenchmarkRunInput,
+  releaseContext: ReviewServingBenchmarkReleaseContext,
+) => {
+  const violations = getReviewServingBenchmarkReleaseIdentityViolations(input, releaseContext)
+
+  return violations.length === 0
+    ? Effect.void
+    : Effect.fail(
+        new Error(
+          `Review-serving benchmark release identity mismatch: ${getReviewServingBenchmarkReleaseIdentityViolationMessage(violations)}`,
+        ),
+      )
+}
+
 const validateReviewServingBenchmarkRowTargets = (
   input: ReviewServingBenchmarkRunInput,
   samples: readonly ReviewServingBenchmarkSample[],
@@ -1549,15 +1645,30 @@ export const getReviewServingBenchmarkReleaseReport = ({
 const getStringReleaseReportViolation = (
   field: ReviewServingBenchmarkReleaseReportViolation['field'],
   value: string,
-) => {
+): ReviewServingBenchmarkReleaseReportViolation | null => {
   return value.trim().length === 0 ? ({field, reason: 'missing'} as const) : null
 }
 
 const getNumberReleaseReportViolation = (
   field: ReviewServingBenchmarkReleaseReportViolation['field'],
   value: number,
-) => {
+): ReviewServingBenchmarkReleaseReportViolation | null => {
   return Number.isFinite(value) && value >= 0 ? null : ({field, reason: 'negative'} as const)
+}
+
+const getDuckdbMemoryLimitReleaseReportViolation = (
+  report: Pick<ReviewServingBenchmarkReleaseReport, 'benchmarkRunKind' | 'duckdbMemoryLimit'>,
+): ReviewServingBenchmarkReleaseReportViolation | null => {
+  const duckdbMemoryLimit = report.duckdbMemoryLimit.trim()
+  const duckdbMemoryLimitPattern = /^\d+(?:\.\d+)?\s*(?:B|KB|MB|GB|TB|KIB|MIB|GIB|TIB)$/i
+
+  if (duckdbMemoryLimit.length === 0) {
+    return {field: 'duckdbMemoryLimit', reason: 'missing'}
+  }
+
+  return report.benchmarkRunKind === 'releaseScaleDuckDb' && !duckdbMemoryLimitPattern.test(duckdbMemoryLimit)
+    ? {field: 'duckdbMemoryLimit', reason: 'invalid'}
+    : null
 }
 
 export const getReviewServingBenchmarkReleaseReportViolations = (report: ReviewServingBenchmarkReleaseReport) => {
@@ -1581,7 +1692,7 @@ export const getReviewServingBenchmarkReleaseReportViolations = (report: ReviewS
     ),
     getStringReleaseReportViolation('activeSnapshotIdentity.snapshotId', report.activeSnapshotIdentity.snapshotId),
     getStringReleaseReportViolation('benchmarkRunKind', report.benchmarkRunKind),
-    getStringReleaseReportViolation('duckdbMemoryLimit', report.duckdbMemoryLimit),
+    getDuckdbMemoryLimitReleaseReportViolation(report),
   ]
   const numberViolations = [
     getNumberReleaseReportViolation('metrics.latency.p50Ms', report.metrics.latency.p50Ms),
@@ -1780,8 +1891,16 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           minimumDistinctRequestSlices: 1,
           requestCount: 1,
         },
-        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[24], requestCount: 1},
-        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[25], requestCount: 1},
+        {
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[24],
+          minimumDistinctRequestSlices: 1,
+          requestCount: 1,
+        },
+        {
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[25],
+          minimumDistinctRequestSlices: 1,
+          requestCount: 1,
+        },
         {
           ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[26],
           minimumDistinctRequestSlices: 1,
@@ -2473,6 +2592,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'exportOverlapSelectionJob',
+        requestSlice: {jobFilterSignature: 'phase5-overlap:export:smoke'},
       },
       {
         admissionRequest: {
@@ -2499,6 +2619,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'pdfOverlapSelectionJob',
+        requestSlice: {jobFilterSignature: 'phase5-overlap:pdf:smoke'},
       },
       {
         admissionRequest: {
@@ -2637,6 +2758,7 @@ export const runReviewServingBenchmarkEffect = (input: ReviewServingBenchmarkRun
     Effect.gen(function* () {
       const releaseContext = yield* getReviewServingBenchmarkRunReleaseContext(input)
       yield* validateReviewServingBenchmarkRequestCounts(input)
+      yield* validateReviewServingBenchmarkReleaseIdentity(input, releaseContext)
       const runState = yield* Effect.acquireRelease(getBenchmarkRunState(), releaseBenchmarkRunState)
       const samples = yield* Effect.forEach(input.workItems, (workItem) => {
         return runBenchmarkWorkItemEffect(workItem, executor)

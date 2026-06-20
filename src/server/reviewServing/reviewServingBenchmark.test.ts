@@ -5,6 +5,7 @@ import {
   getReviewServingBenchmarkCoverageViolations,
   getReviewServingBenchmarkMetrics,
   getReviewServingBenchmarkPerformanceViolations,
+  getReviewServingBenchmarkReleaseIdentityViolations,
   getReviewServingBenchmarkReleaseReport,
   getReviewServingBenchmarkReleaseReportViolations,
   getReviewServingBenchmarkReleaseScopeViolations,
@@ -292,14 +293,14 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
     },
     {
       key: 'exportOverlapSelectionJob',
-      minimumDistinctRequestSlices: 0,
-      requestSliceFields: [],
+      minimumDistinctRequestSlices: 70,
+      requestSliceFields: ['jobFilterSignature'],
       targetRowsReturnedPerRequest: 1,
     },
     {
       key: 'pdfOverlapSelectionJob',
-      minimumDistinctRequestSlices: 0,
-      requestSliceFields: [],
+      minimumDistinctRequestSlices: 70,
+      requestSliceFields: ['jobFilterSignature'],
       targetRowsReturnedPerRequest: 1,
     },
     {
@@ -500,6 +501,75 @@ test('review-serving benchmark release report requires memory, temp, row, queue,
     {field: 'activeSnapshotIdentity.searchIdentity', reason: 'missing'},
     {field: 'duckdbMemoryLimit', reason: 'missing'},
     {field: 'tempDirGrowthBytes', reason: 'negative'},
+  ])
+  expect(
+    getReviewServingBenchmarkReleaseReportViolations({
+      ...releaseReport,
+      duckdbMemoryLimit: 'not-set-synthetic-validation',
+    }),
+  ).toEqual([{field: 'duckdbMemoryLimit', reason: 'invalid'}])
+  expect(
+    getReviewServingBenchmarkReleaseReportViolations({
+      ...releaseReport,
+      duckdbMemoryLimit: '6400MiB',
+    }),
+  ).toEqual([])
+})
+
+test('review-serving benchmark cross-checks release identity against sampled work', () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const firstWorkItem = input.workItems[0]
+
+  if (!firstWorkItem) {
+    throw new Error('Missing smoke work item')
+  }
+
+  const releaseContext = {
+    activeSnapshotIdentity: {
+      countIdentity: 'count-v1',
+      manifestIdentity: 'manifest-v1',
+      projectId: 'project-1',
+      reviewConfigHash: 'review-config-1',
+      searchIdentity: 'search-v1',
+      snapshotId: 'snapshot-1',
+    },
+    benchmarkRunKind: 'releaseScaleDuckDb' as const,
+    duckdbMemoryLimit: '6400MiB',
+    tempDirGrowthBytes: 0,
+  }
+  const staleWorkItem = {
+    ...firstWorkItem,
+    activeSnapshotIdentity: {
+      ...releaseContext.activeSnapshotIdentity,
+      reviewConfigHash: 'review-config-2',
+    },
+    admissionRequest: {...firstWorkItem.admissionRequest, projectId: 'project-2', snapshotId: 'snapshot-2'},
+  }
+
+  expect(
+    getReviewServingBenchmarkReleaseIdentityViolations(
+      {...input, fixture: reviewServingSynthetic10m7PromptOverlapFixture, workItems: [staleWorkItem]},
+      releaseContext,
+    ),
+  ).toEqual([
+    {actual: 'project-2', expected: 'project-1', field: 'projectId', key: 'smoke-llm-page'},
+    {actual: 'snapshot-2', expected: 'snapshot-1', field: 'snapshotId', key: 'smoke-llm-page'},
+    {actual: 'review-config-2', expected: 'review-config-1', field: 'reviewConfigHash', key: 'smoke-llm-page'},
+  ])
+  expect(
+    getReviewServingBenchmarkReleaseIdentityViolations(
+      {...input, fixture: reviewServingSynthetic10m7PromptOverlapFixture, workItems: [firstWorkItem]},
+      releaseContext,
+    ),
+  ).toEqual([
+    {actual: 'smoke-project', expected: 'project-1', field: 'projectId', key: 'smoke-llm-page'},
+    {actual: 'smoke-snapshot', expected: 'snapshot-1', field: 'snapshotId', key: 'smoke-llm-page'},
+    {
+      actual: null,
+      expected: 'review-config-1',
+      field: 'reviewConfigHash',
+      key: 'releaseContext.activeSnapshotIdentity',
+    },
   ])
 })
 
