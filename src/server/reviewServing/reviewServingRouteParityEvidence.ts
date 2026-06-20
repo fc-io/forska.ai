@@ -1,4 +1,4 @@
-import type {ReviewServingReadContract} from './reviewServingContracts.ts'
+import type {ReviewServingListMode, ReviewServingReadContract} from './reviewServingContracts.ts'
 import {getReviewServingReadContract, reviewServingReadContractRouteInventory} from './reviewServingReadContracts.ts'
 import type {ReviewServingReaderRequest} from './reviewServingReader.ts'
 import {
@@ -41,13 +41,23 @@ const getNamedCountKeys = (contract: ReviewServingReadContract) => {
   return contract.servingTable === 'mart.review_article_count_serving_v4' ? contract.namedFastCounts : [null]
 }
 
+const listModeByRoute: Partial<Record<string, ReviewServingListMode>> = {
+  '/api/articlesreviews': 'llm',
+  '/api/articlesreviewscount': 'llm',
+  '/api/articlesreviewshuman': 'human',
+  '/api/articlesreviewsboth': 'both',
+  '/api/articlesreviewsunassessed': 'unassessed',
+}
+
 const getRequest = (
   contractKey: ReviewServingReaderRequest['contractKey'],
   namedCountKey: ReviewServingReaderRequest['namedCountKey'],
+  productRoute: string,
 ): ReviewServingReaderRequest => {
   const contract = getReviewServingReadContract(contractKey)
   const limit = contract ? Math.min(2, contract.maxPageSize) : 1
-  const listMode = contract?.physicalAccessStrategy === 'postingIntersection' ? 'llm' : null
+  const listMode =
+    contract?.physicalAccessStrategy === 'postingIntersection' ? (listModeByRoute[productRoute] ?? null) : null
   const searchInput =
     contract?.searchMode === 'tokenPrefix'
       ? {
@@ -123,7 +133,7 @@ const routeEvidence = (input: {method: 'GET' | 'POST'; productRoute: string}): R
       const namedCountKeys = contract ? getNamedCountKeys(contract) : [null]
 
       return namedCountKeys.map((namedCountKey) => {
-        const request = getRequest(contractKey, namedCountKey)
+        const request = getRequest(contractKey, namedCountKey, input.productRoute)
         const semantic = getReviewServingRouteParityEvidenceSemantic(contractKey, namedCountKey)
         const rows = getReviewServingRouteParityEvidenceRows(routeKey, semantic)
 
