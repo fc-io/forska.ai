@@ -126,6 +126,7 @@ export type ReviewServingReaderResult<T> =
 const snapshotScopedTables = new Set(['app.review_serving_snapshot_manifest'])
 const maxArticleSetHydrationArticleIds = 100
 const maxArticleSetHydrationPayloadBytes = 2_000_000
+const reviewServingArticleTable = 'mart.review_article_serving_v4'
 
 const getReaderDatabase = () => {
   return getApiReadOnlyAppDatabaseService()
@@ -243,6 +244,14 @@ const getCursorFieldName = (field: string) => {
   return field.replace(/\s+(?:asc|desc)\b[\s\S]*$/iu, '').trim()
 }
 
+const getCursorPredicateFieldName = (contract: ReviewServingReadContract, field: string) => {
+  const fieldName = getCursorFieldName(field)
+
+  return contract.servingTable === reviewServingArticleTable && /^[a-z_][a-z0-9_]*$/iu.test(fieldName)
+    ? `${reviewServingArticleTable}.${fieldName}`
+    : fieldName
+}
+
 const getCursorRowFieldName = (field: string) => {
   const fieldName = getCursorFieldName(field)
 
@@ -261,10 +270,10 @@ const getCursorPredicatePart = (input: {
   index: number
 }) => {
   const equalPredicates = input.contract.cursorFields.slice(0, input.index).map((field, fieldIndex) => {
-    return `${getCursorFieldName(field)} IS NOT DISTINCT FROM $cursor${fieldIndex}`
+    return `${getCursorPredicateFieldName(input.contract, field)} IS NOT DISTINCT FROM $cursor${fieldIndex}`
   })
   const field = input.contract.cursorFields[input.index] ?? ''
-  const fieldName = getCursorFieldName(field)
+  const fieldName = getCursorPredicateFieldName(input.contract, field)
   const direction = getCursorFieldDirection(field, input.contract)
   const operator = direction === 'asc' ? '>' : '<'
   const comparison = `${fieldName} ${operator} $cursor${input.index}`

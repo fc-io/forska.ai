@@ -286,6 +286,7 @@ test('selected-import serving insert can seed rows from snapshot templates witho
   })
 
   expect(servingInsert).toContain('UNION')
+  expect(servingInsert).not.toContain('source_metadata')
   expect(servingInsert).toContain('review-config-1')
   expect(servingInsert).toContain('snapshot-1')
   expect(servingInsert).toContain('llmStatus:identity-1')

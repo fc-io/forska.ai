@@ -234,6 +234,22 @@ test('patch cleanup uses component-state protection for pinned snapshot base gen
   expect(joined).toContain('LIMIT 5')
 })
 
+test('status patch cleanup orders without a nullable identity column', async () => {
+  const {database, statements} = createRetentionDatabase({
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 14}, patchWatermark: 0, snapshotId: null},
+  })
+
+  await cleanupReviewServingRetentionState(
+    {batchSize: 5, now: '2026-06-16T00:00:00.000Z', projectId: 'project-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('DELETE FROM mart.review_llm_status_patch_v4')
+  expect(joined).toContain('ORDER BY candidate.base_generation, candidate.patch_watermark')
+  expect(joined).not.toContain('candidate.null')
+})
+
 test('retention cleanup target discovery scopes normal cleanup by project and review config', async () => {
   const {database, statements} = createRetentionDatabase({
     cleanupTargetRows: [{projectId: 'project-1', reviewConfigHash: 'review-config-1'}],

@@ -361,7 +361,7 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
   expect(sql.match(/FROM mart\.review_article_filter_posting_serving_v4 filter_/gu)?.length).toBe(2)
   expect(sql).toContain('EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search')
   expect(sql).toContain(
-    "(sort_key < '2026-01-01') OR (sort_key IS NOT DISTINCT FROM '2026-01-01' AND article_id > 'article-1')",
+    "(mart.review_article_serving_v4.sort_key < '2026-01-01') OR (mart.review_article_serving_v4.sort_key IS NOT DISTINCT FROM '2026-01-01' AND mart.review_article_serving_v4.article_id > 'article-1')",
   )
   expect(sql).not.toContain('(sort_key DESC')
   expect(sql).not.toContain('$cursor0')
@@ -643,10 +643,14 @@ test('readReviewServingRows hydrates filtered lists through postings and article
   expect(reader.statements[0]).toContain('EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search')
   expect(reader.statements[1]).toContain('FROM mart.review_article_serving_v4')
   expect(reader.statements[1]).toContain("AND list_mode_key = 'both'")
-  expect(reader.statements[1]).toContain("AND article_id IN (SELECT unnest(['article-1', 'article-2']::VARCHAR[]))")
+  expect(reader.statements[1]).toContain(
+    "AND mart.review_article_serving_v4.article_id IN (SELECT unnest(['article-1', 'article-2']::VARCHAR[]))",
+  )
   expect(reader.statements[1]).toContain('ORDER BY sort_key DESC, article_id ASC LIMIT 2')
   expect(reader.statements[2]).toContain('FROM mart.review_article_judgment_detail_serving_v4')
-  expect(reader.statements[2]).toContain("AND article_id IN (SELECT unnest(['article-1', 'article-2']::VARCHAR[]))")
+  expect(reader.statements[2]).toContain(
+    "AND mart.review_article_judgment_detail_serving_v4.article_id IN (SELECT unnest(['article-1', 'article-2']::VARCHAR[]))",
+  )
   expect(reader.statements[2]).toContain('ORDER BY article_id ASC, prompt_order ASC NULLS LAST, prompt_id ASC')
   expect(reader.statements.join('\n')).not.toContain('article_id = $articleId')
   expect(reader.statements.join('\n')).not.toContain('selected_scoped_article_import')
