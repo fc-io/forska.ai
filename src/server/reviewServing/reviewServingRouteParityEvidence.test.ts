@@ -69,12 +69,24 @@ const getRouteKey = (entry: {method: string; productRoute: string}) => {
   return `${entry.method} ${entry.productRoute}`
 }
 
+const getCaseKey = (request: ReviewServingReaderRequest) => {
+  return request.namedCountKey ? `${request.contractKey}:${request.namedCountKey}` : request.contractKey
+}
+
+const getSqlFixtureKey = (request: ReviewServingReaderRequest) => {
+  return request.namedCountKey ? `namedCount:${request.namedCountKey}` : request.contractKey
+}
+
 const containsSql = (statement: string, value: string) => {
   return statement.includes(value)
 }
 
 const getPayloadKindSqlMatch = (statement: string, contract: ReviewServingReadContract) => {
-  if (contract.key === 'review.detail.humanJudgments' || contract.key === 'review.both.list.humanJudgments') {
+  if (
+    contract.key === 'review.detail.humanJudgments'
+    || contract.key === 'review.human.list.judgments'
+    || contract.key === 'review.both.list.humanJudgments'
+  ) {
     return containsSql(statement, "payload_kind = 'human'")
   }
 
@@ -124,9 +136,16 @@ const getContractSqlMatch = (
     contract.listMode && contract.physicalAccessStrategy !== 'queueOrdering'
       ? containsSql(statement, `list_mode_key = '${contract.listMode}'`)
       : true,
+    contract.physicalAccessStrategy === 'postingIntersection' && request.listMode
+      ? containsSql(statement, `list_mode_key = '${request.listMode}'`)
+      : true,
+    contract.physicalAccessStrategy === 'tokenPrefixIndex' ? containsSql(statement, 'starts_with(token,') : true,
     getPayloadKindSqlMatch(statement, contract),
     contract.servingTable === 'app.review_serving_snapshot_manifest'
       ? containsSql(statement, `LIMIT ${request.limit}`)
+      : true,
+    contract.key === 'review.warning.snapshot' || contract.key === 'review.health.snapshot'
+      ? containsSql(statement, "snapshot_status IN ('active', 'retired')")
       : true,
   ]
 
@@ -169,14 +188,17 @@ const createDatabase = async () => {
   })
   const rowByContractKey = new Map(
     evidenceCases.map((caseInput) => {
-      return [caseInput.request.contractKey, caseInput.expectedRows]
+      return [getSqlFixtureKey(caseInput.request), caseInput.expectedRows]
     }),
   )
 
   return {
     queryJson: async <T>(statement: string): Promise<T[]> => {
       if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
-        if (statement.includes('snapshot_id AS snapshotId') || statement.includes('snapshot_id AS snapshot_id')) {
+        if (
+          (statement.includes('snapshot_id AS snapshotId') || statement.includes('snapshot_id AS snapshot_id'))
+          && statement.includes('AND snapshot_id =')
+        ) {
           return [getSnapshotRow()] as T[]
         }
 
@@ -191,7 +213,7 @@ const createDatabase = async () => {
         return contract ? getContractSqlMatch(statement, contract, caseInput.request) : false
       })
 
-      return (matchedCase ? rowByContractKey.get(matchedCase.request.contractKey) : []) as T[]
+      return (matchedCase ? rowByContractKey.get(getSqlFixtureKey(matchedCase.request)) : []) as T[]
     },
     run: async () => {},
     transaction: async <T>(operation: (database: unknown) => Promise<T>) => {
@@ -232,13 +254,21 @@ test('route parity evidence runs real readers for every mounted coverage contrac
       return entry.mounted && coverageKeys.includes(getRouteKey(entry))
     })
     .flatMap((entry) => {
-      return entry.contractKeys.map((contractKey) => {
-        return `${getRouteKey(entry)} ${contractKey}`
+      return entry.contractKeys.flatMap((contractKey) => {
+        const contract = contracts.getReviewServingReadContract(contractKey)
+        const namedCountKeys =
+          contract?.servingTable === 'mart.review_article_count_serving_v4' ? contract.namedFastCounts : [null]
+
+        return namedCountKeys.map((namedCountKey) => {
+          return namedCountKey
+            ? `${getRouteKey(entry)} ${contractKey}:${namedCountKey}`
+            : `${getRouteKey(entry)} ${contractKey}`
+        })
       })
     })
   const actualContractCases = evidence.reviewServingRouteParityEvidence.flatMap((entry) => {
     return entry.cases.map((caseInput) => {
-      return `${entry.routeKey} ${caseInput.request.contractKey}`
+      return `${entry.routeKey} ${getCaseKey(caseInput.request)}`
     })
   })
   const missingRunnableCases = evidence.reviewServingRouteParityEvidence.flatMap((entry) => {

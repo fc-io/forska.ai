@@ -405,6 +405,44 @@ test('LLM review route diagnostics surface failed snapshot errors for articlesre
   expect(result.diagnostics.rejectionReason).toBe('manifestStatusRejected')
 })
 
+test('LLM review route diagnostics surface candidate and missing snapshot states for articlesreviews readers', async () => {
+  const candidate = await readReviewServingRows(
+    {
+      contractKey: 'review.llm.rows',
+      limit: 25,
+      projectId: 'project-1',
+      reviewConfigHash: 'config-1',
+      snapshotId: 'candidate-snapshot',
+    },
+    {
+      database: createReaderDatabase().database,
+      diagnosticsDatabase: createManifestDatabase('candidate'),
+      manifestDatabase: createManifestDatabase('candidate'),
+    },
+  )
+  const missing = await readReviewServingRows(
+    {
+      contractKey: 'review.llm.rows',
+      limit: 25,
+      projectId: 'project-1',
+      reviewConfigHash: 'config-1',
+      snapshotId: 'missing-snapshot',
+    },
+    {
+      database: createReaderDatabase().database,
+      diagnosticsDatabase: createManifestDatabase('missing'),
+      manifestDatabase: createManifestDatabase('missing'),
+    },
+  )
+
+  expect(candidate.status).toBe('rejected')
+  expect(candidate.diagnostics.manifest).toMatchObject({freshness: 'indexing', status: 'candidate'})
+  expect(candidate.diagnostics.rejectionReason).toBe('manifestStatusRejected')
+  expect(missing.status).toBe('rejected')
+  expect(missing.diagnostics.manifest).toMatchObject({freshness: 'unavailable', snapshotId: null, status: 'missing'})
+  expect(missing.diagnostics.rejectionReason).toBe('servingIdentityMissing')
+})
+
 test('migrated LLM review routes do not import OLAP fallback wrappers', async () => {
   const listRoute = await readFile('src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviews.ts', 'utf8')
   const countRoute = await readFile('src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts', 'utf8')

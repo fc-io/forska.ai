@@ -37,14 +37,17 @@ const getRouteKey = (method: 'GET' | 'POST', productRoute: string) => {
   return `${method} ${productRoute}`
 }
 
-const getNamedCountKey = (contract: ReviewServingReadContract) => {
-  return contract.servingTable === 'mart.review_article_count_serving_v4' ? (contract.namedFastCounts[0] ?? null) : null
+const getNamedCountKeys = (contract: ReviewServingReadContract) => {
+  return contract.servingTable === 'mart.review_article_count_serving_v4' ? contract.namedFastCounts : [null]
 }
 
-const getRequest = (contractKey: ReviewServingReaderRequest['contractKey']): ReviewServingReaderRequest => {
+const getRequest = (
+  contractKey: ReviewServingReaderRequest['contractKey'],
+  namedCountKey: ReviewServingReaderRequest['namedCountKey'],
+): ReviewServingReaderRequest => {
   const contract = getReviewServingReadContract(contractKey)
-  const namedCountKey = contract ? getNamedCountKey(contract) : null
   const limit = contract ? Math.min(2, contract.maxPageSize) : 1
+  const listMode = contract?.physicalAccessStrategy === 'postingIntersection' ? 'llm' : null
   const searchInput =
     contract?.searchMode === 'tokenPrefix'
       ? {
@@ -76,6 +79,7 @@ const getRequest = (contractKey: ReviewServingReaderRequest['contractKey']): Rev
     filterValue: 'pubmed',
     jobFilterSignature: 'filters:project-1',
     limit,
+    listMode,
     namedCountKey,
     projectId: 'project-1',
     queueKind: 'unassessed',
@@ -87,6 +91,13 @@ const getRequest = (contractKey: ReviewServingReaderRequest['contractKey']): Rev
 
 export const getReviewServingRouteParityEvidenceRows = (_routeKey: string, contractKey: string) => {
   return [{articleId: 'article-1', semantic: contractKey}]
+}
+
+const getReviewServingRouteParityEvidenceSemantic = (
+  contractKey: string,
+  namedCountKey: ReviewServingReaderRequest['namedCountKey'],
+) => {
+  return namedCountKey ? `namedCount:${namedCountKey}` : contractKey
 }
 
 const getExpectedNamedCountState = (request: ReviewServingReaderRequest) => {
@@ -107,25 +118,31 @@ const routeEvidence = (input: {method: 'GET' | 'POST'; productRoute: string}): R
   })
 
   return {
-    cases: (routeInventoryEntry?.contractKeys ?? []).map((contractKey) => {
-      const request = getRequest(contractKey)
-      const rows = getReviewServingRouteParityEvidenceRows(routeKey, contractKey)
+    cases: (routeInventoryEntry?.contractKeys ?? []).flatMap((contractKey) => {
+      const contract = getReviewServingReadContract(contractKey)
+      const namedCountKeys = contract ? getNamedCountKeys(contract) : [null]
 
-      return {
-        currentBehaviorRows: async () => {
-          return rows
-        },
-        expectedCursorValid: true,
-        expectedFreshness: 'ready',
-        expectedNamedCountState: getExpectedNamedCountState(request),
-        expectedRows: rows,
-        maxCurrentBehaviorBytes: 50_000,
-        maxCurrentBehaviorRows: request.limit,
-        maxLatencyMs: 1_000,
-        maxResultBytes: 50_000,
-        name: `${routeKey} ${contractKey} semantic fixture and sampled current behavior`,
-        request,
-      }
+      return namedCountKeys.map((namedCountKey) => {
+        const request = getRequest(contractKey, namedCountKey)
+        const semantic = getReviewServingRouteParityEvidenceSemantic(contractKey, namedCountKey)
+        const rows = getReviewServingRouteParityEvidenceRows(routeKey, semantic)
+
+        return {
+          currentBehaviorRows: async () => {
+            return rows
+          },
+          expectedCursorValid: true,
+          expectedFreshness: 'ready',
+          expectedNamedCountState: getExpectedNamedCountState(request),
+          expectedRows: rows,
+          maxCurrentBehaviorBytes: 50_000,
+          maxCurrentBehaviorRows: request.limit,
+          maxLatencyMs: 1_000,
+          maxResultBytes: 50_000,
+          name: `${routeKey} ${semantic} semantic fixture and sampled current behavior`,
+          request,
+        }
+      })
     }),
     evidenceGates: reviewServingRouteParityGates,
     routeKey,
