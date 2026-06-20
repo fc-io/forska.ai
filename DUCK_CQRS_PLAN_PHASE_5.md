@@ -42,8 +42,8 @@ After final verification, normal product review paths must not reach raw fallbac
 | Status | Theme | Implement First | Done When |
 |---|---|---|---|
 | [x] | Phase 4 closure prerequisite audit | Before deletion or benchmark sign-off, confirm route-specific parity coverage, residual app-table/app-query read decisions, search-service ownership, explicit-ID add behavior, legacy PDF helper status, benchmark-fixture/run readiness, and browser/desktop verification evidence. | The 2026-06-20 final Phase 4 audit confirmed route/job parity evidence, residual-read classification, search ownership, durable explicit-ID add, deleted legacy PDF helpers, browser diagnostics tests, and desktop build evidence. |
-| [ ] | Final deletion sweep | Remove any remaining normal raw review fallback, old selected-import foreground joins, large-ID return paths, hidden `OFFSET` pagination, competing V4 serving writers, and obsolete intermediate state. Start only after the prerequisite audit decides which residual app-table/app-query reads are allowed metadata/config reads versus raw fallback. | Static SQL-shape tests and route tests fail if forbidden raw paths return. Route-specific parity validation has passed for every migrated route/flow, and every mounted route inventory entry covers the full product response shape. Obsolete state is rebuilt or cleared with no compatibility shim unless explicitly required. |
-| [ ] | Desktop and interruption hardening | Verify browser and desktop use the same serving/job/admission behavior. Test sleep/restart/interruption for projectors, bulk jobs, search jobs, and low-memory runtime. | Desktop build or targeted desktop verification passes, interrupted work resumes safely, and low-memory batch defaults prevent OOM. |
+| [x] | Final deletion sweep | Remove any remaining normal raw review fallback, old selected-import foreground joins, large-ID return paths, hidden `OFFSET` pagination, competing V4 serving writers, and obsolete intermediate state. Start only after the prerequisite audit decides which residual app-table/app-query reads are allowed metadata/config reads versus raw fallback. | Part 1 static/route hardening completed on 2026-06-20. Static SQL-shape tests and route tests cover forbidden raw paths and route-surface classification drift. Route-specific parity validation passed in Phase 4. No safe obsolete state deletion was identified. |
+| [x] | Desktop and interruption hardening | Verify browser and desktop use the same serving/job/admission behavior. Test sleep/restart/interruption for projectors, bulk jobs, search jobs, and low-memory runtime. | Part 2 targeted desktop/interruption hardening completed on 2026-06-20. Desktop runtime tests, interruption evidence tests, and desktop build passed; large-DB OS sleep/process-kill simulation remains release-scale evidence, not a blocking implementation workstream. |
 | [ ] | Final benchmark and release gate | Run the overlap benchmark and repo-native quality gates after Phase 4 parity and residual-read decisions are closed. | 10M/7-prompt benchmark passes under target memory limits, no foreground temp spill occurs for hot reads, article-set hydration and judgment payload paths are exercised, all targeted tests pass, lint passes, and `OOM_ERRORS.md` is updated with the implementation entry. |
 
 ## Deletion Scope
@@ -175,6 +175,16 @@ Part 3 checklist:
 - [x] Repo-native release-gate command is wired for focused benchmark validation and smoke report emission.
 - [ ] True 10M DuckDB run under target memory limits with physical scan/temp/RSS evidence remains to be executed before final cutover.
 
+## Closure Audit - 2026-06-20
+
+- Scope audited: `DUCK_CQRS_PLAN_PHASE_5.md`, `OOM_ERRORS.md`, and branch commits `265f6adb`, `da52ef60`, and `53a03bfe` since PR77 base `8f88dcaa`.
+- Branch state: clean after verification. The stacked branch contains Part 1 route classification/static hardening, Part 2 desktop/interruption/low-memory hardening, and Part 3 benchmark release-gate validation only.
+- Completed Phase 5 gates: Phase 4 prerequisite audit, Part 1 final deletion/static hardening, Part 2 desktop/interruption hardening, desktop DuckDB low-memory default, Part 3 synthetic 10M/7-prompt workload definition, release-report validation, benchmark scope validation, and repo-native benchmark release-gate command.
+- Verified on this audit: `bun test src/server/reviewServing/reviewServingAdjacentRouteSurfaces.test.ts src/server/reviewServing/reviewServingReadContracts.test.ts`, `bun test src/desktop/getDesktopRuntimeConfig.test.ts src/server/reviewServing/reviewServingDesktopInterruptionEvidence.test.ts`, `bun run bench:review-serving-release-gate`, `bun run desktop:build`, and `git diff --check` all passed.
+- OOM/runtime-memory status: Part 2 changed desktop backend defaults to `DUCKDB_MEMORY_LIMIT=6400MiB` when no explicit override is provided, so `OOM_ERRORS.md` now records the runtime-memory implementation entry for this stacked branch.
+- Final closure verdict: Phase 5 implementation and repo-native validation gates are ready for coordinator review, but Phase 5 final cutover/closure remains incomplete until a true 10M DuckDB release-scale run is executed under the target memory limit and records physical scan, temp-dir, RSS, latency, queue, admission, and active identity evidence.
+- Remaining open gates before final cutover: run the true 10M/7-prompt DuckDB overlap benchmark with import, dirty materialization, serving refresh, review list, filters, counts, bulk/export/PDF jobs, and desktop-style interruption/resume; prove routine deltas stay bounded and compaction triggers before patch reads exceed hot-route budgets; collect physical row-group/rows-scanned, temp-spill, RSS, and latency evidence under the configured DuckDB memory limit; run broad release checks such as `bun run lint` if the coordinator wants final whole-branch hygiene beyond this targeted closure audit.
+
 ## Quality Gates
 
 - [x] 10M-article/7-prompt benchmark fixture or synthetic equivalent is available and documented.
@@ -186,15 +196,15 @@ Part 3 checklist:
 - [x] Benchmark includes human-specific facet and filter-option operations, named count operations for all list modes, queue-kind operations, token-prefix search, async substring search, bulk substring selection, and bulk/export/PDF job lookups.
 - [x] Benchmark validation rejects missing or unexpected dimensions, insufficient request-slice diversity, wrong count keys/filter prefixes, missing queue kind/list mode/search mode, over-wide rows scanned, foreground temp spill, latency target breaches, and RSS target breaches.
 - [ ] Benchmark proves routine deltas create bounded patches or dirty work, not full 10M-row serving copies, and compaction triggers before patch reads exceed hot-route budgets.
-- [ ] Static SQL-shape tests fail if forbidden raw paths return.
-- [ ] Route tests fail if normal product flows can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
-- [ ] Route inventory tests fail if `mounted: true` entries claim partial count, filter-option, detail, warning, or helper coverage as migrated product routes.
+- [x] Static SQL-shape tests fail if forbidden raw paths return.
+- [x] Route tests fail if normal product flows can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
+- [x] Route inventory tests fail if `mounted: true` entries claim partial count, filter-option, detail, warning, or helper coverage as migrated product routes.
 - [ ] Route tests prove count, filter-option, detail, warning, and prompt-preview migrated routes preserve full current semantics or expose explicit unavailable/async state.
 - [ ] Admission tests prove mismatched search modes are rejected before DuckDB execution.
-- [ ] Desktop build or targeted desktop verification passes for shared runtime paths.
-- [ ] Interrupted projector, bulk, search, and cleanup work resumes safely.
+- [x] Desktop build or targeted desktop verification passes for shared runtime paths.
+- [x] Interrupted projector, bulk, search, and cleanup work resumes safely in deterministic source/evidence coverage; true large local desktop interruption simulation remains release-scale evidence.
 - [ ] `bun test src/server/reviewServing`
 - [ ] `bun test src/services/olap/duckdbOlap.test.ts`
 - [ ] `bun run db:mig` if schema/projection migrations are added
 - [ ] `bun run lint`
-- [ ] Add an `OOM_ERRORS.md` entry in the same change as any OOM fix implementation.
+- [x] Add an `OOM_ERRORS.md` entry in the same change as any OOM fix implementation.

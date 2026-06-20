@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-20 - Desktop DuckDB Runtime Memory Default
+
+- Error: Desktop backend could start without an explicit DuckDB cap, leaving laptop/default runtimes exposed to the same `failed to pin block` class of DuckDB OOM under review-serving overlap workloads.
+- Context: Phase 5 Part 2 desktop backend startup through `getDesktopRuntimeConfig` and shared review-serving projector, job, search, cleanup, and route runtime paths.
+- Cause: Browser/server profiles already had low-memory DuckDB worker behavior, but desktop startup did not provide a bounded default `DUCKDB_MEMORY_LIMIT` when the operator had not set an override.
+- Fix: Desktop backend now defaults `DUCKDB_MEMORY_LIMIT` to `6400MiB` while preserving explicit operator overrides; the existing DuckDB service maps limits at or below `6400MiB` to reduced concurrency and serialized work.
+- Verification: `bun test src/desktop/getDesktopRuntimeConfig.test.ts src/server/reviewServing/reviewServingDesktopInterruptionEvidence.test.ts`; `bun run desktop:build`; Phase 5 closure audit targeted gates on 2026-06-20.
+
 ## 2026-06-13 - Review Serving V4 Foundation
 
 - Error: `Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` from foreground review reads under import/materialization overlap.
