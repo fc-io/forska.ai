@@ -352,8 +352,8 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
   const sql = reader.statements[0] ?? ''
 
   expect(result.status).toBe('accepted')
-  expect(sql).toContain("article_created_at >= TIMESTAMPTZ '2026-01-01'")
-  expect(sql).toContain("article_created_at < TIMESTAMPTZ '2026-02-01'")
+  expect(sql).toContain("mart.review_article_serving_v4.article_created_at >= TIMESTAMPTZ '2026-01-01'")
+  expect(sql).toContain("mart.review_article_serving_v4.article_created_at < TIMESTAMPTZ '2026-02-01'")
   expect(sql).toContain('duplicate_flag = TRUE')
   expect(sql).toContain("llm_status_key = 'answered'")
   expect(sql).toContain('review:promptAnswer:prompt-1:yes')
