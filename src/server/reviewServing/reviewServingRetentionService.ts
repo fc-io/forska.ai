@@ -196,6 +196,7 @@ const getPatchBudget = async (
       CAST(COUNT(DISTINCT patch_watermark) AS INTEGER) AS patchWatermarks
     FROM ${spec.table}
     WHERE project_id = ${getSqlLiteral(projectId)}
+      AND ${spec.identityColumn} = ${getSqlLiteral(state.projectionIdentity)}
       AND base_generation = ${getSqlLiteral(Number(state.baseGeneration))}
   `)
 

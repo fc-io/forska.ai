@@ -124,7 +124,7 @@ test('candidate patch budget assessment uses component table and bounded thresho
     },
   ])
   expect(statements.join('\n')).toContain('FROM mart.review_article_display_patch_v4')
-  expect(statements.join('\n')).not.toContain('display_identity =')
+  expect(statements.join('\n')).toContain("display_identity = 'display:identity-1'")
   expect(statements.join('\n')).toContain('base_generation = 2')
 })
 
