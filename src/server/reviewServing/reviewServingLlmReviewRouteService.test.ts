@@ -9,7 +9,7 @@ import {
   getLlmReviewArticlesFromServing,
 } from './reviewServingLlmReviewRouteService.ts'
 import type {ReviewServingManifestRepositoryDatabase} from './reviewServingManifestRepository.ts'
-import type {ReviewServingReaderDatabase} from './reviewServingReader.ts'
+import {readReviewServingRows, type ReviewServingReaderDatabase} from './reviewServingReader.ts'
 
 const components: readonly ReviewServingProjectionComponent[] = [
   'display',
@@ -376,6 +376,33 @@ test('LLM review route service surfaces stale, indexing, and unavailable freshne
       expect(error).toBeInstanceOf(Error)
       expect(error instanceof Error ? error.message : '').toContain('Review serving snapshot is unavailable')
     })
+})
+
+test('LLM review route diagnostics surface failed snapshot errors for articlesreviews readers', async () => {
+  const result = await readReviewServingRows(
+    {
+      contractKey: 'review.llm.rows',
+      limit: 25,
+      projectId: 'project-1',
+      reviewConfigHash: 'config-1',
+      snapshotId: 'failed-snapshot',
+    },
+    {
+      database: createReaderDatabase().database,
+      diagnosticsDatabase: createManifestDatabase('failed'),
+      manifestDatabase: createManifestDatabase('failed'),
+    },
+  )
+
+  expect(result.status).toBe('rejected')
+  expect(result.diagnostics.manifest).toEqual({
+    freshness: 'unavailable',
+    lastError: 'projection failed',
+    projectId: 'project-1',
+    snapshotId: 'failed-snapshot',
+    status: 'failed',
+  })
+  expect(result.diagnostics.rejectionReason).toBe('manifestStatusRejected')
 })
 
 test('migrated LLM review routes do not import OLAP fallback wrappers', async () => {
