@@ -8,6 +8,43 @@ import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 
 type ListType = 'llm' | 'human' | 'both' | 'unassessed'
 
+type AddArticlesJobResponse = {
+  job?: {jobId?: string; status?: string}
+  providedTotal?: number
+  targetProjectId?: string
+}
+
+type AddArticlesJobStatusResponse = {
+  job?: {
+    jobId?: string
+    lastError?: string | null
+    processedCount?: number
+    status?: string
+    totalEstimate?: number | null
+  }
+  targetProjectId?: string | null
+}
+
+type LastAddArticlesJob = {jobId: string; sourceProjectId: string; targetProjectId?: string; total?: number}
+
+const terminalAddArticlesJobStatuses = new Set(['cancelled', 'completed', 'failed'])
+
+const getAddArticlesJobId = (data: AddArticlesJobResponse) => {
+  const jobId = data.job?.jobId
+
+  return typeof jobId === 'string' ? jobId : null
+}
+
+const shouldPollAddArticlesJob = (data?: AddArticlesJobStatusResponse) => {
+  const status = data?.job?.status
+
+  return status === undefined || !terminalAddArticlesJobStatuses.has(status)
+}
+
+const isTerminalAddArticlesJobStatus = (status: string | undefined) => {
+  return Boolean(status && terminalAddArticlesJobStatuses.has(status))
+}
+
 interface ReviewsPaginationControlsProps {
   page: number
   hasNextPage?: boolean
@@ -39,6 +76,7 @@ interface ReviewsPaginationControlsProps {
 export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps) => {
   const queryClient = useQueryClient()
   const [lastPdfJobId, setLastPdfJobId] = createSignal<string | null>(null)
+  const [lastAddArticlesJob, setLastAddArticlesJob] = createSignal<LastAddArticlesJob | null>(null)
 
   const handlePageChange = (newPage: number) => {
     props.setCurrentPage(newPage)
@@ -133,6 +171,74 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
     }
   })
 
+  const addArticlesJobStatusQuery = useQuery(() => {
+    const job = lastAddArticlesJob()
+
+    return {
+      enabled: job !== null,
+      queryFn: async () => {
+        const response = await apiClient.api.projects['add_articles_jobs'].get({
+          query: {jobId: job?.jobId ?? '', sourceProjectId: job?.sourceProjectId ?? ''},
+        })
+
+        return handleApiResponse(response, 'Failed to load add-to-project job status')
+      },
+      queryKey: ['projects', 'add-articles-job', job?.sourceProjectId, job?.jobId],
+      refetchInterval: (query: {state: {data?: AddArticlesJobStatusResponse}}) => {
+        return shouldPollAddArticlesJob(query.state.data) ? 2_000 : false
+      },
+      suspense: false,
+    }
+  })
+
+  const addArticlesToProjectMutation = createMutation(() => {
+    return {
+      mutationFn: async (
+        args: {mode: 'ids'; articleIds: string[]; targetProjectId: string} | {mode: 'filter'; targetProjectId: string},
+      ) => {
+        const sourceProjectId = props.sourceProjectId || ''
+        const listType = props.listType || 'llm'
+        const response =
+          args.mode === 'filter'
+            ? await apiClient.api.projects['add_articles_by_filter'].post({
+                targetProjectId: args.targetProjectId,
+                sourceProjectId,
+                listType,
+                ...(props.buildAddAllFilterBody ? props.buildAddAllFilterBody() : {}),
+              })
+            : await apiClient.api.projects['add_articles_by_ids'].post({
+                targetProjectId: args.targetProjectId,
+                sourceProjectId,
+                articleIds: args.articleIds,
+              })
+
+        return handleApiResponse(response, 'Failed to start add-to-project job') as AddArticlesJobResponse
+      },
+      onSuccess: (data, args) => {
+        const jobId = getAddArticlesJobId(data)
+        const sourceProjectId = props.sourceProjectId || ''
+
+        if (jobId && sourceProjectId) {
+          setLastAddArticlesJob({
+            jobId,
+            sourceProjectId,
+            targetProjectId: data.targetProjectId ?? args.targetProjectId,
+            total: data.providedTotal,
+          })
+        }
+      },
+    }
+  })
+
+  createEffect(() => {
+    const status = addArticlesJobStatusQuery.data?.job?.status
+
+    if (isTerminalAddArticlesJobStatus(status)) {
+      void queryClient.invalidateQueries({queryKey: ['projects-without-jobs']})
+      void queryClient.invalidateQueries({queryKey: ['project-curated-articles']})
+    }
+  })
+
   return (
     <>
       <div class="flex items-center justify-between gap-2 p-2 bg-white rounded-lg shadow">
@@ -215,14 +321,9 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                                             void (async () => {
                                               const allAcross = props.selectAllMatching && props.selectAllMatching()
                                               if (allAcross) {
-                                                const filter = props.buildAddAllFilterBody
-                                                  ? props.buildAddAllFilterBody()
-                                                  : {}
-                                                await apiClient.api.projects['add_articles_by_filter'].post({
+                                                addArticlesToProjectMutation.mutate({
+                                                  mode: 'filter',
                                                   targetProjectId: p.id,
-                                                  sourceProjectId: props.sourceProjectId || '',
-                                                  listType: (props.listType as ListType) || 'llm',
-                                                  ...filter,
                                                 })
                                               } else {
                                                 const sel = props.rowSelection ? props.rowSelection() : {}
@@ -234,9 +335,9 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                                                     return k
                                                   })
                                                 if (ids.length > 0) {
-                                                  await apiClient.api.projects['add_articles_by_ids'].post({
+                                                  addArticlesToProjectMutation.mutate({
+                                                    mode: 'ids',
                                                     targetProjectId: p.id,
-                                                    sourceProjectId: props.sourceProjectId || '',
                                                     articleIds: ids,
                                                   })
                                                 }
@@ -407,6 +508,45 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
       <Show when={startPdfFetchJobMutation.isSuccess && lastPdfJobId()}>
         <div class="mt-2 text-xs text-gray-700 p-2 bg-white rounded-lg shadow">
           PDF fetch job started: <span class="font-mono select-all">{lastPdfJobId()}</span>
+        </div>
+      </Show>
+
+      <Show when={lastAddArticlesJob()}>
+        {(job) => {
+          const status = () => {
+            return addArticlesJobStatusQuery.data?.job?.status ?? 'pending'
+          }
+          const processedCount = () => {
+            return addArticlesJobStatusQuery.data?.job?.processedCount
+          }
+          const totalEstimate = () => {
+            return addArticlesJobStatusQuery.data?.job?.totalEstimate ?? job().total
+          }
+          const progressText = () => {
+            const processed = processedCount()
+            const total = totalEstimate()
+
+            return typeof processed === 'number' && typeof total === 'number' ? ` (${processed}/${total})` : ''
+          }
+
+          return (
+            <div class="mt-2 text-xs text-gray-700 p-2 bg-white rounded-lg shadow">
+              Add-to-project job {status()}
+              {progressText()}: <span class="font-mono select-all">{job().jobId}</span>
+              <Show when={addArticlesJobStatusQuery.data?.job?.lastError}>
+                {(lastError) => {
+                  return <span class="text-red-700"> {lastError()}</span>
+                }}
+              </Show>
+            </div>
+          )
+        }}
+      </Show>
+
+      <Show when={addArticlesToProjectMutation.isError || addArticlesJobStatusQuery.isError}>
+        <div class="mt-2 text-xs text-red-700 p-2 bg-red-50 border border-red-200 rounded-lg shadow">
+          Failed to track add-to-project job:{' '}
+          {String(addArticlesToProjectMutation.error ?? addArticlesJobStatusQuery.error)}
         </div>
       </Show>
 
