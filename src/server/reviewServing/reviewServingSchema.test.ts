@@ -14,6 +14,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0102_reviewWriteOverlayReadSurface.sql',
   '../../db/duckdbMigrations/0103_reviewServingQueueIdentityPrimaryKey.sql',
   '../../db/duckdbMigrations/0105_reviewServingArticleMetadataStatus.sql',
+  '../../db/duckdbMigrations/0106_reviewServingRemoveHotSourceMetadata.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -37,6 +38,15 @@ const facetSummaryScopeForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0101_reviewServingFacetSummaryScope.sql']
 const articleMetadataStatusForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0105_reviewServingArticleMetadataStatus.sql']
+const hotServingTables = [
+  'mart.review_article_serving_v4',
+  'mart.review_article_display_patch_v4',
+  'mart.review_article_filter_posting_serving_v4',
+  'mart.review_article_count_serving_v4',
+  'mart.review_filter_facet_serving_v4',
+  'mart.review_filter_option_serving_v4',
+  'mart.review_unassessed_queue_serving_v4',
+] as const
 
 const reviewServingPhase1Tables = [
   'app.import_run_article_delta',
@@ -189,6 +199,15 @@ test('Phase 1 schema migration keeps raw payloads out of import hot fields', () 
   expect(hotFieldSql).toContain('publication_year')
   expect(hotFieldSql).not.toContain('payload_json')
   expect(hotFieldSql).not.toContain('source_metadata JSON')
+})
+
+test('Phase 1 schema migration keeps raw payloads out of hot serving tables', () => {
+  expect(
+    hotServingTables.flatMap((tableName) => {
+      return getTableSql(tableName).includes('source_metadata JSON') ? [tableName] : []
+    }),
+  ).toEqual([])
+  expect(getTableSql('mart.review_article_serving_payload_v4')).toContain('source_metadata JSON')
 })
 
 test('Phase 1 payload serving schema preserves prompt preview article ordering', () => {

@@ -146,7 +146,7 @@ test('display routine updates write component-narrow patches for only claimed ar
   expect(joined).toContain("full_text_fetched_at = '2026-01-03T00:00:00.000Z'")
   expect(joined).toContain("full_text_conversion_status = 'converted'")
   expect(joined).toContain("pmid = '12345'")
-  expect(joined).toContain('source_metadata = \'{"covidence":{"studyId":"study-1"}}\'')
+  expect(joined).not.toContain('source_metadata =')
   expect(joined).toContain("activity_sort_at = '2026-01-02T00:00:00.000Z'")
   expect(joined).toContain("snapshot_id = 'snapshot-1'")
   expect(joined).toContain("url = 'https://example.test/article-1'")

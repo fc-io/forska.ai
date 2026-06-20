@@ -69,6 +69,7 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
   })
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('LEFT JOIN mart.review_article_serving_payload_v4 payload')
   expect(sql).toContain(
     "WHERE mart.review_article_serving_v4.project_id = $projectId AND review_config_hash = $reviewConfigHash AND mart.review_article_serving_v4.snapshot_id = $snapshotId AND list_mode_key = 'llm'",
   )
@@ -314,7 +315,7 @@ test('buildReviewServingRowsSql does not pin detail article lookups to a list mo
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('AND article_id = $articleId')
   expect(sql).toContain(
-    "SELECT *, CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END AS list_mode_priority",
+    "SELECT mart.review_article_serving_v4.*, payload.source_metadata, CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END AS list_mode_priority",
   )
   expect(sql).toContain(
     "ORDER BY CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END ASC, article_id ASC",
