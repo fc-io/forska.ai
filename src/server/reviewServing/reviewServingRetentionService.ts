@@ -172,6 +172,12 @@ const getPatchBudgetIdentityPredicate = (
     : `\n      AND ${spec.identityColumn} = ${getSqlLiteral(state.projectionIdentity)}`
 }
 
+const getPatchCleanupOrderSql = (spec: PatchComponentSpec) => {
+  return spec.identityColumn === null
+    ? 'candidate.base_generation, candidate.patch_watermark'
+    : `candidate.${spec.identityColumn}, candidate.base_generation, candidate.patch_watermark`
+}
+
 const getSelectedImportPatchBudget = async (
   candidate: ReviewServingSnapshotManifest,
   database: ReviewServingRetentionServiceTransaction,
@@ -539,7 +545,7 @@ const deletePatchTableBatch = async (
           AND CAST(protected_manifest.component_state_json AS VARCHAR) LIKE '%' || ${getSqlLiteral(input.spec.component)} || '%'
           AND CAST(protected_manifest.component_state_json AS VARCHAR) LIKE '%' || CAST(candidate.base_generation AS VARCHAR) || '%'
       )
-      ORDER BY candidate.${input.spec.identityColumn}, candidate.base_generation, candidate.patch_watermark
+      ORDER BY ${getPatchCleanupOrderSql(input.spec)}
       LIMIT ${getSqlLiteral(input.batchSize)}
     )
   `)
