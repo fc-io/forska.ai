@@ -10,6 +10,8 @@ export const reviewServingRouteParityGates = [
   'responseSize',
 ] as const
 
+export type ReviewServingRouteParityGate = (typeof reviewServingRouteParityGates)[number]
+
 export const reviewServingJobParityGates = [
   'durableJobPersistence',
   'keysetBatching',
@@ -18,6 +20,8 @@ export const reviewServingJobParityGates = [
   'snapshotSemantics',
   'foregroundPayloadCap',
 ] as const
+
+export type ReviewServingJobParityGate = (typeof reviewServingJobParityGates)[number]
 
 export const reviewServingRouteParityCoverage = [
   {method: 'POST', productRoute: '/api/articlesreviews', requiredGates: reviewServingRouteParityGates},
