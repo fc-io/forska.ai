@@ -81,7 +81,7 @@ Prerequisite before evaluating this gate: the 2026-06-20 final Phase 4 audit in 
 - Phase 0 contracts, module boundaries, static guards, and benchmark harness are complete.
 - Phase 1 schema and DuckDB workload-admission foundations are complete.
 - Phase 2 write-side deltas, hot-field extraction, and read-your-write state are complete.
-- Phase 3 projectors, selected-import projection, serving projections, manifests, and cleanup are complete.
+- Phase 3 projectors, selected-import projection, serving projections, manifests, and cleanup are complete for the implemented cut line; release-scale proof for non-selected-import compaction and hot-route patch budgets remains part of final cutover evidence.
 - Phase 4 production route migration, jobs, search, route-specific parity, and DuckDB usage migration are complete.
 - Route-specific parity validation has passed for semantic fixtures, sampled safe-size parity, named counts, freshness states, cursor behavior, SQL shape, latency, and response-size budgets for every migrated route/flow.
 - Every mounted route inventory entry represents complete product-route coverage, not partial helper coverage.

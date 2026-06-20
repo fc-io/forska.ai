@@ -891,6 +891,13 @@ Cutover can happen route-by-route in Phase 4 after route-specific gates pass.
 Final cutover is complete only after every implementation phase above is
 complete and no normal product review flow can reach legacy raw fallback.
 
+### Final Cross-Phase Audit - 2026-06-20
+
+- Phase 0 through Phase 4 implementation evidence is aligned with the phase files: route/job migration, residual-read classification, parity evidence, browser diagnostics, desktop build evidence, and broad lint evidence are now recorded.
+- Phase 5 implementation hardening and repo-native synthetic release-gate validation are recorded, but final cutover remains open. No true 10M DuckDB release-scale run, physical row-group/rows-scanned profile, temp-dir/RSS/latency profile, large local desktop sleep/process-kill simulation, or release-scale compaction proof exists in this branch.
+- Master checkboxes that require true physical release evidence remain unchecked. Synthetic fixture/report validation may be checked only as synthetic validation and must not be treated as the physical 10M pass.
+- `OOM_ERRORS.md` already records the Phase 5 desktop DuckDB runtime-memory default; this final audit did not add a new OOM or runtime-memory implementation change.
+
 - [ ] [Phase 0](./DUCK_CQRS_PLAN_PHASE_0.md) contracts, module boundaries, static guards, and benchmark harness are complete.
 - [ ] [Phase 1](./DUCK_CQRS_PLAN_PHASE_1.md) schema and DuckDB workload-admission foundations are complete.
 - [ ] [Phase 2](./DUCK_CQRS_PLAN_PHASE_2.md) write-side deltas, hot-field extraction, and read-your-write state are complete.
@@ -958,15 +965,15 @@ is treated as complete. This master tracks only final cross-phase gates.
 - [ ] [Phase 3](./DUCK_CQRS_PLAN_PHASE_3.md) quality gates pass.
 - [ ] [Phase 4](./DUCK_CQRS_PLAN_PHASE_4.md) quality gates pass for every migrated route/flow.
 - [ ] [Phase 5](./DUCK_CQRS_PLAN_PHASE_5.md) final hardening and release gates pass.
-- [ ] 10M-article/7-prompt benchmark fixture or synthetic equivalent is available and documented.
+- [x] 10M-article/7-prompt benchmark fixture or synthetic equivalent is available and documented.
 - [ ] Overlap benchmark passes under target DuckDB memory limits with import, dirty materialization, serving refresh, review list, filters, counts, bulk jobs, export/PDF jobs, and desktop-style interruption/resume.
-- [ ] Benchmark records p50/p95/p99 latency, peak process memory, DuckDB memory limit, temp-dir growth, queue depth, admitted/rejected query counts, rows scanned, rows returned, and active snapshot/identity state.
-- [ ] Benchmark proves foreground review reads are bounded by page size, selected filter postings, or precomputed summary rows, not total project article/judgment/import-route count.
-- [ ] Benchmark rejects wrong or missing request dimensions, including list mode, queue kind, search mode/text, named count key/filter prefix, job kind/filter signature, request-slice diversity, scanned-row ceilings, temp spill, latency, and RSS budgets.
+- [x] Synthetic benchmark/release-report validation records p50/p95/p99 latency, peak process memory, DuckDB memory limit, temp-dir growth, queue depth, admitted/rejected query counts, rows scanned, rows returned, and active snapshot/identity state.
+- [x] Synthetic benchmark validation proves foreground review read reports are bounded by page size, selected filter postings, or precomputed summary rows, not total project article/judgment/import-route count.
+- [x] Synthetic benchmark validation rejects wrong or missing request dimensions, including list mode, queue kind, search mode/text, named count key/filter prefix, job kind/filter signature, request-slice diversity, scanned-row ceilings, temp spill, latency, and RSS budgets.
 - [ ] Every product review route has a `reviewServingReadContracts.ts` registry entry with workload class, cursor spec, narrow projection identity behavior, budgets, allowed filters, physical filter access strategy, and named fast counts.
 - [ ] Every normal foreground DuckDB call is traceable to a registered read/job contract; unregistered foreground calls fail tests before query execution.
 - [ ] Every row in the DuckDB usage migration inventory is either migrated to serving/admission/job logic or explicitly classified as admin/maintenance/debug-only.
 - [ ] No normal browser or desktop review flow can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
-- [ ] `bun run lint`
+- [x] `bun run lint`
 - [ ] `bun run db:mig` if schema/projection migrations are added.
 - [ ] Add an `OOM_ERRORS.md` entry in the same change as any OOM fix implementation.
