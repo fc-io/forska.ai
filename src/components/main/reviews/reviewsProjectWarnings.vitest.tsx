@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import type {JSX} from 'solid-js'
 import {render} from 'solid-js/web'
 import {afterEach, beforeEach, expect, test, vi} from 'vitest'
 
@@ -19,7 +20,7 @@ vi.mock('@tanstack/solid-query', () => {
 
 vi.mock('@tanstack/solid-router', () => {
   return {
-    Link: (props: {children: unknown; class?: string; params?: unknown; to: string}) => {
+    Link: (props: {children: JSX.Element; class?: string; params?: unknown; to: string}) => {
       return (
         <a class={props.class} href={props.to}>
           {props.children}
@@ -404,4 +405,42 @@ test('renders bounded cleanup while review index reads stay ready', async () => 
   } finally {
     dispose()
   }
+})
+
+test('renders browser review-flow freshness diagnostics for stale indexing and unavailable states', async () => {
+  const cases = [
+    {
+      expectedBody: 'Review indexing appears stalled because the review index is missing or stale',
+      expectedTitle: 'Review indexing stalled',
+      indexing: getWarningsData({
+        pendingProjectRefreshCount: 0,
+        pendingRefreshCount: 0,
+        progressState: 'stalled',
+        status: 'stale',
+      }),
+    },
+    {
+      expectedBody: 'Review lists may look partial or empty until indexing finishes.',
+      expectedTitle: 'Review indexing in progress for project project-1',
+      indexing: getWarningsData({activeConsumerCount: 1, activeWorkCount: 1, progressState: 'processing'}),
+    },
+    {
+      expectedBody: 'The latest review index refresh failed.',
+      expectedTitle: 'Review indexing failed',
+      indexing: getWarningsData({progressState: 'failed', status: 'failed'}),
+    },
+  ]
+
+  await cases.reduce(async (previous, testCase) => {
+    await previous
+
+    return renderWarnings(testCase.indexing).then(({container, dispose}) => {
+      try {
+        expect(container.textContent).toContain(testCase.expectedTitle)
+        expect(container.textContent).toContain(testCase.expectedBody)
+      } finally {
+        dispose()
+      }
+    })
+  }, Promise.resolve())
 })
