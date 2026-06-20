@@ -59,7 +59,7 @@ After final verification, normal product review paths must not reach raw fallbac
 ### Part 1 Final Deletion/Static Hardening Status - 2026-06-20
 
 - Status: completed for the Part 1 static deletion sweep. No normal mounted review-route raw fallback, selected-import CTE join, hidden `OFFSET`, or route-local cursor/filter-signature path was found beyond the existing guard coverage in `reviewServingReadContracts.test.ts` and route-service SQL-shape tests.
-- Raw/admin/debug classification hardening: judgment unassessed diagnostics and human-assessment overview routes were moved out of `supported-local-api` route-surface classification and into local diagnostics classification, matching their `reviewServingAdjacentRouteSurfaces.ts` out-of-scope admin/debug evidence.
+- Raw/admin/debug classification hardening: judgment unassessed and human-assessment overview admin UI routes remain `supported-local-api` in `routeSurfaceInventory.ts` for browser/desktop local product use, while `reviewServingAdjacentRouteSurfaces.ts` separately marks them out of normal review-row flow evidence.
 - Large-ID return paths: add-by-filter, PDF-by-filter/project, and export remain durable job admissions; add-by-ID and explicit PDF bulk remain article-ID-only job admissions with `reviewBulkOperationArticleIdCap` and payload caps. No foreground all-ID response path was found in the inspected normal select-all/add-to-project/PDF/export routes.
 - Export raw hydration: completed export download still hydrates bounded job-result article IDs in `exportBatchSize` chunks and is guarded as a sensitive local export route, not a foreground selection fallback. The export admission path queues durable jobs and does not return matching article IDs.
 - V4 writer/promotion paths: the active writer/promotion path remains the review-serving projector/writer stack; no competing mounted product-route V4 promotion path was found in this Part 1 sweep.
@@ -72,7 +72,7 @@ Part 1 checklist:
 - [x] Large-ID return paths confirmed replaced by durable job admission or explicit capped article-ID-only admission.
 - [x] Hidden `OFFSET` pagination confirmed guarded in hot mounted review routes.
 - [x] Competing V4 writer/promotion route paths not found; projector/writer stack remains the serving owner.
-- [x] Admin/debug adjacent raw-read surfaces route-classified as diagnostics and tested against product classification drift.
+- [x] Admin UI adjacent raw-read surfaces remain product-classified in route inventory and are tested against drift, while adjacent review-serving evidence excludes them from normal review-row flows.
 
 ## Cutover Gate
 
