@@ -89,19 +89,24 @@ test('US-013 adjacent serving classifications reference registered contracts onl
   expect(unknownContractKeys).toEqual([])
 })
 
-test('US-013 admin/debug adjacent surfaces are not product-classified in route inventory', () => {
+test('US-013 admin UI adjacent surfaces stay product-classified in route inventory', () => {
   const routeSurfaceByKey = new Map(
     routeSurfaceRoutes.map((route) => {
       return [getRouteSurfaceRouteKey(route), route]
     }),
   )
-  const productClassifiedAdminDebugRoutes = reviewServingAdjacentRouteClassifications.flatMap((entry) => {
+  const adminDebugRouteCategories = reviewServingAdjacentRouteClassifications.flatMap((entry) => {
     const routeSurface = routeSurfaceByKey.get(getReviewServingAdjacentRouteClassificationKey(entry))
 
-    return entry.classification === 'out-of-scope-admin-debug' && routeSurface?.category === 'supported-local-api'
-      ? [`${entry.method} ${entry.routePath}`]
+    return entry.classification === 'out-of-scope-admin-debug'
+      ? [`${entry.method} ${entry.routePath} ${routeSurface?.category ?? 'missing'}`]
       : []
   })
 
-  expect(productClassifiedAdminDebugRoutes).toEqual([])
+  expect(adminDebugRouteCategories).toEqual([
+    'GET /api/judgmentsjobs-unassessed-count supported-local-api',
+    'GET /api/judgmentsjobs-unassessed-articles supported-local-api',
+    'GET /api/humanassessment/overview supported-local-api',
+    'GET /api/humanassessment/overview-both-projects supported-local-api',
+  ])
 })

@@ -336,7 +336,7 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
   expect(result.metrics).toMatchObject({
     latency: {p50Ms: 10, p95Ms: 20, p99Ms: 20, sampleCount: 31},
     queueDepth: {average: 1.16, peak: 3},
-    rows: {rowsReturned: 169, rowsScanned: 366},
+    rows: {rowsReturned: 162, rowsScanned: 359},
     tempUsage: {peakBytes: 0, totalBytes: 0},
     work: {admitted: 31, rejected: 0, total: 31},
   })
@@ -484,6 +484,16 @@ test('review-serving benchmark runner can use an injected executor for later rea
   expect(result.samples).toHaveLength(1)
   expect(result.metrics.latency).toMatchObject({p50Ms: 9, p95Ms: 9, p99Ms: 9, sampleCount: 1})
   expect(result.metrics.work).toEqual({admitted: 1, rejected: 0, total: 1})
+})
+
+test('review-serving benchmark requires explicit release context for release-scale runs', async () => {
+  const failureMessage = await getBenchmarkRunFailureMessage({
+    fixture: reviewServingSynthetic10m7PromptOverlapFixture,
+    workload: reviewServingBenchmarkOverlapWorkloadDefinition,
+    workItems: [],
+  })
+
+  expect(failureMessage).toContain('Review-serving benchmark release context is required for release-scale runs')
 })
 
 test('review-serving benchmark rejects runs that do not satisfy operation request counts', async () => {
@@ -688,6 +698,19 @@ test('review-serving benchmark rejects synthetic runs without the canonical rele
     workload: {
       ...reviewServingBenchmarkOverlapWorkloadDefinition,
       operations: [{...reviewServingBenchmarkOverlapWorkloadDefinition.operations[0], requestCount: 1}],
+    },
+    releaseContext: {
+      activeSnapshotIdentity: {
+        countIdentity: 'count-v1',
+        manifestIdentity: 'manifest-v1',
+        projectId: 'project-1',
+        reviewConfigHash: 'review-config-1',
+        searchIdentity: 'search-v1',
+        snapshotId: 'snapshot-1',
+      },
+      benchmarkRunKind: 'releaseScaleDuckDb' as const,
+      duckdbMemoryLimit: '6400MiB',
+      tempDirGrowthBytes: 0,
     },
     workItems: input.workItems.slice(0, 1),
   }

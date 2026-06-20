@@ -314,9 +314,11 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     ['PATCH', '/api/judgmentsjobs/:id'],
     ['DELETE', '/api/judgmentsjobs/:id'],
   ]),
-  ...ownerlessDiagnostics('JudgmentsJobsRoutes.ts', 'Judgment job status, health, provider telemetry, and unassessed-work diagnostics.', [
+  ...ownerDependentProduct('JudgmentsJobsRoutes.ts', [
     ['GET', '/api/judgmentsjobs-unassessed-count'],
     ['GET', '/api/judgmentsjobs-unassessed-articles'],
+  ]),
+  ...ownerlessDiagnostics('JudgmentsJobsRoutes.ts', 'Judgment job status, health, and provider telemetry diagnostics.', [
     ['GET', '/api/judgmentsjobs/:id/health'],
     ['GET', '/api/judgmentsjobs-health'],
   ]),
@@ -389,7 +391,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
       ['POST', '/api/articles/:id/convert-pdf'],
     ],
   ),
-  ...ownerDependentDiagnostics('HumanAssessmentRoutes.ts', 'Human assessment aggregate admin reporting.', [
+  ...ownerDependentProduct('HumanAssessmentRoutes.ts', [
     ['GET', '/api/humanassessment/overview'],
     ['GET', '/api/humanassessment/overview-both-projects'],
   ]),
