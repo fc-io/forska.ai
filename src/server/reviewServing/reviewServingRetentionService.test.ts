@@ -128,6 +128,39 @@ test('candidate patch budget assessment uses component table and bounded thresho
   expect(statements.join('\n')).toContain('base_generation = 2')
 })
 
+test('status patch budget assessment uses component scope instead of prompt config identity', async () => {
+  const candidate = candidateManifest({
+    componentState: {
+      optional: [],
+      required: [
+        {
+          baseGeneration: '2',
+          component: 'llmStatus',
+          patchWatermark: '12',
+          projectionIdentity: 'llmStatus:identity-1',
+          requirement: 'required',
+        },
+      ],
+    },
+    requiredComponents: ['llmStatus'],
+  })
+  const {database, statements} = createRetentionDatabase({
+    budgetRows: {'mart.review_llm_status_patch_v4': {patchRows: 7, patchWatermarks: 3}},
+  })
+
+  await assessReviewServingCandidatePatchBudgets(
+    {budget: {maxPatchRows: 10, maxPatchWatermarks: 2}, candidate},
+    database,
+  )
+
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('FROM mart.review_llm_status_patch_v4')
+  expect(joined).toContain('base_generation = 2')
+  expect(joined).not.toContain('prompt_config_hash')
+  expect(joined).not.toContain('llmStatus:identity-1')
+})
+
 test('patch compaction writes a new major base generation before activation', async () => {
   const {database, statements} = createRetentionDatabase({
     budgetRows: {'mart.review_selected_import_patch_v4': {patchRows: 101, patchWatermarks: 2}},

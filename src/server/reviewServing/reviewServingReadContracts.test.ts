@@ -259,6 +259,7 @@ test('detail row contract does not pin article lookups to a list mode', () => {
 
   expect(detailRow?.listMode).toBeNull()
   expect(detailRow?.servingTable).toBe('mart.review_article_serving_v4')
+  expect(detailRow?.requiredComponents).toContain('payload')
   expect(detailRow?.sort.fields[0]).toContain('CASE list_mode_key')
   expect(detailJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
   expect(detailJudgments?.allowedFilters).toEqual(['articleId'])
