@@ -1140,11 +1140,7 @@ const upsertArticleImportRouteCurrentLinks = async (
   const recordsToUpdate = deduplicatedRecords.filter((record) => {
     const existingLink = existingLinks.get(getArticleImportRouteCurrentLinkKey(record))
 
-    return Boolean(
-      existingLink
-      && (existingLink.sourceRecordKey !== record.sourceRecordKey
-        || existingLink.sourceRecordHash !== record.sourceRecordHash),
-    )
+    return Boolean(existingLink && existingLink.sourceRecordKey !== record.sourceRecordKey)
   })
   const recordsToWrite = deduplicatedRecords.filter((record) => {
     const existingLink = existingLinks.get(getArticleImportRouteCurrentLinkKey(record))
@@ -1978,15 +1974,24 @@ const clearStaleImportRouteLinks = async (
         rawPayload: getJsonValue(row.rawPayload),
       }
     })
-  const deletedSourceRecords = deletedSourceRecordRows.map((row): DeletedArticleImportRouteLink => {
-    return {
-      ...row,
-      importMetadata: getJsonValue(row.importMetadata),
-      importRouteId,
-      matchMetadata: getJsonValue(row.matchMetadata),
-      rawPayload: getJsonValue(row.rawPayload),
-    }
-  })
+  const deletedCurrentLinkSourceRecordKeys = new Set(
+    deletedRecords.map((record) => {
+      return record.sourceRecordKey
+    }),
+  )
+  const deletedSourceRecords = deletedSourceRecordRows
+    .filter((row) => {
+      return !deletedCurrentLinkSourceRecordKeys.has(row.sourceRecordKey)
+    })
+    .map((row): DeletedArticleImportRouteLink => {
+      return {
+        ...row,
+        importMetadata: getJsonValue(row.importMetadata),
+        importRouteId,
+        matchMetadata: getJsonValue(row.matchMetadata),
+        rawPayload: getJsonValue(row.rawPayload),
+      }
+    })
 
   await tx.run(`
     DELETE FROM app.article_import_route_source_record

@@ -18,8 +18,8 @@ A Phase 2 write path may return success only after the source write and its loca
 
 | Status | Theme | Implement First | Done When |
 |---|---|---|---|
-| [ ] | Write-side deltas | Add `reviewServingDeltaLedger` append APIs, source high-water/idempotency helpers, and update import, article content/display, LLM judgment, human judgment, prompt/config, and project-scope writers to append compact deltas transactionally with change kinds from the invalidation registry. Pre-extract hot import fields into `app.review_import_article_hot_field`. Add durable outbox/reconciliation only for source writes that cannot append the delta in the same transaction. | Tests prove source writes and deltas/outbox rows commit atomically or reconcile before watermark advancement, common envelope fields are present, idempotency keys prevent duplicate deltas, source high-water marks are monotonic per partition, deletes/removals create tombstones, config changes produce only the narrow identities they affect, import writes do not persist affected-project fanout unless proven bounded, and no write path synchronously fans out selected-import state to every project. |
-| [ ] | Read-your-write state | Add optimistic/overlay state for reviewer actions that need immediate feedback before projection catches up. | Reviewer changes have a clear immediate response path, route-specific overlay semantics are documented, and reconciliation tests prove overlays disappear once included in a completed serving snapshot. |
+| [x] | Write-side deltas | Add `reviewServingDeltaLedger` append APIs, source high-water/idempotency helpers, and update import, article content/display, LLM judgment, human judgment, prompt/config, and project-scope writers to append compact deltas transactionally with change kinds from the invalidation registry. Pre-extract hot import fields into `app.review_import_article_hot_field`. Add durable outbox/reconciliation only for source writes that cannot append the delta in the same transaction. | 2026-06-20 audit: implemented with evidence in `src/server/reviewServing/reviewServingDeltaLedger.ts`, `src/server/reviewServing/reviewServingDeltaReconciliation.ts`, `src/server/reviewServing/reviewImportHotFieldService.ts`, write integrations listed in the audit section below, and passing focused tests. |
+| [x] | Read-your-write state | Add optimistic/overlay state for reviewer actions that need immediate feedback before projection catches up. | 2026-06-20 audit: implemented with `src/server/reviewServing/reviewWriteOverlayService.ts`, prompt submit integration in `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts`, and overlay scope/reconcile tests listed below. |
 
 ## Delta Envelope
 
@@ -97,27 +97,60 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - Overlay repository/service for reviewer actions
 - Static hook-inventory tests plus targeted tests for atomic writes, idempotency, tombstones, source ownership, hot fields, reconciliation, and overlay scope
 
+## 2026-06-20 Audit Status
+
+Status: Phase 2 is implemented after one scoped fix from this audit.
+
+Findings and fixes:
+
+- Fixed duplicate import rank-field deltas during sync cleanup/update. `src/server/services/articleImportStoreService.ts` now emits current-link `importRoute.article.rankFields.updated` deltas only for source-record key changes, because source-record hash refreshes already emit the compact source-record rank delta. It also avoids duplicate stale source-record tombstones when the current-link removal already covers the same source record.
+- Added direct LLM delta helper coverage in `src/server/reviewServing/llmJudgmentReviewServingDeltaService.test.ts`; previous evidence was only indirect through `src/server/cron/judgmentsJobs/judgmentsJobsMarkDirtyWork.test.ts`.
+- No Phase 2 blocker remains for later phases. The implementation keeps product routes on existing read contracts and does not populate serving projections, promote snapshots, or synchronously fan out selected-import state from import writes.
+
+Evidence:
+
+- Schema/envelope tables: `src/db/duckdbMigrations/0097_reviewServingV4Foundation.sql` creates `app.import_run_article_delta`, `app.review_change_delta`, `app.review_source_change_outbox`, `app.review_delta_reconciliation_cursor`, `app.review_import_article_hot_field`, and `app.review_write_overlay`; `src/db/duckdbMigrations/0102_reviewWriteOverlayReadSurface.sql` adds overlay read-surface scope.
+- Ledger/high-water/idempotency/outbox: `src/server/reviewServing/reviewServingDeltaLedger.ts`; tests in `src/server/reviewServing/reviewServingDeltaLedger.test.ts` and `src/server/reviewServing/reviewServingDeltaReconciliation.test.ts` cover common envelope fields, deterministic idempotency, duplicate no-op behavior, monotonic high-water allocation, tombstones, outbox conversion/quarantine, and watermark barriers.
+- Import deltas and hot fields: `src/server/services/articleImportStoreService.ts` wires `storeImportedArticlesInTx`, `storeImportedArticlesWithTx`, `syncImportedArticlesWithTx`, `upsertArticleImportRouteCurrentLinks`, `upsertArticleImportRouteSourceRecords`, and `clearStaleImportRouteLinks`; `src/server/reviewServing/reviewImportHotFieldService.ts` extracts compact typed hot fields. Evidence tests: `src/server/services/articleImportStoreService.test.ts`, `src/server/reviewServing/reviewImportHotFieldService.test.ts`, `src/server/reviewServing/reviewImportDeltaDirtyIntakeService.test.ts`, `src/server/reviewServing/reviewServingSelectedImportProjector.test.ts`, and `src/server/reviewServing/reviewServingSelectedImportPatchProjector.test.ts`.
+- Article content/display/search/judgment-input deltas: `src/server/reviewServing/articleReviewServingDeltaService.ts` and integrations in `articleImportStoreService.ts`, `articleCanonicalMatcher.ts`, `pdfFetchJobs.ts`, `fullTextConversionJobs.ts`, `ensureFullText.ts`, `ArticleAdminRoutes.ts`, and `ArticlesRoutes.ts`; evidence in `src/server/reviewServing/articleReviewServingDeltaService.test.ts` and `src/server/reviewServing/reviewServingHookInventory.test.ts`.
+- LLM judgment deltas: `src/server/reviewServing/llmJudgmentReviewServingDeltaService.ts` and integrations in `judgmentsJobsMarkDirtyWork.ts`, `judgeStoreJudgment.ts`, `PromptsRoutes.ts`, `ProjectsRoutes.ts`, and `projectTransferCommitWriter.ts`; evidence in `src/server/reviewServing/llmJudgmentReviewServingDeltaService.test.ts` and `src/server/cron/judgmentsJobs/judgmentsJobsMarkDirtyWork.test.ts`.
+- Human judgment deltas and overlays: `src/server/reviewServing/humanJudgmentReviewServingDeltaService.ts`, `src/server/reviewServing/reviewWriteOverlayService.ts`, and `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts`; evidence in `src/server/reviewServing/humanJudgmentReviewServingDeltaService.test.ts`, `src/server/reviewServing/reviewWriteOverlayService.test.ts`, and `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.test.ts`.
+- Prompt/review-config/project-scope deltas: `src/server/reviewServing/reviewConfigReviewServingDeltaService.ts`, `src/server/reviewServing/projectScopeReviewServingDeltaService.ts`, `ProjectsRoutes.ts`, `PromptsRoutes.ts`, `insertArticlesIntoProject.ts`, `SubprojectsRoutes.ts`, `covidenceImportService.ts`, and `projectTransferCommitWriter.ts`; evidence in `src/server/reviewServing/reviewConfigReviewServingDeltaService.test.ts`, `src/server/reviewServing/projectScopeReviewServingDeltaService.test.ts`, and `src/server/reviewServing/reviewServingHookInventory.test.ts`.
+- Invalidation registry coverage: `src/server/reviewServing/reviewServingInvalidationRegistry.ts` and `src/server/reviewServing/reviewServingInvalidationRegistry.test.ts` prove every emitted delta kind has first affected component, downstream dependents, affected keys, and update mode.
+- Overlay scope: `src/server/reviewServing/reviewWriteOverlayService.test.ts` proves row/detail eligibility, TTL/reconcile status, and that counts, facets, queues, search, bulk, PDF, and export are not silently overlay-aware.
+
+Verification run:
+
+- [x] `/Users/fredrik/.bun/bin/bun test src/server/reviewServing` - passed, 467 tests.
+- [x] `/Users/fredrik/.bun/bin/bun test src/server/services/articleImportStoreService.test.ts` - passed, 14 tests.
+- [x] `/Users/fredrik/.bun/bin/bun test src/server/cron/judgmentsJobs/judgmentsJobsMarkDirtyWork.test.ts` - passed, 3 tests.
+- [x] `/Users/fredrik/.bun/bin/bun test src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.test.ts` - passed, 3 tests.
+- [x] `/Users/fredrik/.bun/bin/bun test src/server/reviewServing/llmJudgmentReviewServingDeltaService.test.ts` - passed, 1 test.
+- [x] `git diff --check` - passed.
+- [x] `/Users/fredrik/.bun/bin/bun x eslint src/server/services/articleImportStoreService.ts src/server/reviewServing/llmJudgmentReviewServingDeltaService.test.ts` - passed.
+- [ ] `/Users/fredrik/.bun/bin/bun run lint` - failed on unrelated pre-existing lint errors in `src/server/reviewServing/reviewServingAdjacentRouteSurfaces.ts`, `src/server/reviewServing/reviewServingBenchmark.test.ts`, `src/server/reviewServing/reviewServingBenchmark.ts`, `src/server/routes/ArticlesRoutes.test.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.test.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts`, and `src/server/routes/routeSurfaceInventory.ts`; not fixed because they are outside Phase 2 audit changes.
+
 ## Quality Gates
 
-- [ ] `bun test src/server/reviewServing`
-- [ ] Targeted tests for import delta ledger writes with the common delta envelope, deterministic idempotency keys, tombstones, and no affected-project fanout
-- [ ] Targeted tests proving source high-water allocation is monotonic per `source_partition`, happens in the source-write transaction, and duplicate idempotency keys do not create a second effective mutation
-- [ ] Targeted tests proving idempotency keys are derived from stable source mutation identity and do not include random IDs, process-time timestamps, attempt IDs, or allocated high-water marks
-- [ ] Targeted tests for import hot-field extraction into `app.review_import_article_hot_field`, proving projectors do not need raw JSON for selected-import ranking, display, filters, postings, or contribution keys
-- [ ] Targeted tests for review change delta writes from article display/search/judgment-input changes, LLM judgments, human judgments, prompt/config changes, and project-scope changes
-- [ ] Static hook-inventory tests prove the listed central write hook points either call the review-serving ledger/outbox helper or are explicitly documented as out of Phase 2 scope
-- [ ] Targeted tests proving one source mutation that affects multiple identities emits every required delta in the same transaction, for example title changes that affect display, search, and judgment-input content
-- [ ] Targeted tests proving source writes and delta/outbox writes are atomic or reconciled before watermarks advance
-- [ ] Targeted tests proving outbox reconciliation converts, retries, or quarantines missing/malformed deltas and prevents dependent watermark advancement while unreconciled source high-water marks exist
-- [ ] Targeted tests proving LLM judgment deltas preserve persisted model ID and content flags without retrying, downgrading, or reinterpreting benchmark-critical settings
-- [ ] Targeted tests proving model execution identity, prompt order, and human review mode changes advance the correct prompt/review config identities without rebuilding unrelated article/import/title/search state
-- [ ] Targeted tests proving summary-mode human updates do not require `promptId` and still dirty human status, posting, and summary components
-- [ ] Targeted tests proving judgment-input changes dirty payload-backed detail/preview rows and dependent LLM/count/queue state where the changed content participates in judging
-- [ ] Targeted tests proving projection identity changes invalidate only dependent components, and review config changes do not rebuild config-independent article/import/title/payload/search state
-- [ ] Targeted tests proving display, search, judgment-input-content, project-scope, prompt config, and review config identities advance independently
-- [ ] Targeted tests proving one prompt config change does not rebuild unchanged prompt outputs, summaries, queues, or facets
-- [ ] Targeted tests proving every emitted delta kind has an invalidation registry entry with first affected component, downstream dependents, affected keys, and update mode
-- [ ] Targeted tests for delta semantics, tombstones, and replay after deletes/removals
-- [ ] Targeted tests for read-your-write overlay or optimistic reconciliation behavior, including TTL/reconcile status and route-scoped overlay eligibility
-- [ ] Targeted tests proving counts, facets, queues, and bulk jobs do not silently include overlay state unless declared by the route contract
-- [ ] `bun run lint`
+- [x] `bun test src/server/reviewServing`
+- [x] Targeted tests for import delta ledger writes with the common delta envelope, deterministic idempotency keys, tombstones, and no affected-project fanout
+- [x] Targeted tests proving source high-water allocation is monotonic per `source_partition`, happens in the source-write transaction, and duplicate idempotency keys do not create a second effective mutation
+- [x] Targeted tests proving idempotency keys are derived from stable source mutation identity and do not include random IDs, process-time timestamps, attempt IDs, or allocated high-water marks
+- [x] Targeted tests for import hot-field extraction into `app.review_import_article_hot_field`, proving projectors do not need raw JSON for selected-import ranking, display, filters, postings, or contribution keys
+- [x] Targeted tests for review change delta writes from article display/search/judgment-input changes, LLM judgments, human judgments, prompt/config changes, and project-scope changes
+- [x] Static hook-inventory tests prove the listed central write hook points either call the review-serving ledger/outbox helper or are explicitly documented as out of Phase 2 scope
+- [x] Targeted tests proving one source mutation that affects multiple identities emits every required delta in the same transaction, for example title changes that affect display, search, and judgment-input content
+- [x] Targeted tests proving source writes and delta/outbox writes are atomic or reconciled before watermarks advance
+- [x] Targeted tests proving outbox reconciliation converts, retries, or quarantines missing/malformed deltas and prevents dependent watermark advancement while unreconciled source high-water marks exist
+- [x] Targeted tests proving LLM judgment deltas preserve persisted model ID and content flags without retrying, downgrading, or reinterpreting benchmark-critical settings
+- [x] Targeted tests proving model execution identity, prompt order, and human review mode changes advance the correct prompt/review config identities without rebuilding unrelated article/import/title/search state
+- [x] Targeted tests proving summary-mode human updates do not require `promptId` and still dirty human status, posting, and summary components
+- [x] Targeted tests proving judgment-input changes dirty payload-backed detail/preview rows and dependent LLM/count/queue state where the changed content participates in judging
+- [x] Targeted tests proving projection identity changes invalidate only dependent components, and review config changes do not rebuild config-independent article/import/title/payload/search state
+- [x] Targeted tests proving display, search, judgment-input-content, project-scope, prompt config, and review config identities advance independently
+- [x] Targeted tests proving one prompt config change does not rebuild unchanged prompt outputs, summaries, queues, or facets
+- [x] Targeted tests proving every emitted delta kind has an invalidation registry entry with first affected component, downstream dependents, affected keys, and update mode
+- [x] Targeted tests for delta semantics, tombstones, and replay after deletes/removals
+- [x] Targeted tests for read-your-write overlay or optimistic reconciliation behavior, including TTL/reconcile status and route-scoped overlay eligibility
+- [x] Targeted tests proving counts, facets, queues, and bulk jobs do not silently include overlay state unless declared by the route contract
+- [ ] `bun run lint` - failed on unrelated pre-existing lint errors; changed-file ESLint passed.
