@@ -269,7 +269,7 @@ test('PDF project route preserves date-only upper bounds and request identity in
 
   expect(response.status).toBe(202)
   expect(jobRequest.criteria.to).toBe('2026-01-31')
-  expect(jobRequest.criteria.requestId).toEqual(expect.any(String))
+  expect(typeof jobRequest.criteria.requestId).toBe('string')
 })
 
 test('PDF filter route gives repeated filter jobs durable request identities', async () => {
@@ -328,5 +328,5 @@ test('PDF filter route gives repeated filter jobs durable request identities', a
   const jobRequest = jobRequests[0] as {criteria: {requestId?: string}}
 
   expect(response.status).toBe(202)
-  expect(jobRequest.criteria.requestId).toEqual(expect.any(String))
+  expect(typeof jobRequest.criteria.requestId).toBe('string')
 })

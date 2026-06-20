@@ -1887,7 +1887,11 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           requestCount: 1,
           targetRowsReturnedPerRequest: 1,
         },
-        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[22], minimumDistinctRequestSlices: 1, requestCount: 1},
+        {
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[22],
+          minimumDistinctRequestSlices: 1,
+          requestCount: 1,
+        },
         {
           ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[23],
           minimumDistinctRequestSlices: 1,
@@ -2564,10 +2568,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'bulkSubstringOverlapSelectionJob',
-        requestSlice: {
-          jobFilterSignature: 'phase5-overlap:bulk-substring:smoke',
-          searchText: 'overlap smoke',
-        },
+        requestSlice: {jobFilterSignature: 'phase5-overlap:bulk-substring:smoke', searchText: 'overlap smoke'},
         searchText: 'overlap smoke',
       },
       {

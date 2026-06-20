@@ -508,12 +508,7 @@ test('review-serving benchmark release report requires memory, temp, row, queue,
       duckdbMemoryLimit: 'not-set-synthetic-validation',
     }),
   ).toEqual([{field: 'duckdbMemoryLimit', reason: 'invalid'}])
-  expect(
-    getReviewServingBenchmarkReleaseReportViolations({
-      ...releaseReport,
-      duckdbMemoryLimit: '6400MiB',
-    }),
-  ).toEqual([])
+  expect(getReviewServingBenchmarkReleaseReportViolations({...releaseReport, duckdbMemoryLimit: '6400MiB'})).toEqual([])
 })
 
 test('review-serving benchmark cross-checks release identity against sampled work', () => {
@@ -539,10 +534,7 @@ test('review-serving benchmark cross-checks release identity against sampled wor
   }
   const staleWorkItem = {
     ...firstWorkItem,
-    activeSnapshotIdentity: {
-      ...releaseContext.activeSnapshotIdentity,
-      reviewConfigHash: 'review-config-2',
-    },
+    activeSnapshotIdentity: {...releaseContext.activeSnapshotIdentity, reviewConfigHash: 'review-config-2'},
     admissionRequest: {...firstWorkItem.admissionRequest, projectId: 'project-2', snapshotId: 'snapshot-2'},
   }
 

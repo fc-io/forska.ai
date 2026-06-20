@@ -152,7 +152,8 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     const scopedServingCandidate = servingCandidate
       ? await getNextHumanAssessmentArticleIdFromScope(body.projectId, servingCandidate)
       : null
-    const candidateArticleId = scopedServingCandidate ?? (await getNextHumanAssessmentArticleIdFromScope(body.projectId))
+    const candidateArticleId =
+      scopedServingCandidate ?? (await getNextHumanAssessmentArticleIdFromScope(body.projectId))
 
     if (!candidateArticleId) {
       set.status = 404

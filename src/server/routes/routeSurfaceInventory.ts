@@ -318,10 +318,14 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     ['GET', '/api/judgmentsjobs-unassessed-count'],
     ['GET', '/api/judgmentsjobs-unassessed-articles'],
   ]),
-  ...ownerlessDiagnostics('JudgmentsJobsRoutes.ts', 'Judgment job status, health, and provider telemetry diagnostics.', [
-    ['GET', '/api/judgmentsjobs/:id/health'],
-    ['GET', '/api/judgmentsjobs-health'],
-  ]),
+  ...ownerlessDiagnostics(
+    'JudgmentsJobsRoutes.ts',
+    'Judgment job status, health, and provider telemetry diagnostics.',
+    [
+      ['GET', '/api/judgmentsjobs/:id/health'],
+      ['GET', '/api/judgmentsjobs-health'],
+    ],
+  ),
   ...routeGroup(
     {
       category: 'sensitive-local-api',
