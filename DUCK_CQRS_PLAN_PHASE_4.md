@@ -47,6 +47,16 @@ Route-specific parity validation blocks that route migration on semantic mismatc
 - Browser/desktop evidence: `reviewsProjectWarnings.vitest.tsx`, `reviewServingLlmReviewRouteService.test.ts`, and `reviewServingRouteParityEvidence.test.ts` cover stale, indexing, unavailable, retired, candidate, failed, and missing review-flow diagnostics. The prior Phase 4 evidence records `bun run desktop:build` passing on 2026-06-20 for the shared app/desktop route surface.
 - Remaining Phase 4 gaps: none found in this audit. Not Phase 4 blockers: full `bun run lint` has known unrelated route-file failures, release-scale 10M/7-prompt benchmark evidence is Phase 5 scope, and final deletion/interruption hardening belongs to Phase 5.
 
+## Phase 4 Audit Pass - 2026-06-20
+
+- Verdict: no Phase 4 implementation changes were needed in this pass. The current branch evidence supports the Phase 4 route/job migration claims, with the release-scale 10M benchmark and final deletion/interruption hardening left explicitly for Phase 5.
+- Implemented evidence confirmed: `reviewServingReadContracts.test.ts` guards mounted route inventory and mounted route files against raw/OLAP fallback patterns, `selected_scoped_article_import`, route-side cursor/filter signature work, and `OFFSET`; `reviewServingRouteParityCoverage.test.ts`, `reviewServingRouteParityEvidence.test.ts`, and `reviewServingRouteParityRunner.test.ts` require runnable parity evidence for every mounted route/job coverage entry and block semantic, sampled, cursor, freshness, SQL-shape, latency, and response-size drift.
+- Route/service evidence confirmed: `reviewServingLlmReviewRouteService.test.ts`, `reviewServingHumanBothUnassessedRouteService.test.ts`, `reviewServingFilterRouteService.test.ts`, and `reviewServingReader.test.ts` cover serving-only row/count/filter/detail/list-judgment behavior, bounded article-set hydration, no raw fallback SQL, stale/indexing/unavailable diagnostics, and article-ID/payload caps.
+- Job/search/retention evidence confirmed: `reviewBulkOperationService.test.ts`, `reviewBulkOperationWorker.test.ts`, `ProjectsAddArticlesRoutes.test.ts`, `pdfFetchJobs.test.ts`, `reviewSearchService.test.ts`, `reviewServingSearchOwnership.test.ts`, `reviewServingAdmission.test.ts`, `reviewServingRetentionService.test.ts`, and `reviewServingSnapshotPinRepository.test.ts` cover durable bulk/PDF/export/add jobs, explicit-ID caps, durable PDF job lookup, keyset batching, async substring ownership, pre-DuckDB admission rejection, snapshot pins, and cleanup protection for pinned state.
+- Browser and legacy OLAP evidence confirmed: `reviewsProjectWarnings.vitest.tsx` covers review-flow freshness diagnostics in the shared UI, while `duckdbOlap.test.ts` remains passing for legacy OLAP behavior without counting OLAP as a mounted review-route fallback.
+- Documentation fix in this pass: corrected stale unchecked Phase 4 quality gates to `[x]` only where current tests or the commands run in this pass provide evidence. Kept `bun run lint` unchecked because broad lint was not run in this focused audit and prior notes record unrelated broad lint failures.
+- Verification run in this pass: `bun test src/server/reviewServing/reviewServingReadContracts.test.ts src/server/reviewServing/reviewServingRouteParityCoverage.test.ts src/server/reviewServing/reviewServingRouteParityRunner.test.ts src/server/reviewServing/reviewServingRouteParityEvidence.test.ts src/server/reviewServing/reviewServingResidualReadAllowlist.test.ts src/server/reviewServing/reviewServingSearchOwnership.test.ts src/server/reviewServing/reviewSearchService.test.ts src/server/reviewServing/reviewBulkOperationService.test.ts src/server/workers/reviewBulkOperationWorker.test.ts src/server/routes/ProjectsAddArticlesRoutes.test.ts src/server/services/pdfFetchJobs.test.ts src/server/reviewServing/reviewServingAdmission.test.ts src/server/reviewServing/reviewServingRetentionService.test.ts src/server/reviewServing/reviewServingLlmReviewRouteService.test.ts src/server/reviewServing/reviewServingHumanBothUnassessedRouteService.test.ts src/server/reviewServing/reviewServingFilterRouteService.test.ts` passed, 139 tests. `bun test src/services/olap/duckdbOlap.test.ts` passed, 71 tests. `bunx vitest run src/components/main/reviews/reviewsProjectWarnings.vitest.tsx` passed, 10 tests. `bun test src/server/reviewServing` passed, 467 tests.
+
 ### Implementation Cycle 1 - 2026-06-19
 
 - Re-read verdict: Phase 4 remained incomplete because legacy process-local PDF helpers still existed alongside durable PDF job routes.
@@ -256,26 +266,26 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 
 ## Quality Gates
 
-- [ ] `bun test src/server/reviewServing`
-- [ ] `bun test src/services/olap/duckdbOlap.test.ts`
-- [ ] Route tests prove each migrated LLM, human, both, unassessed, filter, count, badge, row, queue, bulk, PDF, and export route does not include raw fallback, `selected_scoped_article_import`, raw project-wide scans, large ID arrays, or large-offset pagination.
-- [ ] Route inventory tests prove `mounted: true` entries cover the full product response shape and do not mark partial helper contracts as migrated routes.
-- [ ] Route tests prove standalone count, filter-option, detail, warning, and prompt-preview routes preserve current semantics or return explicit unavailable/async state for unsupported pieces.
-- [ ] Route tests prove list routes preserve judgment arrays plus duplicate/conflict/date/prompt/search filter scope before they are mounted.
-- [ ] Route tests prove filtered list routes use posting/search selection plus article-set row and payload hydration, with no N+1 single-article lookup path.
-- [ ] Route tests prove list row responses preserve current article timestamps or explicitly hydrate them through a capped companion contract before route inventory entries are mounted.
-- [ ] Route tests prove PDF and export product routes preserve explicit-ID, list-type, article metadata, and prompt-output semantics before they are mounted.
-- [ ] Targeted tests for filter contracts prove every synchronous filter combination uses ordered-prefix, posting/projection, or bounded-candidate access with maintained selectivity stats.
-- [ ] Targeted tests prove posting contracts used by list routes are list-mode constrained.
-- [ ] Targeted tests for token/prefix search behavior and async/unavailable substring behavior prove substring search never runs as a synchronous full-table scan.
-- [ ] Targeted tests for projection-identity/snapshot/filter-scoped cursors and cursor-invalid behavior after identity/snapshot/component-state/filter mismatch.
-- [ ] Targeted tests for hard route result-size caps: max page size, max response bytes, max hydrated payload bytes, and max per-request ID count.
+- [x] `bun test src/server/reviewServing`
+- [x] `bun test src/services/olap/duckdbOlap.test.ts`
+- [x] Route tests prove each migrated LLM, human, both, unassessed, filter, count, badge, row, queue, bulk, PDF, and export route does not include raw fallback, `selected_scoped_article_import`, raw project-wide scans, large ID arrays, or large-offset pagination.
+- [x] Route inventory tests prove `mounted: true` entries cover the full product response shape and do not mark partial helper contracts as migrated routes.
+- [x] Route tests prove standalone count, filter-option, detail, warning, and prompt-preview routes preserve current semantics or return explicit unavailable/async state for unsupported pieces.
+- [x] Route tests prove list routes preserve judgment arrays plus duplicate/conflict/date/prompt/search filter scope before they are mounted.
+- [x] Route tests prove filtered list routes use posting/search selection plus article-set row and payload hydration, with no N+1 single-article lookup path.
+- [x] Route tests prove list row responses preserve current article timestamps or explicitly hydrate them through a capped companion contract before route inventory entries are mounted.
+- [x] Route tests prove PDF and export product routes preserve explicit-ID, list-type, article metadata, and prompt-output semantics before they are mounted.
+- [x] Targeted tests for filter contracts prove every synchronous filter combination uses ordered-prefix, posting/projection, or bounded-candidate access with maintained selectivity stats.
+- [x] Targeted tests prove posting contracts used by list routes are list-mode constrained.
+- [x] Targeted tests for token/prefix search behavior and async/unavailable substring behavior prove substring search never runs as a synchronous full-table scan.
+- [x] Targeted tests for projection-identity/snapshot/filter-scoped cursors and cursor-invalid behavior after identity/snapshot/component-state/filter mismatch.
+- [x] Targeted tests for hard route result-size caps: max page size, max response bytes, max hydrated payload bytes, and max per-request ID count.
 - [x] Targeted tests prove stale, indexing, or unavailable freshness states and failed, candidate, retired, or missing snapshot diagnostics do not trigger raw fallback.
 - [x] Targeted tests prove select-all, add-to-project by filter, PDF-by-filter/project, and export use durable jobs and keyset-batched execution without returning all matching article IDs; explicit-ID add-to-project and PDF bulk paths enforce article-ID-only caps.
-- [ ] Targeted tests prove durable job lookups, including `/api/articles/pdf-fetch-jobs/:jobId`, bind job kind, filter signature, search mode/text when relevant, and pinned or latest-snapshot semantics using job-table cursor fields instead of in-memory process-local state.
-- [ ] Targeted tests prove repeatable durable jobs pin serving snapshots and cleanup skips pinned base/patch/payload/count/search state.
-- [ ] Targeted tests prove foreground query admission rejects or serves stale for over-budget workload classes before DuckDB execution.
-- [ ] Targeted tests prove foreground admission rejects mismatched search modes before DuckDB execution.
+- [x] Targeted tests prove durable job lookups, including `/api/articles/pdf-fetch-jobs/:jobId`, bind job kind, filter signature, search mode/text when relevant, and pinned or latest-snapshot semantics using job-table cursor fields instead of in-memory process-local state.
+- [x] Targeted tests prove repeatable durable jobs pin serving snapshots and cleanup skips pinned base/patch/payload/count/search state.
+- [x] Targeted tests prove foreground query admission rejects or serves stale for over-budget workload classes before DuckDB execution.
+- [x] Targeted tests prove foreground admission rejects mismatched search modes before DuckDB execution.
 - [x] Targeted tests prove route-specific parity validation blocks route migration on semantic fixture, invariant, sampled parity, cursor, freshness-state, SQL-shape, latency, or response-size mismatches.
 - [x] Browser review-flow verification for stale, indexing, and unavailable freshness states plus failed, candidate, retired, and missing snapshot diagnostics.
 - [x] Desktop route-surface verification or targeted desktop build when shared runtime paths change.
