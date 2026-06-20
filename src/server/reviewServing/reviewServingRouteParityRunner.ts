@@ -7,6 +7,12 @@ import {
 import {getReviewServingSqlShapeViolations} from './reviewServingSql.ts'
 import {reviewServingSqlForbiddenPatterns} from './reviewServingSqlForbiddenPatterns.ts'
 
+const snapshotScopedTables = new Set([
+  'app.review_bulk_operation_job',
+  'app.review_search_job',
+  'app.review_serving_snapshot_manifest',
+])
+
 export type ReviewServingRouteParityMismatchKind =
   | 'cursor'
   | 'forbiddenForegroundDuckdbWork'
@@ -245,7 +251,10 @@ const getNamedCountStateMismatches = <T>(
 
 const getSqlMismatches = <T>(caseInput: ReviewServingRouteParityCase<T>, result: ReviewServingReaderResult<T>) => {
   const sql = result.sql ?? ''
-  const sqlShapeViolations = sql ? getReviewServingSqlShapeViolations(sql) : result.diagnostics.sqlShapeViolations
+  const requireSnapshotScope = result.contract ? !snapshotScopedTables.has(result.contract.servingTable) : true
+  const sqlShapeViolations = sql
+    ? getReviewServingSqlShapeViolations(sql, {requireSnapshotScope})
+    : result.diagnostics.sqlShapeViolations
   const forbiddenViolations = reviewServingSqlForbiddenPatterns.filter((forbiddenPattern) => {
     return forbiddenPattern.pattern.test(sql)
   })

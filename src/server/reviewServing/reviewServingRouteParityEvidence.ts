@@ -1,5 +1,6 @@
 import type {ReviewServingReadContract} from './reviewServingContracts.ts'
-import type {ReviewServingReaderRequest, ReviewServingReaderResult} from './reviewServingReader.ts'
+import {getReviewServingReadContract, reviewServingReadContractRouteInventory} from './reviewServingReadContracts.ts'
+import type {ReviewServingReaderRequest} from './reviewServingReader.ts'
 import {
   type ReviewServingJobParityGate,
   reviewServingJobParityGates,
@@ -8,14 +9,16 @@ import {
 } from './reviewServingRouteParityCoverage.ts'
 import type {ReviewServingRouteParityRunnerInput} from './reviewServingRouteParityRunner.ts'
 
-type SemanticRouteRow = {articleId: string; routeKey: string; semantic: string}
+export type ReviewServingParityEvidenceCase<TGate extends string> = {coveredGates: readonly TGate[]; evidence: string}
+
+type SemanticRouteRow = {articleId: string; semantic: string}
 
 type RouteEvidenceInput = ReviewServingRouteParityRunnerInput<SemanticRouteRow> & {
   evidenceGates: readonly ReviewServingRouteParityGate[]
 }
 
 type JobEvidenceInput = {
-  evidenceCases: readonly string[]
+  evidenceCases: readonly ReviewServingParityEvidenceCase<ReviewServingJobParityGate>[]
   evidenceGates: readonly ReviewServingJobParityGate[]
   productRoute: string
   method: 'GET' | 'POST'
@@ -30,124 +33,101 @@ export type ReviewServingFreshnessDiagnosticsEvidenceCase = {
   verificationTests: readonly string[]
 }
 
-const validServingSql =
-  'SELECT article_id FROM mart.review_article_serving_v4 WHERE project_id = $projectId AND snapshot_id = $snapshotId ORDER BY sort_key DESC LIMIT $limit'
-
 const getRouteKey = (method: 'GET' | 'POST', productRoute: string) => {
   return `${method} ${productRoute}`
 }
 
+const getNamedCountKey = (contract: ReviewServingReadContract) => {
+  return contract.servingTable === 'mart.review_article_count_serving_v4' ? (contract.namedFastCounts[0] ?? null) : null
+}
+
 const getRequest = (contractKey: ReviewServingReaderRequest['contractKey']): ReviewServingReaderRequest => {
-  return {contractKey, limit: 2, projectId: 'project-1', reviewConfigHash: 'config-1', snapshotId: 'snapshot-active'}
-}
+  const contract = getReviewServingReadContract(contractKey)
+  const namedCountKey = contract ? getNamedCountKey(contract) : null
+  const limit = contract ? Math.min(2, contract.maxPageSize) : 1
+  const searchInput =
+    contract?.searchMode === 'tokenPrefix'
+      ? {
+          searchMode: 'tokenPrefix' as const,
+          searchState: {availability: 'ready' as const, snapshotId: 'snapshot-active'},
+          searchTokenPrefix: 'heart',
+        }
+      : contract?.searchMode === 'substringAsync'
+        ? {searchMode: 'substringAsync' as const, searchText: 'heart failure'}
+        : {}
 
-const getRows = (routeKey: string) => {
-  return [{articleId: 'article-1', routeKey, semantic: 'current-behavior-sample'}]
-}
-
-const getAcceptedResult = (rows: readonly SemanticRouteRow[]): ReviewServingReaderResult<SemanticRouteRow> => {
   return {
-    contract: {} as ReviewServingReadContract,
-    diagnostics: {
-      admission: {
-        contractKey: 'review.llm.rows',
-        count: {
-          requestedFilterKey: 'project:project-1',
-          requestedKey: 'review.list.total',
-          state: {
-            availability: 'ready',
-            filterKey: 'project:project-1',
-            key: 'review.list.total',
-            snapshotId: 'snapshot-active',
-            value: rows.length,
-          },
-          supported: true,
-        },
-        decision: 'accepted',
-        freshness: {accepted: true, allowStale: false, behavior: 'requireReadySnapshot', snapshotFreshness: 'ready'},
-        job: {state: null},
-        rejectionReason: null,
-        routeBudget: {
-          estimatedResultBytes: {
-            accepted: true,
-            budgetKey: 'maxEstimatedResultBytes',
-            limit: 2_000_000,
-            rejectionReason: null,
-            requested: null,
-          },
-          pageSize: {accepted: true, budgetKey: 'maxPageSize', limit: 100, rejectionReason: null, requested: 2},
-          resultRows: {accepted: true, budgetKey: 'maxResultRows', limit: 100, rejectionReason: null, requested: null},
-          tempSpill: {
-            accepted: true,
-            budgetKey: 'allowsTempSpill',
-            limit: false,
-            rejectionReason: null,
-            requested: false,
-          },
-        },
-        search: {registeredMode: 'none', requestedMode: null, state: null, synchronousSubstringRejected: false},
-        servingIdentity: {accepted: true, projectId: 'project-1', snapshotId: 'snapshot-active'},
-        workloadClass: {matches: true, registered: 'foregroundReviewRows', requested: 'foregroundReviewRows'},
-      },
-      contractKey: 'review.llm.rows',
-      cursor: {reason: null, valid: true},
-      diagnostics: null,
-      filterSignature: 'filters:project-1',
-      manifest: {
-        freshness: 'ready',
-        lastError: null,
-        projectId: 'project-1',
-        snapshotId: 'snapshot-active',
-        status: 'active',
-      },
-      missingRequiredComponents: [],
-      rejectionReason: null,
-      sqlShapeViolations: [],
-    },
-    getCursorForRow: (row) => {
-      return typeof row.articleId === 'string' ? `cursor:${row.articleId}` : 'cursor:unknown'
-    },
-    rows: [...rows],
-    sql: validServingSql,
-    status: 'accepted',
+    articleId: 'article-1',
+    articleIds: ['article-1'],
+    contractKey,
+    countFilterKey: 'project:project-1',
+    countState: namedCountKey
+      ? {
+          availability: 'ready',
+          filterKey: 'project:project-1',
+          key: namedCountKey,
+          snapshotId: 'snapshot-active',
+          value: 1,
+        }
+      : null,
+    estimatedHydratedPayloadBytes: 1_000,
+    filterKind: 'importRoute',
+    filterOptionIdentity: 'filter-option-identity',
+    filterValue: 'pubmed',
+    jobFilterSignature: 'filters:project-1',
+    limit,
+    namedCountKey,
+    projectId: 'project-1',
+    queueKind: 'unassessed',
+    reviewConfigHash: 'config-1',
+    snapshotId: 'snapshot-active',
+    ...searchInput,
   }
 }
 
-const routeEvidence = (input: {
-  contractKey: ReviewServingReaderRequest['contractKey']
-  method: 'GET' | 'POST'
-  productRoute: string
-}): RouteEvidenceInput => {
+export const getReviewServingRouteParityEvidenceRows = (_routeKey: string, _contractKey: string) => {
+  return [{articleId: 'article-1', semantic: 'current-behavior-sample'}]
+}
+
+const getExpectedNamedCountState = (request: ReviewServingReaderRequest) => {
+  return request.countState?.availability === 'ready' || request.countState?.availability === 'stale'
+    ? {
+        availability: request.countState.availability,
+        filterKey: request.countState.filterKey,
+        key: request.countState.key,
+        snapshotId: request.countState.snapshotId,
+      }
+    : undefined
+}
+
+const routeEvidence = (input: {method: 'GET' | 'POST'; productRoute: string}): RouteEvidenceInput => {
   const routeKey = getRouteKey(input.method, input.productRoute)
-  const rows = getRows(routeKey)
+  const routeInventoryEntry = reviewServingReadContractRouteInventory.find((entry) => {
+    return entry.mounted && entry.method === input.method && entry.productRoute === input.productRoute
+  })
 
   return {
-    cases: [
-      {
+    cases: (routeInventoryEntry?.contractKeys ?? []).map((contractKey) => {
+      const request = getRequest(contractKey)
+      const rows = getReviewServingRouteParityEvidenceRows(routeKey, contractKey)
+
+      return {
         currentBehaviorRows: async () => {
           return rows
         },
         expectedCursorValid: true,
         expectedFreshness: 'ready',
-        expectedNamedCountState: {
-          availability: 'ready',
-          filterKey: 'project:project-1',
-          key: 'review.list.total',
-          snapshotId: 'snapshot-active',
-        },
+        expectedNamedCountState: getExpectedNamedCountState(request),
         expectedRows: rows,
         maxCurrentBehaviorBytes: 50_000,
-        maxCurrentBehaviorRows: 2,
+        maxCurrentBehaviorRows: request.limit,
         maxLatencyMs: 1_000,
         maxResultBytes: 50_000,
-        name: `${routeKey} semantic fixture and sampled current behavior`,
-        request: getRequest(input.contractKey),
-      },
-    ],
+        name: `${routeKey} ${contractKey} semantic fixture and sampled current behavior`,
+        request,
+      }
+    }),
     evidenceGates: reviewServingRouteParityGates,
-    reader: async () => {
-      return getAcceptedResult(rows)
-    },
     routeKey,
   }
 }
@@ -159,11 +139,23 @@ const jobEvidence = (input: {
 }): JobEvidenceInput => {
   return {
     evidenceCases: [
-      'durable job row is persisted with job kind and request identity',
-      'worker consumes selection with keyset batches instead of foreground all-id payloads',
-      'article-id-only paths enforce per-request caps',
-      'filter/search criteria persist filter signatures and snapshot semantics',
-      'foreground response returns job metadata instead of hydrated article payloads',
+      {
+        coveredGates: ['durableJobPersistence'],
+        evidence: 'durable job row is persisted with job kind and request identity',
+      },
+      {
+        coveredGates: ['keysetBatching'],
+        evidence: 'worker consumes selection with keyset batches instead of foreground all-id payloads',
+      },
+      {coveredGates: ['articleIdCaps'], evidence: 'article-id-only paths enforce per-request caps'},
+      {
+        coveredGates: ['filterSignature', 'snapshotSemantics'],
+        evidence: 'filter/search criteria persist filter signatures and snapshot semantics',
+      },
+      {
+        coveredGates: ['foregroundPayloadCap'],
+        evidence: 'foreground response returns job metadata instead of hydrated article payloads',
+      },
     ],
     evidenceGates: reviewServingJobParityGates,
     method: input.method,
@@ -173,29 +165,17 @@ const jobEvidence = (input: {
 }
 
 export const reviewServingRouteParityEvidence = [
-  routeEvidence({contractKey: 'review.llm.rows', method: 'POST', productRoute: '/api/articlesreviews'}),
-  routeEvidence({contractKey: 'review.llm.count', method: 'POST', productRoute: '/api/articlesreviewscount'}),
-  routeEvidence({contractKey: 'review.human.rows', method: 'POST', productRoute: '/api/articlesreviewshuman'}),
-  routeEvidence({contractKey: 'review.both.rows', method: 'POST', productRoute: '/api/articlesreviewsboth'}),
-  routeEvidence({
-    contractKey: 'review.unassessed.rows',
-    method: 'POST',
-    productRoute: '/api/articlesreviewsunassessed',
-  }),
-  routeEvidence({contractKey: 'review.filters.facets', method: 'GET', productRoute: '/api/articlesreviewsfilters'}),
-  routeEvidence({
-    contractKey: 'review.human.filters.facets',
-    method: 'GET',
-    productRoute: '/api/articlesreviewshumanfilters',
-  }),
-  routeEvidence({contractKey: 'review.detail.row', method: 'POST', productRoute: '/api/projectsreview'}),
-  routeEvidence({contractKey: 'review.warning.snapshot', method: 'POST', productRoute: '/api/projectsreviewswarnings'}),
-  routeEvidence({contractKey: 'review.health.snapshot', method: 'POST', productRoute: '/api/projectsreviewshealth'}),
-  routeEvidence({
-    contractKey: 'review.prompt.preview',
-    method: 'GET',
-    productRoute: '/api/projects/:id/prompts/:promptId/preview',
-  }),
+  routeEvidence({method: 'POST', productRoute: '/api/articlesreviews'}),
+  routeEvidence({method: 'POST', productRoute: '/api/articlesreviewscount'}),
+  routeEvidence({method: 'POST', productRoute: '/api/articlesreviewshuman'}),
+  routeEvidence({method: 'POST', productRoute: '/api/articlesreviewsboth'}),
+  routeEvidence({method: 'POST', productRoute: '/api/articlesreviewsunassessed'}),
+  routeEvidence({method: 'GET', productRoute: '/api/articlesreviewsfilters'}),
+  routeEvidence({method: 'GET', productRoute: '/api/articlesreviewshumanfilters'}),
+  routeEvidence({method: 'POST', productRoute: '/api/projectsreview'}),
+  routeEvidence({method: 'POST', productRoute: '/api/projectsreviewswarnings'}),
+  routeEvidence({method: 'POST', productRoute: '/api/projectsreviewshealth'}),
+  routeEvidence({method: 'GET', productRoute: '/api/projects/:id/prompts/:promptId/preview'}),
 ] as const satisfies readonly RouteEvidenceInput[]
 
 export const reviewServingJobParityEvidence = [
@@ -275,7 +255,7 @@ export const reviewServingBrowserFreshnessDiagnosticsEvidence = [
     expectedFreshness: 'unavailable',
     expectedSnapshotStatus: 'failed',
     productRoute: '/api/articlesreviews',
-    verificationTests: ['src/server/reviewServing/reviewServingRouteParityEvidence.test.ts'],
+    verificationTests: ['src/server/reviewServing/reviewServingLlmReviewRouteService.test.ts'],
   },
   {
     browserSurface: 'review-flow-route-diagnostics',
