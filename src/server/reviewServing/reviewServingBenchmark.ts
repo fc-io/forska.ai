@@ -17,9 +17,13 @@ export const reviewServingBenchmarkFixtureKinds = ['smoke', 'synthetic10m7Prompt
 export const reviewServingBenchmarkRequestSliceFields = [
   'cursor',
   'filter',
+  'jobFilterSignature',
   'listMode',
+  'projectId',
   'queueKind',
+  'searchText',
   'searchTokenPrefix',
+  'snapshotId',
 ] as const
 export const reviewServingBenchmarkRequiredReleaseScopes = [
   'import',
@@ -585,8 +589,10 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       jobKind: 'review.bulk.substringSelection',
       key: 'bulkSubstringOverlapSelectionJob',
       maxRowsScannedPerRequest: 10,
+      minimumDistinctRequestSlices: 70,
       pageSize: 1,
       requestCount: 70,
+      requestSliceFields: ['jobFilterSignature', 'searchText'],
       searchMode: 'substringAsync',
       searchTextPrefix: 'overlap ',
       scopes: ['asyncSubstringState', 'bulkJobs'],
@@ -624,8 +630,10 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       jobFilterSignaturePrefix: 'phase5-overlap:',
       key: 'substringOverlapSearchJob',
       maxRowsScannedPerRequest: 10,
+      minimumDistinctRequestSlices: 70,
       pageSize: 1,
       requestCount: 70,
+      requestSliceFields: ['jobFilterSignature', 'searchText'],
       searchMode: 'substringAsync',
       searchTextPrefix: 'overlap ',
       scopes: ['asyncSubstringState', 'bulkJobs'],
@@ -664,7 +672,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       minimumDistinctRequestSlices: 70,
       pageSize: 1,
       requestCount: 70,
-      requestSliceFields: ['filter'],
+      requestSliceFields: ['projectId', 'snapshotId'],
       scopes: ['desktopInterruptionResume', 'import', 'servingRefresh'],
       targetRowsReturnedPerRequest: 1,
       workloadClass: 'reviewMaintenance',
@@ -676,7 +684,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       minimumDistinctRequestSlices: 70,
       pageSize: 1,
       requestCount: 70,
-      requestSliceFields: ['filter'],
+      requestSliceFields: ['projectId', 'snapshotId'],
       scopes: ['desktopInterruptionResume', 'dirtyMaterialization', 'servingRefresh'],
       targetRowsReturnedPerRequest: 1,
       workloadClass: 'reviewMaintenance',
@@ -821,8 +829,24 @@ const getReviewServingBenchmarkActualRequestSliceValue = (
     return workItem.listMode ?? null
   }
 
+  if (field === 'jobFilterSignature') {
+    return workItem.jobFilterSignature ?? null
+  }
+
+  if (field === 'projectId') {
+    return workItem.admissionRequest.projectId ?? null
+  }
+
   if (field === 'queueKind') {
     return workItem.queueKind ?? null
+  }
+
+  if (field === 'searchText') {
+    return workItem.searchText ?? null
+  }
+
+  if (field === 'snapshotId') {
+    return workItem.admissionRequest.snapshotId ?? null
   }
 
   return workItem.admissionRequest.countFilterKey ?? workItem.filterSignature ?? null
@@ -1479,6 +1503,8 @@ export const getReviewServingBenchmarkMetrics = ({
 const getDefaultReviewServingBenchmarkReleaseContext = (
   fixture: ReviewServingBenchmarkFixture,
 ): ReviewServingBenchmarkReleaseContext => {
+  const duckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT?.trim() || 'not-set-synthetic-validation'
+
   return {
     activeSnapshotIdentity: {
       countIdentity: `${fixture.kind}:count:synthetic`,
@@ -1489,14 +1515,16 @@ const getDefaultReviewServingBenchmarkReleaseContext = (
       snapshotId: `${fixture.kind}:snapshot`,
     },
     benchmarkRunKind: 'syntheticValidation',
-    duckdbMemoryLimit: process.env.DUCKDB_MEMORY_LIMIT ?? 'not-set-synthetic-validation',
+    duckdbMemoryLimit,
     tempDirGrowthBytes: 0,
   }
 }
 
 const getReviewServingBenchmarkRunReleaseContext = (input: ReviewServingBenchmarkRunInput) => {
   if (input.releaseContext) {
-    return Effect.succeed(input.releaseContext)
+    return input.fixture.kind === 'smoke' || input.releaseContext.benchmarkRunKind === 'releaseScaleDuckDb'
+      ? Effect.succeed(input.releaseContext)
+      : Effect.fail(new Error('Review-serving benchmark release-scale runs require releaseScaleDuckDb context'))
   }
 
   return input.fixture.kind === 'smoke'
@@ -1747,10 +1775,18 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           targetRowsReturnedPerRequest: 1,
         },
         {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[22], requestCount: 1},
-        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[23], requestCount: 1},
+        {
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[23],
+          minimumDistinctRequestSlices: 1,
+          requestCount: 1,
+        },
         {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[24], requestCount: 1},
         {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[25], requestCount: 1},
-        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[26], requestCount: 1},
+        {
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[26],
+          minimumDistinctRequestSlices: 1,
+          requestCount: 1,
+        },
         {
           ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[27],
           minimumDistinctRequestSlices: 1,
@@ -2406,6 +2442,10 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'bulkSubstringOverlapSelectionJob',
+        requestSlice: {
+          jobFilterSignature: 'phase5-overlap:bulk-substring:smoke',
+          searchText: 'overlap smoke',
+        },
         searchText: 'overlap smoke',
       },
       {
@@ -2482,6 +2522,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'substringOverlapSearchJob',
+        requestSlice: {jobFilterSignature: 'phase5-overlap:substring:smoke', searchText: 'overlap smoke'},
         searchText: 'overlap smoke',
       },
       {
@@ -2545,6 +2586,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           pageSize: 1,
           projectId: 'smoke-project',
           snapshotFreshness: 'stale',
+          snapshotId: 'smoke-snapshot',
           workloadClass: 'reviewMaintenance',
         },
         filterSignature: 'desktop-resume:import-append',
@@ -2558,7 +2600,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'importAppendServingRefreshCheckpoint',
-        requestSlice: {filter: 'desktop-resume:import-append'},
+        requestSlice: {projectId: 'smoke-project', snapshotId: 'smoke-snapshot'},
       },
       {
         admissionRequest: {
@@ -2568,6 +2610,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           pageSize: 1,
           projectId: 'smoke-project',
           snapshotFreshness: 'stale',
+          snapshotId: 'smoke-snapshot',
           workloadClass: 'reviewMaintenance',
         },
         filterSignature: 'desktop-resume:dirty-materialization',
@@ -2581,7 +2624,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'dirtyMaterializationResumeCheckpoint',
-        requestSlice: {filter: 'desktop-resume:dirty-materialization'},
+        requestSlice: {projectId: 'smoke-project', snapshotId: 'smoke-snapshot'},
       },
     ],
   }

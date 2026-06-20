@@ -270,15 +270,53 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
     ].map((operationKey) => {
       const operation = getBenchmarkOperation(operationKey)
 
-      return {key: operation.key, targetRowsReturnedPerRequest: operation.targetRowsReturnedPerRequest}
+      return {
+        key: operation.key,
+        minimumDistinctRequestSlices: operation.minimumDistinctRequestSlices ?? 0,
+        requestSliceFields: operation.requestSliceFields ?? [],
+        targetRowsReturnedPerRequest: operation.targetRowsReturnedPerRequest,
+      }
     }),
   ).toEqual([
-    {key: 'bulkOverlapSelectionJob', targetRowsReturnedPerRequest: 1},
-    {key: 'bulkSubstringOverlapSelectionJob', targetRowsReturnedPerRequest: 1},
-    {key: 'exportOverlapSelectionJob', targetRowsReturnedPerRequest: 1},
-    {key: 'pdfOverlapSelectionJob', targetRowsReturnedPerRequest: 1},
-    {key: 'substringOverlapSearchJob', targetRowsReturnedPerRequest: 1},
+    {
+      key: 'bulkOverlapSelectionJob',
+      minimumDistinctRequestSlices: 0,
+      requestSliceFields: [],
+      targetRowsReturnedPerRequest: 1,
+    },
+    {
+      key: 'bulkSubstringOverlapSelectionJob',
+      minimumDistinctRequestSlices: 70,
+      requestSliceFields: ['jobFilterSignature', 'searchText'],
+      targetRowsReturnedPerRequest: 1,
+    },
+    {
+      key: 'exportOverlapSelectionJob',
+      minimumDistinctRequestSlices: 0,
+      requestSliceFields: [],
+      targetRowsReturnedPerRequest: 1,
+    },
+    {
+      key: 'pdfOverlapSelectionJob',
+      minimumDistinctRequestSlices: 0,
+      requestSliceFields: [],
+      targetRowsReturnedPerRequest: 1,
+    },
+    {
+      key: 'substringOverlapSearchJob',
+      minimumDistinctRequestSlices: 70,
+      requestSliceFields: ['jobFilterSignature', 'searchText'],
+      targetRowsReturnedPerRequest: 1,
+    },
   ])
+  expect(getBenchmarkOperation('importAppendServingRefreshCheckpoint')).toMatchObject({
+    minimumDistinctRequestSlices: 70,
+    requestSliceFields: ['projectId', 'snapshotId'],
+  })
+  expect(getBenchmarkOperation('dirtyMaterializationResumeCheckpoint')).toMatchObject({
+    minimumDistinctRequestSlices: 70,
+    requestSliceFields: ['projectId', 'snapshotId'],
+  })
   expect(
     reviewServingBenchmarkOverlapWorkloadDefinition.operations.some((operation) => {
       return operation.contractKey === 'review.bulk.selection' && operation.jobKind === 'review.bulk.selection'
@@ -494,6 +532,48 @@ test('review-serving benchmark requires explicit release context for release-sca
   })
 
   expect(failureMessage).toContain('Review-serving benchmark release context is required for release-scale runs')
+})
+
+test('review-serving benchmark requires release-scale context kind for release-scale runs', async () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const failureMessage = await getBenchmarkRunFailureMessage({
+    ...input,
+    fixture: reviewServingSynthetic10m7PromptOverlapFixture,
+    releaseContext: {
+      activeSnapshotIdentity: {
+        countIdentity: 'count-v1',
+        manifestIdentity: 'manifest-v1',
+        projectId: 'project-1',
+        reviewConfigHash: 'review-config-1',
+        searchIdentity: 'search-v1',
+        snapshotId: 'snapshot-1',
+      },
+      benchmarkRunKind: 'syntheticValidation',
+      duckdbMemoryLimit: '6400MiB',
+      tempDirGrowthBytes: 0,
+    },
+    workload: reviewServingBenchmarkOverlapWorkloadDefinition,
+    workItems: [],
+  })
+
+  expect(failureMessage).toContain('Review-serving benchmark release-scale runs require releaseScaleDuckDb context')
+})
+
+test('review-serving smoke benchmark trims blank memory limit env before defaulting', async () => {
+  const previousMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
+  process.env.DUCKDB_MEMORY_LIMIT = '   '
+  const result = await runReviewServingBenchmarkSmoke()
+
+  if (previousMemoryLimit === undefined) {
+    delete process.env.DUCKDB_MEMORY_LIMIT
+  }
+
+  if (previousMemoryLimit !== undefined) {
+    process.env.DUCKDB_MEMORY_LIMIT = previousMemoryLimit
+  }
+
+  expect(result.releaseReport.duckdbMemoryLimit).toBe('not-set-synthetic-validation')
+  expect(getReviewServingBenchmarkReleaseReportViolations(result.releaseReport)).toEqual([])
 })
 
 test('review-serving benchmark rejects runs that do not satisfy operation request counts', async () => {
