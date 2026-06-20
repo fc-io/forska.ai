@@ -281,8 +281,8 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
   ).toEqual([
     {
       key: 'bulkOverlapSelectionJob',
-      minimumDistinctRequestSlices: 0,
-      requestSliceFields: [],
+      minimumDistinctRequestSlices: 70,
+      requestSliceFields: ['jobFilterSignature'],
       targetRowsReturnedPerRequest: 1,
     },
     {
@@ -312,11 +312,11 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
   ])
   expect(getBenchmarkOperation('importAppendServingRefreshCheckpoint')).toMatchObject({
     minimumDistinctRequestSlices: 70,
-    requestSliceFields: ['projectId', 'snapshotId'],
+    requestSliceFields: ['projectId', 'snapshotId', 'filter'],
   })
   expect(getBenchmarkOperation('dirtyMaterializationResumeCheckpoint')).toMatchObject({
     minimumDistinctRequestSlices: 70,
-    requestSliceFields: ['projectId', 'snapshotId'],
+    requestSliceFields: ['projectId', 'snapshotId', 'filter'],
   })
   expect(
     reviewServingBenchmarkOverlapWorkloadDefinition.operations.some((operation) => {
@@ -803,6 +803,12 @@ test('review-serving benchmark rejects durable job operations with the wrong cri
       actual: 'other:bulk:smoke',
       expected: 'phase5-overlap:*',
       field: 'jobFilterSignaturePrefix',
+      key: 'smoke-bulk-selection-job',
+    },
+    {
+      actual: 'jobFilterSignature:phase5-overlap:bulk:smoke',
+      expected: 'jobFilterSignature:other:bulk:smoke',
+      field: 'requestSlice',
       key: 'smoke-bulk-selection-job',
     },
   ])

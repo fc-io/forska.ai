@@ -584,8 +584,10 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       jobKind: 'review.bulk.selection',
       key: 'bulkOverlapSelectionJob',
       maxRowsScannedPerRequest: 10,
+      minimumDistinctRequestSlices: 70,
       pageSize: 1,
       requestCount: 70,
+      requestSliceFields: ['jobFilterSignature'],
       searchMode: 'tokenPrefix',
       scopes: ['bulkJobs', 'tokenPrefixSearch'],
       targetRowsReturnedPerRequest: 1,
@@ -684,7 +686,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       minimumDistinctRequestSlices: 70,
       pageSize: 1,
       requestCount: 70,
-      requestSliceFields: ['projectId', 'snapshotId'],
+      requestSliceFields: ['projectId', 'snapshotId', 'filter'],
       scopes: ['desktopInterruptionResume', 'import', 'servingRefresh'],
       targetRowsReturnedPerRequest: 1,
       workloadClass: 'reviewMaintenance',
@@ -696,7 +698,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       minimumDistinctRequestSlices: 70,
       pageSize: 1,
       requestCount: 70,
-      requestSliceFields: ['projectId', 'snapshotId'],
+      requestSliceFields: ['projectId', 'snapshotId', 'filter'],
       scopes: ['desktopInterruptionResume', 'dirtyMaterialization', 'servingRefresh'],
       targetRowsReturnedPerRequest: 1,
       workloadClass: 'reviewMaintenance',
@@ -1885,7 +1887,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           requestCount: 1,
           targetRowsReturnedPerRequest: 1,
         },
-        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[22], requestCount: 1},
+        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[22], minimumDistinctRequestSlices: 1, requestCount: 1},
         {
           ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[23],
           minimumDistinctRequestSlices: 1,
@@ -2537,6 +2539,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'bulkOverlapSelectionJob',
+        requestSlice: {jobFilterSignature: 'phase5-overlap:bulk:smoke'},
       },
       {
         admissionRequest: {
@@ -2721,7 +2724,11 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'importAppendServingRefreshCheckpoint',
-        requestSlice: {projectId: 'smoke-project', snapshotId: 'smoke-snapshot'},
+        requestSlice: {
+          filter: 'desktop-resume:import-append',
+          projectId: 'smoke-project',
+          snapshotId: 'smoke-snapshot',
+        },
       },
       {
         admissionRequest: {
@@ -2745,7 +2752,11 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'dirtyMaterializationResumeCheckpoint',
-        requestSlice: {projectId: 'smoke-project', snapshotId: 'smoke-snapshot'},
+        requestSlice: {
+          filter: 'desktop-resume:dirty-materialization',
+          projectId: 'smoke-project',
+          snapshotId: 'smoke-snapshot',
+        },
       },
     ],
   }
