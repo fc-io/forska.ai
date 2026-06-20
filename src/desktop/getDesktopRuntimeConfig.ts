@@ -213,6 +213,7 @@ export const getDesktopRuntimeConfig = ({
     ...envValues,
     API_SERVER_PORT: apiServerPort,
     DUCKDB_PATH: pathModule.join(dataRoot, 'forska.duckdb'),
+    DUCKDB_MEMORY_LIMIT: getTrimmedValue(envValues.DUCKDB_MEMORY_LIMIT) ?? '6400MiB',
     FORSKA_DESKTOP_MODE: 'true',
     FORSKA_RUNTIME_PROFILE: 'local',
     FORSKA_RUNTIME_SERVICE: 'dev-single-server',
