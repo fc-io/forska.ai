@@ -58,7 +58,8 @@ export const reviewServingAdjacentRouteClassifications = [
     classification: 'out-of-scope-admin-debug',
     contractKeys: [],
     excludedFromNormalReviewFlow: true,
-    guard: 'owner-dependent local product API for browser and desktop admin job pages; not linked from normal review row flows',
+    guard:
+      'owner-dependent local product API for browser and desktop admin job pages; not linked from normal review row flows',
     method: 'GET',
     reason:
       'Judgment-job unassessed count is an operational queue diagnostic for a job, not a production review route.',
@@ -69,7 +70,8 @@ export const reviewServingAdjacentRouteClassifications = [
     classification: 'out-of-scope-admin-debug',
     contractKeys: [],
     excludedFromNormalReviewFlow: true,
-    guard: 'owner-dependent local product API for browser and desktop admin job pages; bounded preview route outside normal review row flows',
+    guard:
+      'owner-dependent local product API for browser and desktop admin job pages; bounded preview route outside normal review row flows',
     method: 'GET',
     reason:
       'Judgment-job unassessed article preview is an operational diagnostic for a job, not a production review route.',

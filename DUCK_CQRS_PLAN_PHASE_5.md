@@ -185,6 +185,16 @@ Part 3 checklist:
 - Final closure verdict: Phase 5 implementation and repo-native validation gates are ready for coordinator review, but Phase 5 final cutover/closure remains incomplete until a true 10M DuckDB release-scale run is executed under the target memory limit and records physical scan, temp-dir, RSS, latency, queue, admission, and active identity evidence.
 - Remaining open gates before final cutover: run the true 10M/7-prompt DuckDB overlap benchmark with import, dirty materialization, serving refresh, review list, filters, counts, bulk/export/PDF jobs, and desktop-style interruption/resume; prove routine deltas stay bounded and compaction triggers before patch reads exceed hot-route budgets; collect physical row-group/rows-scanned, temp-spill, RSS, and latency evidence under the configured DuckDB memory limit; run broad release checks such as `bun run lint` if the coordinator wants final whole-branch hygiene beyond this targeted closure audit.
 
+## Supervisor Audit Pass - 2026-06-20
+
+- Scope audited: Phase 5 only, including this plan, `OOM_ERRORS.md`, `reviewServingBenchmark.ts`, `reviewServingBenchmark.test.ts`, `reviewServingBenchmark.md`, desktop runtime/interruption evidence, route/static guard tests, route parity evidence, admission/reader search-mode tests, and OLAP regression coverage.
+- Evidence confirmed: Part 1 deletion/static hardening remains backed by `reviewServingReadContracts.test.ts`, `reviewServingSql.test.ts`, and adjacent-route classification tests; Part 2 desktop/interruption hardening remains backed by desktop runtime tests, source-marker evidence, and desktop build; Part 3 benchmark/release-gate validation remains synthetic only and explicitly does not claim a true 10M DuckDB run.
+- Checkbox updates from this audit: route semantics for count, filter-option, detail, warning, and prompt-preview migrated routes are now marked evidence-backed by route parity coverage/evidence tests; search-mode admission is now marked evidence-backed by `reviewServingAdmission.test.ts` and `reviewServingReader.test.ts` rejecting mismatched or synchronous substring search before DuckDB execution.
+- OOM/runtime-memory status: no new OOM or runtime-memory implementation was added in this pass, so `OOM_ERRORS.md` was not changed. The existing desktop `DUCKDB_MEMORY_LIMIT=6400MiB` entry remains the relevant Phase 5 runtime-memory entry.
+- Verification run in this pass: `bun test src/server/reviewServing/reviewServingAdjacentRouteSurfaces.test.ts src/server/reviewServing/reviewServingReadContracts.test.ts src/server/reviewServing/reviewServingSql.test.ts src/server/reviewServing/reviewServingRouteParityCoverage.test.ts src/server/reviewServing/reviewServingRouteParityEvidence.test.ts src/server/reviewServing/reviewServingAdmission.test.ts src/server/reviewServing/reviewServingReader.test.ts`, `bun test src/desktop/getDesktopRuntimeConfig.test.ts src/server/reviewServing/reviewServingDesktopInterruptionEvidence.test.ts`, `bun run bench:review-serving-release-gate`, `bun test src/services/olap/duckdbOlap.test.ts`, `bun test src/server/reviewServing`, `bun test src/server/routes/ArticlesRoutes.test.ts src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.test.ts`, `bun run desktop:build`, `bun run lint`, and `git diff --check`.
+- Fixes in this pass: corrected Phase 5 lint-release-gate drift in review-serving benchmark/adjacent-route files and route-adjacent tests with formatting-only changes plus safer string assertions for durable PDF request IDs.
+- Remaining open gates before final cutover: the true 10M/7-prompt DuckDB release-scale benchmark with physical scan/temp/RSS/latency evidence, physical large desktop sleep/process-kill interruption evidence, proof that routine deltas and compaction stay within hot-route budgets at release scale, and `bun run db:mig` only if schema/projection migrations are added. Final cutover remains incomplete.
+
 ## Quality Gates
 
 - [x] 10M-article/7-prompt benchmark fixture or synthetic equivalent is available and documented.
@@ -199,12 +209,12 @@ Part 3 checklist:
 - [x] Static SQL-shape tests fail if forbidden raw paths return.
 - [x] Route tests fail if normal product flows can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
 - [x] Route inventory tests fail if `mounted: true` entries claim partial count, filter-option, detail, warning, or helper coverage as migrated product routes.
-- [ ] Route tests prove count, filter-option, detail, warning, and prompt-preview migrated routes preserve full current semantics or expose explicit unavailable/async state.
-- [ ] Admission tests prove mismatched search modes are rejected before DuckDB execution.
+- [x] Route tests prove count, filter-option, detail, warning, and prompt-preview migrated routes preserve full current semantics or expose explicit unavailable/async state.
+- [x] Admission tests prove mismatched search modes are rejected before DuckDB execution.
 - [x] Desktop build or targeted desktop verification passes for shared runtime paths.
 - [x] Interrupted projector, bulk, search, and cleanup work resumes safely in deterministic source/evidence coverage; true large local desktop interruption simulation remains release-scale evidence.
-- [ ] `bun test src/server/reviewServing`
-- [ ] `bun test src/services/olap/duckdbOlap.test.ts`
+- [x] `bun test src/server/reviewServing`
+- [x] `bun test src/services/olap/duckdbOlap.test.ts`
 - [ ] `bun run db:mig` if schema/projection migrations are added
-- [ ] `bun run lint`
+- [x] `bun run lint`
 - [x] Add an `OOM_ERRORS.md` entry in the same change as any OOM fix implementation.

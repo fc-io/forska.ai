@@ -343,11 +343,7 @@ test('human assessment init checks dated scope without sending date filters to s
 
   expect(set.status).toBe(200)
   expect(response.data?.article.id).toBe('article-1')
-  expect(readerRequests).toEqual([
-    expect.objectContaining({
-      filters: {queueKind: 'human-unreviewed'},
-    }),
-  ])
+  expect(readerRequests).toEqual([expect.objectContaining({filters: {queueKind: 'human-unreviewed'}})])
   expect(statements.join('\n')).toContain("AND scope_article.article_id = 'article-1'")
   expect(statements.join('\n')).toContain('scope_article.article_created_at >= project.date_from')
   expect(statements.join('\n')).toContain('scope_article.article_created_at <= project.date_to')
