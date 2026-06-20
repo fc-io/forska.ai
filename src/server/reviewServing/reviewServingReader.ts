@@ -385,19 +385,23 @@ const isDateOnlyFilter = (value: string) => {
   return /^\d{4}-\d{2}-\d{2}$/.test(value)
 }
 
-const getColumnFilterPredicates = (request: ReviewServingReaderRequest) => {
-  const filters = request.filters ?? {}
+const getColumnFilterPredicates = (input: {
+  contract: ReviewServingReadContract
+  request: ReviewServingReaderRequest
+}) => {
+  const articleCreatedAtColumn = `${input.contract.servingTable}.article_created_at`
+  const filters = input.request.filters ?? {}
   const llmStatus =
     filters.llmStatus === 'complete' ? 'answered' : filters.llmStatus === 'partial' ? 'unanswered' : null
   const articleCreatedAtFrom = getFilterString(filters.articleCreatedAtFrom)
   const articleCreatedAtTo = getFilterString(filters.articleCreatedAtTo)
 
   return [
-    articleCreatedAtFrom ? 'article_created_at >= TIMESTAMPTZ $articleCreatedAtFrom' : '',
+    articleCreatedAtFrom ? `${articleCreatedAtColumn} >= TIMESTAMPTZ $articleCreatedAtFrom` : '',
     articleCreatedAtTo
       ? isDateOnlyFilter(articleCreatedAtTo)
-        ? 'article_created_at < TIMESTAMPTZ $articleCreatedAtTo'
-        : 'article_created_at <= TIMESTAMPTZ $articleCreatedAtTo'
+        ? `${articleCreatedAtColumn} < TIMESTAMPTZ $articleCreatedAtTo`
+        : `${articleCreatedAtColumn} <= TIMESTAMPTZ $articleCreatedAtTo`
       : '',
     filters.duplicateFlag ? `duplicate_flag = TRUE` : '',
     filters.conflictFlag ? `conflict_flag = TRUE` : '',
@@ -490,7 +494,7 @@ const getOrderedPrefixFilterPredicatesSql = (input: {
   }
 
   const predicates = [
-    ...getColumnFilterPredicates(input.request),
+    ...getColumnFilterPredicates({contract: input.contract, request: input.request}),
     ...getPostingFilterPredicates({contract: input.contract, request: input.request}),
     getSearchFilterPredicate(input),
   ].filter((predicate) => {
@@ -511,12 +515,13 @@ const getQueueOrderingFilterPredicatesSql = (input: {
   const filters = input.request.filters ?? {}
   const articleCreatedAtFrom = getFilterString(filters.articleCreatedAtFrom)
   const articleCreatedAtTo = getFilterString(filters.articleCreatedAtTo)
+  const articleCreatedAtColumn = `${input.contract.servingTable}.article_created_at`
   const predicates = [
-    articleCreatedAtFrom ? 'article_created_at >= TIMESTAMPTZ $articleCreatedAtFrom' : '',
+    articleCreatedAtFrom ? `${articleCreatedAtColumn} >= TIMESTAMPTZ $articleCreatedAtFrom` : '',
     articleCreatedAtTo
       ? isDateOnlyFilter(articleCreatedAtTo)
-        ? 'article_created_at < TIMESTAMPTZ $articleCreatedAtTo'
-        : 'article_created_at <= TIMESTAMPTZ $articleCreatedAtTo'
+        ? `${articleCreatedAtColumn} < TIMESTAMPTZ $articleCreatedAtTo`
+        : `${articleCreatedAtColumn} <= TIMESTAMPTZ $articleCreatedAtTo`
       : '',
   ].filter((predicate) => {
     return predicate.length > 0
