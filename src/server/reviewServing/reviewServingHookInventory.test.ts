@@ -25,6 +25,7 @@ const integrationMarkers = [
   'appendProjectScopeArticleReviewServingDeltas',
   'appendPromptConfigReviewServingDelta',
   'appendPromptConfigReviewServingDeltas',
+  'createReviewBulkOperationJob',
   'insertArticlesIntoProject',
   'judgeStoreJudgment',
   'storeImportedArticleChunkInTx',
@@ -245,7 +246,7 @@ const hookInventory: HookInventoryEntry[] = [
   {
     filePath: 'src/server/routes/ProjectsAddArticlesRoutes.ts',
     label: 'project add-articles route fan-in',
-    markers: ['insertArticlesIntoProject'],
+    markers: ['createReviewBulkOperationJob'],
   },
   {
     filePath: 'src/server/routes/SubprojectsRoutes.ts',

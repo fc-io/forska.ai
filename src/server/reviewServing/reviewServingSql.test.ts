@@ -20,6 +20,7 @@ const sqlGuardExcludedFiles = new Set([
   join(reviewServingSourceRoot, 'reviewServingRetentionService.ts'),
   join(reviewServingSourceRoot, 'reviewServingReviewConfig.ts'),
   join(reviewServingSourceRoot, 'reviewServingDiagnosticsRepository.ts'),
+  join(reviewServingSourceRoot, 'reviewServingResidualReadAllowlist.ts'),
 ])
 
 const getRequiredReviewServingReadContract = (contractKey: string) => {
