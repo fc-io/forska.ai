@@ -123,11 +123,7 @@ export type ReviewServingReaderResult<T> =
       status: 'rejected'
     }
 
-const snapshotScopedTables = new Set([
-  'app.review_bulk_operation_job',
-  'app.review_search_job',
-  'app.review_serving_snapshot_manifest',
-])
+const snapshotScopedTables = new Set(['app.review_serving_snapshot_manifest'])
 const maxArticleSetHydrationArticleIds = 100
 const maxArticleSetHydrationPayloadBytes = 2_000_000
 

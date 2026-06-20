@@ -2,7 +2,8 @@ import {existsSync} from 'node:fs'
 
 import {expect, mock, test} from 'bun:test'
 
-import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import type {ReviewServingProjectionComponent, ReviewServingReadContract} from './reviewServingContracts.ts'
+import type {ReviewServingReaderRequest} from './reviewServingReader.ts'
 
 const components: readonly ReviewServingProjectionComponent[] = [
   'display',
@@ -68,6 +69,72 @@ const getRouteKey = (entry: {method: string; productRoute: string}) => {
   return `${entry.method} ${entry.productRoute}`
 }
 
+const containsSql = (statement: string, value: string) => {
+  return statement.includes(value)
+}
+
+const getPayloadKindSqlMatch = (statement: string, contract: ReviewServingReadContract) => {
+  if (contract.key === 'review.detail.humanJudgments' || contract.key === 'review.both.list.humanJudgments') {
+    return containsSql(statement, "payload_kind = 'human'")
+  }
+
+  if (
+    contract.key === 'review.detail.judgments'
+    || contract.key === 'review.llm.list.judgments'
+    || contract.key === 'review.both.list.judgments'
+  ) {
+    return containsSql(statement, "payload_kind = 'llm'")
+  }
+
+  return true
+}
+
+const getContractSqlMatch = (
+  statement: string,
+  contract: ReviewServingReadContract,
+  request: ReviewServingReaderRequest,
+) => {
+  const checks = [
+    containsSql(statement, `FROM ${contract.servingTable} WHERE`),
+    contract.servingTable === 'app.review_bulk_operation_job'
+      ? containsSql(statement, `job_kind = '${contract.key}'`)
+      : true,
+    contract.servingTable === 'app.review_search_job'
+      ? containsSql(statement, `search_mode = '${contract.searchMode}'`)
+      : true,
+    contract.servingTable === 'mart.review_article_count_serving_v4' && request.namedCountKey
+      ? containsSql(statement, `count_kind = '${request.namedCountKey}'`)
+      : true,
+    contract.servingTable === 'mart.review_filter_facet_serving_v4'
+      ? containsSql(
+          statement,
+          contract.key === 'review.human.filters.facets' ? "facet_kind = 'human'" : "facet_kind = 'review'",
+        )
+      : true,
+    contract.servingTable === 'mart.review_filter_option_serving_v4' && request.filterOptionIdentity
+      ? containsSql(statement, `'${request.filterOptionIdentity}'`)
+      : true,
+    contract.physicalAccessStrategy === 'articleSetLookup' ? containsSql(statement, 'article_id IN') : true,
+    contract.physicalAccessStrategy !== 'articleSetLookup' ? !containsSql(statement, 'article_id IN') : true,
+    contract.physicalAccessStrategy === 'keyedLookup' && contract.allowedFilters.includes('articleId')
+      ? containsSql(statement, "article_id = 'article-1'")
+      : true,
+    contract.physicalAccessStrategy !== 'keyedLookup' ? !containsSql(statement, "article_id = 'article-1'") : true,
+    contract.physicalAccessStrategy === 'queueOrdering' ? containsSql(statement, "queue_kind = 'unassessed'") : true,
+    contract.listMode && contract.physicalAccessStrategy !== 'queueOrdering'
+      ? containsSql(statement, `list_mode_key = '${contract.listMode}'`)
+      : true,
+    getPayloadKindSqlMatch(statement, contract),
+    contract.servingTable === 'app.review_serving_snapshot_manifest'
+      ? containsSql(statement, `LIMIT ${request.limit}`)
+      : true,
+  ]
+
+  return checks.every((check) => {
+    return check
+  })
+}
+
 const getDiagnosticsRows = (statement: string) => {
   if (statement.includes('GROUP BY snapshot_status')) {
     return [{snapshotCount: 1, snapshotStatus: 'active'}]
@@ -95,12 +162,14 @@ const getDiagnosticsRows = (statement: string) => {
 }
 
 const createDatabase = async () => {
+  const contracts = await import('./reviewServingReadContracts.ts')
   const evidence = await import('./reviewServingRouteParityEvidence.ts')
+  const evidenceCases = evidence.reviewServingRouteParityEvidence.flatMap((entry) => {
+    return entry.cases
+  })
   const rowByContractKey = new Map(
-    evidence.reviewServingRouteParityEvidence.flatMap((entry) => {
-      return entry.cases.map((caseInput) => {
-        return [caseInput.request.contractKey, caseInput.expectedRows]
-      })
+    evidenceCases.map((caseInput) => {
+      return [caseInput.request.contractKey, caseInput.expectedRows]
     }),
   )
 
@@ -116,7 +185,13 @@ const createDatabase = async () => {
         }
       }
 
-      return ([...rowByContractKey.values()][0] ?? []) as T[]
+      const matchedCase = evidenceCases.find((caseInput) => {
+        const contract = contracts.getReviewServingReadContract(caseInput.request.contractKey)
+
+        return contract ? getContractSqlMatch(statement, contract, caseInput.request) : false
+      })
+
+      return (matchedCase ? rowByContractKey.get(matchedCase.request.contractKey) : []) as T[]
     },
     run: async () => {},
     transaction: async <T>(operation: (database: unknown) => Promise<T>) => {

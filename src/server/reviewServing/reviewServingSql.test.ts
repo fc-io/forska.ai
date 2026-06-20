@@ -704,7 +704,7 @@ test('buildReviewServingRowsSql constrains durable job lookups by criteria', () 
     'AND (snapshot_id = $snapshotId OR (latest_snapshot_semantics = TRUE AND snapshot_id IS NULL))',
   )
   expect(bulkSql).toContain("AND job_kind = 'review.bulk.selection' AND filter_signature = $filterSignature")
-  expect(assertReviewServingSqlShape(searchSql, {requireSnapshotScope: false})).toEqual({ok: true, violations: []})
+  expect(assertReviewServingSqlShape(searchSql)).toEqual({ok: true, violations: []})
   expect(searchSql).toContain('WHERE app.review_search_job.project_id = $projectId')
   expect(searchSql).toContain('AND search_identity IS NOT DISTINCT FROM $searchIdentity')
   expect(searchSql).toContain('AND project_scope_identity = $projectScopeIdentity')
