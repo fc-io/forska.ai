@@ -666,6 +666,7 @@ const getSql = (input: {
       : getRequiredIdentityParameter(input.manifest, 'search'),
     searchTextParameter: input.request.searchText ? '$searchText' : null,
     searchTokenPrefixParameter: input.request.searchTokenPrefix ? '$searchTokenPrefix' : null,
+    searchTokenPrefixesParameter: input.request.searchTokenPrefix ? '$searchTokenPrefixes' : null,
     snapshotIdParameter: '$snapshotId',
   })
 }

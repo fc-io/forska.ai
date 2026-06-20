@@ -500,6 +500,7 @@ const getReviewServingRowsSqlQueuePredicate = (params: {
   queueKindParameter?: string | null
   searchIdentityParameter: string
   searchTokenPrefixParameter?: string | null
+  searchTokenPrefixesParameter?: string | null
   snapshotIdParameter: string
 }) => {
   if (params.contract.physicalAccessStrategy !== 'queueOrdering') {
@@ -512,15 +513,16 @@ const getReviewServingRowsSqlQueuePredicate = (params: {
     params.contract,
   )
 
-  const searchPredicate = params.searchTokenPrefixParameter
+  const searchPredicate = params.searchTokenPrefixesParameter
     ? [
-        ' AND EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search',
+        ` AND NOT EXISTS (SELECT 1 FROM (SELECT unnest(${params.searchTokenPrefixesParameter}) AS token_prefix) search_prefix`,
+        ' WHERE NOT EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search',
         ` WHERE search.project_id = ${params.projectIdParameter}`,
         ` AND search.search_identity = ${params.searchIdentityParameter}`,
         ` AND search.project_scope_identity = ${params.projectScopeIdentityParameter}`,
         ` AND search.snapshot_id = ${params.snapshotIdParameter}`,
         ` AND search.article_id = ${params.contract.servingTable}.article_id`,
-        ` AND starts_with(search.token, ${params.searchTokenPrefixParameter}))`,
+        ' AND starts_with(search.token, search_prefix.token_prefix)))',
       ].join('')
     : ''
 
@@ -618,6 +620,7 @@ const getReviewServingRowsSqlPhysicalFilterPredicate = (params: {
   searchIdentityParameter: string
   queueKindParameter?: string | null
   searchTokenPrefixParameter?: string | null
+  searchTokenPrefixesParameter?: string | null
   searchTextParameter?: string | null
   snapshotIdParameter: string
 }) => {
@@ -655,6 +658,7 @@ export const buildReviewServingRowsSql = (params: {
   searchIdentityParameter: string
   searchTextParameter?: string | null
   searchTokenPrefixParameter?: string | null
+  searchTokenPrefixesParameter?: string | null
   snapshotIdParameter: string
 }) => {
   const cursorPredicate = params.cursorPredicate ? ` AND (${params.cursorPredicate})` : ''
