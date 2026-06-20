@@ -674,11 +674,11 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       key: 'dirtyMaterializationResumeCheckpoint',
       maxRowsScannedPerRequest: 8,
       minimumDistinctRequestSlices: 70,
-      pageSize: 8,
+      pageSize: 1,
       requestCount: 70,
       requestSliceFields: ['filter'],
       scopes: ['desktopInterruptionResume', 'dirtyMaterialization', 'servingRefresh'],
-      targetRowsReturnedPerRequest: 8,
+      targetRowsReturnedPerRequest: 1,
       workloadClass: 'reviewMaintenance',
     },
   ],
@@ -1492,6 +1492,16 @@ const getDefaultReviewServingBenchmarkReleaseContext = (
     duckdbMemoryLimit: process.env.DUCKDB_MEMORY_LIMIT ?? 'not-set-synthetic-validation',
     tempDirGrowthBytes: 0,
   }
+}
+
+const getReviewServingBenchmarkRunReleaseContext = (input: ReviewServingBenchmarkRunInput) => {
+  if (input.releaseContext) {
+    return Effect.succeed(input.releaseContext)
+  }
+
+  return input.fixture.kind === 'smoke'
+    ? Effect.succeed(getDefaultReviewServingBenchmarkReleaseContext(input.fixture))
+    : Effect.fail(new Error('Review-serving benchmark release context is required for release-scale runs'))
 }
 
 export const getReviewServingBenchmarkReleaseReport = ({
@@ -2554,8 +2564,8 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
         admissionRequest: {
           contractKey: 'review.warning.snapshot',
           estimatedResultBytes: 8_000,
-          estimatedResultRows: 8,
-          pageSize: 8,
+          estimatedResultRows: 1,
+          pageSize: 1,
           projectId: 'smoke-project',
           snapshotFreshness: 'stale',
           workloadClass: 'reviewMaintenance',
@@ -2566,8 +2576,8 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           latencyMs: 8,
           memoryRssBytes: 128_425_000,
           queueDepth: 1,
-          rowsReturned: 8,
-          rowsScanned: 8,
+          rowsReturned: 1,
+          rowsScanned: 1,
           tempUsageBytes: 0,
         },
         operationKey: 'dirtyMaterializationResumeCheckpoint',
@@ -2582,6 +2592,7 @@ export const runReviewServingBenchmarkEffect = (input: ReviewServingBenchmarkRun
 
   return Effect.scoped(
     Effect.gen(function* () {
+      const releaseContext = yield* getReviewServingBenchmarkRunReleaseContext(input)
       yield* validateReviewServingBenchmarkRequestCounts(input)
       const runState = yield* Effect.acquireRelease(getBenchmarkRunState(), releaseBenchmarkRunState)
       const samples = yield* Effect.forEach(input.workItems, (workItem) => {
@@ -2594,7 +2605,6 @@ export const runReviewServingBenchmarkEffect = (input: ReviewServingBenchmarkRun
       const endRssBytes = sampleReviewServingBenchmarkMemoryRssBytes()
       const metrics = getReviewServingBenchmarkMetrics({endRssBytes, samples, startRssBytes: runState.startRssBytes})
       yield* validateReviewServingBenchmarkPerformanceTargets(metrics, samples, input.workload.performanceTargets)
-      const releaseContext = input.releaseContext ?? getDefaultReviewServingBenchmarkReleaseContext(input.fixture)
       const releaseReport = getReviewServingBenchmarkReleaseReport({
         fixture: input.fixture,
         metrics,
