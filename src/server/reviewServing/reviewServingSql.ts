@@ -495,7 +495,12 @@ const getReviewServingRowsSqlSearchPredicate = (params: {
 
 const getReviewServingRowsSqlQueuePredicate = (params: {
   contract: ReviewServingReadContract
+  projectIdParameter: string
+  projectScopeIdentityParameter: string
   queueKindParameter?: string | null
+  searchIdentityParameter: string
+  searchTokenPrefixParameter?: string | null
+  snapshotIdParameter: string
 }) => {
   if (params.contract.physicalAccessStrategy !== 'queueOrdering') {
     return ''
@@ -507,7 +512,19 @@ const getReviewServingRowsSqlQueuePredicate = (params: {
     params.contract,
   )
 
-  return ` AND queue_kind = ${queueKindParameter}`
+  const searchPredicate = params.searchTokenPrefixParameter
+    ? [
+        ' AND EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search',
+        ` WHERE search.project_id = ${params.projectIdParameter}`,
+        ` AND search.search_identity = ${params.searchIdentityParameter}`,
+        ` AND search.project_scope_identity = ${params.projectScopeIdentityParameter}`,
+        ` AND search.snapshot_id = ${params.snapshotIdParameter}`,
+        ` AND search.article_id = ${params.contract.servingTable}.article_id`,
+        ` AND starts_with(search.token, ${params.searchTokenPrefixParameter}))`,
+      ].join('')
+    : ''
+
+  return ` AND queue_kind = ${queueKindParameter}${searchPredicate}`
 }
 
 const getReviewServingRowsSqlUnassessedQueuePredicate = (params: {

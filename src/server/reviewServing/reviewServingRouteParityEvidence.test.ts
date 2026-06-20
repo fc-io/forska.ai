@@ -78,16 +78,39 @@ const getCaseKey = (request: ReviewServingReaderRequest) => {
   return request.namedCountKey ? `${request.contractKey}:${request.namedCountKey}` : request.contractKey
 }
 
-const getSqlFixtureKey = (request: ReviewServingReaderRequest) => {
-  return request.namedCountKey ? `namedCount:${request.namedCountKey}` : request.contractKey
+const getSqlFixtureKey = (routeKey: string, request: ReviewServingReaderRequest) => {
+  return `${routeKey}:${request.listMode ?? 'contract'}:${request.namedCountKey ?? request.contractKey}`
 }
 
 const containsSql = (statement: string, value: string) => {
   return statement.includes(value)
 }
 
-const getPromptAnswerPrefix = (request: ReviewServingReaderRequest) => {
-  return request.listMode === 'human' ? 'human:promptAnswer:' : 'review:promptAnswer:'
+const getPromptAnswerPrefix = (contract: ReviewServingReadContract, request: ReviewServingReaderRequest) => {
+  return (request.listMode ?? contract.listMode) === 'human' ? 'human:promptAnswer:' : 'review:promptAnswer:'
+}
+
+const getReviewConfigSqlMatch = (
+  statement: string,
+  contract: ReviewServingReadContract,
+  request: ReviewServingReaderRequest,
+) => {
+  if (
+    contract.servingTable === 'mart.review_article_serving_payload_v4'
+    || contract.servingTable === 'mart.review_title_search_serving_v4'
+  ) {
+    return true
+  }
+
+  if (
+    contract.servingTable === 'app.review_search_job'
+    || contract.servingTable === 'app.review_bulk_operation_job'
+    || contract.servingTable === 'app.review_serving_snapshot_manifest'
+  ) {
+    return containsSql(statement, `review_config_hash IS NOT DISTINCT FROM '${request.reviewConfigHash}'`)
+  }
+
+  return containsSql(statement, `review_config_hash = '${request.reviewConfigHash}'`)
 }
 
 const getStringFilterValue = (value: unknown) => {
@@ -183,7 +206,9 @@ const getSearchTokenPrefixSqlMatch = (
     return containsSql(statement, "starts_with(search.token, 'heart')")
   }
 
-  return contract.physicalAccessStrategy === 'tokenPrefixIndex' ? containsSql(statement, `starts_with(token,`) : true
+  return contract.physicalAccessStrategy === 'tokenPrefixIndex' || contract.physicalAccessStrategy === 'queueOrdering'
+    ? containsSql(statement, 'starts_with(token,') || containsSql(statement, 'starts_with(search.token,')
+    : true
 }
 
 const getRouteFilterSqlMatch = (
@@ -213,7 +238,7 @@ const getRouteFilterSqlMatch = (
     queueOrdering
       ? true
       : promptAnswerValues.every((value) => {
-          return containsSql(statement, `'${getPromptAnswerPrefix(request)}${value}'`)
+          return containsSql(statement, `'${getPromptAnswerPrefix(contract, request)}${value}'`)
         }),
   ].every((check) => {
     return check
@@ -283,6 +308,8 @@ const getContractSqlMatch = (
 ) => {
   const checks = [
     containsSql(statement, `FROM ${contract.servingTable} WHERE`),
+    getReviewConfigSqlMatch(statement, contract, request),
+    containsSql(statement, `project_id = '${request.projectId}'`),
     contract.servingTable === 'app.review_bulk_operation_job'
       ? containsSql(statement, `job_kind = '${contract.key}'`)
       : true,
@@ -357,11 +384,13 @@ const createDatabase = async () => {
   const contracts = await import('./reviewServingReadContracts.ts')
   const evidence = await import('./reviewServingRouteParityEvidence.ts')
   const evidenceCases = evidence.reviewServingRouteParityEvidence.flatMap((entry) => {
-    return entry.cases
+    return entry.cases.map((caseInput) => {
+      return {...caseInput, routeKey: entry.routeKey}
+    })
   })
   const rowByContractKey = new Map(
     evidenceCases.map((caseInput) => {
-      return [getSqlFixtureKey(caseInput.request), caseInput.expectedRows]
+      return [getSqlFixtureKey(caseInput.routeKey, caseInput.request), caseInput.expectedRows]
     }),
   )
 
@@ -386,7 +415,9 @@ const createDatabase = async () => {
         return contract ? getContractSqlMatch(statement, contract, caseInput.request) : false
       })
 
-      return (matchedCase ? rowByContractKey.get(getSqlFixtureKey(matchedCase.request)) : []) as T[]
+      return (
+        matchedCase ? rowByContractKey.get(getSqlFixtureKey(matchedCase.routeKey, matchedCase.request)) : []
+      ) as T[]
     },
     run: async () => {},
     transaction: async <T>(operation: (database: unknown) => Promise<T>) => {

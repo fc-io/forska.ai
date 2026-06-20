@@ -8,7 +8,10 @@ import {
   reviewServingRouteParityGates,
 } from './reviewServingRouteParityCoverage.ts'
 
-const expectedExplicitJobRoutes = ['/api/projects/add_articles_by_ids']
+const expectedExplicitJobRoutes = [
+  {method: 'POST', productRoute: '/api/projects/add_articles_by_ids'},
+  {method: 'GET', productRoute: '/api/articles/pdf-fetch-jobs/:jobId'},
+]
 
 const getRouteKey = (entry: {method: string; productRoute: string}) => {
   return `${entry.method} ${entry.productRoute}`
@@ -39,8 +42,8 @@ test('job parity coverage inventory tracks mounted job routes plus explicit add-
 
     return isMountedProduction && isJobFlow ? [getRouteKey(entry)] : []
   })
-  const explicitJobRouteKeys = expectedExplicitJobRoutes.map((productRoute) => {
-    return `POST ${productRoute}`
+  const explicitJobRouteKeys = expectedExplicitJobRoutes.map((entry) => {
+    return getRouteKey(entry)
   })
   const coverageKeys = reviewServingJobParityCoverage.map(getRouteKey)
 
