@@ -268,6 +268,32 @@ test('buildReviewServingRowsSql only emits list-mode predicates for list-mode ta
   expect(sql).not.toContain('sort_key')
 })
 
+test('buildReviewServingRowsSql requires all token prefixes for queue search', () => {
+  const contract = getRequiredReviewServingReadContract('review.queue.unassessed')
+  const sql = buildReviewServingRowsSql({
+    contract,
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    queueKindParameter: '$queueKind',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    searchTokenPrefixParameter: '$searchTokenPrefix',
+    searchTokenPrefixesParameter: '$searchTokenPrefixes',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('AND queue_kind = $queueKind')
+  expect(sql).toContain('NOT EXISTS (SELECT 1 FROM (SELECT unnest($searchTokenPrefixes) AS token_prefix) search_prefix')
+  expect(sql).toContain('WHERE NOT EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search')
+  expect(sql).toContain('starts_with(search.token, search_prefix.token_prefix)')
+  expect(sql).not.toContain('starts_with(search.token, $searchTokenPrefix)')
+})
+
 test('buildReviewServingRowsSql does not pin detail article lookups to a list mode', () => {
   const contract = getRequiredReviewServingReadContract('review.detail.row')
   const sql = buildReviewServingRowsSql({
