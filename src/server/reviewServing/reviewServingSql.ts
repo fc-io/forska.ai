@@ -142,8 +142,8 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
 const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required<ReviewServingSqlShapeOptions>) => {
   const tableReferences = getReviewServingSqlTableReferenceDetails(sql)
   const hasMultipleReferences = tableReferences.length > 1
-  const wherePredicateClause =
-    sql.match(/\bwhere\b([\s\S]*?)(?:\bqualify\b|\border\s+by\b|\blimit\b|\bgroup\s+by\b|\bhaving\b|$)/iu)?.[1] ?? ''
+  const scopedPredicateClause =
+    sql.match(/\bfrom\b([\s\S]*?)(?:\bqualify\b|\border\s+by\b|\blimit\b|\bgroup\s+by\b|\bhaving\b|$)/iu)?.[1] ?? ''
   const bindOperandPattern = '(?:\\?|[$:@](?:[a-z_][\\w.]*|[0-9]+))'
   const getQualifierPattern = (tableReference: ReviewServingSqlTableReference) => {
     if (tableReference.alias) {
@@ -167,7 +167,7 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
     return required
       ? tableReferences
           .filter((tableReference) => {
-            return !getScopePredicatePattern(tableReference, field).test(wherePredicateClause)
+            return !getScopePredicatePattern(tableReference, field).test(scopedPredicateClause)
           })
           .map((tableReference) => {
             const scopedLabel = tableReference.alias ?? tableReference.table
@@ -213,6 +213,8 @@ export const assertReviewServingSqlShape = (
 const reviewServingSnapshotManifestTable = 'app.review_serving_snapshot_manifest'
 const reviewServingBulkOperationJobTable = 'app.review_bulk_operation_job'
 const reviewServingSearchJobTable = 'app.review_search_job'
+const reviewServingArticleTable = 'mart.review_article_serving_v4'
+const reviewServingPayloadTable = 'mart.review_article_serving_payload_v4'
 const reviewServingFilterFacetTable = 'mart.review_filter_facet_serving_v4'
 const reviewServingFilterOptionTable = 'mart.review_filter_option_serving_v4'
 const reviewServingJudgmentDetailTable = 'mart.review_article_judgment_detail_serving_v4'
@@ -230,7 +232,7 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
   searchIdentityParameter: string
   snapshotIdParameter: string
 }) => {
-  if (params.contract.servingTable === 'mart.review_article_serving_payload_v4') {
+  if (params.contract.servingTable === reviewServingPayloadTable) {
     return ` AND display_identity = ${params.displayIdentityParameter} AND payload_identity = ${params.payloadIdentityParameter} AND snapshot_id = ${params.snapshotIdParameter}`
   }
 
@@ -598,6 +600,14 @@ const getReviewServingRowsSqlListModeDedupeQualifier = (contract: ReviewServingR
 }
 
 const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
+  if (contract.servingTable === reviewServingArticleTable) {
+    return contract.sort.fields.some((field) => {
+      return field.includes(reviewServingListModePrioritySql)
+    })
+      ? `SELECT ${reviewServingArticleTable}.*, payload.source_metadata, ${reviewServingListModePrioritySql} AS ${reviewServingListModePriorityAlias}`
+      : `SELECT ${reviewServingArticleTable}.*, payload.source_metadata`
+  }
+
   return contract.sort.fields.some((field) => {
     return field.includes(reviewServingListModePrioritySql)
   })
@@ -661,6 +671,19 @@ export const buildReviewServingRowsSql = (params: {
   searchTokenPrefixesParameter?: string | null
   snapshotIdParameter: string
 }) => {
+  const articlePayloadJoin =
+    params.contract.servingTable === reviewServingArticleTable
+      ? [
+          ` LEFT JOIN ${reviewServingPayloadTable} payload`,
+          ` ON payload.project_id = ${params.projectIdParameter}`,
+          ` AND payload.project_id = ${reviewServingArticleTable}.project_id`,
+          ` AND payload.display_identity = ${reviewServingArticleTable}.display_identity`,
+          ` AND payload.payload_identity = ${reviewServingArticleTable}.payload_identity`,
+          ` AND payload.snapshot_id = ${params.snapshotIdParameter}`,
+          ` AND payload.snapshot_id = ${reviewServingArticleTable}.snapshot_id`,
+          ` AND payload.article_id = ${reviewServingArticleTable}.article_id`,
+        ].join('')
+      : ''
   const cursorPredicate = params.cursorPredicate ? ` AND (${params.cursorPredicate})` : ''
   const identityPredicates = getReviewServingRowsSqlIdentityPredicates(params)
   const listModePredicate = getReviewServingRowsSqlListModePredicate(params)
@@ -675,7 +698,7 @@ export const buildReviewServingRowsSql = (params: {
   const projectIdColumn = getReviewServingRowsSqlScopeColumn({contract: params.contract, field: 'project_id'})
 
   return [
-    `${selectSql} FROM ${params.contract.servingTable} WHERE ${projectIdColumn} = ${params.projectIdParameter}`,
+    `${selectSql} FROM ${params.contract.servingTable}${articlePayloadJoin} WHERE ${projectIdColumn} = ${params.projectIdParameter}`,
     identityPredicates,
     listModePredicate,
     judgmentPayloadKindPredicate,

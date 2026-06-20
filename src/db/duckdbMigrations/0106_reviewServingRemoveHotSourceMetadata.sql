@@ -1,0 +1,1 @@
+SELECT 1 AS review_serving_hot_source_metadata_removed_from_forward_schema;
