@@ -12,6 +12,12 @@ Final cutover completion happens only after Phases 0 through 4 are complete and 
 
 After final verification, normal product review paths must not reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
 
+## Phase 5 Readiness Review - 2026-06-20
+
+- Verdict: Phase 5 is ready to start. The 2026-06-20 final Phase 4 audit found the route/job/search/parity/residual-read/browser/desktop implementation evidence sufficient to proceed, with no remaining Phase 4 blocker.
+- Superseded blockers: the 2026-06-19 notes below are retained as historical context, but their listed Phase 4 dependencies are now resolved by `reviewServingRouteParityCoverage.ts`, `reviewServingRouteParityEvidence.ts`, `reviewServingResidualReadAllowlist.ts`, `reviewServingSearchOwnership.ts`, durable add-by-ID/PDF/export job routes, deletion of process-local PDF helpers, browser warning tests, and recorded desktop build evidence.
+- Phase 5 scope starts here: final deletion/static hardening, interruption and desktop runtime hardening, release-scale benchmark execution/evidence, and repo-native release gates. Do not reopen Phase 4 route migration unless Phase 5 hardening finds a concrete regression.
+
 ## Phase 5 Readiness Review - 2026-06-19
 
 - Verdict: Phase 5 is not ready to start as a final hardening/release sweep. Phase 4 has advanced substantially, but closure gates remain open and Phase 5 must not treat mounted route inventory entries as equivalent to final semantic parity.
@@ -35,7 +41,7 @@ After final verification, normal product review paths must not reach raw fallbac
 
 | Status | Theme | Implement First | Done When |
 |---|---|---|---|
-| [ ] | Phase 4 closure prerequisite audit | Before deletion or benchmark sign-off, confirm route-specific parity coverage, residual app-table/app-query read decisions, search-service ownership, explicit-ID add behavior, legacy PDF helper status, benchmark-fixture/run readiness, and browser/desktop verification evidence. | Phase 5 has a concrete pass/fail checklist and does not confuse `mounted: true` inventory with final semantic parity. |
+| [x] | Phase 4 closure prerequisite audit | Before deletion or benchmark sign-off, confirm route-specific parity coverage, residual app-table/app-query read decisions, search-service ownership, explicit-ID add behavior, legacy PDF helper status, benchmark-fixture/run readiness, and browser/desktop verification evidence. | The 2026-06-20 final Phase 4 audit confirmed route/job parity evidence, residual-read classification, search ownership, durable explicit-ID add, deleted legacy PDF helpers, browser diagnostics tests, and desktop build evidence. |
 | [ ] | Final deletion sweep | Remove any remaining normal raw review fallback, old selected-import foreground joins, large-ID return paths, hidden `OFFSET` pagination, competing V4 serving writers, and obsolete intermediate state. Start only after the prerequisite audit decides which residual app-table/app-query reads are allowed metadata/config reads versus raw fallback. | Static SQL-shape tests and route tests fail if forbidden raw paths return. Route-specific parity validation has passed for every migrated route/flow, and every mounted route inventory entry covers the full product response shape. Obsolete state is rebuilt or cleared with no compatibility shim unless explicitly required. |
 | [ ] | Desktop and interruption hardening | Verify browser and desktop use the same serving/job/admission behavior. Test sleep/restart/interruption for projectors, bulk jobs, search jobs, and low-memory runtime. | Desktop build or targeted desktop verification passes, interrupted work resumes safely, and low-memory batch defaults prevent OOM. |
 | [ ] | Final benchmark and release gate | Run the overlap benchmark and repo-native quality gates after Phase 4 parity and residual-read decisions are closed. | 10M/7-prompt benchmark passes under target memory limits, no foreground temp spill occurs for hot reads, article-set hydration and judgment payload paths are exercised, all targeted tests pass, lint passes, and `OOM_ERRORS.md` is updated with the implementation entry. |
@@ -52,7 +58,7 @@ After final verification, normal product review paths must not reach raw fallbac
 
 ## Cutover Gate
 
-Prerequisite before evaluating this gate: close the 2026-06-19 Phase 4 audit and second-pass validation gaps in `DUCK_CQRS_PLAN_PHASE_4.md`, or explicitly re-scope them with evidence.
+Prerequisite before evaluating this gate: the 2026-06-20 final Phase 4 audit in `DUCK_CQRS_PLAN_PHASE_4.md` is closed. Phase 5 may now evaluate the gate through deletion/static hardening, interruption and desktop verification, release-scale benchmark evidence, and repo-native release checks.
 
 - Phase 0 contracts, module boundaries, static guards, and benchmark harness are complete.
 - Phase 1 schema and DuckDB workload-admission foundations are complete.
