@@ -50,7 +50,7 @@ type RetentionStateRow = {
   snapshotId: string | null
 }
 
-type PatchComponentSpec = {component: ReviewServingProjectionComponent; identityColumn: string; table: string}
+type PatchComponentSpec = {component: ReviewServingProjectionComponent; identityColumn: string | null; table: string}
 
 type CleanupTableSpec = {keyColumn: string; protectedPredicate: string; table: string}
 
@@ -60,8 +60,8 @@ const defaultRetentionCleanupTargetLimit = 16
 
 const patchComponentSpecs: readonly PatchComponentSpec[] = [
   {component: 'display', identityColumn: 'display_identity', table: 'mart.review_article_display_patch_v4'},
-  {component: 'llmStatus', identityColumn: 'prompt_config_hash', table: 'mart.review_llm_status_patch_v4'},
-  {component: 'humanStatus', identityColumn: 'prompt_config_hash', table: 'mart.review_human_status_patch_v4'},
+  {component: 'llmStatus', identityColumn: null, table: 'mart.review_llm_status_patch_v4'},
+  {component: 'humanStatus', identityColumn: null, table: 'mart.review_human_status_patch_v4'},
   {component: 'queue', identityColumn: 'queue_identity', table: 'mart.review_queue_patch_v4'},
   {component: 'posting', identityColumn: 'posting_identity', table: 'mart.review_article_filter_posting_patch_v4'},
 ]
@@ -163,6 +163,15 @@ const getPatchSpec = (component: ReviewServingProjectionComponent) => {
   })
 }
 
+const getPatchBudgetIdentityPredicate = (
+  spec: PatchComponentSpec,
+  state: ReturnType<typeof getAllComponentStates>[number],
+) => {
+  return spec.identityColumn === null
+    ? ''
+    : `\n      AND ${spec.identityColumn} = ${getSqlLiteral(state.projectionIdentity)}`
+}
+
 const getSelectedImportPatchBudget = async (
   candidate: ReviewServingSnapshotManifest,
   database: ReviewServingRetentionServiceTransaction,
@@ -190,13 +199,14 @@ const getPatchBudget = async (
     return {patchRows: 0, patchWatermarks: 0}
   }
 
+  const identityPredicate = getPatchBudgetIdentityPredicate(spec, state)
   const [row] = await database.queryJson<PatchBudgetRow>(`
     SELECT
       CAST(COUNT(*) AS INTEGER) AS patchRows,
       CAST(COUNT(DISTINCT patch_watermark) AS INTEGER) AS patchWatermarks
     FROM ${spec.table}
     WHERE project_id = ${getSqlLiteral(projectId)}
-      AND ${spec.identityColumn} = ${getSqlLiteral(state.projectionIdentity)}
+      ${identityPredicate}
       AND base_generation = ${getSqlLiteral(Number(state.baseGeneration))}
   `)
 

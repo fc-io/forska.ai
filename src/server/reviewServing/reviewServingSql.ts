@@ -221,6 +221,54 @@ const reviewServingJudgmentDetailTable = 'mart.review_article_judgment_detail_se
 const reviewServingListModePrioritySql =
   "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
 const reviewServingListModePriorityAlias = 'list_mode_priority'
+const reviewServingArticleSelectColumns = [
+  'project_id',
+  'review_config_hash',
+  'snapshot_id',
+  'base_generation',
+  'patch_watermark',
+  'display_identity',
+  'project_scope_identity',
+  'selected_import_identity',
+  'llm_status_identity',
+  'human_status_identity',
+  'posting_identity',
+  'summary_identity',
+  'payload_identity',
+  'list_mode_key',
+  'article_id',
+  'article_created_at',
+  'article_updated_at',
+  'sort_key',
+  'activity_sort_at',
+  'article_title',
+  'article_external_id',
+  'arxiv_id',
+  'biorxiv_id',
+  'medrxiv_id',
+  'doi',
+  'pmid',
+  'journal_title',
+  'url',
+  'full_text_pdf',
+  'full_text_fetched_at',
+  'full_text_conversion_status',
+  'selected_import_route_id',
+  'selected_rank_key',
+  'publication_year',
+  'duplicate_flag',
+  'conflict_flag',
+  'llm_status_key',
+  'human_status_key',
+  'llm_judged_prompt_count',
+  'enabled_prompt_count',
+  'human_answered_prompt_count',
+  'review_opened',
+  'review_sections_completed',
+  'serving_updated_at',
+].map((column) => {
+  return `${reviewServingArticleTable}.${column}`
+})
 
 const getReviewServingRowsSqlIdentityPredicates = (params: {
   contract: ReviewServingReadContract
@@ -414,7 +462,7 @@ const getReviewServingRowsSqlArticlePredicate = (params: {
       params.contract,
     )
 
-    return ` AND article_id IN (SELECT unnest(${articleIdsParameter}))`
+    return ` AND ${params.contract.servingTable}.article_id IN (SELECT unnest(${articleIdsParameter}))`
   }
 
   if (params.contract.physicalAccessStrategy !== 'keyedLookup') {
@@ -427,7 +475,7 @@ const getReviewServingRowsSqlArticlePredicate = (params: {
     params.contract,
   )
 
-  return ` AND article_id = ${articleIdParameter}`
+  return ` AND ${params.contract.servingTable}.article_id = ${articleIdParameter}`
 }
 
 const getReviewServingRowsSqlPostingPredicate = (params: {
@@ -601,11 +649,13 @@ const getReviewServingRowsSqlListModeDedupeQualifier = (contract: ReviewServingR
 
 const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
   if (contract.servingTable === reviewServingArticleTable) {
+    const articleSelectColumns = reviewServingArticleSelectColumns.join(', ')
+
     return contract.sort.fields.some((field) => {
       return field.includes(reviewServingListModePrioritySql)
     })
-      ? `SELECT ${reviewServingArticleTable}.*, payload.source_metadata, ${reviewServingListModePrioritySql} AS ${reviewServingListModePriorityAlias}`
-      : `SELECT ${reviewServingArticleTable}.*, payload.source_metadata`
+      ? `SELECT ${articleSelectColumns}, payload.source_metadata AS source_metadata, ${reviewServingListModePrioritySql} AS ${reviewServingListModePriorityAlias}`
+      : `SELECT ${articleSelectColumns}, payload.source_metadata AS source_metadata`
   }
 
   return contract.sort.fields.some((field) => {

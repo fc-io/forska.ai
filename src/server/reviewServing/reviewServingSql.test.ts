@@ -313,10 +313,12 @@ test('buildReviewServingRowsSql does not pin detail article lookups to a list mo
   })
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
-  expect(sql).toContain('AND article_id = $articleId')
+  expect(sql).toContain('AND mart.review_article_serving_v4.article_id = $articleId')
   expect(sql).toContain(
-    "SELECT mart.review_article_serving_v4.*, payload.source_metadata, CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END AS list_mode_priority",
+    "payload.source_metadata AS source_metadata, CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END AS list_mode_priority",
   )
+  expect(sql).toContain('SELECT mart.review_article_serving_v4.project_id')
+  expect(sql).not.toContain('mart.review_article_serving_v4.*')
   expect(sql).toContain(
     "ORDER BY CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END ASC, article_id ASC",
   )
@@ -344,7 +346,7 @@ test('buildReviewServingRowsSql covers judgment detail rows for article details'
   expect(sql).toContain(
     "SELECT *, CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END AS list_mode_priority",
   )
-  expect(sql).toContain('AND article_id = $articleId')
+  expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.article_id = $articleId')
   expect(sql).toContain("AND payload_kind = 'llm'")
   expect(sql).toContain('QUALIFY CASE list_mode_key')
   expect(sql).toContain('OVER (PARTITION BY article_id, prompt_id)')
@@ -369,7 +371,7 @@ test('buildReviewServingRowsSql pins human detail judgment reads to human payloa
   })
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
-  expect(sql).toContain('AND article_id = $articleId')
+  expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.article_id = $articleId')
   expect(sql).toContain("AND payload_kind = 'human'")
   expect(sql).not.toContain('AND list_mode_key =')
 })
@@ -404,8 +406,12 @@ test('buildReviewServingRowsSql pins fixed list-mode judgment payload reads', ()
 
   expect(assertReviewServingSqlShape(humanListSql)).toEqual({ok: true, violations: []})
   expect(assertReviewServingSqlShape(bothListSql)).toEqual({ok: true, violations: []})
-  expect(humanListSql).toContain('AND article_id IN (SELECT unnest($articleIds))')
-  expect(bothListSql).toContain('AND article_id IN (SELECT unnest($articleIds))')
+  expect(humanListSql).toContain(
+    'AND mart.review_article_judgment_detail_serving_v4.article_id IN (SELECT unnest($articleIds))',
+  )
+  expect(bothListSql).toContain(
+    'AND mart.review_article_judgment_detail_serving_v4.article_id IN (SELECT unnest($articleIds))',
+  )
   expect(humanListSql).toContain("AND list_mode_key = 'human'")
   expect(bothListSql).toContain("AND list_mode_key = 'both'")
   expect(humanListSql).toContain("AND payload_kind = 'human'")
@@ -549,7 +555,7 @@ test('buildReviewServingRowsSql keeps unassessed article-set hydration bounded t
     snapshotIdParameter: '$snapshotId',
   })
 
-  expect(sql).toContain('AND article_id IN (SELECT unnest($articleIds))')
+  expect(sql).toContain('AND mart.review_article_serving_v4.article_id IN (SELECT unnest($articleIds))')
   expect(sql).not.toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
   expect(sql).not.toContain('queue.article_id = mart.review_article_serving_v4.article_id')
 })
@@ -763,7 +769,7 @@ test('buildReviewServingRowsSql supports article-set list judgment lookups', () 
   expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.snapshot_id = $snapshotId')
   expect(sql).toContain("AND list_mode_key = 'both'")
   expect(sql).toContain("AND payload_kind = 'llm'")
-  expect(sql).toContain('AND article_id IN (SELECT unnest($articleIds))')
+  expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.article_id IN (SELECT unnest($articleIds))')
 })
 
 test('buildReviewServingRowsSql supports article-set row hydration lookups', () => {
@@ -783,7 +789,7 @@ test('buildReviewServingRowsSql supports article-set row hydration lookups', () 
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain("AND list_mode_key = 'human'")
-  expect(sql).toContain('AND article_id IN (SELECT unnest($articleIds))')
+  expect(sql).toContain('AND mart.review_article_serving_v4.article_id IN (SELECT unnest($articleIds))')
 })
 
 test('assertReviewServingSqlShape reads table references from SQL', () => {

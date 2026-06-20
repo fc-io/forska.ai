@@ -494,7 +494,7 @@ export const reviewServingReadContractList = [
     namedFastCounts: [],
     optionalComponents: [],
     physicalAccessStrategy: 'keyedLookup',
-    requiredComponents: ['display', 'llmStatus', 'humanStatus', 'projectScope', 'selectedImport', 'summary'],
+    requiredComponents: ['display', 'llmStatus', 'humanStatus', 'projectScope', 'selectedImport', 'summary', 'payload'],
     searchMode: 'none',
     servingTable: reviewArticleServingTable,
     sort: {direction: 'asc', fields: [detailRowListModePrioritySort, 'article_id']},
