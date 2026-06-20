@@ -86,6 +86,14 @@ const containsSql = (statement: string, value: string) => {
   return statement.includes(value)
 }
 
+const getPromptAnswerPrefix = (request: ReviewServingReaderRequest) => {
+  return request.listMode === 'human' ? 'human:promptAnswer:' : 'review:promptAnswer:'
+}
+
+const getStringFilterValue = (value: unknown) => {
+  return typeof value === 'string' ? value : null
+}
+
 const countListModeByKey: Partial<Record<NamedReviewFastCountKey, string>> = {
   'review.both.conflictByPrompt': 'both',
   'review.human.reviewedByPrompt': 'human',
@@ -149,6 +157,83 @@ const getFacetSqlMatch = (
   })
 }
 
+const getSearchTokenPrefixSqlMatch = (
+  statement: string,
+  contract: ReviewServingReadContract,
+  request: ReviewServingReaderRequest,
+) => {
+  if (contract.searchMode !== 'tokenPrefix') {
+    return true
+  }
+
+  const prefixes = request.searchTokenPrefixes ?? []
+
+  if (contract.physicalAccessStrategy === 'orderedPrefix') {
+    return (
+      prefixes.length > 1
+      && containsSql(statement, 'NOT EXISTS (SELECT 1 FROM (SELECT unnest')
+      && containsSql(statement, 'starts_with(search.token, search_prefix.token_prefix)')
+      && prefixes.every((prefix) => {
+        return containsSql(statement, `'${prefix}'`)
+      })
+    )
+  }
+
+  if (contract.physicalAccessStrategy === 'postingIntersection') {
+    return containsSql(statement, "starts_with(search.token, 'heart')")
+  }
+
+  return contract.physicalAccessStrategy === 'tokenPrefixIndex' ? containsSql(statement, `starts_with(token,`) : true
+}
+
+const getRouteFilterSqlMatch = (
+  statement: string,
+  contract: ReviewServingReadContract,
+  request: ReviewServingReaderRequest,
+) => {
+  if (contract.physicalAccessStrategy !== 'orderedPrefix' && contract.physicalAccessStrategy !== 'queueOrdering') {
+    return true
+  }
+
+  const filters = request.filters ?? {}
+  const articleCreatedAtFrom = getStringFilterValue(filters.articleCreatedAtFrom)
+  const humanStatus = getStringFilterValue(filters.humanStatus)
+  const promptAnswerValues = Array.isArray(filters.promptAnswer) ? filters.promptAnswer : []
+  const queueOrdering = contract.physicalAccessStrategy === 'queueOrdering'
+
+  return [
+    articleCreatedAtFrom ? containsSql(statement, `article_created_at >= TIMESTAMPTZ '${articleCreatedAtFrom}'`) : true,
+    filters.articleCreatedAtTo ? containsSql(statement, "article_created_at < TIMESTAMPTZ '2026-02-01'") : true,
+    filters.duplicateFlag && !queueOrdering ? containsSql(statement, 'duplicate_flag = TRUE') : true,
+    filters.conflictFlag && !queueOrdering ? containsSql(statement, 'conflict_flag = TRUE') : true,
+    filters.llmHasJudgment && !queueOrdering ? containsSql(statement, 'llm_judged_prompt_count > 0') : true,
+    filters.llmStatus === 'complete' && !queueOrdering ? containsSql(statement, "llm_status_key = 'answered'") : true,
+    humanStatus && !queueOrdering ? containsSql(statement, `human_status_key = '${humanStatus}'`) : true,
+    promptAnswerValues.length > 0 && !queueOrdering ? containsSql(statement, "filter_kind = 'promptAnswer'") : true,
+    queueOrdering
+      ? true
+      : promptAnswerValues.every((value) => {
+          return containsSql(statement, `'${getPromptAnswerPrefix(request)}${value}'`)
+        }),
+  ].every((check) => {
+    return check
+  })
+}
+
+const getCursorSqlMatch = (
+  statement: string,
+  contract: ReviewServingReadContract,
+  request: ReviewServingReaderRequest,
+) => {
+  if (!request.cursor || contract.cursorFields.length === 0) {
+    return true
+  }
+
+  return contract.cursorFields.every((_field, index) => {
+    return containsSql(statement, `'cursor-sort-${index}'`)
+  })
+}
+
 const getAsyncSearchSqlMatch = (
   statement: string,
   contract: ReviewServingReadContract,
@@ -204,6 +289,9 @@ const getContractSqlMatch = (
     getAsyncSearchSqlMatch(statement, contract, request),
     getNamedCountSqlMatch(statement, contract, request),
     getFacetSqlMatch(statement, contract, request),
+    getSearchTokenPrefixSqlMatch(statement, contract, request),
+    getRouteFilterSqlMatch(statement, contract, request),
+    getCursorSqlMatch(statement, contract, request),
     contract.servingTable === 'mart.review_filter_option_serving_v4' && request.filterOptionIdentity
       ? containsSql(statement, `'${request.filterOptionIdentity}'`)
       : true,
@@ -219,6 +307,10 @@ const getContractSqlMatch = (
       : true,
     contract.physicalAccessStrategy === 'postingIntersection' && request.listMode
       ? containsSql(statement, `list_mode_key = '${request.listMode}'`)
+      : true,
+    contract.physicalAccessStrategy === 'postingIntersection'
+      ? containsSql(statement, `filter_kind = '${request.filterKind}'`)
+        && containsSql(statement, `filter_value = '${request.filterValue}'`)
       : true,
     contract.physicalAccessStrategy === 'tokenPrefixIndex' ? containsSql(statement, 'starts_with(token,') : true,
     getPayloadKindSqlMatch(statement, contract),
@@ -352,6 +444,41 @@ test('route parity evidence runs real readers for every mounted coverage contrac
       return `${entry.routeKey} ${getCaseKey(caseInput.request)}`
     })
   })
+  const allEvidenceCases = evidence.reviewServingRouteParityEvidence.flatMap((entry) => {
+    return entry.cases
+  })
+  const cursorlessPaginatedCases = allEvidenceCases.flatMap((caseInput) => {
+    const contract = contracts.getReviewServingReadContract(caseInput.request.contractKey)
+
+    return contract && contract.cursorFields.length > 0 && !caseInput.request.cursor ? [caseInput.name] : []
+  })
+  const filteredOrderedCases = allEvidenceCases.filter((caseInput) => {
+    const contract = contracts.getReviewServingReadContract(caseInput.request.contractKey)
+
+    return (
+      contract?.physicalAccessStrategy === 'orderedPrefix' && Object.keys(caseInput.request.filters ?? {}).length > 0
+    )
+  })
+  const filteredQueueCases = allEvidenceCases.filter((caseInput) => {
+    const contract = contracts.getReviewServingReadContract(caseInput.request.contractKey)
+
+    return (
+      contract?.physicalAccessStrategy === 'queueOrdering' && Object.keys(caseInput.request.filters ?? {}).length > 0
+    )
+  })
+  const multiTokenSearchCases = allEvidenceCases.filter((caseInput) => {
+    return (caseInput.request.searchTokenPrefixes?.length ?? 0) > 1
+  })
+  const facetSummaryIdentities = allEvidenceCases
+    .filter((caseInput) => {
+      return (
+        caseInput.request.contractKey === 'review.filters.facets'
+        || caseInput.request.contractKey === 'review.human.filters.facets'
+      )
+    })
+    .map((caseInput) => {
+      return caseInput.request.countFilterKey
+    })
   const missingRunnableCases = evidence.reviewServingRouteParityEvidence.flatMap((entry) => {
     return entry.cases.flatMap((caseInput) => {
       return caseInput.currentBehaviorRows && caseInput.expectedRows.length > 0
@@ -372,6 +499,11 @@ test('route parity evidence runs real readers for every mounted coverage contrac
 
   expect([...new Set(evidenceKeys)].sort()).toEqual([...new Set(coverageKeys)].sort())
   expect(actualContractCases.sort()).toEqual(expectedContractCases.sort())
+  expect(cursorlessPaginatedCases).toEqual([])
+  expect(filteredOrderedCases.length).toBeGreaterThan(0)
+  expect(filteredQueueCases.length).toBeGreaterThan(0)
+  expect(multiTokenSearchCases.length).toBeGreaterThan(0)
+  expect(facetSummaryIdentities.sort()).toEqual(['review.filter.importRoute', 'review.human.filter.summaryAnswer'])
   expect(missingRunnableCases).toEqual([])
   expect(missingGateEvidence).toEqual([])
   expect(
