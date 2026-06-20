@@ -126,6 +126,25 @@ Phase 5 does not absorb unfinished Phase 3 projector work. Base selected-import 
 - Low-memory runtime defaults reduce batch sizes before increasing concurrency.
 - Snapshot pins and retention cleanup must tolerate laptop storage and interruption patterns.
 
+### Part 2 Desktop And Interruption Hardening Status - 2026-06-20
+
+- Status: completed for targeted Part 2 hardening. Desktop now defaults its backend DuckDB runtime to the existing low-memory worker profile (`DUCKDB_MEMORY_LIMIT=6400MiB`) when no explicit override is provided, while preserving user/operator overrides.
+- Browser/desktop parity evidence: `reviewServingDesktopInterruptionEvidence.ts` pins that the desktop shell starts the same `src/server/index.ts` backend, bridges `/api/` requests into the same API route surface, and relies on the shared serving read contracts, admission, and `readReviewServingRows` DuckDB workload contexts used by browser routes.
+- Interruption/resume evidence: the evidence registry and tests cover projector dirty-work release, stale lease reclamation, chunk-manifest restart skipping, bulk/export/PDF stale-running job claims and keyset cursor progress, durable substring search jobs in `app.review_search_job`, and retention cleanup marks/pin protection.
+- Low-memory evidence: desktop defaults to `6400MiB`; `duckdbService.ts` maps memory limits at or below `6400MiB` to one DuckDB thread plus serialized concurrent work; projector, bulk, search, and cleanup flows retain bounded batch/cursor defaults instead of raising concurrency.
+- Targeted desktop verification: `src/desktop/getDesktopRuntimeConfig.test.ts` asserts the desktop backend command, API origin bridge preload, low-memory default, and explicit memory-limit override behavior. `bun run desktop:build` was run as the desktop build gate for this part.
+- Remaining risks: full OS sleep/resume and process-kill simulation against a large local desktop database was not run in Part 2. The deterministic guard covers the durable resume contracts and will fail on source/test drift, but release-scale interruption remains part of the final benchmark/release gate.
+
+Part 2 checklist:
+
+- [x] Browser and desktop share serving/job/admission route behavior through the same backend and `/api/` route surface.
+- [x] Projector resume contracts are covered by leases, dirty-work release, and chunk-manifest restart evidence.
+- [x] Bulk/export/PDF resume contracts are covered by durable job rows, stale-running claims, keyset cursors, cancellation, and terminal failure evidence.
+- [x] Search resume contracts are covered by durable async substring job rows and token-prefix ready reads.
+- [x] Cleanup resume contracts are covered by bounded retention marks, target discovery, active pins, and last-known-good protection.
+- [x] Desktop low-memory defaults select reduced DuckDB concurrency and bounded job/projector/search/cleanup batches before any concurrency increase.
+- [x] Targeted desktop tests and desktop build evidence captured.
+
 ## JavaScript And TypeScript Rule
 
 Use the `effect` library for non-trivial JavaScript/TypeScript async and server flow in Phase 5 hardening, interruption handling, cleanup, benchmark orchestration, and release-gate checks. Prefer `Effect.gen` for sequencing, `Layer`/`Context` for service wiring, `Effect.acquireRelease`/`Scope` for resource lifetime, and `Schedule` for retries, polling, and backoff. Keep pure transforms and very small handlers as plain functions.

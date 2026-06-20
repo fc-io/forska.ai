@@ -19,6 +19,7 @@ test('uses the macOS application support directory by default', () => {
   expect(runtimeConfig.backendEnv.DUCKDB_PATH).toBe(
     '/Users/tester/Library/Application Support/Forska/desktop/forska.duckdb',
   )
+  expect(runtimeConfig.backendEnv.DUCKDB_MEMORY_LIMIT).toBe('6400MiB')
   expect(runtimeConfig.backendEnv.FORSKA_RUNTIME_PROFILE).toBe('local')
   expect(runtimeConfig.backendEnv.FORSKA_RUNTIME_SERVICE).toBe('dev-single-server')
   expect(runtimeConfig.backendEnv.LOG_DIR).toBe(
@@ -61,4 +62,15 @@ test('supports desktop API port overrides', () => {
   expect(
     Buffer.from(runtimeConfig.windowPreload.replace('data:text/javascript;base64,', ''), 'base64').toString('utf8'),
   ).toContain('window.__FORSKA_DESKTOP_API_ORIGIN__ = "http://127.0.0.1:32999";')
+})
+
+test('keeps explicit DuckDB memory limit overrides for desktop backends', () => {
+  const runtimeConfig = getDesktopRuntimeConfig({
+    createDataRoot: false,
+    envValues: {DUCKDB_MEMORY_LIMIT: '8GB', FORSKA_DESKTOP_BUN_BIN: '/usr/local/bin/bun'},
+    homeDirectory: '/Users/tester',
+    platform: 'darwin',
+  })
+
+  expect(runtimeConfig.backendEnv.DUCKDB_MEMORY_LIMIT).toBe('8GB')
 })
