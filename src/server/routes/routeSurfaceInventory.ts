@@ -310,13 +310,13 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     ['POST', '/api/judgmentsjobs'],
     ['GET', '/api/judgmentsjobs'],
     ['GET', '/api/judgmentsjobs/:id'],
-    ['GET', '/api/judgmentsjobs-unassessed-count'],
-    ['GET', '/api/judgmentsjobs-unassessed-articles'],
     ['GET', '/api/judgmentsjobs-total-token-usage'],
     ['PATCH', '/api/judgmentsjobs/:id'],
     ['DELETE', '/api/judgmentsjobs/:id'],
   ]),
-  ...ownerlessDiagnostics('JudgmentsJobsRoutes.ts', 'Judgment job status, health, and provider telemetry.', [
+  ...ownerlessDiagnostics('JudgmentsJobsRoutes.ts', 'Judgment job status, health, provider telemetry, and unassessed-work diagnostics.', [
+    ['GET', '/api/judgmentsjobs-unassessed-count'],
+    ['GET', '/api/judgmentsjobs-unassessed-articles'],
     ['GET', '/api/judgmentsjobs/:id/health'],
     ['GET', '/api/judgmentsjobs-health'],
   ]),
@@ -389,9 +389,11 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
       ['POST', '/api/articles/:id/convert-pdf'],
     ],
   ),
-  ...ownerDependentProduct('HumanAssessmentRoutes.ts', [
+  ...ownerDependentDiagnostics('HumanAssessmentRoutes.ts', 'Human assessment aggregate admin reporting.', [
     ['GET', '/api/humanassessment/overview'],
     ['GET', '/api/humanassessment/overview-both-projects'],
+  ]),
+  ...ownerDependentProduct('HumanAssessmentRoutes.ts', [
     ['POST', '/api/humanassessment/init'],
     ['POST', '/api/humanassessment/submit'],
   ]),

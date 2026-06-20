@@ -56,6 +56,24 @@ After final verification, normal product review paths must not reach raw fallbac
 - Delete obsolete intermediate state after rebuild or clear cutover unless explicit compatibility is required.
 - Keep admin/maintenance/debug-only raw reads only when named, route-classified, guarded, and excluded from normal product flows.
 
+### Part 1 Final Deletion/Static Hardening Status - 2026-06-20
+
+- Status: completed for the Part 1 static deletion sweep. No normal mounted review-route raw fallback, selected-import CTE join, hidden `OFFSET`, or route-local cursor/filter-signature path was found beyond the existing guard coverage in `reviewServingReadContracts.test.ts` and route-service SQL-shape tests.
+- Raw/admin/debug classification hardening: judgment unassessed diagnostics and human-assessment overview routes were moved out of `supported-local-api` route-surface classification and into local diagnostics classification, matching their `reviewServingAdjacentRouteSurfaces.ts` out-of-scope admin/debug evidence.
+- Large-ID return paths: add-by-filter, PDF-by-filter/project, and export remain durable job admissions; add-by-ID and explicit PDF bulk remain article-ID-only job admissions with `reviewBulkOperationArticleIdCap` and payload caps. No foreground all-ID response path was found in the inspected normal select-all/add-to-project/PDF/export routes.
+- Export raw hydration: completed export download still hydrates bounded job-result article IDs in `exportBatchSize` chunks and is guarded as a sensitive local export route, not a foreground selection fallback. The export admission path queues durable jobs and does not return matching article IDs.
+- V4 writer/promotion paths: the active writer/promotion path remains the review-serving projector/writer stack; no competing mounted product-route V4 promotion path was found in this Part 1 sweep.
+- Obsolete intermediate state: no clearly safe state deletion was identified in Part 1. V4 base, patch, job, manifest, pin, and retention state remain active serving infrastructure and should not be deleted in this sweep.
+
+Part 1 checklist:
+
+- [x] Normal raw review fallback confirmed guarded or absent from mounted normal review routes.
+- [x] Foreground selected-import CTE joins confirmed absent from normal review/filter/count/bulk selection routes; bounded export-download hydration remains classified separately.
+- [x] Large-ID return paths confirmed replaced by durable job admission or explicit capped article-ID-only admission.
+- [x] Hidden `OFFSET` pagination confirmed guarded in hot mounted review routes.
+- [x] Competing V4 writer/promotion route paths not found; projector/writer stack remains the serving owner.
+- [x] Admin/debug adjacent raw-read surfaces route-classified as diagnostics and tested against product classification drift.
+
 ## Cutover Gate
 
 Prerequisite before evaluating this gate: the 2026-06-20 final Phase 4 audit in `DUCK_CQRS_PLAN_PHASE_4.md` is closed. Phase 5 may now evaluate the gate through deletion/static hardening, interruption and desktop verification, release-scale benchmark evidence, and repo-native release checks.

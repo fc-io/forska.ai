@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {getRouteSurfaceRouteKey, routeSurfaceRoutes} from '../routes/routeSurfaceInventory.ts'
 import {
   getReviewServingAdjacentRouteClassificationKey,
   reviewServingAdjacentRouteClassifications,
@@ -86,4 +87,21 @@ test('US-013 adjacent serving classifications reference registered contracts onl
   })
 
   expect(unknownContractKeys).toEqual([])
+})
+
+test('US-013 admin/debug adjacent surfaces are not product-classified in route inventory', () => {
+  const routeSurfaceByKey = new Map(
+    routeSurfaceRoutes.map((route) => {
+      return [getRouteSurfaceRouteKey(route), route]
+    }),
+  )
+  const productClassifiedAdminDebugRoutes = reviewServingAdjacentRouteClassifications.flatMap((entry) => {
+    const routeSurface = routeSurfaceByKey.get(getReviewServingAdjacentRouteClassificationKey(entry))
+
+    return entry.classification === 'out-of-scope-admin-debug' && routeSurface?.category === 'supported-local-api'
+      ? [`${entry.method} ${entry.routePath}`]
+      : []
+  })
+
+  expect(productClassifiedAdminDebugRoutes).toEqual([])
 })

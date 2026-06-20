@@ -58,7 +58,7 @@ export const reviewServingAdjacentRouteClassifications = [
     classification: 'out-of-scope-admin-debug',
     contractKeys: [],
     excludedFromNormalReviewFlow: true,
-    guard: 'admin judgment-job dashboard diagnostic; not linked from browser or desktop review row flows',
+    guard: 'local diagnostics API classification; not linked from browser or desktop review row flows',
     method: 'GET',
     reason:
       'Judgment-job unassessed count is an operational queue diagnostic for a job, not a production review route.',
@@ -69,7 +69,7 @@ export const reviewServingAdjacentRouteClassifications = [
     classification: 'out-of-scope-admin-debug',
     contractKeys: [],
     excludedFromNormalReviewFlow: true,
-    guard: 'admin judgment-job dashboard diagnostic; bounded preview route outside normal review row flows',
+    guard: 'local diagnostics API classification; bounded preview route outside normal review row flows',
     method: 'GET',
     reason:
       'Judgment-job unassessed article preview is an operational diagnostic for a job, not a production review route.',
@@ -80,7 +80,7 @@ export const reviewServingAdjacentRouteClassifications = [
     classification: 'out-of-scope-admin-debug',
     contractKeys: [],
     excludedFromNormalReviewFlow: true,
-    guard: 'admin assessments page only; route-surface inventory keeps it owner-dependent local API',
+    guard: 'local diagnostics API classification for the admin assessments page only',
     method: 'GET',
     reason:
       'Aggregate human-assessment overview for admin reporting; it is not used by browser or desktop review row flows.',
@@ -91,7 +91,7 @@ export const reviewServingAdjacentRouteClassifications = [
     classification: 'out-of-scope-admin-debug',
     contractKeys: [],
     excludedFromNormalReviewFlow: true,
-    guard: 'admin assessments page only; route-surface inventory keeps it owner-dependent local API',
+    guard: 'local diagnostics API classification for the admin assessments page only',
     method: 'GET',
     reason:
       'Aggregate both-projects human-assessment overview for admin reporting; it is not a normal review row surface.',
