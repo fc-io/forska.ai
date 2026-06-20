@@ -47,5 +47,6 @@ export const reviewServingJobParityCoverage = [
   {method: 'POST', productRoute: '/api/projects/add_articles_by_ids', requiredGates: reviewServingJobParityGates},
   {method: 'POST', productRoute: '/api/articles/pdf-fetch-by-project', requiredGates: reviewServingJobParityGates},
   {method: 'POST', productRoute: '/api/articles/pdf-fetch-bulk', requiredGates: reviewServingJobParityGates},
+  {method: 'GET', productRoute: '/api/articles/pdf-fetch-jobs/:jobId', requiredGates: reviewServingJobParityGates},
   {method: 'POST', productRoute: '/api/projects/:id/export', requiredGates: reviewServingJobParityGates},
 ] as const

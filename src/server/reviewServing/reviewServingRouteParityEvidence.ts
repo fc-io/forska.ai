@@ -73,8 +73,26 @@ const facetSummaryIdentityByContract: Partial<Record<string, string>> = {
   'review.human.filters.facets': 'review.human.filter.summaryAnswer',
 }
 
-const getCountFilterKey = (contract: ReviewServingReadContract | undefined) => {
-  return contract ? (facetSummaryIdentityByContract[contract.key] ?? 'project:project-1') : 'project:project-1'
+const promptScopedCountKeys = new Set([
+  'review.both.conflictByPrompt',
+  'review.human.reviewedByPrompt',
+  'review.llm.assessedByPrompt',
+  'review.llm.unassessedByPrompt',
+])
+
+const getCountFilterKey = (
+  contract: ReviewServingReadContract | undefined,
+  namedCountKey: ReviewServingReaderRequest['namedCountKey'],
+) => {
+  if (!contract) {
+    return 'project:project-1'
+  }
+
+  if (namedCountKey && promptScopedCountKeys.has(namedCountKey)) {
+    return 'prompt:prompt-1'
+  }
+
+  return facetSummaryIdentityByContract[contract.key] ?? 'project:project-1'
 }
 
 const getRouteFilters = (contract: ReviewServingReadContract | undefined) => {
@@ -89,7 +107,7 @@ const getRouteFilters = (contract: ReviewServingReadContract | undefined) => {
     ...(allowedFilters.has('articleCreatedAtTo') ? {articleCreatedAtTo: '2026-01-31'} : {}),
     ...(allowedFilters.has('conflictFlag') ? {conflictFlag: true} : {}),
     ...(allowedFilters.has('duplicateFlag') ? {duplicateFlag: true} : {}),
-    ...(allowedFilters.has('humanStatus') ? {humanStatus: 'reviewed'} : {}),
+    ...(allowedFilters.has('humanStatus') ? {humanStatus: 'answered'} : {}),
     ...(allowedFilters.has('llmHasJudgment') ? {llmHasJudgment: true} : {}),
     ...(allowedFilters.has('llmStatus') ? {llmStatus: 'complete'} : {}),
     ...(allowedFilters.has('promptAnswer') ? {promptAnswer: ['prompt-1:yes', 'prompt-1:maybe']} : {}),
@@ -145,9 +163,8 @@ const getRequest = (
 ): ReviewServingReaderRequest => {
   const contract = getReviewServingReadContract(contractKey)
   const limit = contract ? Math.min(2, contract.maxPageSize) : 1
-  const countFilterKey = getCountFilterKey(contract ?? undefined)
-  const listMode =
-    contract?.physicalAccessStrategy === 'postingIntersection' ? (listModeByRoute[productRoute] ?? null) : null
+  const countFilterKey = getCountFilterKey(contract ?? undefined, namedCountKey)
+  const listMode = listModeByRoute[productRoute] ?? null
   const searchInput =
     contract?.searchMode === 'tokenPrefix'
       ? {
@@ -193,15 +210,22 @@ const getRequest = (
   return {...request, cursor: getCursor(contract ?? undefined, request)}
 }
 
-export const getReviewServingRouteParityEvidenceRows = (_routeKey: string, contractKey: string) => {
-  return [{articleId: 'article-1', semantic: contractKey}]
+export const getReviewServingRouteParityEvidenceRows = (_routeKey: string, semantic: string) => {
+  return [{articleId: 'article-1', semantic}]
 }
 
 const getReviewServingRouteParityEvidenceSemantic = (
   contractKey: string,
   namedCountKey: ReviewServingReaderRequest['namedCountKey'],
+  request: ReviewServingReaderRequest,
 ) => {
-  return namedCountKey ? `namedCount:${namedCountKey}` : contractKey
+  if (namedCountKey) {
+    return `namedCount:${namedCountKey}`
+  }
+
+  return contractKey === 'review.filters.postings' && request.listMode
+    ? `${contractKey}:${request.listMode}`
+    : contractKey
 }
 
 const getExpectedNamedCountState = (request: ReviewServingReaderRequest) => {
@@ -228,7 +252,7 @@ const routeEvidence = (input: {method: 'GET' | 'POST'; productRoute: string}): R
 
       return namedCountKeys.map((namedCountKey) => {
         const request = getRequest(contractKey, namedCountKey, input.productRoute)
-        const semantic = getReviewServingRouteParityEvidenceSemantic(contractKey, namedCountKey)
+        const semantic = getReviewServingRouteParityEvidenceSemantic(contractKey, namedCountKey, request)
         const rows = getReviewServingRouteParityEvidenceRows(routeKey, semantic)
 
         return {
@@ -256,10 +280,11 @@ const routeEvidence = (input: {method: 'GET' | 'POST'; productRoute: string}): R
 const jobEvidence = (input: {
   method: 'GET' | 'POST'
   productRoute: string
+  evidenceCases?: readonly ReviewServingParityEvidenceCase<ReviewServingJobParityGate>[]
   verificationTests: readonly string[]
 }): JobEvidenceInput => {
   return {
-    evidenceCases: [
+    evidenceCases: input.evidenceCases ?? [
       {
         coveredGates: ['durableJobPersistence'],
         evidence: 'durable job row is persisted with job kind and request identity',
@@ -339,6 +364,21 @@ export const reviewServingJobParityEvidence = [
       'src/server/reviewServing/reviewBulkOperationService.test.ts',
       'src/server/services/pdfFetchJobs.test.ts',
     ],
+  }),
+  jobEvidence({
+    method: 'GET',
+    productRoute: '/api/articles/pdf-fetch-jobs/:jobId',
+    evidenceCases: [
+      {
+        coveredGates: ['durableJobPersistence', 'foregroundPayloadCap'],
+        evidence: 'status route reads persisted PDF job status by durable job id without hydrated article payloads',
+      },
+      {
+        coveredGates: ['keysetBatching', 'articleIdCaps', 'filterSignature', 'snapshotSemantics'],
+        evidence: 'status lookup does not perform selection scans and preserves the persisted job request identity',
+      },
+    ],
+    verificationTests: ['src/server/services/pdfFetchJobs.test.ts'],
   }),
   jobEvidence({
     method: 'POST',
