@@ -183,7 +183,7 @@ Part 3 checklist:
 - Completed Phase 5 gates: Phase 4 prerequisite audit, Part 1 final deletion/static hardening, Part 2 desktop/interruption hardening, desktop DuckDB low-memory default, Part 3 synthetic 10M/7-prompt workload definition, release-report validation, benchmark scope validation, and repo-native benchmark release-gate command.
 - Verified on this audit: `bun test src/server/reviewServing/reviewServingAdjacentRouteSurfaces.test.ts src/server/reviewServing/reviewServingReadContracts.test.ts`, `bun test src/desktop/getDesktopRuntimeConfig.test.ts src/server/reviewServing/reviewServingDesktopInterruptionEvidence.test.ts`, `bun run bench:review-serving-release-gate`, `bun run desktop:build`, and `git diff --check` all passed.
 - OOM/runtime-memory status: Part 2 changed desktop backend defaults to `DUCKDB_MEMORY_LIMIT=6400MiB` when no explicit override is provided, so `OOM_ERRORS.md` now records the runtime-memory implementation entry for this stacked branch.
-- Final closure verdict: Phase 5 implementation and repo-native synthetic validation gates are complete for coordinator review. Final cutover remains open only through Phase 6 physical release evidence.
+- Final closure verdict: Phase 5 implementation and repo-native synthetic validation gates are complete for coordinator review. Final cutover still depends on the master coordinator checklist, including Phase 6 physical release evidence.
 - Remaining open gates before final cutover: see `DUCK_CQRS_PLAN_PHASE_6.md` for the true 10M/7-prompt DuckDB physical run, large local desktop interruption evidence, and release-scale routine-delta/compaction proof.
 
 ## Supervisor Audit Pass - 2026-06-20
