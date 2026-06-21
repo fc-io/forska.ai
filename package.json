@@ -17,6 +17,7 @@
     "bench:duckdb-append-lanes": "bun scripts/benchmarkDuckdbAppendLanes.ts",
     "bench:project-transfer": "bun scripts/benchmarkProjectTransfer.ts",
     "bench:review-serving-release-gate": "bun test src/server/reviewServing/reviewServingBenchmark.test.ts && bun run bench:review-serving-smoke",
+    "bench:review-serving-physical-100k": "bun scripts/benchmarkReviewServingPhysical100k.ts",
     "bench:review-serving-smoke": "bun scripts/benchmarkReviewServingSmoke.ts",
     "preview": "bunx --bun vite preview",
     "test": "sh -c 'bun run test:bun; bun_status=$?; bun run test:vitest; vitest_status=$?; bun run test:playwright; playwright_status=$?; [ $bun_status -eq 0 ] && [ $vitest_status -eq 0 ] && [ $playwright_status -eq 0 ]'",

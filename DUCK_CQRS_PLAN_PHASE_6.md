@@ -34,6 +34,20 @@ artifacts/review-serving-phase6/<YYYYMMDD-HHMM>-<commit>/
 
 ## Gate 1 - True 10M/7-Prompt Release-Scale Run
 
+Optional 100k physical rehearsal before the true gate:
+
+```bash
+bun run bench:review-serving-physical-100k -- \
+  --fixture-path=.temp/review-serving-phase6-100k/phase6-physical-rehearsal-100k.duckdb \
+  --output-dir=.temp/review-serving-phase6-100k/evidence \
+  --duckdb-memory-limit=6400MiB
+```
+
+This command builds the explicit 100,000 article / 7 prompt fixture when the
+fixture path does not exist, verifies 700,000 article-prompt overlap rows, then
+runs the Phase 6 physical read workload against that fixture. It is a rehearsal
+only and must not be used to mark the true 10M release-scale gate complete.
+
 Steps:
 
 1. Prepare the target machine with the intended DuckDB memory limit, temp directory, and foreground admission settings.
@@ -49,6 +63,7 @@ Command checklist:
 - [ ] `git rev-parse HEAD`
 - [ ] `git status --short`
 - [ ] `bun run bench:review-serving-release-gate`
+- [ ] Optional first pass: run `bun run bench:review-serving-physical-100k -- --fixture-path=<explicit-100k-fixture.duckdb> --output-dir=<evidence-dir> --duckdb-memory-limit=<limit>` and save its JSON evidence as a rehearsal artifact
 - [ ] `DUCKDB_PATH=<fixture-duckdb-path> DUCKDB_MEMORY_LIMIT=<limit> DUCKDB_TEMP_DIRECTORY=<temp-dir> bun src/db/migrateDuckdb.ts` if the fixture needs migrations
 - [ ] Build fixture if absent; otherwise run the fixture-dimension verification command and save its output
 - [ ] Run the physical release-scale benchmark with `benchmarkRunKind: "releaseScaleDuckDb"` and save stdout/stderr plus JSON reports

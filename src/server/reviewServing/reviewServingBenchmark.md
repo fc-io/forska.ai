@@ -44,3 +44,18 @@ This command does not claim a true 10M DuckDB run. A real release-scale run must
 provide `benchmarkRunKind: "releaseScaleDuckDb"`, the DuckDB memory limit used,
 temp-dir growth, and active snapshot identity values in the emitted release
 report.
+
+Phase 6 100k physical rehearsal command:
+
+```bash
+bun run bench:review-serving-physical-100k -- \
+  --fixture-path=.temp/review-serving-phase6-100k/phase6-physical-rehearsal-100k.duckdb \
+  --output-dir=.temp/review-serving-phase6-100k/evidence \
+  --duckdb-memory-limit=6400MiB
+```
+
+The rehearsal command refuses to run against `DUCKDB_PATH`, builds the explicit
+100,000 article / 7 prompt DuckDB fixture when absent, verifies 700,000
+article-prompt overlap rows, and emits
+`benchmarkRunKind: "phase6PhysicalRehearsal100k"` evidence. It is useful before
+the 10M run, but it is not the `releaseScaleDuckDb` gate.
