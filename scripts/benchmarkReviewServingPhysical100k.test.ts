@@ -8,6 +8,7 @@ import {reviewServingBenchmarkPhase6PhysicalRehearsal100kFixture} from '../src/s
 import {
   assertFixturePathDoesNotTargetLiveDuckdb,
   getReviewServingPhase6PhysicalRehearsal100kWorkloadDefinition,
+  getReviewServingPhysical100kFixtureRouteIdentities,
   getReviewServingPhysical100kBenchmarkInput,
   getReviewServingPhysical100kFixtureVerification,
   parseReviewServingPhysical100kBenchmarkArgs,
@@ -35,6 +36,7 @@ const context: ReviewServingPhysical100kSnapshotContext = {
 const samples = {
   articleIds: ['article-1', 'article-2'],
   filterOptionIdentity: 'filter-option-identity',
+  humanFilterOptionIdentity: 'human-filter-option-identity',
   humanFacetSummaryIdentity: 'human-summary-identity',
   postingFilter: {filterKind: 'promptAnswer', filterValue: 'review:promptAnswer:prompt-1:yes', listMode: 'llm'},
   promptCounts: {
@@ -46,7 +48,7 @@ const samples = {
   queueKind: 'unassessed',
   reviewFacetSummaryIdentity: 'review-summary-identity',
   searchTokenPrefix: 'hea',
-} as ReviewServingPhysical100kFixtureSamples
+} as unknown as ReviewServingPhysical100kFixtureSamples
 
 test('review-serving physical 100k benchmark args require explicit fixture and output paths', () => {
   expect(() => {
@@ -153,6 +155,20 @@ test('review-serving physical 100k fixture path refuses resolved live DuckDB pat
     })
   }).toThrow('Refusing to benchmark the live DuckDB path')
   expect(() => {
+    assertFixturePathDoesNotTargetLiveDuckdb(explicitLivePath, {
+      DUCKDB_PATH: explicitLivePath,
+      DUCKDB_PATH_FILE: duckdbPathFile,
+      HOME: homeDir,
+    })
+  }).toThrow('Refusing to benchmark the live DuckDB path')
+  expect(() => {
+    assertFixturePathDoesNotTargetLiveDuckdb(pathFileLivePath, {
+      DUCKDB_PATH: explicitLivePath,
+      DUCKDB_PATH_FILE: duckdbPathFile,
+      HOME: homeDir,
+    })
+  }).not.toThrow()
+  expect(() => {
     assertFixturePathDoesNotTargetLiveDuckdb('/tmp/forska-physical-100k-fixture.duckdb', {
       HOME: homeDir,
     })
@@ -174,6 +190,28 @@ test('review-serving physical 100k input emits non-release benchmark run kind an
     countFilterKey: 'prompt:prompt-1',
     namedCountKey: 'review.llm.assessedByPrompt',
   })
+  expect(input.readerRequestsByWorkItemKey.get('physical-100k-overlapFilterOptions')).toMatchObject({
+    filterOptionIdentity: 'filter-option-identity',
+  })
+  expect(input.readerRequestsByWorkItemKey.get('physical-100k-humanOverlapFilterOptions')).toMatchObject({
+    filterOptionIdentity: 'human-filter-option-identity',
+  })
+})
+
+test('review-serving physical 100k fixture seeds route filter identities', () => {
+  const identities = getReviewServingPhysical100kFixtureRouteIdentities()
+
+  expect(identities.facetSummary.review).toEqual([
+    'review.filter.duplicateFlag',
+    'review.filter.importRoute',
+    'review.filter.promptAnswer',
+    'review.filter.publicationYear',
+  ])
+  expect(identities.facetSummary.human).toEqual([
+    'review.human.filter.promptAnswer',
+    'review.human.filter.summaryAnswer',
+  ])
+  expect(identities.filterOption.review).not.toBe(identities.filterOption.human)
 })
 
 test('package exposes the review-serving physical 100k benchmark command', async () => {
