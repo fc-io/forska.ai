@@ -1,10 +1,11 @@
-import {writeFileSync} from 'node:fs'
+import {linkSync, mkdirSync, rmSync, symlinkSync, writeFileSync} from 'node:fs'
 import {homedir} from 'node:os'
 import {join, resolve} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
 import {reviewServingBenchmarkPhase6PhysicalRehearsal100kFixture} from '../src/server/reviewServing/reviewServingBenchmark.ts'
+import {getConfiguredDuckdbPath} from '../src/server/utils/getDuckdbPath.ts'
 import {
   assertFixturePathDoesNotTargetLiveDuckdb,
   getReviewServingPhase6PhysicalRehearsal100kWorkloadDefinition,
@@ -115,10 +116,10 @@ test('review-serving physical 100k workload scales Phase 6 operations without cl
     targetRowsReturnedPerRequest: 14,
   })
   expect(workload.operations.find((operation) => operation.key === 'overlapFacetRefresh')).toMatchObject({
-    targetRowsReturnedPerRequest: 4,
+    targetRowsReturnedPerRequest: 1,
   })
   expect(workload.operations.find((operation) => operation.key === 'humanOverlapFacetRefresh')).toMatchObject({
-    targetRowsReturnedPerRequest: 2,
+    targetRowsReturnedPerRequest: 1,
   })
   expect(workload.operations.find((operation) => operation.key === 'overlapFilterOptions')).toMatchObject({
     targetRowsReturnedPerRequest: 3,
@@ -126,11 +127,17 @@ test('review-serving physical 100k workload scales Phase 6 operations without cl
   expect(workload.operations.find((operation) => operation.key === 'humanOverlapFilterOptions')).toMatchObject({
     targetRowsReturnedPerRequest: 3,
   })
+  expect(workload.operations.find((operation) => operation.key === 'llmPromptOverlapRows')).toMatchObject({
+    maxRowsScannedPerRequest: 300,
+  })
+  expect(workload.operations.find((operation) => operation.key === 'humanListJudgmentPayloadRows')).toMatchObject({
+    maxRowsScannedPerRequest: 10_000,
+  })
 })
 
 test('review-serving physical 100k fixture path refuses resolved live DuckDB paths', () => {
   const homeDir = homedir()
-  const defaultLivePath = join(homeDir, 'Library', 'Application Support', 'Forska', 'forska.duckdb')
+  const defaultLivePath = getConfiguredDuckdbPath({envValues: {HOME: homeDir}})
   const explicitLivePath = resolve('/tmp/forska-physical-100k-explicit-live.duckdb')
   const duckdbPathFile = resolve('/tmp/forska-physical-100k-duckdb-path-file.txt')
   const pathFileLivePath = resolve('/tmp/forska-physical-100k-path-file-live.duckdb')
@@ -173,6 +180,33 @@ test('review-serving physical 100k fixture path refuses resolved live DuckDB pat
       HOME: homeDir,
     })
   }).not.toThrow()
+})
+
+test('review-serving physical 100k fixture path refuses filesystem aliases to live DuckDB paths', () => {
+  const fixtureDir = resolve('/tmp/forska-physical-100k-fixture-guard')
+  const livePath = join(fixtureDir, 'live.duckdb')
+  const symlinkPath = join(fixtureDir, 'fixture-symlink.duckdb')
+  const hardLinkPath = join(fixtureDir, 'fixture-hardlink.duckdb')
+  const danglingSymlinkPath = join(fixtureDir, 'fixture-dangling.duckdb')
+
+  rmSync(fixtureDir, {force: true, recursive: true})
+  mkdirSync(fixtureDir, {recursive: true})
+  writeFileSync(livePath, 'live')
+  symlinkSync(livePath, symlinkPath)
+  linkSync(livePath, hardLinkPath)
+  symlinkSync(join(fixtureDir, 'missing.duckdb'), danglingSymlinkPath)
+
+  expect(() => {
+    assertFixturePathDoesNotTargetLiveDuckdb(symlinkPath, {DUCKDB_PATH: livePath})
+  }).toThrow('Refusing to benchmark the live DuckDB path')
+  expect(() => {
+    assertFixturePathDoesNotTargetLiveDuckdb(hardLinkPath, {DUCKDB_PATH: livePath})
+  }).toThrow('Refusing to benchmark the live DuckDB path')
+  expect(() => {
+    assertFixturePathDoesNotTargetLiveDuckdb(danglingSymlinkPath, {DUCKDB_PATH: livePath})
+  }).toThrow('Refusing to benchmark a dangling fixture DuckDB symlink')
+
+  rmSync(fixtureDir, {force: true, recursive: true})
 })
 
 test('review-serving physical 100k input emits non-release benchmark run kind and physical reader requests', () => {
