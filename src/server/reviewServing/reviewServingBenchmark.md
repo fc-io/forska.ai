@@ -5,8 +5,9 @@ so it does not require a populated 10M DuckDB database, serving tables, or
 projectors. It validates the release workload shape and release-report contract.
 
 The full benchmark fixture is `synthetic10m7PromptOverlap`: 10,000,000
-articles, 7 prompts, and 70,000,000 article-prompt overlap rows. That full run
-is a Phase 5 release gate and is not required for Phase 0 completion.
+articles, 7 prompts, and 70,000,000 article-prompt overlap rows. The true
+physical full run is a Phase 6 release-evidence gate and is not required for
+Phase 0 or Phase 5 synthetic validation completion.
 
 The metrics and release-report contract records p50, p95, and p99 latency; RSS
 memory; DuckDB memory limit; temp-dir growth; temp usage; queue depth; rows
@@ -23,9 +24,9 @@ count keys/filter prefixes, bad search/count/job dimensions, over-wide scanned
 rows, over-page returned rows, foreground temp spill, p95/p99 latency breaches,
 RSS breaches, missing identity fields, or negative temp growth.
 
-Phase 5 runs fail if p95 latency exceeds 2,000 ms, p99 latency exceeds 5,000
-ms, peak process RSS exceeds 20 GiB, process RSS growth exceeds 4 GiB, or any
-accepted foreground sample records DuckDB temp spill.
+Phase 6 physical runs fail if p95 latency exceeds 2,000 ms, p99 latency exceeds
+5,000 ms, peak process RSS exceeds 20 GiB, process RSS growth exceeds 4 GiB, or
+any accepted foreground sample records DuckDB temp spill.
 
 Smoke command:
 

@@ -95,11 +95,12 @@ goal:
 - Snapshot/health/warning reads must select usable manifests explicitly, such as
   active or last-known-good/retired states, and must not make candidate or failed
   manifests drive normal freshness decisions.
-- The Phase 5 benchmark is a release gate only if it covers rows, filtered
+- The Phase 5 synthetic benchmark validation and Phase 6 physical release run cover rows, filtered
   posting plus article-set hydration, list/detail judgment payloads, human facets
   and options, named counts across list modes, queue kind, token-prefix search,
   async substring jobs, bulk/export/PDF jobs, request-slice diversity, scanned-row
-  ceilings, zero foreground temp spill, latency, and RSS targets.
+  ceilings, zero foreground temp spill, latency, and RSS targets. Phase 5 validates
+  the report shape; Phase 6 provides the true physical evidence.
 
 These refinements do not conflict with the OOM fix. They reduce the chance of a
 false cutover by making semantic parity and physical boundedness part of the same
@@ -712,7 +713,7 @@ unclassified DuckDB work.
 | Overlay semantics | Route/service tests for read-your-write overlays. | Row/detail overlays reconcile after projection, while counts/facets/queues/bulk jobs remain snapshot-scoped or explicitly return overlay-aware state. |
 | Route-specific parity | Validation tests and benchmark assertions for parity mode. | Semantic fixtures, sampled safe-size parity, invariants, freshness states, cursors, SQL shape, latency, result bytes, and route states match expected behavior before each production route or flow migrates. |
 | Desktop/proxy | Route-surface/proxy tests for browser and desktop owner paths. | Browser and desktop share the same serving/job/admission behavior and route classifications. |
-| Benchmark | Scripted 10M-article/7-prompt synthetic benchmark. | Overlap import, dirty materialization, serving refresh, direct rows, filtered postings, article-set hydration, list/detail judgment payloads, human facets/options, named counts across list modes, queue-kind reads, token/prefix search, unavailable/async substring state, bulk substring selection, bulk jobs, PDF/export jobs, and desktop interruption/resume under target memory limits. Validate request-slice diversity, expected count/search/job dimensions, rows scanned ceilings, zero foreground temp spill, latency, and RSS targets. Include repeated small updates proving projectors do not rerun unrelated components. |
+| Benchmark | Scripted 10M-article/7-prompt synthetic validation and Phase 6 physical release run. | Phase 5 validates workload shape and release-report fields without claiming physical evidence. Phase 6 runs the true release-scale DuckDB workload with overlap import, dirty materialization, serving refresh, direct rows, filtered postings, article-set hydration, list/detail judgment payloads, human facets/options, named counts across list modes, queue-kind reads, token/prefix search, unavailable/async substring state, bulk substring selection, bulk jobs, PDF/export jobs, and desktop interruption/resume under target memory limits. Validate request-slice diversity, expected count/search/job dimensions, rows scanned ceilings, zero foreground temp spill, latency, RSS, queue, admission, active identities, and repeated small updates proving projectors do not rerun unrelated components. |
 
 Add a shared foreground-SQL assertion helper used by route and SQL-builder tests.
 It should fail if a foreground query contains any forbidden token or non-allowlisted
@@ -722,11 +723,11 @@ absent after each route migration.
 
 ## Implementation Phase Index
 
-These are implementation phases, not staged product releases. Production route
-migration happens in Phase 4 route-by-route after the relevant gates pass. Final
-cutover is complete only after all phases and the Phase 5 release gate pass. Each
-phase should leave tests passing, and migrated routes should not retain hidden
-legacy fallback paths.
+These are phase gates, not staged product releases. Production route migration
+happens in Phase 4 route-by-route after the relevant gates pass. Final cutover
+is complete only after all phases and the Phase 6 physical release-evidence
+gates pass. Each phase should leave tests passing, and migrated routes should
+not retain hidden legacy fallback paths.
 
 The phase files are authoritative for implementation tasks and phase-local
 quality gates. This master remains authoritative for shared constraints, terms,
@@ -739,13 +740,15 @@ non-goals, architecture boundaries, migration inventory, and final cutover gates
 | 2 | [DUCK_CQRS_PLAN_PHASE_2.md](./DUCK_CQRS_PLAN_PHASE_2.md) | Transactional deltas, import hot fields, outbox/reconciliation, and overlays. | No |
 | 3 | [DUCK_CQRS_PLAN_PHASE_3.md](./DUCK_CQRS_PLAN_PHASE_3.md) | Projector core, selected-import projection, serving projections, manifests, and cleanup. | No |
 | 4 | [DUCK_CQRS_PLAN_PHASE_4.md](./DUCK_CQRS_PLAN_PHASE_4.md) | Production route migration to serving readers, durable jobs, route-specific parity validation, and DuckDB usage migration. | Yes, per route after gates pass |
-| 5 | [DUCK_CQRS_PLAN_PHASE_5.md](./DUCK_CQRS_PLAN_PHASE_5.md) | Final hardening sweep, any remaining raw fallback deletion, desktop hardening, final benchmark, and release gate. | Final verification |
+| 5 | [DUCK_CQRS_PLAN_PHASE_5.md](./DUCK_CQRS_PLAN_PHASE_5.md) | Final hardening sweep, any remaining raw fallback deletion, desktop hardening, and repo-native synthetic validation. | Final implementation verification |
+| 6 | [DUCK_CQRS_PLAN_PHASE_6.md](./DUCK_CQRS_PLAN_PHASE_6.md) | Physical release evidence and cutover proof for the true 10M run, large desktop interruption, and release-scale delta/compaction budgets. | Final cutover evidence |
 
 Rules for phase coordination:
 
 - Phase 4 may switch production route handlers one route or flow at a time after route-specific serving, parity, SQL-shape, budget, and relevant browser/desktop gates pass.
 - When a Phase 4 route switches, delete or hard-disable the matching legacy raw path in the same change unless it is explicitly reclassified as admin/maintenance/debug-only.
-- Phase 5 is the final hardening and verification sweep, not the first normal-route switch.
+- Phase 5 is the final hardening and repo-native synthetic verification sweep, not the first normal-route switch.
+- Phase 6 owns physical release evidence; do not treat Phase 5 synthetic validation as a substitute for the true physical release run.
 - Do not preserve raw fallback as a hidden normal path after a route has migrated.
 - If a phase file changes a global contract, term, table name, or cutover gate, update this master document in the same change.
 - If this master document changes a phase cut line or quality gate, update the affected phase file in the same change.
@@ -894,7 +897,8 @@ complete and no normal product review flow can reach legacy raw fallback.
 ### Final Cross-Phase Audit - 2026-06-20
 
 - Phase 0 through Phase 4 implementation evidence is aligned with the phase files: route/job migration, residual-read classification, parity evidence, browser diagnostics, desktop build evidence, and broad lint evidence are now recorded.
-- Phase 5 implementation hardening and repo-native synthetic release-gate validation are recorded, but final cutover remains open. No true 10M DuckDB release-scale run, physical row-group/rows-scanned profile, temp-dir/RSS/latency profile, large local desktop sleep/process-kill simulation, or release-scale compaction proof exists in this branch.
+- Phase 5 implementation hardening and repo-native synthetic validation are recorded as complete, but final cutover remains open for Phase 6.
+- No true 10M DuckDB release-scale run, physical row-group/rows-scanned profile, temp-dir/RSS/latency profile, large local desktop sleep/process-kill simulation, or release-scale compaction proof exists in this branch.
 - Master checkboxes that require true physical release evidence remain unchecked. Synthetic fixture/report validation may be checked only as synthetic validation and must not be treated as the physical 10M pass.
 - `OOM_ERRORS.md` already records the Phase 5 desktop DuckDB runtime-memory default; this final audit did not add a new OOM or runtime-memory implementation change.
 
@@ -903,7 +907,8 @@ complete and no normal product review flow can reach legacy raw fallback.
 - [ ] [Phase 2](./DUCK_CQRS_PLAN_PHASE_2.md) write-side deltas, hot-field extraction, and read-your-write state are complete.
 - [ ] [Phase 3](./DUCK_CQRS_PLAN_PHASE_3.md) projectors, selected-import projection, serving projections, manifests, and cleanup are complete.
 - [ ] [Phase 4](./DUCK_CQRS_PLAN_PHASE_4.md) production route migration, jobs, search, route-specific parity, and DuckDB usage migration are complete.
-- [ ] [Phase 5](./DUCK_CQRS_PLAN_PHASE_5.md) remaining raw fallback deletion, desktop hardening, final benchmark, and repo quality gates are complete.
+- [x] [Phase 5](./DUCK_CQRS_PLAN_PHASE_5.md) remaining raw fallback deletion, desktop hardening, repo-native synthetic benchmark validation, and repo quality gates are complete.
+- [ ] [Phase 6](./DUCK_CQRS_PLAN_PHASE_6.md) physical release evidence and cutover proof gates are complete.
 - [ ] Route-specific parity validation has passed for semantic fixtures, sampled safe-size parity, named counts, freshness states, cursor behavior, SQL shape, latency, and response-size budgets for every migrated route/flow.
 - [ ] A single normal V4 serving writer owns all `mart.review_*_v4` writes and active V4 snapshot promotion; legacy mart refresh/rebuild paths cannot promote competing V4 review snapshots.
 - [ ] Serving manifests classify required versus optional components, and optional search/count work cannot block unrelated review-list activation.
@@ -925,6 +930,9 @@ complete and no normal product review flow can reach legacy raw fallback.
 - [ ] Serving reads, cursors, counts, search, and jobs include the narrow projection identities they depend on and reject mismatched identity state.
 - [ ] No normal browser or desktop review flow can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
 - [ ] Admin/maintenance/debug-only raw reads are named, route-classified, guarded, and excluded from normal product flows.
+- [ ] Phase 6 true 10M/7-prompt DuckDB release-scale run records physical row-group/rows-scanned, temp-dir, RSS, latency, queue, admission, and active identity evidence.
+- [ ] Phase 6 large local desktop sleep/process-kill interruption evidence proves safe resume without browser/desktop behavior divergence.
+- [ ] Phase 6 release-scale delta and compaction proof shows routine deltas stay within hot-route budgets.
 
 ## Non-Goals
 
@@ -964,12 +972,16 @@ is treated as complete. This master tracks only final cross-phase gates.
 - [ ] [Phase 2](./DUCK_CQRS_PLAN_PHASE_2.md) quality gates pass.
 - [ ] [Phase 3](./DUCK_CQRS_PLAN_PHASE_3.md) quality gates pass.
 - [ ] [Phase 4](./DUCK_CQRS_PLAN_PHASE_4.md) quality gates pass for every migrated route/flow.
-- [ ] [Phase 5](./DUCK_CQRS_PLAN_PHASE_5.md) final hardening and release gates pass.
+- [x] [Phase 5](./DUCK_CQRS_PLAN_PHASE_5.md) final hardening and repo-native synthetic validation gates pass.
+- [ ] [Phase 6](./DUCK_CQRS_PLAN_PHASE_6.md) physical release evidence and cutover proof gates pass.
 - [x] 10M-article/7-prompt benchmark fixture or synthetic equivalent is available and documented.
-- [ ] Overlap benchmark passes under target DuckDB memory limits with import, dirty materialization, serving refresh, review list, filters, counts, bulk jobs, export/PDF jobs, and desktop-style interruption/resume.
+- [ ] Phase 6 true 10M/7-prompt DuckDB release-scale run passes under target DuckDB memory limits with import, dirty materialization, serving refresh, review list, filters, counts, bulk jobs, export/PDF jobs, and desktop-style interruption/resume.
 - [x] Synthetic benchmark/release-report validation records p50/p95/p99 latency, peak process memory, DuckDB memory limit, temp-dir growth, queue depth, admitted/rejected query counts, rows scanned, rows returned, and active snapshot/identity state.
 - [x] Synthetic benchmark validation proves foreground review read reports are bounded by page size, selected filter postings, or precomputed summary rows, not total project article/judgment/import-route count.
 - [x] Synthetic benchmark validation rejects wrong or missing request dimensions, including list mode, queue kind, search mode/text, named count key/filter prefix, job kind/filter signature, request-slice diversity, scanned-row ceilings, temp spill, latency, and RSS budgets.
+- [ ] Phase 6 true physical run records row-group/rows-scanned, temp-dir, RSS, latency, queue, admission, and active project/snapshot/review-config/manifest/count/search identity evidence.
+- [ ] Phase 6 large local desktop sleep/process-kill interruption evidence passes.
+- [ ] Phase 6 release-scale proof shows routine deltas and compaction stay within hot-route budgets.
 - [ ] Every product review route has a `reviewServingReadContracts.ts` registry entry with workload class, cursor spec, narrow projection identity behavior, budgets, allowed filters, physical filter access strategy, and named fast counts.
 - [ ] Every normal foreground DuckDB call is traceable to a registered read/job contract; unregistered foreground calls fail tests before query execution.
 - [ ] Every row in the DuckDB usage migration inventory is either migrated to serving/admission/job logic or explicitly classified as admin/maintenance/debug-only.
