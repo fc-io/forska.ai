@@ -1,4 +1,4 @@
-import {existsSync} from 'node:fs'
+import {existsSync, readFileSync} from 'node:fs'
 import {mkdir, unlink, writeFile} from 'node:fs/promises'
 import {dirname, join, resolve} from 'node:path'
 
@@ -34,6 +34,7 @@ import {
   type ReviewServingReaderRequest,
 } from '../src/server/reviewServing/reviewServingReader.ts'
 import type {DuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
+import {getConfiguredDuckdbPath} from '../src/server/utils/getDuckdbPath.ts'
 
 export const reviewServingPhase6PhysicalRehearsal100kRunKind = 'phase6PhysicalRehearsal100k' as const
 
@@ -1396,6 +1397,9 @@ export const getReviewServingPhase6PhysicalRehearsal100kWorkloadDefinition =
   }
 
 const physical100kArticleSetSampleSize = 2
+const physical100kReviewFacetRows = 4
+const physical100kHumanFacetRows = 2
+const physical100kFilterOptionRows = 3
 
 const getPhysical100kTargetRowsReturnedPerRequest = (operation: ReviewServingBenchmarkWorkloadOperation) => {
   const articleSetJudgmentRows =
@@ -1407,6 +1411,18 @@ const getPhysical100kTargetRowsReturnedPerRequest = (operation: ReviewServingBen
 
   if (operation.key.endsWith('ListJudgmentPayloadRows') || operation.key === 'bothListHumanJudgmentPayloadRows') {
     return Math.min(operation.targetRowsReturnedPerRequest, articleSetJudgmentRows)
+  }
+
+  if (operation.key === 'overlapFacetRefresh') {
+    return Math.min(operation.targetRowsReturnedPerRequest, physical100kReviewFacetRows)
+  }
+
+  if (operation.key === 'humanOverlapFacetRefresh') {
+    return Math.min(operation.targetRowsReturnedPerRequest, physical100kHumanFacetRows)
+  }
+
+  if (operation.key === 'overlapFilterOptions' || operation.key === 'humanOverlapFilterOptions') {
+    return Math.min(operation.targetRowsReturnedPerRequest, physical100kFilterOptionRows)
   }
 
   return operation.targetRowsReturnedPerRequest
@@ -1783,11 +1799,26 @@ const getEvidenceFileName = (generatedAt: string) => {
   return `review-serving-phase6-physical-rehearsal-100k-${generatedAt.replaceAll(/[:.]/gu, '-')}.json`
 }
 
-const assertFixturePathDoesNotTargetLiveDuckdb = (fixturePath: string) => {
-  const liveDuckdbPath = process.env.DUCKDB_PATH?.trim()
+const getDuckdbPathFileValue = (envValues: NodeJS.ProcessEnv) => {
+  const duckdbPathFile = envValues.DUCKDB_PATH_FILE?.trim()
 
-  if (liveDuckdbPath && resolve(liveDuckdbPath) === resolve(fixturePath)) {
-    throw new Error('Refusing to benchmark DUCKDB_PATH; pass a separate physical fixture copy via --fixture-path')
+  return duckdbPathFile && existsSync(duckdbPathFile) ? readFileSync(duckdbPathFile, 'utf8').trim() : null
+}
+
+const getLiveDuckdbPath = (envValues: NodeJS.ProcessEnv = process.env) => {
+  const duckdbPathFileValue = getDuckdbPathFileValue(envValues)
+
+  return getConfiguredDuckdbPath({envValues: {...envValues, DUCKDB_PATH: duckdbPathFileValue ?? envValues.DUCKDB_PATH}})
+}
+
+export const assertFixturePathDoesNotTargetLiveDuckdb = (
+  fixturePath: string,
+  envValues: NodeJS.ProcessEnv = process.env,
+) => {
+  const liveDuckdbPath = getLiveDuckdbPath(envValues)
+
+  if (liveDuckdbPath !== ':memory:' && resolve(liveDuckdbPath) === resolve(fixturePath)) {
+    throw new Error('Refusing to benchmark the live DuckDB path; pass a separate physical fixture copy via --fixture-path')
   }
 }
 
