@@ -33,6 +33,7 @@ import {
   type ReviewServingReaderDatabase,
   type ReviewServingReaderRequest,
 } from '../src/server/reviewServing/reviewServingReader.ts'
+import {getReviewServingFilterOptionIdentity} from '../src/server/reviewServing/reviewServingFilterOptionProjector.ts'
 import type {DuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 import {getConfiguredDuckdbPath} from '../src/server/utils/getDuckdbPath.ts'
 
@@ -61,6 +62,7 @@ export type ReviewServingPhysical100kFixtureVerification = {
 export type ReviewServingPhysical100kFixtureSamples = {
   articleIds: readonly string[]
   filterOptionIdentity: string
+  humanFilterOptionIdentity: string
   humanFacetSummaryIdentity: string
   postingFilter: {filterKind: string; filterValue: string; listMode: ReviewServingListMode}
   promptCounts: Record<NamedReviewFastCountKey, {filterKey: string; value: number}>
@@ -102,7 +104,6 @@ const fixtureProjectId = 'phase6-physical-rehearsal-100k-project'
 const fixtureSnapshotId = 'phase6-physical-rehearsal-100k-snapshot'
 const fixtureReviewConfigHash = 'phase6-physical-rehearsal-100k-review-config'
 const fixtureSelectedImportSnapshotId = 'phase6-physical-rehearsal-100k-selected-import'
-const fixtureFilterOptionIdentity = 'phase6-physical-rehearsal-filter-options-v1'
 const fixtureQueueKind = 'unassessed'
 const fixtureComponents = [
   'display',
@@ -123,6 +124,55 @@ const fixtureComponentIdentities = fixtureComponents.reduce<Record<ReviewServing
   },
   {} as Record<ReviewServingProjectionComponent, string>,
 )
+const fixtureReviewFilterOptionKeys = [
+  'conflictFlag',
+  'duplicateFlag',
+  'humanStatus',
+  'importRoute',
+  'llmStatus',
+  'promptAnswer',
+  'publicationYear',
+  'searchTokenPrefix',
+] as const
+const fixtureHumanFilterOptionKeys = [
+  'conflictFlag',
+  'duplicateFlag',
+  'humanStatus',
+  'importRoute',
+  'promptAnswer',
+  'publicationYear',
+  'searchTokenPrefix',
+] as const
+const fixtureReviewFilterOptionIdentity = getReviewServingFilterOptionIdentity({
+  filterKeys: fixtureReviewFilterOptionKeys,
+  listModeKeys: ['both', 'human', 'llm', 'unassessed'],
+  optionMode: 'review',
+  searchIdentity: fixtureComponentIdentities.search,
+})
+const fixtureHumanFilterOptionIdentity = getReviewServingFilterOptionIdentity({
+  filterKeys: fixtureHumanFilterOptionKeys,
+  listModeKeys: ['both', 'human'],
+  optionMode: 'human',
+  searchIdentity: fixtureComponentIdentities.search,
+})
+
+export const getReviewServingPhysical100kFixtureRouteIdentities = () => {
+  return {
+    filterOption: {
+      human: fixtureHumanFilterOptionIdentity,
+      review: fixtureReviewFilterOptionIdentity,
+    },
+    facetSummary: {
+      human: ['review.human.filter.promptAnswer', 'review.human.filter.summaryAnswer'],
+      review: [
+        'review.filter.duplicateFlag',
+        'review.filter.importRoute',
+        'review.filter.promptAnswer',
+        'review.filter.publicationYear',
+      ],
+    },
+  }
+}
 
 const promptScopedCountKeys = [
   'review.llm.assessedByPrompt',
@@ -398,7 +448,7 @@ const getFixtureFacetValuesSql = () => {
       promptId: null,
       summaryDefinitionVersion:
         namedReviewFastCountDefinitions['review.filter.publicationYear'].summaryDefinitionVersion,
-      summaryIdentity: 'phase6-physical-rehearsal-100k:review-facets:v1',
+      summaryIdentity: 'review.filter.publicationYear',
     },
     {
       answerId: null,
@@ -409,7 +459,7 @@ const getFixtureFacetValuesSql = () => {
       facetValue: 'false',
       promptId: null,
       summaryDefinitionVersion: namedReviewFastCountDefinitions['review.filter.duplicateFlag'].summaryDefinitionVersion,
-      summaryIdentity: 'phase6-physical-rehearsal-100k:review-facets:v1',
+      summaryIdentity: 'review.filter.duplicateFlag',
     },
     {
       answerId: null,
@@ -420,7 +470,7 @@ const getFixtureFacetValuesSql = () => {
       facetValue: 'route-1',
       promptId: null,
       summaryDefinitionVersion: namedReviewFastCountDefinitions['review.filter.importRoute'].summaryDefinitionVersion,
-      summaryIdentity: 'phase6-physical-rehearsal-100k:review-facets:v1',
+      summaryIdentity: 'review.filter.importRoute',
     },
     {
       answerId: 1,
@@ -431,7 +481,7 @@ const getFixtureFacetValuesSql = () => {
       facetValue: 'review:promptAnswer:prompt-1:yes',
       promptId: 'prompt-1',
       summaryDefinitionVersion: namedReviewFastCountDefinitions['review.filter.promptAnswer'].summaryDefinitionVersion,
-      summaryIdentity: 'phase6-physical-rehearsal-100k:review-facets:v1',
+      summaryIdentity: 'review.filter.promptAnswer',
     },
     {
       answerId: 1,
@@ -443,7 +493,7 @@ const getFixtureFacetValuesSql = () => {
       promptId: 'prompt-1',
       summaryDefinitionVersion:
         namedReviewFastCountDefinitions['review.human.filter.promptAnswer'].summaryDefinitionVersion,
-      summaryIdentity: 'phase6-physical-rehearsal-100k:human-facets:v1',
+      summaryIdentity: 'review.human.filter.promptAnswer',
     },
     {
       answerId: null,
@@ -455,7 +505,7 @@ const getFixtureFacetValuesSql = () => {
       promptId: null,
       summaryDefinitionVersion:
         namedReviewFastCountDefinitions['review.human.filter.summaryAnswer'].summaryDefinitionVersion,
-      summaryIdentity: 'phase6-physical-rehearsal-100k:human-facets:v1',
+      summaryIdentity: 'review.human.filter.summaryAnswer',
     },
   ] as const
 
@@ -484,16 +534,15 @@ const getFixtureFacetValuesSql = () => {
 }
 
 const getFixtureFilterOptionValuesSql = () => {
-  const optionRows = [
+  const sharedOptionRows = [
     {
       answerId: null,
       countValue: 50_000,
       facetKey: 'publicationYear',
       facetValue: '2024',
-      filterKind: 'publicationYear',
       numericMax: 2024,
       numericMin: 2024,
-      optionValueKey: 'publicationYear:2024',
+      optionValueKeySuffix: 'publicationYear:2024',
       promptId: null,
     },
     {
@@ -501,10 +550,9 @@ const getFixtureFilterOptionValuesSql = () => {
       countValue: 20_000,
       facetKey: 'importRoute',
       facetValue: 'route-1',
-      filterKind: 'importRoute',
       numericMax: null,
       numericMin: null,
-      optionValueKey: 'importRoute:route-1',
+      optionValueKeySuffix: 'importRoute:route-1',
       promptId: null,
     },
     {
@@ -512,12 +560,29 @@ const getFixtureFilterOptionValuesSql = () => {
       countValue: 100_000,
       facetKey: 'promptAnswer',
       facetValue: 'yes',
-      filterKind: 'promptAnswer',
       numericMax: null,
       numericMin: null,
-      optionValueKey: 'promptAnswer:prompt-1:yes',
+      optionValueKeySuffix: 'promptAnswer:prompt-1:yes',
       promptId: 'prompt-1',
     },
+  ] as const
+  const optionRows = [
+    ...sharedOptionRows.map((row) => {
+      return {
+        ...row,
+        filterKind: 'review',
+        filterOptionIdentity: fixtureReviewFilterOptionIdentity,
+        optionValueKey: `review:${row.optionValueKeySuffix}`,
+      }
+    }),
+    ...sharedOptionRows.map((row) => {
+      return {
+        ...row,
+        filterKind: 'human',
+        filterOptionIdentity: fixtureHumanFilterOptionIdentity,
+        optionValueKey: `human:${row.optionValueKeySuffix}`,
+      }
+    }),
   ] as const
 
   return optionRows
@@ -527,7 +592,7 @@ const getFixtureFilterOptionValuesSql = () => {
         getSqlStringLiteral(fixtureReviewConfigHash),
         getSqlStringLiteral(fixtureSnapshotId),
         getSqlStringLiteral(fixtureComponentIdentities.search),
-        getSqlStringLiteral(fixtureFilterOptionIdentity),
+        getSqlStringLiteral(row.filterOptionIdentity),
         getSqlStringLiteral(row.optionValueKey),
         getSqlStringLiteral(row.filterKind),
         getSqlStringLiteral(row.facetKey),
@@ -1310,6 +1375,7 @@ const getFacetSummaryIdentity = async (
 const getFilterOptionIdentity = async (
   context: ReviewServingPhysical100kSnapshotContext,
   database: ReviewServingReaderDatabase,
+  mode: 'human' | 'review',
 ) => {
   const row = await getFirstRow<{filterOptionIdentity: string}>(
     database,
@@ -1318,10 +1384,11 @@ const getFilterOptionIdentity = async (
       FROM mart.review_filter_option_serving_v4
       WHERE ${getSnapshotScopePredicate(context)}
         AND search_identity = ${getSqlStringLiteral(context.activeSnapshotIdentity.searchIdentity)}
+        AND filter_kind = ${getSqlStringLiteral(mode)}
       ORDER BY count_value DESC NULLS LAST, filter_kind, facet_key, option_value_key
       LIMIT 1
     `,
-    'a filter option identity',
+    `${mode} filter option identity`,
   )
 
   return row.filterOptionIdentity
@@ -1349,6 +1416,7 @@ const getFixtureSamples = async (
   const [
     articleIds,
     filterOptionIdentity,
+    humanFilterOptionIdentity,
     humanFacetSummaryIdentity,
     postingFilter,
     promptCounts,
@@ -1357,7 +1425,8 @@ const getFixtureSamples = async (
     searchTokenPrefix,
   ] = await Promise.all([
     getArticleIds(context, database),
-    getFilterOptionIdentity(context, database),
+    getFilterOptionIdentity(context, database, 'review'),
+    getFilterOptionIdentity(context, database, 'human'),
     getFacetSummaryIdentity(context, database, 'human'),
     getPostingFilter(context, database),
     getPromptCounts(context, database),
@@ -1369,6 +1438,7 @@ const getFixtureSamples = async (
   return {
     articleIds,
     filterOptionIdentity,
+    humanFilterOptionIdentity,
     humanFacetSummaryIdentity,
     postingFilter,
     promptCounts,
@@ -1605,10 +1675,19 @@ const getReaderRequestForOperation = (
     return {...request, countFilterKey: samples.humanFacetSummaryIdentity}
   }
 
-  if (operation.key === 'overlapFilterOptions' || operation.key === 'humanOverlapFilterOptions') {
+  if (operation.key === 'overlapFilterOptions') {
     return {
       ...request,
       filterOptionIdentity: samples.filterOptionIdentity,
+      searchTokenPrefix: samples.searchTokenPrefix,
+      searchTokenPrefixes: [samples.searchTokenPrefix],
+    }
+  }
+
+  if (operation.key === 'humanOverlapFilterOptions') {
+    return {
+      ...request,
+      filterOptionIdentity: samples.humanFilterOptionIdentity,
       searchTokenPrefix: samples.searchTokenPrefix,
       searchTokenPrefixes: [samples.searchTokenPrefix],
     }
@@ -1807,8 +1886,9 @@ const getDuckdbPathFileValue = (envValues: NodeJS.ProcessEnv) => {
 
 const getLiveDuckdbPath = (envValues: NodeJS.ProcessEnv = process.env) => {
   const duckdbPathFileValue = getDuckdbPathFileValue(envValues)
+  const duckdbPath = envValues.DUCKDB_PATH?.trim() ? envValues.DUCKDB_PATH : (duckdbPathFileValue ?? undefined)
 
-  return getConfiguredDuckdbPath({envValues: {...envValues, DUCKDB_PATH: duckdbPathFileValue ?? envValues.DUCKDB_PATH}})
+  return getConfiguredDuckdbPath({envValues: {...envValues, DUCKDB_PATH: duckdbPath}})
 }
 
 export const assertFixturePathDoesNotTargetLiveDuckdb = (
@@ -1855,7 +1935,17 @@ const buildReviewServingPhysical100kFixture = async (args: ReviewServingPhysical
   let shouldRemoveFailedFixture = false
 
   console.log(`Building Phase 6 physical 100k fixture at ${args.fixturePath}`)
-  await runFixtureMigration(args)
+  try {
+    await runFixtureMigration(args)
+  } catch (error) {
+    shouldRemoveFailedFixture = !fixtureExistedBeforeBuild
+    if (shouldRemoveFailedFixture) {
+      await unlink(args.fixturePath).catch(() => {
+        return undefined
+      })
+    }
+    throw error
+  }
   const runtime = await createDuckdbWriteRuntime(args)
 
   try {
