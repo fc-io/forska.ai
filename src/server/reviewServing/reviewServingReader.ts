@@ -111,6 +111,7 @@ export type ReviewServingReaderResult<T> =
       contract: ReviewServingReadContract
       diagnostics: ReviewServingReaderDiagnostics
       getCursorForRow: (row: Record<string, unknown>) => string
+      executableSql: string
       rows: T[]
       sql: string
       status: 'accepted'
@@ -964,6 +965,7 @@ export const readReviewServingRows = async <T>(
     getCursorForRow: (row) => {
       return createCursorForRow({contract, filterSignature: filterSignature as string, manifest, row})
     },
+    executableSql,
     rows,
     sql,
     status: 'accepted',

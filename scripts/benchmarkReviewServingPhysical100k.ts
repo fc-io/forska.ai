@@ -81,11 +81,14 @@ export type ReviewServingPhysical100kInput = ReviewServingBenchmarkRunInput & {
 
 export type ReviewServingPhysical100kSampleEvidence = {
   contractKey: string
+  executableSql: string
   key: string
   latencyMs: number
   operationKey: string
+  rowsScanned: number
   rowsReturned: number
   sql: string
+  tempUsageBytes: number
 }
 
 const expectedFixtureDimensions = {
@@ -99,7 +102,7 @@ const fixtureSnapshotId = 'phase6-physical-rehearsal-100k-snapshot'
 const fixtureReviewConfigHash = 'phase6-physical-rehearsal-100k-review-config'
 const fixtureSelectedImportSnapshotId = 'phase6-physical-rehearsal-100k-selected-import'
 const fixtureFilterOptionIdentity = 'phase6-physical-rehearsal-filter-options-v1'
-const fixtureQueueKind = 'oldestUnassessed'
+const fixtureQueueKind = 'unassessed'
 const fixtureComponents = [
   'display',
   'humanStatus',
@@ -1386,11 +1389,87 @@ export const getReviewServingPhase6PhysicalRehearsal100kWorkloadDefinition =
           maxRowsScannedPerRequest: Number.MAX_SAFE_INTEGER,
           minimumDistinctRequestSlices: operation.minimumDistinctRequestSlices === undefined ? undefined : 1,
           requestCount: 1,
-          targetRowsReturnedPerRequest: 0,
+          targetRowsReturnedPerRequest: getPhysical100kTargetRowsReturnedPerRequest(operation),
         }
       }),
     }
   }
+
+const physical100kArticleSetSampleSize = 2
+
+const getPhysical100kTargetRowsReturnedPerRequest = (operation: ReviewServingBenchmarkWorkloadOperation) => {
+  const articleSetJudgmentRows =
+    physical100kArticleSetSampleSize * reviewServingBenchmarkPhase6PhysicalRehearsal100kFixture.promptCount
+
+  if (operation.key.endsWith('RowsByArticleSet')) {
+    return Math.min(operation.targetRowsReturnedPerRequest, physical100kArticleSetSampleSize)
+  }
+
+  if (operation.key.endsWith('ListJudgmentPayloadRows') || operation.key === 'bothListHumanJudgmentPayloadRows') {
+    return Math.min(operation.targetRowsReturnedPerRequest, articleSetJudgmentRows)
+  }
+
+  return operation.targetRowsReturnedPerRequest
+}
+
+const getNumericValuesFromUnknown = (value: unknown): number[] => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? [value] : []
+  }
+
+  if (typeof value === 'string') {
+    return [...value.matchAll(/([0-9][0-9,]*)\s+rows?\b/giu)].map((match) => {
+      return Number((match[1] ?? '').replaceAll(',', ''))
+    })
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => {
+      return getNumericValuesFromUnknown(entry)
+    })
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.values(value).flatMap((entry) => {
+      return getNumericValuesFromUnknown(entry)
+    })
+  }
+
+  return []
+}
+
+const getRowsScannedFromExplainAnalyze = async (
+  database: ReviewServingReaderDatabase,
+  executableSql: string,
+): Promise<number> => {
+  try {
+    const rows = await database.queryJson<Record<string, unknown>>(`EXPLAIN ANALYZE ${executableSql}`)
+    const rowCounts = rows.flatMap((row) => {
+      return getNumericValuesFromUnknown(row)
+    })
+
+    return rowCounts.length > 0 ? Math.max(...rowCounts) : -1
+  } catch (_error) {
+    return -1
+  }
+}
+
+const getTempUsageBytes = async (database: ReviewServingReaderDatabase): Promise<number> => {
+  try {
+    const rows = await database.queryJson<{tempUsageBytes: number | null}>(
+      'SELECT COALESCE(SUM(size), 0)::BIGINT AS tempUsageBytes FROM duckdb_temporary_files()',
+    )
+    const tempUsageBytes = rows[0]?.tempUsageBytes
+
+    if (typeof tempUsageBytes === 'bigint') {
+      return Number(tempUsageBytes)
+    }
+
+    return typeof tempUsageBytes === 'number' && Number.isFinite(tempUsageBytes) ? tempUsageBytes : -1
+  } catch (_error) {
+    return -1
+  }
+}
 
 const getEstimatedResultBytes = (operation: ReviewServingBenchmarkWorkloadOperation) => {
   const contract = getReviewServingReadContract(operation.contractKey)
@@ -1648,7 +1727,7 @@ const createPhysicalBenchmarkExecutor = (input: {
   sampleEvidence: ReviewServingPhysical100kSampleEvidence[]
 }): ReviewServingBenchmarkExecutor => {
   return (workItem) => {
-    return Effect.tryPromise(async (): Promise<ReviewServingBenchmarkObservation> => {
+    return Effect.promise(async (): Promise<ReviewServingBenchmarkObservation> => {
       const request = input.readerRequestsByWorkItemKey.get(workItem.key)
 
       if (!request) {
@@ -1671,13 +1750,21 @@ const createPhysicalBenchmarkExecutor = (input: {
         )
       }
 
+      const [rowsScanned, tempUsageBytes] = await Promise.all([
+        getRowsScannedFromExplainAnalyze(input.database, result.executableSql),
+        getTempUsageBytes(input.database),
+      ])
+
       input.sampleEvidence.push({
         contractKey: request.contractKey,
+        executableSql: result.executableSql,
         key: workItem.key,
         latencyMs,
         operationKey: workItem.operationKey,
+        rowsScanned,
         rowsReturned: result.rows.length,
         sql: result.sql,
+        tempUsageBytes,
       })
 
       return {
@@ -1685,8 +1772,8 @@ const createPhysicalBenchmarkExecutor = (input: {
         memoryRssBytes: sampleReviewServingBenchmarkMemoryRssBytes(),
         queueDepth: 0,
         rowsReturned: result.rows.length,
-        rowsScanned: result.rows.length,
-        tempUsageBytes: 0,
+        rowsScanned,
+        tempUsageBytes,
       }
     })
   }

@@ -95,13 +95,20 @@ test('review-serving physical 100k workload scales Phase 6 operations without cl
   expect(workload.operations).toHaveLength(31)
   expect(
     workload.operations.every((operation) => {
-      return (
-        operation.requestCount === 1
-        && operation.minimumDistinctRequestSlices === 1
-        && operation.targetRowsReturnedPerRequest === 0
-      )
+      return operation.requestCount === 1 && operation.minimumDistinctRequestSlices === 1
     }),
   ).toBe(true)
+  expect(
+    workload.operations.every((operation) => {
+      return operation.targetRowsReturnedPerRequest > 0
+    }),
+  ).toBe(true)
+  expect(workload.operations.find((operation) => operation.key === 'filteredLlmRowsByArticleSet')).toMatchObject({
+    targetRowsReturnedPerRequest: 2,
+  })
+  expect(workload.operations.find((operation) => operation.key === 'humanListJudgmentPayloadRows')).toMatchObject({
+    targetRowsReturnedPerRequest: 14,
+  })
 })
 
 test('review-serving physical 100k input emits non-release benchmark run kind and physical reader requests', () => {
