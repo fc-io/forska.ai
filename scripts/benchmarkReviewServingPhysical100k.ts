@@ -1,4 +1,4 @@
-import {existsSync, readFileSync} from 'node:fs'
+import {existsSync, lstatSync, readFileSync, realpathSync, statSync} from 'node:fs'
 import {mkdir, unlink, writeFile} from 'node:fs/promises'
 import {dirname, join, resolve} from 'node:path'
 
@@ -1247,7 +1247,7 @@ const getArticleIds = async (
     FROM mart.review_article_serving_v4
     WHERE ${getSnapshotScopePredicate(context)}
     ORDER BY article_id
-    LIMIT 100
+    LIMIT ${physical100kArticleSetSampleSize}
   `)
   const articleIds = rows
     .map((row) => {
@@ -1457,7 +1457,7 @@ export const getReviewServingPhase6PhysicalRehearsal100kWorkloadDefinition =
       operations: reviewServingBenchmarkOverlapWorkloadDefinition.operations.map((operation) => {
         return {
           ...operation,
-          maxRowsScannedPerRequest: Number.MAX_SAFE_INTEGER,
+          maxRowsScannedPerRequest: operation.maxRowsScannedPerRequest,
           minimumDistinctRequestSlices: operation.minimumDistinctRequestSlices === undefined ? undefined : 1,
           requestCount: 1,
           targetRowsReturnedPerRequest: getPhysical100kTargetRowsReturnedPerRequest(operation),
@@ -1467,8 +1467,8 @@ export const getReviewServingPhase6PhysicalRehearsal100kWorkloadDefinition =
   }
 
 const physical100kArticleSetSampleSize = 2
-const physical100kReviewFacetRows = 4
-const physical100kHumanFacetRows = 2
+const physical100kReviewFacetRows = 1
+const physical100kHumanFacetRows = 1
 const physical100kFilterOptionRows = 3
 
 const getPhysical100kTargetRowsReturnedPerRequest = (operation: ReviewServingBenchmarkWorkloadOperation) => {
@@ -1891,13 +1891,45 @@ const getLiveDuckdbPath = (envValues: NodeJS.ProcessEnv = process.env) => {
   return getConfiguredDuckdbPath({envValues: {...envValues, DUCKDB_PATH: duckdbPath}})
 }
 
+const getExistingPathIdentity = (pathValue: string) => {
+  if (!existsSync(pathValue)) {
+    return null
+  }
+
+  const stats = statSync(pathValue)
+
+  return `${stats.dev}:${stats.ino}`
+}
+
+const getComparableExistingPath = (pathValue: string) => {
+  return existsSync(pathValue) ? realpathSync(pathValue) : resolve(pathValue)
+}
+
+const assertFixturePathIsNotDanglingSymlink = (fixturePath: string) => {
+  if (existsSync(fixturePath)) {
+    return
+  }
+
+  const stats = lstatSync(fixturePath, {throwIfNoEntry: false})
+
+  if (stats?.isSymbolicLink()) {
+    throw new Error('Refusing to benchmark a dangling fixture DuckDB symlink; pass a separate physical fixture copy via --fixture-path')
+  }
+}
+
 export const assertFixturePathDoesNotTargetLiveDuckdb = (
   fixturePath: string,
   envValues: NodeJS.ProcessEnv = process.env,
 ) => {
   const liveDuckdbPath = getLiveDuckdbPath(envValues)
+  assertFixturePathIsNotDanglingSymlink(fixturePath)
+  const livePathIdentity = liveDuckdbPath === ':memory:' ? null : getExistingPathIdentity(liveDuckdbPath)
+  const fixturePathIdentity = getExistingPathIdentity(fixturePath)
+  const targetsSameExistingFile = livePathIdentity !== null && livePathIdentity === fixturePathIdentity
+  const targetsSameResolvedPath =
+    liveDuckdbPath !== ':memory:' && getComparableExistingPath(liveDuckdbPath) === getComparableExistingPath(fixturePath)
 
-  if (liveDuckdbPath !== ':memory:' && resolve(liveDuckdbPath) === resolve(fixturePath)) {
+  if (targetsSameExistingFile || targetsSameResolvedPath) {
     throw new Error('Refusing to benchmark the live DuckDB path; pass a separate physical fixture copy via --fixture-path')
   }
 }
