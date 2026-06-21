@@ -13,7 +13,11 @@ import type {
   ReviewServingWorkloadClass,
 } from './reviewServingContracts.ts'
 
-export const reviewServingBenchmarkFixtureKinds = ['smoke', 'synthetic10m7PromptOverlap'] as const
+export const reviewServingBenchmarkFixtureKinds = [
+  'smoke',
+  'synthetic10m7PromptOverlap',
+  'phase6PhysicalRehearsal100k',
+] as const
 export const reviewServingBenchmarkRequestSliceFields = [
   'cursor',
   'filter',
@@ -151,7 +155,7 @@ export type ReviewServingBenchmarkReleaseContext = {
     searchIdentity: string
     snapshotId: string
   }
-  benchmarkRunKind: 'releaseScaleDuckDb' | 'syntheticValidation'
+  benchmarkRunKind: 'phase6PhysicalRehearsal100k' | 'releaseScaleDuckDb' | 'syntheticValidation'
   duckdbMemoryLimit: string
   tempDirGrowthBytes: number
 }
@@ -287,6 +291,14 @@ export const reviewServingSynthetic10m7PromptOverlapFixture = {
   articleCount: 10_000_000,
   articlePromptOverlapRows: 70_000_000,
   kind: 'synthetic10m7PromptOverlap',
+  promptCount: 7,
+  requiresCompletedSchemaProjectors: true,
+} as const satisfies ReviewServingBenchmarkFixture
+
+export const reviewServingBenchmarkPhase6PhysicalRehearsal100kFixture = {
+  articleCount: 100_000,
+  articlePromptOverlapRows: 700_000,
+  kind: 'phase6PhysicalRehearsal100k',
   promptCount: 7,
   requiresCompletedSchemaProjectors: true,
 } as const satisfies ReviewServingBenchmarkFixture
@@ -1270,8 +1282,12 @@ const getReviewServingBenchmarkPerformanceViolationMessage = (
 }
 
 const getExpectedReviewServingBenchmarkFixture = (fixtureKind: ReviewServingBenchmarkFixtureKind) => {
-  return fixtureKind === 'synthetic10m7PromptOverlap'
-    ? reviewServingSynthetic10m7PromptOverlapFixture
+  if (fixtureKind === 'synthetic10m7PromptOverlap') {
+    return reviewServingSynthetic10m7PromptOverlapFixture
+  }
+
+  return fixtureKind === 'phase6PhysicalRehearsal100k'
+    ? reviewServingBenchmarkPhase6PhysicalRehearsal100kFixture
     : reviewServingBenchmarkSmokeFixture
 }
 
@@ -1620,7 +1636,19 @@ const getDefaultReviewServingBenchmarkReleaseContext = (
 
 const getReviewServingBenchmarkRunReleaseContext = (input: ReviewServingBenchmarkRunInput) => {
   if (input.releaseContext) {
-    return input.fixture.kind === 'smoke' || input.releaseContext.benchmarkRunKind === 'releaseScaleDuckDb'
+    if (input.fixture.kind === 'smoke') {
+      return Effect.succeed(input.releaseContext)
+    }
+
+    if (
+      input.fixture.kind === 'phase6PhysicalRehearsal100k'
+      && input.releaseContext.benchmarkRunKind === 'phase6PhysicalRehearsal100k'
+    ) {
+      return Effect.succeed(input.releaseContext)
+    }
+
+    return input.fixture.kind === 'synthetic10m7PromptOverlap'
+      && input.releaseContext.benchmarkRunKind === 'releaseScaleDuckDb'
       ? Effect.succeed(input.releaseContext)
       : Effect.fail(new Error('Review-serving benchmark release-scale runs require releaseScaleDuckDb context'))
   }
