@@ -89,7 +89,7 @@ export type ReviewServingBenchmarkWorkloadDefinition = {
   operations: readonly ReviewServingBenchmarkWorkloadOperation[]
   performanceTargets: ReviewServingBenchmarkPerformanceTargets
   requiredForPhase0: boolean
-  releaseGatePhase: 'Phase 5'
+  releaseGatePhase: 'Phase 6'
 }
 
 export type ReviewServingBenchmarkObservation = {
@@ -159,7 +159,7 @@ export type ReviewServingBenchmarkReleaseContext = {
 export type ReviewServingBenchmarkReleaseReport = ReviewServingBenchmarkReleaseContext & {
   fixture: ReviewServingBenchmarkFixture
   metrics: ReviewServingBenchmarkMetrics
-  releaseGatePhase: 'Phase 5'
+  releaseGatePhase: 'Phase 6'
   workloadKey: string
 }
 
@@ -276,7 +276,7 @@ type ReviewServingBenchmarkRunState = {startedAtMs: number; startRssBytes: numbe
 
 const gibibyte = 1024 ** 3
 
-export const reviewServingBenchmarkPhase5PerformanceTargets = {
+export const reviewServingBenchmarkPhase6PerformanceTargets = {
   maxP95LatencyMs: 2_000,
   maxP99LatencyMs: 5_000,
   maxPeakRssBytes: 20 * gibibyte,
@@ -580,7 +580,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
     },
     {
       contractKey: 'review.bulk.selection',
-      jobFilterSignaturePrefix: 'phase5-overlap:',
+      jobFilterSignaturePrefix: 'phase6-overlap:',
       jobKind: 'review.bulk.selection',
       key: 'bulkOverlapSelectionJob',
       maxRowsScannedPerRequest: 10,
@@ -595,7 +595,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
     },
     {
       contractKey: 'review.bulk.substringSelection',
-      jobFilterSignaturePrefix: 'phase5-overlap:',
+      jobFilterSignaturePrefix: 'phase6-overlap:',
       jobKind: 'review.bulk.substringSelection',
       key: 'bulkSubstringOverlapSelectionJob',
       maxRowsScannedPerRequest: 10,
@@ -611,7 +611,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
     },
     {
       contractKey: 'review.export.selection',
-      jobFilterSignaturePrefix: 'phase5-overlap:',
+      jobFilterSignaturePrefix: 'phase6-overlap:',
       jobKind: 'review.export.selection',
       key: 'exportOverlapSelectionJob',
       maxRowsScannedPerRequest: 10,
@@ -626,7 +626,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
     },
     {
       contractKey: 'review.pdf.selection',
-      jobFilterSignaturePrefix: 'phase5-overlap:',
+      jobFilterSignaturePrefix: 'phase6-overlap:',
       jobKind: 'review.pdf.selection',
       key: 'pdfOverlapSelectionJob',
       maxRowsScannedPerRequest: 10,
@@ -641,7 +641,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
     },
     {
       contractKey: 'review.search.substringAsync',
-      jobFilterSignaturePrefix: 'phase5-overlap:',
+      jobFilterSignaturePrefix: 'phase6-overlap:',
       key: 'substringOverlapSearchJob',
       maxRowsScannedPerRequest: 10,
       minimumDistinctRequestSlices: 70,
@@ -704,15 +704,15 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       workloadClass: 'reviewMaintenance',
     },
   ],
-  performanceTargets: reviewServingBenchmarkPhase5PerformanceTargets,
-  releaseGatePhase: 'Phase 5',
+  performanceTargets: reviewServingBenchmarkPhase6PerformanceTargets,
+  releaseGatePhase: 'Phase 6',
   requiredForPhase0: false,
 } as const satisfies ReviewServingBenchmarkWorkloadDefinition
 
-export const reviewServingBenchmarkPhase5ReleaseGate = {
+export const reviewServingBenchmarkPhase6ReleaseGate = {
   fixtureKind: reviewServingSynthetic10m7PromptOverlapFixture.kind,
   requiredForPhase0: false,
-  releaseGatePhase: 'Phase 5',
+  releaseGatePhase: 'Phase 6',
   workloadKey: reviewServingBenchmarkOverlapWorkloadDefinition.key,
 } as const
 
@@ -2531,7 +2531,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotId: 'smoke-snapshot',
           workloadClass: 'bulkReviewJob',
         },
-        jobFilterSignature: 'phase5-overlap:bulk:smoke',
+        jobFilterSignature: 'phase6-overlap:bulk:smoke',
         jobKind: 'review.bulk.selection',
         key: 'smoke-bulk-selection-job',
         observation: {
@@ -2543,7 +2543,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'bulkOverlapSelectionJob',
-        requestSlice: {jobFilterSignature: 'phase5-overlap:bulk:smoke'},
+        requestSlice: {jobFilterSignature: 'phase6-overlap:bulk:smoke'},
       },
       {
         admissionRequest: {
@@ -2556,7 +2556,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotFreshness: 'unavailable',
           workloadClass: 'bulkReviewJob',
         },
-        jobFilterSignature: 'phase5-overlap:bulk-substring:smoke',
+        jobFilterSignature: 'phase6-overlap:bulk-substring:smoke',
         jobKind: 'review.bulk.substringSelection',
         key: 'smoke-bulk-substring-selection-job',
         observation: {
@@ -2568,7 +2568,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'bulkSubstringOverlapSelectionJob',
-        requestSlice: {jobFilterSignature: 'phase5-overlap:bulk-substring:smoke', searchText: 'overlap smoke'},
+        requestSlice: {jobFilterSignature: 'phase6-overlap:bulk-substring:smoke', searchText: 'overlap smoke'},
         searchText: 'overlap smoke',
       },
       {
@@ -2584,7 +2584,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotId: 'smoke-snapshot',
           workloadClass: 'bulkReviewJob',
         },
-        jobFilterSignature: 'phase5-overlap:export:smoke',
+        jobFilterSignature: 'phase6-overlap:export:smoke',
         jobKind: 'review.export.selection',
         key: 'smoke-export-selection-job',
         observation: {
@@ -2596,7 +2596,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'exportOverlapSelectionJob',
-        requestSlice: {jobFilterSignature: 'phase5-overlap:export:smoke'},
+        requestSlice: {jobFilterSignature: 'phase6-overlap:export:smoke'},
       },
       {
         admissionRequest: {
@@ -2611,7 +2611,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotId: 'smoke-snapshot',
           workloadClass: 'bulkReviewJob',
         },
-        jobFilterSignature: 'phase5-overlap:pdf:smoke',
+        jobFilterSignature: 'phase6-overlap:pdf:smoke',
         jobKind: 'review.pdf.selection',
         key: 'smoke-pdf-selection-job',
         observation: {
@@ -2623,7 +2623,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'pdfOverlapSelectionJob',
-        requestSlice: {jobFilterSignature: 'phase5-overlap:pdf:smoke'},
+        requestSlice: {jobFilterSignature: 'phase6-overlap:pdf:smoke'},
       },
       {
         admissionRequest: {
@@ -2636,7 +2636,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotFreshness: 'unavailable',
           workloadClass: 'bulkReviewJob',
         },
-        jobFilterSignature: 'phase5-overlap:substring:smoke',
+        jobFilterSignature: 'phase6-overlap:substring:smoke',
         key: 'smoke-substring-search-job',
         observation: {
           latencyMs: 11,
@@ -2647,7 +2647,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'substringOverlapSearchJob',
-        requestSlice: {jobFilterSignature: 'phase5-overlap:substring:smoke', searchText: 'overlap smoke'},
+        requestSlice: {jobFilterSignature: 'phase6-overlap:substring:smoke', searchText: 'overlap smoke'},
         searchText: 'overlap smoke',
       },
       {

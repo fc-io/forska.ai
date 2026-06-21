@@ -17,7 +17,7 @@ import {
   getReviewServingBenchmarkTempSpillViolations,
   getReviewServingBenchmarkWorkItemShapeViolations,
   reviewServingBenchmarkOverlapWorkloadDefinition,
-  reviewServingBenchmarkPhase5ReleaseGate,
+  reviewServingBenchmarkPhase6ReleaseGate,
   type ReviewServingBenchmarkWorkloadOperation,
   reviewServingSynthetic10m7PromptOverlapFixture,
   runReviewServingBenchmarkEffect,
@@ -64,13 +64,13 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
       maxPeakRssBytes: 21_474_836_480,
       maxRssGrowthBytes: 4_294_967_296,
     },
-    releaseGatePhase: 'Phase 5',
+    releaseGatePhase: 'Phase 6',
     requiredForPhase0: false,
   })
-  expect(reviewServingBenchmarkPhase5ReleaseGate).toEqual({
+  expect(reviewServingBenchmarkPhase6ReleaseGate).toEqual({
     fixtureKind: 'synthetic10m7PromptOverlap',
     requiredForPhase0: false,
-    releaseGatePhase: 'Phase 5',
+    releaseGatePhase: 'Phase 6',
     workloadKey: 'reviewServing.10m7PromptOverlap.v1',
   })
   expect(
@@ -351,7 +351,7 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
   expect(result.workload).toMatchObject({
     fixtureKind: 'smoke',
     key: 'reviewServing.smokeOverlap.v1',
-    releaseGatePhase: 'Phase 5',
+    releaseGatePhase: 'Phase 6',
     requiredForPhase0: false,
   })
   expect(
@@ -383,7 +383,7 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
     benchmarkRunKind: 'syntheticValidation',
     fixture: {kind: 'smoke'},
     metrics: result.metrics,
-    releaseGatePhase: 'Phase 5',
+    releaseGatePhase: 'Phase 6',
     tempDirGrowthBytes: 0,
     workloadKey: 'reviewServing.smokeOverlap.v1',
   })
@@ -707,7 +707,7 @@ test('review-serving benchmark rejects dimensions that the declared operation om
       namedCountKey: 'review.llm.assessedByPrompt' as const,
       searchMode: 'tokenPrefix' as const,
     },
-    jobFilterSignature: 'phase5-overlap:unexpected',
+    jobFilterSignature: 'phase6-overlap:unexpected',
     jobKind: 'review.bulk.selection',
   }
   const mismatchedInput = {...input, workItems: [mismatchedWorkItem, ...input.workItems.slice(1)]}
@@ -716,7 +716,7 @@ test('review-serving benchmark rejects dimensions that the declared operation om
     {actual: 'review.llm.assessedByPrompt', expected: null, field: 'namedCountKey', key: 'smoke-llm-page'},
     {actual: 'review.bulk.selection', expected: null, field: 'jobKind', key: 'smoke-llm-page'},
     {actual: 'tokenPrefix', expected: null, field: 'searchMode', key: 'smoke-llm-page'},
-    {actual: 'phase5-overlap:unexpected', expected: null, field: 'jobFilterSignaturePrefix', key: 'smoke-llm-page'},
+    {actual: 'phase6-overlap:unexpected', expected: null, field: 'jobFilterSignaturePrefix', key: 'smoke-llm-page'},
   ])
   expect(await getBenchmarkRunFailureMessage(mismatchedInput)).toContain('Review-serving benchmark work item mismatch')
 })
@@ -793,12 +793,12 @@ test('review-serving benchmark rejects durable job operations with the wrong cri
     },
     {
       actual: 'other:bulk:smoke',
-      expected: 'phase5-overlap:*',
+      expected: 'phase6-overlap:*',
       field: 'jobFilterSignaturePrefix',
       key: 'smoke-bulk-selection-job',
     },
     {
-      actual: 'jobFilterSignature:phase5-overlap:bulk:smoke',
+      actual: 'jobFilterSignature:phase6-overlap:bulk:smoke',
       expected: 'jobFilterSignature:other:bulk:smoke',
       field: 'requestSlice',
       key: 'smoke-bulk-selection-job',

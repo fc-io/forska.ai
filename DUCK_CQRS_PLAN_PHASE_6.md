@@ -38,7 +38,7 @@ Steps:
 
 1. Prepare the target machine with the intended DuckDB memory limit, temp directory, and foreground admission settings.
 2. Record baseline state: commit SHA, `git status --short`, DuckDB memory limit, DuckDB temp directory, temp-dir size, data-root free space, machine RAM, and active runtime profile.
-3. Run `bun run db:mig` if the fixture data root has not been migrated at the current commit.
+3. Run DuckDB migrations against the fixture database if the fixture data root has not been migrated at the current commit. Use an explicit fixture `DUCKDB_PATH`; do not rely on `bun run db:mig` unless the selected runtime profile is already pointed at the release fixture.
 4. Build the 10M/7-prompt fixture if it does not already exist. If it does exist, verify dimensions before reuse: 10,000,000 project articles, 7 prompts, 70,000,000 article-prompt overlap rows, expected import routes, expected review modes, and expected search/count/job dimensions.
 5. Run the release benchmark with `benchmarkRunKind: "releaseScaleDuckDb"` and the same workload shape validated by `bun run bench:review-serving-release-gate`. If no command exists yet, add a repo-native runner such as `bun run bench:review-serving-release-scale -- --fixture <fixture> --out <evidence-dir>` before claiming this gate.
 6. Capture the emitted release report and DuckDB/runtime evidence from the same run.
@@ -49,7 +49,7 @@ Command checklist:
 - [ ] `git rev-parse HEAD`
 - [ ] `git status --short`
 - [ ] `bun run bench:review-serving-release-gate`
-- [ ] `DUCKDB_MEMORY_LIMIT=<limit> DUCKDB_TEMP_DIRECTORY=<temp-dir> bun run db:mig` if the fixture needs migrations
+- [ ] `DUCKDB_PATH=<fixture-duckdb-path> DUCKDB_MEMORY_LIMIT=<limit> DUCKDB_TEMP_DIRECTORY=<temp-dir> bun src/db/migrateDuckdb.ts` if the fixture needs migrations
 - [ ] Build fixture if absent; otherwise run the fixture-dimension verification command and save its output
 - [ ] Run the physical release-scale benchmark with `benchmarkRunKind: "releaseScaleDuckDb"` and save stdout/stderr plus JSON reports
 
