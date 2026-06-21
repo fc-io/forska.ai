@@ -1,9 +1,12 @@
+import {writeFileSync} from 'node:fs'
+import {homedir} from 'node:os'
 import {join, resolve} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
 import {reviewServingBenchmarkPhase6PhysicalRehearsal100kFixture} from '../src/server/reviewServing/reviewServingBenchmark.ts'
 import {
+  assertFixturePathDoesNotTargetLiveDuckdb,
   getReviewServingPhase6PhysicalRehearsal100kWorkloadDefinition,
   getReviewServingPhysical100kBenchmarkInput,
   getReviewServingPhysical100kFixtureVerification,
@@ -109,6 +112,51 @@ test('review-serving physical 100k workload scales Phase 6 operations without cl
   expect(workload.operations.find((operation) => operation.key === 'humanListJudgmentPayloadRows')).toMatchObject({
     targetRowsReturnedPerRequest: 14,
   })
+  expect(workload.operations.find((operation) => operation.key === 'overlapFacetRefresh')).toMatchObject({
+    targetRowsReturnedPerRequest: 4,
+  })
+  expect(workload.operations.find((operation) => operation.key === 'humanOverlapFacetRefresh')).toMatchObject({
+    targetRowsReturnedPerRequest: 2,
+  })
+  expect(workload.operations.find((operation) => operation.key === 'overlapFilterOptions')).toMatchObject({
+    targetRowsReturnedPerRequest: 3,
+  })
+  expect(workload.operations.find((operation) => operation.key === 'humanOverlapFilterOptions')).toMatchObject({
+    targetRowsReturnedPerRequest: 3,
+  })
+})
+
+test('review-serving physical 100k fixture path refuses resolved live DuckDB paths', () => {
+  const homeDir = homedir()
+  const defaultLivePath = join(homeDir, 'Library', 'Application Support', 'Forska', 'forska.duckdb')
+  const explicitLivePath = resolve('/tmp/forska-physical-100k-explicit-live.duckdb')
+  const duckdbPathFile = resolve('/tmp/forska-physical-100k-duckdb-path-file.txt')
+  const pathFileLivePath = resolve('/tmp/forska-physical-100k-path-file-live.duckdb')
+
+  writeFileSync(duckdbPathFile, pathFileLivePath)
+
+  expect(() => {
+    assertFixturePathDoesNotTargetLiveDuckdb(defaultLivePath, {
+      HOME: homeDir,
+    })
+  }).toThrow('Refusing to benchmark the live DuckDB path')
+  expect(() => {
+    assertFixturePathDoesNotTargetLiveDuckdb(explicitLivePath, {
+      DUCKDB_PATH: explicitLivePath,
+      HOME: homeDir,
+    })
+  }).toThrow('Refusing to benchmark the live DuckDB path')
+  expect(() => {
+    assertFixturePathDoesNotTargetLiveDuckdb(pathFileLivePath, {
+      DUCKDB_PATH_FILE: duckdbPathFile,
+      HOME: homeDir,
+    })
+  }).toThrow('Refusing to benchmark the live DuckDB path')
+  expect(() => {
+    assertFixturePathDoesNotTargetLiveDuckdb('/tmp/forska-physical-100k-fixture.duckdb', {
+      HOME: homeDir,
+    })
+  }).not.toThrow()
 })
 
 test('review-serving physical 100k input emits non-release benchmark run kind and physical reader requests', () => {
