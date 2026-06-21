@@ -19,7 +19,7 @@ Route-level raw-path guards become blocking when those routes are migrated in Ph
 | Status | Theme | Implement First | Done When |
 |---|---|---|---|
 | [ ] | Contracts, budgets, and module boundary | Add `src/server/reviewServing/` with contracts, projection identity builders, invalidation registry, read registry, cursor helpers, SQL-shape test helpers, admission interfaces, route-specific parity contracts, and diagnostics shape. | Every planned hot read has a contract entry and conservative migration inventory entry, every mounted route entry represents complete product-route coverage, incomplete helper/future contracts stay unmounted, every hot read has a declared physical table/cursor/budget/count/filter-access behavior, every delta kind maps to first affected component/downstream dependents/update mode, foreground admission is registry-based, and static tests guard the new SQL builders/registries from raw fallback shapes. |
-| [ ] | Benchmark harness | Add the 10M-article/7-prompt synthetic fixture generator, overlap workload definition, memory limits, and metrics capture API. | The harness can run a smoke workload before final schema/projectors exist and can later run the full fixture. It reports p50/p95/p99 latency, memory, temp usage, queue depth, rows scanned, rows returned, and admitted/rejected work. The full 10M pass remains a Phase 5 release gate. |
+| [ ] | Benchmark harness | Add the 10M-article/7-prompt synthetic fixture generator, overlap workload definition, memory limits, and metrics capture API. | The harness can run a smoke workload before final schema/projectors exist and can later run the full fixture. It reports p50/p95/p99 latency, memory, temp usage, queue depth, rows scanned, rows returned, and admitted/rejected work. The full physical 10M pass is a Phase 6 release-evidence gate. |
 
 ## Review-Driven Phase 0 Refinements
 
@@ -52,7 +52,7 @@ certify partial route coverage as a safe migration.
   declared latest-snapshot semantics.
 - Manifest status reads must select usable snapshot statuses explicitly and not
   treat candidate or failed manifests as active serving snapshots.
-- The Phase 5 workload definition in the benchmark harness must exercise the
+- The Phase 5 synthetic workload definition and Phase 6 physical release run must exercise the
   added contracts: article-set hydration, list/detail payloads, human facets and
   options, counts across list modes, queue kind, token-prefix search, async
   substring jobs, and durable bulk/export/PDF jobs.
@@ -127,7 +127,7 @@ Scope: Phase 0 only. Later-phase serving implementation exists in the tree, so t
 ### Stale Assumptions And Gaps
 
 - Phase 0's original cut line says product routes must not switch. That statement is stale for the current branch because later phases have already mounted serving-backed product routes. For Phase 0 dependency purposes, the relevant invariant is now that the contract inventory and static guards still describe and protect the mounted routes.
-- The full 10M DuckDB benchmark remains a Phase 5 release gate. Phase 0 has a smokeable harness and full workload definition only; it does not provide physical 10M scan/temp/RSS evidence.
+- The full physical 10M DuckDB benchmark is a Phase 6 release-evidence gate. Phase 0 has a smokeable harness and full workload definition only; it does not provide physical 10M scan/temp/RSS evidence.
 - The SQL static source guard intentionally excludes projector, diagnostics, retention, review-config, and residual-read allowlist files. Those files are not foreground serving SQL builders and are covered by later-phase route/residual-read tests where applicable.
 
 ### Fixes Made During This Audit

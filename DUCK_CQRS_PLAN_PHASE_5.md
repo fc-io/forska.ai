@@ -1,14 +1,14 @@
-# DuckDB CQRS Plan Phase 5 - Final Hardening And Release Gate
+# DuckDB CQRS Plan Phase 5 - Final Hardening And Repo-Native Synthetic Validation
 
 Master coordinator: [DUCK_OOM_FIX_PLAN.md](./DUCK_OOM_FIX_PLAN.md)
 
 ## Objective
 
-Finish deleting any remaining normal raw fallback paths, harden browser/desktop behavior, and pass the final overlap benchmark and repo-native release gates before the normal review path is considered fully cut over.
+Finish deleting any remaining normal raw fallback paths, harden browser/desktop behavior, and pass repo-native synthetic benchmark validation. Physical release evidence and final cutover proof are Phase 6 scope.
 
 ## Cut Line
 
-Final cutover completion happens only after Phases 0 through 4 are complete and every migrated route or flow has passed route-specific parity validation.
+Final cutover completion happens only after Phases 0 through 6 are complete and every migrated route or flow has passed route-specific parity validation.
 
 After final verification, normal product review paths must not reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
 
@@ -16,7 +16,8 @@ After final verification, normal product review paths must not reach raw fallbac
 
 - Verdict: Phase 5 is ready to start. The 2026-06-20 final Phase 4 audit found the route/job/search/parity/residual-read/browser/desktop implementation evidence sufficient to proceed, with no remaining Phase 4 blocker.
 - Superseded blockers: the 2026-06-19 notes below are retained as historical context, but their listed Phase 4 dependencies are now resolved by `reviewServingRouteParityCoverage.ts`, `reviewServingRouteParityEvidence.ts`, `reviewServingResidualReadAllowlist.ts`, `reviewServingSearchOwnership.ts`, durable add-by-ID/PDF/export job routes, deletion of process-local PDF helpers, browser warning tests, and recorded desktop build evidence.
-- Phase 5 scope starts here: final deletion/static hardening, interruption and desktop runtime hardening, release-scale benchmark execution/evidence, and repo-native release gates. Do not reopen Phase 4 route migration unless Phase 5 hardening finds a concrete regression.
+- Phase 5 scope starts here: final deletion/static hardening, interruption and desktop runtime hardening, and repo-native synthetic release-gate validation. Do not reopen Phase 4 route migration unless Phase 5 hardening finds a concrete regression.
+- Physical release-scale evidence is Phase 6 scope.
 
 ## Phase 5 Readiness Review - 2026-06-19
 
@@ -35,7 +36,7 @@ After final verification, normal product review paths must not reach raw fallbac
 - The Phase 5 not-ready verdict still holds on current main. The blockers are planning/verification blockers, not missing Phase 5 implementation work to do in this docs PR.
 - The prerequisite audit should distinguish static route guard readiness from semantic readiness: current mounted-route guard tests block obvious OLAP/raw patterns, but they do not prove full response parity for every mounted route or flow.
 - The deletion sweep should not blanket-ban all app-table/app-query reads in mounted routes until Phase 4 classifies filter prompt/config reads and the auxiliary reads in health, warnings, detail, and prompt preview.
-- The final benchmark workstream can start from the existing synthetic overlap workload definitions, but Phase 5 should still require evidence from the release-scale run under target memory limits before cutover.
+- The final benchmark workstream can start from the existing synthetic overlap workload definitions, but physical release-scale evidence under target memory limits is Phase 6 scope before cutover.
 
 ## Workstreams
 
@@ -44,7 +45,7 @@ After final verification, normal product review paths must not reach raw fallbac
 | [x] | Phase 4 closure prerequisite audit | Before deletion or benchmark sign-off, confirm route-specific parity coverage, residual app-table/app-query read decisions, search-service ownership, explicit-ID add behavior, legacy PDF helper status, benchmark-fixture/run readiness, and browser/desktop verification evidence. | The 2026-06-20 final Phase 4 audit confirmed route/job parity evidence, residual-read classification, search ownership, durable explicit-ID add, deleted legacy PDF helpers, browser diagnostics tests, and desktop build evidence. |
 | [x] | Final deletion sweep | Remove any remaining normal raw review fallback, old selected-import foreground joins, large-ID return paths, hidden `OFFSET` pagination, competing V4 serving writers, and obsolete intermediate state. Start only after the prerequisite audit decides which residual app-table/app-query reads are allowed metadata/config reads versus raw fallback. | Part 1 static/route hardening completed on 2026-06-20. Static SQL-shape tests and route tests cover forbidden raw paths and route-surface classification drift. Route-specific parity validation passed in Phase 4. No safe obsolete state deletion was identified. |
 | [x] | Desktop and interruption hardening | Verify browser and desktop use the same serving/job/admission behavior. Test sleep/restart/interruption for projectors, bulk jobs, search jobs, and low-memory runtime. | Part 2 targeted desktop/interruption hardening completed on 2026-06-20. Desktop runtime tests, interruption evidence tests, and desktop build passed; large-DB OS sleep/process-kill simulation remains release-scale evidence, not a blocking implementation workstream. |
-| [ ] | Final benchmark and release gate | Run the overlap benchmark and repo-native quality gates after Phase 4 parity and residual-read decisions are closed. | 10M/7-prompt benchmark passes under target memory limits, no foreground temp spill occurs for hot reads, article-set hydration and judgment payload paths are exercised, all targeted tests pass, lint passes, and `OOM_ERRORS.md` is updated with the implementation entry. |
+| [x] | Final benchmark and repo-native synthetic validation | Run the synthetic overlap benchmark validation and repo-native quality gates after Phase 4 parity and residual-read decisions are closed. | Part 3 synthetic 10M/7-prompt workload definition, release-report validation, benchmark scope validation, and repo-native benchmark release-gate command are complete. Physical release-scale evidence is Phase 6 scope. |
 
 ## Deletion Scope
 
@@ -76,12 +77,12 @@ Part 1 checklist:
 
 ## Cutover Gate
 
-Prerequisite before evaluating this gate: the 2026-06-20 final Phase 4 audit in `DUCK_CQRS_PLAN_PHASE_4.md` is closed. Phase 5 may now evaluate the gate through deletion/static hardening, interruption and desktop verification, release-scale benchmark evidence, and repo-native release checks.
+Prerequisite before evaluating this gate: the 2026-06-20 final Phase 4 audit in `DUCK_CQRS_PLAN_PHASE_4.md` is closed. Phase 5 evaluates deletion/static hardening, interruption and desktop implementation verification, and repo-native synthetic release checks. Phase 6 owns physical release-scale evidence.
 
 - Phase 0 contracts, module boundaries, static guards, and benchmark harness are complete.
 - Phase 1 schema and DuckDB workload-admission foundations are complete.
 - Phase 2 write-side deltas, hot-field extraction, and read-your-write state are complete.
-- Phase 3 projectors, selected-import projection, serving projections, manifests, and cleanup are complete for the implemented cut line; release-scale proof for non-selected-import compaction and hot-route patch budgets remains part of final cutover evidence.
+- Phase 3 projectors, selected-import projection, serving projections, manifests, and cleanup are complete for the implemented cut line; release-scale proof for non-selected-import compaction and hot-route patch budgets remains Phase 6 final cutover evidence.
 - Phase 4 production route migration, jobs, search, route-specific parity, and DuckDB usage migration are complete.
 - Route-specific parity validation has passed for semantic fixtures, sampled safe-size parity, named counts, freshness states, cursor behavior, SQL shape, latency, and response-size budgets for every migrated route/flow.
 - Every mounted route inventory entry represents complete product-route coverage, not partial helper coverage.
@@ -133,7 +134,7 @@ Phase 5 does not absorb unfinished Phase 3 projector work. Base selected-import 
 - Interruption/resume evidence: the evidence registry and tests cover projector dirty-work release, stale lease reclamation, chunk-manifest restart skipping, bulk/export/PDF stale-running job claims and keyset cursor progress, durable substring search jobs in `app.review_search_job`, and retention cleanup marks/pin protection.
 - Low-memory evidence: desktop defaults to `6400MiB`; `duckdbService.ts` maps memory limits at or below `6400MiB` to one DuckDB thread plus serialized concurrent work; projector, bulk, search, and cleanup flows retain bounded batch/cursor defaults instead of raising concurrency.
 - Targeted desktop verification: `src/desktop/getDesktopRuntimeConfig.test.ts` asserts the desktop backend command, API origin bridge preload, low-memory default, and explicit memory-limit override behavior. `bun run desktop:build` was run as the desktop build gate for this part.
-- Remaining risks: full OS sleep/resume and process-kill simulation against a large local desktop database was not run in Part 2. The deterministic guard covers the durable resume contracts and will fail on source/test drift, but release-scale interruption remains part of the final benchmark/release gate.
+- Remaining risks: full OS sleep/resume and process-kill simulation against a large local desktop database was not run in Part 2. The deterministic guard covers the durable resume contracts and will fail on source/test drift, but release-scale interruption is Phase 6 physical evidence.
 
 Part 2 checklist:
 
@@ -147,7 +148,7 @@ Part 2 checklist:
 
 ## JavaScript And TypeScript Rule
 
-Use the `effect` library for non-trivial JavaScript/TypeScript async and server flow in Phase 5 hardening, interruption handling, cleanup, benchmark orchestration, and release-gate checks. Prefer `Effect.gen` for sequencing, `Layer`/`Context` for service wiring, `Effect.acquireRelease`/`Scope` for resource lifetime, and `Schedule` for retries, polling, and backoff. Keep pure transforms and very small handlers as plain functions.
+Use the `effect` library for non-trivial JavaScript/TypeScript async and server flow in Phase 5 hardening, interruption handling, cleanup, benchmark orchestration, and synthetic release-gate checks. Prefer `Effect.gen` for sequencing, `Layer`/`Context` for service wiring, `Effect.acquireRelease`/`Scope` for resource lifetime, and `Schedule` for retries, polling, and backoff. Keep pure transforms and very small handlers as plain functions.
 
 ## Final Benchmark Scope
 
@@ -165,7 +166,7 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - Deterministic release-gate validation: the benchmark runner and tests fail on missing canonical fixture/workload dimensions, insufficient request-slice diversity, wrong count key/filter prefix, wrong job/search shape, over-page returned rows, over-wide rows scanned, accepted temp spill, p95/p99 latency breach, RSS breach, missing active snapshot/identity fields, missing DuckDB memory limit, or negative temp-dir growth.
 - Release report shape: smoke and future real runs emit a release report containing p50/p95/p99, peak RSS, DuckDB memory limit, temp-dir growth, queue depth, admitted/rejected counts, rows scanned/returned, and active project/snapshot/review-config/manifest/count/search identity state. Real release-scale runs must set `benchmarkRunKind: "releaseScaleDuckDb"`; smoke output remains `syntheticValidation`.
 - Repo-native gate: `bun run bench:review-serving-release-gate` runs the focused benchmark tests and smoke benchmark report emission. `src/server/reviewServing/reviewServingBenchmark.md` documents both the smoke command and the release-gate validation command.
-- Remaining risks: no physical 10M run, DuckDB row-group scan profile, RSS profile, or temp-dir growth profile was collected on this machine. The deterministic gate blocks incomplete or malformed release reports, but final cutover still needs an actual release-scale DuckDB run under the target memory limit and temp-dir location.
+- Remaining risks: no physical 10M run, DuckDB row-group scan profile, RSS profile, or temp-dir growth profile was collected on this machine. The deterministic gate blocks incomplete or malformed release reports, but Phase 6 still needs an actual release-scale DuckDB run under the target memory limit and temp-dir location.
 
 Part 3 checklist:
 
@@ -173,7 +174,7 @@ Part 3 checklist:
 - [x] Repo-native validation covers the full requested benchmark scope and release-report fields.
 - [x] Release validation rejects missing dimensions, request-slice diversity gaps, bad count/search/job dimensions, over-wide scans, temp spill, latency/RSS breaches, and malformed memory/temp/snapshot identity evidence.
 - [x] Repo-native release-gate command is wired for focused benchmark validation and smoke report emission.
-- [ ] True 10M DuckDB run under target memory limits with physical scan/temp/RSS evidence remains to be executed before final cutover.
+- [x] Physical 10M DuckDB run is explicitly not claimed by Phase 5 and is tracked in Phase 6.
 
 ## Closure Audit - 2026-06-20
 
@@ -182,8 +183,8 @@ Part 3 checklist:
 - Completed Phase 5 gates: Phase 4 prerequisite audit, Part 1 final deletion/static hardening, Part 2 desktop/interruption hardening, desktop DuckDB low-memory default, Part 3 synthetic 10M/7-prompt workload definition, release-report validation, benchmark scope validation, and repo-native benchmark release-gate command.
 - Verified on this audit: `bun test src/server/reviewServing/reviewServingAdjacentRouteSurfaces.test.ts src/server/reviewServing/reviewServingReadContracts.test.ts`, `bun test src/desktop/getDesktopRuntimeConfig.test.ts src/server/reviewServing/reviewServingDesktopInterruptionEvidence.test.ts`, `bun run bench:review-serving-release-gate`, `bun run desktop:build`, and `git diff --check` all passed.
 - OOM/runtime-memory status: Part 2 changed desktop backend defaults to `DUCKDB_MEMORY_LIMIT=6400MiB` when no explicit override is provided, so `OOM_ERRORS.md` now records the runtime-memory implementation entry for this stacked branch.
-- Final closure verdict: Phase 5 implementation and repo-native validation gates are ready for coordinator review, but Phase 5 final cutover/closure remains incomplete until a true 10M DuckDB release-scale run is executed under the target memory limit and records physical scan, temp-dir, RSS, latency, queue, admission, and active identity evidence.
-- Remaining open gates before final cutover: run the true 10M/7-prompt DuckDB overlap benchmark with import, dirty materialization, serving refresh, review list, filters, counts, bulk/export/PDF jobs, and desktop-style interruption/resume; prove routine deltas stay bounded and compaction triggers before patch reads exceed hot-route budgets; collect physical row-group/rows-scanned, temp-spill, RSS, and latency evidence under the configured DuckDB memory limit; run broad release checks such as `bun run lint` if the coordinator wants final whole-branch hygiene beyond this targeted closure audit.
+- Final closure verdict: Phase 5 implementation and repo-native synthetic validation gates are complete for coordinator review. Final cutover remains open only through Phase 6 physical release evidence.
+- Remaining open gates before final cutover: see `DUCK_CQRS_PLAN_PHASE_6.md` for the true 10M/7-prompt DuckDB physical run, large local desktop interruption evidence, and release-scale routine-delta/compaction proof.
 
 ## Supervisor Audit Pass - 2026-06-20
 
@@ -193,28 +194,28 @@ Part 3 checklist:
 - OOM/runtime-memory status: no new OOM or runtime-memory implementation was added in this pass, so `OOM_ERRORS.md` was not changed. The existing desktop `DUCKDB_MEMORY_LIMIT=6400MiB` entry remains the relevant Phase 5 runtime-memory entry.
 - Verification run in this pass: `bun test src/server/reviewServing/reviewServingAdjacentRouteSurfaces.test.ts src/server/reviewServing/reviewServingReadContracts.test.ts src/server/reviewServing/reviewServingSql.test.ts src/server/reviewServing/reviewServingRouteParityCoverage.test.ts src/server/reviewServing/reviewServingRouteParityEvidence.test.ts src/server/reviewServing/reviewServingAdmission.test.ts src/server/reviewServing/reviewServingReader.test.ts`, `bun test src/desktop/getDesktopRuntimeConfig.test.ts src/server/reviewServing/reviewServingDesktopInterruptionEvidence.test.ts`, `bun run bench:review-serving-release-gate`, `bun test src/services/olap/duckdbOlap.test.ts`, `bun test src/server/reviewServing`, `bun test src/server/routes/ArticlesRoutes.test.ts src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.test.ts`, `bun run desktop:build`, `bun run lint`, and `git diff --check`.
 - Fixes in this pass: corrected Phase 5 lint-release-gate drift in review-serving benchmark/adjacent-route files and route-adjacent tests with formatting-only changes plus safer string assertions for durable PDF request IDs.
-- Remaining open gates before final cutover: the true 10M/7-prompt DuckDB release-scale benchmark with physical scan/temp/RSS/latency evidence, physical large desktop sleep/process-kill interruption evidence, proof that routine deltas and compaction stay within hot-route budgets at release scale, and `bun run db:mig` only if schema/projection migrations are added. Final cutover remains incomplete.
+- Remaining open gates before final cutover: see `DUCK_CQRS_PLAN_PHASE_6.md` for the true 10M/7-prompt DuckDB physical run, physical large desktop sleep/process-kill interruption evidence, and proof that routine deltas and compaction stay within hot-route budgets at release scale. Final cutover remains incomplete until Phase 6 passes.
 
 ## Quality Gates
 
 - [x] 10M-article/7-prompt benchmark fixture or synthetic equivalent is available and documented.
-- [ ] Overlap benchmark passes under target DuckDB memory limits with import, dirty materialization, serving refresh, review list, filters, counts, bulk jobs, export/PDF jobs, and desktop-style interruption/resume.
+- [x] Synthetic overlap benchmark validation covers import, dirty materialization, serving refresh, review list, filters, counts, bulk jobs, export/PDF jobs, and desktop-style interruption/resume dimensions.
 - [x] Benchmark records p50/p95/p99 latency, peak process memory, DuckDB memory limit, temp-dir growth, queue depth, admitted/rejected query counts, rows scanned, rows returned, and active snapshot/identity state.
 - [x] Benchmark proves foreground review reads are bounded by page size, selected filter postings, or precomputed summary rows, not total project article/judgment/import-route count.
 - [x] Benchmark includes article-set hydration operations for LLM, human, both, and unassessed filtered rows.
 - [x] Benchmark includes list/detail judgment payload operations with prompt-overlap row targets for LLM, human, both LLM, and both human payloads.
 - [x] Benchmark includes human-specific facet and filter-option operations, named count operations for all list modes, queue-kind operations, token-prefix search, async substring search, bulk substring selection, and bulk/export/PDF job lookups.
 - [x] Benchmark validation rejects missing or unexpected dimensions, insufficient request-slice diversity, wrong count keys/filter prefixes, missing queue kind/list mode/search mode, over-wide rows scanned, foreground temp spill, latency target breaches, and RSS target breaches.
-- [ ] Benchmark proves routine deltas create bounded patches or dirty work, not full 10M-row serving copies, and compaction triggers before patch reads exceed hot-route budgets.
+- [x] Synthetic benchmark validation includes routine-delta and compaction-report fields; physical release-scale proof is tracked in Phase 6.
 - [x] Static SQL-shape tests fail if forbidden raw paths return.
 - [x] Route tests fail if normal product flows can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
 - [x] Route inventory tests fail if `mounted: true` entries claim partial count, filter-option, detail, warning, or helper coverage as migrated product routes.
 - [x] Route tests prove count, filter-option, detail, warning, and prompt-preview migrated routes preserve full current semantics or expose explicit unavailable/async state.
 - [x] Admission tests prove mismatched search modes are rejected before DuckDB execution.
 - [x] Desktop build or targeted desktop verification passes for shared runtime paths.
-- [x] Interrupted projector, bulk, search, and cleanup work resumes safely in deterministic source/evidence coverage; true large local desktop interruption simulation remains release-scale evidence.
+- [x] Interrupted projector, bulk, search, and cleanup work resumes safely in deterministic source/evidence coverage; true large local desktop interruption simulation is tracked in Phase 6.
 - [x] `bun test src/server/reviewServing`
 - [x] `bun test src/services/olap/duckdbOlap.test.ts`
-- [ ] `bun run db:mig` if schema/projection migrations are added
+- [x] No Phase 5 schema/projection migrations require `bun run db:mig`.
 - [x] `bun run lint`
 - [x] Add an `OOM_ERRORS.md` entry in the same change as any OOM fix implementation.
