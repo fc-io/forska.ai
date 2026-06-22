@@ -812,6 +812,26 @@ const getReviewsIndexingProgressState = (params: {
             : 'stalled'
 }
 
+const getShouldRequestMissingReviewIndexWork = (params: {
+  enabledPromptCount: number
+  hasAnyArticlesInScope: boolean
+  hasLargeRebuild: boolean
+  hasReviewServingRows: boolean
+  projectRefreshState: ProjectRefreshState
+}) => {
+  return (
+    params.enabledPromptCount > 0
+    && params.hasAnyArticlesInScope
+    && !params.hasReviewServingRows
+    && !params.hasLargeRebuild
+    && params.projectRefreshState.isFresh
+    && params.projectRefreshState.refreshStatus !== 'failed'
+    && params.projectRefreshState.dirtyMaterialization.failedCount === 0
+    && params.projectRefreshState.dirtyMaterialization.unreconciledCount === 0
+    && !params.projectRefreshState.hasUnresolvedQuarantineBarrier
+  )
+}
+
 export const projectsRoutesGetReviewsWarnings = new Elysia().post(
   '/api/projectsreviewswarnings',
   async ({body}) => {
@@ -835,9 +855,9 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       enabledPromptCount,
       hasCuratedArticles,
       hasRouteArticles,
-      projectRefreshState,
-      projectLargeRebuildState,
-      pendingArticleRefreshInfo,
+      initialProjectRefreshState,
+      initialProjectLargeRebuildState,
+      initialPendingArticleRefreshInfo,
       quarantinedArticleRefreshes,
       freshMaintenanceLeases,
       maintenanceRecoveryContext,
@@ -856,6 +876,33 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     ])
     const hasReviewServingRows =
       warningSnapshot.status === 'accepted' && warningSnapshot.diagnostics.manifest.status === 'active'
+    const hasAnyArticlesInScope = hasCuratedArticles || hasRouteArticles
+    let projectRefreshState = initialProjectRefreshState
+    let projectLargeRebuildState = initialProjectLargeRebuildState
+    let pendingArticleRefreshInfo = initialPendingArticleRefreshInfo
+
+    if (
+      getShouldRequestMissingReviewIndexWork({
+        enabledPromptCount,
+        hasAnyArticlesInScope,
+        hasLargeRebuild: (projectLargeRebuildState.refreshToken ?? 0) > 0,
+        hasReviewServingRows,
+        projectRefreshState,
+      })
+    ) {
+      await martRefreshService.requestProjectLargeRebuild(projectId, 'reviews-warnings-missing-review-index')
+
+      const refreshedIndexingState = await Promise.all([
+        getProjectRefreshState(projectId),
+        getProjectLargeRebuildState(projectId),
+        getPendingArticleRefreshInfo(projectId),
+      ])
+
+      projectRefreshState = refreshedIndexingState[0]
+      projectLargeRebuildState = refreshedIndexingState[1]
+      pendingArticleRefreshInfo = refreshedIndexingState[2]
+    }
+
     const freshArticleRefreshLeaseCount = getFreshArticleRefreshLeaseCount(freshMaintenanceLeases)
     const freshProjectRefreshLeaseCount = getFreshMaintenanceLeaseCount(
       freshMaintenanceLeases,
@@ -924,7 +971,6 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const pendingArticleRefreshCount = queuedArticleRefreshCount + inFlightArticleRefreshCount
     const queuedRefreshCount = queuedProjectRefreshCount + queuedArticleRefreshCount
     const inFlightRefreshCount = inFlightProjectRefreshCount + inFlightArticleRefreshCount
-    const hasAnyArticlesInScope = hasCuratedArticles || hasRouteArticles
     const pendingRefreshCount = pendingProjectRefreshCount + pendingArticleRefreshCount
     const activeWorkCount = inFlightRefreshCount
     const rawBlockedReason = getReviewIndexingBlockedReason({

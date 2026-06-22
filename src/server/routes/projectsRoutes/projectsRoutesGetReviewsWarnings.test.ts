@@ -865,8 +865,8 @@ test('reviews warnings count only dirty articles still in live project scope', a
   expect(body.data.indexing.status).toBe('refreshing')
 })
 
-test('reviews warnings report stale when scope exists but review rollups are missing', async () => {
-  const projectId = 'project-stale-warning'
+test('reviews warnings queue a large rebuild when scoped articles exist but review serving is missing', async () => {
+  const projectId = 'project-missing-serving-bootstrap-warning'
 
   await insertProjectFixture(projectId)
 
@@ -874,9 +874,11 @@ test('reviews warnings report stale when scope exists but review rollups are mis
 
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
-  expect(body.data.indexing.pendingRefreshCount).toBe(0)
-  expect(body.data.indexing.progressState).toBe('stalled')
-  expect(body.data.indexing.status).toBe('stale')
+  expect(body.data.indexing.largeRebuild?.progress?.scopeArticleCount).toBe(1)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.queuedProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.status).toBe('refreshing')
 })
 
 test('reviews warnings report processing from fresh persisted article leases', async () => {
@@ -1058,6 +1060,10 @@ test('reviews warnings report refreshing when a staged large rebuild is queued',
 })
 
 test('reviews warnings expose large rebuild cursor progress separately from dirty article ACKs', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
   const projectId = 'project-large-rebuild-progress-warning'
   const articleId = `article-${projectId}`
 
