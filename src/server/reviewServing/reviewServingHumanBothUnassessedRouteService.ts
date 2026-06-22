@@ -125,18 +125,6 @@ const defaultJudgmentHydrationPromptCount = 128
 const queueReadyFilterKey = 'queue:ready'
 const reviewServingSnapshotUnavailableError = 'Review serving snapshot is unavailable'
 
-const getUnavailableReviewArticlesResponse = (page: number, limit: number) => {
-  return {
-    data: [],
-    error: reviewServingSnapshotUnavailableError,
-    totalCount: 0,
-    page,
-    limit,
-    totalPages: 0,
-    nextCursor: null,
-  }
-}
-
 const getDateValue = (value: unknown) => {
   if (value instanceof Date) {
     return value
@@ -681,7 +669,7 @@ export const getHumanReviewArticlesFromServing = async (
   const limit = getLimit(effectiveParams.limit)
 
   if (!manifest) {
-    return {...getUnavailableReviewArticlesResponse(page, limit), humanJudgmentMode: 'prompt'}
+    throw new Error(reviewServingSnapshotUnavailableError)
   }
 
   const pageResult = await readRowsPage<ReviewServingArticleRow>({
@@ -739,7 +727,7 @@ export const getBothReviewArticlesFromServing = async (
   const limit = getLimit(effectiveParams.limit)
 
   if (!manifest) {
-    return getUnavailableReviewArticlesResponse(page, limit)
+    throw new Error(reviewServingSnapshotUnavailableError)
   }
 
   const pageResult = await readRowsPage<ReviewServingArticleRow>({
@@ -793,7 +781,7 @@ export const getUnassessedReviewArticlesFromServing = async (
   const limit = getLimit(effectiveParams.limit)
 
   if (!manifest) {
-    return getUnavailableReviewArticlesResponse(page, limit)
+    throw new Error(reviewServingSnapshotUnavailableError)
   }
 
   const pageResult = await readRowsPage<ReviewServingArticleRow>({

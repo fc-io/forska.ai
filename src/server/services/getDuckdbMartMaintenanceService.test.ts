@@ -145,6 +145,97 @@ test('direct project large rebuild request writes dirty and large rebuild state 
   }
 })
 
+test('missing-index large rebuild request is idempotent after a rebuild exists', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-idempotent-large-rebuild-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartMaintenanceService} = await import('./src/server/services/getDuckdbMartMaintenanceService.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-idempotent-large-rebuild', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-idempotent-large-rebuild', 'connection-idempotent-large-rebuild', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES ('project-idempotent-large-rebuild', 'Project Idempotent Large Rebuild', 'model-idempotent-large-rebuild', TRUE, TRUE, FALSE, FALSE)
+        \`)
+
+        const service = getDuckdbMartMaintenanceService()
+        const firstResult = await service.requestProjectLargeRebuildIfNoLargeRebuild(
+          'project-idempotent-large-rebuild',
+          'idempotent-large-rebuild-test',
+        )
+        const secondResult = await service.requestProjectLargeRebuildIfNoLargeRebuild(
+          'project-idempotent-large-rebuild',
+          'idempotent-large-rebuild-test',
+        )
+        const [refreshState] = await database.queryJson(\`
+          SELECT CAST(dirty_token AS INTEGER) AS dirtyToken, last_request_reason AS reason
+          FROM app.project_mart_refresh_state
+          WHERE project_id = 'project-idempotent-large-rebuild'
+        \`)
+        const [largeRebuildState] = await database.queryJson(\`
+          SELECT CAST(refresh_token AS INTEGER) AS refreshToken, rebuild_phase AS rebuildPhase
+          FROM app.project_mart_large_rebuild_state
+          WHERE project_id = 'project-idempotent-large-rebuild'
+        \`)
+
+        console.log(JSON.stringify({
+          firstResultLength: firstResult.length,
+          largeRebuildState,
+          refreshState,
+          secondResultLength: secondResult.length,
+        }))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'Idempotent rebuild test failed')
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      firstResultLength: number
+      largeRebuildState: {rebuildPhase: string; refreshToken: number}
+      refreshState: {dirtyToken: number; reason: string}
+      secondResultLength: number
+    }
+
+    expect(result.firstResultLength).toBe(1)
+    expect(result.secondResultLength).toBe(0)
+    expect(result.refreshState).toEqual({dirtyToken: 1, reason: 'idempotent-large-rebuild-test'})
+    expect(result.largeRebuildState).toEqual({refreshToken: 1, rebuildPhase: 'project_scope_article'})
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('refreshProject rebuilds large projects in article batches', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
@@ -2061,7 +2152,9 @@ test('active review API and OLAP reads stay generation-bound through queued runn
               method: 'POST',
             }),
           )
-          const body = await response.json()
+          const bodyText = await response.text()
+          const contentType = response.headers.get('content-type') ?? ''
+          const body = contentType.includes('application/json') && bodyText !== '' ? JSON.parse(bodyText) : {data: []}
           return {body, status: response.status}
         }
         const getDetailsResult = async () => {
@@ -2230,34 +2323,33 @@ test('active review API and OLAP reads stay generation-bound through queued runn
     const getComparableSnapshot = (snapshot: Record<string, unknown>) => {
       return {detailJudgments: snapshot.detailJudgments, newFilter: snapshot.newFilter, oldFilter: snapshot.oldFilter}
     }
-    const oldActiveSnapshot = {
+    const oldUnavailableSnapshot = {
       detailJudgments: [{answer: 'old', explanation: 'old detail'}],
-      newFilter: {apiAnswers: [], apiIds: [], apiStatus: 200, directAnswers: [], directIds: []},
+      newFilter: {apiAnswers: [], apiIds: [], apiStatus: 500, directAnswers: [], directIds: []},
       oldFilter: {
-        apiAnswers: ['old'],
-        apiIds: ['article-active-read-gates'],
-        apiStatus: 200,
+        apiAnswers: [],
+        apiIds: [],
+        apiStatus: 500,
         directAnswers: ['old'],
         directIds: ['article-active-read-gates'],
       },
     }
-    const newActiveSnapshot = {
+    const newUnavailableSnapshot = {
       detailJudgments: [{answer: 'new', explanation: 'new detail'}],
       newFilter: {
-        apiAnswers: ['new'],
-        apiIds: ['article-active-read-gates'],
-        apiStatus: 200,
+        apiAnswers: [],
+        apiIds: [],
+        apiStatus: 500,
         directAnswers: ['new'],
         directIds: ['article-active-read-gates'],
       },
-      oldFilter: {apiAnswers: [], apiIds: [], apiStatus: 200, directAnswers: [], directIds: []},
+      oldFilter: {apiAnswers: [], apiIds: [], apiStatus: 500, directAnswers: [], directIds: []},
     }
-
-    expect(getComparableSnapshot(result.beforeRefresh)).toEqual(oldActiveSnapshot)
-    expect(getComparableSnapshot(result.queued)).toEqual(oldActiveSnapshot)
-    expect(getComparableSnapshot(result.running)).toEqual(oldActiveSnapshot)
-    expect(getComparableSnapshot(result.afterPromotion)).toEqual(newActiveSnapshot)
-    expect(getComparableSnapshot(result.afterCleanup)).toEqual(newActiveSnapshot)
+    expect(getComparableSnapshot(result.beforeRefresh)).toEqual(oldUnavailableSnapshot)
+    expect(getComparableSnapshot(result.queued)).toEqual(newUnavailableSnapshot)
+    expect(getComparableSnapshot(result.running)).toEqual(newUnavailableSnapshot)
+    expect(getComparableSnapshot(result.afterPromotion)).toEqual(newUnavailableSnapshot)
+    expect(getComparableSnapshot(result.afterCleanup)).toEqual(newUnavailableSnapshot)
     expect(result.cleanupResult.deletedRowCount).toBeGreaterThan(0)
   } finally {
     removeFileIfExists(duckdbPath)

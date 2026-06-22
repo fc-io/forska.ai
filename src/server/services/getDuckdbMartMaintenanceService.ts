@@ -1862,6 +1862,27 @@ const requestProjectLargeRebuilds = async (projectIds: string[], reason: string)
       }) as Promise<MarkedProjectDirtyState[]>)
 }
 
+const requestProjectLargeRebuildIfNoLargeRebuild = async (projectId: string, reason: string) => {
+  return getAppDatabaseService().transaction(async (tx) => {
+    const [largeRebuildState] = await tx.queryJson<{refreshToken: number | null}>(`
+      SELECT CAST(refresh_token AS INTEGER) AS refreshToken
+      FROM app.project_mart_large_rebuild_state
+      WHERE project_id = ${getSqlLiteral(projectId)}
+      LIMIT 1
+    `)
+
+    if ((largeRebuildState?.refreshToken ?? 0) > 0) {
+      return []
+    }
+
+    const refreshStateService = getProjectMartDirtyRefreshStateService()
+    const dirtyProjects = await refreshStateService.getDirtyProjectsForProjectIds(tx, [projectId])
+    const states = await refreshStateService.markProjectsDirtyAtomically({projects: dirtyProjects, reason, runner: tx})
+
+    return requestLargeRebuildsForDirtyStates(states, tx)
+  }) as Promise<MarkedProjectDirtyState[]>
+}
+
 const requestProjectLargeRebuildForDirtyArticles = async (projectId: string, articleIds: string[], reason: string) => {
   const refreshArticleIds = getUniqueValues(articleIds)
 
@@ -3063,6 +3084,7 @@ const duckdbMartMaintenanceService = {
   requestProjectLargeRebuild: async (projectId: string, reason: string) => {
     return requestProjectLargeRebuilds([projectId], reason)
   },
+  requestProjectLargeRebuildIfNoLargeRebuild,
   requestProjectLargeRebuilds,
   cleanupArchivedProjectMartData,
   cleanupArchivedProjectMartDataBatch,

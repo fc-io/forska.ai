@@ -529,18 +529,6 @@ const getResponseRows = (
   })
 }
 
-const getUnavailableArticlesResponse = (page: number, limit: number) => {
-  return {
-    data: [],
-    error: reviewServingSnapshotUnavailableError,
-    totalCount: null,
-    page,
-    limit,
-    totalPages: null,
-    nextCursor: null,
-  }
-}
-
 export const getLlmReviewArticlesFromServing = async (
   params: ArticlesReviewsParams,
   dependencies?: ReviewServingLlmReviewRouteDependencies,
@@ -552,7 +540,7 @@ export const getLlmReviewArticlesFromServing = async (
   const manifest = await getManifest(params.projectId, dependencies)
 
   if (!manifest) {
-    return getUnavailableArticlesResponse(page, limit)
+    throw new Error(reviewServingSnapshotUnavailableError)
   }
 
   const rowsResult = await readReviewServingRows<ReviewServingArticleRow>(
@@ -595,7 +583,7 @@ export const countLlmReviewArticlesFromServing = async (
   const limit = getLimit(effectiveParams.limit)
 
   if (!manifest) {
-    return {totalCount: 0, totalPages: 0, error: reviewServingSnapshotUnavailableError}
+    throw new Error(reviewServingSnapshotUnavailableError)
   }
 
   const totalCount = await getCountValue({...effectiveParams, limit, page: 1}, manifest, {...dependencies, database})

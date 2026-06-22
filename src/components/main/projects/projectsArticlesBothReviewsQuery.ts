@@ -75,6 +75,10 @@ export const createArticlesBothReviewsQueryOptions = (
         throw new Error('Failed to fetch both-assessed articles')
       }
 
+      if (response.data.error) {
+        throw new Error(response.data.error)
+      }
+
       return response.data
     },
     refetchOnWindowFocus: false,
