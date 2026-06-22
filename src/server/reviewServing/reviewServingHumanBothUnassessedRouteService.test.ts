@@ -429,36 +429,65 @@ test('human, both, and unassessed services surface stale and unavailable freshne
   expect(staleResult.totalCount).toBe(1)
   expect(staleReader.statements.join('\n')).toContain('FROM mart.review_unassessed_queue_serving_v4')
 
-  await getHumanReviewArticlesFromServing(
+  const humanReader = createReaderDatabase()
+  const humanResult = await getHumanReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
     {
       currentReviewConfigHash: 'config-1',
-      database: createReaderDatabase().database,
+      database: humanReader.database,
       manifestDatabase: createManifestDatabase('candidate'),
     },
   )
-    .then(() => {
-      throw new Error('expected indexing freshness to reject')
-    })
-    .catch((error: unknown) => {
-      expect(error).toBeInstanceOf(Error)
-      expect(error instanceof Error ? error.message : '').toContain('Review serving snapshot is unavailable')
-    })
-  await getBothReviewArticlesFromServing(
+  const bothReader = createReaderDatabase()
+  const bothResult = await getBothReviewArticlesFromServing(
     {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
     {
       currentReviewConfigHash: 'config-1',
-      database: createReaderDatabase().database,
+      database: bothReader.database,
       manifestDatabase: createManifestDatabase('missing'),
     },
   )
-    .then(() => {
-      throw new Error('expected unavailable freshness to reject')
-    })
-    .catch((error: unknown) => {
-      expect(error).toBeInstanceOf(Error)
-      expect(error instanceof Error ? error.message : '').toContain('Review serving snapshot is unavailable')
-    })
+  const unassessedReader = createReaderDatabase()
+  const unassessedResult = await getUnassessedReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: unassessedReader.database,
+      manifestDatabase: createManifestDatabase('missing'),
+    },
+  )
+
+  expect(humanResult).toEqual({
+    data: [],
+    error: 'Review serving snapshot is unavailable',
+    humanJudgmentMode: 'prompt',
+    totalCount: 0,
+    page: 1,
+    limit: 25,
+    totalPages: 0,
+    nextCursor: null,
+  })
+  expect(bothResult).toEqual({
+    data: [],
+    error: 'Review serving snapshot is unavailable',
+    totalCount: 0,
+    page: 1,
+    limit: 25,
+    totalPages: 0,
+    nextCursor: null,
+  })
+  expect(unassessedResult).toEqual({
+    data: [],
+    error: 'Review serving snapshot is unavailable',
+    totalCount: 0,
+    page: 1,
+    limit: 25,
+    totalPages: 0,
+    nextCursor: null,
+  })
+  expect(humanReader.statements.join('\n')).not.toContain('FROM mart.review_article_serving_v4')
+  expect(bothReader.statements.join('\n')).not.toContain('FROM mart.review_article_serving_v4')
+  expect(unassessedReader.statements.join('\n')).not.toContain('FROM mart.review_article_serving_v4')
 })
 
 test('migrated human, both, and unassessed routes do not import OLAP or raw fallback wrappers', async () => {

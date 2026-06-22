@@ -67,6 +67,7 @@ export type ArticleReviewResult = {
 
 export type ArticlesReviewsResponse = {
   data: ArticleReviewResult[]
+  error?: string
   totalCount: number | null
   page: number
   limit: number
@@ -149,6 +150,7 @@ export type ArticleReviewsBothResult = {
 
 export type ArticlesReviewsBothResponse = {
   data: ArticleReviewsBothResult[]
+  error?: string
   totalCount: number
   page: number
   limit: number

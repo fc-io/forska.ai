@@ -91,6 +91,7 @@ type ReviewServingRouteDependencies = {
 }
 type HumanReviewArticlesResponse = {
   data: unknown[]
+  error?: string
   humanJudgmentMode: 'prompt' | 'summary'
   limit: number
   nextCursor?: string | null
@@ -100,6 +101,7 @@ type HumanReviewArticlesResponse = {
 }
 type UnassessedReviewArticlesResponse = {
   data: unknown[]
+  error?: string
   limit: number
   nextCursor?: string | null
   page: number
@@ -121,6 +123,19 @@ const maxJudgmentHydrationArticleIds = 100
 const maxJudgmentHydrationRows = 10_000
 const defaultJudgmentHydrationPromptCount = 128
 const queueReadyFilterKey = 'queue:ready'
+const reviewServingSnapshotUnavailableError = 'Review serving snapshot is unavailable'
+
+const getUnavailableReviewArticlesResponse = (page: number, limit: number) => {
+  return {
+    data: [],
+    error: reviewServingSnapshotUnavailableError,
+    totalCount: 0,
+    page,
+    limit,
+    totalPages: 0,
+    nextCursor: null,
+  }
+}
 
 const getDateValue = (value: unknown) => {
   if (value instanceof Date) {
@@ -666,7 +681,7 @@ export const getHumanReviewArticlesFromServing = async (
   const limit = getLimit(effectiveParams.limit)
 
   if (!manifest) {
-    throw new Error('Review serving snapshot is unavailable')
+    return {...getUnavailableReviewArticlesResponse(page, limit), humanJudgmentMode: 'prompt'}
   }
 
   const pageResult = await readRowsPage<ReviewServingArticleRow>({
@@ -724,7 +739,7 @@ export const getBothReviewArticlesFromServing = async (
   const limit = getLimit(effectiveParams.limit)
 
   if (!manifest) {
-    throw new Error('Review serving snapshot is unavailable')
+    return getUnavailableReviewArticlesResponse(page, limit)
   }
 
   const pageResult = await readRowsPage<ReviewServingArticleRow>({
@@ -778,7 +793,7 @@ export const getUnassessedReviewArticlesFromServing = async (
   const limit = getLimit(effectiveParams.limit)
 
   if (!manifest) {
-    throw new Error('Review serving snapshot is unavailable')
+    return getUnavailableReviewArticlesResponse(page, limit)
   }
 
   const pageResult = await readRowsPage<ReviewServingArticleRow>({

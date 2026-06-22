@@ -93,6 +93,7 @@ const maxJudgmentHydrationRows = 10_000
 const defaultJudgmentHydrationPromptCount = 128
 const dynamicFilterKey = 'filter:dynamic'
 const listAllFilterKey = 'list:all'
+const reviewServingSnapshotUnavailableError = 'Review serving snapshot is unavailable'
 
 const getDateValue = (value: unknown) => {
   if (value instanceof Date) {
@@ -528,18 +529,30 @@ const getResponseRows = (
   })
 }
 
+const getUnavailableArticlesResponse = (page: number, limit: number) => {
+  return {
+    data: [],
+    error: reviewServingSnapshotUnavailableError,
+    totalCount: null,
+    page,
+    limit,
+    totalPages: null,
+    nextCursor: null,
+  }
+}
+
 export const getLlmReviewArticlesFromServing = async (
   params: ArticlesReviewsParams,
   dependencies?: ReviewServingLlmReviewRouteDependencies,
 ): Promise<ArticlesReviewsResponse> => {
   const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
   const effectiveParams = await getParamsWithEffectiveDateFilters(params, database)
-  const manifest = await getManifest(params.projectId, dependencies)
   const page = getPage(effectiveParams.page)
   const limit = getLimit(effectiveParams.limit)
+  const manifest = await getManifest(params.projectId, dependencies)
 
   if (!manifest) {
-    throw new Error('Review serving snapshot is unavailable')
+    return getUnavailableArticlesResponse(page, limit)
   }
 
   const rowsResult = await readReviewServingRows<ReviewServingArticleRow>(
@@ -582,7 +595,7 @@ export const countLlmReviewArticlesFromServing = async (
   const limit = getLimit(effectiveParams.limit)
 
   if (!manifest) {
-    throw new Error('Review serving snapshot is unavailable')
+    return {totalCount: 0, totalPages: 0, error: reviewServingSnapshotUnavailableError}
   }
 
   const totalCount = await getCountValue({...effectiveParams, limit, page: 1}, manifest, {...dependencies, database})
