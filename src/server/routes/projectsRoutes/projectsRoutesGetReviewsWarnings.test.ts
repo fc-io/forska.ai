@@ -412,6 +412,7 @@ const insertActiveReviewServingManifest = async (input: {
   projectId: string
   reviewConfigHash?: string | null
   snapshotId: string
+  status?: 'active' | 'candidate'
 }) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -426,6 +427,7 @@ const insertActiveReviewServingManifest = async (input: {
   const reviewConfigHash =
     input.reviewConfigHash === undefined ? getFixtureReviewConfigHash(input.projectId) : input.reviewConfigHash
   const reviewConfigHashSql = reviewConfigHash === null ? 'NULL' : `'${reviewConfigHash}'`
+  const status = input.status ?? 'active'
 
   await runDatabase(`
     INSERT INTO app.review_serving_snapshot_manifest (
@@ -443,7 +445,7 @@ const insertActiveReviewServingManifest = async (input: {
     ) VALUES (
       '${input.projectId}',
       '${input.snapshotId}',
-      'active',
+      '${status}',
       ${reviewConfigHashSql},
       '{}'::JSON,
       '${JSON.stringify({optional, required}).replaceAll("'", "''")}'::JSON,
@@ -879,6 +881,57 @@ test('reviews warnings queue a large rebuild when scoped articles exist but revi
   expect(body.data.indexing.progressState).toBe('queued')
   expect(body.data.indexing.queuedProjectRefreshCount).toBe(1)
   expect(body.data.indexing.status).toBe('refreshing')
+})
+
+test('reviews warnings wait for candidate serving generation before queueing bootstrap rebuild', async () => {
+  const projectId = 'project-candidate-serving-bootstrap-warning'
+
+  await insertProjectFixture(projectId)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-candidate-bootstrap-warning',
+    status: 'candidate',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
+  expect(body.data.indexing.largeRebuild).toBe(null)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('stalled')
+  expect(body.data.indexing.status).toBe('stale')
+})
+
+test('reviews warnings do not queue bootstrap rebuild for articles outside project dates', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-date-bounded-bootstrap-warning'
+
+  await insertProjectFixture(projectId)
+  await runDatabase(`
+    UPDATE app.project
+    SET date_from = TIMESTAMPTZ '2026-05-01T00:00:00.000Z'
+    WHERE id = '${projectId}'
+  `)
+  await runDatabase(`
+    UPDATE app.article
+    SET article_created_at = TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
+    WHERE id = 'article-${projectId}'
+  `)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.scope.hasAnyArticlesInScope).toBe(false)
+  expect(body.data.indexing.largeRebuild).toBe(null)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.status).toBe('not-needed')
 })
 
 test('reviews warnings report processing from fresh persisted article leases', async () => {

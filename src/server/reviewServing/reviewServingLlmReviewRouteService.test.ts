@@ -388,16 +388,8 @@ test('LLM review route service surfaces stale, indexing, and unavailable freshne
     },
   )
 
-  expect(indexingResult).toEqual({
-    error: 'Review serving snapshot is unavailable',
-    totalCount: 0,
-    totalPages: 0,
-  })
-  expect(missingResult).toEqual({
-    error: 'Review serving snapshot is unavailable',
-    totalCount: 0,
-    totalPages: 0,
-  })
+  expect(indexingResult).toEqual({error: 'Review serving snapshot is unavailable', totalCount: 0, totalPages: 0})
+  expect(missingResult).toEqual({error: 'Review serving snapshot is unavailable', totalCount: 0, totalPages: 0})
   expect(indexingReader.statements.join('\n')).not.toContain('FROM mart.review_article_serving_v4')
   expect(missingReader.statements.join('\n')).not.toContain('FROM mart.review_article_serving_v4')
 })
