@@ -257,23 +257,28 @@ const getEnabledPromptCount = async (projectId: string): Promise<number> => {
   return Number(rows[0]?.count ?? 0)
 }
 
-const getHasCuratedArticles = async (projectId: string): Promise<boolean> => {
+const getHasArticlesInScope = async (projectId: string): Promise<boolean> => {
   const rows = await getAppDatabaseService().queryJson<{articleId: string}>(`
-    SELECT article_id AS articleId
-    FROM app.project_article
-    WHERE project_id = '${escapeSqlString(projectId)}'
-    LIMIT 1
-  `)
-
-  return rows.length > 0
-}
-
-const getHasRouteArticles = async (projectId: string): Promise<boolean> => {
-  const rows = await getAppDatabaseService().queryJson<{articleId: string}>(`
-    SELECT air.article_id AS articleId
-    FROM app.project_import_route pir
-    INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
-    WHERE pir.project_id = '${escapeSqlString(projectId)}'
+    WITH scoped_article AS (
+      SELECT pa.article_id AS articleId
+      FROM app.project_article pa
+      INNER JOIN app.project p ON p.id = pa.project_id
+      INNER JOIN app.article a ON a.id = pa.article_id
+      WHERE pa.project_id = '${escapeSqlString(projectId)}'
+        AND (p.date_from IS NULL OR a.article_created_at >= p.date_from)
+        AND (p.date_to IS NULL OR a.article_created_at <= p.date_to)
+      UNION ALL
+      SELECT air.article_id AS articleId
+      FROM app.project_import_route pir
+      INNER JOIN app.project p ON p.id = pir.project_id
+      INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+      INNER JOIN app.article a ON a.id = air.article_id
+      WHERE pir.project_id = '${escapeSqlString(projectId)}'
+        AND (p.date_from IS NULL OR a.article_created_at >= p.date_from)
+        AND (p.date_to IS NULL OR a.article_created_at <= p.date_to)
+    )
+    SELECT articleId
+    FROM scoped_article
     LIMIT 1
   `)
 
@@ -817,6 +822,7 @@ const getShouldRequestMissingReviewIndexWork = (params: {
   hasAnyArticlesInScope: boolean
   hasLargeRebuild: boolean
   hasReviewServingRows: boolean
+  hasServingGenerationWork: boolean
   projectRefreshState: ProjectRefreshState
 }) => {
   return (
@@ -824,11 +830,22 @@ const getShouldRequestMissingReviewIndexWork = (params: {
     && params.hasAnyArticlesInScope
     && !params.hasReviewServingRows
     && !params.hasLargeRebuild
+    && !params.hasServingGenerationWork
     && params.projectRefreshState.isFresh
     && params.projectRefreshState.refreshStatus !== 'failed'
     && params.projectRefreshState.dirtyMaterialization.failedCount === 0
     && params.projectRefreshState.dirtyMaterialization.unreconciledCount === 0
     && !params.projectRefreshState.hasUnresolvedQuarantineBarrier
+  )
+}
+
+const getHasServingGenerationWork = (servingDiagnostics: Awaited<ReturnType<typeof getReviewServingDiagnostics>>) => {
+  return (
+    servingDiagnostics.snapshot.candidateCount > 0
+    || servingDiagnostics.dirtyWork.pendingCount > 0
+    || servingDiagnostics.dirtyWork.runningCount > 0
+    || servingDiagnostics.rebuildChunks.pendingCount > 0
+    || servingDiagnostics.rebuildChunks.runningCount > 0
   )
 }
 
@@ -853,8 +870,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     })
     const [
       enabledPromptCount,
-      hasCuratedArticles,
-      hasRouteArticles,
+      hasAnyArticlesInScope,
       initialProjectRefreshState,
       initialProjectLargeRebuildState,
       initialPendingArticleRefreshInfo,
@@ -864,8 +880,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       maintenanceConsumerAvailability,
     ] = await Promise.all([
       getEnabledPromptCount(projectId),
-      getHasCuratedArticles(projectId),
-      getHasRouteArticles(projectId),
+      getHasArticlesInScope(projectId),
       getProjectRefreshState(projectId),
       getProjectLargeRebuildState(projectId),
       getPendingArticleRefreshInfo(projectId),
@@ -876,7 +891,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     ])
     const hasReviewServingRows =
       warningSnapshot.status === 'accepted' && warningSnapshot.diagnostics.manifest.status === 'active'
-    const hasAnyArticlesInScope = hasCuratedArticles || hasRouteArticles
+    const hasServingGenerationWork = getHasServingGenerationWork(servingDiagnostics)
     let projectRefreshState = initialProjectRefreshState
     let projectLargeRebuildState = initialProjectLargeRebuildState
     let pendingArticleRefreshInfo = initialPendingArticleRefreshInfo
@@ -887,6 +902,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
         hasAnyArticlesInScope,
         hasLargeRebuild: (projectLargeRebuildState.refreshToken ?? 0) > 0,
         hasReviewServingRows,
+        hasServingGenerationWork,
         projectRefreshState,
       })
     ) {
