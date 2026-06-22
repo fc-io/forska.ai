@@ -47,20 +47,32 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
     setPageCursors({1: null})
     setLoadedPages({})
   })
+  const warningsQuery = useQuery(() => {
+    return createReviewsWarningsQueryOptions(props.projectId)
+  })
+  const isReviewServingUsable = createMemo(() => {
+    return warningsQuery.data?.indexing.serving.usable === true
+  })
+  const showReviewIndexState = createMemo(() => {
+    return warningsQuery.isSuccess && !isReviewServingUsable()
+  })
   const articlesQuery = useQuery(() => {
-    return createArticlesUnassessedQueryOptions(
-      props.projectId,
-      props.covidenceDuplicatesOnly,
-      props.covidenceConflictsOnly,
-      props.currentPage,
-      () => {
-        return pageCursors()[props.currentPage()]
-      },
-      props.pageLimit,
-      props.fromDate,
-      props.toDate,
-      props.searchTitle,
-    )
+    return {
+      ...createArticlesUnassessedQueryOptions(
+        props.projectId,
+        props.covidenceDuplicatesOnly,
+        props.covidenceConflictsOnly,
+        props.currentPage,
+        () => {
+          return pageCursors()[props.currentPage()]
+        },
+        props.pageLimit,
+        props.fromDate,
+        props.toDate,
+        props.searchTitle,
+      ),
+      enabled: isReviewServingUsable(),
+    }
   })
   createEffect(() => {
     const nextCursor = articlesQuery.data?.nextCursor
@@ -99,9 +111,6 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
       return pages[index + 1]?.data ?? []
     }).flat()
   }
-  const warningsQuery = useQuery(() => {
-    return createReviewsWarningsQueryOptions(props.projectId)
-  })
   const hasFilters = createMemo(() => {
     return Boolean(props.fromDate().trim() || props.toDate().trim() || (props.searchTitle() || '').trim())
   })
@@ -136,9 +145,21 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
   return (
     <Suspense fallback={null}>
       <div class="space-y-4">
-        <Show when={articlesQuery.isPending}>
+        <Show when={articlesQuery.isPending && !showReviewIndexState()}>
           <div class="flex justify-center p-8">
             <div class="text-gray-500">Loading articles...</div>
+          </div>
+        </Show>
+
+        <Show when={showReviewIndexState()}>
+          <div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center">
+            <p class="font-medium text-slate-800">{emptyState().title}</p>
+            <p class="mt-2 text-sm text-slate-600">{emptyState().description}</p>
+            <Show when={warningsQuery.data?.scope.hasAnyArticlesInScope ? warningsQuery.data.indexing : null}>
+              {(indexing) => {
+                return <ReviewsIndexingProgress indexing={indexing()} compact />
+              }}
+            </Show>
           </div>
         </Show>
 
@@ -148,7 +169,7 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
           </div>
         </Show>
 
-        <Show when={articlesQuery.data}>
+        <Show when={isReviewServingUsable() && articlesQuery.data}>
           {(response) => {
             const articles = () => {
               return loadedArticles()

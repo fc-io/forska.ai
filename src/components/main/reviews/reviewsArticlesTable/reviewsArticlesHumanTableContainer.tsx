@@ -1,9 +1,12 @@
 import {useQuery} from '@tanstack/solid-query'
 import type {Accessor, Setter} from 'solid-js'
-import {createEffect, createSignal, Show, Suspense} from 'solid-js'
+import {createEffect, createMemo, createSignal, Show, Suspense} from 'solid-js'
 
 import {createArticlesHumanReviewsQueryOptions} from '../../projects/projectsArticlesHumanReviewsQuery.ts'
+import {getReviewIndexingStateCopy} from '../getReviewIndexingInProgressTitle.ts'
+import {ReviewsIndexingProgress} from '../reviewsIndexingProgress.tsx'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
+import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
 import type {ArticleWithHumanJudgments} from './reviewsArticlesHumanTable.tsx'
 import {ReviewsArticlesHumanTable} from './reviewsArticlesHumanTable.tsx'
 
@@ -42,21 +45,44 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
     setPageCursors({1: null})
     setLoadedPages({})
   })
+  const warningsQuery = useQuery(() => {
+    return createReviewsWarningsQueryOptions(props.projectId)
+  })
+  const isReviewServingUsable = createMemo(() => {
+    return warningsQuery.data?.indexing.serving.usable === true
+  })
+  const showReviewIndexState = createMemo(() => {
+    return warningsQuery.isSuccess && !isReviewServingUsable()
+  })
+  const indexStateCopy = createMemo(() => {
+    const warningsData = warningsQuery.data
+
+    return warningsData?.scope.hasAnyArticlesInScope
+      ? getReviewIndexingStateCopy({
+          indexing: warningsData.indexing,
+          projectId: props.projectId,
+          surface: 'judgedEmpty',
+        })
+      : {description: 'No scoped articles are available for this project yet.', title: 'No articles found'}
+  })
   const articlesQuery = useQuery(() => {
-    return createArticlesHumanReviewsQueryOptions(
-      props.projectId,
-      props.covidenceDuplicatesOnly,
-      props.covidenceConflictsOnly,
-      props.promptFilters,
-      props.currentPage,
-      () => {
-        return pageCursors()[props.currentPage()]
-      },
-      props.pageLimit,
-      props.fromDate,
-      props.toDate,
-      props.searchTitle,
-    )
+    return {
+      ...createArticlesHumanReviewsQueryOptions(
+        props.projectId,
+        props.covidenceDuplicatesOnly,
+        props.covidenceConflictsOnly,
+        props.promptFilters,
+        props.currentPage,
+        () => {
+          return pageCursors()[props.currentPage()]
+        },
+        props.pageLimit,
+        props.fromDate,
+        props.toDate,
+        props.searchTitle,
+      ),
+      enabled: isReviewServingUsable(),
+    }
   })
   createEffect(() => {
     const nextCursor = articlesQuery.data?.nextCursor
@@ -99,9 +125,21 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
   return (
     <Suspense>
       <div class="space-y-4">
-        <Show when={articlesQuery.isPending}>
+        <Show when={articlesQuery.isPending && !showReviewIndexState()}>
           <div class="flex justify-center p-8">
             <div class="text-gray-500">Loading articles...</div>
+          </div>
+        </Show>
+
+        <Show when={showReviewIndexState()}>
+          <div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center">
+            <p class="font-medium text-slate-800">{indexStateCopy().title}</p>
+            <p class="mt-2 text-sm text-slate-600">{indexStateCopy().description}</p>
+            <Show when={warningsQuery.data?.scope.hasAnyArticlesInScope ? warningsQuery.data.indexing : null}>
+              {(indexing) => {
+                return <ReviewsIndexingProgress indexing={indexing()} compact />
+              }}
+            </Show>
           </div>
         </Show>
 
@@ -111,7 +149,7 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
           </div>
         </Show>
 
-        <Show when={articlesQuery.data}>
+        <Show when={isReviewServingUsable() && articlesQuery.data}>
           {(response) => {
             const articles = () => {
               return loadedArticles()

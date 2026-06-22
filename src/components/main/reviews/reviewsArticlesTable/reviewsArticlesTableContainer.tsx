@@ -53,6 +53,15 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
     setPageCursors({1: null})
     setLoadedPages({})
   })
+  const warningsQuery = useQuery(() => {
+    return createReviewsWarningsQueryOptions(props.projectId)
+  })
+  const isReviewServingUsable = createMemo(() => {
+    return warningsQuery.data?.indexing.serving.usable === true
+  })
+  const showReviewIndexState = createMemo(() => {
+    return warningsQuery.isSuccess && !isReviewServingUsable()
+  })
 
   // Main data query - returns data immediately without waiting for count
   const articlesQuery = useQuery(() => {
@@ -72,7 +81,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         props.searchTitle,
         props.llmStatus,
       ),
-      enabled: props.initialized(),
+      enabled: props.initialized() && isReviewServingUsable(),
     }
   })
 
@@ -122,11 +131,8 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         props.searchTitle,
         props.llmStatus,
       ),
-      enabled: props.initialized() && articlesQuery.isSuccess && !articlesQuery.isFetching,
+      enabled: props.initialized() && isReviewServingUsable() && articlesQuery.isSuccess && !articlesQuery.isFetching,
     }
-  })
-  const warningsQuery = useQuery(() => {
-    return createReviewsWarningsQueryOptions(props.projectId)
   })
 
   // Helper to get count values from either the count query or fall back to data response
@@ -194,9 +200,21 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
 
   return (
     <div class="space-y-4">
-      <Show when={articlesQuery.isPending}>
+      <Show when={articlesQuery.isPending && !showReviewIndexState()}>
         <div class="flex justify-center p-8">
           <div class="text-gray-500">Loading articles...</div>
+        </div>
+      </Show>
+
+      <Show when={showReviewIndexState()}>
+        <div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center">
+          <p class="font-medium text-slate-800">{emptyState().title}</p>
+          <p class="mt-2 text-sm text-slate-600">{emptyState().description}</p>
+          <Show when={warningsQuery.data?.scope.hasAnyArticlesInScope ? warningsQuery.data.indexing : null}>
+            {(indexing) => {
+              return <ReviewsIndexingProgress indexing={indexing()} compact />
+            }}
+          </Show>
         </div>
       </Show>
 
@@ -206,7 +224,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         </div>
       </Show>
 
-      <Show when={articlesQuery.isSuccess && articlesQuery.data}>
+      <Show when={isReviewServingUsable() && articlesQuery.isSuccess && articlesQuery.data}>
         <div class="space-y-4">
           <div class="p-4 bg-white rounded-lg shadow">
             <h3 class="text-lg font-semibold mb-2">

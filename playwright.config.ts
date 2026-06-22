@@ -8,11 +8,13 @@ const smokeEnv = {
   API_SERVER_PORT: String(apiServerPort),
   APP_SERVER_PORT: String(appServerPort),
   DUCKDB_PATH: duckdbPath,
+  FORSKA_EXPOSE_LOCAL_OPERATOR_API: 'true',
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
   RUN_SERVER_FULL_TEXT_FETCHING: 'false',
   SERVER_ROLE: 'dev-single',
   SERVER_DUCKDB_OWNER_URL: '',
   VITE_PORT: String(appServerPort),
+  VITE_SERVER_API: `http://127.0.0.1:${apiServerPort}`,
 }
 
 export default defineConfig({
