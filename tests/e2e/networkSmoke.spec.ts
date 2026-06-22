@@ -6,6 +6,7 @@ import {routeErrorSurfaceTestId} from '../../src/app/routerErrorSurface'
 
 const apiBaseUrl = 'http://127.0.0.1:43101'
 const appBaseUrl = 'http://127.0.0.1:43100'
+const isNetworkSmokeAudit = process.env.FORSKA_NETWORK_SMOKE_AUDIT === 'true'
 
 type ApiDataResponse<T> = {data: T}
 type ArticleSearchResponse = Array<{articleId: string | null; articleTitle: string; id: string}>
@@ -642,6 +643,8 @@ test('network smoke route inventory stays explicit', () => {
 })
 
 test('audited app pages have no unexpected local network errors', async ({page}) => {
+  test.skip(!isNetworkSmokeAudit, 'Network smoke audit only runs via bun run test:network-smoke')
+
   const seed = await createNetworkSmokeSeed()
   let currentPagePath = 'seed'
   const recorder = createNetworkFailureRecorder(page, () => {
