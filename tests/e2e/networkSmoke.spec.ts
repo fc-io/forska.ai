@@ -500,6 +500,7 @@ const formatNetworkFailure = (failure: NetworkFailure, index: number) => {
 
 const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
   const failures: NetworkFailure[] = []
+  const pendingHttpFailureReads: Promise<void>[] = []
 
   const record = (failure: Omit<NetworkFailure, 'pagePath'>) => {
     failures.push({...failure, pagePath: pagePath()})
@@ -525,9 +526,10 @@ const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
       return
     }
 
-    void getResponseBodySnippet(response).then((details) => {
+    const bodyRead = getResponseBodySnippet(response).then((details) => {
       record({details, method: request.method(), source: 'http', status: response.status(), url: response.url()})
     })
+    pendingHttpFailureReads.push(bodyRead)
   }
 
   const onPageError = (error: Error) => {
@@ -548,7 +550,9 @@ const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
   page.on('console', onConsole)
 
   return {
-    assertNoFailures: () => {
+    assertNoFailures: async () => {
+      await Promise.all(pendingHttpFailureReads)
+
       if (failures.length === 0) {
         return
       }
@@ -596,7 +600,7 @@ test('audited app pages have no unexpected local network errors', async ({page})
       })
     }
 
-    recorder.assertNoFailures()
+    await recorder.assertNoFailures()
   } finally {
     recorder.dispose()
   }
