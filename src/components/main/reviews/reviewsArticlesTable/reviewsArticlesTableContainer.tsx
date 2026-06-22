@@ -56,14 +56,14 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
   const warningsQuery = useQuery(() => {
     return createReviewsWarningsQueryOptions(props.projectId)
   })
-  const isReviewServingUsable = createMemo(() => {
-    return warningsQuery.data?.indexing.serving.usable === true
+  const isReviewServingReadable = createMemo(() => {
+    return warningsQuery.data?.indexing.serving.readable === true
   })
   const canLoadArticles = createMemo(() => {
-    return isReviewServingUsable() || warningsQuery.isError
+    return isReviewServingReadable() || warningsQuery.isError
   })
   const showReviewIndexState = createMemo(() => {
-    return warningsQuery.isSuccess && !isReviewServingUsable()
+    return warningsQuery.isSuccess && !isReviewServingReadable()
   })
 
   // Main data query - returns data immediately without waiting for count
