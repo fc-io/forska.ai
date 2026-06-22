@@ -8,7 +8,6 @@ const smokeEnv = {
   API_SERVER_PORT: String(apiServerPort),
   APP_SERVER_PORT: String(appServerPort),
   DUCKDB_PATH: duckdbPath,
-  FORSKA_EXPOSE_LOCAL_OPERATOR_API: 'true',
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
   RUN_SERVER_FULL_TEXT_FETCHING: 'false',
   SERVER_ROLE: 'dev-single',
@@ -24,7 +23,11 @@ export default defineConfig({
   webServer: [
     {
       command: `sh -c 'rm -f "${duckdbPath}" "${duckdbPath}.wal" && rm -rf "/tmp/forska-playwright-project-edit-smoke.duckdb-temp" && bun run build && bun run src/server/index.ts'`,
-      env: {...smokeEnv, DUCKDB_TEMP_DIRECTORY: '/tmp/forska-playwright-project-edit-smoke.duckdb-temp'},
+      env: {
+        ...smokeEnv,
+        DUCKDB_TEMP_DIRECTORY: '/tmp/forska-playwright-project-edit-smoke.duckdb-temp',
+        FORSKA_EXPOSE_LOCAL_OPERATOR_API: process.env.FORSKA_NETWORK_SMOKE_AUDIT === 'true' ? 'true' : 'false',
+      },
       port: apiServerPort,
       reuseExistingServer: false,
       stdout: 'pipe',

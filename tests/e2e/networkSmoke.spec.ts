@@ -40,6 +40,8 @@ type NetworkFailure = {
   url?: string
 }
 
+type PendingAuditedRequest = {promise: Promise<void>; resolve: () => void}
+
 const routeTreePath = path.resolve(process.cwd(), 'src/app/routeTree.gen.ts')
 
 const readGeneratedRouteTemplates = () => {
@@ -501,9 +503,38 @@ const formatNetworkFailure = (failure: NetworkFailure, index: number) => {
 const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
   const failures: NetworkFailure[] = []
   const pendingHttpFailureReads: Promise<void>[] = []
+  const pendingAuditedRequests = new Map<Request, PendingAuditedRequest>()
+
+  const createPendingAuditedRequest = () => {
+    let resolve: () => void = () => {}
+    const promise = new Promise<void>((done) => {
+      resolve = done
+    })
+
+    return {promise, resolve}
+  }
 
   const record = (failure: Omit<NetworkFailure, 'pagePath'>) => {
     failures.push({...failure, pagePath: pagePath()})
+  }
+
+  const settleAuditedRequest = (request: Request) => {
+    const pending = pendingAuditedRequests.get(request)
+
+    if (!pending) {
+      return
+    }
+
+    pending.resolve()
+    pendingAuditedRequests.delete(request)
+  }
+
+  const onRequest = (request: Request) => {
+    if (!isAuditedOrigin(request.url()) || isBenignRequest(request)) {
+      return
+    }
+
+    pendingAuditedRequests.set(request, createPendingAuditedRequest())
   }
 
   const onRequestFailed = (request: Request) => {
@@ -517,6 +548,11 @@ const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
       source: 'requestfailed',
       url: request.url(),
     })
+    settleAuditedRequest(request)
+  }
+
+  const onRequestFinished = (request: Request) => {
+    settleAuditedRequest(request)
   }
 
   const onResponse = (response: Response) => {
@@ -545,13 +581,29 @@ const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
   }
 
   page.on('requestfailed', onRequestFailed)
+  page.on('request', onRequest)
+  page.on('requestfinished', onRequestFinished)
   page.on('response', onResponse)
   page.on('pageerror', onPageError)
   page.on('console', onConsole)
 
+  const waitForAuditedRequests = async (): Promise<void> => {
+    const pendingRequests = [...pendingAuditedRequests.values()].map((request) => {
+      return request.promise
+    })
+
+    if (pendingRequests.length === 0) {
+      await Promise.all(pendingHttpFailureReads)
+      return
+    }
+
+    await Promise.all(pendingRequests)
+    await waitForAuditedRequests()
+  }
+
   return {
     assertNoFailures: async () => {
-      await Promise.all(pendingHttpFailureReads)
+      await waitForAuditedRequests()
 
       if (failures.length === 0) {
         return
@@ -561,19 +613,23 @@ const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
     },
     dispose: () => {
       page.off('requestfailed', onRequestFailed)
+      page.off('request', onRequest)
+      page.off('requestfinished', onRequestFinished)
       page.off('response', onResponse)
       page.off('pageerror', onPageError)
       page.off('console', onConsole)
     },
+    waitForAuditedRequests,
   }
 }
 
-const visitRoute = async (page: Page, pathToVisit: string) => {
+const visitRoute = async (page: Page, pathToVisit: string, waitForAuditedRequests: () => Promise<void>) => {
   await page.goto(pathToVisit)
   await page.waitForLoadState('domcontentloaded')
   await page.waitForLoadState('networkidle', {timeout: 2_000}).catch(() => {
     return undefined
   })
+  await waitForAuditedRequests()
   await expect(page.getByTestId(routeErrorSurfaceTestId)).toHaveCount(0)
 }
 
@@ -596,7 +652,7 @@ test('audited app pages have no unexpected local network errors', async ({page})
     for (const target of allAuditTargets) {
       currentPagePath = `${target.label} (${target.template})`
       await test.step(currentPagePath, async () => {
-        await visitRoute(page, target.buildPath(seed))
+        await visitRoute(page, target.buildPath(seed), recorder.waitForAuditedRequests)
       })
     }
 
