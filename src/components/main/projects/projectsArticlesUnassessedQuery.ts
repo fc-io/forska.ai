@@ -64,6 +64,10 @@ export const createArticlesUnassessedQueryOptions = (
         throw new Error('Failed to fetch unassessed articles')
       }
 
+      if (response.data.error) {
+        throw new Error(response.data.error)
+      }
+
       return response.data
     },
     refetchOnWindowFocus: false,

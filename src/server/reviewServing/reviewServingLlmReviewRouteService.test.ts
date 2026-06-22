@@ -186,6 +186,17 @@ const createReaderDatabase = (totalCount = 1, articleCount = 1, enabledPromptCou
   return {database, statements}
 }
 
+const expectUnavailableSnapshotRejection = async (promise: Promise<unknown>) => {
+  await promise.then(
+    () => {
+      throw new Error('Expected unavailable snapshot rejection')
+    },
+    (error) => {
+      expect(error).toEqual(expect.objectContaining({message: 'Review serving snapshot is unavailable'}))
+    },
+  )
+}
+
 test('LLM review route honors the largest offered page size', async () => {
   const reader = createReaderDatabase(1001)
   const result = await getLlmReviewArticlesFromServing(
@@ -333,26 +344,19 @@ test('LLM review count route service requires reviewed LLM rows without row hydr
   expect(reader.statements[1]).toContain('serving.llm_judged_prompt_count > 0')
 })
 
-test('LLM review list route returns an empty unavailable response when no serving snapshot is readable', async () => {
+test('LLM review list route rejects when no serving snapshot is readable', async () => {
   const reader = createReaderDatabase()
-  const result = await getLlmReviewArticlesFromServing(
-    {projectId: 'project-1', page: 2, limit: 25, prompts: {}},
-    {
-      currentReviewConfigHash: 'config-1',
-      database: reader.database,
-      manifestDatabase: createManifestDatabase('missing'),
-    },
-  )
 
-  expect(result).toEqual({
-    data: [],
-    error: 'Review serving snapshot is unavailable',
-    totalCount: null,
-    page: 2,
-    limit: 25,
-    totalPages: null,
-    nextCursor: null,
-  })
+  await expectUnavailableSnapshotRejection(
+    getLlmReviewArticlesFromServing(
+      {projectId: 'project-1', page: 2, limit: 25, prompts: {}},
+      {
+        currentReviewConfigHash: 'config-1',
+        database: reader.database,
+        manifestDatabase: createManifestDatabase('missing'),
+      },
+    ),
+  )
   expect(reader.statements.join('\n')).not.toContain('FROM mart.review_article_serving_v4')
 })
 
@@ -370,26 +374,28 @@ test('LLM review route service surfaces stale, indexing, and unavailable freshne
   expect(staleResult.totalCount).toBe(1)
   expect(staleReader.statements.join('\n')).toContain('serving.llm_judged_prompt_count > 0')
   const indexingReader = createReaderDatabase()
-  const indexingResult = await countLlmReviewArticlesFromServing(
-    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
-    {
-      currentReviewConfigHash: 'config-1',
-      database: indexingReader.database,
-      manifestDatabase: createManifestDatabase('candidate'),
-    },
-  )
   const missingReader = createReaderDatabase()
-  const missingResult = await countLlmReviewArticlesFromServing(
-    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
-    {
-      currentReviewConfigHash: 'config-1',
-      database: missingReader.database,
-      manifestDatabase: createManifestDatabase('missing'),
-    },
-  )
 
-  expect(indexingResult).toEqual({error: 'Review serving snapshot is unavailable', totalCount: 0, totalPages: 0})
-  expect(missingResult).toEqual({error: 'Review serving snapshot is unavailable', totalCount: 0, totalPages: 0})
+  await expectUnavailableSnapshotRejection(
+    countLlmReviewArticlesFromServing(
+      {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+      {
+        currentReviewConfigHash: 'config-1',
+        database: indexingReader.database,
+        manifestDatabase: createManifestDatabase('candidate'),
+      },
+    ),
+  )
+  await expectUnavailableSnapshotRejection(
+    countLlmReviewArticlesFromServing(
+      {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+      {
+        currentReviewConfigHash: 'config-1',
+        database: missingReader.database,
+        manifestDatabase: createManifestDatabase('missing'),
+      },
+    ),
+  )
   expect(indexingReader.statements.join('\n')).not.toContain('FROM mart.review_article_serving_v4')
   expect(missingReader.statements.join('\n')).not.toContain('FROM mart.review_article_serving_v4')
 })

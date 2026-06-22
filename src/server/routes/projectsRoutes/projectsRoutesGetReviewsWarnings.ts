@@ -906,7 +906,10 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
         projectRefreshState,
       })
     ) {
-      await martRefreshService.requestProjectLargeRebuild(projectId, 'reviews-warnings-missing-review-index')
+      await martRefreshService.requestProjectLargeRebuildIfNoLargeRebuild(
+        projectId,
+        'reviews-warnings-missing-review-index',
+      )
 
       const refreshedIndexingState = await Promise.all([
         getProjectRefreshState(projectId),

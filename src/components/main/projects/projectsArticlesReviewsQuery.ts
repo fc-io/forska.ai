@@ -84,6 +84,10 @@ export const createArticlesReviewsQueryOptions = (
         throw new Error('Failed to fetch articles')
       }
 
+      if (response.data.error) {
+        throw new Error(response.data.error)
+      }
+
       return response.data
     },
     refetchOnWindowFocus: false,

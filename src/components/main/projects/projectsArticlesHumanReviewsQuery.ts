@@ -75,6 +75,10 @@ export const createArticlesHumanReviewsQueryOptions = (
         throw new Error('Failed to fetch human-assessed articles')
       }
 
+      if (response.data.error) {
+        throw new Error(response.data.error)
+      }
+
       return response.data
     },
     refetchOnWindowFocus: false,

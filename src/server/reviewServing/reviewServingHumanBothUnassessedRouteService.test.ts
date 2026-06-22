@@ -174,6 +174,17 @@ const createReaderDatabase = () => {
   return {database, statements}
 }
 
+const expectUnavailableSnapshotRejection = async (promise: Promise<unknown>) => {
+  await promise.then(
+    () => {
+      throw new Error('Expected unavailable snapshot rejection')
+    },
+    (error) => {
+      expect(error).toEqual(expect.objectContaining({message: 'Review serving snapshot is unavailable'}))
+    },
+  )
+}
+
 const createChunkedHydrationReaderDatabase = (articleCount: number, enabledPromptCount?: number) => {
   const statements: string[] = []
   const articleIds = Array.from({length: articleCount}, (_, index) => {
@@ -430,61 +441,39 @@ test('human, both, and unassessed services surface stale and unavailable freshne
   expect(staleReader.statements.join('\n')).toContain('FROM mart.review_unassessed_queue_serving_v4')
 
   const humanReader = createReaderDatabase()
-  const humanResult = await getHumanReviewArticlesFromServing(
-    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
-    {
-      currentReviewConfigHash: 'config-1',
-      database: humanReader.database,
-      manifestDatabase: createManifestDatabase('candidate'),
-    },
-  )
   const bothReader = createReaderDatabase()
-  const bothResult = await getBothReviewArticlesFromServing(
-    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
-    {
-      currentReviewConfigHash: 'config-1',
-      database: bothReader.database,
-      manifestDatabase: createManifestDatabase('missing'),
-    },
-  )
   const unassessedReader = createReaderDatabase()
-  const unassessedResult = await getUnassessedReviewArticlesFromServing(
-    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
-    {
-      currentReviewConfigHash: 'config-1',
-      database: unassessedReader.database,
-      manifestDatabase: createManifestDatabase('missing'),
-    },
-  )
 
-  expect(humanResult).toEqual({
-    data: [],
-    error: 'Review serving snapshot is unavailable',
-    humanJudgmentMode: 'prompt',
-    totalCount: 0,
-    page: 1,
-    limit: 25,
-    totalPages: 0,
-    nextCursor: null,
-  })
-  expect(bothResult).toEqual({
-    data: [],
-    error: 'Review serving snapshot is unavailable',
-    totalCount: 0,
-    page: 1,
-    limit: 25,
-    totalPages: 0,
-    nextCursor: null,
-  })
-  expect(unassessedResult).toEqual({
-    data: [],
-    error: 'Review serving snapshot is unavailable',
-    totalCount: 0,
-    page: 1,
-    limit: 25,
-    totalPages: 0,
-    nextCursor: null,
-  })
+  await expectUnavailableSnapshotRejection(
+    getHumanReviewArticlesFromServing(
+      {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+      {
+        currentReviewConfigHash: 'config-1',
+        database: humanReader.database,
+        manifestDatabase: createManifestDatabase('candidate'),
+      },
+    ),
+  )
+  await expectUnavailableSnapshotRejection(
+    getBothReviewArticlesFromServing(
+      {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+      {
+        currentReviewConfigHash: 'config-1',
+        database: bothReader.database,
+        manifestDatabase: createManifestDatabase('missing'),
+      },
+    ),
+  )
+  await expectUnavailableSnapshotRejection(
+    getUnassessedReviewArticlesFromServing(
+      {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+      {
+        currentReviewConfigHash: 'config-1',
+        database: unassessedReader.database,
+        manifestDatabase: createManifestDatabase('missing'),
+      },
+    ),
+  )
   expect(humanReader.statements.join('\n')).not.toContain('FROM mart.review_article_serving_v4')
   expect(bothReader.statements.join('\n')).not.toContain('FROM mart.review_article_serving_v4')
   expect(unassessedReader.statements.join('\n')).not.toContain('FROM mart.review_article_serving_v4')
