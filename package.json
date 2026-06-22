@@ -23,6 +23,7 @@
     "test:bun": "bun scripts/runBunTests.ts",
     "test:vitest": "bunx vitest run",
     "test:playwright": "bunx playwright test",
+    "test:network-smoke": "bunx playwright test tests/e2e/networkSmoke.spec.ts",
     "lint": "bunx eslint src",
     "lint:fix": "bunx eslint src --fix",
     "dev:start": "bun scripts/devStart.ts",
