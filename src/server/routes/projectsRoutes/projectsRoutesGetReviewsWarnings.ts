@@ -897,6 +897,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     ])
     const hasReviewServingRows =
       warningSnapshot.status === 'accepted' && warningSnapshot.diagnostics.manifest.status === 'active'
+    const hasReadableReviewServingRows = warningSnapshot.status === 'accepted'
     const hasServingGenerationWork = getHasServingGenerationWork(servingDiagnostics)
     let projectRefreshState = initialProjectRefreshState
     let projectLargeRebuildState = initialProjectLargeRebuildState
@@ -1105,6 +1106,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           serving: {
             diagnostics: servingDiagnostics,
             manifest: warningSnapshot.diagnostics.manifest,
+            readable: hasReadableReviewServingRows,
             usable: hasReviewServingRows,
           },
           status: indexingStatus,

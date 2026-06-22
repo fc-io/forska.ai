@@ -48,11 +48,14 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
   const warningsQuery = useQuery(() => {
     return createReviewsWarningsQueryOptions(props.projectId)
   })
-  const isReviewServingUsable = createMemo(() => {
-    return warningsQuery.data?.indexing.serving.usable === true
+  const isReviewServingReadable = createMemo(() => {
+    return warningsQuery.data?.indexing.serving.readable === true
+  })
+  const canLoadArticles = createMemo(() => {
+    return isReviewServingReadable() || warningsQuery.isError
   })
   const showReviewIndexState = createMemo(() => {
-    return warningsQuery.isSuccess && !isReviewServingUsable()
+    return warningsQuery.isSuccess && !isReviewServingReadable()
   })
   const indexStateCopy = createMemo(() => {
     const warningsData = warningsQuery.data
@@ -81,7 +84,7 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
         props.toDate,
         props.searchTitle,
       ),
-      enabled: isReviewServingUsable(),
+      enabled: canLoadArticles(),
     }
   })
   createEffect(() => {
@@ -149,7 +152,7 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
           </div>
         </Show>
 
-        <Show when={isReviewServingUsable() && articlesQuery.data}>
+        <Show when={canLoadArticles() && articlesQuery.data}>
           {(response) => {
             const articles = () => {
               return loadedArticles()

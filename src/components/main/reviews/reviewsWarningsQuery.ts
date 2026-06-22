@@ -124,7 +124,7 @@ export type ReviewsWarningsData = {
     recoveryMode: 'archived_project_mart_recovery' | 'none' | 'retry_backoff'
     requiredConsumerRole: 'maintenance-worker'
     retryAfterAt: string | null
-    serving: {usable: boolean}
+    serving: {readable: boolean; usable: boolean}
     status: 'blocked' | 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
   }
   projectId: string

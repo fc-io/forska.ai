@@ -94,6 +94,7 @@ type ReviewsWarningsResponse = {
         optionalComponent: boolean
         snapshotId: string | null
       }
+      serving: {readable: boolean; usable: boolean}
       status: 'blocked' | 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
     }
     projectId: string
@@ -412,7 +413,7 @@ const insertActiveReviewServingManifest = async (input: {
   projectId: string
   reviewConfigHash?: string | null
   snapshotId: string
-  status?: 'active' | 'candidate'
+  status?: 'active' | 'candidate' | 'retired'
 }) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -572,7 +573,29 @@ test('reviews warnings report ready when serving rows are fresh', async () => {
   expect(body.data.enabledPromptCount).toBe(1)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
   expect(body.data.indexing.status).toBe('ready')
+})
+
+test('reviews warnings mark stale snapshots readable but not usable during refresh', async () => {
+  const projectId = 'project-stale-readable-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 2, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-stale-readable-warning',
+    status: 'retired',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: false})
+  expect(body.data.indexing.status).toBe('refreshing')
 })
 
 test('reviews warnings expose bounded cleanup lease progress without blocking ready reads', async () => {
