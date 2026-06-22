@@ -883,6 +883,56 @@ test('reviews warnings queue a large rebuild when scoped articles exist but revi
   expect(body.data.indexing.status).toBe('refreshing')
 })
 
+test('reviews warnings do not bootstrap missing serving rows for archived prompt links', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-archived-prompt-link-bootstrap-warning'
+
+  await insertProjectFixture(projectId)
+  await runDatabase(`
+    UPDATE app.project_prompt
+    SET archived = TRUE
+    WHERE id = 'project-prompt-${projectId}'
+  `)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.enabledPromptCount).toBe(0)
+  expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
+  expect(body.data.indexing.largeRebuild).toBe(null)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.status).toBe('not-needed')
+})
+
+test('reviews warnings do not bootstrap missing serving rows for archived prompts', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-archived-prompt-bootstrap-warning'
+
+  await insertProjectFixture(projectId)
+  await runDatabase(`
+    UPDATE app.prompt
+    SET archived = TRUE
+    WHERE id = 'prompt-${projectId}'
+  `)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.enabledPromptCount).toBe(0)
+  expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
+  expect(body.data.indexing.largeRebuild).toBe(null)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.status).toBe('not-needed')
+})
+
 test('reviews warnings wait for candidate serving generation before queueing bootstrap rebuild', async () => {
   const projectId = 'project-candidate-serving-bootstrap-warning'
 
