@@ -1862,6 +1862,54 @@ const requestProjectLargeRebuilds = async (projectIds: string[], reason: string)
       }) as Promise<MarkedProjectDirtyState[]>)
 }
 
+const getProjectIsFreshForLargeRebuildBootstrap = async (
+  projectId: string,
+  runner: {queryJson: <T>(statement: string) => Promise<T[]>},
+) => {
+  const [row] = await runner.queryJson<{isFresh: boolean}>(`
+    WITH refresh_state AS (
+      SELECT project_id, dirty_token, last_completed_dirty_token, refresh_status
+      FROM app.project_mart_refresh_state
+      WHERE project_id = ${getSqlLiteral(projectId)}
+      LIMIT 1
+    ),
+    materialization_summary AS (
+      SELECT CAST(COUNT(*) AS INTEGER) AS incompleteCount
+      FROM app.project_mart_dirty_materialization_state materialization
+      INNER JOIN refresh_state state ON state.project_id = materialization.project_id
+      WHERE state.dirty_token IS NOT NULL
+        AND materialization.target_dirty_token <= state.dirty_token
+        AND materialization.materialization_status <> 'completed'
+    ),
+    quarantine_summary AS (
+      SELECT CAST(COUNT(*) AS INTEGER) AS unresolvedCount
+      FROM app.project_mart_dirty_refresh_article_quarantine quarantine
+      INNER JOIN refresh_state state ON state.project_id = quarantine.project_id
+      WHERE state.dirty_token IS NOT NULL
+        AND quarantine.dirty_token <= state.dirty_token
+        AND quarantine.resolved_at IS NULL
+    )
+    SELECT
+      COALESCE(
+        state.dirty_token IS NULL
+          OR (
+            state.refresh_status <> 'failed'
+            AND state.last_completed_dirty_token IS NOT NULL
+            AND state.last_completed_dirty_token >= state.dirty_token
+            AND COALESCE(materialization_summary.incompleteCount, 0) = 0
+            AND COALESCE(quarantine_summary.unresolvedCount, 0) = 0
+          ),
+        TRUE
+      ) AS isFresh
+    FROM (SELECT 1) seed
+    LEFT JOIN refresh_state state ON TRUE
+    LEFT JOIN materialization_summary ON TRUE
+    LEFT JOIN quarantine_summary ON TRUE
+  `)
+
+  return row?.isFresh === true
+}
+
 const requestProjectLargeRebuildIfNoLargeRebuild = async (projectId: string, reason: string) => {
   return getAppDatabaseService().transaction(async (tx) => {
     const [largeRebuildState] = await tx.queryJson<{refreshToken: number | null}>(`
@@ -1872,6 +1920,10 @@ const requestProjectLargeRebuildIfNoLargeRebuild = async (projectId: string, rea
     `)
 
     if ((largeRebuildState?.refreshToken ?? 0) > 0) {
+      return []
+    }
+
+    if (!(await getProjectIsFreshForLargeRebuildBootstrap(projectId, tx))) {
       return []
     }
 

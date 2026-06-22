@@ -236,6 +236,89 @@ test('missing-index large rebuild request is idempotent after a rebuild exists',
   }
 })
 
+test('missing-index large rebuild request does not upgrade pending project refresh', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-pending-large-rebuild-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartMaintenanceService} = await import('./src/server/services/getDuckdbMartMaintenanceService.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-pending-large-rebuild', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-pending-large-rebuild', 'connection-pending-large-rebuild', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES ('project-pending-large-rebuild', 'Project Pending Large Rebuild', 'model-pending-large-rebuild', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_mart_refresh_state (project_id, dirty_token, last_completed_dirty_token, refresh_status, last_request_reason)
+          VALUES ('project-pending-large-rebuild', 1, 0, 'idle', 'incremental-refresh-test')
+        \`)
+
+        const result = await getDuckdbMartMaintenanceService().requestProjectLargeRebuildIfNoLargeRebuild(
+          'project-pending-large-rebuild',
+          'pending-large-rebuild-test',
+        )
+        const [refreshState] = await database.queryJson(\`
+          SELECT CAST(dirty_token AS INTEGER) AS dirtyToken, last_request_reason AS reason
+          FROM app.project_mart_refresh_state
+          WHERE project_id = 'project-pending-large-rebuild'
+        \`)
+        const largeRebuildRows = await database.queryJson(\`
+          SELECT CAST(refresh_token AS INTEGER) AS refreshToken
+          FROM app.project_mart_large_rebuild_state
+          WHERE project_id = 'project-pending-large-rebuild'
+        \`)
+
+        console.log(JSON.stringify({largeRebuildRows, refreshState, resultLength: result.length}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'Pending rebuild test failed')
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      largeRebuildRows: Array<{refreshToken: number}>
+      refreshState: {dirtyToken: number; reason: string}
+      resultLength: number
+    }
+
+    expect(result.resultLength).toBe(0)
+    expect(result.refreshState).toEqual({dirtyToken: 1, reason: 'incremental-refresh-test'})
+    expect(result.largeRebuildRows).toEqual([])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('refreshProject rebuilds large projects in article batches', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
