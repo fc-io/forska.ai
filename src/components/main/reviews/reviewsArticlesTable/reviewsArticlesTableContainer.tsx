@@ -59,6 +59,9 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
   const isReviewServingUsable = createMemo(() => {
     return warningsQuery.data?.indexing.serving.usable === true
   })
+  const canLoadArticles = createMemo(() => {
+    return isReviewServingUsable() || warningsQuery.isError
+  })
   const showReviewIndexState = createMemo(() => {
     return warningsQuery.isSuccess && !isReviewServingUsable()
   })
@@ -81,7 +84,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         props.searchTitle,
         props.llmStatus,
       ),
-      enabled: props.initialized() && isReviewServingUsable(),
+      enabled: props.initialized() && canLoadArticles(),
     }
   })
 
@@ -131,7 +134,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         props.searchTitle,
         props.llmStatus,
       ),
-      enabled: props.initialized() && isReviewServingUsable() && articlesQuery.isSuccess && !articlesQuery.isFetching,
+      enabled: props.initialized() && canLoadArticles() && articlesQuery.isSuccess && !articlesQuery.isFetching,
     }
   })
 
@@ -206,6 +209,12 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         </div>
       </Show>
 
+      <Show when={warningsQuery.error}>
+        <div class="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+          <p class="text-amber-700">Could not load review indexing warnings: {warningsQuery.error?.message}</p>
+        </div>
+      </Show>
+
       <Show when={showReviewIndexState()}>
         <div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center">
           <p class="font-medium text-slate-800">{emptyState().title}</p>
@@ -224,7 +233,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         </div>
       </Show>
 
-      <Show when={isReviewServingUsable() && articlesQuery.isSuccess && articlesQuery.data}>
+      <Show when={canLoadArticles() && articlesQuery.isSuccess && articlesQuery.data}>
         <div class="space-y-4">
           <div class="p-4 bg-white rounded-lg shadow">
             <h3 class="text-lg font-semibold mb-2">

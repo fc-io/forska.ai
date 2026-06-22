@@ -14,7 +14,7 @@ const smokeEnv = {
   SERVER_ROLE: 'dev-single',
   SERVER_DUCKDB_OWNER_URL: '',
   VITE_PORT: String(appServerPort),
-  VITE_SERVER_API: `http://127.0.0.1:${apiServerPort}`,
+  VITE_SERVER_API: `http://127.0.0.1:${appServerPort}`,
 }
 
 export default defineConfig({
