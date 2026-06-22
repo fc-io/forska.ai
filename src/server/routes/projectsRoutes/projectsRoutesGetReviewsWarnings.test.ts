@@ -905,6 +905,51 @@ test('reviews warnings wait for candidate serving generation before queueing boo
   expect(body.data.indexing.status).toBe('stale')
 })
 
+test('reviews warnings wait for failed serving generation before queueing bootstrap rebuild', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-failed-serving-bootstrap-warning'
+
+  await insertProjectFixture(projectId)
+  await runDatabase(`
+    INSERT INTO app.review_serving_dirty_work (
+      dirty_work_id,
+      project_id,
+      scope_kind,
+      scope_id,
+      article_id,
+      dirty_kind,
+      source_partition,
+      first_source_high_water_mark,
+      latest_source_high_water_mark,
+      status
+    ) VALUES (
+      'dirty-work-${projectId}',
+      '${projectId}',
+      'article',
+      'article-${projectId}',
+      'article-${projectId}',
+      'review-change',
+      'review-change:${projectId}',
+      1,
+      1,
+      'failed'
+    )
+  `)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
+  expect(body.data.indexing.largeRebuild).toBe(null)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('stalled')
+  expect(body.data.indexing.status).toBe('stale')
+})
+
 test('reviews warnings do not queue bootstrap rebuild for articles outside project dates', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')

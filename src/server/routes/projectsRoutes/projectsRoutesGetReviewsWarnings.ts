@@ -844,8 +844,10 @@ const getHasServingGenerationWork = (servingDiagnostics: Awaited<ReturnType<type
     servingDiagnostics.snapshot.candidateCount > 0
     || servingDiagnostics.dirtyWork.pendingCount > 0
     || servingDiagnostics.dirtyWork.runningCount > 0
+    || servingDiagnostics.dirtyWork.failedCount > 0
     || servingDiagnostics.rebuildChunks.pendingCount > 0
     || servingDiagnostics.rebuildChunks.runningCount > 0
+    || servingDiagnostics.rebuildChunks.failedCount > 0
   )
 }
 
