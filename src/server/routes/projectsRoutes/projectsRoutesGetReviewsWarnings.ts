@@ -249,9 +249,13 @@ type ProjectRefreshState = {
 const getEnabledPromptCount = async (projectId: string): Promise<number> => {
   const rows = await getAppDatabaseService().queryJson<{count: number}>(`
     SELECT COUNT(*) AS count
-    FROM app.project_prompt
-    WHERE project_id = '${escapeSqlString(projectId)}'
-      AND enabled = TRUE
+    FROM app.project_prompt project_prompt
+    INNER JOIN app.prompt prompt
+      ON prompt.id = project_prompt.prompt_id
+    WHERE project_prompt.project_id = '${escapeSqlString(projectId)}'
+      AND project_prompt.enabled = TRUE
+      AND NOT project_prompt.archived
+      AND COALESCE(prompt.archived, FALSE) = FALSE
   `)
 
   return Number(rows[0]?.count ?? 0)
