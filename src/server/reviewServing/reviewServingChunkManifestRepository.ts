@@ -124,28 +124,33 @@ const getReviewServingRebuildChunkManifestFromRow = (
   }
 }
 
-const getReviewServingRebuildChunkSelect = () => {
+const getReviewServingRebuildChunkSelect = (input: {tableAlias?: string} = {}) => {
+  const source = input.tableAlias ?? 'app.review_rebuild_chunk_manifest'
+  const from = input.tableAlias
+    ? `FROM app.review_rebuild_chunk_manifest AS ${input.tableAlias}`
+    : 'FROM app.review_rebuild_chunk_manifest'
+
   return `
     SELECT
-      chunk_id AS chunkId,
-      project_id AS projectId,
-      projection_component AS projectionComponent,
-      projection_identity AS projectionIdentity,
-      input_digest AS inputDigest,
-      input_watermark AS inputWatermark,
-      chunk_start_key AS chunkStartKey,
-      chunk_end_key AS chunkEndKey,
-      output_base_generation AS outputBaseGeneration,
-      status,
-      checksum,
-      lease_owner AS leaseOwner,
-      lease_expires_at AS leaseExpiresAt,
-      last_error AS lastError,
-      started_at AS startedAt,
-      completed_at AS completedAt,
-      created_at AS createdAt,
-      updated_at AS updatedAt
-    FROM app.review_rebuild_chunk_manifest
+      ${source}.chunk_id AS chunkId,
+      ${source}.project_id AS projectId,
+      ${source}.projection_component AS projectionComponent,
+      ${source}.projection_identity AS projectionIdentity,
+      ${source}.input_digest AS inputDigest,
+      ${source}.input_watermark AS inputWatermark,
+      ${source}.chunk_start_key AS chunkStartKey,
+      ${source}.chunk_end_key AS chunkEndKey,
+      ${source}.output_base_generation AS outputBaseGeneration,
+      ${source}.status,
+      ${source}.checksum,
+      ${source}.lease_owner AS leaseOwner,
+      ${source}.lease_expires_at AS leaseExpiresAt,
+      ${source}.last_error AS lastError,
+      ${source}.started_at AS startedAt,
+      ${source}.completed_at AS completedAt,
+      ${source}.created_at AS createdAt,
+      ${source}.updated_at AS updatedAt
+    ${from}
   `
 }
 
@@ -162,10 +167,30 @@ const getReviewServingRebuildChunkIdentityPredicate = (input: ReviewServingRebui
   `
 }
 
-const getReviewServingRebuildChunkClaimPredicate = (input: {now: Date | string}) => {
+const getReviewServingRebuildChunkClaimPredicate = (input: {now: Date | string}, tableAlias?: string) => {
+  const source = tableAlias ? `${tableAlias}.` : ''
+
   return `
-    status IN ('pending', 'failed')
-    OR (status = 'running' AND lease_expires_at <= ${getReviewServingChunkTimestampLiteral(input.now)})
+    ${source}status IN ('pending', 'failed')
+    OR (${source}status = 'running' AND ${source}lease_expires_at <= ${getReviewServingChunkTimestampLiteral(input.now)})
+  `
+}
+
+const getReviewServingRebuildChunkProjectPredicate = (input: {projectId?: string | null}, tableAlias?: string) => {
+  const source = tableAlias ? `${tableAlias}.` : ''
+
+  return input.projectId === undefined
+    ? ''
+    : `AND ${source}project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}`
+}
+
+const getReviewServingRebuildChunkClaimWhere = (
+  input: {now: Date | string; projectId?: string | null},
+  tableAlias?: string,
+) => {
+  return `
+    (${getReviewServingRebuildChunkClaimPredicate(input, tableAlias)})
+    ${getReviewServingRebuildChunkProjectPredicate(input, tableAlias)}
   `
 }
 
@@ -202,13 +227,37 @@ export const getNextClaimableReviewServingRebuildChunk = async (
   input: {now: Date | string; projectId?: string | null},
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
 ) => {
-  const projectPredicate =
-    input.projectId === undefined ? '' : `AND project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}`
   const rows = await database.queryJson<ReviewServingRebuildChunkManifestRow>(`
-    ${getReviewServingRebuildChunkSelect()}
-    WHERE (${getReviewServingRebuildChunkClaimPredicate(input)})
-      ${projectPredicate}
-    ORDER BY updated_at ASC, input_watermark ASC, chunk_start_key ASC, chunk_id ASC
+    WITH
+      claimable_min_updated AS (
+        SELECT MIN(candidate.updated_at) AS updated_at
+        FROM app.review_rebuild_chunk_manifest AS candidate
+        WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
+      ),
+      claimable_min_watermark AS (
+        SELECT MIN(candidate.input_watermark) AS input_watermark
+        FROM app.review_rebuild_chunk_manifest AS candidate
+        JOIN claimable_min_updated ON candidate.updated_at = claimable_min_updated.updated_at
+        WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
+      ),
+      claimable_min_start_key AS (
+        SELECT MIN(candidate.chunk_start_key) AS chunk_start_key
+        FROM app.review_rebuild_chunk_manifest AS candidate
+        JOIN claimable_min_updated ON candidate.updated_at = claimable_min_updated.updated_at
+        JOIN claimable_min_watermark ON candidate.input_watermark = claimable_min_watermark.input_watermark
+        WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
+      ),
+      claimable_chunk AS (
+        SELECT MIN(candidate.chunk_id) AS chunk_id
+        FROM app.review_rebuild_chunk_manifest AS candidate
+        JOIN claimable_min_updated ON candidate.updated_at = claimable_min_updated.updated_at
+        JOIN claimable_min_watermark ON candidate.input_watermark = claimable_min_watermark.input_watermark
+        JOIN claimable_min_start_key ON candidate.chunk_start_key = claimable_min_start_key.chunk_start_key
+        WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
+      )
+    ${getReviewServingRebuildChunkSelect({tableAlias: 'manifest'})}
+    JOIN claimable_chunk ON manifest.chunk_id = claimable_chunk.chunk_id
+    WHERE claimable_chunk.chunk_id IS NOT NULL
     LIMIT 1
   `)
   const row = rows[0]
