@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-23 - Review Serving Projector Chunk Claim
+
+- Error: `DuckDB workload budget exceeded for reviewServing.projector.worker: temp spill 11206656 bytes is not allowed` from the rebuild chunk claim query.
+- Context: `reviewServingProjectorWorker` calling `getNextClaimableReviewServingRebuildChunk` against `app.review_rebuild_chunk_manifest`.
+- Cause: The claim path sorted all claimable rebuild chunk manifest rows by `updated_at`, `input_watermark`, `chunk_start_key`, and `chunk_id` before `LIMIT 1`, spilling temp data under the no-spill projector workload budget.
+- Fix: Replaced the full-row `ORDER BY ... LIMIT 1` with aggregate tie-break CTEs that select the next `chunk_id` via `MIN(...)`, then fetch only that manifest row while keeping temp spill disallowed.
+- Verification: `bun test src/server/reviewServing/reviewServingChunkManifestRepository.test.ts src/server/workers/reviewServingProjectorWorker.test.ts src/server/utils/reviewServingProjectorWorkerHeartbeat.test.ts`; `bun run lint`; in-memory DuckDB parser/runtime check for `getNextClaimableReviewServingRebuildChunk`.
+
 ## 2026-06-20 - Desktop DuckDB Runtime Memory Default
 
 - Error: Desktop backend could start without an explicit DuckDB cap, leaving laptop/default runtimes exposed to the same `failed to pin block` class of DuckDB OOM under review-serving overlap workloads.

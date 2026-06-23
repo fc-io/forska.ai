@@ -39,6 +39,10 @@ const getWhereLiteral = (statement: string, columnName: string) => {
   )
 }
 
+const hasChunkIdLiteralPredicate = (statement: string) => {
+  return statement.match(/chunk_id\s*=\s*'/u) !== null
+}
+
 const getClock = (statements: readonly string[]) => {
   return new Date(2026, 5, 16, 14, statements.length).toISOString()
 }
@@ -179,17 +183,26 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
   const queryJson = async <T>(statement: string) => {
     statements.push(statement)
 
-    if (statement.includes('FROM app.review_rebuild_chunk_manifest') && statement.includes('chunk_id =')) {
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest') && hasChunkIdLiteralPredicate(statement)) {
       const chunkId = getWhereLiteral(statement, 'chunk_id') ?? ''
       const row = rows.get(chunkId)
       return (row === undefined ? [] : [row]) as T[]
     }
 
     if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
-      if (statement.includes('ORDER BY updated_at ASC')) {
-        const claimable = [...rows.values()].find((row) => {
-          return row.status === 'pending' || row.status === 'failed' || row.status === 'running'
-        })
+      if (statement.includes('claimable_chunk')) {
+        const [claimable] = [...rows.values()]
+          .filter((row) => {
+            return row.status === 'pending' || row.status === 'failed' || row.status === 'running'
+          })
+          .toSorted((left, right) => {
+            return (
+              left.updatedAt.localeCompare(right.updatedAt)
+              || left.inputWatermark - right.inputWatermark
+              || left.chunkStartKey.localeCompare(right.chunkStartKey)
+              || left.chunkId.localeCompare(right.chunkId)
+            )
+          })
 
         return (claimable === undefined ? [] : [claimable]) as T[]
       }
@@ -265,6 +278,9 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(next).toEqual({...baseChunkIdentity, checksum: null})
   expect(statements.join('\n')).toContain("status IN ('pending', 'failed')")
   expect(statements.join('\n')).toContain("project_id IS NOT DISTINCT FROM 'project-1'")
+  expect(statements.join('\n')).toContain('MIN(candidate.updated_at)')
+  expect(statements.join('\n')).toContain('MIN(candidate.chunk_id)')
+  expect(statements.join('\n')).not.toContain('ORDER BY updated_at ASC')
 })
 
 test('failed chunks can be claimed again and completed transactionally with output validation', async () => {
