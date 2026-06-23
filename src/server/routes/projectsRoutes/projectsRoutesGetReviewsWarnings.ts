@@ -15,7 +15,6 @@ import {
   getProjectMartLargeRebuildScopeProgress,
   isArticleScopedLargeRebuildPhase,
 } from '../../services/projectMartLargeRebuildProgressService.ts'
-import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
 import {getDuckdbOwnerConnectionsOverview} from '../../utils/duckdbOwnerConnections.ts'
 import {
@@ -110,8 +109,6 @@ type QuarantinedArticleRefresh = {
   error: string
   updatedAt: string | null
 }
-
-const missingJudgmentFactRepairArticleLimit = 4
 
 const getLargeRebuildDetails = (state: ProjectLargeRebuildState, progress: ProjectLargeRebuildProgress | null) => {
   return state.refreshToken === null || state.refreshToken <= 0
@@ -626,62 +623,6 @@ const getOldestQueuedAt = (...values: Array<string | null>) => {
   }, null)
 }
 
-const getMissingVisibleJudgmentFactArticleIds = async (projectId: string): Promise<string[]> => {
-  const projectLiteral = getSqlLiteral(projectId)
-  const rows = await getAppDatabaseService().queryJson<{articleId: string}>(`
-    SELECT judgment.article_id AS articleId
-    FROM mart.project_scope_article scope_article
-    INNER JOIN app.project project
-      ON project.id = scope_article.project_id
-     AND project.archived = FALSE
-    INNER JOIN app.project_prompt project_prompt
-      ON project_prompt.project_id = scope_article.project_id
-     AND project_prompt.enabled = TRUE
-    INNER JOIN app.judgment judgment
-      ON ${getProjectVisibleJudgmentScopeSql({
-        judgmentAlias: 'judgment',
-        projectAlias: 'project',
-        projectPromptAlias: 'project_prompt',
-        projectScopeAlias: 'scope_article',
-      })}
-    LEFT JOIN mart.judgment_fact judgment_fact ON judgment_fact.judgment_id = judgment.id
-    WHERE scope_article.project_id = ${projectLiteral}
-      AND judgment.deleted_at IS NULL
-      AND judgment_fact.judgment_id IS NULL
-    GROUP BY judgment.article_id
-    ORDER BY judgment.article_id ASC
-    LIMIT ${missingJudgmentFactRepairArticleLimit}
-  `)
-
-  return rows.map((row) => {
-    return row.articleId
-  })
-}
-
-const queueMissingVisibleJudgmentFactRepair = async (projectId: string): Promise<void> => {
-  const [projectRefreshState, projectLargeRebuildState] = await Promise.all([
-    getProjectRefreshState(projectId),
-    getProjectLargeRebuildState(projectId),
-  ])
-  const hasLargeRebuild = projectLargeRebuildState.refreshToken !== null && projectLargeRebuildState.refreshToken > 0
-
-  if (!projectRefreshState.isFresh || hasLargeRebuild) {
-    return
-  }
-
-  const articleIds = await getMissingVisibleJudgmentFactArticleIds(projectId)
-
-  if (articleIds.length === 0) {
-    return
-  }
-
-  await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-    projects: [{articleIds, projectId}],
-    reason: 'missingVisibleJudgmentFacts',
-    requestedBy: 'reviews-warnings',
-  })
-}
-
 const getReviewIndexingBlockedReason = (params: {
   canRunMartRefreshDrain: boolean
   canRunMaintenanceWork: boolean
@@ -821,46 +762,11 @@ const getReviewsIndexingProgressState = (params: {
             : 'stalled'
 }
 
-const getShouldRequestMissingReviewIndexWork = (params: {
-  enabledPromptCount: number
-  hasAnyArticlesInScope: boolean
-  hasLargeRebuild: boolean
-  hasReviewServingRows: boolean
-  hasServingGenerationWork: boolean
-  projectRefreshState: ProjectRefreshState
-}) => {
-  return (
-    params.enabledPromptCount > 0
-    && params.hasAnyArticlesInScope
-    && !params.hasReviewServingRows
-    && !params.hasLargeRebuild
-    && !params.hasServingGenerationWork
-    && params.projectRefreshState.isFresh
-    && params.projectRefreshState.refreshStatus !== 'failed'
-    && params.projectRefreshState.dirtyMaterialization.failedCount === 0
-    && params.projectRefreshState.dirtyMaterialization.unreconciledCount === 0
-    && !params.projectRefreshState.hasUnresolvedQuarantineBarrier
-  )
-}
-
-const getHasServingGenerationWork = (servingDiagnostics: Awaited<ReturnType<typeof getReviewServingDiagnostics>>) => {
-  return (
-    servingDiagnostics.snapshot.candidateCount > 0
-    || servingDiagnostics.dirtyWork.pendingCount > 0
-    || servingDiagnostics.dirtyWork.runningCount > 0
-    || servingDiagnostics.dirtyWork.failedCount > 0
-    || servingDiagnostics.rebuildChunks.pendingCount > 0
-    || servingDiagnostics.rebuildChunks.runningCount > 0
-    || servingDiagnostics.rebuildChunks.failedCount > 0
-  )
-}
-
 export const projectsRoutesGetReviewsWarnings = new Elysia().post(
   '/api/projectsreviewswarnings',
   async ({body}) => {
     const projectId = body.projectId
     await assertProjectIsActive(projectId)
-    await queueMissingVisibleJudgmentFactRepair(projectId)
     const martRefreshService = getDuckdbMartMaintenanceService()
     const throughputSnapshot = martRefreshService.getThroughputSnapshot()
     const currentNow = new Date()
@@ -898,36 +804,9 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const hasReviewServingRows =
       warningSnapshot.status === 'accepted' && warningSnapshot.diagnostics.manifest.status === 'active'
     const hasReadableReviewServingRows = warningSnapshot.status === 'accepted'
-    const hasServingGenerationWork = getHasServingGenerationWork(servingDiagnostics)
-    let projectRefreshState = initialProjectRefreshState
-    let projectLargeRebuildState = initialProjectLargeRebuildState
-    let pendingArticleRefreshInfo = initialPendingArticleRefreshInfo
-
-    if (
-      getShouldRequestMissingReviewIndexWork({
-        enabledPromptCount,
-        hasAnyArticlesInScope,
-        hasLargeRebuild: (projectLargeRebuildState.refreshToken ?? 0) > 0,
-        hasReviewServingRows,
-        hasServingGenerationWork,
-        projectRefreshState,
-      })
-    ) {
-      await martRefreshService.requestProjectLargeRebuildIfNoLargeRebuild(
-        projectId,
-        'reviews-warnings-missing-review-index',
-      )
-
-      const refreshedIndexingState = await Promise.all([
-        getProjectRefreshState(projectId),
-        getProjectLargeRebuildState(projectId),
-        getPendingArticleRefreshInfo(projectId),
-      ])
-
-      projectRefreshState = refreshedIndexingState[0]
-      projectLargeRebuildState = refreshedIndexingState[1]
-      pendingArticleRefreshInfo = refreshedIndexingState[2]
-    }
+    const projectRefreshState = initialProjectRefreshState
+    const projectLargeRebuildState = initialProjectLargeRebuildState
+    const pendingArticleRefreshInfo = initialPendingArticleRefreshInfo
 
     const freshArticleRefreshLeaseCount = getFreshArticleRefreshLeaseCount(freshMaintenanceLeases)
     const freshProjectRefreshLeaseCount = getFreshMaintenanceLeaseCount(

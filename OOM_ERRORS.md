@@ -44,6 +44,14 @@ Entry format:
 - Fix: Removed legacy refresh/large-rebuild heartbeat startup from normal maintenance work, kept the V4 projector heartbeat as the normal rebuild executor, renamed package commands to explicit `legacy-admin-*`, and required `--legacy-admin-ack=legacy-large-rebuild` for direct legacy worker execution.
 - Verification: `bun test src/server/utils/startBackgroundWork.test.ts scripts/rebuild2PackageCommands.test.ts scripts/runLargeRebuildWorkerOnce.test.ts scripts/runLargeRebuildWorkerCycles.test.ts`; focused ESLint on the touched startup, package-script, legacy-admin, and recovery compatibility tests.
 
+## 2026-06-23 - Phase 5B Recovery And Warning Side Effects
+
+- Error: Recovery and warning/status paths could still resume or schedule legacy refresh and large-rebuild work as a side effect of inspection.
+- Context: `scripts/recoverDirtyRefreshClaims.ts` and `src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts`.
+- Cause: `recoverDirtyRefreshClaims --recover` shelled into legacy refresh and large-rebuild workers; review-warning reads scanned `mart.judgment_fact`, marked dirty repair state for missing facts, and bootstrapped missing serving rows through legacy large rebuild requests.
+- Fix: Recovery now enqueues V4 `app.review_rebuild_request` rows and leaves stale legacy claims as diagnostics; review-warning reads no longer scan `mart.judgment_fact` or schedule legacy dirty/large-rebuild repair, reporting stale V4 state instead.
+- Verification: `bun test scripts/projectMartRefreshRecovery.test.ts src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts`; focused ESLint on the touched recovery script and warning route/tests.
+
 ## 2026-06-23 - Review Serving Projector Chunk Claim
 
 - Error: `DuckDB workload budget exceeded for reviewServing.projector.worker: temp spill 11206656 bytes is not allowed` from the rebuild chunk claim query.
