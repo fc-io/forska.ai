@@ -20,6 +20,14 @@ Entry format:
 - Fix: Phase 5B plan now requires retiring or V4-rewiring legacy refresh/rebuild, dirty-refresh, repair/recovery, warning/admin, startup/heartbeat, package-script, and adjacent browser fallback paths; it also adds V4 rebuild request admission, component-specific chunk budgets, retry cooldown/split/quarantine behavior, durable OOM telemetry, and Phase 6 adversarial OOM proof gates.
 - Verification: Five Codex review passes integrated into `DUCK_CQRS_PLAN_PHASE_5B.md`, `DUCK_OOM_FIX_PLAN.md`, and `DUCK_CQRS_PLAN_PHASE_6.md`; implementation and runtime verification remain Phase 5B/Phase 6 work.
 
+## 2026-06-23 - Phase 5B V4 Rebuild Request Admission
+
+- Error: Legacy rebuild and repair requests could still create or resume article-count chunks that only discovered dense judgment/payload/temp risk after DuckDB execution began.
+- Context: Phase 5B request layer above `app.review_rebuild_chunk_manifest`.
+- Cause: Chunk manifests existed, but there was no durable request-level admission record carrying requested components, identities, retry policy, estimates, budget diagnostics, or over-budget state before chunks became claimable.
+- Fix: Added `app.review_rebuild_request`, request-owned chunk manifest fields, request admission, budget/diagnostic fields, retry-after/over-budget metadata, and claim gating so request-owned chunks are claimable only after the parent request is admitted.
+- Verification: `bun test src/server/reviewServing/reviewServingSchema.test.ts src/server/reviewServing/reviewServingChunkManifestRepository.test.ts src/server/reviewServing/reviewServingRebuildRequestRepository.test.ts`.
+
 ## 2026-06-23 - Review Serving Projector Chunk Claim
 
 - Error: `DuckDB workload budget exceeded for reviewServing.projector.worker: temp spill 11206656 bytes is not allowed` from the rebuild chunk claim query.
