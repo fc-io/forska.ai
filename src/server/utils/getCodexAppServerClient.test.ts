@@ -423,6 +423,12 @@ test('keeps known transient Codex stderr out of terminal logs', async () => {
     stderr.emit(
       'data',
       Buffer.from(
+        '2026-06-23T04:07:36.710843Z ERROR codex_models_manager::manager: failed to refresh available models: stream disconnected before completion: error sending request for url (http://127.0.0.1:8787/v1/models?client_version=0.139.0)\n',
+      ),
+    )
+    stderr.emit(
+      'data',
+      Buffer.from(
         '2026-05-22T08:22:53.499992Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 503 Service Unavailable, url: wss://chatgpt.com/backend-api/codex/responses\n',
       ),
     )
