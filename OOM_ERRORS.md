@@ -52,6 +52,14 @@ Entry format:
 - Fix: Recovery now enqueues V4 `app.review_rebuild_request` rows and leaves stale legacy claims as diagnostics; review-warning reads no longer scan `mart.judgment_fact` or schedule legacy dirty/large-rebuild repair, reporting stale V4 state instead.
 - Verification: `bun test scripts/projectMartRefreshRecovery.test.ts src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts`; focused ESLint on the touched recovery script and warning route/tests.
 
+## 2026-06-23 - Phase 5B Legacy Admin Guards
+
+- Error: Direct legacy dirty-refresh worker scripts could still be run without an explicit acknowledgement, and the Phase 5B cutover decisions had no focused regression guard.
+- Context: `scripts/runProjectMartRefreshWorker*.ts`, `scripts/runLargeRebuildWorker*.ts`, startup, package scripts, warning route, and dirty recovery script.
+- Cause: Startup and package cutover reduced normal exposure, but direct script execution and future edits could reintroduce legacy refresh/rebuild OOM paths without a static test failing.
+- Fix: Added `legacy-dirty-refresh` acknowledgement checks to direct dirty-refresh worker scripts and added Phase 5B static guards covering startup, warning side effects, V4 recovery, package command exposure, and required legacy-admin acknowledgements.
+- Verification: `bun test src/server/reviewServing/reviewServingPhase5BStaticGuards.test.ts scripts/projectMartRefreshRecovery.test.ts`; focused ESLint on the touched scripts and static guard test.
+
 ## 2026-06-23 - Review Serving Projector Chunk Claim
 
 - Error: `DuckDB workload budget exceeded for reviewServing.projector.worker: temp spill 11206656 bytes is not allowed` from the rebuild chunk claim query.
