@@ -6,6 +6,7 @@ import {getMaintenanceWorkLeaseService} from '../src/server/services/maintenance
 import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 import {runProjectMartLargeRebuildCycle} from '../src/server/services/projectMartLargeRebuildRunner.ts'
 import {getProjectMartLargeRebuildStateService} from '../src/server/services/projectMartLargeRebuildStateService.ts'
+import {legacyDirtyRefreshAckValue, requireLegacyAdminAck} from './legacyAdminAck.ts'
 
 type CliOptions = {
   heartbeatMs: number | undefined
@@ -165,6 +166,15 @@ const startHeartbeat = (claim: Claim, heartbeatMs: number, leaseMs: number) => {
 }
 
 export const runProjectMartRefreshWorkerOnceIsolated = async () => {
+  if (
+    !requireLegacyAdminAck({
+      command: 'runProjectMartRefreshWorkerOnceIsolated',
+      expectedAck: legacyDirtyRefreshAckValue,
+    })
+  ) {
+    return
+  }
+
   const options = getCliOptions()
   const largeRebuildStateService = getProjectMartLargeRebuildStateService()
   const stateService = getProjectMartDirtyRefreshStateService()

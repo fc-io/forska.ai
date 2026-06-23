@@ -198,10 +198,10 @@ test('runProjectMartRefreshWorkerOnce CLI completes one claim and leaves the led
   removeFileIfExists(dirname(duckdbPath))
   seedDatabase({dirtyArticleCount: 1, duckdbPath, projectId: 'project-run-once', refreshStatus: 'idle'})
 
-  const runScript = globalThis.Bun.spawnSync(['bun', runOnceScriptPath, '--worker-id=test-worker'], {
-    cwd: projectRoot,
-    env: {...defaultEnv, DUCKDB_PATH: duckdbPath},
-  })
+  const runScript = globalThis.Bun.spawnSync(
+    ['bun', runOnceScriptPath, '--worker-id=test-worker', '--legacy-admin-ack=legacy-dirty-refresh'],
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
+  )
 
   if (runScript.exitCode !== 0) {
     throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'run-once script failed')
@@ -223,15 +223,32 @@ test('runProjectMartRefreshWorkerOnce CLI completes one claim and leaves the led
   expect(state).toEqual({lastCompletedDirtyToken: '1', refreshStatus: 'idle'})
 })
 
+test('runProjectMartRefreshWorkerOnce legacy CLI blocks without admin acknowledgement', () => {
+  const runScript = globalThis.Bun.spawnSync(['bun', runOnceScriptPath, '--worker-id=test-worker'], {
+    cwd: projectRoot,
+    env: {...defaultEnv, DUCKDB_PATH: join(projectRoot, '.tmp', 'unused-dirty-refresh.duckdb')},
+  })
+
+  expect(runScript.exitCode).toBe(1)
+  expect(JSON.parse(getLastJsonLine(runScript.stderr.toString()))).toEqual({
+    command: 'runProjectMartRefreshWorkerOnceIsolated',
+    requiredAck: 'legacy-dirty-refresh',
+    status: 'blocked_legacy_admin_ack_required',
+  })
+})
+
 test('runProjectMartRefreshWorkerOnce routes oversized full refreshes into staged large rebuild state', () => {
   const duckdbPath = join(projectRoot, '.tmp', 'run-project-mart-refresh-worker-once-blocked.duckdb')
   removeFileIfExists(dirname(duckdbPath))
   seedDatabase({dirtyArticleCount: 4, duckdbPath, projectId: 'project-blocked', refreshStatus: 'idle'})
 
-  const runScript = globalThis.Bun.spawnSync(['bun', runOnceScriptPath, '--worker-id=test-worker'], {
-    cwd: projectRoot,
-    env: {...defaultEnv, DUCKDB_PATH: duckdbPath, PROJECT_MART_REFRESH_MAX_FULL_SCOPE_ARTICLES: '3'},
-  })
+  const runScript = globalThis.Bun.spawnSync(
+    ['bun', runOnceScriptPath, '--worker-id=test-worker', '--legacy-admin-ack=legacy-dirty-refresh'],
+    {
+      cwd: projectRoot,
+      env: {...defaultEnv, DUCKDB_PATH: duckdbPath, PROJECT_MART_REFRESH_MAX_FULL_SCOPE_ARTICLES: '3'},
+    },
+  )
 
   expect(runScript.exitCode).toBe(0)
 
@@ -384,10 +401,13 @@ test('isolated refresh command progresses one large rebuild batch when no normal
     )
   }
 
-  const runScript = globalThis.Bun.spawnSync(['bun', runOnceScriptPath, '--worker-id=test-large-rebuild'], {
-    cwd: projectRoot,
-    env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker', SERVER_DUCKDB_OWNER_URL: ''},
-  })
+  const runScript = globalThis.Bun.spawnSync(
+    ['bun', runOnceScriptPath, '--worker-id=test-large-rebuild', '--legacy-admin-ack=legacy-dirty-refresh'],
+    {
+      cwd: projectRoot,
+      env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker', SERVER_DUCKDB_OWNER_URL: ''},
+    },
+  )
 
   if (runScript.exitCode !== 0) {
     throw new Error(

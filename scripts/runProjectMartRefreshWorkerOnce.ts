@@ -3,6 +3,7 @@ import {
   type ProjectMartRefreshWorkerCycleOptions,
   runProjectMartRefreshWorkerOnce,
 } from '../src/server/workers/projectMartRefreshWorker.ts'
+import {legacyDirtyRefreshAckValue, requireLegacyAdminAck} from './legacyAdminAck.ts'
 
 type CliOptions = {
   heartbeatMs: number | undefined
@@ -43,6 +44,10 @@ const getCliOptions = (): CliOptions => {
 }
 
 export const runProjectMartRefreshWorkerOnceCli = async () => {
+  if (!requireLegacyAdminAck({command: 'runProjectMartRefreshWorkerOnce', expectedAck: legacyDirtyRefreshAckValue})) {
+    return
+  }
+
   const options = getCliOptions()
   const workerOptions: ProjectMartRefreshWorkerCycleOptions = {
     heartbeatMs: options.heartbeatMs,
