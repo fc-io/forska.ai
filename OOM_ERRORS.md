@@ -36,6 +36,14 @@ Entry format:
 - Fix: Rewired the scripts through `reviewServingV4RebuildRequestService.ts` so they create admitted `app.review_rebuild_request` rows and request-owned chunk manifests; `requestJudgmentFactRepair` now requires explicit project selection and no longer scans `mart.judgment_fact` by default.
 - Verification: `bun test scripts/requestReviewServingLargeRebuild.test.ts scripts/requestProjectLargeRebuild.test.ts scripts/requestJudgmentFactRepair.test.ts`; focused ESLint on the touched scripts, tests, and V4 request service.
 
+## 2026-06-23 - Phase 5B Startup And Legacy Worker Cutover
+
+- Error: Normal maintenance startup and package scripts could still mount legacy refresh and seven-phase large-rebuild workers after V4 rebuild request admission existed.
+- Context: `src/server/utils/startBackgroundWork.ts`, `package.json`, `scripts/runLargeRebuildWorkerOnce.ts`, and `scripts/runLargeRebuildWorkerCycles.ts`.
+- Cause: The startup path gated on legacy mart-refresh drain eligibility and then started legacy refresh/large-rebuild heartbeats; package commands exposed unguarded legacy large-rebuild worker entrypoints.
+- Fix: Removed legacy refresh/large-rebuild heartbeat startup from normal maintenance work, kept the V4 projector heartbeat as the normal rebuild executor, renamed package commands to explicit `legacy-admin-*`, and required `--legacy-admin-ack=legacy-large-rebuild` for direct legacy worker execution.
+- Verification: `bun test src/server/utils/startBackgroundWork.test.ts scripts/rebuild2PackageCommands.test.ts scripts/runLargeRebuildWorkerOnce.test.ts scripts/runLargeRebuildWorkerCycles.test.ts`; focused ESLint on the touched startup, package-script, legacy-admin, and recovery compatibility tests.
+
 ## 2026-06-23 - Review Serving Projector Chunk Claim
 
 - Error: `DuckDB workload budget exceeded for reviewServing.projector.worker: temp spill 11206656 bytes is not allowed` from the rebuild chunk claim query.

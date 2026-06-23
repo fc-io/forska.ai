@@ -5,7 +5,9 @@ import {expect, test} from 'bun:test'
 const projectRoot = process.cwd()
 
 test('package exposes final rebuild2 command surface and removes obsolete mart refresh queue commands', async () => {
-  const packageJson = (await Bun.file(join(projectRoot, 'package.json')).json()) as {scripts: Record<string, string>}
+  const packageJson = (await globalThis.Bun.file(join(projectRoot, 'package.json')).json()) as {
+    scripts: Record<string, string>
+  }
   const obsoleteCommandMatches = Object.entries(packageJson.scripts)
     .filter(([name, command]) => {
       return (
@@ -48,11 +50,13 @@ test('package exposes final rebuild2 command surface and removes obsolete mart r
   expect(packageJson.scripts['db:duck:request-review-serving-large-rebuild']).toBe(
     'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestReviewServingLargeRebuild.ts',
   )
-  expect(packageJson.scripts['db:duck:run-large-rebuild-worker-once']).toBe(
-    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runLargeRebuildWorkerOnce.ts',
+  expect(packageJson.scripts['db:duck:run-large-rebuild-worker-once']).toBeUndefined()
+  expect(packageJson.scripts['db:duck:run-large-rebuild-worker-cycles']).toBeUndefined()
+  expect(packageJson.scripts['db:duck:legacy-admin-run-large-rebuild-worker-once']).toBe(
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runLargeRebuildWorkerOnce.ts --legacy-admin-ack=legacy-large-rebuild',
   )
-  expect(packageJson.scripts['db:duck:run-large-rebuild-worker-cycles']).toBe(
-    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runLargeRebuildWorkerCycles.ts',
+  expect(packageJson.scripts['db:duck:legacy-admin-run-large-rebuild-worker-cycles']).toBe(
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runLargeRebuildWorkerCycles.ts --legacy-admin-ack=legacy-large-rebuild',
   )
   expect(packageJson.scripts['db:duck:quarantine-dirty-refresh-article']).toBe(
     'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/quarantineDirtyRefreshArticle.ts',

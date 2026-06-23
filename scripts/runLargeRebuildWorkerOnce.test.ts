@@ -14,7 +14,12 @@ test('runLargeRebuildWorkerOnce CLI returns structured idle result', () => {
   migrateLargeRebuildCommandDatabase(duckdbPath)
 
   const result = globalThis.Bun.spawnSync(
-    ['bun', 'scripts/runLargeRebuildWorkerOnce.ts', '--worker-id=test-run-large-rebuild-worker-once'],
+    [
+      'bun',
+      'scripts/runLargeRebuildWorkerOnce.ts',
+      '--worker-id=test-run-large-rebuild-worker-once',
+      '--legacy-admin-ack=legacy-large-rebuild',
+    ],
     {cwd: projectRoot, env: {...defaultLargeRebuildCommandTestEnv, DUCKDB_PATH: duckdbPath}},
   )
 
@@ -28,9 +33,19 @@ test('runLargeRebuildWorkerOnce CLI returns structured idle result', () => {
     workerId: string
   }
 
-  expect(response).toEqual({
-    projectId: null,
-    status: 'idle',
-    workerId: 'test-run-large-rebuild-worker-once',
+  expect(response).toEqual({projectId: null, status: 'idle', workerId: 'test-run-large-rebuild-worker-once'})
+})
+
+test('runLargeRebuildWorkerOnce CLI blocks without legacy admin acknowledgement', () => {
+  const result = globalThis.Bun.spawnSync(['bun', 'scripts/runLargeRebuildWorkerOnce.ts'], {
+    cwd: projectRoot,
+    env: {...defaultLargeRebuildCommandTestEnv, DUCKDB_PATH: join(projectRoot, '.tmp', 'unused.duckdb')},
+  })
+
+  expect(result.exitCode).toBe(1)
+  expect(JSON.parse(getLastJsonLine(result.stderr.toString()))).toEqual({
+    command: 'runLargeRebuildWorkerOnce',
+    requiredAck: 'legacy-large-rebuild',
+    status: 'blocked_legacy_admin_ack_required',
   })
 })

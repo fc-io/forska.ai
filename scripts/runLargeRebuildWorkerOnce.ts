@@ -2,13 +2,9 @@ import {hostname} from 'node:os'
 
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {runProjectMartLargeRebuildCycle} from '../src/server/services/projectMartLargeRebuildRunner.ts'
+import {legacyLargeRebuildAckValue, requireLegacyAdminAck} from './legacyAdminAck.ts'
 
-type CliOptions = {
-  batchSize: number
-  heartbeatMs: number | undefined
-  leaseMs: number
-  workerId: string
-}
+type CliOptions = {batchSize: number; heartbeatMs: number | undefined; leaseMs: number; workerId: string}
 
 const defaultBatchSize = 1
 const defaultLeaseMs = 30_000
@@ -41,6 +37,10 @@ const getCliOptions = (): CliOptions => {
 }
 
 const runLargeRebuildWorkerOnceCli = async () => {
+  if (!requireLegacyAdminAck({command: 'runLargeRebuildWorkerOnce', expectedAck: legacyLargeRebuildAckValue})) {
+    return
+  }
+
   const options = getCliOptions()
 
   try {

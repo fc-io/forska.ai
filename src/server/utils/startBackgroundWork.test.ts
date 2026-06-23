@@ -20,10 +20,7 @@ const getLastJsonLine = (value: string) => {
   return lastLine
 }
 
-const runStartBackgroundWork = (input: {
-  canRunMartRefreshDrain?: boolean
-  role: 'api' | 'judge-worker' | 'maintenance-worker'
-}) => {
+const runStartBackgroundWork = (input: {role: 'api' | 'judge-worker' | 'maintenance-worker'}) => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -36,9 +33,6 @@ const runStartBackgroundWork = (input: {
         }
 
         const startBackgroundWorkModulePath = getModulePath('./src/server/utils/startBackgroundWork.ts')
-        const martRefreshDrainEligibilityModulePath = getModulePath('./src/server/utils/martRefreshDrainEligibility.ts')
-        const projectMartLargeRebuildHeartbeatModulePath = getModulePath('./src/server/utils/projectMartLargeRebuildHeartbeat.ts')
-        const projectMartRefreshWorkerHeartbeatModulePath = getModulePath('./src/server/utils/projectMartRefreshWorkerHeartbeat.ts')
         const reviewServingProjectorWorkerHeartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
         const requestAttemptCloseoutBackfillSchedulerModulePath = getModulePath('./src/server/utils/startRequestAttemptCloseoutBackfillScheduler.ts')
         const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
@@ -46,27 +40,6 @@ const runStartBackgroundWork = (input: {
         const calls = []
         const input = ${JSON.stringify(input)}
 
-        void mock.module(martRefreshDrainEligibilityModulePath, () => {
-          return {
-            shouldCurrentRuntimeRunMartRefreshDrain: () => {
-              return input.canRunMartRefreshDrain ?? true
-            },
-          }
-        })
-        void mock.module(projectMartLargeRebuildHeartbeatModulePath, () => {
-          return {
-            startProjectMartLargeRebuildHeartbeat: () => {
-              calls.push('projectMartLargeRebuildHeartbeat')
-            },
-          }
-        })
-        void mock.module(projectMartRefreshWorkerHeartbeatModulePath, () => {
-          return {
-            startProjectMartRefreshWorkerHeartbeat: () => {
-              calls.push('projectMartRefreshWorkerHeartbeat')
-            },
-          }
-        })
         void mock.module(reviewServingProjectorWorkerHeartbeatModulePath, () => {
           return {
             startReviewServingProjectorWorkerHeartbeat: () => {
@@ -129,20 +102,7 @@ test('startBackgroundWork starts shared infrastructure and maintenance work for 
     'duckdbOwnerConnectionHeartbeat',
     'requestAttemptCloseoutBackfillScheduler',
     'reviewBulkOperationWorkerHeartbeat',
-    'projectMartRefreshWorkerHeartbeat',
-    'projectMartLargeRebuildHeartbeat',
     'reviewServingProjectorWorkerHeartbeat',
-  ])
-})
-
-test('startBackgroundWork starts bulk worker when mart refresh drain is disabled', () => {
-  const result = runStartBackgroundWork({canRunMartRefreshDrain: false, role: 'maintenance-worker'})
-
-  expect(result.calls).toEqual([
-    'serverRuntimeRoleMonitor',
-    'duckdbOwnerConnectionHeartbeat',
-    'requestAttemptCloseoutBackfillScheduler',
-    'reviewBulkOperationWorkerHeartbeat',
   ])
 })
 

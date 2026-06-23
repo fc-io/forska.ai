@@ -159,7 +159,7 @@ const runQuery = (duckdbPath: string, sql: string) => {
     throw new Error(result.stderr.toString() || result.stdout.toString() || 'query failed')
   }
 
-  return JSON.parse(getLastJsonLine(result.stdout.toString()))
+  return JSON.parse(getLastJsonLine(result.stdout.toString())) as unknown
 }
 
 test('inspectProjectMartRefreshRisk reports scope dirty count and planned mode', () => {
@@ -470,7 +470,11 @@ test('recoverProjectMartRefreshClaims lists and recovers stale claims only when 
 
   expect(recovered.recoverAttempted).toBe(true)
   expect(recovered.status).toBe('recovered')
-  expect(recovered.staleClaims.map((claim) => claim.projectId)).toEqual(['project-recover'])
+  expect(
+    recovered.staleClaims.map((claim) => {
+      return claim.projectId
+    }),
+  ).toEqual(['project-recover'])
   expect(recovered.recoveryResult).toMatchObject({projectId: 'project-recover', status: 'completed'})
 
   const [state] = runQuery(
@@ -607,8 +611,16 @@ test('runLargeRebuildWorkerOnce CLI advances one staged batch with conservative 
   }
 
   const runScript = globalThis.Bun.spawnSync(
-    ['bun', 'scripts/runLargeRebuildWorkerOnce.ts', '--worker-id=test-large-rebuild-cli'],
-    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker', SERVER_DUCKDB_OWNER_URL: ''}},
+    [
+      'bun',
+      'scripts/runLargeRebuildWorkerOnce.ts',
+      '--worker-id=test-large-rebuild-cli',
+      '--legacy-admin-ack=legacy-large-rebuild',
+    ],
+    {
+      cwd: projectRoot,
+      env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker', SERVER_DUCKDB_OWNER_URL: ''},
+    },
   )
 
   if (runScript.exitCode !== 0) {
@@ -763,8 +775,12 @@ test('runLargeRebuildWorkerCycles CLI returns structured bounded multi-cycle pro
       'scripts/runLargeRebuildWorkerCycles.ts',
       '--worker-id=test-large-rebuild-cycles-cli',
       '--max-cycles=3',
+      '--legacy-admin-ack=legacy-large-rebuild',
     ],
-    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker', SERVER_DUCKDB_OWNER_URL: ''}},
+    {
+      cwd: projectRoot,
+      env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker', SERVER_DUCKDB_OWNER_URL: ''},
+    },
   )
 
   if (runScript.exitCode !== 0) {

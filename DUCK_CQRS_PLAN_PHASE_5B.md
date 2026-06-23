@@ -124,7 +124,7 @@ Not allowed after the cut line:
 | [ ] | Legacy large rebuild cutover | Replace `projectMartLargeRebuild*` normal execution with V4 rebuild chunk orchestration or retire it from normal scheduling. | No normal code path can run `temp_project_judgment_fact_article`, `getProjectJudgmentFactBatchInsertSql`, or the seven legacy phases as production serving rebuild work. |
 | [ ] | Dirty refresh cutover | Route dirty article/project refresh through delta intake, dirty-work coalescing, component acknowledgements, and V4 projector wakeups. | Dirty project refresh completion is based on V4 watermarks/manifests, not legacy mart refresh completion. |
 | [~] | Repair and recovery command cutover | Rewire CLI scripts and admin repair controls to enqueue V4 component rebuilds or projector retries. | Part 2 rewired `requestProjectLargeRebuild`, `requestReviewServingLargeRebuild`, and `requestJudgmentFactRepair` to enqueue V4 requests and assert no legacy large-rebuild state. Remaining: recovery/quarantine commands and admin controls. |
-| [ ] | Startup, heartbeat, and package-script cutover | Remove legacy rebuild heartbeats and normal package commands from browser/desktop maintenance startup. | Production/browser/desktop startup and documented package commands cannot mount legacy rebuild cycles; remaining legacy commands require explicit admin/debug naming and acknowledgement. |
+| [x] | Startup, heartbeat, and package-script cutover | Remove legacy rebuild heartbeats and normal package commands from browser/desktop maintenance startup. | Part 3 removed legacy refresh/large-rebuild heartbeat startup, starts the V4 projector heartbeat from maintenance startup, renamed normal large-rebuild worker package scripts to `legacy-admin-*`, and requires `--legacy-admin-ack=legacy-large-rebuild` for direct legacy worker execution. |
 | [ ] | Progress and warning cutover | Make UI and warning APIs read V4 snapshot, chunk, dirty-work, and projector diagnostics. | Browser and desktop show failed/stale/indexing/unavailable V4 states and never imply a legacy rebuild is the normal freshness source. |
 | [ ] | Warning, health, and admin side-effect removal | Make warning/health/admin status reads report state only and move remediation into explicit V4 actions. | Loading warnings or admin status cannot scan old facts, mark legacy dirty state, or schedule large rebuild repair. |
 | [ ] | Adversarial OOM taxonomy and recovery | Add pass/fail behavior for checkpoint, append/import, V4 chunk/projector, dirty-work intake, cross-project, retry-thrash, and offline-repair OOMs. | Each OOM class has admission, cooldown/split/quarantine, telemetry, and Phase 6 proof requirements. |
@@ -369,6 +369,27 @@ The request contract must not store raw all-article ID arrays or make a single
   scripts/requestJudgmentFactRepair.test.ts`; focused ESLint on the touched
   scripts, tests, and V4 request service.
 
+### Part 3 - Startup And Package Script Cutover
+
+- Status: completed as the third implementation slice.
+- Removed normal maintenance startup imports and calls for
+  `startProjectMartRefreshWorkerHeartbeat`,
+  `startProjectMartLargeRebuildHeartbeat`, and the legacy mart-refresh drain gate.
+- Maintenance startup now starts shared closeout/bulk work and the V4
+  `startReviewServingProjectorWorkerHeartbeat` path without mounting legacy
+  refresh or seven-phase large-rebuild cycles.
+- Renamed normal package scripts for legacy large-rebuild workers to
+  `db:duck:legacy-admin-run-large-rebuild-worker-once` and
+  `db:duck:legacy-admin-run-large-rebuild-worker-cycles`, each carrying
+  `--legacy-admin-ack=legacy-large-rebuild`.
+- Added a reusable legacy-admin acknowledgement helper and made direct legacy
+  large-rebuild worker CLIs fail with structured JSON unless the acknowledgement
+  is passed.
+- Verification: `bun test src/server/utils/startBackgroundWork.test.ts
+  scripts/rebuild2PackageCommands.test.ts scripts/runLargeRebuildWorkerOnce.test.ts
+  scripts/runLargeRebuildWorkerCycles.test.ts`; focused ESLint on the touched
+  startup, package-script, legacy-admin, and recovery compatibility tests.
+
 ## JavaScript And TypeScript Rule
 
 Use `effect` for new non-trivial async and server orchestration in V4 rebuild
@@ -419,9 +440,9 @@ retry/backoff. Keep pure transforms and small local handlers as plain functions.
   rebuilds are not scheduled.
 - [ ] Existing active/failed/idle legacy refresh and large-rebuild rows are migrated,
   frozen, or marked retired so no normal claim path can resume them.
-- [ ] Startup and heartbeat tests prove production/browser/desktop maintenance
+- [x] Startup and heartbeat tests prove production/browser/desktop maintenance
   startup cannot mount legacy rebuild cycles after cutover.
-- [ ] Package-script static tests prove normal operator entrypoints are V4-rewired
+- [x] Package-script static tests prove normal operator entrypoints are V4-rewired
   or explicitly legacy-admin with acknowledgement.
 - [ ] Warning and health route tests prove failed, missing, stale, and candidate V4
   snapshots are reported without legacy fact scans, dirty repair, or large-rebuild
