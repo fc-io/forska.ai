@@ -53,16 +53,48 @@ const getChunkRowFromIdentity = (
 ): FakeChunkRow => {
   return {
     ...input,
+    actualInputRows: null,
+    actualOutputBytes: null,
+    actualOutputRows: null,
+    actualPayloadBytes: null,
+    actualPromptCount: null,
+    actualTempBytes: null,
+    admissionState: 'admitted',
+    budgetJson: {},
     checksum: null,
     chunkId: getReviewServingRebuildChunkId(input),
     completedAt: null,
     createdAt: getClock(statements),
+    diagnosticsJson: {},
+    durationMs: null,
+    estimatedInputRows: null,
+    estimatedOutputBytes: null,
+    estimatedOutputRows: null,
+    estimatedPayloadBytes: null,
+    estimatedPromptCount: null,
+    estimatedTempBytes: null,
     lastError: null,
     leaseExpiresAt: null,
     leaseOwner: null,
+    maxInputRows: null,
+    maxOutputBytes: null,
+    maxOutputRows: null,
+    maxPayloadBytes: null,
+    maxPromptCount: null,
+    maxTempBytes: null,
+    oomCategory: null,
+    overBudgetReason: null,
+    parentChunkId: null,
+    requestId: input.requestId ?? null,
+    retryAfter: null,
+    retryCount: 0,
+    snapshotCount: 1,
+    snapshotId: null,
+    splitDepth: 0,
     startedAt: null,
     status: 'pending',
     updatedAt: getClock(statements),
+    workloadClass: null,
   }
 }
 
@@ -81,26 +113,61 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
     const chunkId = strings[0] ?? ''
     const existing = rows.get(chunkId)
     const row = {
+      actualInputRows: existing?.actualInputRows ?? null,
+      actualOutputBytes: existing?.actualOutputBytes ?? null,
+      actualOutputRows: existing?.actualOutputRows ?? null,
+      actualPayloadBytes: existing?.actualPayloadBytes ?? null,
+      actualPromptCount: existing?.actualPromptCount ?? null,
+      actualTempBytes: existing?.actualTempBytes ?? null,
+      admissionState: (existing?.admissionState
+        ?? (strings.includes('blocked_over_budget')
+          ? 'blocked_over_budget'
+          : 'admitted')) as FakeChunkRow['admissionState'],
+      budgetJson: existing?.budgetJson ?? {},
       checksum: strings[9] ?? null,
       chunkEndKey: strings[6] ?? '',
       chunkId,
       chunkStartKey: strings[5] ?? '',
       completedAt: existing?.completedAt ?? null,
       createdAt: existing?.createdAt ?? getClock(statements),
+      diagnosticsJson: existing?.diagnosticsJson ?? {},
+      durationMs: existing?.durationMs ?? null,
+      estimatedInputRows: existing?.estimatedInputRows ?? null,
+      estimatedOutputBytes: existing?.estimatedOutputBytes ?? null,
+      estimatedOutputRows: existing?.estimatedOutputRows ?? null,
+      estimatedPayloadBytes: existing?.estimatedPayloadBytes ?? null,
+      estimatedPromptCount: existing?.estimatedPromptCount ?? null,
+      estimatedTempBytes: existing?.estimatedTempBytes ?? null,
       inputDigest: strings[4] ?? null,
       inputWatermark: Number(statement.match(/input_watermark[\s\S]*?,\s*(\d+),\s*'[^']*',/u)?.[1] ?? 0),
       lastError: existing?.status === 'completed' ? existing.lastError : null,
       leaseExpiresAt: existing?.status === 'completed' ? existing.leaseExpiresAt : null,
       leaseOwner: existing?.status === 'completed' ? existing.leaseOwner : null,
+      maxInputRows: existing?.maxInputRows ?? null,
+      maxOutputBytes: existing?.maxOutputBytes ?? null,
+      maxOutputRows: existing?.maxOutputRows ?? null,
+      maxPayloadBytes: existing?.maxPayloadBytes ?? null,
+      maxPromptCount: existing?.maxPromptCount ?? null,
+      maxTempBytes: existing?.maxTempBytes ?? null,
+      oomCategory: existing?.oomCategory ?? null,
       outputBaseGeneration: Number(statement.match(/output_base_generation[\s\S]*?'[^']*',\s*(\d+),/u)?.[1] ?? 0),
+      overBudgetReason: existing?.overBudgetReason ?? null,
+      parentChunkId: existing?.parentChunkId ?? null,
       projectId: strings[1] ?? null,
       projectionComponent: (strings[2] ?? 'display') as FakeChunkRow['projectionComponent'],
       projectionIdentity: strings[3] ?? '',
+      requestId: existing?.requestId ?? null,
+      retryAfter: existing?.retryAfter ?? null,
+      retryCount: existing?.retryCount ?? 0,
+      snapshotCount: existing?.snapshotCount ?? 1,
+      snapshotId: existing?.snapshotId ?? null,
+      splitDepth: existing?.splitDepth ?? 0,
       startedAt: existing?.startedAt ?? null,
       status: (existing?.status === 'completed'
         ? existing.status
-        : (strings[8] ?? 'pending')) as FakeChunkRow['status'],
+        : (strings[7] ?? 'pending')) as FakeChunkRow['status'],
       updatedAt: getClock(statements),
+      workloadClass: existing?.workloadClass ?? null,
     }
 
     rows.set(chunkId, row)
@@ -111,7 +178,9 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
     const strings = getSqlStrings(statement)
     const leaseOwner = strings[1] ?? ''
     const leaseExpiresAt = strings[2] ?? null
-    const canClaim = existing?.status === 'pending' || existing?.status === 'failed' || existing?.status === 'running'
+    const canClaim =
+      existing?.admissionState === 'admitted'
+      && (existing.status === 'pending' || existing.status === 'failed' || existing.status === 'running')
 
     if (existing !== undefined && canClaim) {
       rows.set(chunkId, {
@@ -168,11 +237,14 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       claimChunk(statement)
     }
 
-    if (statement.includes("status = 'failed'")) {
+    if (statement.includes("SET\n      status = 'failed'") || statement.includes("SET\r\n      status = 'failed'")) {
       failChunk(statement)
     }
 
-    if (statement.includes("status = 'completed'")) {
+    if (
+      statement.includes("SET\n        status = 'completed'")
+      || statement.includes("SET\r\n        status = 'completed'")
+    ) {
       completeChunk(statement)
     }
 
@@ -193,7 +265,10 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       if (statement.includes('claimable_chunk')) {
         const [claimable] = [...rows.values()]
           .filter((row) => {
-            return row.status === 'pending' || row.status === 'failed' || row.status === 'running'
+            return (
+              row.admissionState === 'admitted'
+              && (row.status === 'pending' || row.status === 'failed' || row.status === 'running')
+            )
           })
           .toSorted((left, right) => {
             return (
@@ -275,12 +350,46 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
     database,
   )
 
-  expect(next).toEqual({...baseChunkIdentity, checksum: null})
-  expect(statements.join('\n')).toContain("status IN ('pending', 'failed')")
+  expect(next).toEqual({...baseChunkIdentity, checksum: null, requestId: null})
+  expect(statements.join('\n')).toContain("candidate.status = 'pending'")
+  expect(statements.join('\n')).toContain("candidate.status = 'failed'")
+  expect(statements.join('\n')).toContain("request.status IN ('admitted', 'running')")
   expect(statements.join('\n')).toContain("project_id IS NOT DISTINCT FROM 'project-1'")
   expect(statements.join('\n')).toContain('MIN(candidate.updated_at)')
   expect(statements.join('\n')).toContain('MIN(candidate.chunk_id)')
   expect(statements.join('\n')).not.toContain('ORDER BY updated_at ASC')
+})
+
+test('over-budget chunks are parked before claim and cannot hot-loop', async () => {
+  const blocked = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, requestId: 'rebuild:blocked'}, []),
+    admissionState: 'blocked_over_budget' as const,
+    oomCategory: 'request_over_budget',
+    overBudgetReason: 'input rows: estimated 99 > max 10',
+    retryAfter: '2026-06-16T14:10:00.000Z',
+    status: 'blocked_over_budget' as const,
+  }
+  const {database, statements} = createFakeChunkManifestDatabase([blocked])
+
+  const next = await getNextClaimableReviewServingRebuildChunk(
+    {now: '2026-06-16T14:00:00.000Z', projectId: 'project-1'},
+    database,
+  )
+  const claimed = await claimReviewServingRebuildChunk(
+    {
+      ...baseChunkIdentity,
+      leaseExpiresAt: '2026-06-16T14:05:00.000Z',
+      leaseOwner: 'worker-blocked',
+      now: '2026-06-16T14:00:00.000Z',
+      requestId: 'rebuild:blocked',
+    },
+    database,
+  )
+
+  expect(next).toBeNull()
+  expect(claimed).toBeNull()
+  expect(statements.join('\n')).toContain("admission_state = 'admitted'")
+  expect(statements.join('\n')).toContain('retry_after')
 })
 
 test('failed chunks can be claimed again and completed transactionally with output validation', async () => {

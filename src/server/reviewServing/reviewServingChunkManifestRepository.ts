@@ -14,7 +14,49 @@ export type ReviewServingChunkManifestRepositoryDatabase = ReviewServingChunkMan
   transaction: <T>(operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>) => Promise<T>
 }
 
-export type ReviewServingRebuildChunkStatus = 'pending' | 'running' | 'completed' | 'failed'
+export type ReviewServingRebuildChunkStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'blocked_over_budget'
+  | 'quarantined'
+
+export type ReviewServingRebuildChunkAdmissionState = 'admitted' | 'blocked_over_budget' | 'pending'
+
+export type ReviewServingRebuildChunkBudgetFields = {
+  actualInputRows?: number | null
+  actualOutputBytes?: number | null
+  actualOutputRows?: number | null
+  actualPayloadBytes?: number | null
+  actualPromptCount?: number | null
+  actualTempBytes?: number | null
+  admissionState?: ReviewServingRebuildChunkAdmissionState
+  budgetJson?: unknown
+  diagnosticsJson?: unknown
+  durationMs?: number | null
+  estimatedInputRows?: number | null
+  estimatedOutputBytes?: number | null
+  estimatedOutputRows?: number | null
+  estimatedPayloadBytes?: number | null
+  estimatedPromptCount?: number | null
+  estimatedTempBytes?: number | null
+  maxInputRows?: number | null
+  maxOutputBytes?: number | null
+  maxOutputRows?: number | null
+  maxPayloadBytes?: number | null
+  maxPromptCount?: number | null
+  maxTempBytes?: number | null
+  oomCategory?: string | null
+  overBudgetReason?: string | null
+  parentChunkId?: string | null
+  retryAfter?: Date | string | null
+  retryCount?: number
+  snapshotCount?: number
+  snapshotId?: string | null
+  splitDepth?: number
+  workloadClass?: string | null
+}
 
 export type ReviewServingRebuildChunkIdentity = {
   chunkEndKey: string
@@ -25,25 +67,26 @@ export type ReviewServingRebuildChunkIdentity = {
   projectId: string | null
   projectionComponent: ReviewServingProjectionComponent
   projectionIdentity: string
+  requestId?: string | null
 }
 
-export type ReviewServingRebuildChunkManifest = ReviewServingRebuildChunkIdentity & {
-  checksum: string | null
-  chunkId: string
-  completedAt: string | null
-  createdAt: string
-  lastError: string | null
-  leaseExpiresAt: string | null
-  leaseOwner: string | null
-  startedAt: string | null
-  status: ReviewServingRebuildChunkStatus
-  updatedAt: string
-}
+export type ReviewServingRebuildChunkManifest = ReviewServingRebuildChunkIdentity
+  & Required<Pick<ReviewServingRebuildChunkIdentity, 'requestId'>>
+  & ReviewServingRebuildChunkBudgetFields & {
+    checksum: string | null
+    chunkId: string
+    completedAt: string | null
+    createdAt: string
+    lastError: string | null
+    leaseExpiresAt: string | null
+    leaseOwner: string | null
+    startedAt: string | null
+    status: ReviewServingRebuildChunkStatus
+    updatedAt: string
+  }
 
-export type ReviewServingRebuildChunkManifestInput = ReviewServingRebuildChunkIdentity & {
-  checksum?: string | null
-  status?: ReviewServingRebuildChunkStatus
-}
+export type ReviewServingRebuildChunkManifestInput = ReviewServingRebuildChunkIdentity
+  & ReviewServingRebuildChunkBudgetFields & {checksum?: string | null; status?: ReviewServingRebuildChunkStatus}
 
 export type ReviewServingRebuildChunkValidationResult = {
   actualChecksum: string
@@ -53,24 +96,56 @@ export type ReviewServingRebuildChunkValidationResult = {
 }
 
 type ReviewServingRebuildChunkManifestRow = {
+  actualInputRows: number | null
+  actualOutputBytes: number | null
+  actualOutputRows: number | null
+  actualPayloadBytes: number | null
+  actualPromptCount: number | null
+  actualTempBytes: number | null
+  admissionState: ReviewServingRebuildChunkAdmissionState
+  budgetJson: unknown
   checksum: string | null
   chunkEndKey: string
   chunkId: string
   chunkStartKey: string
   completedAt: string | null
   createdAt: string
+  diagnosticsJson: unknown
+  durationMs: number | null
+  estimatedInputRows: number | null
+  estimatedOutputBytes: number | null
+  estimatedOutputRows: number | null
+  estimatedPayloadBytes: number | null
+  estimatedPromptCount: number | null
+  estimatedTempBytes: number | null
   inputDigest: string | null
   inputWatermark: number
   lastError: string | null
   leaseExpiresAt: string | null
   leaseOwner: string | null
+  maxInputRows: number | null
+  maxOutputBytes: number | null
+  maxOutputRows: number | null
+  maxPayloadBytes: number | null
+  maxPromptCount: number | null
+  maxTempBytes: number | null
+  oomCategory: string | null
   outputBaseGeneration: number
+  overBudgetReason: string | null
+  parentChunkId: string | null
   projectId: string | null
   projectionComponent: ReviewServingProjectionComponent
   projectionIdentity: string
+  requestId: string | null
+  retryAfter: string | null
+  retryCount: number
+  snapshotCount: number
+  snapshotId: string | null
+  splitDepth: number
   startedAt: string | null
   status: ReviewServingRebuildChunkStatus
   updatedAt: string
+  workloadClass: string | null
 }
 
 const getReviewServingChunkManifestDatabase = () => {
@@ -79,6 +154,26 @@ const getReviewServingChunkManifestDatabase = () => {
 
 const getReviewServingChunkTimestampLiteral = (value: Date | string) => {
   return value instanceof Date ? getSqlLiteral(value) : `TIMESTAMPTZ ${getSqlLiteral(value)}`
+}
+
+const getNullableReviewServingChunkTimestampLiteral = (value: Date | string | null | undefined) => {
+  return value === null || value === undefined ? 'NULL' : getReviewServingChunkTimestampLiteral(value)
+}
+
+const getOptionalNumberLiteral = (value: number | null | undefined) => {
+  return value === null || value === undefined ? 'NULL' : getSqlLiteral(Math.trunc(value))
+}
+
+const getOptionalRowNumber = (value: number | string | null | undefined) => {
+  return value === null || value === undefined ? null : Number(value)
+}
+
+const getJsonSqlLiteral = (value: unknown) => {
+  return getSqlLiteral(getStableReviewServingJson(value ?? {}))
+}
+
+const getChunkRequestId = (input: ReviewServingRebuildChunkIdentity) => {
+  return input.requestId ?? null
 }
 
 export const getReviewServingRebuildChunkId = (input: ReviewServingRebuildChunkIdentity) => {
@@ -93,6 +188,7 @@ export const getReviewServingRebuildChunkId = (input: ReviewServingRebuildChunkI
         projectId: input.projectId,
         projectionComponent: input.projectionComponent,
         projectionIdentity: input.projectionIdentity,
+        requestId: getChunkRequestId(input),
       }),
     )
     .digest('hex')
@@ -103,24 +199,56 @@ const getReviewServingRebuildChunkManifestFromRow = (
   row: ReviewServingRebuildChunkManifestRow,
 ): ReviewServingRebuildChunkManifest => {
   return {
+    actualInputRows: getOptionalRowNumber(row.actualInputRows),
+    actualOutputBytes: getOptionalRowNumber(row.actualOutputBytes),
+    actualOutputRows: getOptionalRowNumber(row.actualOutputRows),
+    actualPayloadBytes: getOptionalRowNumber(row.actualPayloadBytes),
+    actualPromptCount: getOptionalRowNumber(row.actualPromptCount),
+    actualTempBytes: getOptionalRowNumber(row.actualTempBytes),
+    admissionState: row.admissionState ?? 'admitted',
+    budgetJson: row.budgetJson ?? {},
     checksum: row.checksum,
     chunkEndKey: row.chunkEndKey,
     chunkId: row.chunkId,
     chunkStartKey: row.chunkStartKey,
     completedAt: row.completedAt,
     createdAt: row.createdAt,
+    diagnosticsJson: row.diagnosticsJson ?? {},
+    durationMs: getOptionalRowNumber(row.durationMs),
+    estimatedInputRows: getOptionalRowNumber(row.estimatedInputRows),
+    estimatedOutputBytes: getOptionalRowNumber(row.estimatedOutputBytes),
+    estimatedOutputRows: getOptionalRowNumber(row.estimatedOutputRows),
+    estimatedPayloadBytes: getOptionalRowNumber(row.estimatedPayloadBytes),
+    estimatedPromptCount: getOptionalRowNumber(row.estimatedPromptCount),
+    estimatedTempBytes: getOptionalRowNumber(row.estimatedTempBytes),
     inputDigest: row.inputDigest,
     inputWatermark: Number(row.inputWatermark),
     lastError: row.lastError,
     leaseExpiresAt: row.leaseExpiresAt,
     leaseOwner: row.leaseOwner,
+    maxInputRows: getOptionalRowNumber(row.maxInputRows),
+    maxOutputBytes: getOptionalRowNumber(row.maxOutputBytes),
+    maxOutputRows: getOptionalRowNumber(row.maxOutputRows),
+    maxPayloadBytes: getOptionalRowNumber(row.maxPayloadBytes),
+    maxPromptCount: getOptionalRowNumber(row.maxPromptCount),
+    maxTempBytes: getOptionalRowNumber(row.maxTempBytes),
+    oomCategory: row.oomCategory,
     outputBaseGeneration: Number(row.outputBaseGeneration),
+    overBudgetReason: row.overBudgetReason,
+    parentChunkId: row.parentChunkId,
     projectId: row.projectId,
     projectionComponent: row.projectionComponent,
     projectionIdentity: row.projectionIdentity,
+    requestId: row.requestId,
+    retryAfter: row.retryAfter,
+    retryCount: Number(row.retryCount ?? 0),
+    snapshotCount: Number(row.snapshotCount ?? 1),
+    snapshotId: row.snapshotId,
+    splitDepth: Number(row.splitDepth),
     startedAt: row.startedAt,
     status: row.status,
     updatedAt: row.updatedAt,
+    workloadClass: row.workloadClass,
   }
 }
 
@@ -133,6 +261,7 @@ const getReviewServingRebuildChunkSelect = (input: {tableAlias?: string} = {}) =
   return `
     SELECT
       ${source}.chunk_id AS chunkId,
+      ${source}.request_id AS requestId,
       ${source}.project_id AS projectId,
       ${source}.projection_component AS projectionComponent,
       ${source}.projection_identity AS projectionIdentity,
@@ -142,6 +271,37 @@ const getReviewServingRebuildChunkSelect = (input: {tableAlias?: string} = {}) =
       ${source}.chunk_end_key AS chunkEndKey,
       ${source}.output_base_generation AS outputBaseGeneration,
       ${source}.status,
+      ${source}.parent_chunk_id AS parentChunkId,
+      ${source}.split_depth AS splitDepth,
+      ${source}.snapshot_id AS snapshotId,
+      ${source}.snapshot_count AS snapshotCount,
+      ${source}.retry_count AS retryCount,
+      ${source}.retry_after AS retryAfter,
+      ${source}.oom_category AS oomCategory,
+      ${source}.over_budget_reason AS overBudgetReason,
+      ${source}.estimated_input_rows AS estimatedInputRows,
+      ${source}.max_input_rows AS maxInputRows,
+      ${source}.actual_input_rows AS actualInputRows,
+      ${source}.estimated_output_rows AS estimatedOutputRows,
+      ${source}.max_output_rows AS maxOutputRows,
+      ${source}.actual_output_rows AS actualOutputRows,
+      ${source}.estimated_output_bytes AS estimatedOutputBytes,
+      ${source}.max_output_bytes AS maxOutputBytes,
+      ${source}.actual_output_bytes AS actualOutputBytes,
+      ${source}.estimated_payload_bytes AS estimatedPayloadBytes,
+      ${source}.max_payload_bytes AS maxPayloadBytes,
+      ${source}.actual_payload_bytes AS actualPayloadBytes,
+      ${source}.estimated_prompt_count AS estimatedPromptCount,
+      ${source}.max_prompt_count AS maxPromptCount,
+      ${source}.actual_prompt_count AS actualPromptCount,
+      ${source}.estimated_temp_bytes AS estimatedTempBytes,
+      ${source}.max_temp_bytes AS maxTempBytes,
+      ${source}.actual_temp_bytes AS actualTempBytes,
+      ${source}.duration_ms AS durationMs,
+      ${source}.workload_class AS workloadClass,
+      ${source}.admission_state AS admissionState,
+      ${source}.budget_json AS budgetJson,
+      ${source}.diagnostics_json AS diagnosticsJson,
       ${source}.checksum,
       ${source}.lease_owner AS leaseOwner,
       ${source}.lease_expires_at AS leaseExpiresAt,
@@ -157,6 +317,7 @@ const getReviewServingRebuildChunkSelect = (input: {tableAlias?: string} = {}) =
 const getReviewServingRebuildChunkIdentityPredicate = (input: ReviewServingRebuildChunkIdentity) => {
   return `
     project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
+    AND request_id IS NOT DISTINCT FROM ${getSqlLiteral(getChunkRequestId(input))}
     AND projection_component = ${getSqlLiteral(input.projectionComponent)}
     AND projection_identity = ${getSqlLiteral(input.projectionIdentity)}
     AND input_digest IS NOT DISTINCT FROM ${getSqlLiteral(input.inputDigest)}
@@ -171,8 +332,35 @@ const getReviewServingRebuildChunkClaimPredicate = (input: {now: Date | string},
   const source = tableAlias ? `${tableAlias}.` : ''
 
   return `
-    ${source}status IN ('pending', 'failed')
-    OR (${source}status = 'running' AND ${source}lease_expires_at <= ${getReviewServingChunkTimestampLiteral(input.now)})
+    ${source}admission_state = 'admitted'
+    AND (
+      ${source}status = 'pending'
+      OR (
+        ${source}status = 'failed'
+        AND (
+          ${source}retry_after IS NULL
+          OR ${source}retry_after <= ${getReviewServingChunkTimestampLiteral(input.now)}
+        )
+      )
+      OR (
+        ${source}status = 'running'
+        AND ${source}lease_expires_at <= ${getReviewServingChunkTimestampLiteral(input.now)}
+      )
+    )
+    AND (
+      ${source}request_id IS NULL
+      OR EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_request request
+        WHERE request.request_id = ${source}request_id
+          AND request.status IN ('admitted', 'running')
+          AND request.admission_state = 'admitted'
+          AND (
+            request.retry_after IS NULL
+            OR request.retry_after <= ${getReviewServingChunkTimestampLiteral(input.now)}
+          )
+      )
+    )
   `
 }
 
@@ -274,6 +462,7 @@ export const getNextClaimableReviewServingRebuildChunk = async (
         projectId: row.projectId,
         projectionComponent: row.projectionComponent,
         projectionIdentity: row.projectionIdentity,
+        requestId: row.requestId ?? null,
       }
 }
 
@@ -284,10 +473,12 @@ export const upsertReviewServingRebuildChunkManifests = async (
   await Promise.all(
     inputs.map(async (input) => {
       const chunkId = getReviewServingRebuildChunkId(input)
+      const nowSql = getSqlLiteral(new Date())
 
       await database.run(`
         INSERT INTO app.review_rebuild_chunk_manifest (
           chunk_id,
+          request_id,
           project_id,
           projection_component,
           projection_identity,
@@ -297,10 +488,42 @@ export const upsertReviewServingRebuildChunkManifests = async (
           chunk_end_key,
           output_base_generation,
           status,
+          parent_chunk_id,
+          split_depth,
+          snapshot_id,
+          snapshot_count,
+          retry_count,
+          retry_after,
+          oom_category,
+          over_budget_reason,
+          estimated_input_rows,
+          max_input_rows,
+          actual_input_rows,
+          estimated_output_rows,
+          max_output_rows,
+          actual_output_rows,
+          estimated_output_bytes,
+          max_output_bytes,
+          actual_output_bytes,
+          estimated_payload_bytes,
+          max_payload_bytes,
+          actual_payload_bytes,
+          estimated_prompt_count,
+          max_prompt_count,
+          actual_prompt_count,
+          estimated_temp_bytes,
+          max_temp_bytes,
+          actual_temp_bytes,
+          duration_ms,
+          workload_class,
+          admission_state,
+          budget_json,
+          diagnostics_json,
           checksum,
           updated_at
         ) VALUES (
           ${getSqlLiteral(chunkId)},
+          ${getSqlLiteral(getChunkRequestId(input))},
           ${getSqlLiteral(input.projectId)},
           ${getSqlLiteral(input.projectionComponent)},
           ${getSqlLiteral(input.projectionIdentity)},
@@ -310,13 +533,76 @@ export const upsertReviewServingRebuildChunkManifests = async (
           ${getSqlLiteral(input.chunkEndKey)},
           ${getSqlLiteral(input.outputBaseGeneration)},
           ${getSqlLiteral(input.status ?? 'pending')},
+          ${getSqlLiteral(input.parentChunkId ?? null)},
+          ${getSqlLiteral(input.splitDepth ?? 0)},
+          ${getSqlLiteral(input.snapshotId ?? null)},
+          ${getSqlLiteral(input.snapshotCount ?? 1)},
+          ${getSqlLiteral(input.retryCount ?? 0)},
+          ${getNullableReviewServingChunkTimestampLiteral(input.retryAfter)},
+          ${getSqlLiteral(input.oomCategory ?? null)},
+          ${getSqlLiteral(input.overBudgetReason ?? null)},
+          ${getOptionalNumberLiteral(input.estimatedInputRows)},
+          ${getOptionalNumberLiteral(input.maxInputRows)},
+          ${getOptionalNumberLiteral(input.actualInputRows)},
+          ${getOptionalNumberLiteral(input.estimatedOutputRows)},
+          ${getOptionalNumberLiteral(input.maxOutputRows)},
+          ${getOptionalNumberLiteral(input.actualOutputRows)},
+          ${getOptionalNumberLiteral(input.estimatedOutputBytes)},
+          ${getOptionalNumberLiteral(input.maxOutputBytes)},
+          ${getOptionalNumberLiteral(input.actualOutputBytes)},
+          ${getOptionalNumberLiteral(input.estimatedPayloadBytes)},
+          ${getOptionalNumberLiteral(input.maxPayloadBytes)},
+          ${getOptionalNumberLiteral(input.actualPayloadBytes)},
+          ${getOptionalNumberLiteral(input.estimatedPromptCount)},
+          ${getOptionalNumberLiteral(input.maxPromptCount)},
+          ${getOptionalNumberLiteral(input.actualPromptCount)},
+          ${getOptionalNumberLiteral(input.estimatedTempBytes)},
+          ${getOptionalNumberLiteral(input.maxTempBytes)},
+          ${getOptionalNumberLiteral(input.actualTempBytes)},
+          ${getOptionalNumberLiteral(input.durationMs)},
+          ${getSqlLiteral(input.workloadClass ?? null)},
+          ${getSqlLiteral(input.admissionState ?? 'admitted')},
+          ${getJsonSqlLiteral(input.budgetJson)},
+          ${getJsonSqlLiteral(input.diagnosticsJson)},
           ${getSqlLiteral(input.checksum ?? null)},
-          current_timestamp
+          ${nowSql}
         )
         ON CONFLICT(chunk_id) DO UPDATE SET
+          request_id = CASE
+            WHEN app.review_rebuild_chunk_manifest.status = 'completed' THEN app.review_rebuild_chunk_manifest.request_id
+            ELSE excluded.request_id
+          END,
           status = CASE
             WHEN app.review_rebuild_chunk_manifest.status = 'completed' THEN app.review_rebuild_chunk_manifest.status
             ELSE excluded.status
+          END,
+          admission_state = CASE
+            WHEN app.review_rebuild_chunk_manifest.status = 'completed' THEN app.review_rebuild_chunk_manifest.admission_state
+            ELSE excluded.admission_state
+          END,
+          retry_after = CASE
+            WHEN app.review_rebuild_chunk_manifest.status = 'completed' THEN app.review_rebuild_chunk_manifest.retry_after
+            ELSE excluded.retry_after
+          END,
+          retry_count = CASE
+            WHEN app.review_rebuild_chunk_manifest.status = 'completed' THEN app.review_rebuild_chunk_manifest.retry_count
+            ELSE excluded.retry_count
+          END,
+          oom_category = CASE
+            WHEN app.review_rebuild_chunk_manifest.status = 'completed' THEN app.review_rebuild_chunk_manifest.oom_category
+            ELSE excluded.oom_category
+          END,
+          over_budget_reason = CASE
+            WHEN app.review_rebuild_chunk_manifest.status = 'completed' THEN app.review_rebuild_chunk_manifest.over_budget_reason
+            ELSE excluded.over_budget_reason
+          END,
+          budget_json = CASE
+            WHEN app.review_rebuild_chunk_manifest.status = 'completed' THEN app.review_rebuild_chunk_manifest.budget_json
+            ELSE excluded.budget_json
+          END,
+          diagnostics_json = CASE
+            WHEN app.review_rebuild_chunk_manifest.status = 'completed' THEN app.review_rebuild_chunk_manifest.diagnostics_json
+            ELSE excluded.diagnostics_json
           END,
           checksum = CASE
             WHEN app.review_rebuild_chunk_manifest.status = 'completed' THEN app.review_rebuild_chunk_manifest.checksum
@@ -325,7 +611,7 @@ export const upsertReviewServingRebuildChunkManifests = async (
           lease_owner = CASE WHEN app.review_rebuild_chunk_manifest.status = 'completed' THEN lease_owner ELSE NULL END,
           lease_expires_at = CASE WHEN app.review_rebuild_chunk_manifest.status = 'completed' THEN lease_expires_at ELSE NULL END,
           last_error = CASE WHEN app.review_rebuild_chunk_manifest.status = 'completed' THEN last_error ELSE NULL END,
-          updated_at = current_timestamp
+          updated_at = ${nowSql}
       `)
     }),
   )

@@ -120,7 +120,7 @@ Not allowed after the cut line:
 | Status | Theme | Implement First | Done When |
 |---|---|---|---|
 | [ ] | Legacy path audit and classification | Inventory every caller that writes or depends on legacy review marts, including scripts, workers, routes, warnings, tests, and admin tools. | Each caller is classified as `retire`, `rewire-to-v4`, or `admin-debug-only`, with a test or static guard proving the classification. |
-| [ ] | V4 rebuild request API | Add a durable V4 rebuild request path above chunk manifests that creates projection manifests, chunk manifests, and projector wakeups by project/component/review config. | Operator and automatic refresh requests can ask for component-scoped V4 rebuilds without touching legacy mart phases, and over-budget requests are parked before chunks become claimable. |
+| [~] | V4 rebuild request API | Add a durable V4 rebuild request path above chunk manifests that creates projection manifests, chunk manifests, and projector wakeups by project/component/review config. | Part 1 added `app.review_rebuild_request`, request admission, request-owned chunk fields, retry/over-budget metadata, and claim gating so over-budget request chunks park before claim. Remaining: rewire operator and automatic refresh entrypoints to this API and add projector wakeups. |
 | [ ] | Legacy large rebuild cutover | Replace `projectMartLargeRebuild*` normal execution with V4 rebuild chunk orchestration or retire it from normal scheduling. | No normal code path can run `temp_project_judgment_fact_article`, `getProjectJudgmentFactBatchInsertSql`, or the seven legacy phases as production serving rebuild work. |
 | [ ] | Dirty refresh cutover | Route dirty article/project refresh through delta intake, dirty-work coalescing, component acknowledgements, and V4 projector wakeups. | Dirty project refresh completion is based on V4 watermarks/manifests, not legacy mart refresh completion. |
 | [ ] | Repair and recovery command cutover | Rewire CLI scripts and admin repair controls to enqueue V4 component rebuilds or projector retries. | Commands previously named around project large rebuild or judgment fact repair either become V4 commands or are marked obsolete with tests preventing normal use. |
@@ -328,6 +328,29 @@ The request contract must not store raw all-article ID arrays or make a single
   `prompt_answer_fact`, phase counters, or old large-rebuild labels except inside
   clearly marked admin/debug diagnostics.
 
+## Implementation Progress - 2026-06-23
+
+### Part 1 - V4 Rebuild Request Foundation
+
+- Status: completed and committed as the first manageable implementation slice.
+- Added `0107_reviewServingRebuildRequest.sql` with durable
+  `app.review_rebuild_request` state above chunk manifests.
+- Extended `app.review_rebuild_chunk_manifest` with `request_id`, retry-after,
+  retry count, OOM category, over-budget reason, split/parent/snapshot fields,
+  row/byte/prompt/temp budget fields, workload class, admission state, and
+  diagnostics JSON.
+- Added `reviewServingRebuildRequestRepository.ts` so rebuild/repair/refresh
+  callers can create component-scoped V4 requests and chunk manifests without
+  using legacy phase rows.
+- Updated chunk claim logic so request-owned chunks are claimable only when the
+  parent request is admitted and not cooling down; over-budget chunks are parked
+  before execution.
+- Added focused schema, request, and chunk tests for request admission and
+  over-budget parking.
+- Verification: `bun test src/server/reviewServing/reviewServingSchema.test.ts
+  src/server/reviewServing/reviewServingChunkManifestRepository.test.ts
+  src/server/reviewServing/reviewServingRebuildRequestRepository.test.ts`.
+
 ## JavaScript And TypeScript Rule
 
 Use `effect` for new non-trivial async and server orchestration in V4 rebuild
@@ -347,7 +370,7 @@ retry/backoff. Keep pure transforms and small local handlers as plain functions.
   `admin-debug-only` with test evidence.
 - [ ] Normal rebuild and repair requests create V4 component rebuild requests,
   dirty work, or chunk manifests rather than legacy phase rows.
-- [ ] V4 rebuild requests have durable request IDs, status, retry policy, admission
+- [x] V4 rebuild requests have durable request IDs, status, retry policy, admission
   estimates, over-budget state, diagnostics, and request-to-chunk linkage.
 - [ ] Normal refresh completion is based on V4 component watermarks, manifests,
   and active or last-known-good snapshot state.
@@ -366,7 +389,7 @@ retry/backoff. Keep pure transforms and small local handlers as plain functions.
 - [ ] V4 rebuild chunks are budgeted by rows, bytes, expected temp use, wake time,
   prompt/judgment density, payload size, posting/filter fanout, summary/filter
   option cardinality, snapshot count, timeout, and retry policy.
-- [ ] Over-budget V4 chunks split, park, or quarantine with retry-after diagnostics;
+- [x] Over-budget V4 chunks split, park, or quarantine with retry-after diagnostics;
   repeated OOM cannot hot-loop in the same shape.
 - [ ] Append/import batches and checkpoint operations have explicit OOM admission,
   telemetry, and no retry-loop behavior.

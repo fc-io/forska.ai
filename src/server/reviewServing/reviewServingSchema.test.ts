@@ -15,6 +15,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0103_reviewServingQueueIdentityPrimaryKey.sql',
   '../../db/duckdbMigrations/0105_reviewServingArticleMetadataStatus.sql',
   '../../db/duckdbMigrations/0106_reviewServingRemoveHotSourceMetadata.sql',
+  '../../db/duckdbMigrations/0107_reviewServingRebuildRequest.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -59,6 +60,7 @@ const reviewServingPhase1Tables = [
   'app.review_project_import_delta_cursor',
   'app.review_serving_projector_watermark',
   'app.review_projection_identity_manifest',
+  'app.review_rebuild_request',
   'app.review_rebuild_chunk_manifest',
   'app.review_selected_import_snapshot',
   'app.review_selected_article_import_v4',
@@ -118,6 +120,20 @@ const getTableSql = (tableName: string) => {
   return lastMatch?.[0] ?? ''
 }
 
+const getTableColumnSql = (tableName: string) => {
+  const alterColumnSql = [
+    ...schemaMigrationSql.matchAll(
+      new RegExp(`ALTER TABLE ${escapeRegex(tableName)} ADD COLUMN IF NOT EXISTS [^;]+;`, 'g'),
+    ),
+  ]
+    .map((match) => {
+      return match[0]
+    })
+    .join('\n')
+
+  return `${getTableSql(tableName)}\n${alterColumnSql}`
+}
+
 const getTableColumns = (tableName: string) => {
   return new Set(
     [...getTableSql(tableName).matchAll(/^ {2}([a-z_][\w]*)\s+/gm)].map((match) => {
@@ -146,7 +162,7 @@ const getContractPhysicalColumns = (contract: (typeof reviewServingReadContractL
 }
 
 const getMissingColumns = (tableName: string, columnNames: readonly string[]) => {
-  const tableSql = getTableSql(tableName)
+  const tableSql = getTableColumnSql(tableName)
 
   return columnNames.filter((columnName) => {
     return !new RegExp(`\\b${escapeRegex(columnName)}\\b`).test(tableSql)
@@ -190,6 +206,48 @@ test('Phase 1 schema migration separates logical snapshots from component bases 
   ).toEqual([])
   expect(getMissingColumns('app.review_serving_snapshot_manifest', ['required_components_json'])).toEqual([])
   expect(getMissingColumns('app.review_serving_snapshot_manifest', ['optional_components_json'])).toEqual([])
+})
+
+test('Phase 5B schema migration adds rebuild request admission above chunk manifests', () => {
+  expect(
+    getMissingColumns('app.review_rebuild_request', [
+      'request_id',
+      'project_id',
+      'requested_components_json',
+      'source_watermarks_json',
+      'identity_json',
+      'status',
+      'admission_state',
+      'retry_policy_json',
+      'retry_after',
+      'oom_category',
+      'over_budget_reason',
+      'diagnostics_json',
+    ]),
+  ).toEqual([])
+  expect(
+    getMissingColumns('app.review_rebuild_chunk_manifest', [
+      'request_id',
+      'parent_chunk_id',
+      'split_depth',
+      'snapshot_id',
+      'snapshot_count',
+      'retry_count',
+      'retry_after',
+      'oom_category',
+      'over_budget_reason',
+      'max_input_rows',
+      'max_output_rows',
+      'max_output_bytes',
+      'max_payload_bytes',
+      'max_prompt_count',
+      'max_temp_bytes',
+      'workload_class',
+      'admission_state',
+      'budget_json',
+      'diagnostics_json',
+    ]),
+  ).toEqual([])
 })
 
 test('Phase 1 schema migration keeps raw payloads out of import hot fields', () => {
