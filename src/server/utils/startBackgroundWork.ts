@@ -1,7 +1,4 @@
 import {startDuckdbOwnerConnectionHeartbeat} from './duckdbOwnerConnectionHeartbeat.ts'
-import {shouldCurrentRuntimeRunMartRefreshDrain} from './martRefreshDrainEligibility.ts'
-import {startProjectMartLargeRebuildHeartbeat} from './projectMartLargeRebuildHeartbeat.ts'
-import {startProjectMartRefreshWorkerHeartbeat} from './projectMartRefreshWorkerHeartbeat.ts'
 import {startReviewBulkOperationWorkerHeartbeat} from './reviewBulkOperationWorkerHeartbeat.ts'
 import {startReviewServingProjectorWorkerHeartbeat} from './reviewServingProjectorWorkerHeartbeat.ts'
 import {shouldCurrentServerRunMaintenanceLoops, startServerRuntimeRoleMonitor} from './serverRuntimeRole.ts'
@@ -14,13 +11,6 @@ const startMaintenanceBackgroundWork = () => {
 
   startRequestAttemptCloseoutBackfillScheduler()
   startReviewBulkOperationWorkerHeartbeat()
-
-  if (!shouldCurrentRuntimeRunMartRefreshDrain()) {
-    return
-  }
-
-  startProjectMartRefreshWorkerHeartbeat()
-  startProjectMartLargeRebuildHeartbeat()
   startReviewServingProjectorWorkerHeartbeat()
 }
 

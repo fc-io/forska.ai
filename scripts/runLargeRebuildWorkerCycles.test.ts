@@ -19,6 +19,7 @@ test('runLargeRebuildWorkerCycles CLI returns structured idle summary', () => {
       'scripts/runLargeRebuildWorkerCycles.ts',
       '--worker-id=test-run-large-rebuild-worker-cycles',
       '--max-cycles=3',
+      '--legacy-admin-ack=legacy-large-rebuild',
     ],
     {cwd: projectRoot, env: {...defaultLargeRebuildCommandTestEnv, DUCKDB_PATH: duckdbPath}},
   )
@@ -44,4 +45,18 @@ test('runLargeRebuildWorkerCycles CLI returns structured idle summary', () => {
   expect(response.cycleResults).toEqual([
     {projectId: null, status: 'idle', workerId: 'test-run-large-rebuild-worker-cycles'},
   ])
+})
+
+test('runLargeRebuildWorkerCycles CLI blocks without legacy admin acknowledgement', () => {
+  const result = globalThis.Bun.spawnSync(['bun', 'scripts/runLargeRebuildWorkerCycles.ts'], {
+    cwd: projectRoot,
+    env: {...defaultLargeRebuildCommandTestEnv, DUCKDB_PATH: join(projectRoot, '.tmp', 'unused.duckdb')},
+  })
+
+  expect(result.exitCode).toBe(1)
+  expect(JSON.parse(getLastJsonLine(result.stderr.toString()))).toEqual({
+    command: 'runLargeRebuildWorkerCycles',
+    requiredAck: 'legacy-large-rebuild',
+    status: 'blocked_legacy_admin_ack_required',
+  })
 })

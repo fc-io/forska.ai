@@ -2,9 +2,10 @@ import {hostname} from 'node:os'
 
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {
-  runProjectMartLargeRebuildCycles,
   type ProjectMartLargeRebuildUntil,
+  runProjectMartLargeRebuildCycles,
 } from '../src/server/services/projectMartLargeRebuildCyclesService.ts'
+import {legacyLargeRebuildAckValue, requireLegacyAdminAck} from './legacyAdminAck.ts'
 
 const defaultBatchSize = 1
 const defaultLeaseMs = 30_000
@@ -31,13 +32,22 @@ const getNumberArgValue = (names: string[]) => {
 const getUntil = (): ProjectMartLargeRebuildUntil | undefined => {
   const value = getArgValue(['--until'])
 
-  return value === 'completed' || value === 'failed' || value === 'idle' || value === 'phase-change' || value === 'max-cycles'
+  return value === 'completed'
+    || value === 'failed'
+    || value === 'idle'
+    || value === 'phase-change'
+    || value === 'max-cycles'
     ? value
     : undefined
 }
 
 const runLargeRebuildWorkerCyclesCli = async () => {
-  const workerId = getArgValue(['--workerId', '--worker-id']) ?? `large-rebuild-worker-cycles:${hostname()}:${process.pid}`
+  if (!requireLegacyAdminAck({command: 'runLargeRebuildWorkerCycles', expectedAck: legacyLargeRebuildAckValue})) {
+    return
+  }
+
+  const workerId =
+    getArgValue(['--workerId', '--worker-id']) ?? `large-rebuild-worker-cycles:${hostname()}:${process.pid}`
 
   try {
     const result = await runProjectMartLargeRebuildCycles({
