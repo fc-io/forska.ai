@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-23 - Legacy Judgment Fact Large Rebuild
+
+- Error: DuckDB OOM during the staged background `judgment_fact` large rebuild; the failing shape built `temp_project_judgment_fact_article` from a large inline `VALUES (...)` article list before deleting and reinserting `mart.judgment_fact` rows from raw `app.judgment`.
+- Context: Legacy project mart large-rebuild maintenance path still available after normal review reads moved toward V4 serving contracts.
+- Cause: The legacy phase was chunked by article count but not by prompt density, judgment rows, payload bytes, temp risk, retry behavior, or V4 manifest ownership, so a background rebuild could still scan, hash, delete, and reinsert project-scale fact state under the shared DuckDB cap.
+- Fix: Phase 5B plan now requires retiring or V4-rewiring legacy refresh/rebuild, dirty-refresh, repair/recovery, warning/admin, startup/heartbeat, package-script, and adjacent browser fallback paths; it also adds V4 rebuild request admission, component-specific chunk budgets, retry cooldown/split/quarantine behavior, durable OOM telemetry, and Phase 6 adversarial OOM proof gates.
+- Verification: Five Codex review passes integrated into `DUCK_CQRS_PLAN_PHASE_5B.md`, `DUCK_OOM_FIX_PLAN.md`, and `DUCK_CQRS_PLAN_PHASE_6.md`; implementation and runtime verification remain Phase 5B/Phase 6 work.
+
 ## 2026-06-23 - Review Serving Projector Chunk Claim
 
 - Error: `DuckDB workload budget exceeded for reviewServing.projector.worker: temp spill 11206656 bytes is not allowed` from the rebuild chunk claim query.
