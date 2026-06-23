@@ -1,4 +1,4 @@
-import {spawn} from 'node:child_process'
+import {type ChildProcessWithoutNullStreams, spawn} from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -20,11 +20,12 @@ type Pending = {resolve: (value: unknown) => void; reject: (error: unknown) => v
 
 type Listener = (msg: JsonRpcMessage) => void
 type LifecycleListener = (error: Error) => void
+type CodexKillSignal = Parameters<ChildProcessWithoutNullStreams['kill']>[0]
 
 type CodexAppServerProcess = {
   on: ((event: 'error', listener: (error: Error) => void) => unknown)
     & ((event: 'exit', listener: (code: number | null, signal: string | null) => void) => unknown)
-  kill?: (signal?: string | number) => boolean
+  kill?: (signal?: CodexKillSignal) => boolean
   stderr: {on: (event: 'data', listener: (data: Buffer) => void) => unknown}
   stdin: {write: (data: string) => unknown}
   stdout: {on: (event: 'data', listener: (data: Buffer) => void) => unknown}
@@ -296,6 +297,22 @@ const getCodexCacheTtlStderrEvent = (normalized: string): CodexStderrEvent | nul
     : null
 }
 
+const getCodexModelRefreshStderrEvent = (normalized: string): CodexStderrEvent | null => {
+  const isModelRefreshFailure =
+    normalized.includes('codex_models_manager::manager') && normalized.includes('failed to refresh available models')
+  const isLocalModelsRequestFailure =
+    normalized.includes('/v1/models')
+    && (normalized.includes('stream disconnected before completion')
+      || normalized.includes('error sending request for url'))
+
+  return isModelRefreshFailure && isLocalModelsRequestFailure
+    ? {
+        key: 'codex:model-refresh',
+        message: '[codex] Codex model cache refresh failed; treating as transient Codex cache state.',
+      }
+    : null
+}
+
 const getCodexUpstreamResetStderrEvent = (normalized: string): CodexStderrEvent | null => {
   const hasUnexpectedContentType =
     normalized.includes('unexpected content type') || normalized.includes('unexpectedcontenttype')
@@ -339,6 +356,7 @@ const getCodexTransientStderrEvent = (value: string): CodexStderrEvent | null =>
   return (
     getCodexResponsesWebsocketStderrEvent(normalized)
     ?? getCodexCacheTtlStderrEvent(normalized)
+    ?? getCodexModelRefreshStderrEvent(normalized)
     ?? getCodexUpstreamResetStderrEvent(normalized)
     ?? getCodexUserRejectedToolStderrEvent(normalized)
   )
