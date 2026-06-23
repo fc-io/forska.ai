@@ -463,7 +463,7 @@ test('recoverProjectMartRefreshClaims lists and recovers stale claims only when 
 
   const recovered = JSON.parse(getLastJsonLine(recoverScript.stdout.toString())) as {
     recoverAttempted: boolean
-    recoveryResult: {projectId: string; status: string}
+    recoveryResult: {kind: string; projectIds: string[]; reason: string; requestIds: string[]}
     staleClaims: Array<{projectId: string}>
     status: string
   }
@@ -475,14 +475,28 @@ test('recoverProjectMartRefreshClaims lists and recovers stale claims only when 
       return claim.projectId
     }),
   ).toEqual(['project-recover'])
-  expect(recovered.recoveryResult).toMatchObject({projectId: 'project-recover', status: 'completed'})
+  expect(recovered.recoveryResult).toMatchObject({
+    kind: 'v4_rebuild_request',
+    projectIds: ['project-recover'],
+    reason: 'recoverDirtyRefreshClaims.staleDirtyRefreshClaim',
+  })
+  expect(recovered.recoveryResult.requestIds).toHaveLength(1)
 
   const [state] = runQuery(
     duckdbPath,
     "SELECT refresh_status AS refreshStatus, last_completed_dirty_token AS lastCompletedDirtyToken FROM app.project_mart_refresh_state WHERE project_id = 'project-recover'",
   ) as Array<{lastCompletedDirtyToken: string; refreshStatus: string}>
+  const [request] = runQuery(
+    duckdbPath,
+    "SELECT project_id AS projectId, reason, status FROM app.review_rebuild_request WHERE project_id = 'project-recover'",
+  ) as Array<{projectId: string; reason: string; status: string}>
 
-  expect(state).toEqual({lastCompletedDirtyToken: '1', refreshStatus: 'idle'})
+  expect(state).toEqual({lastCompletedDirtyToken: '0', refreshStatus: 'running'})
+  expect(request).toEqual({
+    projectId: 'project-recover',
+    reason: 'recoverDirtyRefreshClaims.staleDirtyRefreshClaim',
+    status: 'admitted',
+  })
 })
 
 test('runLargeRebuildWorkerOnce CLI advances one staged batch with conservative default batch size', () => {

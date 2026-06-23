@@ -123,10 +123,10 @@ Not allowed after the cut line:
 | [~] | V4 rebuild request API | Add a durable V4 rebuild request path above chunk manifests that creates projection manifests, chunk manifests, and projector wakeups by project/component/review config. | Parts 1-2 added `app.review_rebuild_request`, request admission, request-owned chunk fields, retry/over-budget metadata, claim gating, a shared V4 rebuild request service, and operator request script rewrites. Remaining: automatic refresh entrypoints and projector wakeups. |
 | [ ] | Legacy large rebuild cutover | Replace `projectMartLargeRebuild*` normal execution with V4 rebuild chunk orchestration or retire it from normal scheduling. | No normal code path can run `temp_project_judgment_fact_article`, `getProjectJudgmentFactBatchInsertSql`, or the seven legacy phases as production serving rebuild work. |
 | [ ] | Dirty refresh cutover | Route dirty article/project refresh through delta intake, dirty-work coalescing, component acknowledgements, and V4 projector wakeups. | Dirty project refresh completion is based on V4 watermarks/manifests, not legacy mart refresh completion. |
-| [~] | Repair and recovery command cutover | Rewire CLI scripts and admin repair controls to enqueue V4 component rebuilds or projector retries. | Part 2 rewired `requestProjectLargeRebuild`, `requestReviewServingLargeRebuild`, and `requestJudgmentFactRepair` to enqueue V4 requests and assert no legacy large-rebuild state. Remaining: recovery/quarantine commands and admin controls. |
+| [~] | Repair and recovery command cutover | Rewire CLI scripts and admin repair controls to enqueue V4 component rebuilds or projector retries. | Parts 2 and 4 rewired rebuild/repair request scripts and `recoverDirtyRefreshClaims --recover` to enqueue V4 rebuild requests, while leaving stale legacy state read-only in recovery. Remaining: quarantine commands and admin controls. |
 | [x] | Startup, heartbeat, and package-script cutover | Remove legacy rebuild heartbeats and normal package commands from browser/desktop maintenance startup. | Part 3 removed legacy refresh/large-rebuild heartbeat startup, starts the V4 projector heartbeat from maintenance startup, renamed normal large-rebuild worker package scripts to `legacy-admin-*`, and requires `--legacy-admin-ack=legacy-large-rebuild` for direct legacy worker execution. |
 | [ ] | Progress and warning cutover | Make UI and warning APIs read V4 snapshot, chunk, dirty-work, and projector diagnostics. | Browser and desktop show failed/stale/indexing/unavailable V4 states and never imply a legacy rebuild is the normal freshness source. |
-| [ ] | Warning, health, and admin side-effect removal | Make warning/health/admin status reads report state only and move remediation into explicit V4 actions. | Loading warnings or admin status cannot scan old facts, mark legacy dirty state, or schedule large rebuild repair. |
+| [~] | Warning, health, and admin side-effect removal | Make warning/health/admin status reads report state only and move remediation into explicit V4 actions. | Part 4 made review-warning reads stop scanning `mart.judgment_fact`, stop marking dirty repair state, and stop bootstrapping large rebuilds. Remaining: health/admin status paths and explicit V4 operator actions. |
 | [ ] | Adversarial OOM taxonomy and recovery | Add pass/fail behavior for checkpoint, append/import, V4 chunk/projector, dirty-work intake, cross-project, retry-thrash, and offline-repair OOMs. | Each OOM class has admission, cooldown/split/quarantine, telemetry, and Phase 6 proof requirements. |
 | [ ] | Legacy state cleanup | After caller cutover, delete or freeze obsolete legacy state and phase rows. | No active refresh state is stranded, no last-known-good V4 snapshot is lost, and cleanup is pin-aware. |
 | [ ] | Static and runtime guards | Add tests that fail on legacy SQL shape, broad raw maintenance in normal paths, and unclassified DuckDB work. | CI catches reintroduction of legacy mart writers, unbounded temp tables, inline article `VALUES` batches, raw fact aggregation, and raw fallback in normal flows. |
@@ -390,6 +390,24 @@ The request contract must not store raw all-article ID arrays or make a single
   scripts/runLargeRebuildWorkerCycles.test.ts`; focused ESLint on the touched
   startup, package-script, legacy-admin, and recovery compatibility tests.
 
+### Part 4 - Recovery And Warning Side-Effect Cutover
+
+- Status: completed as the fourth implementation slice.
+- Rewired `scripts/recoverDirtyRefreshClaims.ts --recover` so stale dirty
+  materialization, dirty refresh, and large-rebuild claims create V4
+  `app.review_rebuild_request` rows instead of shelling into legacy refresh or
+  large-rebuild worker scripts.
+- Recovery now leaves legacy stale claim rows as diagnostic state and returns the
+  created V4 request IDs in structured output.
+- Removed the review-warning route's legacy `mart.judgment_fact` missing-row scan
+  and `missingVisibleJudgmentFacts` dirty-state enqueue side effect.
+- Removed warning-route bootstrap of missing serving rows through
+  `requestProjectLargeRebuildIfNoLargeRebuild`; warnings now report stale V4
+  state instead of scheduling old large-rebuild work.
+- Verification: `bun test scripts/projectMartRefreshRecovery.test.ts
+  src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts`;
+  focused ESLint on the touched recovery script and warning route/tests.
+
 ## JavaScript And TypeScript Rule
 
 Use `effect` for new non-trivial async and server orchestration in V4 rebuild
@@ -436,7 +454,7 @@ retry/backoff. Keep pure transforms and small local handlers as plain functions.
   sleep, and repeated operator commands.
 - [ ] V4 rebuild failures preserve the last known-good snapshot and surface
   failed/stale/indexing/unavailable diagnostics without raw fallback.
-- [~] Repair and recovery CLI tests prove V4 work is queued and legacy normal
+- [x] Repair and recovery CLI tests prove V4 work is queued and legacy normal
   rebuilds are not scheduled.
 - [ ] Existing active/failed/idle legacy refresh and large-rebuild rows are migrated,
   frozen, or marked retired so no normal claim path can resume them.
@@ -444,9 +462,10 @@ retry/backoff. Keep pure transforms and small local handlers as plain functions.
   startup cannot mount legacy rebuild cycles after cutover.
 - [x] Package-script static tests prove normal operator entrypoints are V4-rewired
   or explicitly legacy-admin with acknowledgement.
-- [ ] Warning and health route tests prove failed, missing, stale, and candidate V4
+- [~] Warning and health route tests prove failed, missing, stale, and candidate V4
   snapshots are reported without legacy fact scans, dirty repair, or large-rebuild
-  scheduling side effects.
+  scheduling side effects. Review-warning route tests cover this; health/admin
+  routes remain.
 - [ ] Warning/progress UI and APIs report V4 snapshot/chunk/projector diagnostics
   for browser and desktop, and normal review UI does not render legacy phase names
   or old phase counters.

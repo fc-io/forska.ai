@@ -734,7 +734,7 @@ test('reviews warnings expose quarantined article refreshes without pending heal
   expect(body.data.indexing.status).toBe('blocked')
 })
 
-test('reviews warnings queues repair when visible judgments are missing from judgment facts', async () => {
+test('reviews warnings report stale state without queueing repair for missing legacy judgment facts', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
@@ -799,11 +799,11 @@ test('reviews warnings queues repair when visible judgments are missing from jud
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.queuedProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.queuedArticleRefreshCount).toBe(1)
-  expect(body.data.indexing.pendingRefreshCount).toBe(2)
-  expect(body.data.indexing.progressState).toBe('queued')
-  expect(body.data.indexing.status).toBe('refreshing')
+  expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
+  expect(body.data.indexing.queuedArticleRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('stalled')
+  expect(body.data.indexing.status).toBe('stale')
 })
 
 test('reviews warnings report refreshing from ledger and worker progress state', async () => {
@@ -890,7 +890,7 @@ test('reviews warnings count only dirty articles still in live project scope', a
   expect(body.data.indexing.status).toBe('refreshing')
 })
 
-test('reviews warnings queue a large rebuild when scoped articles exist but review serving is missing', async () => {
+test('reviews warnings report stale state without queueing a large rebuild when serving is missing', async () => {
   const projectId = 'project-missing-serving-bootstrap-warning'
 
   await insertProjectFixture(projectId)
@@ -899,11 +899,11 @@ test('reviews warnings queue a large rebuild when scoped articles exist but revi
 
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
-  expect(body.data.indexing.largeRebuild?.progress?.scopeArticleCount).toBe(1)
-  expect(body.data.indexing.pendingRefreshCount).toBe(1)
-  expect(body.data.indexing.progressState).toBe('queued')
-  expect(body.data.indexing.queuedProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.status).toBe('refreshing')
+  expect(body.data.indexing.largeRebuild).toBe(null)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('stalled')
+  expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
+  expect(body.data.indexing.status).toBe('stale')
 })
 
 test('reviews warnings do not bootstrap missing serving rows for archived prompt links', async () => {

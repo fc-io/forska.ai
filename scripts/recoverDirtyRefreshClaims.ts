@@ -1,11 +1,9 @@
+import {requestReviewServingV4Rebuilds} from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 
 type CliOptions = {recover: boolean; yes: boolean}
 
-type RecoveryResult = {
-  command: string
-  result: unknown
-}
+type RecoveryResult = {kind: 'v4_rebuild_request'; projectIds: string[]; reason: string; requestIds: string[]}
 
 type StaleDirtyRefreshClaimRow = {
   activeDirtyToken: number | string
@@ -33,11 +31,7 @@ type StaleLargeRebuildClaimRow = {
   workerId: string | null
 }
 
-type QuarantineBarrierRow = {
-  articleId: string
-  dirtyToken: number | string
-  projectId: string
-}
+type QuarantineBarrierRow = {articleId: string; dirtyToken: number | string; projectId: string}
 
 const getBooleanFlag = (names: string[]) => {
   return process.argv.slice(2).some((argument) => {
@@ -158,82 +152,64 @@ const getLargeRebuildSummary = (rows: StaleLargeRebuildClaimRow[]) => {
 
 const getQuarantineBarrierSummary = (rows: QuarantineBarrierRow[]) => {
   return rows.map((row) => {
-    return {
-      articleId: row.articleId,
-      dirtyToken: toNumber(row.dirtyToken),
-      projectId: row.projectId,
-    }
+    return {articleId: row.articleId, dirtyToken: toNumber(row.dirtyToken), projectId: row.projectId}
   })
 }
 
-const getLastJsonLine = (output: string) => {
-  return output
-    .split(/\r?\n/)
-    .map((line) => {
-      return line.trim()
-    })
-    .filter((line) => {
-      return line.startsWith('{') && line.endsWith('}')
-    })
-    .slice(-1)[0]
+const getUniqueProjectIds = (projectIds: string[]) => {
+  return [...new Set(projectIds)].sort()
 }
 
-const runRecoveryCommand = (command: string, args: string[]) => {
-  const result = globalThis.Bun.spawnSync(['bun', command, ...args], {
-    cwd: process.cwd(),
-    env: {...process.env, SERVER_DUCKDB_OWNER_URL: '', SERVER_ROLE: 'maintenance-worker'},
-    stderr: 'pipe',
-    stdout: 'pipe',
-  })
-  const output = result.stdout.toString().trim()
-  const lastLine = getLastJsonLine(output)
+const queueV4RecoveryRequests = async (params: {projectIds: string[]; reason: string}): Promise<RecoveryResult[]> => {
+  const projectIds = getUniqueProjectIds(params.projectIds)
 
-  if (result.exitCode !== 0 || !lastLine) {
-    throw new Error(result.stderr.toString() || output || `Missing JSON output from ${command}`)
+  if (projectIds.length === 0) {
+    return []
   }
 
-  return JSON.parse(lastLine) as unknown
+  const requests = await requestReviewServingV4Rebuilds(
+    projectIds.map((projectId) => {
+      return {projectId, reason: params.reason}
+    }),
+  )
+
+  return [
+    {
+      kind: 'v4_rebuild_request',
+      projectIds,
+      reason: params.reason,
+      requestIds: requests.map((request) => {
+        return request.requestId
+      }),
+    },
+  ]
 }
 
 const recoverDirtyMaterializations = (rows: StaleDirtyMaterializationClaimRow[]) => {
-  return rows.length === 0
-    ? []
-    : [
-        {
-          command: 'scripts/runProjectMartRefreshWorkerOnce.ts',
-          result: runRecoveryCommand('scripts/runProjectMartRefreshWorkerOnce.ts', [
-            '--worker-id=dirty-refresh-materialization-recovery',
-          ]),
-        },
-      ]
+  return queueV4RecoveryRequests({
+    projectIds: rows.map((row) => {
+      return row.projectId
+    }),
+    reason: 'recoverDirtyRefreshClaims.staleDirtyMaterialization',
+  })
 }
 
 const recoverDirtyRefreshClaims = (rows: StaleDirtyRefreshClaimRow[]) => {
-  return rows.reduce<RecoveryResult[]>((acc, row) => {
-    return [
-      ...acc,
-      {
-        command: 'scripts/runProjectMartRefreshWorkerOnceIsolated.ts',
-        result: runRecoveryCommand('scripts/runProjectMartRefreshWorkerOnceIsolated.ts', [
-          `--project-id=${row.projectId}`,
-          '--worker-id=dirty-refresh-claim-recovery',
-        ]),
-      },
-    ]
-  }, [])
+  return queueV4RecoveryRequests({
+    projectIds: rows.map((row) => {
+      return row.projectId
+    }),
+    reason: 'recoverDirtyRefreshClaims.staleDirtyRefreshClaim',
+  })
 }
 
 const recoverLargeRebuildClaims = (rows: StaleLargeRebuildClaimRow[]) => {
-  return rows.length === 0
-    ? []
-    : [
-        {
-          command: 'scripts/runLargeRebuildWorkerOnce.ts',
-          result: runRecoveryCommand('scripts/runLargeRebuildWorkerOnce.ts', [
-            '--worker-id=dirty-refresh-large-rebuild-recovery',
-          ]),
-        },
-      ]
+  return queueV4RecoveryRequests({
+    projectIds: rows.map((row) => {
+      return row.projectId
+    }),
+    reason: 'recoverDirtyRefreshClaims.staleLargeRebuildClaim',
+  })
 }
 
 export const recoverDirtyRefreshClaimState = async () => {
@@ -269,17 +245,16 @@ export const recoverDirtyRefreshClaimState = async () => {
       throw new Error('Refusing recovery without --yes')
     }
 
-    await getAppDatabaseService().close()
     const recoveryResults = [
-      ...recoverDirtyMaterializations(dirtyMaterializations),
-      ...recoverDirtyRefreshClaims(dirtyRefreshClaims),
-      ...recoverLargeRebuildClaims(largeRebuildClaims),
+      ...(await recoverDirtyMaterializations(dirtyMaterializations)),
+      ...(await recoverDirtyRefreshClaims(dirtyRefreshClaims)),
+      ...(await recoverLargeRebuildClaims(largeRebuildClaims)),
     ]
 
     console.log(
       JSON.stringify({
         recoverAttempted: true,
-        recoveryResult: recoveryResults[0]?.result ?? null,
+        recoveryResult: recoveryResults[0] ?? null,
         recoveryResults,
         staleClaims,
         staleDirtyMaterializations,
