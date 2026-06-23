@@ -14,7 +14,7 @@ Phase execution details live in the phase files below:
 | 3 | [DUCK_CQRS_PLAN_PHASE_3.md](./DUCK_CQRS_PLAN_PHASE_3.md) | Projector core, selected-import projection, serving projections, manifests, and cleanup. |
 | 4 | [DUCK_CQRS_PLAN_PHASE_4.md](./DUCK_CQRS_PLAN_PHASE_4.md) | Production serving reads, route-specific parity validation, bulk/search/export/PDF jobs, and usage migration. |
 | 5 | [DUCK_CQRS_PLAN_PHASE_5.md](./DUCK_CQRS_PLAN_PHASE_5.md) | Final hardening sweep, any remaining raw fallback deletion, desktop hardening, benchmark, and release gates. |
-| 5B | [DUCK_CQRS_PLAN_PHASE_5B.md](./DUCK_CQRS_PLAN_PHASE_5B.md) | Legacy mart refresh, dirty refresh, repair, and large-rebuild cutover to V4 projector/chunk ownership. |
+| 5B | [DUCK_CQRS_PLAN_PHASE_5B.md](./DUCK_CQRS_PLAN_PHASE_5B.md) | Legacy mart refresh, dirty refresh, repair, large-rebuild cutover to V4 projector/chunk ownership, and adversarial maintenance OOM coverage. |
 | 6 | [DUCK_CQRS_PLAN_PHASE_6.md](./DUCK_CQRS_PLAN_PHASE_6.md) | Physical release evidence and final cutover proof. |
 
 When a phase-specific detail conflicts with this master document, update both in
@@ -715,7 +715,7 @@ unclassified DuckDB work.
 | Overlay semantics | Route/service tests for read-your-write overlays. | Row/detail overlays reconcile after projection, while counts/facets/queues/bulk jobs remain snapshot-scoped or explicitly return overlay-aware state. |
 | Route-specific parity | Validation tests and benchmark assertions for parity mode. | Semantic fixtures, sampled safe-size parity, invariants, freshness states, cursors, SQL shape, latency, result bytes, and route states match expected behavior before each production route or flow migrates. |
 | Desktop/proxy | Route-surface/proxy tests for browser and desktop owner paths. | Browser and desktop share the same serving/job/admission behavior and route classifications. |
-| Benchmark | Scripted 10M-article/7-prompt synthetic validation and Phase 6 physical release run. | Phase 5 validates workload shape and release-report fields without claiming physical evidence. Phase 6 runs the true release-scale DuckDB workload with overlap import, dirty materialization, serving refresh, direct rows, filtered postings, article-set hydration, list/detail judgment payloads, human facets/options, named counts across list modes, queue-kind reads, token/prefix search, unavailable/async substring state, bulk substring selection, bulk jobs, PDF/export jobs, and desktop interruption/resume under target memory limits. Validate request-slice diversity, expected count/search/job dimensions, rows scanned ceilings, zero foreground temp spill, latency, RSS, queue, admission, active identities, and repeated small updates proving projectors do not rerun unrelated components. |
+| Benchmark | Scripted 10M-article/7-prompt synthetic validation and Phase 6 physical release run. | Phase 5 validates workload shape and release-report fields without claiming physical evidence. Phase 6 runs the true release-scale DuckDB workload with overlap import, dirty materialization, serving refresh, direct rows, filtered postings, article-set hydration, list/detail judgment payloads, human facets/options, named counts across list modes, queue-kind reads, token/prefix search, unavailable/async substring state, bulk substring selection, bulk jobs, PDF/export jobs, and desktop interruption/resume under target memory limits. Validate request-slice diversity, expected count/search/job dimensions, rows scanned ceilings, zero foreground temp spill, latency, RSS, queue, admission, active identities, repeated small updates proving projectors do not rerun unrelated components, adversarial OOM recovery, and disabled legacy normal rebuild paths. |
 
 Add a shared foreground-SQL assertion helper used by route and SQL-builder tests.
 It should fail if a foreground query contains any forbidden token or non-allowlisted
@@ -743,6 +743,7 @@ non-goals, architecture boundaries, migration inventory, and final cutover gates
 | 3 | [DUCK_CQRS_PLAN_PHASE_3.md](./DUCK_CQRS_PLAN_PHASE_3.md) | Projector core, selected-import projection, serving projections, manifests, and cleanup. | No |
 | 4 | [DUCK_CQRS_PLAN_PHASE_4.md](./DUCK_CQRS_PLAN_PHASE_4.md) | Production route migration to serving readers, durable jobs, route-specific parity validation, and DuckDB usage migration. | Yes, per route after gates pass |
 | 5 | [DUCK_CQRS_PLAN_PHASE_5.md](./DUCK_CQRS_PLAN_PHASE_5.md) | Final hardening sweep, any remaining raw fallback deletion, desktop hardening, and repo-native synthetic validation. | Final implementation verification |
+| 5B | [DUCK_CQRS_PLAN_PHASE_5B.md](./DUCK_CQRS_PLAN_PHASE_5B.md) | Legacy mart refresh/rebuild, dirty refresh, repair/recovery, warning/admin/operator paths, and adversarial maintenance OOM cutover to V4 requests/chunks. | Final maintenance-path cutover |
 | 6 | [DUCK_CQRS_PLAN_PHASE_6.md](./DUCK_CQRS_PLAN_PHASE_6.md) | Physical release evidence and cutover proof for the true 10M run, large desktop interruption, and release-scale delta/compaction budgets. | Final cutover evidence |
 
 Rules for phase coordination:
@@ -750,6 +751,7 @@ Rules for phase coordination:
 - Phase 4 may switch production route handlers one route or flow at a time after route-specific serving, parity, SQL-shape, budget, and relevant browser/desktop gates pass.
 - When a Phase 4 route switches, delete or hard-disable the matching legacy raw path in the same change unless it is explicitly reclassified as admin/maintenance/debug-only.
 - Phase 5 is the final hardening and repo-native synthetic verification sweep, not the first normal-route switch.
+- Phase 5B must retire or V4-rewire legacy maintenance, warning, admin, package-script, recovery, dirty-refresh, and large-rebuild paths before Phase 6 evidence starts.
 - Phase 6 owns physical release evidence; do not treat Phase 5 synthetic validation as a substitute for the true physical release run.
 - Do not preserve raw fallback as a hidden normal path after a route has migrated.
 - If a phase file changes a global contract, term, table name, or cutover gate, update this master document in the same change.
@@ -769,7 +771,8 @@ Rules for phase coordination:
 | `app.review_project_import_delta_cursor` | Projector cursor from route/article import deltas to project/article dirty work. | Track project, route, source delta high-water, lease, status, cursor, and errors. Use this to resolve affected projects in bounded batches. |
 | `app.review_serving_projector_watermark` | Durable source/output state for each review-serving projector dependency. | Track projector name, project/import scope, source high-water marks, output `base_generation` or `patch_watermark`, status, lease, cursor, and error. Advance watermarks atomically with projector output. |
 | `app.review_projection_identity_manifest` | Active narrow identity values for display, search, judgment input content, project scope, per-prompt config, summary, and review config projections. | Stores `projection_component`, `projection_identity`, `base_generation`, `patch_watermark`, patch ranges, input watermarks/digests, definition version, status, and invalidation reason. Readers compose these identities instead of forcing one broad rebuild key. |
-| `app.review_rebuild_chunk_manifest` | Chunk-level rebuild/compaction/repair state. | Key by project, component, projection identity, incrementally maintained input watermark/digest, chunk range, output `base_generation`, status, checksum, lease, and error. Completed unchanged chunks are skipped on rerun without scanning source rows to decide skip eligibility. |
+| `app.review_rebuild_request` | Durable V4 rebuild, repair, and refresh request state above chunk manifests. | Key by request, project, reason, requested components, source watermarks, review/config identities, candidate/base generation, priority, lease, status, admission state, retry policy, retry-after, OOM category, and diagnostics. Over-budget requests are parked before chunks become claimable. |
+| `app.review_rebuild_chunk_manifest` | Chunk-level rebuild/compaction/repair state. | Key by request, project, component, projection identity, incrementally maintained input watermark/digest, chunk range, output `base_generation`, status, checksum/digest, lease, retry-after, parent chunk, split depth, admission state, and error. Include estimated/max/actual input rows, output rows, output bytes, payload bytes, prompt count, snapshot count, temp bytes, and duration so completed unchanged chunks are skipped and oversized chunks split or park before OOM. |
 | `app.review_selected_import_snapshot` | Projector snapshot/checkpoint state for selected import projection. | Track `project_id`, `project_scope_identity`, `selected_import_snapshot_id`, `source_delta_high_water`, cursor fields, status, owner, lease, started/completed timestamps, and errors. It does not depend on model/prompt config. |
 | `app.review_selected_article_import_v4` | Selected-import snapshot rows per project/article. | Key by `project_id, project_scope_identity, selected_import_snapshot_id, article_id`. Store selected IDs and rank/filter/display fields. Promote completed selected-import snapshots atomically. The `_v4` name avoids mutating legacy selected-import state during Phase 1. |
 | `app.review_serving_snapshot_manifest` | Atomic control record for logical review serving snapshots. | Track project, active/candidate/failed state, `snapshot_id`, composed projection identities, component `base_generation` and `patch_watermark` state, optional review config hash, route-required projection completeness, optional projection availability, source watermarks, validation results, selected-import snapshot, last-known-good snapshot, timestamps, and last error. |
@@ -888,6 +891,8 @@ cheap at million-scale.
 - Keep active, candidate, last known-good, and pinned snapshots; clean obsolete base, patch, payload, count, facet, queue, and search rows in bounded batches.
 - Store and compare snapshot state explicitly so foreground routes know whether data is active, stale, indexing, failed, or missing.
 - Health and warning reads choose usable manifests explicitly, such as active or last-known-good/retired state, and do not let newer candidate/failed manifests masquerade as readable snapshots.
+- Warning, health, admin, recovery, and package-script entrypoints must not schedule legacy V3 repair or large-rebuild work as a side effect of status reads or stale-state recovery.
+- Checkpoint, append/import, V4 chunk, retry-thrash, cross-project, and offline-repair OOM classes must have explicit admission, cooldown/split/quarantine, durable telemetry, and release-evidence behavior.
 - Prefer clear cutovers that rebuild obsolete intermediate state over compatibility shims that keep old and new paths alive.
 
 ## Cutover Gate
@@ -900,6 +905,7 @@ complete and no normal product review flow can reach legacy raw fallback.
 
 - Phase 0 through Phase 4 implementation evidence is aligned with the phase files: route/job migration, residual-read classification, parity evidence, browser diagnostics, desktop build evidence, and broad lint evidence are now recorded.
 - Phase 5 implementation hardening and repo-native synthetic validation are recorded as complete, but final cutover remains open for Phase 6.
+- Phase 5B was added after a 2026-06-23 `judgment_fact` large-rebuild OOM exposed remaining legacy maintenance writers and adjacent OOM classes outside normal review routes.
 - No true 10M DuckDB release-scale run, physical row-group/rows-scanned profile, temp-dir/RSS/latency profile, large local desktop sleep/process-kill simulation, or release-scale compaction proof exists in this branch.
 - Master checkboxes that require true physical release evidence remain unchecked. Synthetic fixture/report validation may be checked only as synthetic validation and must not be treated as the physical 10M pass.
 - `OOM_ERRORS.md` already records the Phase 5 desktop DuckDB runtime-memory default; this final audit did not add a new OOM or runtime-memory implementation change.
@@ -910,9 +916,11 @@ complete and no normal product review flow can reach legacy raw fallback.
 - [ ] [Phase 3](./DUCK_CQRS_PLAN_PHASE_3.md) projectors, selected-import projection, serving projections, manifests, and cleanup are complete.
 - [ ] [Phase 4](./DUCK_CQRS_PLAN_PHASE_4.md) production route migration, jobs, search, route-specific parity, and DuckDB usage migration are complete.
 - [x] [Phase 5](./DUCK_CQRS_PLAN_PHASE_5.md) remaining raw fallback deletion, desktop hardening, repo-native synthetic benchmark validation, and repo quality gates are complete.
+- [ ] [Phase 5B](./DUCK_CQRS_PLAN_PHASE_5B.md) legacy refresh/rebuild, repair/recovery, warning/admin/operator, and adversarial maintenance OOM cutover gates are complete.
 - [ ] [Phase 6](./DUCK_CQRS_PLAN_PHASE_6.md) physical release evidence and cutover proof gates are complete.
 - [ ] Route-specific parity validation has passed for semantic fixtures, sampled safe-size parity, named counts, freshness states, cursor behavior, SQL shape, latency, and response-size budgets for every migrated route/flow.
 - [ ] A single normal V4 serving writer owns all `mart.review_*_v4` writes and active V4 snapshot promotion; legacy mart refresh/rebuild paths cannot promote competing V4 review snapshots.
+- [ ] No normal startup, heartbeat, warning, health, admin run control, package script, repair command, recovery command, dirty-refresh worker, or adjacent browser route can schedule legacy mart refresh/rebuild or use old facts as fallback.
 - [ ] Serving manifests classify required versus optional components, and optional search/count work cannot block unrelated review-list activation.
 - [ ] Logical snapshot/base/patch behavior is benchmarked, and routine deltas cannot full-copy project-scale serving rows.
 - [ ] Layered projection identities prove model/prompt/content changes do not rebuild article/import/title/payload/search projections when those inputs are unchanged.
@@ -935,6 +943,7 @@ complete and no normal product review flow can reach legacy raw fallback.
 - [ ] Phase 6 true 10M/7-prompt DuckDB release-scale run records physical row-group/rows-scanned, temp-dir, RSS, latency, queue, admission, and active identity evidence.
 - [ ] Phase 6 large local desktop sleep/process-kill interruption evidence proves safe resume without browser/desktop behavior divergence.
 - [ ] Phase 6 release-scale delta and compaction proof shows routine deltas stay within hot-route budgets.
+- [ ] Phase 6 adversarial OOM proof covers checkpoint, append/import, V4 chunk over-budget, retry thrash, cross-project bursts, warning/admin/recovery side effects, offline repair, and disabled legacy normal rebuild paths.
 
 ## Non-Goals
 
@@ -975,6 +984,7 @@ is treated as complete. This master tracks only final cross-phase gates.
 - [ ] [Phase 3](./DUCK_CQRS_PLAN_PHASE_3.md) quality gates pass.
 - [ ] [Phase 4](./DUCK_CQRS_PLAN_PHASE_4.md) quality gates pass for every migrated route/flow.
 - [x] [Phase 5](./DUCK_CQRS_PLAN_PHASE_5.md) final hardening and repo-native synthetic validation gates pass.
+- [ ] [Phase 5B](./DUCK_CQRS_PLAN_PHASE_5B.md) legacy maintenance cutover and adversarial OOM gates pass.
 - [ ] [Phase 6](./DUCK_CQRS_PLAN_PHASE_6.md) physical release evidence and cutover proof gates pass.
 - [x] 10M-article/7-prompt benchmark fixture or synthetic equivalent is available and documented.
 - [ ] Phase 6 true 10M/7-prompt DuckDB release-scale run passes under target DuckDB memory limits with import, dirty materialization, serving refresh, review list, filters, counts, bulk jobs, export/PDF jobs, and desktop-style interruption/resume.
@@ -984,10 +994,12 @@ is treated as complete. This master tracks only final cross-phase gates.
 - [ ] Phase 6 true physical run records row-group/rows-scanned, temp-dir, RSS, latency, queue, admission, and active project/snapshot/review-config/manifest/count/search identity evidence.
 - [ ] Phase 6 large local desktop sleep/process-kill interruption evidence passes.
 - [ ] Phase 6 release-scale proof shows routine deltas and compaction stay within hot-route budgets.
+- [ ] Phase 6 adversarial OOM and legacy-retirement evidence passes.
 - [ ] Every product review route has a `reviewServingReadContracts.ts` registry entry with workload class, cursor spec, narrow projection identity behavior, budgets, allowed filters, physical filter access strategy, and named fast counts.
 - [ ] Every normal foreground DuckDB call is traceable to a registered read/job contract; unregistered foreground calls fail tests before query execution.
 - [ ] Every row in the DuckDB usage migration inventory is either migrated to serving/admission/job logic or explicitly classified as admin/maintenance/debug-only.
 - [ ] No normal browser or desktop review flow can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
+- [ ] No normal maintenance, warning, health, admin, recovery, startup, or operator path can reach legacy V3 mart rebuild/fallback for review-serving freshness.
 - [x] `bun run lint`
 - [ ] `bun run db:mig` if schema/projection migrations are added.
 - [ ] Add an `OOM_ERRORS.md` entry in the same change as any OOM fix implementation.
