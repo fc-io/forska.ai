@@ -1,5 +1,5 @@
+import {requestReviewServingV4Rebuild} from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
-import {getDuckdbMartMaintenanceService} from '../src/server/services/getDuckdbMartMaintenanceService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 
 type CliOptions = {projectId: string | null; reason: string}
@@ -33,18 +33,35 @@ const requestProjectLargeRebuildCli = async () => {
   }
 
   await withDuckdbMaintenanceAccess('request project large rebuild', async () => {
-    const requestedStates = await getDuckdbMartMaintenanceService().requestProjectLargeRebuild(
-      options.projectId,
-      options.reason,
-    )
+    const [project] = await getAppDatabaseService().queryJson<{id: string}>(`
+      SELECT id
+      FROM app.project
+      WHERE id = '${options.projectId.replaceAll("'", "''")}'
+        AND archived = FALSE
+      LIMIT 1
+    `)
 
-    await getAppDatabaseService().maintenance('checkpoint')
+    if (!project) {
+      console.log(
+        JSON.stringify({
+          projectId: options.projectId,
+          reason: options.reason,
+          requestIds: [],
+          requestedCount: 0,
+          status: 'not_found',
+        }),
+      )
+      return
+    }
+
+    const request = await requestReviewServingV4Rebuild({projectId: options.projectId, reason: options.reason})
     console.log(
       JSON.stringify({
         projectId: options.projectId,
         reason: options.reason,
-        requestedCount: requestedStates.length,
-        status: requestedStates.length === 0 ? 'not_found' : 'requested',
+        requestIds: [request.requestId],
+        requestedCount: 1,
+        status: 'requested',
       }),
     )
   })

@@ -1,5 +1,5 @@
+import {requestReviewServingV4Rebuild} from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
-import {getDuckdbMartMaintenanceService} from '../src/server/services/getDuckdbMartMaintenanceService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 
 type RequestReviewServingLargeRebuildOptions = {includeArchived: boolean; projectId: string | null}
@@ -37,21 +37,21 @@ const getProjectIds = async (options: RequestReviewServingLargeRebuildOptions) =
   })
 }
 
-const requestProjectLargeRebuilds = async (projectIds: string[], index = 0): Promise<number> => {
+const requestProjectLargeRebuilds = async (projectIds: string[], index = 0): Promise<string[]> => {
   const currentProjectId = projectIds[index]
 
   if (!currentProjectId) {
-    return 0
+    return []
   }
 
   console.log(`[requestReviewServingLargeRebuild] requesting ${index + 1}/${projectIds.length} ${currentProjectId}`)
-  const requestedStates = await getDuckdbMartMaintenanceService().requestProjectLargeRebuild(
-    currentProjectId,
-    'requestReviewServingLargeRebuild',
-  )
-  const remainingCount = await requestProjectLargeRebuilds(projectIds, index + 1)
+  const request = await requestReviewServingV4Rebuild({
+    projectId: currentProjectId,
+    reason: 'requestReviewServingLargeRebuild',
+  })
+  const remainingRequestIds = await requestProjectLargeRebuilds(projectIds, index + 1)
 
-  return requestedStates.length + remainingCount
+  return [request.requestId, ...remainingRequestIds]
 }
 
 const main = async () => {
@@ -66,9 +66,15 @@ const main = async () => {
       return
     }
 
-    const requestedCount = await requestProjectLargeRebuilds(projectIds)
-    await getAppDatabaseService().maintenance('checkpoint')
-    console.log(JSON.stringify({projectCount: projectIds.length, requestedCount, status: 'requested'}))
+    const requestIds = await requestProjectLargeRebuilds(projectIds)
+    console.log(
+      JSON.stringify({
+        projectCount: projectIds.length,
+        requestIds,
+        requestedCount: requestIds.length,
+        status: 'requested',
+      }),
+    )
   })
 }
 
