@@ -71,7 +71,7 @@ const seedDatabase = (duckdbPath: string) => {
   }
 }
 
-const runQuery = (duckdbPath: string, sql: string) => {
+const runQuery = (duckdbPath: string, sql: string): unknown => {
   const result = globalThis.Bun.spawnSync(['bun', 'scripts/dbQuerySnapshot.ts', `--sql=${sql}`], {
     cwd: projectRoot,
     env: {...defaultEnv, DUCKDB_PATH: duckdbPath},
@@ -81,20 +81,17 @@ const runQuery = (duckdbPath: string, sql: string) => {
     throw new Error(result.stderr.toString() || result.stdout.toString() || 'query failed')
   }
 
-  return JSON.parse(getLastJsonLine(result.stdout.toString()))
+  return JSON.parse(getLastJsonLine(result.stdout.toString())) as unknown
 }
 
-test('requestJudgmentFactRepair schedules large rebuild work without rewriting mart tables', () => {
+test('requestJudgmentFactRepair schedules V4 repair work without legacy mart rebuild state', () => {
   const duckdbPath = join(projectRoot, '.tmp', `request-judgment-fact-repair-${Date.now()}.duckdb`)
   removeFileIfExists(dirname(duckdbPath))
   seedDatabase(duckdbPath)
 
   const runScript = globalThis.Bun.spawnSync(
     ['bun', 'scripts/requestJudgmentFactRepair.ts', '--project-id=judgment-fact-repair-project'],
-    {
-      cwd: projectRoot,
-      env: {...defaultEnv, DUCKDB_PATH: duckdbPath},
-    },
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
   )
 
   if (runScript.exitCode !== 0) {
@@ -103,23 +100,41 @@ test('requestJudgmentFactRepair schedules large rebuild work without rewriting m
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
     projectIds: string[]
+    requestIds: string[]
     requestedCount: number
     status: string
   }
-  const [refreshState] = runQuery(
+  const [requestRow] = runQuery(
     duckdbPath,
-    "SELECT CAST(dirty_token AS INTEGER) AS dirtyToken, last_request_reason AS reason FROM app.project_mart_refresh_state WHERE project_id = 'judgment-fact-repair-project'",
-  ) as Array<{dirtyToken: number; reason: string}>
+    "SELECT project_id AS projectId, reason, status, admission_state AS admissionState, requested_components_json AS requestedComponentsJson FROM app.review_rebuild_request WHERE project_id = 'judgment-fact-repair-project'",
+  ) as Array<{
+    admissionState: string
+    projectId: string
+    reason: string
+    requestedComponentsJson: string
+    status: string
+  }>
   const [largeRebuildState] = runQuery(
     duckdbPath,
-    "SELECT rebuild_phase AS rebuildPhase, CAST(refresh_token AS INTEGER) AS refreshToken FROM app.project_mart_large_rebuild_state WHERE project_id = 'judgment-fact-repair-project'",
-  ) as Array<{rebuildPhase: string; refreshToken: number}>
+    "SELECT CAST(COUNT(*) AS INTEGER) AS count FROM app.project_mart_large_rebuild_state WHERE project_id = 'judgment-fact-repair-project' AND refresh_token > 0",
+  ) as Array<{count: number}>
 
-  expect(result).toMatchObject({
-    projectIds: ['judgment-fact-repair-project'],
-    requestedCount: 1,
-    status: 'requested',
+  expect(result).toMatchObject({projectIds: ['judgment-fact-repair-project'], requestedCount: 1, status: 'requested'})
+  expect(result.requestIds).toHaveLength(1)
+  expect(requestRow).toMatchObject({
+    admissionState: 'admitted',
+    projectId: 'judgment-fact-repair-project',
+    reason: 'requestJudgmentFactRepair',
+    status: 'admitted',
   })
-  expect(refreshState).toEqual({dirtyToken: 1, reason: 'requestJudgmentFactRepair'})
-  expect(largeRebuildState).toEqual({rebuildPhase: 'project_scope_article', refreshToken: 1})
+  expect(JSON.parse(requestRow.requestedComponentsJson)).toEqual([
+    'judgmentInputContent',
+    'llmStatus',
+    'humanStatus',
+    'queue',
+    'posting',
+    'summary',
+    'payload',
+  ])
+  expect(largeRebuildState).toEqual({count: 0})
 })

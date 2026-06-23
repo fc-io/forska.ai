@@ -120,10 +120,10 @@ Not allowed after the cut line:
 | Status | Theme | Implement First | Done When |
 |---|---|---|---|
 | [ ] | Legacy path audit and classification | Inventory every caller that writes or depends on legacy review marts, including scripts, workers, routes, warnings, tests, and admin tools. | Each caller is classified as `retire`, `rewire-to-v4`, or `admin-debug-only`, with a test or static guard proving the classification. |
-| [~] | V4 rebuild request API | Add a durable V4 rebuild request path above chunk manifests that creates projection manifests, chunk manifests, and projector wakeups by project/component/review config. | Part 1 added `app.review_rebuild_request`, request admission, request-owned chunk fields, retry/over-budget metadata, and claim gating so over-budget request chunks park before claim. Remaining: rewire operator and automatic refresh entrypoints to this API and add projector wakeups. |
+| [~] | V4 rebuild request API | Add a durable V4 rebuild request path above chunk manifests that creates projection manifests, chunk manifests, and projector wakeups by project/component/review config. | Parts 1-2 added `app.review_rebuild_request`, request admission, request-owned chunk fields, retry/over-budget metadata, claim gating, a shared V4 rebuild request service, and operator request script rewrites. Remaining: automatic refresh entrypoints and projector wakeups. |
 | [ ] | Legacy large rebuild cutover | Replace `projectMartLargeRebuild*` normal execution with V4 rebuild chunk orchestration or retire it from normal scheduling. | No normal code path can run `temp_project_judgment_fact_article`, `getProjectJudgmentFactBatchInsertSql`, or the seven legacy phases as production serving rebuild work. |
 | [ ] | Dirty refresh cutover | Route dirty article/project refresh through delta intake, dirty-work coalescing, component acknowledgements, and V4 projector wakeups. | Dirty project refresh completion is based on V4 watermarks/manifests, not legacy mart refresh completion. |
-| [ ] | Repair and recovery command cutover | Rewire CLI scripts and admin repair controls to enqueue V4 component rebuilds or projector retries. | Commands previously named around project large rebuild or judgment fact repair either become V4 commands or are marked obsolete with tests preventing normal use. |
+| [~] | Repair and recovery command cutover | Rewire CLI scripts and admin repair controls to enqueue V4 component rebuilds or projector retries. | Part 2 rewired `requestProjectLargeRebuild`, `requestReviewServingLargeRebuild`, and `requestJudgmentFactRepair` to enqueue V4 requests and assert no legacy large-rebuild state. Remaining: recovery/quarantine commands and admin controls. |
 | [ ] | Startup, heartbeat, and package-script cutover | Remove legacy rebuild heartbeats and normal package commands from browser/desktop maintenance startup. | Production/browser/desktop startup and documented package commands cannot mount legacy rebuild cycles; remaining legacy commands require explicit admin/debug naming and acknowledgement. |
 | [ ] | Progress and warning cutover | Make UI and warning APIs read V4 snapshot, chunk, dirty-work, and projector diagnostics. | Browser and desktop show failed/stale/indexing/unavailable V4 states and never imply a legacy rebuild is the normal freshness source. |
 | [ ] | Warning, health, and admin side-effect removal | Make warning/health/admin status reads report state only and move remediation into explicit V4 actions. | Loading warnings or admin status cannot scan old facts, mark legacy dirty state, or schedule large rebuild repair. |
@@ -351,6 +351,24 @@ The request contract must not store raw all-article ID arrays or make a single
   src/server/reviewServing/reviewServingChunkManifestRepository.test.ts
   src/server/reviewServing/reviewServingRebuildRequestRepository.test.ts`.
 
+### Part 2 - Operator Request Script Cutover
+
+- Status: completed and committed as the second implementation slice.
+- Added `reviewServingV4RebuildRequestService.ts` with default full rebuild and
+  judgment-repair component sets plus conservative request/chunk budgets.
+- Rewired `scripts/requestProjectLargeRebuild.ts` and
+  `scripts/requestReviewServingLargeRebuild.ts` to create V4 rebuild requests
+  instead of writing `app.project_mart_large_rebuild_state`.
+- Rewired `scripts/requestJudgmentFactRepair.ts` so normal repair requires an
+  explicit project selection and enqueues judgment-related V4 components instead
+  of scanning or repairing `mart.judgment_fact`.
+- Updated CLI tests to assert admitted `app.review_rebuild_request` rows and zero
+  legacy `project_mart_large_rebuild_state` request rows.
+- Verification: `bun test scripts/requestReviewServingLargeRebuild.test.ts
+  scripts/requestProjectLargeRebuild.test.ts
+  scripts/requestJudgmentFactRepair.test.ts`; focused ESLint on the touched
+  scripts, tests, and V4 request service.
+
 ## JavaScript And TypeScript Rule
 
 Use `effect` for new non-trivial async and server orchestration in V4 rebuild
@@ -368,7 +386,7 @@ retry/backoff. Keep pure transforms and small local handlers as plain functions.
   legacy mart reads.
 - [ ] Each legacy caller is classified as `retire`, `rewire-to-v4`, or
   `admin-debug-only` with test evidence.
-- [ ] Normal rebuild and repair requests create V4 component rebuild requests,
+- [x] Normal rebuild and repair requests create V4 component rebuild requests,
   dirty work, or chunk manifests rather than legacy phase rows.
 - [x] V4 rebuild requests have durable request IDs, status, retry policy, admission
   estimates, over-budget state, diagnostics, and request-to-chunk linkage.
@@ -397,7 +415,7 @@ retry/backoff. Keep pure transforms and small local handlers as plain functions.
   sleep, and repeated operator commands.
 - [ ] V4 rebuild failures preserve the last known-good snapshot and surface
   failed/stale/indexing/unavailable diagnostics without raw fallback.
-- [ ] Repair and recovery CLI tests prove V4 work is queued and legacy normal
+- [~] Repair and recovery CLI tests prove V4 work is queued and legacy normal
   rebuilds are not scheduled.
 - [ ] Existing active/failed/idle legacy refresh and large-rebuild rows are migrated,
   frozen, or marked retired so no normal claim path can resume them.
