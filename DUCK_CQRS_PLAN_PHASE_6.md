@@ -14,7 +14,7 @@ Collect the physical release evidence that cannot be proven by repo-native synth
 
 ## Prerequisites
 
-- Phases 0 through 5 are complete in the master coordinator.
+- Phases 0 through 5B are complete in the master coordinator.
 - `bun run bench:review-serving-release-gate` passes as synthetic validation before the physical run starts.
 - The release-scale machine, data root, DuckDB path, DuckDB memory limit, DuckDB temp directory, and output evidence directory are chosen before work starts.
 - The evidence bundle records commit SHA, branch, command lines, environment variables, machine RAM, disk free space, report paths, log paths, and operator notes.
