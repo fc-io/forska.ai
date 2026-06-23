@@ -14,6 +14,8 @@ Phase execution details live in the phase files below:
 | 3 | [DUCK_CQRS_PLAN_PHASE_3.md](./DUCK_CQRS_PLAN_PHASE_3.md) | Projector core, selected-import projection, serving projections, manifests, and cleanup. |
 | 4 | [DUCK_CQRS_PLAN_PHASE_4.md](./DUCK_CQRS_PLAN_PHASE_4.md) | Production serving reads, route-specific parity validation, bulk/search/export/PDF jobs, and usage migration. |
 | 5 | [DUCK_CQRS_PLAN_PHASE_5.md](./DUCK_CQRS_PLAN_PHASE_5.md) | Final hardening sweep, any remaining raw fallback deletion, desktop hardening, benchmark, and release gates. |
+| 5B | [DUCK_CQRS_PLAN_PHASE_5B.md](./DUCK_CQRS_PLAN_PHASE_5B.md) | Legacy mart refresh, dirty refresh, repair, and large-rebuild cutover to V4 projector/chunk ownership. |
+| 6 | [DUCK_CQRS_PLAN_PHASE_6.md](./DUCK_CQRS_PLAN_PHASE_6.md) | Physical release evidence and final cutover proof. |
 
 When a phase-specific detail conflicts with this master document, update both in
 the same change and keep this master as the coordination source of truth.

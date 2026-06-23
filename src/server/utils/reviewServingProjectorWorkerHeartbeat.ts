@@ -1,5 +1,3 @@
-import {Effect} from 'effect'
-
 import {runReviewServingProjectorWorker} from '../workers/reviewServingProjectorWorker.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
@@ -20,12 +18,6 @@ const logReviewServingProjectorWorkerError = (error: unknown) => {
     '[reviewServingProjectorWorker] background loop failed',
     {component: reviewServingProjectorWorkerComponent, errorMessage: getErrorMessage(error), event: 'loopFailed'},
   )
-}
-
-const runReviewServingProjectorWorkerEffect = (input: {pollIntervalMs?: number; signal: AbortSignal}) => {
-  return Effect.tryPromise(() => {
-    return runReviewServingProjectorWorker({pollIntervalMs: input.pollIntervalMs, signal: input.signal})
-  })
 }
 
 export const startReviewServingProjectorWorkerHeartbeat = (
@@ -51,18 +43,18 @@ export const startReviewServingProjectorWorkerHeartbeat = (
   )
 
   const startLoop = () => {
-    void Effect.runPromise(
-      runReviewServingProjectorWorkerEffect({pollIntervalMs: options.pollIntervalMs, signal: controller.signal}),
-    ).catch((error) => {
-      logReviewServingProjectorWorkerError(error)
+    void runReviewServingProjectorWorker({pollIntervalMs: options.pollIntervalMs, signal: controller.signal}).catch(
+      (error) => {
+        logReviewServingProjectorWorkerError(error)
 
-      if (stopped || controller.signal.aborted) {
-        return
-      }
+        if (stopped || controller.signal.aborted) {
+          return
+        }
 
-      restartTimer = setTimeout(startLoop, options.pollIntervalMs ?? 0)
-      restartTimer.unref()
-    })
+        restartTimer = setTimeout(startLoop, options.pollIntervalMs ?? 0)
+        restartTimer.unref()
+      },
+    )
   }
 
   startLoop()
