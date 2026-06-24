@@ -187,11 +187,45 @@ const getJsonSqlLiteral = (value: unknown) => {
 }
 
 const activeRebuildChunkStatusSql = "('completed', 'running', 'failed', 'blocked_over_budget', 'quarantined')"
-const rebuildChunkPrerequisiteComponents = [
-  'projectScope',
-  'selectedImport',
-] as const satisfies readonly ReviewServingProjectionComponent[]
-const rebuildChunkPrerequisiteComponentSql = `(${rebuildChunkPrerequisiteComponents.map(getSqlLiteral).join(', ')})`
+const rebuildChunkPrerequisitesByComponent = {
+  display: ['projectScope', 'selectedImport'],
+  humanStatus: ['projectScope', 'display'],
+  judgmentInputContent: ['projectScope'],
+  llmStatus: ['projectScope', 'display', 'judgmentInputContent'],
+  payload: ['projectScope', 'display'],
+  posting: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus'],
+  projectScope: [],
+  queue: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus'],
+  search: ['projectScope'],
+  selectedImport: ['projectScope'],
+  summary: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue'],
+} as const satisfies Record<ReviewServingProjectionComponent, readonly ReviewServingProjectionComponent[]>
+
+const getComponentSqlList = (components: readonly ReviewServingProjectionComponent[]) => {
+  return `(${components.map(getSqlLiteral).join(', ')})`
+}
+
+const getRebuildChunkComponentPrerequisitePredicate = (tableAlias?: string) => {
+  const source = tableAlias ? `${tableAlias}.` : ''
+
+  return Object.entries(rebuildChunkPrerequisitesByComponent)
+    .map(([component, prerequisites]) => {
+      return prerequisites.length === 0
+        ? `${source}projection_component = ${getSqlLiteral(component)}`
+        : `(
+          ${source}projection_component = ${getSqlLiteral(component)}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM app.review_rebuild_chunk_manifest prerequisite
+            WHERE prerequisite.request_id = ${source}request_id
+              AND prerequisite.project_id IS NOT DISTINCT FROM ${source}project_id
+              AND prerequisite.projection_component IN ${getComponentSqlList(prerequisites)}
+              AND prerequisite.status <> 'completed'
+          )
+        )`
+    })
+    .join('\n      OR ')
+}
 
 const getChunkRequestId = (input: ReviewServingRebuildChunkIdentity) => {
   return input.requestId ?? null
@@ -400,15 +434,7 @@ const getReviewServingRebuildChunkClaimPredicate = (input: {now: Date | string},
     )
     AND (
       ${source}request_id IS NULL
-      OR ${source}projection_component IN ${rebuildChunkPrerequisiteComponentSql}
-      OR NOT EXISTS (
-        SELECT 1
-        FROM app.review_rebuild_chunk_manifest prerequisite
-        WHERE prerequisite.request_id = ${source}request_id
-          AND prerequisite.project_id IS NOT DISTINCT FROM ${source}project_id
-          AND prerequisite.projection_component IN ${rebuildChunkPrerequisiteComponentSql}
-          AND prerequisite.status <> 'completed'
-      )
+      OR ${getRebuildChunkComponentPrerequisitePredicate(tableAlias)}
     )
   `
 }

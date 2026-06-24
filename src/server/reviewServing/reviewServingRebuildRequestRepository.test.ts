@@ -32,6 +32,20 @@ type FakeRequestRow = {
   updatedAt: string
 }
 
+type FakeProjectionManifestRow = {
+  baseGeneration: number
+  inputDigest: string | null
+  inputWatermark: number
+  projectionComponent: string
+  projectionIdentity: string
+}
+
+type FakeRequestDatabaseOptions = {
+  activeComponentStateJson?: unknown
+  componentStateJson?: unknown
+  projectionManifestRows?: readonly FakeProjectionManifestRow[]
+}
+
 const getSqlStrings = (statement: string) => {
   return [...statement.matchAll(/'((?:''|[^'])*)'/g)].map((match) => {
     return match[1]?.replaceAll("''", "'") ?? ''
@@ -42,10 +56,16 @@ const getClock = (statements: readonly string[]) => {
   return new Date(2026, 5, 23, 16, statements.length).toISOString()
 }
 
-const createFakeRequestDatabase = () => {
+const getThrownError = async (run: () => Promise<unknown>) => {
+  return run().catch((error: unknown) => {
+    return error instanceof Error ? error : new Error(String(error))
+  })
+}
+
+const createFakeRequestDatabase = (options: FakeRequestDatabaseOptions = {}) => {
   const requests = new Map<string, FakeRequestRow>()
   const statements: string[] = []
-  const componentStateJson = {
+  const componentStateJson = options.componentStateJson ?? {
     optional: [{baseGeneration: 3, component: 'search', patchWatermark: 11, projectionIdentity: 'search:identity-1'}],
     required: [
       {baseGeneration: 2, component: 'display', patchWatermark: 10, projectionIdentity: 'display:identity-1'},
@@ -53,13 +73,57 @@ const createFakeRequestDatabase = () => {
       {baseGeneration: 2, component: 'summary', patchWatermark: 10, projectionIdentity: 'summary:identity-1'},
     ],
   }
-  const activeComponentStateJson = {
+  const activeComponentStateJson = options.activeComponentStateJson ?? {
     optional: [],
     required: [
       {baseGeneration: 4, component: 'payload', patchWatermark: 12, projectionIdentity: 'payload:active-identity-1'},
       {baseGeneration: 4, component: 'summary', patchWatermark: 12, projectionIdentity: 'summary:active-identity-1'},
     ],
   }
+  const projectionManifestRows = options.projectionManifestRows ?? [
+    {
+      baseGeneration: 2,
+      inputDigest: 'display-digest-v1',
+      inputWatermark: 10,
+      projectionComponent: 'display',
+      projectionIdentity: 'display:identity-1',
+    },
+    {
+      baseGeneration: 2,
+      inputDigest: 'payload-digest-v1',
+      inputWatermark: 10,
+      projectionComponent: 'payload',
+      projectionIdentity: 'payload:identity-1',
+    },
+    {
+      baseGeneration: 2,
+      inputDigest: 'summary-digest-v1',
+      inputWatermark: 10,
+      projectionComponent: 'summary',
+      projectionIdentity: 'summary:identity-1',
+    },
+    {
+      baseGeneration: 4,
+      inputDigest: 'payload-active-digest-v1',
+      inputWatermark: 12,
+      projectionComponent: 'payload',
+      projectionIdentity: 'payload:active-identity-1',
+    },
+    {
+      baseGeneration: 4,
+      inputDigest: 'summary-active-digest-v1',
+      inputWatermark: 12,
+      projectionComponent: 'summary',
+      projectionIdentity: 'summary:active-identity-1',
+    },
+    {
+      baseGeneration: 3,
+      inputDigest: 'search-digest-v1',
+      inputWatermark: 11,
+      projectionComponent: 'search',
+      projectionIdentity: 'search:identity-1',
+    },
+  ]
 
   const run = async (statement: string) => {
     statements.push(statement)
@@ -113,50 +177,7 @@ const createFakeRequestDatabase = () => {
     }
 
     if (statement.includes('FROM app.review_projection_identity_manifest')) {
-      return [
-        {
-          baseGeneration: 2,
-          inputDigest: 'display-digest-v1',
-          inputWatermark: 10,
-          projectionComponent: 'display',
-          projectionIdentity: 'display:identity-1',
-        },
-        {
-          baseGeneration: 2,
-          inputDigest: 'payload-digest-v1',
-          inputWatermark: 10,
-          projectionComponent: 'payload',
-          projectionIdentity: 'payload:identity-1',
-        },
-        {
-          baseGeneration: 2,
-          inputDigest: 'summary-digest-v1',
-          inputWatermark: 10,
-          projectionComponent: 'summary',
-          projectionIdentity: 'summary:identity-1',
-        },
-        {
-          baseGeneration: 4,
-          inputDigest: 'payload-active-digest-v1',
-          inputWatermark: 12,
-          projectionComponent: 'payload',
-          projectionIdentity: 'payload:active-identity-1',
-        },
-        {
-          baseGeneration: 4,
-          inputDigest: 'summary-active-digest-v1',
-          inputWatermark: 12,
-          projectionComponent: 'summary',
-          projectionIdentity: 'summary:active-identity-1',
-        },
-        {
-          baseGeneration: 3,
-          inputDigest: 'search-digest-v1',
-          inputWatermark: 11,
-          projectionComponent: 'search',
-          projectionIdentity: 'search:identity-1',
-        },
-      ] as T[]
+      return projectionManifestRows as T[]
     }
 
     if (statement.includes('FROM app.review_rebuild_request')) {
@@ -278,4 +299,75 @@ test('default rebuild request chunks use existing projection identities and real
   expect(joined).toContain("'payload:active-identity-1'")
   expect(joined).not.toContain('component:all')
   expect(joined).not.toContain(':request:rebuild:default-identities')
+})
+
+test('default rebuild request keeps same projection identity across base generations', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    activeComponentStateJson: {
+      optional: [],
+      required: [
+        {baseGeneration: 4, component: 'payload', patchWatermark: 12, projectionIdentity: 'payload:stable-identity'},
+      ],
+    },
+    componentStateJson: {
+      optional: [],
+      required: [
+        {baseGeneration: 2, component: 'payload', patchWatermark: 10, projectionIdentity: 'payload:stable-identity'},
+      ],
+    },
+    projectionManifestRows: [
+      {
+        baseGeneration: 4,
+        inputDigest: 'payload-active-digest-v1',
+        inputWatermark: 12,
+        projectionComponent: 'payload',
+        projectionIdentity: 'payload:stable-identity',
+      },
+      {
+        baseGeneration: 2,
+        inputDigest: 'payload-candidate-digest-v1',
+        inputWatermark: 10,
+        projectionComponent: 'payload',
+        projectionIdentity: 'payload:stable-identity',
+      },
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['payload'],
+      requestId: 'rebuild:stable-identity-generations',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const identityOccurrences = joined.match(/'payload:stable-identity'/g) ?? []
+
+  expect(identityOccurrences).toHaveLength(2)
+  expect(joined).toContain("'payload-active-digest-v1'")
+  expect(joined).toContain("'payload-candidate-digest-v1'")
+})
+
+test('default rebuild request rejects empty chunk expansion', async () => {
+  const {database, statements} = createFakeRequestDatabase({projectionManifestRows: []})
+
+  const error = await getThrownError(() => {
+    return createReviewServingRebuildRequest(
+      {
+        projectId: 'project-v4',
+        reason: 'requestReviewServingLargeRebuild',
+        requestedComponents: ['payload'],
+        requestId: 'rebuild:no-chunks',
+      },
+      database,
+    )
+  })
+
+  expect(error.message).toContain('created no rebuild chunks')
+  expect(statements.join('\n')).toContain('FROM app.review_projection_identity_manifest')
+  expect(statements.join('\n')).not.toContain('INSERT INTO app.review_rebuild_request')
+  expect(statements.join('\n')).not.toContain('INSERT INTO app.review_rebuild_chunk_manifest')
 })

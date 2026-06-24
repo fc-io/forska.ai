@@ -453,10 +453,14 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).toContain("candidate.status = 'failed'")
   expect(statements.join('\n')).toContain("request.status IN ('admitted', 'running')")
   expect(statements.join('\n')).toContain('request.request_id = candidate.request_id')
-  expect(statements.join('\n')).toContain("candidate.projection_component IN ('projectScope', 'selectedImport')")
+  expect(statements.join('\n')).toContain("candidate.projection_component = 'selectedImport'")
+  expect(statements.join('\n')).toContain("candidate.projection_component = 'summary'")
   expect(statements.join('\n')).toContain('FROM app.review_rebuild_chunk_manifest prerequisite')
   expect(statements.join('\n')).toContain('prerequisite.request_id = candidate.request_id')
-  expect(statements.join('\n')).toContain("prerequisite.projection_component IN ('projectScope', 'selectedImport')")
+  expect(statements.join('\n')).toContain("prerequisite.projection_component IN ('projectScope')")
+  expect(statements.join('\n')).toContain(
+    "prerequisite.projection_component IN ('projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue')",
+  )
   expect(statements.join('\n')).toContain("prerequisite.status <> 'completed'")
   expect(statements.join('\n')).toContain("project_id IS NOT DISTINCT FROM 'project-1'")
   expect(statements.join('\n')).toContain('MIN(candidate.updated_at)')
