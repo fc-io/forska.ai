@@ -70,7 +70,7 @@ const runSeed = (duckdbPath: string, sql: string) => {
   }
 }
 
-const runQuery = (duckdbPath: string, sql: string) => {
+const runQuery = <T>(duckdbPath: string, sql: string) => {
   const result = globalThis.Bun.spawnSync(['bun', 'scripts/dbQuerySnapshot.ts', `--sql=${sql}`], {
     cwd: projectRoot,
     env: {...defaultEnv, DUCKDB_PATH: duckdbPath},
@@ -80,7 +80,7 @@ const runQuery = (duckdbPath: string, sql: string) => {
     throw new Error(result.stderr.toString() || result.stdout.toString() || 'query failed')
   }
 
-  return JSON.parse(getLastJsonLine(result.stdout.toString()))
+  return JSON.parse(getLastJsonLine(result.stdout.toString())) as T
 }
 
 test('recoverDirtyRefreshClaims lists dirty materialization, quarantine, refresh, and large rebuild risks', () => {
@@ -177,10 +177,26 @@ test('recoverDirtyRefreshClaims lists dirty materialization, quarantine, refresh
     unresolvedQuarantineBarriers: Array<{projectId: string}>
   }
 
-  expect(result.staleClaims).toEqual([expect.objectContaining({projectId: 'recover-list-project'})])
-  expect(result.staleDirtyMaterializations).toEqual([expect.objectContaining({projectId: 'recover-list-project'})])
-  expect(result.staleLargeRebuildClaims).toEqual([expect.objectContaining({projectId: 'recover-list-project'})])
-  expect(result.unresolvedQuarantineBarriers).toEqual([expect.objectContaining({projectId: 'recover-list-project'})])
+  expect(
+    result.staleClaims.map((row) => {
+      return row.projectId
+    }),
+  ).toEqual(['recover-list-project'])
+  expect(
+    result.staleDirtyMaterializations.map((row) => {
+      return row.projectId
+    }),
+  ).toEqual(['recover-list-project'])
+  expect(
+    result.staleLargeRebuildClaims.map((row) => {
+      return row.projectId
+    }),
+  ).toEqual(['recover-list-project'])
+  expect(
+    result.unresolvedQuarantineBarriers.map((row) => {
+      return row.projectId
+    }),
+  ).toEqual(['recover-list-project'])
 })
 
 test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with explicit confirmation', () => {
@@ -247,16 +263,30 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
     recoverAttempted: boolean
-    recoveryResults: Array<{result: {projectId: string; status: string}}>
+    recoveryResult: {kind: string; projectIds: string[]; reason: string; requestIds: string[]}
+    recoveryResults: Array<{kind: string; projectIds: string[]; reason: string; requestIds: string[]}>
     status: string
   }
-  const [state] = runQuery(
+  const [state] = runQuery<
+    Array<{
+      activeDirtyToken: number
+      lastCompletedDirtyToken: number
+      leaseExpiresAt: string | null
+      refreshStatus: string
+    }>
+  >(
     duckdbPath,
-    "SELECT refresh_status AS refreshStatus, CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken FROM app.project_mart_refresh_state WHERE project_id = 'recover-apply-project'",
-  ) as Array<{lastCompletedDirtyToken: number; refreshStatus: string}>
+    "SELECT refresh_status AS refreshStatus, CAST(active_dirty_token AS INTEGER) AS activeDirtyToken, CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken, lease_expires_at AS leaseExpiresAt FROM app.project_mart_refresh_state WHERE project_id = 'recover-apply-project'",
+  )
 
   expect(result.recoverAttempted).toBe(true)
   expect(result.status).toBe('recovered')
-  expect(result.recoveryResults[0]?.result).toMatchObject({projectId: 'recover-apply-project', status: 'completed'})
-  expect(state).toEqual({lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  expect(result.recoveryResult).toMatchObject({
+    kind: 'v4_rebuild_request',
+    projectIds: ['recover-apply-project'],
+    reason: 'recoverDirtyRefreshClaims.staleDirtyRefreshClaim',
+  })
+  expect(result.recoveryResult.requestIds).toHaveLength(1)
+  expect(result.recoveryResults).toHaveLength(1)
+  expect(state).toEqual({activeDirtyToken: 0, lastCompletedDirtyToken: 1, leaseExpiresAt: null, refreshStatus: 'idle'})
 })

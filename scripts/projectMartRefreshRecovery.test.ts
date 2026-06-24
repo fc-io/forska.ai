@@ -510,14 +510,19 @@ test('recoverProjectMartRefreshClaims lists and recovers stale claims only when 
 
   const [state] = runQuery(
     duckdbPath,
-    "SELECT refresh_status AS refreshStatus, last_completed_dirty_token AS lastCompletedDirtyToken FROM app.project_mart_refresh_state WHERE project_id = 'project-recover'",
-  ) as Array<{lastCompletedDirtyToken: string; refreshStatus: string}>
+    "SELECT refresh_status AS refreshStatus, CAST(active_dirty_token AS INTEGER) AS activeDirtyToken, CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken, lease_expires_at AS leaseExpiresAt FROM app.project_mart_refresh_state WHERE project_id = 'project-recover'",
+  ) as Array<{
+    activeDirtyToken: number
+    lastCompletedDirtyToken: number
+    leaseExpiresAt: string | null
+    refreshStatus: string
+  }>
   const [request] = runQuery(
     duckdbPath,
     "SELECT project_id AS projectId, reason, status FROM app.review_rebuild_request WHERE project_id = 'project-recover'",
   ) as Array<{projectId: string; reason: string; status: string}>
 
-  expect(state).toEqual({lastCompletedDirtyToken: '0', refreshStatus: 'running'})
+  expect(state).toEqual({activeDirtyToken: 0, lastCompletedDirtyToken: 1, leaseExpiresAt: null, refreshStatus: 'idle'})
   expect(request).toEqual({
     projectId: 'project-recover',
     reason: 'recoverDirtyRefreshClaims.staleDirtyRefreshClaim',

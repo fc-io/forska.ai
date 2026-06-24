@@ -1,5 +1,6 @@
 import {requestReviewServingV4Rebuilds} from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
+import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 
 type CliOptions = {recover: boolean; yes: boolean}
 
@@ -160,6 +161,20 @@ const getUniqueProjectIds = (projectIds: string[]) => {
   return [...new Set(projectIds)].sort()
 }
 
+const getIntegerSqlLiteral = (value: number | string) => {
+  const numberValue = Number(value)
+
+  return Number.isFinite(numberValue) ? String(Math.trunc(numberValue)) : '0'
+}
+
+const getRecoveredClaimSqlValues = (rows: StaleDirtyRefreshClaimRow[]) => {
+  return rows
+    .map((row) => {
+      return `(${getSqlLiteral(row.projectId)}, ${getIntegerSqlLiteral(row.dirtyToken)}, ${getIntegerSqlLiteral(row.activeDirtyToken)})`
+    })
+    .join(', ')
+}
+
 const queueV4RecoveryRequests = async (params: {projectIds: string[]; reason: string}): Promise<RecoveryResult[]> => {
   const projectIds = getUniqueProjectIds(params.projectIds)
 
@@ -185,6 +200,36 @@ const queueV4RecoveryRequests = async (params: {projectIds: string[]; reason: st
   ]
 }
 
+const releaseStaleDirtyRefreshClaims = async (rows: StaleDirtyRefreshClaimRow[]) => {
+  if (rows.length === 0) {
+    return
+  }
+
+  await getAppDatabaseService().run(`
+    UPDATE app.project_mart_refresh_state
+    SET
+      active_dirty_token = 0,
+      last_completed_dirty_token = dirty_token,
+      refresh_status = 'idle',
+      last_completed_at = current_timestamp,
+      last_error = NULL,
+      worker_id = NULL,
+      lease_expires_at = NULL,
+      updated_at = current_timestamp
+    WHERE EXISTS (
+        SELECT 1
+        FROM (VALUES ${getRecoveredClaimSqlValues(rows)}) AS recovered_claim(project_id, dirty_token, active_dirty_token)
+        WHERE recovered_claim.project_id = app.project_mart_refresh_state.project_id
+          AND recovered_claim.dirty_token = app.project_mart_refresh_state.dirty_token
+          AND recovered_claim.active_dirty_token = app.project_mart_refresh_state.active_dirty_token
+      )
+      AND refresh_status = 'running'
+      AND lease_expires_at IS NOT NULL
+      AND lease_expires_at < NOW()
+      AND dirty_token > last_completed_dirty_token
+  `)
+}
+
 const recoverDirtyMaterializations = (rows: StaleDirtyMaterializationClaimRow[]) => {
   return queueV4RecoveryRequests({
     projectIds: rows.map((row) => {
@@ -194,13 +239,17 @@ const recoverDirtyMaterializations = (rows: StaleDirtyMaterializationClaimRow[])
   })
 }
 
-const recoverDirtyRefreshClaims = (rows: StaleDirtyRefreshClaimRow[]) => {
-  return queueV4RecoveryRequests({
+const recoverDirtyRefreshClaims = async (rows: StaleDirtyRefreshClaimRow[]) => {
+  const recoveryResults = await queueV4RecoveryRequests({
     projectIds: rows.map((row) => {
       return row.projectId
     }),
     reason: 'recoverDirtyRefreshClaims.staleDirtyRefreshClaim',
   })
+
+  await releaseStaleDirtyRefreshClaims(rows)
+
+  return recoveryResults
 }
 
 const recoverLargeRebuildClaims = (rows: StaleLargeRebuildClaimRow[]) => {

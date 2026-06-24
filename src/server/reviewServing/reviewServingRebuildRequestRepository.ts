@@ -260,8 +260,25 @@ const getDefaultRebuildArticleBounds = async (
       MIN(article_id) AS chunkStartKey,
       MAX(article_id) AS chunkEndKey,
       CAST(COUNT(*) AS INTEGER) AS scopedArticleCount
-    FROM app.project_article
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
+    FROM (
+      SELECT project_article.article_id
+      FROM app.project_article project_article
+      INNER JOIN app.project project ON project.id = project_article.project_id
+      INNER JOIN app.article article ON article.id = project_article.article_id
+      WHERE project_article.project_id = ${getSqlLiteral(input.projectId)}
+        AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+        AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+      UNION
+      SELECT article_import_route.article_id
+      FROM app.project_import_route project_import_route
+      INNER JOIN app.project project ON project.id = project_import_route.project_id
+      INNER JOIN app.article_import_route article_import_route
+        ON article_import_route.import_route_id = project_import_route.import_route_id
+      INNER JOIN app.article article ON article.id = article_import_route.article_id
+      WHERE project_import_route.project_id = ${getSqlLiteral(input.projectId)}
+        AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+        AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+    ) scoped_article
   `)
   const scopedArticleCount = Number(row?.scopedArticleCount ?? 0)
 
