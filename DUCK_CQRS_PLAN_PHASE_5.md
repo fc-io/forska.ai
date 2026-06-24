@@ -8,7 +8,7 @@ Finish deleting any remaining normal raw fallback paths, harden browser/desktop 
 
 ## Cut Line
 
-Final cutover completion happens only after Phases 0 through 6 are complete and every migrated route or flow has passed route-specific parity validation.
+Final cutover completion happens only after Phases 0 through 6, including 5B and 5C, are complete and every migrated route or flow has passed route-specific parity validation.
 
 After final verification, normal product review paths must not reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
 
@@ -183,8 +183,8 @@ Part 3 checklist:
 - Completed Phase 5 gates: Phase 4 prerequisite audit, Part 1 final deletion/static hardening, Part 2 desktop/interruption hardening, desktop DuckDB low-memory default, Part 3 synthetic 10M/7-prompt workload definition, release-report validation, benchmark scope validation, and repo-native benchmark release-gate command.
 - Verified on this audit: `bun test src/server/reviewServing/reviewServingAdjacentRouteSurfaces.test.ts src/server/reviewServing/reviewServingReadContracts.test.ts`, `bun test src/desktop/getDesktopRuntimeConfig.test.ts src/server/reviewServing/reviewServingDesktopInterruptionEvidence.test.ts`, `bun run bench:review-serving-release-gate`, `bun run desktop:build`, and `git diff --check` all passed.
 - OOM/runtime-memory status: Part 2 changed desktop backend defaults to `DUCKDB_MEMORY_LIMIT=6400MiB` when no explicit override is provided, so `OOM_ERRORS.md` now records the runtime-memory implementation entry for this stacked branch.
-- Final closure verdict: Phase 5 implementation and repo-native synthetic validation gates are complete for coordinator review. Final cutover still depends on the master coordinator checklist, including Phase 6 physical release evidence.
-- Remaining open gates before final cutover: see `DUCK_CQRS_PLAN_PHASE_6.md` for the true 10M/7-prompt DuckDB physical run, large local desktop interruption evidence, and release-scale routine-delta/compaction proof.
+- Final closure verdict: Phase 5 implementation and repo-native synthetic validation gates are complete for coordinator review. Final cutover still depends on the master coordinator checklist, including Phase 5C legacy maintenance retirement and Phase 6 physical release evidence.
+- Remaining open gates before final cutover: see `DUCK_CQRS_PLAN_PHASE_5C.md` for final legacy maintenance retirement and `DUCK_CQRS_PLAN_PHASE_6.md` for the true 10M/7-prompt DuckDB physical run, large local desktop interruption evidence, and release-scale routine-delta/compaction proof.
 
 ## Supervisor Audit Pass - 2026-06-20
 
@@ -194,7 +194,7 @@ Part 3 checklist:
 - OOM/runtime-memory status: no new OOM or runtime-memory implementation was added in this pass, so `OOM_ERRORS.md` was not changed. The existing desktop `DUCKDB_MEMORY_LIMIT=6400MiB` entry remains the relevant Phase 5 runtime-memory entry.
 - Verification run in this pass: `bun test src/server/reviewServing/reviewServingAdjacentRouteSurfaces.test.ts src/server/reviewServing/reviewServingReadContracts.test.ts src/server/reviewServing/reviewServingSql.test.ts src/server/reviewServing/reviewServingRouteParityCoverage.test.ts src/server/reviewServing/reviewServingRouteParityEvidence.test.ts src/server/reviewServing/reviewServingAdmission.test.ts src/server/reviewServing/reviewServingReader.test.ts`, `bun test src/desktop/getDesktopRuntimeConfig.test.ts src/server/reviewServing/reviewServingDesktopInterruptionEvidence.test.ts`, `bun run bench:review-serving-release-gate`, `bun test src/services/olap/duckdbOlap.test.ts`, `bun test src/server/reviewServing`, `bun test src/server/routes/ArticlesRoutes.test.ts src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.test.ts`, `bun run desktop:build`, `bun run lint`, and `git diff --check`.
 - Fixes in this pass: corrected Phase 5 lint-release-gate drift in review-serving benchmark/adjacent-route files and route-adjacent tests with formatting-only changes plus safer string assertions for durable PDF request IDs.
-- Remaining open gates before final cutover: see `DUCK_CQRS_PLAN_PHASE_6.md` for the true 10M/7-prompt DuckDB physical run, physical large desktop sleep/process-kill interruption evidence, and proof that routine deltas and compaction stay within hot-route budgets at release scale. Final cutover remains incomplete until Phase 6 passes.
+- Remaining open gates before final cutover: see `DUCK_CQRS_PLAN_PHASE_5C.md` for final legacy maintenance retirement and `DUCK_CQRS_PLAN_PHASE_6.md` for the true 10M/7-prompt DuckDB physical run, physical large desktop sleep/process-kill interruption evidence, and proof that routine deltas and compaction stay within hot-route budgets at release scale. Final cutover remains incomplete until Phase 5C and Phase 6 pass.
 
 ## Quality Gates
 

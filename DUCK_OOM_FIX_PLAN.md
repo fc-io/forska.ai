@@ -14,7 +14,8 @@ Phase execution details live in the phase files below:
 | 3 | [DUCK_CQRS_PLAN_PHASE_3.md](./DUCK_CQRS_PLAN_PHASE_3.md) | Projector core, selected-import projection, serving projections, manifests, and cleanup. |
 | 4 | [DUCK_CQRS_PLAN_PHASE_4.md](./DUCK_CQRS_PLAN_PHASE_4.md) | Production serving reads, route-specific parity validation, bulk/search/export/PDF jobs, and usage migration. |
 | 5 | [DUCK_CQRS_PLAN_PHASE_5.md](./DUCK_CQRS_PLAN_PHASE_5.md) | Final hardening sweep, any remaining raw fallback deletion, desktop hardening, benchmark, and release gates. |
-| 5B | [DUCK_CQRS_PLAN_PHASE_5B.md](./DUCK_CQRS_PLAN_PHASE_5B.md) | Legacy mart refresh, dirty refresh, repair, large-rebuild cutover to V4 projector/chunk ownership, and adversarial maintenance OOM coverage. |
+| 5B | [DUCK_CQRS_PLAN_PHASE_5B.md](./DUCK_CQRS_PLAN_PHASE_5B.md) | V4 rebuild request foundation, operator request rewrites, startup/package-script cutover, recovery rewiring, warning side-effect removal, and focused static guards. |
+| 5C | [DUCK_CQRS_PLAN_PHASE_5C.md](./DUCK_CQRS_PLAN_PHASE_5C.md) | Final legacy maintenance retirement, dirty-refresh/admin/progress cutover, legacy state cleanup, broad guards, and adversarial maintenance OOM closure before physical evidence. |
 | 6 | [DUCK_CQRS_PLAN_PHASE_6.md](./DUCK_CQRS_PLAN_PHASE_6.md) | Physical release evidence and final cutover proof. |
 
 When a phase-specific detail conflicts with this master document, update both in
@@ -743,7 +744,8 @@ non-goals, architecture boundaries, migration inventory, and final cutover gates
 | 3 | [DUCK_CQRS_PLAN_PHASE_3.md](./DUCK_CQRS_PLAN_PHASE_3.md) | Projector core, selected-import projection, serving projections, manifests, and cleanup. | No |
 | 4 | [DUCK_CQRS_PLAN_PHASE_4.md](./DUCK_CQRS_PLAN_PHASE_4.md) | Production route migration to serving readers, durable jobs, route-specific parity validation, and DuckDB usage migration. | Yes, per route after gates pass |
 | 5 | [DUCK_CQRS_PLAN_PHASE_5.md](./DUCK_CQRS_PLAN_PHASE_5.md) | Final hardening sweep, any remaining raw fallback deletion, desktop hardening, and repo-native synthetic validation. | Final implementation verification |
-| 5B | [DUCK_CQRS_PLAN_PHASE_5B.md](./DUCK_CQRS_PLAN_PHASE_5B.md) | Legacy mart refresh/rebuild, dirty refresh, repair/recovery, warning/admin/operator paths, and adversarial maintenance OOM cutover to V4 requests/chunks. | Final maintenance-path cutover |
+| 5B | [DUCK_CQRS_PLAN_PHASE_5B.md](./DUCK_CQRS_PLAN_PHASE_5B.md) | V4 rebuild request foundation, request script rewires, startup/package cutover, recovery rewiring, warning side-effect removal, and focused guards. | Maintenance cutover foundation |
+| 5C | [DUCK_CQRS_PLAN_PHASE_5C.md](./DUCK_CQRS_PLAN_PHASE_5C.md) | Final legacy mart refresh/rebuild, dirty refresh, repair/recovery, warning/health/admin/operator, progress UI, state cleanup, and adversarial maintenance OOM cutover. | Final maintenance-path cutover |
 | 6 | [DUCK_CQRS_PLAN_PHASE_6.md](./DUCK_CQRS_PLAN_PHASE_6.md) | Physical release evidence and cutover proof for the true 10M run, large desktop interruption, and release-scale delta/compaction budgets. | Final cutover evidence |
 
 Rules for phase coordination:
@@ -751,7 +753,8 @@ Rules for phase coordination:
 - Phase 4 may switch production route handlers one route or flow at a time after route-specific serving, parity, SQL-shape, budget, and relevant browser/desktop gates pass.
 - When a Phase 4 route switches, delete or hard-disable the matching legacy raw path in the same change unless it is explicitly reclassified as admin/maintenance/debug-only.
 - Phase 5 is the final hardening and repo-native synthetic verification sweep, not the first normal-route switch.
-- Phase 5B must retire or V4-rewire legacy maintenance, warning, admin, package-script, recovery, dirty-refresh, and large-rebuild paths before Phase 6 evidence starts.
+- Phase 5B provides the V4 request, startup, package-script, recovery, warning-side-effect, and focused guard foundation for legacy maintenance cutover.
+- Phase 5C must retire, block, or V4-rewire remaining legacy maintenance, warning, health, admin, package-script, recovery, dirty-refresh, and large-rebuild paths before Phase 6 evidence starts.
 - Phase 6 owns physical release evidence; do not treat Phase 5 synthetic validation as a substitute for the true physical release run.
 - Do not preserve raw fallback as a hidden normal path after a route has migrated.
 - If a phase file changes a global contract, term, table name, or cutover gate, update this master document in the same change.
@@ -904,8 +907,9 @@ complete and no normal product review flow can reach legacy raw fallback.
 ### Final Cross-Phase Audit - 2026-06-20
 
 - Phase 0 through Phase 4 implementation evidence is aligned with the phase files: route/job migration, residual-read classification, parity evidence, browser diagnostics, desktop build evidence, and broad lint evidence are now recorded.
-- Phase 5 implementation hardening and repo-native synthetic validation are recorded as complete, but final cutover remains open for Phase 6.
-- Phase 5B was added after a 2026-06-23 `judgment_fact` large-rebuild OOM exposed remaining legacy maintenance writers and adjacent OOM classes outside normal review routes.
+- Phase 5 implementation hardening and repo-native synthetic validation are recorded as complete, but final cutover remains open for Phase 5C and Phase 6.
+- Phase 5B was added after a 2026-06-23 `judgment_fact` large-rebuild OOM and is now scoped to the completed V4 request foundation, script/startup/package/recovery/warning-side-effect cutover, and focused guards.
+- Phase 5C now owns the remaining legacy maintenance retirement, admin/progress/dirty-refresh/state cleanup, broad guards, and adversarial maintenance OOM closure before Phase 6 physical evidence.
 - No true 10M DuckDB release-scale run, physical row-group/rows-scanned profile, temp-dir/RSS/latency profile, large local desktop sleep/process-kill simulation, or release-scale compaction proof exists in this branch.
 - Master checkboxes that require true physical release evidence remain unchecked. Synthetic fixture/report validation may be checked only as synthetic validation and must not be treated as the physical 10M pass.
 - `OOM_ERRORS.md` already records the Phase 5 desktop DuckDB runtime-memory default; this final audit did not add a new OOM or runtime-memory implementation change.
@@ -916,7 +920,8 @@ complete and no normal product review flow can reach legacy raw fallback.
 - [ ] [Phase 3](./DUCK_CQRS_PLAN_PHASE_3.md) projectors, selected-import projection, serving projections, manifests, and cleanup are complete.
 - [ ] [Phase 4](./DUCK_CQRS_PLAN_PHASE_4.md) production route migration, jobs, search, route-specific parity, and DuckDB usage migration are complete.
 - [x] [Phase 5](./DUCK_CQRS_PLAN_PHASE_5.md) remaining raw fallback deletion, desktop hardening, repo-native synthetic benchmark validation, and repo quality gates are complete.
-- [ ] [Phase 5B](./DUCK_CQRS_PLAN_PHASE_5B.md) legacy refresh/rebuild, repair/recovery, warning/admin/operator, and adversarial maintenance OOM cutover gates are complete.
+- [x] [Phase 5B](./DUCK_CQRS_PLAN_PHASE_5B.md) V4 rebuild request foundation, request scripts, startup/package cutover, recovery rewiring, warning side-effect removal, and focused guards are complete.
+- [ ] [Phase 5C](./DUCK_CQRS_PLAN_PHASE_5C.md) final legacy maintenance retirement, dirty-refresh/admin/progress cutover, legacy state cleanup, broad guards, and adversarial maintenance OOM closure gates are complete.
 - [ ] [Phase 6](./DUCK_CQRS_PLAN_PHASE_6.md) physical release evidence and cutover proof gates are complete.
 - [ ] Route-specific parity validation has passed for semantic fixtures, sampled safe-size parity, named counts, freshness states, cursor behavior, SQL shape, latency, and response-size budgets for every migrated route/flow.
 - [ ] A single normal V4 serving writer owns all `mart.review_*_v4` writes and active V4 snapshot promotion; legacy mart refresh/rebuild paths cannot promote competing V4 review snapshots.
@@ -943,7 +948,7 @@ complete and no normal product review flow can reach legacy raw fallback.
 - [ ] Phase 6 true 10M/7-prompt DuckDB release-scale run records physical row-group/rows-scanned, temp-dir, RSS, latency, queue, admission, and active identity evidence.
 - [ ] Phase 6 large local desktop sleep/process-kill interruption evidence proves safe resume without browser/desktop behavior divergence.
 - [ ] Phase 6 release-scale delta and compaction proof shows routine deltas stay within hot-route budgets.
-- [ ] Phase 6 adversarial OOM proof covers checkpoint, append/import, V4 chunk over-budget, retry thrash, cross-project bursts, warning/admin/recovery side effects, offline repair, and disabled legacy normal rebuild paths.
+- [ ] Phase 6 adversarial OOM proof covers checkpoint, append/import, V4 chunk over-budget, retry thrash, cross-project bursts, warning/admin/recovery side effects, offline repair, and Phase 5C-disabled legacy normal rebuild paths.
 
 ## Non-Goals
 
@@ -984,7 +989,8 @@ is treated as complete. This master tracks only final cross-phase gates.
 - [ ] [Phase 3](./DUCK_CQRS_PLAN_PHASE_3.md) quality gates pass.
 - [ ] [Phase 4](./DUCK_CQRS_PLAN_PHASE_4.md) quality gates pass for every migrated route/flow.
 - [x] [Phase 5](./DUCK_CQRS_PLAN_PHASE_5.md) final hardening and repo-native synthetic validation gates pass.
-- [ ] [Phase 5B](./DUCK_CQRS_PLAN_PHASE_5B.md) legacy maintenance cutover and adversarial OOM gates pass.
+- [x] [Phase 5B](./DUCK_CQRS_PLAN_PHASE_5B.md) V4 rebuild request foundation and startup/package/recovery/warning-side-effect cutover gates pass.
+- [ ] [Phase 5C](./DUCK_CQRS_PLAN_PHASE_5C.md) final legacy maintenance retirement and adversarial OOM gates pass.
 - [ ] [Phase 6](./DUCK_CQRS_PLAN_PHASE_6.md) physical release evidence and cutover proof gates pass.
 - [x] 10M-article/7-prompt benchmark fixture or synthetic equivalent is available and documented.
 - [ ] Phase 6 true 10M/7-prompt DuckDB release-scale run passes under target DuckDB memory limits with import, dirty materialization, serving refresh, review list, filters, counts, bulk jobs, export/PDF jobs, and desktop-style interruption/resume.
@@ -994,7 +1000,7 @@ is treated as complete. This master tracks only final cross-phase gates.
 - [ ] Phase 6 true physical run records row-group/rows-scanned, temp-dir, RSS, latency, queue, admission, and active project/snapshot/review-config/manifest/count/search identity evidence.
 - [ ] Phase 6 large local desktop sleep/process-kill interruption evidence passes.
 - [ ] Phase 6 release-scale proof shows routine deltas and compaction stay within hot-route budgets.
-- [ ] Phase 6 adversarial OOM and legacy-retirement evidence passes.
+- [ ] Phase 6 adversarial OOM and Phase 5C legacy-retirement evidence passes.
 - [ ] Every product review route has a `reviewServingReadContracts.ts` registry entry with workload class, cursor spec, narrow projection identity behavior, budgets, allowed filters, physical filter access strategy, and named fast counts.
 - [ ] Every normal foreground DuckDB call is traceable to a registered read/job contract; unregistered foreground calls fail tests before query execution.
 - [ ] Every row in the DuckDB usage migration inventory is either migrated to serving/admission/job logic or explicitly classified as admin/maintenance/debug-only.

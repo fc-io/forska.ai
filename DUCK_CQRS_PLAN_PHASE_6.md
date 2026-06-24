@@ -15,7 +15,7 @@ Collect the physical release evidence that cannot be proven by repo-native synth
 
 ## Prerequisites
 
-- Phases 0 through 5B are complete in the master coordinator.
+- Phases 0 through 5C are complete in the master coordinator.
 - `bun run bench:review-serving-release-gate` passes as synthetic validation before the physical run starts.
 - The release-scale machine, data root, DuckDB path, DuckDB memory limit, DuckDB temp directory, and output evidence directory are chosen before work starts.
 - The evidence bundle records commit SHA, branch, command lines, environment variables, machine RAM, disk free space, report paths, log paths, and operator notes.
@@ -129,7 +129,7 @@ Evidence checklist:
 
 Steps:
 
-1. Start from the Phase 5B cutover state with legacy normal rebuild disabled and V4 rebuild requests/chunks enabled.
+1. Start from the Phase 5C cutover state with legacy normal rebuild disabled and V4 rebuild requests/chunks enabled.
 2. Trigger or simulate each adversarial OOM class: checkpoint under heavy writer/temp pressure, append/import burst with large payloads, over-budget V4 chunk, repeated failed chunk retry, cross-project dirty/rebuild burst, stale recovery command, warning/admin remediation path, and offline repair from failed or invalidated runtime state.
 3. Confirm each case is admitted, split, cooled down, parked, quarantined, or rejected before retrying the same unsafe shape.
 4. Confirm last-known-good snapshots remain readable and no failed/missing/stale V4 state schedules a legacy raw/mart rebuild.
@@ -138,7 +138,7 @@ Steps:
 
 Command checklist:
 
-- [ ] Run the repo-native adversarial OOM/recovery test suite added in Phase 5B.
+- [ ] Run the repo-native adversarial OOM/recovery test suite added in Phase 5C.
 - [ ] Run checkpoint pressure proof and save WAL/temp/RSS/checkpoint logs.
 - [ ] Run append/import burst proof and save row/parameter/payload/lane-pressure logs.
 - [ ] Run V4 chunk over-budget and retry-thrash proof and save request/chunk state.
