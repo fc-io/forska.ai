@@ -732,11 +732,11 @@ test('reviews warnings fold V4 rebuild chunks into visible progress', async () =
   expect(response.status).toBe(200)
   expect(body.data.indexing.activeWorkCount).toBe(1)
   expect(body.data.indexing.inFlightRefreshCount).toBe(1)
-  expect(body.data.indexing.oldestQueuedAt).toBe('2026-04-02 11:59:00+00')
-  expect(body.data.indexing.pendingRefreshCount).toBe(3)
-  expect(body.data.indexing.progressState).toBe('processing')
-  expect(body.data.indexing.queuedRefreshCount).toBe(2)
-  expect(body.data.indexing.status).toBe('refreshing')
+  expect(body.data.indexing.oldestQueuedAt).toBe('2026-04-02 12:00:00+00')
+  expect(body.data.indexing.pendingRefreshCount).toBe(2)
+  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.queuedRefreshCount).toBe(1)
+  expect(body.data.indexing.status).toBe('failed')
 })
 
 test('reviews warnings search diagnostic ignores active snapshots for older review configs', async () => {

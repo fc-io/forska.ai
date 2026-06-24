@@ -867,16 +867,109 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   expect(joined).toContain("article_id <= 'article-099'")
 })
 
-test('base rebuild chunks complete without being retried as unsupported', async () => {
-  const runningChunk = {
-    ...chunkManifest,
-    checksum: 'checksum-project-scope',
-    projectionComponent: 'projectScope' as const,
-  }
+test('base rebuild chunks regenerate project scope and selected import state before completion', async () => {
   const statements: string[] = []
+  const projectScopeChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    chunkId: 'chunk-project-scope',
+    checksum: null,
+    inputWatermark: 9,
+    outputBaseGeneration: 7,
+    projectionComponent: 'projectScope',
+    projectionIdentity: 'projectScope:project-1',
+  }
+  const selectedImportChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    chunkId: 'chunk-selected-import',
+    checksum: null,
+    inputWatermark: 9,
+    outputBaseGeneration: 7,
+    projectionComponent: 'selectedImport',
+    projectionIdentity: 'selectedImport:project-1',
+  }
+  const componentState = {
+    optional: [],
+    required: [
+      {
+        baseGeneration: '7',
+        component: 'projectScope',
+        patchWatermark: '9',
+        projectionIdentity: 'projectScope:project-1',
+      },
+      {
+        baseGeneration: '7',
+        component: 'selectedImport',
+        patchWatermark: '9',
+        projectionIdentity: 'selectedImport:project-1',
+      },
+      {baseGeneration: '7', component: 'display', patchWatermark: '9', projectionIdentity: 'display:project-1'},
+      {baseGeneration: '7', component: 'llmStatus', patchWatermark: '9', projectionIdentity: 'llmStatus:project-1'},
+      {baseGeneration: '7', component: 'humanStatus', patchWatermark: '9', projectionIdentity: 'humanStatus:project-1'},
+      {baseGeneration: '7', component: 'posting', patchWatermark: '9', projectionIdentity: 'posting:project-1'},
+      {baseGeneration: '7', component: 'summary', patchWatermark: '9', projectionIdentity: 'summary:project-1'},
+      {baseGeneration: '7', component: 'payload', patchWatermark: '9', projectionIdentity: 'payload:project-1'},
+    ],
+  }
+  let activeChunk = projectScopeChunk
   const database: TestDatabase = {
-    queryJson: async <T>() => {
-      return [runningChunk] as T[]
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+        return [activeChunk] as T[]
+      }
+
+      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+        return [
+          {
+            baseGeneration: activeChunk.outputBaseGeneration,
+            definitionVersion: `${activeChunk.projectionComponent}-v1`,
+            inputDigest: activeChunk.inputDigest,
+            inputWatermark: activeChunk.inputWatermark,
+            inputWatermarksJson: {},
+            invalidationReason: activeChunk.inputDigest,
+            manifestId: `manifest-${activeChunk.projectionComponent}`,
+            patchRangeEnd: activeChunk.inputWatermark,
+            patchRangeStart: activeChunk.inputWatermark,
+            patchWatermark: activeChunk.inputWatermark,
+            projectId: activeChunk.projectId,
+            projectionComponent: activeChunk.projectionComponent,
+            projectionIdentity: activeChunk.projectionIdentity,
+            promptConfigHash: null,
+            reviewConfigHash: 'review-config-1',
+            status: 'candidate',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return [
+          {
+            componentStateJson: componentState,
+            reviewConfigHash: 'review-config-1',
+            selectedImportSnapshotId: 'selected-import-snapshot-1',
+            snapshotId: 'snapshot-base-rebuild-1',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.review_selected_import_snapshot')) {
+        return [{cursorJson: null, sourceDeltaHighWater: 9, status: 'completed'}] as T[]
+      }
+
+      if (statement.includes('WITH selected_import_candidates')) {
+        return [] as T[]
+      }
+
+      if (statement.includes('FROM mart.project_scope_article')) {
+        return [{actualChecksum: 'checksum-project-scope', actualCount: 1}] as T[]
+      }
+
+      if (statement.includes('WITH output_row')) {
+        return [{actualChecksum: 'checksum-selected-import', actualCount: 1}] as T[]
+      }
+
+      return [] as T[]
     },
     run: async (statement: string) => {
       statements.push(statement)
@@ -885,11 +978,26 @@ test('base rebuild chunks complete without being retried as unsupported', async 
       return operation(database)
     },
   }
-  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
-    {chunk: runningChunk, leaseOwner: 'worker-1'},
+  const projectScopeResult = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: projectScopeChunk, leaseOwner: 'worker-1'},
     database,
   )
+  activeChunk = selectedImportChunk
+  const selectedImportResult = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: selectedImportChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const joined = statements.join('\n')
 
-  expect(result).toEqual({status: 'completed'})
-  expect(statements.join('\n')).toContain("status = 'completed'")
+  expect(projectScopeResult).toEqual({status: 'completed'})
+  expect(selectedImportResult).toEqual({status: 'completed'})
+  expect(joined).toContain('DELETE FROM mart.project_scope_article')
+  expect(joined).toContain('INSERT INTO mart.project_scope_article')
+  expect(joined).toContain('projectScope.rebuild')
+  expect(joined).toContain('DELETE FROM app.review_selected_article_import_v4')
+  expect(joined).toContain('DELETE FROM app.review_selected_import_snapshot')
+  expect(joined).toContain('WITH selected_import_candidates')
+  expect(joined).toContain('selectedImport.rebuild')
+  expect(joined).toContain("checksum = 'checksum-project-scope'")
+  expect(joined).toContain("checksum = 'checksum-selected-import'")
 })

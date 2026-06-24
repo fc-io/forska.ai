@@ -23,6 +23,7 @@ import {reviewServingListModes, type ReviewServingProjectionComponent} from '../
 import {
   completeReviewServingDirtyWorkClaims,
   releaseReviewServingDirtyWorkClaims,
+  type ReviewServingDirtyWorkClaim,
 } from '../reviewServing/reviewServingDirtyWorkService.ts'
 import {
   projectReviewServingDisplayBaseRows,
@@ -370,6 +371,16 @@ const getSnapshotIdPredicate = (snapshotIds: readonly string[]) => {
   return snapshotIds.length === 0
     ? 'FALSE'
     : `snapshot_id IN (${snapshotIds
+        .map((snapshotId) => {
+          return getSqlLiteral(snapshotId)
+        })
+        .join(', ')})`
+}
+
+const getSelectedImportSnapshotIdPredicate = (snapshotIds: readonly string[]) => {
+  return snapshotIds.length === 0
+    ? 'FALSE'
+    : `selected_import_snapshot_id IN (${snapshotIds
         .map((snapshotId) => {
           return getSqlLiteral(snapshotId)
         })
@@ -1233,20 +1244,311 @@ const runJudgmentInputContentRebuildChunk = async (
   )
 }
 
-const runAlreadyMaterializedRebuildChunk = async (
-  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
-  database: ReviewServingChunkManifestRepositoryDatabase,
+const getRebuildChunkProjectClaim = (input: {
+  chunk: ReviewServingRebuildChunkManifest
+  dirtyKind: string
+  sourcePartition: string
+}): ReviewServingDirtyWorkClaim => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+
+  return {
+    articleId: null,
+    dirtyKind: input.dirtyKind,
+    dirtyRangeEnd: null,
+    dirtyRangeStart: null,
+    dirtyWorkId: `rebuild:${input.chunk.chunkId}`,
+    firstSourceHighWaterMark: input.chunk.inputWatermark,
+    latestDeltaId: input.chunk.chunkId,
+    latestSourceHighWaterMark: input.chunk.inputWatermark,
+    projectId,
+    projectionComponent: input.chunk.projectionComponent,
+    projectionIdentity: input.chunk.projectionIdentity,
+    scopeId: projectId,
+    scopeKind: 'project',
+    sourcePartition: input.sourcePartition,
+    status: 'running',
+  }
+}
+
+const getProjectScopeRebuildChunkOutputChecksum = async (
+  input: {chunk: ReviewServingRebuildChunkManifest},
+  database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
-  const checksum = input.chunk.checksum ?? `${input.chunk.projectionComponent}:${input.chunk.chunkId}`
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256(COALESCE(string_agg(
+        CAST(article_id AS VARCHAR) || ':' ||
+        CAST(in_curated_scope AS VARCHAR) || ':' ||
+        CAST(in_route_scope AS VARCHAR) || ':' ||
+        COALESCE(CAST(article_created_at AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(article_updated_at AS VARCHAR), ''),
+        '|' ORDER BY article_id
+      ), '')) AS actualChecksum
+    FROM mart.project_scope_article
+    WHERE project_id = ${getSqlLiteral(projectId)}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const writeProjectScopeRebuildChunkRows = async (
+  input: {chunk: ReviewServingRebuildChunkManifest},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+
+  await database.run(`
+    DELETE FROM mart.project_scope_article
+    WHERE project_id = ${getSqlLiteral(projectId)};
+    INSERT INTO mart.project_scope_article (
+      project_id,
+      article_id,
+      in_curated_scope,
+      in_route_scope,
+      article_created_at,
+      article_updated_at
+    )
+    WITH route_scope AS (
+      SELECT
+        project_import_route.project_id,
+        article_import_route.article_id,
+        TRUE AS in_route_scope,
+        FALSE AS in_curated_scope
+      FROM app.project_import_route project_import_route
+      INNER JOIN app.article_import_route article_import_route
+        ON article_import_route.import_route_id = project_import_route.import_route_id
+      WHERE project_import_route.project_id = ${getSqlLiteral(projectId)}
+    ),
+    curated_scope AS (
+      SELECT
+        project_article.project_id,
+        project_article.article_id,
+        FALSE AS in_route_scope,
+        TRUE AS in_curated_scope
+      FROM app.project_article project_article
+      WHERE project_article.project_id = ${getSqlLiteral(projectId)}
+    ),
+    combined_scope AS (
+      SELECT * FROM route_scope
+      UNION ALL
+      SELECT * FROM curated_scope
+    ),
+    aggregated_scope AS (
+      SELECT
+        project_id,
+        article_id,
+        COALESCE(BOOL_OR(in_curated_scope), FALSE) AS in_curated_scope,
+        COALESCE(BOOL_OR(in_route_scope), FALSE) AS in_route_scope
+      FROM combined_scope
+      GROUP BY project_id, article_id
+    )
+    SELECT
+      aggregated_scope.project_id,
+      aggregated_scope.article_id,
+      aggregated_scope.in_curated_scope,
+      aggregated_scope.in_route_scope,
+      article.article_created_at,
+      article.article_updated_at
+    FROM aggregated_scope
+    INNER JOIN app.project project
+      ON project.id = aggregated_scope.project_id
+      AND project.archived = FALSE
+    INNER JOIN app.article article ON article.id = aggregated_scope.article_id
+    WHERE aggregated_scope.project_id = ${getSqlLiteral(projectId)}
+      AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+      AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+  `)
+}
+
+const runProjectScopeRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
+  const claim = getRebuildChunkProjectClaim({
+    chunk: input.chunk,
+    dirtyKind: 'projectScope.rebuild',
+    sourcePartition: `projectScope:${projectId}`,
+  })
 
   return runValidatedRebuildChunkOutput(
     {
-      chunk: input.chunk,
-      leaseOwner: input.leaseOwner,
-      validateOutput: async () => {
-        return {actualChecksum: checksum, expectedChecksum: checksum}
+      ...input,
+      validateOutput: async (tx) => {
+        const checksum = await getProjectScopeRebuildChunkOutputChecksum({chunk: input.chunk}, tx)
+
+        return {
+          actualChecksum: checksum.actualChecksum,
+          actualCount: checksum.actualCount,
+          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
+        }
       },
-      writeOutput: async () => {},
+      writeOutput: async (tx) => {
+        await writeProjectScopeRebuildChunkRows({chunk: input.chunk}, tx)
+        await projectReviewServingProjectScopePatches(
+          {
+            baseGeneration: input.chunk.outputBaseGeneration,
+            claims: [claim],
+            definitionVersion: manifest.definitionVersion,
+            projectId,
+            projectionIdentity: input.chunk.projectionIdentity,
+          },
+          getChunkProjectorDatabase(tx),
+        )
+      },
+    },
+    database,
+  )
+}
+
+const getSelectedImportRebuildChunkOutputChecksum = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; selectedImportSnapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    WITH output_row AS (
+      SELECT
+        'base:' || CAST(selected_import_snapshot_id AS VARCHAR) || ':' || CAST(article_id AS VARCHAR) AS row_key,
+        COALESCE(CAST(import_route_id AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(source_record_key AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(selected_rank_key AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(selected_rank_numeric AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(publication_year AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(tombstone AS VARCHAR), '') AS row_value
+      FROM app.review_selected_article_import_v4
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND ${getSelectedImportSnapshotIdPredicate(input.selectedImportSnapshotIds)}
+      UNION ALL
+      SELECT
+        'patch:' || CAST(selected_import_snapshot_id AS VARCHAR) || ':' || CAST(patch_watermark AS VARCHAR) || ':' || CAST(article_id AS VARCHAR) AS row_key,
+        COALESCE(CAST(import_route_id AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(selected_rank_key AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(selected_rank_numeric AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(publication_year AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(tombstone AS VARCHAR), '') AS row_value
+      FROM mart.review_selected_import_patch_v4
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND ${getSelectedImportSnapshotIdPredicate(input.selectedImportSnapshotIds)}
+    )
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256(COALESCE(string_agg(row_key || ':' || row_value, '|' ORDER BY row_key), '')) AS actualChecksum
+    FROM output_row
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const resetSelectedImportSnapshotForRebuild = async (
+  input: {projectId: string; projectScopeIdentity: string; selectedImportSnapshotId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  await database.run(`
+    DELETE FROM mart.review_selected_import_patch_v4
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)};
+    DELETE FROM app.review_selected_article_import_v4
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)};
+    DELETE FROM app.review_selected_import_snapshot
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+  `)
+}
+
+const drainSelectedImportBaseProjection = async (
+  input: {
+    projectId: string
+    projectScopeIdentity: string
+    selectedImportSnapshotId: string
+    sourceDeltaHighWater: number
+  },
+  database: ReviewServingProjectorWorkerDatabase,
+): Promise<number> => {
+  const result = await projectReviewServingSelectedImportBatch(
+    {
+      limit: defaultReviewServingSelectedImportBaseBatchSize,
+      projectId: input.projectId,
+      projectScopeIdentity: input.projectScopeIdentity,
+      selectedImportSnapshotId: input.selectedImportSnapshotId,
+      sourceDeltaHighWater: input.sourceDeltaHighWater,
+    },
+    database,
+  )
+
+  return result.status === 'completed'
+    ? result.insertedRowCount
+    : result.insertedRowCount + (await drainSelectedImportBaseProjection(input, database))
+}
+
+const runSelectedImportRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
+  const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
+  const selectedImportSnapshotIds = snapshots.map((snapshot) => {
+    return requireSelectedImportSnapshotId(snapshot)
+  })
+  const claim = getRebuildChunkProjectClaim({
+    chunk: input.chunk,
+    dirtyKind: 'selectedImport.rebuild',
+    sourcePartition: `import-run-article:${projectId}`,
+  })
+
+  return runValidatedRebuildChunkOutput(
+    {
+      ...input,
+      validateOutput: async (tx) => {
+        const checksum = await getSelectedImportRebuildChunkOutputChecksum(
+          {chunk: input.chunk, selectedImportSnapshotIds},
+          tx,
+        )
+
+        return {
+          actualChecksum: checksum.actualChecksum,
+          actualCount: checksum.actualCount,
+          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
+        }
+      },
+      writeOutput: async (tx) => {
+        const chunkDatabase = getChunkProjectorDatabase(tx)
+
+        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+          await previous
+          const selectedImportSnapshotId = requireSelectedImportSnapshotId(snapshot)
+          const projectScopeIdentity = requireSnapshotComponentIdentity(snapshot, 'projectScope')
+          const existingSnapshot = await getSelectedImportSnapshotStatus(selectedImportSnapshotId, chunkDatabase)
+          const sourceDeltaHighWater = Number(existingSnapshot?.sourceDeltaHighWater ?? input.chunk.inputWatermark)
+
+          await resetSelectedImportSnapshotForRebuild({projectId, projectScopeIdentity, selectedImportSnapshotId}, tx)
+          await drainSelectedImportBaseProjection(
+            {projectId, projectScopeIdentity, selectedImportSnapshotId, sourceDeltaHighWater},
+            chunkDatabase,
+          )
+          await projectReviewServingSelectedImportPatches(
+            {
+              acknowledgeClaims: false,
+              baseGeneration: input.chunk.outputBaseGeneration,
+              claims: [claim],
+              definitionVersion: manifest.definitionVersion,
+              projectId,
+              projectScopeIdentity,
+              projectionIdentity: input.chunk.projectionIdentity,
+              selectedImportSnapshotId,
+            },
+            chunkDatabase,
+          )
+        }, Promise.resolve())
+      },
     },
     database,
   )
@@ -1256,8 +1558,12 @@ export const runReviewServingProjectorWorkerClaimedRebuildChunk = async (
   input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
-  if (input.chunk.projectionComponent === 'projectScope' || input.chunk.projectionComponent === 'selectedImport') {
-    return runAlreadyMaterializedRebuildChunk(input, database)
+  if (input.chunk.projectionComponent === 'projectScope') {
+    return runProjectScopeRebuildChunk(input, database)
+  }
+
+  if (input.chunk.projectionComponent === 'selectedImport') {
+    return runSelectedImportRebuildChunk(input, database)
   }
 
   if (input.chunk.projectionComponent === 'display') {

@@ -14,6 +14,8 @@ type FakeStats = {
   projectPromptUpdatedAt: string | null
   projectUpdatedAt: string
   scopedArticleCount: number
+  summaryHumanJudgmentCount: number
+  summaryHumanJudgmentUpdatedAt: string | null
 }
 
 type FakeRequestRow = {
@@ -58,6 +60,8 @@ const baseStats = {
   projectPromptUpdatedAt: '2026-06-20T10:01:00.000Z',
   projectUpdatedAt: '2026-06-20T09:59:00.000Z',
   scopedArticleCount: 10,
+  summaryHumanJudgmentCount: 3,
+  summaryHumanJudgmentUpdatedAt: '2026-06-20T10:03:30.000Z',
 } satisfies FakeStats
 
 const createFakeRequestDatabase = (stats: FakeStats) => {
@@ -174,6 +178,7 @@ test('V4 rebuild request service estimates admission budget from project data', 
     humanJudgmentCount: 2_000,
     judgmentCount: 5_000,
     scopedArticleCount: 100_000,
+    summaryHumanJudgmentCount: 1_000,
   })
 
   const request = await Effect.runPromise(
@@ -189,14 +194,21 @@ test('V4 rebuild request service estimates admission budget from project data', 
   expect(request.sourceWatermarksJson).toMatchObject({
     projectArticles: {count: 100_000, updatedAt: '2026-06-20T10:00:00.000Z'},
     projectPrompts: {count: 4, updatedAt: '2026-06-20T10:01:00.000Z'},
+    summaryHumanJudgments: {count: 1_000, updatedAt: '2026-06-20T10:03:30.000Z'},
   })
+  expect(joined).toContain('FROM app.project_import_route')
+  expect(joined).toContain('INNER JOIN app.article_import_route')
+  expect(joined).toContain('INNER JOIN scoped_article ON scoped_article.article_id = judgment.article_id')
+  expect(joined).toContain('INNER JOIN enabled_prompt ON enabled_prompt.prompt_id = judgment.prompt_id')
   expect(joined).toContain('judgment.model_id = project.model_id')
+  expect(joined).not.toContain('judgment.project_id = project.id')
   expect(joined).toContain('judgment.use_fulltext_no_images = project.use_fulltext_no_images')
+  expect(joined).toContain('FROM app.judgment_human_summary')
 })
 
 test('V4 rebuild request service watermarks make changed data produce a new request id', async () => {
   const first = createFakeRequestDatabase(baseStats)
-  const second = createFakeRequestDatabase({...baseStats, projectArticleUpdatedAt: '2026-06-20T11:00:00.000Z'})
+  const second = createFakeRequestDatabase({...baseStats, summaryHumanJudgmentUpdatedAt: '2026-06-20T11:00:00.000Z'})
 
   const firstRequest = await Effect.runPromise(
     requestReviewServingV4RebuildEffect(

@@ -249,6 +249,40 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
         1,
         1
       );
+
+      INSERT INTO app.project_mart_dirty_materialization_state (
+        project_id,
+        source_kind,
+        target_dirty_token,
+        inserted_row_count,
+        materialization_status,
+        materialization_owner,
+        lease_expires_at
+      ) VALUES (
+        'recover-apply-project',
+        'project_scope_article',
+        1,
+        1,
+        'running',
+        'stale-materialization-worker',
+        TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
+      );
+
+      INSERT INTO app.project_mart_large_rebuild_state (
+        project_id,
+        refresh_token,
+        rebuild_phase,
+        refresh_status,
+        worker_id,
+        lease_expires_at
+      ) VALUES (
+        'recover-apply-project',
+        2,
+        'project_scope_article',
+        'running',
+        'stale-large-worker',
+        TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
+      );
     `,
   )
 
@@ -278,15 +312,42 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
     duckdbPath,
     "SELECT refresh_status AS refreshStatus, CAST(active_dirty_token AS INTEGER) AS activeDirtyToken, CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken, lease_expires_at AS leaseExpiresAt FROM app.project_mart_refresh_state WHERE project_id = 'recover-apply-project'",
   )
+  const [materializationState] = runQuery<
+    Array<{leaseExpiresAt: string | null; materializationOwner: string | null; materializationStatus: string}>
+  >(
+    duckdbPath,
+    "SELECT materialization_status AS materializationStatus, materialization_owner AS materializationOwner, lease_expires_at AS leaseExpiresAt FROM app.project_mart_dirty_materialization_state WHERE project_id = 'recover-apply-project'",
+  )
+  const [largeRebuildState] = runQuery<
+    Array<{leaseExpiresAt: string | null; refreshStatus: string; supersededAt: string | null; workerId: string | null}>
+  >(
+    duckdbPath,
+    "SELECT refresh_status AS refreshStatus, worker_id AS workerId, lease_expires_at AS leaseExpiresAt, superseded_at AS supersededAt FROM app.project_mart_large_rebuild_state WHERE project_id = 'recover-apply-project'",
+  )
 
   expect(result.recoverAttempted).toBe(true)
   expect(result.status).toBe('recovered')
   expect(result.recoveryResult).toMatchObject({
     kind: 'v4_rebuild_request',
     projectIds: ['recover-apply-project'],
-    reason: 'recoverDirtyRefreshClaims.staleDirtyRefreshClaim',
+    reason: 'recoverDirtyRefreshClaims.staleDirtyMaterialization',
   })
   expect(result.recoveryResult.requestIds).toHaveLength(1)
-  expect(result.recoveryResults).toHaveLength(1)
+  expect(
+    result.recoveryResults.map((recoveryResult) => {
+      return recoveryResult.reason
+    }),
+  ).toEqual([
+    'recoverDirtyRefreshClaims.staleDirtyMaterialization',
+    'recoverDirtyRefreshClaims.staleDirtyRefreshClaim',
+    'recoverDirtyRefreshClaims.staleLargeRebuildClaim',
+  ])
   expect(state).toEqual({activeDirtyToken: 0, lastCompletedDirtyToken: 1, leaseExpiresAt: null, refreshStatus: 'idle'})
+  expect(materializationState).toEqual({
+    leaseExpiresAt: null,
+    materializationOwner: null,
+    materializationStatus: 'completed',
+  })
+  expect(largeRebuildState).toMatchObject({leaseExpiresAt: null, refreshStatus: 'idle', workerId: null})
+  expect(largeRebuildState?.supersededAt).not.toBeNull()
 })
