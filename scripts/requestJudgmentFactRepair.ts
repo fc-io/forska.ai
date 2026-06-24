@@ -1,11 +1,13 @@
 import {
   defaultJudgmentRepairV4RebuildComponents,
-  requestReviewServingV4Rebuilds,
+  requestReviewServingV4Rebuild,
 } from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 
 type CliOptions = {allActiveProjects: boolean; projectId: string | null; reason: string}
+type RepairProjectFailure = {error: string; projectId: string}
+type RepairProjectResult = {failedProjects: RepairProjectFailure[]; requestIds: string[]}
 
 const defaultReason = 'requestJudgmentFactRepair'
 
@@ -65,6 +67,49 @@ const getRepairProjectIds = async (options: CliOptions) => {
       : []
 }
 
+const getFailureMessage = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error)
+  const details = String(error)
+  const rebuildChunkMessage = details.match(/Review rebuild request [^\n]+ created no rebuild chunks/u)?.[0]
+
+  return rebuildChunkMessage ?? message
+}
+
+const getRequestStatus = (result: RepairProjectResult) => {
+  return result.failedProjects.length === 0
+    ? 'requested'
+    : result.requestIds.length === 0
+      ? 'failed'
+      : 'requested_with_failures'
+}
+
+const requestProjectRepairs = async (
+  input: {projectIds: string[]; reason: string},
+  index = 0,
+): Promise<RepairProjectResult> => {
+  const projectId = input.projectIds[index]
+
+  if (!projectId) {
+    return {failedProjects: [], requestIds: []}
+  }
+
+  try {
+    const request = await requestReviewServingV4Rebuild({
+      components: defaultJudgmentRepairV4RebuildComponents,
+      projectId,
+      reason: input.reason,
+    })
+    const remaining = await requestProjectRepairs(input, index + 1)
+
+    return {failedProjects: remaining.failedProjects, requestIds: [request.requestId, ...remaining.requestIds]}
+  } catch (error) {
+    const failure = {error: getFailureMessage(error), projectId}
+    const remaining = await requestProjectRepairs(input, index + 1)
+
+    return {failedProjects: [failure, ...remaining.failedProjects], requestIds: remaining.requestIds}
+  }
+}
+
 const main = async () => {
   const options = getCliOptions()
 
@@ -95,21 +140,17 @@ const main = async () => {
       return
     }
 
-    const requests = await requestReviewServingV4Rebuilds(
-      projectIds.map((projectId) => {
-        return {components: defaultJudgmentRepairV4RebuildComponents, projectId, reason: options.reason}
-      }),
-    )
+    const result = await requestProjectRepairs({projectIds, reason: options.reason})
 
     console.log(
       JSON.stringify({
+        failedCount: result.failedProjects.length,
+        failedProjects: result.failedProjects,
         projectIds,
         reason: options.reason,
-        requestIds: requests.map((request) => {
-          return request.requestId
-        }),
-        requestedCount: requests.length,
-        status: 'requested',
+        requestIds: result.requestIds,
+        requestedCount: result.requestIds.length,
+        status: getRequestStatus(result),
       }),
     )
   })

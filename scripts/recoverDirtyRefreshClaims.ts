@@ -1,10 +1,19 @@
-import {requestReviewServingV4Rebuilds} from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
+import {requestReviewServingV4Rebuild} from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 
 type CliOptions = {recover: boolean; yes: boolean}
 
-type RecoveryResult = {kind: 'v4_rebuild_request'; projectIds: string[]; reason: string; requestIds: string[]}
+type RecoveryFailure = {error: string; projectId: string}
+type RecoveryRequestResult = {failedProjects: RecoveryFailure[]; projectIds: string[]; requestIds: string[]}
+type RecoveryResult = {
+  failedCount: number
+  failedProjects: RecoveryFailure[]
+  kind: 'v4_rebuild_request'
+  projectIds: string[]
+  reason: string
+  requestIds: string[]
+}
 
 const staleLegacyClaimRecoveryReason = 'recoverDirtyRefreshClaims.staleLegacyClaim'
 
@@ -193,6 +202,45 @@ const getRecoveredLargeRebuildSqlValues = (rows: StaleLargeRebuildClaimRow[]) =>
     .join(', ')
 }
 
+const getFailureMessage = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error)
+  const details = String(error)
+  const rebuildChunkMessage = details.match(/Review rebuild request [^\n]+ created no rebuild chunks/u)?.[0]
+
+  return rebuildChunkMessage ?? message
+}
+
+const requestProjectRecovery = async (
+  input: {projectIds: string[]; reason: string},
+  index = 0,
+): Promise<RecoveryRequestResult> => {
+  const projectId = input.projectIds[index]
+
+  if (!projectId) {
+    return {failedProjects: [], projectIds: [], requestIds: []}
+  }
+
+  try {
+    const request = await requestReviewServingV4Rebuild({projectId, reason: input.reason})
+    const remaining = await requestProjectRecovery(input, index + 1)
+
+    return {
+      failedProjects: remaining.failedProjects,
+      projectIds: [projectId, ...remaining.projectIds],
+      requestIds: [request.requestId, ...remaining.requestIds],
+    }
+  } catch (error) {
+    const failure = {error: getFailureMessage(error), projectId}
+    const remaining = await requestProjectRecovery(input, index + 1)
+
+    return {
+      failedProjects: [failure, ...remaining.failedProjects],
+      projectIds: remaining.projectIds,
+      requestIds: remaining.requestIds,
+    }
+  }
+}
+
 const queueV4RecoveryRequests = async (params: {projectIds: string[]; reason: string}): Promise<RecoveryResult[]> => {
   const projectIds = getUniqueProjectIds(params.projectIds)
 
@@ -200,22 +248,26 @@ const queueV4RecoveryRequests = async (params: {projectIds: string[]; reason: st
     return []
   }
 
-  const requests = await requestReviewServingV4Rebuilds(
-    projectIds.map((projectId) => {
-      return {projectId, reason: params.reason}
-    }),
-  )
+  const result = await requestProjectRecovery({projectIds, reason: params.reason})
 
   return [
     {
+      failedCount: result.failedProjects.length,
+      failedProjects: result.failedProjects,
       kind: 'v4_rebuild_request',
-      projectIds,
+      projectIds: result.projectIds,
       reason: params.reason,
-      requestIds: requests.map((request) => {
-        return request.requestId
-      }),
+      requestIds: result.requestIds,
     },
   ]
+}
+
+const getRowsForProjects = <TRow extends {projectId: string}>(rows: TRow[], projectIds: readonly string[]) => {
+  const projectIdSet = new Set(projectIds)
+
+  return rows.filter((row) => {
+    return projectIdSet.has(row.projectId)
+  })
 }
 
 const releaseStaleDirtyRefreshClaims = async (rows: StaleDirtyRefreshClaimRow[]) => {
@@ -332,12 +384,26 @@ const recoverStaleLegacyClaims = async (input: {
     projectIds: getStaleLegacyClaimProjectIds(input),
     reason: staleLegacyClaimRecoveryReason,
   })
+  const recoveredProjectIds = recoveryResults.flatMap((result) => {
+    return result.projectIds
+  })
 
-  await releaseStaleDirtyMaterializationClaims(input.dirtyMaterializations)
-  await releaseStaleDirtyRefreshClaims(input.dirtyRefreshClaims)
-  await releaseStaleLargeRebuildClaims(input.largeRebuildClaims)
+  await releaseStaleDirtyMaterializationClaims(getRowsForProjects(input.dirtyMaterializations, recoveredProjectIds))
+  await releaseStaleDirtyRefreshClaims(getRowsForProjects(input.dirtyRefreshClaims, recoveredProjectIds))
+  await releaseStaleLargeRebuildClaims(getRowsForProjects(input.largeRebuildClaims, recoveredProjectIds))
 
   return recoveryResults
+}
+
+const getRecoveryStatus = (recoveryResults: RecoveryResult[]) => {
+  const failedCount = recoveryResults.reduce((total, result) => {
+    return total + result.failedCount
+  }, 0)
+  const requestCount = recoveryResults.reduce((total, result) => {
+    return total + result.requestIds.length
+  }, 0)
+
+  return failedCount === 0 ? 'recovered' : requestCount === 0 ? 'failed' : 'recovered_with_failures'
 }
 
 export const recoverDirtyRefreshClaimState = async () => {
@@ -387,7 +453,7 @@ export const recoverDirtyRefreshClaimState = async () => {
         staleClaims,
         staleDirtyMaterializations,
         staleLargeRebuildClaims,
-        status: 'recovered',
+        status: getRecoveryStatus(recoveryResults),
         unresolvedQuarantineBarriers,
       }),
     )

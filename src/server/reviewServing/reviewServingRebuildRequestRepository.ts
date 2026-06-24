@@ -390,6 +390,48 @@ const getProjectionManifestByKey = (rows: readonly DefaultRebuildProjectionManif
   }, {})
 }
 
+const getMissingDefaultRebuildComponents = (
+  requestedComponents: readonly ReviewServingProjectionComponent[],
+  stateByComponent: Partial<Record<ReviewServingProjectionComponent, DefaultRebuildSnapshotComponentState[]>>,
+) => {
+  return requestedComponents.filter((component) => {
+    return (stateByComponent[component] ?? []).length === 0
+  })
+}
+
+const getMissingDefaultRebuildManifestKeys = (
+  states: readonly DefaultRebuildSnapshotComponentState[],
+  manifestByKey: Record<string, DefaultRebuildProjectionManifestRow>,
+) => {
+  return states
+    .filter((state) => {
+      return manifestByKey[getProjectionManifestKey(state)] === undefined
+    })
+    .map((state) => {
+      return `${state.projectionComponent}:${state.projectionIdentity}:${state.baseGeneration}`
+    })
+}
+
+const assertDefaultRebuildExpansionComplete = (input: {
+  manifestByKey: Record<string, DefaultRebuildProjectionManifestRow>
+  projectId: string
+  requestedComponents: readonly ReviewServingProjectionComponent[]
+  selectedStates: readonly DefaultRebuildSnapshotComponentState[]
+  stateByComponent: Partial<Record<ReviewServingProjectionComponent, DefaultRebuildSnapshotComponentState[]>>
+}) => {
+  const missingComponents = getMissingDefaultRebuildComponents(input.requestedComponents, input.stateByComponent)
+  const missingManifestKeys = getMissingDefaultRebuildManifestKeys(input.selectedStates, input.manifestByKey)
+
+  if (missingComponents.length > 0 || missingManifestKeys.length > 0) {
+    throw new Error(
+      `Review rebuild request for ${input.projectId} skipped requested rebuild components: ${[
+        ...missingComponents,
+        ...missingManifestKeys,
+      ].join(', ')}`,
+    )
+  }
+}
+
 const getDefaultReviewServingRebuildChunks = async (
   input: {projectId: string; requestedComponents: readonly ReviewServingProjectionComponent[]},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -413,25 +455,31 @@ const getDefaultReviewServingRebuildChunks = async (
   )
   const manifestByKey = getProjectionManifestByKey(manifests)
 
-  return selectedStates.flatMap((state) => {
+  assertDefaultRebuildExpansionComplete({
+    manifestByKey,
+    projectId: input.projectId,
+    requestedComponents: input.requestedComponents,
+    selectedStates,
+    stateByComponent,
+  })
+
+  return selectedStates.map((state) => {
     const manifest = manifestByKey[getProjectionManifestKey(state)]
 
     if (manifest === undefined) {
-      return []
+      throw new Error(`Review rebuild request for ${input.projectId} skipped requested rebuild manifest`)
     }
 
-    return [
-      {
-        chunkEndKey: articleBounds.chunkEndKey,
-        chunkStartKey: articleBounds.chunkStartKey,
-        inputDigest: manifest.inputDigest,
-        inputWatermark: Number(manifest.inputWatermark ?? state.inputWatermark),
-        outputBaseGeneration: state.baseGeneration,
-        projectId: input.projectId,
-        projectionComponent: state.projectionComponent,
-        projectionIdentity: state.projectionIdentity,
-      } satisfies ReviewServingRebuildChunkManifestInput,
-    ]
+    return {
+      chunkEndKey: articleBounds.chunkEndKey,
+      chunkStartKey: articleBounds.chunkStartKey,
+      inputDigest: manifest.inputDigest,
+      inputWatermark: Number(manifest.inputWatermark ?? state.inputWatermark),
+      outputBaseGeneration: state.baseGeneration,
+      projectId: input.projectId,
+      projectionComponent: state.projectionComponent,
+      projectionIdentity: state.projectionIdentity,
+    } satisfies ReviewServingRebuildChunkManifestInput
   })
 }
 

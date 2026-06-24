@@ -4,6 +4,7 @@ import {
   claimReviewServingRebuildChunk,
   getNextClaimableReviewServingRebuildChunk,
   getReviewServingRebuildChunkId,
+  heartbeatReviewServingRebuildChunkLease,
   isReviewServingRebuildChunkComplete,
   markReviewServingRebuildChunkFailed,
   type ReviewServingChunkManifestRepositoryDatabase,
@@ -245,6 +246,19 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       })
     }
   }
+  const heartbeatChunk = (statement: string) => {
+    const chunkId = getChunkIdLiteral(statement)
+    const existing = rows.get(chunkId)
+    const leaseOwner = getWhereLiteral(statement, 'lease_owner')
+    const leaseExpiresAt = statement.match(/lease_expires_at\s*=\s*TIMESTAMPTZ\s*'((?:''|[^'])*)'/u)?.[1] ?? null
+
+    if (existing?.status === 'running' && existing.leaseOwner === leaseOwner) {
+      const heartbeated = {...existing, leaseExpiresAt, updatedAt: getClock(statements)} satisfies FakeChunkRow
+
+      rows.set(chunkId, heartbeated)
+      claimedRows.set(chunkId, heartbeated)
+    }
+  }
   const completeChunk = (statement: string) => {
     const chunkId = getChunkIdLiteral(statement)
     const existing = rows.get(chunkId)
@@ -272,9 +286,19 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
 
     if (
       statement.includes('UPDATE app.review_rebuild_chunk_manifest')
-      && statement.match(/status\s*=\s*'running'/u) !== null
+      && (statement.includes("SET\n        status = 'running'")
+        || statement.includes("SET\r\n        status = 'running'"))
     ) {
       claimChunk(statement)
+    }
+
+    if (
+      statement.includes('UPDATE app.review_rebuild_chunk_manifest')
+      && statement.includes('lease_expires_at =')
+      && statement.includes("AND status = 'running'")
+      && statement.includes('AND lease_owner =')
+    ) {
+      heartbeatChunk(statement)
     }
 
     if (
@@ -535,6 +559,31 @@ test('failed chunks can be claimed again and completed transactionally with outp
   expect(outputWrites).toHaveLength(1)
   expect(completed).toMatchObject({checksum: 'checksum-v2', status: 'completed'})
   expect(rows.get(getReviewServingRebuildChunkId(baseChunkIdentity))?.lastError).toBeNull()
+})
+
+test('rebuild chunk heartbeat extends only the current owner lease', async () => {
+  const running = {
+    ...getChunkRowFromIdentity(baseChunkIdentity, []),
+    leaseExpiresAt: '2026-06-16T14:05:00.000Z',
+    leaseOwner: 'worker-heartbeat',
+    status: 'running' as const,
+  }
+  const {database, rows, statements} = createFakeChunkManifestDatabase([running])
+
+  const mismatch = await heartbeatReviewServingRebuildChunkLease(
+    {chunkId: running.chunkId, leaseExpiresAt: '2026-06-16T14:20:00.000Z', leaseOwner: 'worker-other'},
+    database,
+  )
+  const extended = await heartbeatReviewServingRebuildChunkLease(
+    {chunkId: running.chunkId, leaseExpiresAt: '2026-06-16T14:30:00.000Z', leaseOwner: 'worker-heartbeat'},
+    database,
+  )
+
+  expect(mismatch).toBeNull()
+  expect(extended).toMatchObject({leaseExpiresAt: '2026-06-16T14:30:00.000Z', leaseOwner: 'worker-heartbeat'})
+  expect(rows.get(running.chunkId)?.leaseExpiresAt).toBe('2026-06-16T14:30:00.000Z')
+  expect(statements.join('\n')).toContain("AND status = 'running'")
+  expect(statements.join('\n')).toContain("AND lease_owner = 'worker-heartbeat'")
 })
 
 test('validation mismatch rolls back output writes and marks the claimed chunk failed for retry', async () => {

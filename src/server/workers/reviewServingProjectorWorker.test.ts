@@ -97,6 +97,7 @@ const createWorkerHarness = (input?: {
   const claimInputs: unknown[] = []
   const cleanupInputs: unknown[] = []
   const failedChunks: unknown[] = []
+  const heartbeatInputs: unknown[] = []
   const runChunkInputs: ReviewServingRebuildChunkManifest[] = []
   const wakeStatus = input?.wakeStatus ?? 'blocked'
   const dependencies: ReviewServingProjectorWorkerDependencies = {
@@ -128,6 +129,11 @@ const createWorkerHarness = (input?: {
       getNextChunk: async () => {
         return chunkInput
       },
+      heartbeatChunk: async (heartbeatInput) => {
+        heartbeatInputs.push(heartbeatInput)
+
+        return {...chunkManifest, leaseExpiresAt: new Date().toISOString()}
+      },
       isChunkComplete: async () => {
         return input?.chunkComplete ?? false
       },
@@ -156,6 +162,7 @@ const createWorkerHarness = (input?: {
     database,
     dependencies,
     failedChunks,
+    heartbeatInputs,
     runChunkInputs,
     wakeInputs,
     workloadContexts,
@@ -269,6 +276,23 @@ test('worker retries claimable failed or expired chunk leases and records execut
   expect(result.status).toBe('failed')
   expect(harness.claimInputs[0]).toMatchObject({leaseOwner: 'worker-2'})
   expect(harness.failedChunks).toEqual([{chunkId: 'chunk-1', error: 'chunk executor failed', leaseOwner: 'worker-2'}])
+})
+
+test('worker heartbeats claimed rebuild chunks before running long executors', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {heartbeatMs: 1_000, leaseMs: 5_000, now: new Date('2026-06-16T10:00:00.000Z'), workerId: 'worker-heartbeat'},
+    harness.dependencies,
+  )
+
+  expect(result.chunk.status).toBe('completed')
+  const [heartbeatInput] = harness.heartbeatInputs as Array<{chunkId: string; leaseExpiresAt: Date; leaseOwner: string}>
+
+  expect(harness.heartbeatInputs).toHaveLength(1)
+  expect(heartbeatInput).toMatchObject({chunkId: 'chunk-1', leaseOwner: 'worker-heartbeat'})
+  expect(heartbeatInput?.leaseExpiresAt).toBeInstanceOf(Date)
+  expect(harness.runChunkInputs).toEqual([chunkManifest])
 })
 
 test('worker schedules cleanup only after its cleanup interval elapses', async () => {
