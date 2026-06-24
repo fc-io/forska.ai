@@ -23,7 +23,11 @@ export type ReviewServingDiagnosticsCountState = {
   updatedAt: string | null
 }
 
-export type ReviewServingDiagnosticsRebuildChunkState = ReviewServingDiagnosticsCountState & {expiredLeaseCount: number}
+export type ReviewServingDiagnosticsRebuildChunkState = ReviewServingDiagnosticsCountState & {
+  blockedOverBudgetCount: number
+  expiredLeaseCount: number
+  quarantinedCount: number
+}
 
 export type ReviewServingDiagnosticsQuarantineBarrier = {
   outboxId: string
@@ -81,7 +85,11 @@ type CountStateRow = {
   updatedAt: string | null
 }
 
-type RebuildChunkStateRow = CountStateRow & {expiredLeaseCount: number}
+type RebuildChunkStateRow = CountStateRow & {
+  blockedOverBudgetCount: number
+  expiredLeaseCount: number
+  quarantinedCount: number
+}
 
 type QuarantineStateRow = {quarantinedOutboxCount: number; retryableOutboxCount: number; unresolvedOutboxCount: number}
 
@@ -98,7 +106,12 @@ const emptyCountState: ReviewServingDiagnosticsCountState = {
   runningCount: 0,
   updatedAt: null,
 }
-const emptyRebuildChunkState: ReviewServingDiagnosticsRebuildChunkState = {...emptyCountState, expiredLeaseCount: 0}
+const emptyRebuildChunkState: ReviewServingDiagnosticsRebuildChunkState = {
+  ...emptyCountState,
+  blockedOverBudgetCount: 0,
+  expiredLeaseCount: 0,
+  quarantinedCount: 0,
+}
 const emptyQuarantineState = {quarantinedOutboxCount: 0, retryableOutboxCount: 0, unresolvedOutboxCount: 0}
 
 const getDiagnosticsDatabase = () => {
@@ -154,7 +167,12 @@ const getCountState = (row: CountStateRow | undefined): ReviewServingDiagnostics
 const getRebuildChunkState = (row: RebuildChunkStateRow | undefined): ReviewServingDiagnosticsRebuildChunkState => {
   return row === undefined
     ? emptyRebuildChunkState
-    : {...getCountState(row), expiredLeaseCount: Number(row.expiredLeaseCount)}
+    : {
+        ...getCountState(row),
+        blockedOverBudgetCount: Number(row.blockedOverBudgetCount),
+        expiredLeaseCount: Number(row.expiredLeaseCount),
+        quarantinedCount: Number(row.quarantinedCount),
+      }
 }
 
 const getSnapshotStatusCounts = (rows: readonly SnapshotStatusCountRow[]) => {
@@ -336,8 +354,10 @@ const getRebuildChunkRowsEffect = (
         CAST(COUNT(*) FILTER (WHERE status = 'running') AS INTEGER) AS runningCount,
         CAST(COUNT(*) FILTER (WHERE status = 'failed') AS INTEGER) AS failedCount,
         CAST(COUNT(*) FILTER (WHERE status = 'completed') AS INTEGER) AS completedCount,
+        CAST(COUNT(*) FILTER (WHERE status = 'blocked_over_budget') AS INTEGER) AS blockedOverBudgetCount,
+        CAST(COUNT(*) FILTER (WHERE status = 'quarantined') AS INTEGER) AS quarantinedCount,
         CAST(COUNT(*) FILTER (WHERE status = 'running' AND lease_expires_at <= ${getSqlLiteral(now)}) AS INTEGER) AS expiredLeaseCount,
-        MIN(created_at) FILTER (WHERE status IN ('pending', 'failed')) AS oldestQueuedAt,
+        MIN(created_at) FILTER (WHERE status IN ('pending', 'failed', 'blocked_over_budget')) AS oldestQueuedAt,
         MAX(updated_at) AS updatedAt
       FROM app.review_rebuild_chunk_manifest
       WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}

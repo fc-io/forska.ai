@@ -117,6 +117,29 @@ type ReviewServingRebuildRequestRow = {
   updatedAt: string
 }
 
+type DefaultRebuildArticleBoundsRow = {
+  chunkEndKey: string | null
+  chunkStartKey: string | null
+  scopedArticleCount: number
+}
+
+type DefaultRebuildSnapshotStateRow = {componentStateJson: unknown}
+
+type DefaultRebuildSnapshotComponentState = {
+  baseGeneration: number
+  inputWatermark: number
+  projectionComponent: ReviewServingProjectionComponent
+  projectionIdentity: string
+}
+
+type DefaultRebuildProjectionManifestRow = {
+  baseGeneration: number
+  inputDigest: string | null
+  inputWatermark: number
+  projectionComponent: ReviewServingProjectionComponent
+  projectionIdentity: string
+}
+
 const requestBudgetPairs = [
   ['estimatedInputRows', 'maxInputRows', 'input rows'],
   ['estimatedOutputRows', 'maxOutputRows', 'output rows'],
@@ -133,6 +156,10 @@ const getReviewServingRebuildRequestDatabase = () => {
 
 const getJsonSqlLiteral = (value: unknown) => {
   return getSqlLiteral(getStableReviewServingJson(value ?? {}))
+}
+
+const getSqlStringList = (values: readonly string[]) => {
+  return values.map(getSqlLiteral).join(', ')
 }
 
 const getOptionalTimestampLiteral = (value: Date | string | null | undefined) => {
@@ -182,6 +209,200 @@ const getOverBudgetReason = (
   })
 
   return exceeded[0] ?? null
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+const getUnknownArray = (value: unknown): readonly unknown[] => {
+  return Array.isArray(value) ? value : []
+}
+
+const getNonNegativeInteger = (value: unknown, fallback: number) => {
+  const numberValue = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN
+
+  return Number.isFinite(numberValue) && numberValue >= 0 ? Math.trunc(numberValue) : fallback
+}
+
+const getSnapshotComponentStates = (componentStateJson: unknown): DefaultRebuildSnapshotComponentState[] => {
+  const parsed = getJsonValue(componentStateJson)
+  const state = isRecord(parsed) ? parsed : {}
+  const candidates = [...getUnknownArray(state.required), ...getUnknownArray(state.optional)]
+
+  return candidates.flatMap((candidate) => {
+    if (
+      !isRecord(candidate)
+      || typeof candidate.component !== 'string'
+      || !isReviewServingProjectionComponent(candidate.component)
+      || typeof candidate.projectionIdentity !== 'string'
+    ) {
+      return []
+    }
+
+    return [
+      {
+        baseGeneration: getNonNegativeInteger(candidate.baseGeneration, 0),
+        inputWatermark: getNonNegativeInteger(candidate.patchWatermark, 0),
+        projectionComponent: candidate.component,
+        projectionIdentity: candidate.projectionIdentity,
+      },
+    ]
+  })
+}
+
+const getDefaultRebuildArticleBounds = async (
+  input: {projectId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const [row] = await database.queryJson<DefaultRebuildArticleBoundsRow>(`
+    SELECT
+      MIN(article_id) AS chunkStartKey,
+      MAX(article_id) AS chunkEndKey,
+      CAST(COUNT(*) AS INTEGER) AS scopedArticleCount
+    FROM app.project_article
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+  `)
+  const scopedArticleCount = Number(row?.scopedArticleCount ?? 0)
+
+  return row?.chunkStartKey === null
+    || row?.chunkStartKey === undefined
+    || row.chunkEndKey === null
+    || scopedArticleCount === 0
+    ? null
+    : {chunkEndKey: row.chunkEndKey, chunkStartKey: row.chunkStartKey}
+}
+
+const getDefaultRebuildSnapshotStates = async (
+  input: {projectId: string; requestedComponents: readonly ReviewServingProjectionComponent[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const requestedComponentSet = new Set(input.requestedComponents)
+  const rows = await database.queryJson<DefaultRebuildSnapshotStateRow>(`
+    SELECT component_state_json AS componentStateJson
+    FROM app.review_serving_snapshot_manifest
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND snapshot_status IN ('candidate', 'active')
+    ORDER BY CASE WHEN snapshot_status = 'candidate' THEN 0 ELSE 1 END, updated_at DESC, snapshot_id DESC
+  `)
+
+  return rows
+    .flatMap((row) => {
+      return getSnapshotComponentStates(row.componentStateJson)
+    })
+    .filter((state) => {
+      return requestedComponentSet.has(state.projectionComponent)
+    })
+}
+
+const getComponentStateByComponent = (
+  requestedComponents: readonly ReviewServingProjectionComponent[],
+  states: readonly DefaultRebuildSnapshotComponentState[],
+) => {
+  return requestedComponents.reduce<
+    Partial<Record<ReviewServingProjectionComponent, DefaultRebuildSnapshotComponentState>>
+  >((stateByComponent, component) => {
+    const state = states.find((candidate) => {
+      return candidate.projectionComponent === component
+    })
+
+    return state === undefined ? stateByComponent : {...stateByComponent, [component]: state}
+  }, {})
+}
+
+const getProjectionManifestKey = (input: {
+  projectionComponent: ReviewServingProjectionComponent
+  projectionIdentity: string
+}) => {
+  return `${input.projectionComponent}\0${input.projectionIdentity}`
+}
+
+const getDefaultRebuildProjectionManifests = async (
+  input: {projectId: string; states: readonly DefaultRebuildSnapshotComponentState[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const components = [
+    ...new Set(
+      input.states.map((state) => {
+        return state.projectionComponent
+      }),
+    ),
+  ]
+  const requestedIdentityKeys = new Set(input.states.map(getProjectionManifestKey))
+
+  if (components.length === 0) {
+    return []
+  }
+
+  const rows = await database.queryJson<DefaultRebuildProjectionManifestRow>(`
+    SELECT
+      projection_component AS projectionComponent,
+      projection_identity AS projectionIdentity,
+      base_generation AS baseGeneration,
+      input_watermark AS inputWatermark,
+      input_digest AS inputDigest
+    FROM app.review_projection_identity_manifest
+    WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
+      AND projection_component IN (${getSqlStringList(components)})
+    ORDER BY CASE WHEN status = 'active' THEN 0 WHEN status = 'candidate' THEN 1 ELSE 2 END, updated_at DESC
+  `)
+
+  return rows.filter((row) => {
+    return requestedIdentityKeys.has(getProjectionManifestKey(row))
+  })
+}
+
+const getProjectionManifestByKey = (rows: readonly DefaultRebuildProjectionManifestRow[]) => {
+  return rows.reduce<Record<string, DefaultRebuildProjectionManifestRow>>((manifestByKey, row) => {
+    const key = getProjectionManifestKey(row)
+
+    return manifestByKey[key] === undefined ? {...manifestByKey, [key]: row} : manifestByKey
+  }, {})
+}
+
+const getDefaultReviewServingRebuildChunks = async (
+  input: {projectId: string; requestedComponents: readonly ReviewServingProjectionComponent[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const articleBounds = await getDefaultRebuildArticleBounds(input, database)
+
+  if (articleBounds === null) {
+    return []
+  }
+
+  const snapshotStates = await getDefaultRebuildSnapshotStates(input, database)
+  const stateByComponent = getComponentStateByComponent(input.requestedComponents, snapshotStates)
+  const selectedStates = input.requestedComponents.flatMap((component) => {
+    const state = stateByComponent[component]
+
+    return state === undefined ? [] : [state]
+  })
+  const manifests = await getDefaultRebuildProjectionManifests(
+    {projectId: input.projectId, states: selectedStates},
+    database,
+  )
+  const manifestByKey = getProjectionManifestByKey(manifests)
+
+  return selectedStates.flatMap((state) => {
+    const manifest = manifestByKey[getProjectionManifestKey(state)]
+
+    if (manifest === undefined) {
+      return []
+    }
+
+    return [
+      {
+        chunkEndKey: articleBounds.chunkEndKey,
+        chunkStartKey: articleBounds.chunkStartKey,
+        inputDigest: manifest.inputDigest,
+        inputWatermark: Number(manifest.inputWatermark ?? state.inputWatermark),
+        outputBaseGeneration: state.baseGeneration,
+        projectId: input.projectId,
+        projectionComponent: state.projectionComponent,
+        projectionIdentity: state.projectionIdentity,
+      } satisfies ReviewServingRebuildChunkManifestInput,
+    ]
+  })
 }
 
 const getRequestFromRow = (row: ReviewServingRebuildRequestRow): ReviewServingRebuildRequest => {
@@ -361,22 +582,12 @@ export const createReviewServingRebuildRequestEffect = (
         overBudgetReason,
       } satisfies ReviewServingRebuildChunkBudgetFields
 
+      const chunks =
+        input.chunks
+        ?? (await getDefaultReviewServingRebuildChunks({projectId: input.projectId, requestedComponents}, tx))
+
       await upsertReviewServingRebuildChunkManifests(
-        (
-          input.chunks
-          ?? requestedComponents.map((component) => {
-            return {
-              chunkEndKey: 'component:all',
-              chunkStartKey: 'component:all',
-              inputDigest: null,
-              inputWatermark: 0,
-              outputBaseGeneration: 0,
-              projectId: input.projectId,
-              projectionComponent: component,
-              projectionIdentity: `${component}:request:${requestId}`,
-            } satisfies ReviewServingRebuildChunkManifestInput
-          })
-        ).map((chunk) => {
+        chunks.map((chunk) => {
           return {...chunk, ...chunkBudgetFields, requestId, status: chunkStatus}
         }),
         tx,

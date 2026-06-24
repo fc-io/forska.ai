@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 
@@ -148,6 +148,20 @@ type ReviewServingRebuildChunkManifestRow = {
   workloadClass: string | null
 }
 
+type ReviewServingRebuildRequestRetryPolicyRow = {retryPolicyJson: unknown}
+
+type ReviewServingRebuildChunkRetryPolicy = {
+  maxAttempts: number
+  retryAfterMs: number
+  terminalState: Extract<ReviewServingRebuildChunkStatus, 'blocked_over_budget' | 'quarantined'>
+}
+
+const defaultReviewServingRebuildChunkRetryPolicy = {
+  maxAttempts: 3,
+  retryAfterMs: 60_000,
+  terminalState: 'quarantined',
+} as const satisfies ReviewServingRebuildChunkRetryPolicy
+
 const getReviewServingChunkManifestDatabase = () => {
   return getAppDatabaseService() as ReviewServingChunkManifestRepositoryDatabase
 }
@@ -176,21 +190,25 @@ const getChunkRequestId = (input: ReviewServingRebuildChunkIdentity) => {
   return input.requestId ?? null
 }
 
+const getReviewServingRebuildChunkHashIdentity = (input: ReviewServingRebuildChunkIdentity) => {
+  const identity = {
+    chunkEndKey: input.chunkEndKey,
+    chunkStartKey: input.chunkStartKey,
+    inputDigest: input.inputDigest,
+    inputWatermark: input.inputWatermark,
+    outputBaseGeneration: input.outputBaseGeneration,
+    projectId: input.projectId,
+    projectionComponent: input.projectionComponent,
+    projectionIdentity: input.projectionIdentity,
+  }
+  const requestId = getChunkRequestId(input)
+
+  return requestId === null ? identity : {...identity, requestId}
+}
+
 export const getReviewServingRebuildChunkId = (input: ReviewServingRebuildChunkIdentity) => {
   return `chunk:${createHash('sha256')
-    .update(
-      getStableReviewServingJson({
-        chunkEndKey: input.chunkEndKey,
-        chunkStartKey: input.chunkStartKey,
-        inputDigest: input.inputDigest,
-        inputWatermark: input.inputWatermark,
-        outputBaseGeneration: input.outputBaseGeneration,
-        projectId: input.projectId,
-        projectionComponent: input.projectionComponent,
-        projectionIdentity: input.projectionIdentity,
-        requestId: getChunkRequestId(input),
-      }),
-    )
+    .update(getStableReviewServingJson(getReviewServingRebuildChunkHashIdentity(input)))
     .digest('hex')
     .slice(0, 32)}`
 }
@@ -337,6 +355,18 @@ const getReviewServingRebuildChunkClaimPredicate = (input: {now: Date | string},
       ${source}status = 'pending'
       OR (
         ${source}status = 'failed'
+        AND COALESCE(${source}retry_count, 0) < CASE
+          WHEN ${source}request_id IS NULL THEN ${getSqlLiteral(defaultReviewServingRebuildChunkRetryPolicy.maxAttempts)}
+          ELSE COALESCE((
+            SELECT GREATEST(
+              1,
+              TRY_CAST(json_extract_string(policy.retry_policy_json, '$.maxAttempts') AS INTEGER)
+            )
+            FROM app.review_rebuild_request policy
+            WHERE policy.request_id = ${source}request_id
+            LIMIT 1
+          ), ${getSqlLiteral(defaultReviewServingRebuildChunkRetryPolicy.maxAttempts)})
+        END
         AND (
           ${source}retry_after IS NULL
           OR ${source}retry_after <= ${getReviewServingChunkTimestampLiteral(input.now)}
@@ -643,7 +673,7 @@ export const claimReviewServingRebuildChunk = async (
 
   return database.transaction(async (tx) => {
     await tx.run(`
-      UPDATE app.review_rebuild_chunk_manifest
+      UPDATE app.review_rebuild_chunk_manifest AS manifest
       SET
         status = 'running',
         lease_owner = ${getSqlLiteral(input.leaseOwner)},
@@ -651,8 +681,8 @@ export const claimReviewServingRebuildChunk = async (
         last_error = NULL,
         started_at = COALESCE(started_at, current_timestamp),
         updated_at = current_timestamp
-      WHERE chunk_id = ${getSqlLiteral(chunkId)}
-        AND (${getReviewServingRebuildChunkClaimPredicate(input)})
+      WHERE manifest.chunk_id = ${getSqlLiteral(chunkId)}
+        AND (${getReviewServingRebuildChunkClaimPredicate(input, 'manifest')})
     `)
 
     const claimed = await getReviewServingRebuildChunkManifest({chunkId}, tx)
@@ -661,16 +691,80 @@ export const claimReviewServingRebuildChunk = async (
   })
 }
 
+const isPositiveInteger = (value: unknown) => {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+}
+
+const getRetryPolicyNumber = (value: unknown, fallback: number) => {
+  return isPositiveInteger(value) ? value : fallback
+}
+
+const getRetryPolicyTerminalState = (value: unknown): ReviewServingRebuildChunkRetryPolicy['terminalState'] => {
+  return value === 'blocked_over_budget' || value === 'quarantined'
+    ? value
+    : defaultReviewServingRebuildChunkRetryPolicy.terminalState
+}
+
+const getRetryPolicyFromValue = (value: unknown): ReviewServingRebuildChunkRetryPolicy => {
+  const policy = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+
+  return {
+    maxAttempts: getRetryPolicyNumber(
+      'maxAttempts' in policy ? policy.maxAttempts : undefined,
+      defaultReviewServingRebuildChunkRetryPolicy.maxAttempts,
+    ),
+    retryAfterMs: getRetryPolicyNumber(
+      'retryAfterMs' in policy ? policy.retryAfterMs : undefined,
+      defaultReviewServingRebuildChunkRetryPolicy.retryAfterMs,
+    ),
+    terminalState: getRetryPolicyTerminalState('terminalState' in policy ? policy.terminalState : undefined),
+  }
+}
+
+const getReviewServingRebuildChunkRetryPolicy = async (
+  input: {requestId: string | null},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  if (input.requestId === null) {
+    return defaultReviewServingRebuildChunkRetryPolicy
+  }
+
+  const [row] = await database.queryJson<ReviewServingRebuildRequestRetryPolicyRow>(`
+    SELECT retry_policy_json AS retryPolicyJson
+    FROM app.review_rebuild_request
+    WHERE request_id = ${getSqlLiteral(input.requestId)}
+    LIMIT 1
+  `)
+
+  return row === undefined
+    ? defaultReviewServingRebuildChunkRetryPolicy
+    : getRetryPolicyFromValue(getJsonValue(row.retryPolicyJson))
+}
+
 export const markReviewServingRebuildChunkFailed = async (
-  input: {chunkId: string; error: string; leaseOwner?: string},
+  input: {chunkId: string; error: string; leaseOwner?: string; now?: Date | string},
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
 ) => {
   const leasePredicate = input.leaseOwner ? `AND lease_owner = ${getSqlLiteral(input.leaseOwner)}` : ''
+  const existing = await getReviewServingRebuildChunkManifest({chunkId: input.chunkId}, database)
+  const retryPolicy = await getReviewServingRebuildChunkRetryPolicy({requestId: existing?.requestId ?? null}, database)
+  const retryCount = (existing?.retryCount ?? 0) + 1
+  const exhausted = retryCount >= retryPolicy.maxAttempts
+  const status = exhausted ? retryPolicy.terminalState : 'failed'
+  const retryAfter = exhausted
+    ? null
+    : new Date(new Date(input.now ?? new Date()).getTime() + retryPolicy.retryAfterMs).toISOString()
 
   await database.run(`
     UPDATE app.review_rebuild_chunk_manifest
     SET
-      status = 'failed',
+      status = ${getSqlLiteral(status)},
+      admission_state = CASE
+        WHEN ${getSqlLiteral(status)} = 'blocked_over_budget' THEN 'blocked_over_budget'
+        ELSE admission_state
+      END,
+      retry_count = ${getSqlLiteral(retryCount)},
+      retry_after = ${getNullableReviewServingChunkTimestampLiteral(retryAfter)},
       last_error = ${getSqlLiteral(input.error)},
       lease_owner = NULL,
       lease_expires_at = NULL,
