@@ -82,16 +82,28 @@ const baseStats = {
   summaryHumanJudgmentUpdatedAt: '2026-06-20T10:03:30.000Z',
 } satisfies FakeStats
 
+const fakeRebuildComponents = [
+  'projectScope',
+  'selectedImport',
+  'display',
+  'judgmentInputContent',
+  'llmStatus',
+  'humanStatus',
+  'queue',
+  'posting',
+  'summary',
+  'payload',
+  'search',
+] as const
+
 const createFakeRequestDatabase = (stats: FakeStats) => {
   const requests = new Map<string, FakeRequestRow>()
   const statements: string[] = []
   const componentStateJson = {
     optional: [],
-    required: [
-      {baseGeneration: 2, component: 'display', patchWatermark: 10, projectionIdentity: 'display:identity-1'},
-      {baseGeneration: 2, component: 'payload', patchWatermark: 10, projectionIdentity: 'payload:identity-1'},
-      {baseGeneration: 2, component: 'summary', patchWatermark: 10, projectionIdentity: 'summary:identity-1'},
-    ],
+    required: fakeRebuildComponents.map((component) => {
+      return {baseGeneration: 2, component, patchWatermark: 10, projectionIdentity: `${component}:identity-1`}
+    }),
   }
 
   const run = async (statement: string) => {
@@ -152,29 +164,15 @@ const createFakeRequestDatabase = (stats: FakeStats) => {
     }
 
     if (statement.includes('FROM app.review_projection_identity_manifest')) {
-      return [
-        {
+      return fakeRebuildComponents.map((component) => {
+        return {
           baseGeneration: 2,
-          inputDigest: 'display-digest-v1',
+          inputDigest: `${component}-digest-v1`,
           inputWatermark: 10,
-          projectionComponent: 'display',
-          projectionIdentity: 'display:identity-1',
-        },
-        {
-          baseGeneration: 2,
-          inputDigest: 'payload-digest-v1',
-          inputWatermark: 10,
-          projectionComponent: 'payload',
-          projectionIdentity: 'payload:identity-1',
-        },
-        {
-          baseGeneration: 2,
-          inputDigest: 'summary-digest-v1',
-          inputWatermark: 10,
-          projectionComponent: 'summary',
-          projectionIdentity: 'summary:identity-1',
-        },
-      ] as T[]
+          projectionComponent: component,
+          projectionIdentity: `${component}:identity-1`,
+        }
+      }) as T[]
     }
 
     if (statement.includes('FROM app.review_rebuild_request')) {
@@ -280,6 +278,76 @@ test('V4 rebuild request service accounts for list-mode fan-out in admission bud
 
   expect(request.status).toBe('blocked_over_budget')
   expect(request.overBudgetReason).toBe('input rows: estimated 400000 > max 250000')
+})
+
+test('V4 rebuild request service estimates status rebuild rows from written list modes', async () => {
+  const {database} = createFakeRequestDatabase({
+    ...baseStats,
+    enabledPromptCount: 2,
+    humanJudgmentCount: 0,
+    judgmentCount: 0,
+    promptCount: 2,
+    scopedArticleCount: 30_000,
+    summaryHumanJudgmentCount: 0,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['llmStatus'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      database,
+    ),
+  )
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+})
+
+test('V4 rebuild request service includes selected-import posting facets in admission budgets', async () => {
+  const {database} = createFakeRequestDatabase({
+    ...baseStats,
+    enabledPromptCount: 0,
+    humanJudgmentCount: 0,
+    judgmentCount: 0,
+    promptCount: 0,
+    scopedArticleCount: 40_000,
+    summaryHumanJudgmentCount: 0,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['posting'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      database,
+    ),
+  )
+
+  expect(request.status).toBe('blocked_over_budget')
+  expect(request.overBudgetReason).toBe('input rows: estimated 640000 > max 250000')
+})
+
+test('V4 rebuild request service includes placeholder detail rows in payload bytes', async () => {
+  const {database} = createFakeRequestDatabase({
+    ...baseStats,
+    enabledPromptCount: 7,
+    humanJudgmentCount: 0,
+    judgmentCount: 0,
+    promptCount: 7,
+    scopedArticleCount: 10_000,
+    summaryHumanJudgmentCount: 0,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {
+        components: ['judgmentInputContent', 'payload'],
+        projectId: 'project-v4',
+        reason: 'requestReviewServingLargeRebuild',
+      },
+      database,
+    ),
+  )
+
+  expect(request.status).toBe('blocked_over_budget')
+  expect(request.overBudgetReason).toBe('payload bytes: estimated 76800000 > max 67108864')
 })
 
 test('V4 rebuild request service scales admission estimates by queued snapshots', async () => {

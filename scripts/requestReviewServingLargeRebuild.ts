@@ -3,6 +3,11 @@ import {getAppDatabaseService} from '../src/server/services/appDatabaseService.t
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 
 type RequestReviewServingLargeRebuildOptions = {includeArchived: boolean; projectId: string | null}
+type RequestReviewServingLargeRebuildFailure = {error: string; projectId: string}
+type RequestReviewServingLargeRebuildResult = {
+  failedProjects: RequestReviewServingLargeRebuildFailure[]
+  requestIds: string[]
+}
 
 const getRequestOptions = (): RequestReviewServingLargeRebuildOptions => {
   const projectIdArg = process.argv.slice(2).find((argument) => {
@@ -37,21 +42,48 @@ const getProjectIds = async (options: RequestReviewServingLargeRebuildOptions) =
   })
 }
 
-const requestProjectLargeRebuilds = async (projectIds: string[], index = 0): Promise<string[]> => {
+const getFailureMessage = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error)
+  const details = String(error)
+  const rebuildChunkMessage = details.match(/Review rebuild request [^\n]+ created no rebuild chunks/u)?.[0]
+
+  return rebuildChunkMessage ?? message
+}
+
+const getRequestStatus = (result: RequestReviewServingLargeRebuildResult) => {
+  return result.failedProjects.length === 0
+    ? 'requested'
+    : result.requestIds.length === 0
+      ? 'failed'
+      : 'requested_with_failures'
+}
+
+const requestProjectLargeRebuilds = async (
+  projectIds: string[],
+  index = 0,
+): Promise<RequestReviewServingLargeRebuildResult> => {
   const currentProjectId = projectIds[index]
 
   if (!currentProjectId) {
-    return []
+    return {failedProjects: [], requestIds: []}
   }
 
   console.log(`[requestReviewServingLargeRebuild] requesting ${index + 1}/${projectIds.length} ${currentProjectId}`)
-  const request = await requestReviewServingV4Rebuild({
-    projectId: currentProjectId,
-    reason: 'requestReviewServingLargeRebuild',
-  })
-  const remainingRequestIds = await requestProjectLargeRebuilds(projectIds, index + 1)
+  try {
+    const request = await requestReviewServingV4Rebuild({
+      projectId: currentProjectId,
+      reason: 'requestReviewServingLargeRebuild',
+    })
+    const remaining = await requestProjectLargeRebuilds(projectIds, index + 1)
 
-  return [request.requestId, ...remainingRequestIds]
+    return {failedProjects: remaining.failedProjects, requestIds: [request.requestId, ...remaining.requestIds]}
+  } catch (error) {
+    const failure = {error: getFailureMessage(error), projectId: currentProjectId}
+    console.error(`[requestReviewServingLargeRebuild] failed ${currentProjectId}: ${failure.error}`)
+    const remaining = await requestProjectLargeRebuilds(projectIds, index + 1)
+
+    return {failedProjects: [failure, ...remaining.failedProjects], requestIds: remaining.requestIds}
+  }
 }
 
 const main = async () => {
@@ -66,13 +98,15 @@ const main = async () => {
       return
     }
 
-    const requestIds = await requestProjectLargeRebuilds(projectIds)
+    const result = await requestProjectLargeRebuilds(projectIds)
     console.log(
       JSON.stringify({
+        failedCount: result.failedProjects.length,
+        failedProjects: result.failedProjects,
         projectCount: projectIds.length,
-        requestIds,
-        requestedCount: requestIds.length,
-        status: 'requested',
+        requestIds: result.requestIds,
+        requestedCount: result.requestIds.length,
+        status: getRequestStatus(result),
       }),
     )
   })

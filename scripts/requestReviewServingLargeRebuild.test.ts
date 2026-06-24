@@ -44,6 +44,8 @@ test('requestReviewServingLargeRebuild CLI requests active project large rebuild
   }
 
   const response = JSON.parse(getLastJsonLine(result.stdout.toString())) as {
+    failedCount: number
+    failedProjects: Array<{error: string; projectId: string}>
     projectCount: number
     requestIds: string[]
     requestedCount: number
@@ -58,7 +60,13 @@ test('requestReviewServingLargeRebuild CLI requests active project large rebuild
     'SELECT CAST(COUNT(*) AS INTEGER) AS count FROM app.project_mart_large_rebuild_state WHERE refresh_token > 0',
   ) as Array<{count: number}>
 
-  expect(response).toMatchObject({projectCount: 1, requestedCount: 1, status: 'requested'})
+  expect(response).toMatchObject({
+    failedCount: 0,
+    failedProjects: [],
+    projectCount: 1,
+    requestedCount: 1,
+    status: 'requested',
+  })
   expect(response.requestIds).toHaveLength(1)
   expect(requestRows).toEqual([
     {
@@ -69,4 +77,58 @@ test('requestReviewServingLargeRebuild CLI requests active project large rebuild
     },
   ])
   expect(legacyRow).toEqual({count: 0})
+})
+
+test('requestReviewServingLargeRebuild CLI continues after an empty active project', () => {
+  const duckdbPath = join(projectRoot, '.tmp', 'request-review-serving-large-rebuild-empty-project.duckdb')
+  seedLargeRebuildCommandProjectDatabase({
+    duckdbPath,
+    projects: [
+      {projectId: 'project-empty-review-serving-large-rebuild', skipRebuildSeed: true},
+      {projectId: 'project-valid-review-serving-large-rebuild'},
+    ],
+  })
+
+  const result = globalThis.Bun.spawnSync(['bun', 'scripts/requestReviewServingLargeRebuild.ts'], {
+    cwd: projectRoot,
+    env: {...defaultLargeRebuildCommandTestEnv, DUCKDB_PATH: duckdbPath},
+  })
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      result.stderr.toString() || result.stdout.toString() || 'request review serving large rebuild failed',
+    )
+  }
+
+  const response = JSON.parse(getLastJsonLine(result.stdout.toString())) as {
+    failedCount: number
+    failedProjects: Array<{error: string; projectId: string}>
+    projectCount: number
+    requestIds: string[]
+    requestedCount: number
+    status: string
+  }
+  const requestRows = runQuery(
+    duckdbPath,
+    'SELECT project_id AS projectId, reason, status, admission_state AS admissionState FROM app.review_rebuild_request ORDER BY project_id ASC',
+  ) as Array<{admissionState: string; projectId: string; reason: string; status: string}>
+
+  expect(response).toMatchObject({
+    failedCount: 1,
+    projectCount: 2,
+    requestedCount: 1,
+    status: 'requested_with_failures',
+  })
+  expect(response.failedProjects).toHaveLength(1)
+  expect(response.failedProjects[0]?.projectId).toBe('project-empty-review-serving-large-rebuild')
+  expect(response.failedProjects[0]?.error).toContain('created no rebuild chunks')
+  expect(response.requestIds).toHaveLength(1)
+  expect(requestRows).toEqual([
+    {
+      admissionState: 'admitted',
+      projectId: 'project-valid-review-serving-large-rebuild',
+      reason: 'requestReviewServingLargeRebuild',
+      status: 'admitted',
+    },
+  ])
 })
