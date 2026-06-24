@@ -3,7 +3,7 @@ import {Effect} from 'effect'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import type {ReviewServingChunkManifestRepositoryDatabase} from './reviewServingChunkManifestRepository.ts'
-import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {reviewServingListModes, type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {
   createReviewServingRebuildRequest,
   type ReviewServingRebuildRequest,
@@ -73,20 +73,49 @@ export type RequestReviewServingV4RebuildInput = {
   reason: string
 }
 
-const promptScaledComponents = new Set<ReviewServingProjectionComponent>([
-  'humanStatus',
-  'judgmentInputContent',
-  'llmStatus',
-  'payload',
-  'posting',
-  'queue',
-  'summary',
-])
+const listModeFanOut = reviewServingListModes.length
+const payloadJudgmentFanOut = 2
+const articleScaledComponentFanOut = {
+  display: listModeFanOut,
+  humanStatus: 1,
+  judgmentInputContent: 1,
+  llmStatus: 1,
+  payload: 1,
+  posting: listModeFanOut,
+  projectScope: 1,
+  queue: 1,
+  search: 1,
+  selectedImport: listModeFanOut,
+  summary: listModeFanOut,
+} satisfies Record<ReviewServingProjectionComponent, number>
+const promptScaledComponentFanOut = {
+  display: 0,
+  humanStatus: listModeFanOut,
+  judgmentInputContent: 1,
+  llmStatus: listModeFanOut,
+  payload: payloadJudgmentFanOut,
+  posting: listModeFanOut,
+  projectScope: 0,
+  queue: payloadJudgmentFanOut,
+  search: 0,
+  selectedImport: 0,
+  summary: listModeFanOut,
+} satisfies Record<ReviewServingProjectionComponent, number>
 
-const getPromptScaledComponentCount = (components: readonly ReviewServingProjectionComponent[]) => {
-  return components.filter((component) => {
-    return promptScaledComponents.has(component)
-  }).length
+const getArticleScaledComponentFanOut = (components: readonly ReviewServingProjectionComponent[]) => {
+  return components.reduce((total, component) => {
+    return total + articleScaledComponentFanOut[component]
+  }, 0)
+}
+
+const getPromptScaledComponentFanOut = (components: readonly ReviewServingProjectionComponent[]) => {
+  return components.reduce((total, component) => {
+    return total + promptScaledComponentFanOut[component]
+  }, 0)
+}
+
+const getHasPayloadComponent = (components: readonly ReviewServingProjectionComponent[]) => {
+  return components.includes('payload')
 }
 
 const getSafeCount = (value: number | string | null | undefined) => {
@@ -109,9 +138,11 @@ const getReviewServingV4RebuildEstimate = (
   const humanJudgmentCount = getSafeCount(stats.humanJudgmentCount)
   const summaryHumanJudgmentCount = getSafeCount(stats.summaryHumanJudgmentCount)
   const snapshotCount = getSafeCount(stats.snapshotCount)
-  const componentInputRows = scopedArticleCount * components.length * snapshotCount
-  const promptInputRows = scopedArticleCount * promptCount * getPromptScaledComponentCount(components) * snapshotCount
-  const estimatedPayloadRows = (judgmentCount + humanJudgmentCount + summaryHumanJudgmentCount) * snapshotCount
+  const componentInputRows = scopedArticleCount * getArticleScaledComponentFanOut(components) * snapshotCount
+  const promptInputRows = scopedArticleCount * promptCount * getPromptScaledComponentFanOut(components) * snapshotCount
+  const estimatedPayloadRows = getHasPayloadComponent(components)
+    ? (judgmentCount + humanJudgmentCount + summaryHumanJudgmentCount) * payloadJudgmentFanOut * snapshotCount
+    : 0
   const estimatedInputRows = componentInputRows + promptInputRows + estimatedPayloadRows
 
   return {

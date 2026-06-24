@@ -220,6 +220,54 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
       INSERT INTO app.project_article (id, project_id, article_id)
       VALUES ('recover-apply-project-article', 'recover-apply-project', 'recover-apply-article');
 
+      INSERT INTO app.review_projection_identity_manifest (
+        manifest_id,
+        project_id,
+        projection_component,
+        projection_identity,
+        base_generation,
+        patch_watermark,
+        input_watermark,
+        input_digest,
+        definition_version,
+        status
+      ) VALUES (
+        'recover-apply-summary-manifest',
+        'recover-apply-project',
+        'summary',
+        'summary:recover-apply',
+        1,
+        1,
+        1,
+        'summary-digest',
+        'summary:v1',
+        'active'
+      );
+
+      INSERT INTO app.review_serving_snapshot_manifest (
+        project_id,
+        snapshot_id,
+        snapshot_status,
+        review_config_hash,
+        composed_identity_json,
+        component_state_json,
+        required_components_json,
+        optional_components_json,
+        source_watermarks_json,
+        activated_at
+      ) VALUES (
+        'recover-apply-project',
+        'recover-apply-snapshot',
+        'active',
+        'recover-apply-review-config',
+        '{}'::JSON,
+        '{"required":[{"component":"summary","projectionIdentity":"summary:recover-apply","baseGeneration":1,"patchWatermark":1}],"optional":[]}'::JSON,
+        '["summary"]'::JSON,
+        '[]'::JSON,
+        '{}'::JSON,
+        TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
+      );
+
       INSERT INTO app.project_mart_refresh_state (
         project_id,
         dirty_token,
@@ -324,24 +372,25 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
     duckdbPath,
     "SELECT refresh_status AS refreshStatus, worker_id AS workerId, lease_expires_at AS leaseExpiresAt, superseded_at AS supersededAt FROM app.project_mart_large_rebuild_state WHERE project_id = 'recover-apply-project'",
   )
+  const [requestCount] = runQuery<Array<{requestCount: number}>>(
+    duckdbPath,
+    "SELECT CAST(COUNT(*) AS INTEGER) AS requestCount FROM app.review_rebuild_request WHERE project_id = 'recover-apply-project'",
+  )
 
   expect(result.recoverAttempted).toBe(true)
   expect(result.status).toBe('recovered')
   expect(result.recoveryResult).toMatchObject({
     kind: 'v4_rebuild_request',
     projectIds: ['recover-apply-project'],
-    reason: 'recoverDirtyRefreshClaims.staleDirtyMaterialization',
+    reason: 'recoverDirtyRefreshClaims.staleLegacyClaim',
   })
   expect(result.recoveryResult.requestIds).toHaveLength(1)
   expect(
     result.recoveryResults.map((recoveryResult) => {
       return recoveryResult.reason
     }),
-  ).toEqual([
-    'recoverDirtyRefreshClaims.staleDirtyMaterialization',
-    'recoverDirtyRefreshClaims.staleDirtyRefreshClaim',
-    'recoverDirtyRefreshClaims.staleLargeRebuildClaim',
-  ])
+  ).toEqual(['recoverDirtyRefreshClaims.staleLegacyClaim'])
+  expect(requestCount?.requestCount).toBe(1)
   expect(state).toEqual({activeDirtyToken: 0, lastCompletedDirtyToken: 1, leaseExpiresAt: null, refreshStatus: 'idle'})
   expect(materializationState).toEqual({
     leaseExpiresAt: null,

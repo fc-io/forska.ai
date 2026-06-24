@@ -349,21 +349,41 @@ const getRebuildChunkRowsEffect = (
   return queryEffect<RebuildChunkStateRow>(
     database,
     `
+      WITH latest_request AS (
+        SELECT request_id
+        FROM app.review_rebuild_request
+        WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
+        ORDER BY updated_at DESC, created_at DESC, request_id DESC
+        LIMIT 1
+      )
       SELECT
-        CAST(COUNT(*) FILTER (WHERE status = 'pending') AS INTEGER) AS pendingCount,
-        CAST(COUNT(*) FILTER (WHERE status = 'running') AS INTEGER) AS runningCount,
-        CAST(COUNT(*) FILTER (WHERE status = 'failed') AS INTEGER) AS failedCount,
-        CAST(COUNT(*) FILTER (WHERE status = 'completed') AS INTEGER) AS completedCount,
-        CAST(COUNT(*) FILTER (WHERE status = 'blocked_over_budget') AS INTEGER) AS blockedOverBudgetCount,
-        CAST(COUNT(*) FILTER (WHERE status = 'quarantined') AS INTEGER) AS quarantinedCount,
-        CAST(COUNT(*) FILTER (WHERE status = 'running' AND lease_expires_at <= ${getSqlLiteral(now)}) AS INTEGER) AS expiredLeaseCount,
-        MIN(created_at) FILTER (
-          WHERE status IN ('pending', 'failed')
-            OR (status = 'running' AND lease_expires_at <= ${getSqlLiteral(now)})
+        CAST(COUNT(*) FILTER (WHERE chunk.status = 'pending') AS INTEGER) AS pendingCount,
+        CAST(COUNT(*) FILTER (WHERE chunk.status = 'running') AS INTEGER) AS runningCount,
+        CAST(COUNT(*) FILTER (WHERE chunk.status = 'failed') AS INTEGER) AS failedCount,
+        CAST(COUNT(*) FILTER (WHERE chunk.status = 'completed') AS INTEGER) AS completedCount,
+        CAST(COUNT(*) FILTER (
+          WHERE chunk.status = 'blocked_over_budget'
+            AND (
+              latest_request.request_id IS NULL
+              OR chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
+            )
+        ) AS INTEGER) AS blockedOverBudgetCount,
+        CAST(COUNT(*) FILTER (
+          WHERE chunk.status = 'quarantined'
+            AND (
+              latest_request.request_id IS NULL
+              OR chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
+            )
+        ) AS INTEGER) AS quarantinedCount,
+        CAST(COUNT(*) FILTER (WHERE chunk.status = 'running' AND chunk.lease_expires_at <= ${getSqlLiteral(now)}) AS INTEGER) AS expiredLeaseCount,
+        MIN(chunk.created_at) FILTER (
+          WHERE chunk.status IN ('pending', 'failed')
+            OR (chunk.status = 'running' AND chunk.lease_expires_at <= ${getSqlLiteral(now)})
         ) AS oldestQueuedAt,
-        MAX(updated_at) AS updatedAt
-      FROM app.review_rebuild_chunk_manifest
-      WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
+        MAX(chunk.updated_at) AS updatedAt
+      FROM app.review_rebuild_chunk_manifest chunk
+      LEFT JOIN latest_request ON TRUE
+      WHERE chunk.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
     `,
   )
 }

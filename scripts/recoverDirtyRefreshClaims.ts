@@ -6,6 +6,8 @@ type CliOptions = {recover: boolean; yes: boolean}
 
 type RecoveryResult = {kind: 'v4_rebuild_request'; projectIds: string[]; reason: string; requestIds: string[]}
 
+const staleLegacyClaimRecoveryReason = 'recoverDirtyRefreshClaims.staleLegacyClaim'
+
 type StaleDirtyRefreshClaimRow = {
   activeDirtyToken: number | string
   dirtyToken: number | string
@@ -303,41 +305,37 @@ const releaseStaleLargeRebuildClaims = async (rows: StaleLargeRebuildClaimRow[])
   `)
 }
 
-const recoverDirtyMaterializations = async (rows: StaleDirtyMaterializationClaimRow[]) => {
-  const recoveryResults = await queueV4RecoveryRequests({
-    projectIds: rows.map((row) => {
+const getStaleLegacyClaimProjectIds = (input: {
+  dirtyMaterializations: StaleDirtyMaterializationClaimRow[]
+  dirtyRefreshClaims: StaleDirtyRefreshClaimRow[]
+  largeRebuildClaims: StaleLargeRebuildClaimRow[]
+}) => {
+  return getUniqueProjectIds([
+    ...input.dirtyMaterializations.map((row) => {
       return row.projectId
     }),
-    reason: 'recoverDirtyRefreshClaims.staleDirtyMaterialization',
-  })
-
-  await releaseStaleDirtyMaterializationClaims(rows)
-
-  return recoveryResults
+    ...input.dirtyRefreshClaims.map((row) => {
+      return row.projectId
+    }),
+    ...input.largeRebuildClaims.map((row) => {
+      return row.projectId
+    }),
+  ])
 }
 
-const recoverDirtyRefreshClaims = async (rows: StaleDirtyRefreshClaimRow[]) => {
+const recoverStaleLegacyClaims = async (input: {
+  dirtyMaterializations: StaleDirtyMaterializationClaimRow[]
+  dirtyRefreshClaims: StaleDirtyRefreshClaimRow[]
+  largeRebuildClaims: StaleLargeRebuildClaimRow[]
+}) => {
   const recoveryResults = await queueV4RecoveryRequests({
-    projectIds: rows.map((row) => {
-      return row.projectId
-    }),
-    reason: 'recoverDirtyRefreshClaims.staleDirtyRefreshClaim',
+    projectIds: getStaleLegacyClaimProjectIds(input),
+    reason: staleLegacyClaimRecoveryReason,
   })
 
-  await releaseStaleDirtyRefreshClaims(rows)
-
-  return recoveryResults
-}
-
-const recoverLargeRebuildClaims = async (rows: StaleLargeRebuildClaimRow[]) => {
-  const recoveryResults = await queueV4RecoveryRequests({
-    projectIds: rows.map((row) => {
-      return row.projectId
-    }),
-    reason: 'recoverDirtyRefreshClaims.staleLargeRebuildClaim',
-  })
-
-  await releaseStaleLargeRebuildClaims(rows)
+  await releaseStaleDirtyMaterializationClaims(input.dirtyMaterializations)
+  await releaseStaleDirtyRefreshClaims(input.dirtyRefreshClaims)
+  await releaseStaleLargeRebuildClaims(input.largeRebuildClaims)
 
   return recoveryResults
 }
@@ -375,11 +373,11 @@ export const recoverDirtyRefreshClaimState = async () => {
       throw new Error('Refusing recovery without --yes')
     }
 
-    const recoveryResults = [
-      ...(await recoverDirtyMaterializations(dirtyMaterializations)),
-      ...(await recoverDirtyRefreshClaims(dirtyRefreshClaims)),
-      ...(await recoverLargeRebuildClaims(largeRebuildClaims)),
-    ]
+    const recoveryResults = await recoverStaleLegacyClaims({
+      dirtyMaterializations,
+      dirtyRefreshClaims,
+      largeRebuildClaims,
+    })
 
     console.log(
       JSON.stringify({
