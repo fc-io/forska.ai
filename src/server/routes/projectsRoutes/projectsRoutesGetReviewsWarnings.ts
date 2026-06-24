@@ -873,9 +873,18 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
         : isProjectRunning
           ? 0
           : pendingArticleRefreshInfo.queuedRefreshCount
+    const expiredRebuildChunkLeaseCount = Math.min(
+      servingDiagnostics.rebuildChunks.runningCount,
+      servingDiagnostics.rebuildChunks.expiredLeaseCount,
+    )
     const queuedRebuildChunkCount =
-      servingDiagnostics.rebuildChunks.pendingCount + servingDiagnostics.rebuildChunks.failedCount
-    const inFlightRebuildChunkCount = servingDiagnostics.rebuildChunks.runningCount
+      servingDiagnostics.rebuildChunks.pendingCount
+      + servingDiagnostics.rebuildChunks.failedCount
+      + expiredRebuildChunkLeaseCount
+    const inFlightRebuildChunkCount = getNonNegativeDifference(
+      servingDiagnostics.rebuildChunks.runningCount,
+      expiredRebuildChunkLeaseCount,
+    )
     const pendingRebuildChunkCount = queuedRebuildChunkCount + inFlightRebuildChunkCount
     const terminalRebuildChunkCount =
       servingDiagnostics.rebuildChunks.blockedOverBudgetCount + servingDiagnostics.rebuildChunks.quarantinedCount
@@ -962,7 +971,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
             projectRefreshState.dirtyMaterialization.lastProgressedAt,
             projectLargeRebuildState.lastCompletedAt,
             isLargeRebuildRunning ? projectLargeRebuildState.updatedAt : null,
-            servingDiagnostics.rebuildChunks.runningCount > 0 ? servingDiagnostics.rebuildChunks.updatedAt : null,
+            inFlightRebuildChunkCount > 0 ? servingDiagnostics.rebuildChunks.updatedAt : null,
             ...freshMaintenanceLeases.map((lease) => {
               return lease.lastProgressedAt
             }),

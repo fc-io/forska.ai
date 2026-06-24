@@ -187,6 +187,11 @@ const getJsonSqlLiteral = (value: unknown) => {
 }
 
 const activeRebuildChunkStatusSql = "('completed', 'running', 'failed', 'blocked_over_budget', 'quarantined')"
+const rebuildChunkPrerequisiteComponents = [
+  'projectScope',
+  'selectedImport',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+const rebuildChunkPrerequisiteComponentSql = `(${rebuildChunkPrerequisiteComponents.map(getSqlLiteral).join(', ')})`
 
 const getChunkRequestId = (input: ReviewServingRebuildChunkIdentity) => {
   return input.requestId ?? null
@@ -391,6 +396,18 @@ const getReviewServingRebuildChunkClaimPredicate = (input: {now: Date | string},
             request.retry_after IS NULL
             OR request.retry_after <= ${getReviewServingChunkTimestampLiteral(input.now)}
           )
+      )
+    )
+    AND (
+      ${source}request_id IS NULL
+      OR ${source}projection_component IN ${rebuildChunkPrerequisiteComponentSql}
+      OR NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest prerequisite
+        WHERE prerequisite.request_id = ${source}request_id
+          AND prerequisite.project_id IS NOT DISTINCT FROM ${source}project_id
+          AND prerequisite.projection_component IN ${rebuildChunkPrerequisiteComponentSql}
+          AND prerequisite.status <> 'completed'
       )
     )
   `

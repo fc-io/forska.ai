@@ -10,9 +10,13 @@ type FakeStats = {
   humanJudgmentUpdatedAt: string | null
   judgmentCount: number
   judgmentUpdatedAt: string | null
+  modelExecutionIdentityDigest: string | null
+  modelUpdatedAt: string | null
+  patchPromptUpdatedAt: string | null
   promptCount: number
   promptIdentityDigest: string | null
   promptUpdatedAt: string | null
+  providerConnectionUpdatedAt: string | null
   projectArticleUpdatedAt: string | null
   projectPromptUpdatedAt: string | null
   projectUpdatedAt: string
@@ -61,9 +65,13 @@ const baseStats = {
   humanJudgmentUpdatedAt: '2026-06-20T10:03:00.000Z',
   judgmentCount: 12,
   judgmentUpdatedAt: '2026-06-20T10:02:00.000Z',
+  modelExecutionIdentityDigest: 'model-execution-digest-v1',
+  modelUpdatedAt: '2026-06-20T10:01:45.000Z',
+  patchPromptUpdatedAt: '2026-06-20T10:01:50.000Z',
   promptCount: 2,
   promptIdentityDigest: 'prompt-digest-v1',
   promptUpdatedAt: '2026-06-20T10:01:30.000Z',
+  providerConnectionUpdatedAt: '2026-06-20T10:01:40.000Z',
   projectArticleUpdatedAt: '2026-06-20T10:00:00.000Z',
   projectPromptUpdatedAt: '2026-06-20T10:01:00.000Z',
   projectUpdatedAt: '2026-06-20T09:59:00.000Z',
@@ -203,8 +211,18 @@ test('V4 rebuild request service estimates admission budget from project data', 
   expect(request.status).toBe('blocked_over_budget')
   expect(request.overBudgetReason).toContain('input rows')
   expect(request.sourceWatermarksJson).toMatchObject({
+    modelExecution: {
+      identityDigest: 'model-execution-digest-v1',
+      modelUpdatedAt: '2026-06-20T10:01:45.000Z',
+      providerConnectionUpdatedAt: '2026-06-20T10:01:40.000Z',
+    },
     projectArticles: {count: 100_000, updatedAt: '2026-06-20T10:00:00.000Z'},
-    projectPrompts: {count: 4, updatedAt: '2026-06-20T10:01:00.000Z'},
+    projectPrompts: {
+      count: 4,
+      enabledCount: 4,
+      patchUpdatedAt: '2026-06-20T10:01:50.000Z',
+      updatedAt: '2026-06-20T10:01:00.000Z',
+    },
     prompts: {count: 4, identityDigest: 'prompt-digest-v1', updatedAt: '2026-06-20T10:01:30.000Z'},
     snapshots: {count: 1, updatedAt: '2026-06-20T10:03:45.000Z'},
     summaryHumanJudgments: {count: 1_000, updatedAt: '2026-06-20T10:03:30.000Z'},
@@ -213,9 +231,18 @@ test('V4 rebuild request service estimates admission budget from project data', 
   expect(joined).toContain('INNER JOIN app.article_import_route')
   expect(joined).toContain('scoped_article_id AS')
   expect(joined).toContain('SELECT DISTINCT article_id')
+  expect(joined).toContain('LEFT JOIN app.model model ON model.id = project.model_id')
+  expect(joined).toContain('LEFT JOIN app.provider_connection provider_connection')
+  expect(joined).toContain('model_execution_identity_digest')
+  expect(joined).toContain('rebuild_prompt_source AS')
+  expect(joined).toContain('FROM mart.review_llm_status_patch_v4 llm')
+  expect(joined).toContain('FROM mart.review_human_status_patch_v4 human')
+  expect(joined).toContain('FROM rebuild_prompt')
   expect(joined).toContain('INNER JOIN scoped_article_id ON scoped_article_id.article_id = judgment.article_id')
   expect(joined).not.toContain('INNER JOIN scoped_article ON scoped_article.article_id = judgment.article_id')
-  expect(joined).toContain('INNER JOIN enabled_prompt ON enabled_prompt.prompt_id = judgment.prompt_id')
+  expect(joined).toContain('INNER JOIN rebuild_prompt ON rebuild_prompt.prompt_id = judgment.prompt_id')
+  expect(joined).toContain('INNER JOIN rebuild_prompt ON rebuild_prompt.prompt_id = human.prompt_id')
+  expect(joined).toContain('INNER JOIN scoped_article_id ON scoped_article_id.article_id = human.article_id')
   expect(joined).toContain('INNER JOIN app.prompt prompt ON prompt.id = project_prompt.prompt_id')
   expect(joined).toContain('AND COALESCE(prompt.archived, FALSE) = FALSE')
   expect(joined).toContain('COALESCE(prompt.content_hash, sha256(prompt.original_text))')
@@ -271,6 +298,26 @@ test('V4 rebuild request service watermarks make changed data produce a new requ
 test('V4 rebuild request service prompt watermarks make changed prompt identity produce a new request id', async () => {
   const first = createFakeRequestDatabase(baseStats)
   const second = createFakeRequestDatabase({...baseStats, promptIdentityDigest: 'prompt-digest-v2'})
+
+  const firstRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['summary'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      first.database,
+    ),
+  )
+  const secondRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['summary'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      second.database,
+    ),
+  )
+
+  expect(firstRequest.requestId).not.toBe(secondRequest.requestId)
+})
+
+test('V4 rebuild request service model watermarks make changed execution identity produce a new request id', async () => {
+  const first = createFakeRequestDatabase(baseStats)
+  const second = createFakeRequestDatabase({...baseStats, modelExecutionIdentityDigest: 'model-execution-digest-v2'})
 
   const firstRequest = await Effect.runPromise(
     requestReviewServingV4RebuildEffect(
