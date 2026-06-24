@@ -74,14 +74,18 @@ export type RequestReviewServingV4RebuildInput = {
 }
 
 const listModeFanOut = reviewServingListModes.length
-const payloadJudgmentFanOut = 2
+const llmStatusListModeFanOut = 2
+const humanStatusListModeFanOut = 2
+const queuePayloadFanOut = 2
+const selectedImportPostingFilterFanOut = 4
+const selectedImportPostingFanOut = listModeFanOut * selectedImportPostingFilterFanOut
 const articleScaledComponentFanOut = {
   display: listModeFanOut,
-  humanStatus: 1,
-  judgmentInputContent: 1,
-  llmStatus: 1,
-  payload: 1,
-  posting: listModeFanOut,
+  humanStatus: 0,
+  judgmentInputContent: 0,
+  llmStatus: 0,
+  payload: 0,
+  posting: selectedImportPostingFanOut,
   projectScope: 1,
   queue: 1,
   search: 1,
@@ -90,13 +94,13 @@ const articleScaledComponentFanOut = {
 } satisfies Record<ReviewServingProjectionComponent, number>
 const promptScaledComponentFanOut = {
   display: 0,
-  humanStatus: listModeFanOut,
-  judgmentInputContent: 1,
-  llmStatus: listModeFanOut,
-  payload: payloadJudgmentFanOut,
+  humanStatus: humanStatusListModeFanOut,
+  judgmentInputContent: 0,
+  llmStatus: llmStatusListModeFanOut,
+  payload: 0,
   posting: listModeFanOut,
   projectScope: 0,
-  queue: payloadJudgmentFanOut,
+  queue: queuePayloadFanOut,
   search: 0,
   selectedImport: 0,
   summary: listModeFanOut,
@@ -114,8 +118,23 @@ const getPromptScaledComponentFanOut = (components: readonly ReviewServingProjec
   }, 0)
 }
 
-const getHasPayloadComponent = (components: readonly ReviewServingProjectionComponent[]) => {
-  return components.includes('payload')
+const getEstimatedPayloadRows = (input: {
+  components: readonly ReviewServingProjectionComponent[]
+  enabledPromptCount: number
+  humanJudgmentCount: number
+  scopedArticleCount: number
+  snapshotCount: number
+  summaryHumanJudgmentCount: number
+}) => {
+  const articlePayloadRows = input.components.includes('payload') ? input.scopedArticleCount : 0
+  const llmDetailRows = input.components.includes('judgmentInputContent')
+    ? input.scopedArticleCount * input.enabledPromptCount * llmStatusListModeFanOut
+    : 0
+  const humanDetailRows = input.components.includes('judgmentInputContent')
+    ? (input.humanJudgmentCount + input.summaryHumanJudgmentCount) * humanStatusListModeFanOut
+    : 0
+
+  return (articlePayloadRows + llmDetailRows + humanDetailRows) * input.snapshotCount
 }
 
 const getSafeCount = (value: number | string | null | undefined) => {
@@ -134,15 +153,20 @@ const getReviewServingV4RebuildEstimate = (
 ): ReviewServingRebuildRequestEstimate => {
   const scopedArticleCount = getSafeCount(stats.scopedArticleCount)
   const promptCount = getSafeCount(stats.promptCount)
-  const judgmentCount = getSafeCount(stats.judgmentCount)
+  const enabledPromptCount = getSafeCount(stats.enabledPromptCount)
   const humanJudgmentCount = getSafeCount(stats.humanJudgmentCount)
   const summaryHumanJudgmentCount = getSafeCount(stats.summaryHumanJudgmentCount)
   const snapshotCount = getSafeCount(stats.snapshotCount)
   const componentInputRows = scopedArticleCount * getArticleScaledComponentFanOut(components) * snapshotCount
   const promptInputRows = scopedArticleCount * promptCount * getPromptScaledComponentFanOut(components) * snapshotCount
-  const estimatedPayloadRows = getHasPayloadComponent(components)
-    ? (judgmentCount + humanJudgmentCount + summaryHumanJudgmentCount) * payloadJudgmentFanOut * snapshotCount
-    : 0
+  const estimatedPayloadRows = getEstimatedPayloadRows({
+    components,
+    enabledPromptCount,
+    humanJudgmentCount,
+    scopedArticleCount,
+    snapshotCount,
+    summaryHumanJudgmentCount,
+  })
   const estimatedInputRows = componentInputRows + promptInputRows + estimatedPayloadRows
 
   return {

@@ -13,6 +13,20 @@ export const defaultLargeRebuildCommandTestEnv = {
   VITE_PORT: '39917',
 }
 
+const rebuildSeedComponents = [
+  'projectScope',
+  'selectedImport',
+  'display',
+  'judgmentInputContent',
+  'llmStatus',
+  'humanStatus',
+  'queue',
+  'posting',
+  'summary',
+  'payload',
+  'search',
+] as const
+
 export const getLastJsonLine = (output: string) => {
   const [lastLine = ''] = output
     .trim()
@@ -44,7 +58,92 @@ const prepareDuckdbPath = (duckdbPath: string) => {
   removePathIfExists(`${duckdbPath}.wal`)
 }
 
-const getProjectSeedSql = (projects: Array<{archived?: boolean; projectId: string}>) => {
+const getSqlString = (value: string) => {
+  return `'${value.replaceAll("'", "''")}'`
+}
+
+const getRebuildComponentStateJson = (projectId: string) => {
+  return JSON.stringify({
+    optional: [],
+    required: rebuildSeedComponents.map((component) => {
+      return {baseGeneration: 1, component, patchWatermark: 1, projectionIdentity: `${component}:${projectId}`}
+    }),
+  })
+}
+
+const getProjectRebuildSeedSql = (project: {projectId: string; skipRebuildSeed?: boolean}) => {
+  const componentStateJson = getRebuildComponentStateJson(project.projectId)
+  const articleId = `article-${project.projectId}`
+  const projectionManifestSql = rebuildSeedComponents
+    .map((component) => {
+      return `
+        INSERT INTO app.review_projection_identity_manifest (
+          manifest_id,
+          project_id,
+          projection_component,
+          projection_identity,
+          base_generation,
+          patch_watermark,
+          input_watermark,
+          input_digest,
+          definition_version,
+          status
+        ) VALUES (
+          ${getSqlString(`${component}-manifest-${project.projectId}`)},
+          ${getSqlString(project.projectId)},
+          ${getSqlString(component)},
+          ${getSqlString(`${component}:${project.projectId}`)},
+          1,
+          1,
+          1,
+          ${getSqlString(`${component}-digest-${project.projectId}`)},
+          ${getSqlString(`${component}:v1`)},
+          'active'
+        );
+      `
+    })
+    .join('\n')
+
+  return project.skipRebuildSeed
+    ? ''
+    : `
+        INSERT INTO app.article (id, article_title, article_created_at)
+        VALUES (${getSqlString(articleId)}, ${getSqlString(`Article ${project.projectId}`)}, TIMESTAMPTZ '2026-06-20T00:00:00.000Z');
+
+        INSERT INTO app.project_article (id, project_id, article_id)
+        VALUES (${getSqlString(`project-article-${project.projectId}`)}, ${getSqlString(project.projectId)}, ${getSqlString(articleId)});
+
+        ${projectionManifestSql}
+
+        INSERT INTO app.review_serving_snapshot_manifest (
+          project_id,
+          snapshot_id,
+          snapshot_status,
+          review_config_hash,
+          composed_identity_json,
+          component_state_json,
+          required_components_json,
+          optional_components_json,
+          source_watermarks_json,
+          selected_import_snapshot_id,
+          activated_at
+        ) VALUES (
+          ${getSqlString(project.projectId)},
+          ${getSqlString(`snapshot-${project.projectId}`)},
+          'active',
+          ${getSqlString(`review-config-${project.projectId}`)},
+          '{}'::JSON,
+          ${getSqlString(componentStateJson)}::JSON,
+          ${getSqlString(JSON.stringify(rebuildSeedComponents))}::JSON,
+          '[]'::JSON,
+          '{}'::JSON,
+          ${getSqlString(`selected-import-${project.projectId}`)},
+          TIMESTAMPTZ '2026-06-20T00:00:00.000Z'
+        );
+      `
+}
+
+const getProjectSeedSql = (projects: Array<{archived?: boolean; projectId: string; skipRebuildSeed?: boolean}>) => {
   return projects
     .map((project) => {
       const archivedSql = project.archived === true ? 'TRUE' : 'FALSE'
@@ -75,6 +174,8 @@ const getProjectSeedSql = (projects: Array<{archived?: boolean; projectId: strin
           FALSE,
           FALSE
         );
+
+        ${getProjectRebuildSeedSql(project)}
       `
     })
     .join('\n')
@@ -108,7 +209,7 @@ export const seedLargeRebuildCommandProjectDatabase = ({
   projects,
 }: {
   duckdbPath: string
-  projects: Array<{archived?: boolean; projectId: string}>
+  projects: Array<{archived?: boolean; projectId: string; skipRebuildSeed?: boolean}>
 }) => {
   prepareDuckdbPath(duckdbPath)
 
