@@ -593,6 +593,41 @@ test('failed rebuild chunks record retry backoff and exhaust to the request term
   expect(statements.join('\n')).toContain('retry_after')
 })
 
+test('expired running rebuild chunk leases consume retry policy attempts before reclaim', async () => {
+  const retryIdentity = {
+    ...baseChunkIdentity,
+    requestId: 'rebuild:expired-lease-retry-policy',
+  } satisfies ReviewServingRebuildChunkIdentity
+  const expired = {
+    ...getChunkRowFromIdentity(retryIdentity, []),
+    leaseExpiresAt: '2026-06-16T13:59:00.000Z',
+    leaseOwner: 'worker-dead',
+    status: 'running' as const,
+  }
+  const {database, rows, statements} = createFakeChunkManifestDatabase([expired])
+  const chunkId = getReviewServingRebuildChunkId(retryIdentity)
+
+  const claimed = await claimReviewServingRebuildChunk(
+    {
+      ...retryIdentity,
+      leaseExpiresAt: '2026-06-16T14:05:00.000Z',
+      leaseOwner: 'worker-retry',
+      now: '2026-06-16T14:00:00.000Z',
+    },
+    database,
+  )
+
+  expect(claimed).toBeNull()
+  expect(rows.get(chunkId)).toMatchObject({
+    lastError: 'review rebuild chunk lease expired before completion',
+    leaseOwner: null,
+    retryAfter: '2026-06-16T14:02:00.000Z',
+    retryCount: 1,
+    status: 'failed',
+  })
+  expect(statements.join('\n')).toContain('FROM app.review_rebuild_request')
+})
+
 test('changed maintained input digest creates a different chunk and avoids stale completed skips', async () => {
   const completed = {
     ...getChunkRowFromIdentity(baseChunkIdentity, []),

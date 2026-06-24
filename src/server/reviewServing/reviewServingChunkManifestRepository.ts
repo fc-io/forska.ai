@@ -423,6 +423,18 @@ const getReviewServingRebuildChunkValidationError = (input: ReviewServingRebuild
     : `chunk validation failed: expected checksum ${input.expectedChecksum} and count ${input.expectedCount ?? 'n/a'}, got checksum ${input.actualChecksum} and count ${input.actualCount ?? 'n/a'}`
 }
 
+const getHasExpiredRunningLease = (chunk: ReviewServingRebuildChunkManifest | null, now: Date | string) => {
+  const leaseExpiresAtMs = new Date(chunk?.leaseExpiresAt ?? Number.POSITIVE_INFINITY).getTime()
+  const nowMs = new Date(now).getTime()
+
+  return (
+    chunk?.status === 'running'
+    && Number.isFinite(leaseExpiresAtMs)
+    && Number.isFinite(nowMs)
+    && leaseExpiresAtMs <= nowMs
+  )
+}
+
 export const getReviewServingRebuildChunkManifest = async (
   input: {chunkId: string},
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
@@ -683,6 +695,17 @@ export const claimReviewServingRebuildChunk = async (
   const chunkId = getReviewServingRebuildChunkId(input)
 
   return database.transaction(async (tx) => {
+    const existing = await getReviewServingRebuildChunkManifest({chunkId}, tx)
+
+    if (getHasExpiredRunningLease(existing, input.now)) {
+      await markReviewServingRebuildChunkFailed(
+        {chunkId, error: 'review rebuild chunk lease expired before completion', now: input.now},
+        tx,
+      )
+
+      return null
+    }
+
     await tx.run(`
       UPDATE app.review_rebuild_chunk_manifest AS manifest
       SET

@@ -50,10 +50,15 @@ type ReviewServingV4RebuildStatsRow = {
   humanJudgmentUpdatedAt: string | null
   judgmentCount: number
   judgmentUpdatedAt: string | null
+  promptCount: number
+  promptIdentityDigest: string | null
+  promptUpdatedAt: string | null
   projectArticleUpdatedAt: string | null
   projectPromptUpdatedAt: string | null
   projectUpdatedAt: string
   scopedArticleCount: number
+  snapshotCount: number
+  snapshotUpdatedAt: string | null
   summaryHumanJudgmentCount: number
   summaryHumanJudgmentUpdatedAt: string | null
 }
@@ -99,18 +104,20 @@ const getReviewServingV4RebuildEstimate = (
   const judgmentCount = getSafeCount(stats.judgmentCount)
   const humanJudgmentCount = getSafeCount(stats.humanJudgmentCount)
   const summaryHumanJudgmentCount = getSafeCount(stats.summaryHumanJudgmentCount)
-  const componentInputRows = scopedArticleCount * components.length
-  const promptInputRows = scopedArticleCount * enabledPromptCount * getPromptScaledComponentCount(components)
-  const estimatedInputRows =
-    componentInputRows + promptInputRows + judgmentCount + humanJudgmentCount + summaryHumanJudgmentCount
+  const snapshotCount = getSafeCount(stats.snapshotCount)
+  const componentInputRows = scopedArticleCount * components.length * snapshotCount
+  const promptInputRows =
+    scopedArticleCount * enabledPromptCount * getPromptScaledComponentCount(components) * snapshotCount
+  const estimatedPayloadRows = (judgmentCount + humanJudgmentCount + summaryHumanJudgmentCount) * snapshotCount
+  const estimatedInputRows = componentInputRows + promptInputRows + estimatedPayloadRows
 
   return {
     estimatedInputRows,
     estimatedOutputBytes: getEstimatedOutputBytes(estimatedInputRows),
     estimatedOutputRows: estimatedInputRows,
-    estimatedPayloadBytes: getEstimatedOutputBytes(judgmentCount + humanJudgmentCount + summaryHumanJudgmentCount),
+    estimatedPayloadBytes: getEstimatedOutputBytes(estimatedPayloadRows),
     estimatedPromptCount: enabledPromptCount,
-    estimatedSnapshotCount: 1,
+    estimatedSnapshotCount: snapshotCount,
     estimatedTempBytes: 0,
   }
 }
@@ -122,6 +129,12 @@ const getReviewServingV4RebuildSourceWatermarks = (stats: ReviewServingV4Rebuild
     project: {updatedAt: stats.projectUpdatedAt},
     projectArticles: {count: getSafeCount(stats.scopedArticleCount), updatedAt: stats.projectArticleUpdatedAt},
     projectPrompts: {count: getSafeCount(stats.enabledPromptCount), updatedAt: stats.projectPromptUpdatedAt},
+    prompts: {
+      count: getSafeCount(stats.promptCount),
+      identityDigest: stats.promptIdentityDigest,
+      updatedAt: stats.promptUpdatedAt,
+    },
+    snapshots: {count: getSafeCount(stats.snapshotCount), updatedAt: stats.snapshotUpdatedAt},
     summaryHumanJudgments: {
       count: getSafeCount(stats.summaryHumanJudgmentCount),
       updatedAt: stats.summaryHumanJudgmentUpdatedAt,
@@ -178,31 +191,63 @@ const getReviewServingV4RebuildStats = async (
       WHERE (project.date_from IS NULL OR article.article_created_at >= project.date_from)
         AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
     ),
+    scoped_article_id AS (
+      SELECT DISTINCT article_id
+      FROM scoped_article
+    ),
     enabled_prompt AS (
-      SELECT prompt.prompt_id
-      FROM app.project_prompt prompt
-      INNER JOIN project_settings project ON project.id = prompt.project_id
-      WHERE prompt.enabled = TRUE
-        AND prompt.archived = FALSE
+      SELECT
+        project_prompt.prompt_id,
+        project_prompt.updated_at AS project_prompt_updated_at,
+        prompt.updated_at AS prompt_updated_at,
+        COALESCE(prompt.content_hash, sha256(prompt.original_text)) AS prompt_content_hash
+      FROM app.project_prompt project_prompt
+      INNER JOIN project_settings project ON project.id = project_prompt.project_id
+      INNER JOIN app.prompt prompt ON prompt.id = project_prompt.prompt_id
+      WHERE project_prompt.enabled = TRUE
+        AND project_prompt.archived = FALSE
+        AND COALESCE(prompt.archived, FALSE) = FALSE
+    ),
+    queued_snapshot AS (
+      SELECT DISTINCT
+        snapshot.snapshot_id,
+        snapshot.updated_at
+      FROM app.review_serving_snapshot_manifest snapshot
+      INNER JOIN project_settings project ON project.id = snapshot.project_id
+      WHERE snapshot.snapshot_status IN ('candidate', 'active')
     )
     SELECT
-      CAST((SELECT COUNT(DISTINCT article_id) FROM scoped_article) AS INTEGER) AS scopedArticleCount,
+      CAST((SELECT COUNT(*) FROM scoped_article_id) AS INTEGER) AS scopedArticleCount,
       (SELECT MAX(scoped_updated_at) FROM scoped_article) AS projectArticleUpdatedAt,
       CAST((
         SELECT COUNT(*)
         FROM enabled_prompt
       ) AS INTEGER) AS enabledPromptCount,
+      CAST((
+        SELECT COUNT(*)
+        FROM enabled_prompt
+      ) AS INTEGER) AS promptCount,
       (
-        SELECT MAX(updated_at)
-        FROM app.project_prompt prompt
-        WHERE prompt.project_id = project.id
-          AND prompt.enabled = TRUE
-          AND prompt.archived = FALSE
+        SELECT CASE
+          WHEN COUNT(*) = 0 THEN NULL
+          ELSE sha256(COALESCE(string_agg(prompt_id || ':' || prompt_content_hash, '|' ORDER BY prompt_id), ''))
+        END
+        FROM enabled_prompt
+      ) AS promptIdentityDigest,
+      (
+        SELECT MAX(project_prompt_updated_at)
+        FROM enabled_prompt
       ) AS projectPromptUpdatedAt,
+      (
+        SELECT MAX(prompt_updated_at)
+        FROM enabled_prompt
+      ) AS promptUpdatedAt,
+      CAST((SELECT COUNT(*) FROM queued_snapshot) AS INTEGER) AS snapshotCount,
+      (SELECT MAX(updated_at) FROM queued_snapshot) AS snapshotUpdatedAt,
       CAST((
         SELECT COUNT(*)
         FROM app.judgment judgment
-        INNER JOIN scoped_article ON scoped_article.article_id = judgment.article_id
+        INNER JOIN scoped_article_id ON scoped_article_id.article_id = judgment.article_id
         INNER JOIN enabled_prompt ON enabled_prompt.prompt_id = judgment.prompt_id
         WHERE judgment.model_id = project.model_id
           AND judgment.use_title = project.use_title
@@ -214,7 +259,7 @@ const getReviewServingV4RebuildStats = async (
       (
         SELECT MAX(updated_at)
         FROM app.judgment judgment
-        INNER JOIN scoped_article ON scoped_article.article_id = judgment.article_id
+        INNER JOIN scoped_article_id ON scoped_article_id.article_id = judgment.article_id
         INNER JOIN enabled_prompt ON enabled_prompt.prompt_id = judgment.prompt_id
         WHERE judgment.model_id = project.model_id
           AND judgment.use_title = project.use_title

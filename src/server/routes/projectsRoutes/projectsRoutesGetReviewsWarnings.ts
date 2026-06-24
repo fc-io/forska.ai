@@ -846,7 +846,8 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const canRunMartRefreshDrain =
       maintenanceConsumerAvailability.canRunMartRefreshDrain
       || (shouldCurrentServerRunMaintenanceLoops() && shouldCurrentRuntimeRunMartRefreshDrain())
-    const eligibleConsumerPresent = maintenanceConsumerAvailability.eligibleConsumerPresent || canRunMartRefreshDrain
+    const legacyRefreshConsumerPresent =
+      maintenanceConsumerAvailability.eligibleConsumerPresent || canRunMartRefreshDrain
     const isProjectRunning =
       freshProjectRefreshLeaseCount > 0
       || projectRefreshState.dirtyMaterialization.isActive
@@ -880,10 +881,16 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       servingDiagnostics.rebuildChunks.blockedOverBudgetCount + servingDiagnostics.rebuildChunks.quarantinedCount
     const pendingProjectRefreshCount = queuedProjectRefreshCount + inFlightProjectRefreshCount
     const pendingArticleRefreshCount = queuedArticleRefreshCount + inFlightArticleRefreshCount
+    const pendingLegacyRefreshCount = pendingProjectRefreshCount + pendingArticleRefreshCount
     const queuedRefreshCount = queuedProjectRefreshCount + queuedArticleRefreshCount + queuedRebuildChunkCount
     const inFlightRefreshCount = inFlightProjectRefreshCount + inFlightArticleRefreshCount + inFlightRebuildChunkCount
     const pendingRefreshCount = pendingProjectRefreshCount + pendingArticleRefreshCount + pendingRebuildChunkCount
     const activeWorkCount = inFlightRefreshCount
+    const rebuildChunkConsumerPresent = pendingRebuildChunkCount > 0 && canRunMaintenanceWork
+    const eligibleConsumerPresent =
+      pendingRefreshCount === 0
+        ? legacyRefreshConsumerPresent
+        : (pendingLegacyRefreshCount > 0 && legacyRefreshConsumerPresent) || rebuildChunkConsumerPresent
     const rawBlockedReason = getReviewIndexingBlockedReason({
       canRunMaintenanceWork,
       canRunMartRefreshDrain,

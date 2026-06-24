@@ -10,10 +10,15 @@ type FakeStats = {
   humanJudgmentUpdatedAt: string | null
   judgmentCount: number
   judgmentUpdatedAt: string | null
+  promptCount: number
+  promptIdentityDigest: string | null
+  promptUpdatedAt: string | null
   projectArticleUpdatedAt: string | null
   projectPromptUpdatedAt: string | null
   projectUpdatedAt: string
   scopedArticleCount: number
+  snapshotCount: number
+  snapshotUpdatedAt: string | null
   summaryHumanJudgmentCount: number
   summaryHumanJudgmentUpdatedAt: string | null
 }
@@ -56,10 +61,15 @@ const baseStats = {
   humanJudgmentUpdatedAt: '2026-06-20T10:03:00.000Z',
   judgmentCount: 12,
   judgmentUpdatedAt: '2026-06-20T10:02:00.000Z',
+  promptCount: 2,
+  promptIdentityDigest: 'prompt-digest-v1',
+  promptUpdatedAt: '2026-06-20T10:01:30.000Z',
   projectArticleUpdatedAt: '2026-06-20T10:00:00.000Z',
   projectPromptUpdatedAt: '2026-06-20T10:01:00.000Z',
   projectUpdatedAt: '2026-06-20T09:59:00.000Z',
   scopedArticleCount: 10,
+  snapshotCount: 1,
+  snapshotUpdatedAt: '2026-06-20T10:03:45.000Z',
   summaryHumanJudgmentCount: 3,
   summaryHumanJudgmentUpdatedAt: '2026-06-20T10:03:30.000Z',
 } satisfies FakeStats
@@ -177,6 +187,7 @@ test('V4 rebuild request service estimates admission budget from project data', 
     enabledPromptCount: 4,
     humanJudgmentCount: 2_000,
     judgmentCount: 5_000,
+    promptCount: 4,
     scopedArticleCount: 100_000,
     summaryHumanJudgmentCount: 1_000,
   })
@@ -194,21 +205,72 @@ test('V4 rebuild request service estimates admission budget from project data', 
   expect(request.sourceWatermarksJson).toMatchObject({
     projectArticles: {count: 100_000, updatedAt: '2026-06-20T10:00:00.000Z'},
     projectPrompts: {count: 4, updatedAt: '2026-06-20T10:01:00.000Z'},
+    prompts: {count: 4, identityDigest: 'prompt-digest-v1', updatedAt: '2026-06-20T10:01:30.000Z'},
+    snapshots: {count: 1, updatedAt: '2026-06-20T10:03:45.000Z'},
     summaryHumanJudgments: {count: 1_000, updatedAt: '2026-06-20T10:03:30.000Z'},
   })
   expect(joined).toContain('FROM app.project_import_route')
   expect(joined).toContain('INNER JOIN app.article_import_route')
-  expect(joined).toContain('INNER JOIN scoped_article ON scoped_article.article_id = judgment.article_id')
+  expect(joined).toContain('scoped_article_id AS')
+  expect(joined).toContain('SELECT DISTINCT article_id')
+  expect(joined).toContain('INNER JOIN scoped_article_id ON scoped_article_id.article_id = judgment.article_id')
+  expect(joined).not.toContain('INNER JOIN scoped_article ON scoped_article.article_id = judgment.article_id')
   expect(joined).toContain('INNER JOIN enabled_prompt ON enabled_prompt.prompt_id = judgment.prompt_id')
+  expect(joined).toContain('INNER JOIN app.prompt prompt ON prompt.id = project_prompt.prompt_id')
+  expect(joined).toContain('AND COALESCE(prompt.archived, FALSE) = FALSE')
+  expect(joined).toContain('COALESCE(prompt.content_hash, sha256(prompt.original_text))')
+  expect(joined).toContain("snapshot.snapshot_status IN ('candidate', 'active')")
   expect(joined).toContain('judgment.model_id = project.model_id')
   expect(joined).not.toContain('judgment.project_id = project.id')
   expect(joined).toContain('judgment.use_fulltext_no_images = project.use_fulltext_no_images')
   expect(joined).toContain('FROM app.judgment_human_summary')
 })
 
+test('V4 rebuild request service scales admission estimates by queued snapshots', async () => {
+  const {database} = createFakeRequestDatabase({
+    ...baseStats,
+    enabledPromptCount: 1,
+    humanJudgmentCount: 2,
+    judgmentCount: 4,
+    scopedArticleCount: 10,
+    snapshotCount: 2,
+    summaryHumanJudgmentCount: 1,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['summary', 'payload'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      database,
+    ),
+  )
+
+  expect(request.status).toBe('blocked_over_budget')
+  expect(request.overBudgetReason).toBe('snapshot count: estimated 2 > max 1')
+})
+
 test('V4 rebuild request service watermarks make changed data produce a new request id', async () => {
   const first = createFakeRequestDatabase(baseStats)
   const second = createFakeRequestDatabase({...baseStats, summaryHumanJudgmentUpdatedAt: '2026-06-20T11:00:00.000Z'})
+
+  const firstRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['summary'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      first.database,
+    ),
+  )
+  const secondRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['summary'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      second.database,
+    ),
+  )
+
+  expect(firstRequest.requestId).not.toBe(secondRequest.requestId)
+})
+
+test('V4 rebuild request service prompt watermarks make changed prompt identity produce a new request id', async () => {
+  const first = createFakeRequestDatabase(baseStats)
+  const second = createFakeRequestDatabase({...baseStats, promptIdentityDigest: 'prompt-digest-v2'})
 
   const firstRequest = await Effect.runPromise(
     requestReviewServingV4RebuildEffect(
