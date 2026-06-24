@@ -245,6 +245,8 @@ test('default rebuild request chunks use existing projection identities and real
 
   expect(request).toMatchObject({requestId: 'rebuild:default-identities', status: 'admitted'})
   expect(joined).toContain('FROM app.project_article')
+  expect(joined).toContain('FROM app.project_import_route')
+  expect(joined).toContain('INNER JOIN app.article_import_route')
   expect(joined).toContain('FROM app.review_serving_snapshot_manifest')
   expect(joined).toContain('FROM app.review_projection_identity_manifest')
   expect(joined).toContain("'article-a'")

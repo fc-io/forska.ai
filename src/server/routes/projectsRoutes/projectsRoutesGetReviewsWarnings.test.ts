@@ -130,6 +130,8 @@ type LargeRebuildStateOverrides = {
   workerId?: string | null
 }
 
+type ReviewRebuildChunkStatus = 'blocked_over_budget' | 'completed' | 'failed' | 'pending' | 'quarantined' | 'running'
+
 let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
@@ -407,6 +409,48 @@ const insertReviewServingRow = async (projectId: string, articleId: string) => {
   `)
 }
 
+const insertReviewRebuildChunk = async (input: {
+  chunkId: string
+  createdAt: string
+  projectId: string
+  status: ReviewRebuildChunkStatus
+  updatedAt: string
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.review_rebuild_chunk_manifest (
+      chunk_id,
+      project_id,
+      projection_component,
+      projection_identity,
+      input_digest,
+      input_watermark,
+      chunk_start_key,
+      chunk_end_key,
+      output_base_generation,
+      status,
+      created_at,
+      updated_at
+    ) VALUES (
+      '${input.chunkId}',
+      '${input.projectId}',
+      'summary',
+      'summary:identity-1',
+      'summary-digest-v1',
+      1,
+      'article-a',
+      'article-z',
+      1,
+      '${input.status}',
+      TIMESTAMPTZ '${input.createdAt}',
+      TIMESTAMPTZ '${input.updatedAt}'
+    )
+  `)
+}
+
 const insertActiveReviewServingManifest = async (input: {
   includeSearchState: boolean
   optionalComponents: string[]
@@ -647,6 +691,52 @@ test('reviews warnings expose optional search diagnostic without blocking ready 
   })
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.status).toBe('ready')
+})
+
+test('reviews warnings fold V4 rebuild chunks into visible progress', async () => {
+  const projectId = 'project-v4-rebuild-progress-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-v4-rebuild-progress-warning',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-pending-warning',
+    createdAt: '2026-04-02T12:00:00.000Z',
+    projectId,
+    status: 'pending',
+    updatedAt: '2026-04-02T12:00:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-running-warning',
+    createdAt: '2026-04-02T12:01:00.000Z',
+    projectId,
+    status: 'running',
+    updatedAt: '2026-04-02T12:05:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-blocked-warning',
+    createdAt: '2026-04-02T11:59:00.000Z',
+    projectId,
+    status: 'blocked_over_budget',
+    updatedAt: '2026-04-02T12:02:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.activeWorkCount).toBe(1)
+  expect(body.data.indexing.inFlightRefreshCount).toBe(1)
+  expect(body.data.indexing.oldestQueuedAt).toBe('2026-04-02 11:59:00+00')
+  expect(body.data.indexing.pendingRefreshCount).toBe(3)
+  expect(body.data.indexing.progressState).toBe('processing')
+  expect(body.data.indexing.queuedRefreshCount).toBe(2)
+  expect(body.data.indexing.status).toBe('refreshing')
 })
 
 test('reviews warnings search diagnostic ignores active snapshots for older review configs', async () => {

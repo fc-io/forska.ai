@@ -872,11 +872,18 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
         : isProjectRunning
           ? 0
           : pendingArticleRefreshInfo.queuedRefreshCount
+    const queuedRebuildChunkCount =
+      servingDiagnostics.rebuildChunks.pendingCount
+      + servingDiagnostics.rebuildChunks.failedCount
+      + servingDiagnostics.rebuildChunks.blockedOverBudgetCount
+      + servingDiagnostics.rebuildChunks.quarantinedCount
+    const inFlightRebuildChunkCount = servingDiagnostics.rebuildChunks.runningCount
+    const pendingRebuildChunkCount = queuedRebuildChunkCount + inFlightRebuildChunkCount
     const pendingProjectRefreshCount = queuedProjectRefreshCount + inFlightProjectRefreshCount
     const pendingArticleRefreshCount = queuedArticleRefreshCount + inFlightArticleRefreshCount
-    const queuedRefreshCount = queuedProjectRefreshCount + queuedArticleRefreshCount
-    const inFlightRefreshCount = inFlightProjectRefreshCount + inFlightArticleRefreshCount
-    const pendingRefreshCount = pendingProjectRefreshCount + pendingArticleRefreshCount
+    const queuedRefreshCount = queuedProjectRefreshCount + queuedArticleRefreshCount + queuedRebuildChunkCount
+    const inFlightRefreshCount = inFlightProjectRefreshCount + inFlightArticleRefreshCount + inFlightRebuildChunkCount
+    const pendingRefreshCount = pendingProjectRefreshCount + pendingArticleRefreshCount + pendingRebuildChunkCount
     const activeWorkCount = inFlightRefreshCount
     const rawBlockedReason = getReviewIndexingBlockedReason({
       canRunMaintenanceWork,
@@ -889,6 +896,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       || projectRefreshState.dirtyMaterialization.failedCount > 0
       || projectRefreshState.dirtyMaterialization.unreconciledCount > 0
       || isLargeRebuildFailed
+      || servingDiagnostics.rebuildChunks.failedCount > 0
     const indexingStatus = getReviewsIndexingStatus({
       activeWorkCount,
       enabledPromptCount,
@@ -947,6 +955,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
             projectRefreshState.dirtyMaterialization.lastProgressedAt,
             projectLargeRebuildState.lastCompletedAt,
             isLargeRebuildRunning ? projectLargeRebuildState.updatedAt : null,
+            servingDiagnostics.rebuildChunks.runningCount > 0 ? servingDiagnostics.rebuildChunks.updatedAt : null,
             ...freshMaintenanceLeases.map((lease) => {
               return lease.lastProgressedAt
             }),
@@ -966,6 +975,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
             projectRefreshState.isFresh ? null : projectRefreshState.lastRequestedAt,
             projectRefreshState.dirtyMaterialization.oldestQueuedAt,
             pendingArticleRefreshInfo.oldestQueuedAt,
+            servingDiagnostics.rebuildChunks.oldestQueuedAt,
           ),
           pendingArticleRefreshCount,
           pendingProjectRefreshCount,
