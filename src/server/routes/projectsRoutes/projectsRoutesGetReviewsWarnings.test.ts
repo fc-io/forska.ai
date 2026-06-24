@@ -412,6 +412,8 @@ const insertReviewServingRow = async (projectId: string, articleId: string) => {
 const insertReviewRebuildChunk = async (input: {
   chunkId: string
   createdAt: string
+  leaseExpiresAt?: string | null
+  leaseOwner?: string | null
   projectId: string
   status: ReviewRebuildChunkStatus
   updatedAt: string
@@ -432,6 +434,8 @@ const insertReviewRebuildChunk = async (input: {
       chunk_end_key,
       output_base_generation,
       status,
+      lease_owner,
+      lease_expires_at,
       created_at,
       updated_at
     ) VALUES (
@@ -445,6 +449,8 @@ const insertReviewRebuildChunk = async (input: {
       'article-z',
       1,
       '${input.status}',
+      ${input.leaseOwner === undefined || input.leaseOwner === null ? 'NULL' : `'${input.leaseOwner}'`},
+      ${input.leaseExpiresAt === undefined || input.leaseExpiresAt === null ? 'NULL' : `TIMESTAMPTZ '${input.leaseExpiresAt}'`},
       TIMESTAMPTZ '${input.createdAt}',
       TIMESTAMPTZ '${input.updatedAt}'
     )
@@ -737,6 +743,44 @@ test('reviews warnings fold V4 rebuild chunks into visible progress', async () =
   expect(body.data.indexing.progressState).toBe('failed')
   expect(body.data.indexing.queuedRefreshCount).toBe(1)
   expect(body.data.indexing.status).toBe('failed')
+})
+
+test('reviews warnings treat expired V4 rebuild chunk leases as queued instead of in-flight', async () => {
+  const projectId = 'project-v4-expired-rebuild-lease-warning'
+  const {withCurrentServerRoleOverride} = await import('../../utils/serverRuntimeRole.ts')
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-v4-expired-rebuild-lease-warning',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-expired-lease-warning',
+    createdAt: '2026-04-02T11:59:00.000Z',
+    leaseExpiresAt: '2026-04-02T12:00:00.000Z',
+    leaseOwner: 'worker-dead',
+    projectId,
+    status: 'running',
+    updatedAt: '2026-04-02T12:01:00.000Z',
+  })
+
+  const {body, response} = await withCurrentServerRoleOverride('api', () => {
+    return postWarningsRequest(projectId)
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.activeWorkCount).toBe(0)
+  expect(body.data.indexing.blockedReason).toBe('waiting_for_maintenance_worker')
+  expect(body.data.indexing.inFlightRefreshCount).toBe(0)
+  expect(body.data.indexing.oldestQueuedAt).toBe('2026-04-02 11:59:00+00')
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('blocked')
+  expect(body.data.indexing.queuedRefreshCount).toBe(1)
+  expect(body.data.indexing.status).toBe('blocked')
 })
 
 test('reviews warnings search diagnostic ignores active snapshots for older review configs', async () => {
