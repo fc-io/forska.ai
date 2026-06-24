@@ -67,6 +67,12 @@ const getClock = (statements: readonly string[]) => {
   return new Date(2026, 5, 16, 14, statements.length).toISOString()
 }
 
+const shouldPreserveChunkStateOnUpsert = (row: FakeChunkRow | undefined) => {
+  return row === undefined
+    ? false
+    : ['blocked_over_budget', 'completed', 'failed', 'quarantined', 'running'].includes(row.status)
+}
+
 const getChunkRowFromIdentity = (
   input: ReviewServingRebuildChunkIdentity,
   statements: readonly string[],
@@ -133,6 +139,7 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
     const strings = getSqlStrings(statement)
     const chunkId = strings[0] ?? ''
     const existing = rows.get(chunkId)
+    const preserveState = shouldPreserveChunkStateOnUpsert(existing)
     const row = {
       actualInputRows: existing?.actualInputRows ?? null,
       actualOutputBytes: existing?.actualOutputBytes ?? null,
@@ -140,12 +147,11 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       actualPayloadBytes: existing?.actualPayloadBytes ?? null,
       actualPromptCount: existing?.actualPromptCount ?? null,
       actualTempBytes: existing?.actualTempBytes ?? null,
-      admissionState: (existing?.admissionState
-        ?? (strings.includes('blocked_over_budget')
-          ? 'blocked_over_budget'
-          : 'admitted')) as FakeChunkRow['admissionState'],
+      admissionState: preserveState
+        ? existing?.admissionState
+        : (existing?.admissionState ?? (strings.includes('blocked_over_budget') ? 'blocked_over_budget' : 'admitted')),
       budgetJson: existing?.budgetJson ?? {},
-      checksum: strings[9] ?? null,
+      checksum: preserveState ? (existing?.checksum ?? null) : (strings[9] ?? null),
       chunkEndKey: strings[6] ?? '',
       chunkId,
       chunkStartKey: strings[5] ?? '',
@@ -161,9 +167,9 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       estimatedTempBytes: existing?.estimatedTempBytes ?? null,
       inputDigest: strings[4] ?? null,
       inputWatermark: Number(statement.match(/input_watermark[\s\S]*?,\s*(\d+),\s*'[^']*',/u)?.[1] ?? 0),
-      lastError: existing?.status === 'completed' ? existing.lastError : null,
-      leaseExpiresAt: existing?.status === 'completed' ? existing.leaseExpiresAt : null,
-      leaseOwner: existing?.status === 'completed' ? existing.leaseOwner : null,
+      lastError: preserveState ? (existing?.lastError ?? null) : null,
+      leaseExpiresAt: preserveState ? (existing?.leaseExpiresAt ?? null) : null,
+      leaseOwner: preserveState ? (existing?.leaseOwner ?? null) : null,
       maxInputRows: existing?.maxInputRows ?? null,
       maxOutputBytes: existing?.maxOutputBytes ?? null,
       maxOutputRows: existing?.maxOutputRows ?? null,
@@ -177,16 +183,14 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       projectId: strings[1] ?? null,
       projectionComponent: (strings[2] ?? 'display') as FakeChunkRow['projectionComponent'],
       projectionIdentity: strings[3] ?? '',
-      requestId: existing?.requestId ?? null,
-      retryAfter: existing?.retryAfter ?? null,
-      retryCount: existing?.retryCount ?? 0,
+      requestId: preserveState ? (existing?.requestId ?? null) : (strings[8] ?? null),
+      retryAfter: preserveState ? (existing?.retryAfter ?? null) : null,
+      retryCount: preserveState ? (existing?.retryCount ?? 0) : 0,
       snapshotCount: existing?.snapshotCount ?? 1,
       snapshotId: existing?.snapshotId ?? null,
       splitDepth: existing?.splitDepth ?? 0,
       startedAt: existing?.startedAt ?? null,
-      status: (existing?.status === 'completed'
-        ? existing.status
-        : (strings[7] ?? 'pending')) as FakeChunkRow['status'],
+      status: (preserveState ? existing.status : (strings[7] ?? 'pending')) as FakeChunkRow['status'],
       updatedAt: getClock(statements),
       workloadClass: existing?.workloadClass ?? null,
     }
@@ -392,6 +396,47 @@ test('completed chunks resume after restart and are skipped for the same maintai
       return statement.includes('FROM mart.') || statement.includes('FROM app.review_change_delta')
     }),
   ).toBe(false)
+})
+
+test('idempotent rebuild chunk upserts preserve active retry and lease state', async () => {
+  const running = {
+    ...getChunkRowFromIdentity(baseChunkIdentity, []),
+    lastError: 'still writing',
+    leaseExpiresAt: '2026-06-16T14:10:00.000Z',
+    leaseOwner: 'worker-active',
+    startedAt: '2026-06-16T14:00:00.000Z',
+    status: 'running' as const,
+  }
+  const failed = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-failed'}, []),
+    lastError: 'cooling down',
+    retryAfter: '2026-06-16T14:15:00.000Z',
+    retryCount: 1,
+    status: 'failed' as const,
+  }
+  const {database, rows, statements} = createFakeChunkManifestDatabase([running, failed])
+
+  await upsertReviewServingRebuildChunkManifests(
+    [
+      {...baseChunkIdentity, status: 'pending'},
+      {...baseChunkIdentity, inputDigest: 'digest-failed', status: 'pending'},
+    ],
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(rows.get(running.chunkId)).toMatchObject({
+    lastError: 'still writing',
+    leaseOwner: 'worker-active',
+    status: 'running',
+  })
+  expect(rows.get(failed.chunkId)).toMatchObject({
+    lastError: 'cooling down',
+    retryAfter: '2026-06-16T14:15:00.000Z',
+    retryCount: 1,
+    status: 'failed',
+  })
+  expect(joined).toContain("status IN ('completed', 'running', 'failed', 'blocked_over_budget', 'quarantined')")
 })
 
 test('next claimable chunk discovery returns maintained identity and checksum', async () => {

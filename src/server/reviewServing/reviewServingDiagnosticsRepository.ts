@@ -357,7 +357,7 @@ const getRebuildChunkRowsEffect = (
         CAST(COUNT(*) FILTER (WHERE status = 'blocked_over_budget') AS INTEGER) AS blockedOverBudgetCount,
         CAST(COUNT(*) FILTER (WHERE status = 'quarantined') AS INTEGER) AS quarantinedCount,
         CAST(COUNT(*) FILTER (WHERE status = 'running' AND lease_expires_at <= ${getSqlLiteral(now)}) AS INTEGER) AS expiredLeaseCount,
-        MIN(created_at) FILTER (WHERE status IN ('pending', 'failed', 'blocked_over_budget')) AS oldestQueuedAt,
+        MIN(created_at) FILTER (WHERE status IN ('pending', 'failed')) AS oldestQueuedAt,
         MAX(updated_at) AS updatedAt
       FROM app.review_rebuild_chunk_manifest
       WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}

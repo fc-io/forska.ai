@@ -54,6 +54,8 @@ type ReviewServingV4RebuildStatsRow = {
   projectPromptUpdatedAt: string | null
   projectUpdatedAt: string
   scopedArticleCount: number
+  summaryHumanJudgmentCount: number
+  summaryHumanJudgmentUpdatedAt: string | null
 }
 
 export type RequestReviewServingV4RebuildInput = {
@@ -96,15 +98,17 @@ const getReviewServingV4RebuildEstimate = (
   const enabledPromptCount = getSafeCount(stats.enabledPromptCount)
   const judgmentCount = getSafeCount(stats.judgmentCount)
   const humanJudgmentCount = getSafeCount(stats.humanJudgmentCount)
+  const summaryHumanJudgmentCount = getSafeCount(stats.summaryHumanJudgmentCount)
   const componentInputRows = scopedArticleCount * components.length
   const promptInputRows = scopedArticleCount * enabledPromptCount * getPromptScaledComponentCount(components)
-  const estimatedInputRows = componentInputRows + promptInputRows + judgmentCount + humanJudgmentCount
+  const estimatedInputRows =
+    componentInputRows + promptInputRows + judgmentCount + humanJudgmentCount + summaryHumanJudgmentCount
 
   return {
     estimatedInputRows,
     estimatedOutputBytes: getEstimatedOutputBytes(estimatedInputRows),
     estimatedOutputRows: estimatedInputRows,
-    estimatedPayloadBytes: getEstimatedOutputBytes(judgmentCount + humanJudgmentCount),
+    estimatedPayloadBytes: getEstimatedOutputBytes(judgmentCount + humanJudgmentCount + summaryHumanJudgmentCount),
     estimatedPromptCount: enabledPromptCount,
     estimatedSnapshotCount: 1,
     estimatedTempBytes: 0,
@@ -118,6 +122,10 @@ const getReviewServingV4RebuildSourceWatermarks = (stats: ReviewServingV4Rebuild
     project: {updatedAt: stats.projectUpdatedAt},
     projectArticles: {count: getSafeCount(stats.scopedArticleCount), updatedAt: stats.projectArticleUpdatedAt},
     projectPrompts: {count: getSafeCount(stats.enabledPromptCount), updatedAt: stats.projectPromptUpdatedAt},
+    summaryHumanJudgments: {
+      count: getSafeCount(stats.summaryHumanJudgmentCount),
+      updatedAt: stats.summaryHumanJudgmentUpdatedAt,
+    },
   }
 }
 
@@ -129,6 +137,8 @@ const getReviewServingV4RebuildStats = async (
     WITH project_settings AS (
       SELECT
         id,
+        date_from,
+        date_to,
         model_id,
         updated_at,
         use_title,
@@ -137,16 +147,50 @@ const getReviewServingV4RebuildStats = async (
         use_fulltext_no_images
       FROM app.project
       WHERE id = ${getSqlLiteral(input.projectId)}
+    ),
+    scoped_article AS (
+      SELECT
+        project_article.article_id,
+        GREATEST(
+          project_article.updated_at,
+          article.updated_at,
+          COALESCE(article.article_updated_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')
+        ) AS scoped_updated_at
+      FROM app.project_article project_article
+      INNER JOIN project_settings project ON project.id = project_article.project_id
+      INNER JOIN app.article article ON article.id = project_article.article_id
+      WHERE (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+        AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+      UNION
+      SELECT
+        article_import_route.article_id,
+        GREATEST(
+          project_import_route.updated_at,
+          article_import_route.updated_at,
+          article.updated_at,
+          COALESCE(article.article_updated_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')
+        ) AS scoped_updated_at
+      FROM app.project_import_route project_import_route
+      INNER JOIN project_settings project ON project.id = project_import_route.project_id
+      INNER JOIN app.article_import_route article_import_route
+        ON article_import_route.import_route_id = project_import_route.import_route_id
+      INNER JOIN app.article article ON article.id = article_import_route.article_id
+      WHERE (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+        AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+    ),
+    enabled_prompt AS (
+      SELECT prompt.prompt_id
+      FROM app.project_prompt prompt
+      INNER JOIN project_settings project ON project.id = prompt.project_id
+      WHERE prompt.enabled = TRUE
+        AND prompt.archived = FALSE
     )
     SELECT
-      CAST((SELECT COUNT(*) FROM app.project_article article WHERE article.project_id = project.id) AS INTEGER) AS scopedArticleCount,
-      (SELECT MAX(updated_at) FROM app.project_article article WHERE article.project_id = project.id) AS projectArticleUpdatedAt,
+      CAST((SELECT COUNT(DISTINCT article_id) FROM scoped_article) AS INTEGER) AS scopedArticleCount,
+      (SELECT MAX(scoped_updated_at) FROM scoped_article) AS projectArticleUpdatedAt,
       CAST((
         SELECT COUNT(*)
-        FROM app.project_prompt prompt
-        WHERE prompt.project_id = project.id
-          AND prompt.enabled = TRUE
-          AND prompt.archived = FALSE
+        FROM enabled_prompt
       ) AS INTEGER) AS enabledPromptCount,
       (
         SELECT MAX(updated_at)
@@ -158,8 +202,9 @@ const getReviewServingV4RebuildStats = async (
       CAST((
         SELECT COUNT(*)
         FROM app.judgment judgment
-        WHERE judgment.project_id = project.id
-          AND judgment.model_id = project.model_id
+        INNER JOIN scoped_article ON scoped_article.article_id = judgment.article_id
+        INNER JOIN enabled_prompt ON enabled_prompt.prompt_id = judgment.prompt_id
+        WHERE judgment.model_id = project.model_id
           AND judgment.use_title = project.use_title
           AND judgment.use_abstract = project.use_abstract
           AND judgment.use_fulltext = project.use_fulltext
@@ -169,8 +214,9 @@ const getReviewServingV4RebuildStats = async (
       (
         SELECT MAX(updated_at)
         FROM app.judgment judgment
-        WHERE judgment.project_id = project.id
-          AND judgment.model_id = project.model_id
+        INNER JOIN scoped_article ON scoped_article.article_id = judgment.article_id
+        INNER JOIN enabled_prompt ON enabled_prompt.prompt_id = judgment.prompt_id
+        WHERE judgment.model_id = project.model_id
           AND judgment.use_title = project.use_title
           AND judgment.use_abstract = project.use_abstract
           AND judgment.use_fulltext = project.use_fulltext
@@ -179,6 +225,8 @@ const getReviewServingV4RebuildStats = async (
       ) AS judgmentUpdatedAt,
       CAST((SELECT COUNT(*) FROM app.judgment_human human WHERE human.project_id = project.id) AS INTEGER) AS humanJudgmentCount,
       (SELECT MAX(updated_at) FROM app.judgment_human human WHERE human.project_id = project.id) AS humanJudgmentUpdatedAt,
+      CAST((SELECT COUNT(*) FROM app.judgment_human_summary human WHERE human.project_id = project.id) AS INTEGER) AS summaryHumanJudgmentCount,
+      (SELECT MAX(updated_at) FROM app.judgment_human_summary human WHERE human.project_id = project.id) AS summaryHumanJudgmentUpdatedAt,
       project.updated_at AS projectUpdatedAt
     FROM project_settings project
   `)

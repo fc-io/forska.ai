@@ -312,18 +312,30 @@ const getDefaultRebuildSnapshotStates = async (
     })
 }
 
-const getComponentStateByComponent = (
+const getUniqueSnapshotComponentStates = (states: readonly DefaultRebuildSnapshotComponentState[]) => {
+  return states.reduce<DefaultRebuildSnapshotComponentState[]>((uniqueStates, state) => {
+    const hasState = uniqueStates.some((candidate) => {
+      return getProjectionManifestKey(candidate) === getProjectionManifestKey(state)
+    })
+
+    return hasState ? uniqueStates : [...uniqueStates, state]
+  }, [])
+}
+
+const getComponentStatesByComponent = (
   requestedComponents: readonly ReviewServingProjectionComponent[],
   states: readonly DefaultRebuildSnapshotComponentState[],
 ) => {
   return requestedComponents.reduce<
-    Partial<Record<ReviewServingProjectionComponent, DefaultRebuildSnapshotComponentState>>
+    Partial<Record<ReviewServingProjectionComponent, DefaultRebuildSnapshotComponentState[]>>
   >((stateByComponent, component) => {
-    const state = states.find((candidate) => {
+    const componentStates = states.filter((candidate) => {
       return candidate.projectionComponent === component
     })
 
-    return state === undefined ? stateByComponent : {...stateByComponent, [component]: state}
+    return componentStates.length === 0
+      ? stateByComponent
+      : {...stateByComponent, [component]: getUniqueSnapshotComponentStates(componentStates)}
   }, {})
 }
 
@@ -388,11 +400,11 @@ const getDefaultReviewServingRebuildChunks = async (
   }
 
   const snapshotStates = await getDefaultRebuildSnapshotStates(input, database)
-  const stateByComponent = getComponentStateByComponent(input.requestedComponents, snapshotStates)
+  const stateByComponent = getComponentStatesByComponent(input.requestedComponents, snapshotStates)
   const selectedStates = input.requestedComponents.flatMap((component) => {
-    const state = stateByComponent[component]
+    const states = stateByComponent[component]
 
-    return state === undefined ? [] : [state]
+    return states ?? []
   })
   const manifests = await getDefaultRebuildProjectionManifests(
     {projectId: input.projectId, states: selectedStates},

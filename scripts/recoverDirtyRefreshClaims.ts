@@ -175,6 +175,22 @@ const getRecoveredClaimSqlValues = (rows: StaleDirtyRefreshClaimRow[]) => {
     .join(', ')
 }
 
+const getRecoveredDirtyMaterializationSqlValues = (rows: StaleDirtyMaterializationClaimRow[]) => {
+  return rows
+    .map((row) => {
+      return `(${getSqlLiteral(row.projectId)}, ${getSqlLiteral(row.sourceKind)}, ${getIntegerSqlLiteral(row.targetDirtyToken)})`
+    })
+    .join(', ')
+}
+
+const getRecoveredLargeRebuildSqlValues = (rows: StaleLargeRebuildClaimRow[]) => {
+  return rows
+    .map((row) => {
+      return `(${getSqlLiteral(row.projectId)}, ${getIntegerSqlLiteral(row.refreshToken)}, ${getSqlLiteral(row.rebuildPhase)})`
+    })
+    .join(', ')
+}
+
 const queueV4RecoveryRequests = async (params: {projectIds: string[]; reason: string}): Promise<RecoveryResult[]> => {
   const projectIds = getUniqueProjectIds(params.projectIds)
 
@@ -230,13 +246,74 @@ const releaseStaleDirtyRefreshClaims = async (rows: StaleDirtyRefreshClaimRow[])
   `)
 }
 
-const recoverDirtyMaterializations = (rows: StaleDirtyMaterializationClaimRow[]) => {
-  return queueV4RecoveryRequests({
+const releaseStaleDirtyMaterializationClaims = async (rows: StaleDirtyMaterializationClaimRow[]) => {
+  if (rows.length === 0) {
+    return
+  }
+
+  await getAppDatabaseService().run(`
+    UPDATE app.project_mart_dirty_materialization_state
+    SET
+      materialization_status = 'completed',
+      materialization_owner = NULL,
+      lease_expires_at = NULL,
+      last_completed_at = current_timestamp,
+      last_error = NULL,
+      updated_at = current_timestamp
+    WHERE EXISTS (
+        SELECT 1
+        FROM (VALUES ${getRecoveredDirtyMaterializationSqlValues(rows)}) AS recovered_claim(project_id, source_kind, target_dirty_token)
+        WHERE recovered_claim.project_id = app.project_mart_dirty_materialization_state.project_id
+          AND recovered_claim.source_kind = app.project_mart_dirty_materialization_state.source_kind
+          AND recovered_claim.target_dirty_token = app.project_mart_dirty_materialization_state.target_dirty_token
+      )
+      AND materialization_status = 'running'
+      AND lease_expires_at IS NOT NULL
+      AND lease_expires_at < NOW()
+  `)
+}
+
+const releaseStaleLargeRebuildClaims = async (rows: StaleLargeRebuildClaimRow[]) => {
+  if (rows.length === 0) {
+    return
+  }
+
+  await getAppDatabaseService().run(`
+    UPDATE app.project_mart_large_rebuild_state
+    SET
+      refresh_status = 'idle',
+      worker_id = NULL,
+      lease_expires_at = NULL,
+      superseded_at = current_timestamp,
+      last_completed_at = current_timestamp,
+      last_error = NULL,
+      updated_at = current_timestamp
+    WHERE EXISTS (
+        SELECT 1
+        FROM (VALUES ${getRecoveredLargeRebuildSqlValues(rows)}) AS recovered_claim(project_id, refresh_token, rebuild_phase)
+        WHERE recovered_claim.project_id = app.project_mart_large_rebuild_state.project_id
+          AND recovered_claim.refresh_token = app.project_mart_large_rebuild_state.refresh_token
+          AND recovered_claim.rebuild_phase = app.project_mart_large_rebuild_state.rebuild_phase
+      )
+      AND refresh_status = 'running'
+      AND refresh_token > 0
+      AND superseded_at IS NULL
+      AND lease_expires_at IS NOT NULL
+      AND lease_expires_at < NOW()
+  `)
+}
+
+const recoverDirtyMaterializations = async (rows: StaleDirtyMaterializationClaimRow[]) => {
+  const recoveryResults = await queueV4RecoveryRequests({
     projectIds: rows.map((row) => {
       return row.projectId
     }),
     reason: 'recoverDirtyRefreshClaims.staleDirtyMaterialization',
   })
+
+  await releaseStaleDirtyMaterializationClaims(rows)
+
+  return recoveryResults
 }
 
 const recoverDirtyRefreshClaims = async (rows: StaleDirtyRefreshClaimRow[]) => {
@@ -252,13 +329,17 @@ const recoverDirtyRefreshClaims = async (rows: StaleDirtyRefreshClaimRow[]) => {
   return recoveryResults
 }
 
-const recoverLargeRebuildClaims = (rows: StaleLargeRebuildClaimRow[]) => {
-  return queueV4RecoveryRequests({
+const recoverLargeRebuildClaims = async (rows: StaleLargeRebuildClaimRow[]) => {
+  const recoveryResults = await queueV4RecoveryRequests({
     projectIds: rows.map((row) => {
       return row.projectId
     }),
     reason: 'recoverDirtyRefreshClaims.staleLargeRebuildClaim',
   })
+
+  await releaseStaleLargeRebuildClaims(rows)
+
+  return recoveryResults
 }
 
 export const recoverDirtyRefreshClaimState = async () => {

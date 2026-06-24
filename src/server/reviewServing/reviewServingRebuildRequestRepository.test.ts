@@ -53,6 +53,13 @@ const createFakeRequestDatabase = () => {
       {baseGeneration: 2, component: 'summary', patchWatermark: 10, projectionIdentity: 'summary:identity-1'},
     ],
   }
+  const activeComponentStateJson = {
+    optional: [],
+    required: [
+      {baseGeneration: 4, component: 'payload', patchWatermark: 12, projectionIdentity: 'payload:active-identity-1'},
+      {baseGeneration: 4, component: 'summary', patchWatermark: 12, projectionIdentity: 'summary:active-identity-1'},
+    ],
+  }
 
   const run = async (statement: string) => {
     statements.push(statement)
@@ -102,7 +109,7 @@ const createFakeRequestDatabase = () => {
     }
 
     if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
-      return [{componentStateJson}] as T[]
+      return [{componentStateJson}, {componentStateJson: activeComponentStateJson}] as T[]
     }
 
     if (statement.includes('FROM app.review_projection_identity_manifest')) {
@@ -127,6 +134,20 @@ const createFakeRequestDatabase = () => {
           inputWatermark: 10,
           projectionComponent: 'summary',
           projectionIdentity: 'summary:identity-1',
+        },
+        {
+          baseGeneration: 4,
+          inputDigest: 'payload-active-digest-v1',
+          inputWatermark: 12,
+          projectionComponent: 'payload',
+          projectionIdentity: 'payload:active-identity-1',
+        },
+        {
+          baseGeneration: 4,
+          inputDigest: 'summary-active-digest-v1',
+          inputWatermark: 12,
+          projectionComponent: 'summary',
+          projectionIdentity: 'summary:active-identity-1',
         },
         {
           baseGeneration: 3,
@@ -253,6 +274,8 @@ test('default rebuild request chunks use existing projection identities and real
   expect(joined).toContain("'article-z'")
   expect(joined).toContain("'summary:identity-1'")
   expect(joined).toContain("'payload:identity-1'")
+  expect(joined).toContain("'summary:active-identity-1'")
+  expect(joined).toContain("'payload:active-identity-1'")
   expect(joined).not.toContain('component:all')
   expect(joined).not.toContain(':request:rebuild:default-identities')
 })

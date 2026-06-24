@@ -873,12 +873,11 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           ? 0
           : pendingArticleRefreshInfo.queuedRefreshCount
     const queuedRebuildChunkCount =
-      servingDiagnostics.rebuildChunks.pendingCount
-      + servingDiagnostics.rebuildChunks.failedCount
-      + servingDiagnostics.rebuildChunks.blockedOverBudgetCount
-      + servingDiagnostics.rebuildChunks.quarantinedCount
+      servingDiagnostics.rebuildChunks.pendingCount + servingDiagnostics.rebuildChunks.failedCount
     const inFlightRebuildChunkCount = servingDiagnostics.rebuildChunks.runningCount
     const pendingRebuildChunkCount = queuedRebuildChunkCount + inFlightRebuildChunkCount
+    const terminalRebuildChunkCount =
+      servingDiagnostics.rebuildChunks.blockedOverBudgetCount + servingDiagnostics.rebuildChunks.quarantinedCount
     const pendingProjectRefreshCount = queuedProjectRefreshCount + inFlightProjectRefreshCount
     const pendingArticleRefreshCount = queuedArticleRefreshCount + inFlightArticleRefreshCount
     const queuedRefreshCount = queuedProjectRefreshCount + queuedArticleRefreshCount + queuedRebuildChunkCount
@@ -897,6 +896,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       || projectRefreshState.dirtyMaterialization.unreconciledCount > 0
       || isLargeRebuildFailed
       || servingDiagnostics.rebuildChunks.failedCount > 0
+      || terminalRebuildChunkCount > 0
     const indexingStatus = getReviewsIndexingStatus({
       activeWorkCount,
       enabledPromptCount,
@@ -975,7 +975,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
             projectRefreshState.isFresh ? null : projectRefreshState.lastRequestedAt,
             projectRefreshState.dirtyMaterialization.oldestQueuedAt,
             pendingArticleRefreshInfo.oldestQueuedAt,
-            servingDiagnostics.rebuildChunks.oldestQueuedAt,
+            pendingRebuildChunkCount > 0 ? servingDiagnostics.rebuildChunks.oldestQueuedAt : null,
           ),
           pendingArticleRefreshCount,
           pendingProjectRefreshCount,
