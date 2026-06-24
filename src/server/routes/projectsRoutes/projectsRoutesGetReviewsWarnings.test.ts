@@ -415,6 +415,7 @@ const insertReviewRebuildChunk = async (input: {
   leaseExpiresAt?: string | null
   leaseOwner?: string | null
   projectId: string
+  retryAfter?: string | null
   status: ReviewRebuildChunkStatus
   updatedAt: string
 }) => {
@@ -436,6 +437,7 @@ const insertReviewRebuildChunk = async (input: {
       status,
       lease_owner,
       lease_expires_at,
+      retry_after,
       created_at,
       updated_at
     ) VALUES (
@@ -451,6 +453,7 @@ const insertReviewRebuildChunk = async (input: {
       '${input.status}',
       ${input.leaseOwner === undefined || input.leaseOwner === null ? 'NULL' : `'${input.leaseOwner}'`},
       ${input.leaseExpiresAt === undefined || input.leaseExpiresAt === null ? 'NULL' : `TIMESTAMPTZ '${input.leaseExpiresAt}'`},
+      ${input.retryAfter === undefined || input.retryAfter === null ? 'NULL' : `TIMESTAMPTZ '${input.retryAfter}'`},
       TIMESTAMPTZ '${input.createdAt}',
       TIMESTAMPTZ '${input.updatedAt}'
     )
@@ -781,6 +784,36 @@ test('reviews warnings treat expired V4 rebuild chunk leases as queued instead o
   expect(body.data.indexing.progressState).toBe('blocked')
   expect(body.data.indexing.queuedRefreshCount).toBe(1)
   expect(body.data.indexing.status).toBe('blocked')
+})
+
+test('reviews warnings keep retryable V4 rebuild chunk failures queued', async () => {
+  const projectId = 'project-v4-retryable-rebuild-failed-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-v4-retryable-rebuild-failed-warning',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-retryable-failed-warning',
+    createdAt: '2026-04-02T12:00:00.000Z',
+    projectId,
+    retryAfter: '2099-04-02T12:05:00.000Z',
+    status: 'failed',
+    updatedAt: '2026-04-02T12:01:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.queuedRefreshCount).toBe(1)
+  expect(body.data.indexing.status).toBe('refreshing')
 })
 
 test('reviews warnings search diagnostic ignores active snapshots for older review configs', async () => {

@@ -911,7 +911,6 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       || projectRefreshState.dirtyMaterialization.failedCount > 0
       || projectRefreshState.dirtyMaterialization.unreconciledCount > 0
       || isLargeRebuildFailed
-      || servingDiagnostics.rebuildChunks.failedCount > 0
       || terminalRebuildChunkCount > 0
     const indexingStatus = getReviewsIndexingStatus({
       activeWorkCount,

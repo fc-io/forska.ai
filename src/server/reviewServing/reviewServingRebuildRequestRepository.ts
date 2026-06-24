@@ -340,10 +340,11 @@ const getComponentStatesByComponent = (
 }
 
 const getProjectionManifestKey = (input: {
+  baseGeneration: number
   projectionComponent: ReviewServingProjectionComponent
   projectionIdentity: string
 }) => {
-  return `${input.projectionComponent}\0${input.projectionIdentity}`
+  return `${input.projectionComponent}\0${input.projectionIdentity}\0${input.baseGeneration}`
 }
 
 const getDefaultRebuildProjectionManifests = async (
@@ -516,26 +517,38 @@ export const createReviewServingRebuildRequestEffect = (
   input: ReviewServingRebuildRequestInput,
   database: ReviewServingChunkManifestRepositoryDatabase = getReviewServingRebuildRequestDatabase(),
 ) => {
-  return Effect.tryPromise(async () => {
-    const requestedComponents = getNormalizedComponents(input.requestedComponents)
+  return Effect.tryPromise({
+    catch: (error) => {
+      return error
+    },
+    try: async () => {
+      const requestedComponents = getNormalizedComponents(input.requestedComponents)
 
-    if (requestedComponents.length !== input.requestedComponents.length || requestedComponents.length === 0) {
-      throw new Error(
-        `Review rebuild request must use known components: ${reviewServingProjectionComponents.join(', ')}`,
-      )
-    }
+      if (requestedComponents.length !== input.requestedComponents.length || requestedComponents.length === 0) {
+        throw new Error(
+          `Review rebuild request must use known components: ${reviewServingProjectionComponents.join(', ')}`,
+        )
+      }
 
-    const requestId = input.requestId ?? getReviewServingRebuildRequestId(input)
-    const overBudgetReason = getOverBudgetReason(input.estimate, input.budget)
-    const admissionState: ReviewServingRebuildRequestAdmissionState =
-      overBudgetReason === null ? 'admitted' : 'blocked_over_budget'
-    const status: ReviewServingRebuildRequestStatus = overBudgetReason === null ? 'admitted' : 'blocked_over_budget'
-    const chunkStatus = overBudgetReason === null ? 'pending' : 'blocked_over_budget'
-    const chunkAdmissionState = overBudgetReason === null ? 'admitted' : 'blocked_over_budget'
-    const nowSql = getSqlLiteral(new Date())
+      const requestId = input.requestId ?? getReviewServingRebuildRequestId(input)
+      const overBudgetReason = getOverBudgetReason(input.estimate, input.budget)
+      const admissionState: ReviewServingRebuildRequestAdmissionState =
+        overBudgetReason === null ? 'admitted' : 'blocked_over_budget'
+      const status: ReviewServingRebuildRequestStatus = overBudgetReason === null ? 'admitted' : 'blocked_over_budget'
+      const chunkStatus = overBudgetReason === null ? 'pending' : 'blocked_over_budget'
+      const chunkAdmissionState = overBudgetReason === null ? 'admitted' : 'blocked_over_budget'
+      const nowSql = getSqlLiteral(new Date())
 
-    return database.transaction(async (tx) => {
-      await tx.run(`
+      return database.transaction(async (tx) => {
+        const chunks =
+          input.chunks
+          ?? (await getDefaultReviewServingRebuildChunks({projectId: input.projectId, requestedComponents}, tx))
+
+        if (chunks.length === 0) {
+          throw new Error(`Review rebuild request ${requestId} created no rebuild chunks`)
+        }
+
+        await tx.run(`
         INSERT INTO app.review_rebuild_request (
           request_id,
           project_id,
@@ -591,45 +604,42 @@ export const createReviewServingRebuildRequestEffect = (
           updated_at = ${nowSql}
       `)
 
-      const chunkBudgetFields = {
-        admissionState: chunkAdmissionState,
-        budgetJson: input.budget ?? {},
-        diagnosticsJson: input.diagnostics ?? {},
-        estimatedInputRows: input.estimate?.estimatedInputRows,
-        estimatedOutputBytes: input.estimate?.estimatedOutputBytes,
-        estimatedOutputRows: input.estimate?.estimatedOutputRows,
-        estimatedPayloadBytes: input.estimate?.estimatedPayloadBytes,
-        estimatedPromptCount: input.estimate?.estimatedPromptCount,
-        estimatedTempBytes: input.estimate?.estimatedTempBytes,
-        maxInputRows: input.budget?.maxInputRows,
-        maxOutputBytes: input.budget?.maxOutputBytes,
-        maxOutputRows: input.budget?.maxOutputRows,
-        maxPayloadBytes: input.budget?.maxPayloadBytes,
-        maxPromptCount: input.budget?.maxPromptCount,
-        maxTempBytes: input.budget?.maxTempBytes,
-        oomCategory: overBudgetReason === null ? null : 'request_over_budget',
-        overBudgetReason,
-      } satisfies ReviewServingRebuildChunkBudgetFields
+        const chunkBudgetFields = {
+          admissionState: chunkAdmissionState,
+          budgetJson: input.budget ?? {},
+          diagnosticsJson: input.diagnostics ?? {},
+          estimatedInputRows: input.estimate?.estimatedInputRows,
+          estimatedOutputBytes: input.estimate?.estimatedOutputBytes,
+          estimatedOutputRows: input.estimate?.estimatedOutputRows,
+          estimatedPayloadBytes: input.estimate?.estimatedPayloadBytes,
+          estimatedPromptCount: input.estimate?.estimatedPromptCount,
+          estimatedTempBytes: input.estimate?.estimatedTempBytes,
+          maxInputRows: input.budget?.maxInputRows,
+          maxOutputBytes: input.budget?.maxOutputBytes,
+          maxOutputRows: input.budget?.maxOutputRows,
+          maxPayloadBytes: input.budget?.maxPayloadBytes,
+          maxPromptCount: input.budget?.maxPromptCount,
+          maxTempBytes: input.budget?.maxTempBytes,
+          oomCategory: overBudgetReason === null ? null : 'request_over_budget',
+          overBudgetReason,
+        } satisfies ReviewServingRebuildChunkBudgetFields
 
-      const chunks =
-        input.chunks
-        ?? (await getDefaultReviewServingRebuildChunks({projectId: input.projectId, requestedComponents}, tx))
+        await upsertReviewServingRebuildChunkManifests(
+          chunks.map((chunk) => {
+            return {...chunk, ...chunkBudgetFields, requestId, status: chunkStatus}
+          }),
+          tx,
+        )
 
-      await upsertReviewServingRebuildChunkManifests(
-        chunks.map((chunk) => {
-          return {...chunk, ...chunkBudgetFields, requestId, status: chunkStatus}
-        }),
-        tx,
-      )
+        const created = await getReviewServingRebuildRequest({requestId}, tx)
 
-      const created = await getReviewServingRebuildRequest({requestId}, tx)
+        if (created === null) {
+          throw new Error(`Failed to create review rebuild request ${requestId}`)
+        }
 
-      if (created === null) {
-        throw new Error(`Failed to create review rebuild request ${requestId}`)
-      }
-
-      return created
-    })
+        return created
+      })
+    },
   })
 }
 
