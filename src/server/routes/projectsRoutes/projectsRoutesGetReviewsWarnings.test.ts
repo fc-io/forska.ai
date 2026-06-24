@@ -415,6 +415,7 @@ const insertReviewRebuildChunk = async (input: {
   leaseExpiresAt?: string | null
   leaseOwner?: string | null
   projectId: string
+  requestId?: string | null
   retryAfter?: string | null
   status: ReviewRebuildChunkStatus
   updatedAt: string
@@ -426,6 +427,7 @@ const insertReviewRebuildChunk = async (input: {
   await runDatabase(`
     INSERT INTO app.review_rebuild_chunk_manifest (
       chunk_id,
+      request_id,
       project_id,
       projection_component,
       projection_identity,
@@ -442,6 +444,7 @@ const insertReviewRebuildChunk = async (input: {
       updated_at
     ) VALUES (
       '${input.chunkId}',
+      ${input.requestId === undefined || input.requestId === null ? 'NULL' : `'${input.requestId}'`},
       '${input.projectId}',
       'summary',
       'summary:identity-1',
@@ -454,6 +457,55 @@ const insertReviewRebuildChunk = async (input: {
       ${input.leaseOwner === undefined || input.leaseOwner === null ? 'NULL' : `'${input.leaseOwner}'`},
       ${input.leaseExpiresAt === undefined || input.leaseExpiresAt === null ? 'NULL' : `TIMESTAMPTZ '${input.leaseExpiresAt}'`},
       ${input.retryAfter === undefined || input.retryAfter === null ? 'NULL' : `TIMESTAMPTZ '${input.retryAfter}'`},
+      TIMESTAMPTZ '${input.createdAt}',
+      TIMESTAMPTZ '${input.updatedAt}'
+    )
+  `)
+}
+
+const insertReviewRebuildRequest = async (input: {
+  completedAt?: string | null
+  createdAt: string
+  projectId: string
+  requestId: string
+  status: 'admitted' | 'blocked_over_budget' | 'completed'
+  updatedAt: string
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.review_rebuild_request (
+      request_id,
+      project_id,
+      reason,
+      requested_components_json,
+      source_watermarks_json,
+      identity_json,
+      status,
+      admission_state,
+      retry_policy_json,
+      over_budget_reason,
+      diagnostics_json,
+      admitted_at,
+      completed_at,
+      created_at,
+      updated_at
+    ) VALUES (
+      '${input.requestId}',
+      '${input.projectId}',
+      'test',
+      '["summary"]'::JSON,
+      '{}'::JSON,
+      '{}'::JSON,
+      '${input.status}',
+      ${input.status === 'blocked_over_budget' ? "'blocked_over_budget'" : "'admitted'"},
+      '{}'::JSON,
+      ${input.status === 'blocked_over_budget' ? "'test over budget'" : 'NULL'},
+      '{}'::JSON,
+      TIMESTAMPTZ '${input.createdAt}',
+      ${input.completedAt === undefined || input.completedAt === null ? 'NULL' : `TIMESTAMPTZ '${input.completedAt}'`},
       TIMESTAMPTZ '${input.createdAt}',
       TIMESTAMPTZ '${input.updatedAt}'
     )
@@ -746,6 +798,58 @@ test('reviews warnings fold V4 rebuild chunks into visible progress', async () =
   expect(body.data.indexing.progressState).toBe('failed')
   expect(body.data.indexing.queuedRefreshCount).toBe(1)
   expect(body.data.indexing.status).toBe('failed')
+})
+
+test('reviews warnings ignore superseded terminal V4 rebuild chunks', async () => {
+  const projectId = 'project-v4-superseded-terminal-rebuild-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-v4-superseded-terminal-rebuild-warning',
+  })
+  await insertReviewRebuildRequest({
+    createdAt: '2026-04-02T12:00:00.000Z',
+    projectId,
+    requestId: 'request-v4-superseded-blocked-warning',
+    status: 'blocked_over_budget',
+    updatedAt: '2026-04-02T12:00:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-superseded-blocked-warning',
+    createdAt: '2026-04-02T12:00:00.000Z',
+    projectId,
+    requestId: 'request-v4-superseded-blocked-warning',
+    status: 'blocked_over_budget',
+    updatedAt: '2026-04-02T12:00:00.000Z',
+  })
+  await insertReviewRebuildRequest({
+    completedAt: '2026-04-02T12:10:00.000Z',
+    createdAt: '2026-04-02T12:09:00.000Z',
+    projectId,
+    requestId: 'request-v4-successful-warning',
+    status: 'completed',
+    updatedAt: '2026-04-02T12:10:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-successful-warning',
+    createdAt: '2026-04-02T12:09:00.000Z',
+    projectId,
+    requestId: 'request-v4-successful-warning',
+    status: 'completed',
+    updatedAt: '2026-04-02T12:10:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.status).toBe('ready')
 })
 
 test('reviews warnings treat expired V4 rebuild chunk leases as queued instead of in-flight', async () => {

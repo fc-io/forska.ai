@@ -88,6 +88,7 @@ const createFakeRequestDatabase = (stats: FakeStats) => {
   const componentStateJson = {
     optional: [],
     required: [
+      {baseGeneration: 2, component: 'display', patchWatermark: 10, projectionIdentity: 'display:identity-1'},
       {baseGeneration: 2, component: 'payload', patchWatermark: 10, projectionIdentity: 'payload:identity-1'},
       {baseGeneration: 2, component: 'summary', patchWatermark: 10, projectionIdentity: 'summary:identity-1'},
     ],
@@ -152,6 +153,13 @@ const createFakeRequestDatabase = (stats: FakeStats) => {
 
     if (statement.includes('FROM app.review_projection_identity_manifest')) {
       return [
+        {
+          baseGeneration: 2,
+          inputDigest: 'display-digest-v1',
+          inputWatermark: 10,
+          projectionComponent: 'display',
+          projectionIdentity: 'display:identity-1',
+        },
         {
           baseGeneration: 2,
           inputDigest: 'payload-digest-v1',
@@ -251,6 +259,27 @@ test('V4 rebuild request service estimates admission budget from project data', 
   expect(joined).not.toContain('judgment.project_id = project.id')
   expect(joined).toContain('judgment.use_fulltext_no_images = project.use_fulltext_no_images')
   expect(joined).toContain('FROM app.judgment_human_summary')
+})
+
+test('V4 rebuild request service accounts for list-mode fan-out in admission budgets', async () => {
+  const {database} = createFakeRequestDatabase({
+    ...baseStats,
+    humanJudgmentCount: 0,
+    judgmentCount: 0,
+    promptCount: 0,
+    scopedArticleCount: 100_000,
+    summaryHumanJudgmentCount: 0,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['display'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      database,
+    ),
+  )
+
+  expect(request.status).toBe('blocked_over_budget')
+  expect(request.overBudgetReason).toBe('input rows: estimated 400000 > max 250000')
 })
 
 test('V4 rebuild request service scales admission estimates by queued snapshots', async () => {

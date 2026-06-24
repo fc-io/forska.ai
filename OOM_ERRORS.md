@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-24 - Phase 5B Review Thread Follow-Up
+
+- Error: Review found V4 warning state could stay failed after superseded terminal request chunks, dirty recovery could enqueue duplicate full-project V4 rebuilds, and rebuild admission estimates ignored list-mode fan-out.
+- Context: `projectsRoutesGetReviewsWarnings`, `recoverDirtyRefreshClaims`, and `reviewServingV4RebuildRequestService`.
+- Cause: Diagnostics counted terminal chunks project-wide, stale legacy categories queued separate request IDs for the same project, and row budgets used one row per component/article or judgment instead of display/status/payload list-mode expansion.
+- Fix: Terminal rebuild chunk diagnostics now apply only to the latest request, stale legacy recovery coalesces projects into one V4 request before releasing rows, and V4 estimates multiply article, prompt, and payload rows by component-specific fan-out.
+- Verification: Focused Bun tests for warnings, diagnostics, recovery, and V4 rebuild request admission; targeted ESLint on touched files.
+
 ## 2026-06-24 - Phase 5B V4 Rebuild Request Review Fixes
 
 - Error: Review found V4 rebuild requests admitted project-scale work with `estimatedInputRows` based only on component count, default chunks with synthetic identities and sentinel article bounds, and failed chunks without retry backoff.
