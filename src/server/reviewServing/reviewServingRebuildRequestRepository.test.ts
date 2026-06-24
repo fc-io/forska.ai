@@ -45,6 +45,14 @@ const getClock = (statements: readonly string[]) => {
 const createFakeRequestDatabase = () => {
   const requests = new Map<string, FakeRequestRow>()
   const statements: string[] = []
+  const componentStateJson = {
+    optional: [{baseGeneration: 3, component: 'search', patchWatermark: 11, projectionIdentity: 'search:identity-1'}],
+    required: [
+      {baseGeneration: 2, component: 'display', patchWatermark: 10, projectionIdentity: 'display:identity-1'},
+      {baseGeneration: 2, component: 'payload', patchWatermark: 10, projectionIdentity: 'payload:identity-1'},
+      {baseGeneration: 2, component: 'summary', patchWatermark: 10, projectionIdentity: 'summary:identity-1'},
+    ],
+  }
 
   const run = async (statement: string) => {
     statements.push(statement)
@@ -88,6 +96,47 @@ const createFakeRequestDatabase = () => {
 
   const queryJson = async <T>(statement: string) => {
     statements.push(statement)
+
+    if (statement.includes('FROM app.project_article')) {
+      return [{chunkEndKey: 'article-z', chunkStartKey: 'article-a', scopedArticleCount: 3}] as T[]
+    }
+
+    if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+      return [{componentStateJson}] as T[]
+    }
+
+    if (statement.includes('FROM app.review_projection_identity_manifest')) {
+      return [
+        {
+          baseGeneration: 2,
+          inputDigest: 'display-digest-v1',
+          inputWatermark: 10,
+          projectionComponent: 'display',
+          projectionIdentity: 'display:identity-1',
+        },
+        {
+          baseGeneration: 2,
+          inputDigest: 'payload-digest-v1',
+          inputWatermark: 10,
+          projectionComponent: 'payload',
+          projectionIdentity: 'payload:identity-1',
+        },
+        {
+          baseGeneration: 2,
+          inputDigest: 'summary-digest-v1',
+          inputWatermark: 10,
+          projectionComponent: 'summary',
+          projectionIdentity: 'summary:identity-1',
+        },
+        {
+          baseGeneration: 3,
+          inputDigest: 'search-digest-v1',
+          inputWatermark: 11,
+          projectionComponent: 'search',
+          projectionIdentity: 'search:identity-1',
+        },
+      ] as T[]
+    }
 
     if (statement.includes('FROM app.review_rebuild_request')) {
       const requestId = getSqlStrings(statement)[0] ?? ''
@@ -177,4 +226,31 @@ test('over-budget V4 rebuild requests park before their chunks can be claimable'
   expect(request.overBudgetReason).toContain('input rows')
   expect(statements.join('\n')).toContain("'blocked_over_budget'")
   expect(statements.join('\n')).toContain("'request_over_budget'")
+})
+
+test('default rebuild request chunks use existing projection identities and real article bounds', async () => {
+  const {database, statements} = createFakeRequestDatabase()
+
+  const request = await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 100},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['summary', 'payload'],
+      requestId: 'rebuild:default-identities',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(request).toMatchObject({requestId: 'rebuild:default-identities', status: 'admitted'})
+  expect(joined).toContain('FROM app.project_article')
+  expect(joined).toContain('FROM app.review_serving_snapshot_manifest')
+  expect(joined).toContain('FROM app.review_projection_identity_manifest')
+  expect(joined).toContain("'article-a'")
+  expect(joined).toContain("'article-z'")
+  expect(joined).toContain("'summary:identity-1'")
+  expect(joined).toContain("'payload:identity-1'")
+  expect(joined).not.toContain('component:all')
+  expect(joined).not.toContain(':request:rebuild:default-identities')
 })

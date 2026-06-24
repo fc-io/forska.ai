@@ -405,7 +405,13 @@ test('isolated refresh command progresses one large rebuild batch when no normal
     ['bun', runOnceScriptPath, '--worker-id=test-large-rebuild', '--legacy-admin-ack=legacy-dirty-refresh'],
     {
       cwd: projectRoot,
-      env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker', SERVER_DUCKDB_OWNER_URL: ''},
+      env: {
+        ...defaultEnv,
+        DUCKDB_PATH: duckdbPath,
+        FORSKA_LEGACY_ADMIN_ACK: 'legacy-large-rebuild',
+        SERVER_DUCKDB_OWNER_URL: '',
+        SERVER_ROLE: 'maintenance-worker',
+      },
     },
   )
 

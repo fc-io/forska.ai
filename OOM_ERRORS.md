@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-24 - Phase 5B V4 Rebuild Request Review Fixes
+
+- Error: Review found V4 rebuild requests admitted project-scale work with `estimatedInputRows` based only on component count, default chunks with synthetic identities and sentinel article bounds, and failed chunks without retry backoff.
+- Context: `app.review_rebuild_request`, `app.review_rebuild_chunk_manifest`, V4 review-serving rebuild request scripts, and the projector chunk worker.
+- Cause: Request-created chunks did not inherit active/candidate projection identities or real article ranges, request IDs did not include live data watermarks, budget admission underestimated scoped articles/prompts/judgments, and failed chunks could be reclaimed without cooldown.
+- Fix: Default chunks now use existing snapshot/manifest identities and project article bounds, request estimates and source watermarks come from project data, diagnostics surface blocked chunks, chunk claim/retry metadata is qualified and bounded, and the legacy dirty-refresh fallback requires the large-rebuild ack.
+- Verification: Focused Bun tests for the touched request, chunk manifest, diagnostics, V4 request service, and static guard paths.
+
 ## 2026-06-23 - Legacy Judgment Fact Large Rebuild
 
 - Error: DuckDB OOM during the staged background `judgment_fact` large rebuild; the failing shape built `temp_project_judgment_fact_article` from a large inline `VALUES (...)` article list before deleting and reinserting `mart.judgment_fact` rows from raw `app.judgment`.

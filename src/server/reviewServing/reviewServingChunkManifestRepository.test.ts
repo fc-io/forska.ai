@@ -5,6 +5,7 @@ import {
   getNextClaimableReviewServingRebuildChunk,
   getReviewServingRebuildChunkId,
   isReviewServingRebuildChunkComplete,
+  markReviewServingRebuildChunkFailed,
   type ReviewServingChunkManifestRepositoryDatabase,
   type ReviewServingRebuildChunkIdentity,
   type ReviewServingRebuildChunkManifest,
@@ -39,8 +40,27 @@ const getWhereLiteral = (statement: string, columnName: string) => {
   )
 }
 
+const getAssignmentLiteral = (statement: string, columnName: string) => {
+  return (
+    statement
+      .match(new RegExp(`(?<![A-Za-z0-9_])${columnName}\\s*=\\s*'((?:''|[^'])*)'`, 'u'))?.[1]
+      ?.replaceAll("''", "'") ?? null
+  )
+}
+
 const hasChunkIdLiteralPredicate = (statement: string) => {
   return statement.match(/chunk_id\s*=\s*'/u) !== null
+}
+
+const getChunkIdLiteral = (statement: string) => {
+  return (
+    getWhereLiteral(statement, 'chunk_id')
+    ?? statement.match(/manifest\.chunk_id\s*=\s*'((?:''|[^'])*)'/u)?.[1]?.replaceAll("''", "'")
+    ?? getSqlStrings(statement).find((value) => {
+      return value.startsWith('chunk:')
+    })
+    ?? ''
+  )
 }
 
 const getClock = (statements: readonly string[]) => {
@@ -100,6 +120,7 @@ const getChunkRowFromIdentity = (
 
 const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = []) => {
   const rows = new Map<string, FakeChunkRow>()
+  const claimedRows = new Map<string, FakeChunkRow>()
   const statements: string[] = []
   const outputWrites: string[] = []
 
@@ -173,17 +194,18 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
     rows.set(chunkId, row)
   }
   const claimChunk = (statement: string) => {
-    const chunkId = getWhereLiteral(statement, 'chunk_id') ?? ''
+    const chunkId = getChunkIdLiteral(statement)
     const existing = rows.get(chunkId)
     const strings = getSqlStrings(statement)
-    const leaseOwner = strings[1] ?? ''
-    const leaseExpiresAt = strings[2] ?? null
+    const leaseOwner = getAssignmentLiteral(statement, 'lease_owner') ?? strings[1] ?? ''
+    const leaseExpiresAt =
+      statement.match(/lease_expires_at\s*=\s*TIMESTAMPTZ\s*'((?:''|[^'])*)'/u)?.[1] ?? strings[2] ?? null
     const canClaim =
       existing?.admissionState === 'admitted'
       && (existing.status === 'pending' || existing.status === 'failed' || existing.status === 'running')
 
     if (existing !== undefined && canClaim) {
-      rows.set(chunkId, {
+      const claimed = {
         ...existing,
         lastError: null,
         leaseExpiresAt,
@@ -191,29 +213,40 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
         startedAt: existing.startedAt ?? getClock(statements),
         status: 'running',
         updatedAt: getClock(statements),
-      })
+      } satisfies FakeChunkRow
+
+      rows.set(chunkId, claimed)
+      claimedRows.set(chunkId, claimed)
     }
   }
   const failChunk = (statement: string) => {
-    const chunkId = getWhereLiteral(statement, 'chunk_id') ?? ''
+    const chunkId = getChunkIdLiteral(statement)
     const existing = rows.get(chunkId)
+    const retryAfter = statement.match(/retry_after\s*=\s*TIMESTAMPTZ\s*'((?:''|[^'])*)'/u)?.[1] ?? null
+    const retryCount = Number(statement.match(/retry_count\s*=\s*(\d+)/u)?.[1] ?? existing?.retryCount ?? 0)
+    const status = (getAssignmentLiteral(statement, 'status') ?? 'failed') as FakeChunkRow['status']
 
     if (existing !== undefined && existing.status !== 'completed') {
+      claimedRows.delete(chunkId)
       rows.set(chunkId, {
         ...existing,
-        lastError: getSqlStrings(statement)[1] ?? getSqlStrings(statement)[0] ?? null,
+        admissionState: status === 'blocked_over_budget' ? 'blocked_over_budget' : existing.admissionState,
+        lastError: getAssignmentLiteral(statement, 'last_error'),
         leaseExpiresAt: null,
         leaseOwner: null,
-        status: 'failed',
+        retryAfter,
+        retryCount,
+        status,
         updatedAt: getClock(statements),
       })
     }
   }
   const completeChunk = (statement: string) => {
-    const chunkId = getWhereLiteral(statement, 'chunk_id') ?? ''
+    const chunkId = getChunkIdLiteral(statement)
     const existing = rows.get(chunkId)
 
     if (existing?.status === 'running') {
+      claimedRows.delete(chunkId)
       rows.set(chunkId, {
         ...existing,
         checksum: getSqlStrings(statement)[1] ?? null,
@@ -233,11 +266,18 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       upsertChunk(statement)
     }
 
-    if (statement.includes("status = 'running'")) {
+    if (
+      statement.includes('UPDATE app.review_rebuild_chunk_manifest')
+      && statement.match(/status\s*=\s*'running'/u) !== null
+    ) {
       claimChunk(statement)
     }
 
-    if (statement.includes("SET\n      status = 'failed'") || statement.includes("SET\r\n      status = 'failed'")) {
+    if (
+      statement.includes('UPDATE app.review_rebuild_chunk_manifest')
+      && statement.includes('last_error =')
+      && statement.match(/retry_count\s*=\s*\d+/u) !== null
+    ) {
       failChunk(statement)
     }
 
@@ -256,8 +296,8 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
     statements.push(statement)
 
     if (statement.includes('FROM app.review_rebuild_chunk_manifest') && hasChunkIdLiteralPredicate(statement)) {
-      const chunkId = getWhereLiteral(statement, 'chunk_id') ?? ''
-      const row = rows.get(chunkId)
+      const chunkId = getChunkIdLiteral(statement)
+      const row = claimedRows.get(chunkId) ?? rows.get(chunkId)
       return (row === undefined ? [] : [row]) as T[]
     }
 
@@ -289,6 +329,10 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       return (complete ? [{chunkId}] : []) as T[]
     }
 
+    if (statement.includes('FROM app.review_rebuild_request')) {
+      return [{retryPolicyJson: {maxAttempts: 2, retryAfterMs: 120_000, terminalState: 'blocked_over_budget'}}] as T[]
+    }
+
     return [] as T[]
   }
   const database = {
@@ -301,6 +345,15 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
 
   return {database, outputWrites, rows, statements}
 }
+
+test('null-request chunk ids preserve legacy identity hashes', () => {
+  expect(getReviewServingRebuildChunkId({...baseChunkIdentity, requestId: null})).toBe(
+    getReviewServingRebuildChunkId(baseChunkIdentity),
+  )
+  expect(getReviewServingRebuildChunkId({...baseChunkIdentity, requestId: 'rebuild:new'})).not.toBe(
+    getReviewServingRebuildChunkId(baseChunkIdentity),
+  )
+})
 
 test('completed chunks resume after restart and are skipped for the same maintained input digest', async () => {
   const completed = {
@@ -354,6 +407,7 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).toContain("candidate.status = 'pending'")
   expect(statements.join('\n')).toContain("candidate.status = 'failed'")
   expect(statements.join('\n')).toContain("request.status IN ('admitted', 'running')")
+  expect(statements.join('\n')).toContain('request.request_id = candidate.request_id')
   expect(statements.join('\n')).toContain("project_id IS NOT DISTINCT FROM 'project-1'")
   expect(statements.join('\n')).toContain('MIN(candidate.updated_at)')
   expect(statements.join('\n')).toContain('MIN(candidate.chunk_id)')
@@ -458,6 +512,40 @@ test('validation mismatch rolls back output writes and marks the claimed chunk f
   expect(statements).toContain('ROLLBACK TO SAVEPOINT review_serving_rebuild_chunk_output')
   expect(statements).toContain('RELEASE SAVEPOINT review_serving_rebuild_chunk_output')
   expect(rows.get(getReviewServingRebuildChunkId(baseChunkIdentity))?.lastError).toContain('chunk validation failed')
+})
+
+test('failed rebuild chunks record retry backoff and exhaust to the request terminal state', async () => {
+  const retryIdentity = {
+    ...baseChunkIdentity,
+    requestId: 'rebuild:retry-policy',
+  } satisfies ReviewServingRebuildChunkIdentity
+  const running = {
+    ...getChunkRowFromIdentity(retryIdentity, []),
+    leaseOwner: 'worker-retry',
+    status: 'running' as const,
+  }
+  const {database, rows, statements} = createFakeChunkManifestDatabase([running])
+  const chunkId = getReviewServingRebuildChunkId(retryIdentity)
+
+  const failed = await markReviewServingRebuildChunkFailed(
+    {chunkId, error: 'temporary oom', leaseOwner: 'worker-retry', now: '2026-06-16T14:00:00.000Z'},
+    database,
+  )
+  const exhausted = await markReviewServingRebuildChunkFailed(
+    {chunkId, error: 'temporary oom again', now: '2026-06-16T14:02:00.000Z'},
+    database,
+  )
+
+  expect(failed).toMatchObject({retryAfter: '2026-06-16T14:02:00.000Z', retryCount: 1, status: 'failed'})
+  expect(exhausted).toMatchObject({
+    admissionState: 'blocked_over_budget',
+    retryAfter: null,
+    retryCount: 2,
+    status: 'blocked_over_budget',
+  })
+  expect(rows.get(chunkId)?.lastError).toBe('temporary oom again')
+  expect(statements.join('\n')).toContain('FROM app.review_rebuild_request')
+  expect(statements.join('\n')).toContain('retry_after')
 })
 
 test('changed maintained input digest creates a different chunk and avoids stale completed skips', async () => {

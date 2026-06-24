@@ -58,11 +58,13 @@ const createDiagnosticsDatabase = () => {
       if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
         return [
           {
+            blockedOverBudgetCount: 2,
             completedCount: 8,
             expiredLeaseCount: 1,
             failedCount: 1,
             oldestQueuedAt: '2026-06-18T08:00:00.000Z',
             pendingCount: 4,
+            quarantinedCount: 1,
             runningCount: 2,
             updatedAt: '2026-06-18T10:02:00.000Z',
           },
@@ -122,7 +124,14 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
       retryableOutboxCount: 2,
       unresolvedOutboxCount: 3,
     },
-    rebuildChunks: {expiredLeaseCount: 1, failedCount: 1, pendingCount: 4, runningCount: 2},
+    rebuildChunks: {
+      blockedOverBudgetCount: 2,
+      expiredLeaseCount: 1,
+      failedCount: 1,
+      pendingCount: 4,
+      quarantinedCount: 1,
+      runningCount: 2,
+    },
     search: {availability: 'ready', optionalComponent: true, snapshotId: 'snapshot-1'},
     snapshot: {activeCount: 1, activeSnapshotId: 'snapshot-1', failedCount: 2, lastKnownGoodSnapshotId: 'snapshot-0'},
   })
