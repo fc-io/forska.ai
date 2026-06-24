@@ -1305,6 +1305,50 @@ test('reviews warnings report blocked when memory policy disables mart refresh d
   }
 })
 
+test('reviews warnings keep V4 rebuild chunks refreshable when memory policy disables mart refresh drain', async () => {
+  const projectId = 'project-v4-rebuild-low-memory-warning'
+  const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
+
+  process.env.DUCKDB_MEMORY_LIMIT = '5120MiB'
+
+  try {
+    await insertProjectFixture(projectId)
+    await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+    await insertReviewServingRow(projectId, `article-${projectId}`)
+    await insertActiveReviewServingManifest({
+      includeSearchState: false,
+      optionalComponents: [],
+      projectId,
+      snapshotId: 'snapshot-v4-low-memory-warning',
+    })
+    await insertReviewRebuildChunk({
+      chunkId: 'rebuild-chunk-v4-low-memory-warning',
+      createdAt: '2026-04-02T12:00:00.000Z',
+      projectId,
+      status: 'pending',
+      updatedAt: '2026-04-02T12:00:00.000Z',
+    })
+
+    const {body, response} = await postWarningsRequest(projectId)
+
+    expect(response.status).toBe(200)
+    expect(body.data.indexing.blockedReason).toBe(null)
+    expect(body.data.indexing.eligibleConsumerCount).toBe(1)
+    expect(body.data.indexing.eligibleConsumerPresent).toBe(true)
+    expect(body.data.indexing.pendingProjectRefreshCount).toBe(0)
+    expect(body.data.indexing.pendingRefreshCount).toBe(1)
+    expect(body.data.indexing.progressState).toBe('queued')
+    expect(body.data.indexing.queuedRefreshCount).toBe(1)
+    expect(body.data.indexing.status).toBe('refreshing')
+  } finally {
+    if (previousDuckdbMemoryLimit === undefined) {
+      delete process.env.DUCKDB_MEMORY_LIMIT
+    } else {
+      process.env.DUCKDB_MEMORY_LIMIT = previousDuckdbMemoryLimit
+    }
+  }
+})
+
 test('reviews warnings report refreshing when a staged large rebuild is queued', async () => {
   const projectId = 'project-large-rebuild-queued-warning'
 
