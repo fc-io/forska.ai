@@ -79,6 +79,7 @@ const humanStatusListModeFanOut = 2
 const queuePayloadFanOut = 2
 const selectedImportPostingFilterFanOut = 4
 const selectedImportPostingFanOut = listModeFanOut * selectedImportPostingFilterFanOut
+const syntheticHumanStatusPromptCount = 1
 const articleScaledComponentFanOut = {
   display: listModeFanOut,
   humanStatus: 0,
@@ -112,9 +113,15 @@ const getArticleScaledComponentFanOut = (components: readonly ReviewServingProje
   }, 0)
 }
 
-const getPromptScaledComponentFanOut = (components: readonly ReviewServingProjectionComponent[]) => {
-  return components.reduce((total, component) => {
-    return total + promptScaledComponentFanOut[component]
+const getPromptScaledComponentRows = (input: {
+  components: readonly ReviewServingProjectionComponent[]
+  promptCount: number
+}) => {
+  return input.components.reduce((total, component) => {
+    const promptCount =
+      component === 'humanStatus' ? input.promptCount + syntheticHumanStatusPromptCount : input.promptCount
+
+    return total + promptCount * promptScaledComponentFanOut[component]
   }, 0)
 }
 
@@ -158,7 +165,7 @@ const getReviewServingV4RebuildEstimate = (
   const summaryHumanJudgmentCount = getSafeCount(stats.summaryHumanJudgmentCount)
   const snapshotCount = getSafeCount(stats.snapshotCount)
   const componentInputRows = scopedArticleCount * getArticleScaledComponentFanOut(components) * snapshotCount
-  const promptInputRows = scopedArticleCount * promptCount * getPromptScaledComponentFanOut(components) * snapshotCount
+  const promptInputRows = scopedArticleCount * getPromptScaledComponentRows({components, promptCount}) * snapshotCount
   const estimatedPayloadRows = getEstimatedPayloadRows({
     components,
     enabledPromptCount,

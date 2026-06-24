@@ -351,22 +351,33 @@ test('default rebuild request keeps same projection identity across base generat
   expect(joined).toContain("'payload-candidate-digest-v1'")
 })
 
-test('default rebuild request rejects empty chunk expansion', async () => {
-  const {database, statements} = createFakeRequestDatabase({projectionManifestRows: []})
+test('default rebuild request rejects partial chunk expansion', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    projectionManifestRows: [
+      {
+        baseGeneration: 2,
+        inputDigest: 'display-digest-v1',
+        inputWatermark: 10,
+        projectionComponent: 'display',
+        projectionIdentity: 'display:identity-1',
+      },
+    ],
+  })
 
   const error = await getThrownError(() => {
     return createReviewServingRebuildRequest(
       {
         projectId: 'project-v4',
         reason: 'requestReviewServingLargeRebuild',
-        requestedComponents: ['payload'],
-        requestId: 'rebuild:no-chunks',
+        requestedComponents: ['display', 'payload'],
+        requestId: 'rebuild:partial-chunks',
       },
       database,
     )
   })
 
-  expect(error.message).toContain('created no rebuild chunks')
+  expect(error.message).toContain('skipped requested rebuild components')
+  expect(error.message).toContain('payload')
   expect(statements.join('\n')).toContain('FROM app.review_projection_identity_manifest')
   expect(statements.join('\n')).not.toContain('INSERT INTO app.review_rebuild_request')
   expect(statements.join('\n')).not.toContain('INSERT INTO app.review_rebuild_chunk_manifest')

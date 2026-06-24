@@ -208,6 +208,9 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
       INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
       VALUES ('recover-apply-project', 'Recover Apply Project', 'recover-dirty-model', TRUE, TRUE, FALSE, FALSE);
 
+      INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+      VALUES ('recover-empty-project', 'Recover Empty Project', 'recover-dirty-model', TRUE, TRUE, FALSE, FALSE);
+
       INSERT INTO app.prompt (id, original_text, content_hash)
       VALUES ('recover-apply-prompt', 'Recover prompt', 'recover-apply-prompt-hash');
 
@@ -231,18 +234,18 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
         input_digest,
         definition_version,
         status
-      ) VALUES (
-        'recover-apply-summary-manifest',
-        'recover-apply-project',
-        'summary',
-        'summary:recover-apply',
-        1,
-        1,
-        1,
-        'summary-digest',
-        'summary:v1',
-        'active'
-      );
+      ) VALUES
+        ('recover-apply-project-scope-manifest', 'recover-apply-project', 'projectScope', 'projectScope:recover-apply', 1, 1, 1, 'project-scope-digest', 'projectScope:v1', 'active'),
+        ('recover-apply-selected-import-manifest', 'recover-apply-project', 'selectedImport', 'selectedImport:recover-apply', 1, 1, 1, 'selected-import-digest', 'selectedImport:v1', 'active'),
+        ('recover-apply-display-manifest', 'recover-apply-project', 'display', 'display:recover-apply', 1, 1, 1, 'display-digest', 'display:v1', 'active'),
+        ('recover-apply-judgment-input-content-manifest', 'recover-apply-project', 'judgmentInputContent', 'judgmentInputContent:recover-apply', 1, 1, 1, 'judgment-input-content-digest', 'judgmentInputContent:v1', 'active'),
+        ('recover-apply-llm-status-manifest', 'recover-apply-project', 'llmStatus', 'llmStatus:recover-apply', 1, 1, 1, 'llm-status-digest', 'llmStatus:v1', 'active'),
+        ('recover-apply-human-status-manifest', 'recover-apply-project', 'humanStatus', 'humanStatus:recover-apply', 1, 1, 1, 'human-status-digest', 'humanStatus:v1', 'active'),
+        ('recover-apply-queue-manifest', 'recover-apply-project', 'queue', 'queue:recover-apply', 1, 1, 1, 'queue-digest', 'queue:v1', 'active'),
+        ('recover-apply-posting-manifest', 'recover-apply-project', 'posting', 'posting:recover-apply', 1, 1, 1, 'posting-digest', 'posting:v1', 'active'),
+        ('recover-apply-summary-manifest', 'recover-apply-project', 'summary', 'summary:recover-apply', 1, 1, 1, 'summary-digest', 'summary:v1', 'active'),
+        ('recover-apply-payload-manifest', 'recover-apply-project', 'payload', 'payload:recover-apply', 1, 1, 1, 'payload-digest', 'payload:v1', 'active'),
+        ('recover-apply-search-manifest', 'recover-apply-project', 'search', 'search:recover-apply', 1, 1, 1, 'search-digest', 'search:v1', 'active');
 
       INSERT INTO app.review_serving_snapshot_manifest (
         project_id,
@@ -261,8 +264,8 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
         'active',
         'recover-apply-review-config',
         '{}'::JSON,
-        '{"required":[{"component":"summary","projectionIdentity":"summary:recover-apply","baseGeneration":1,"patchWatermark":1}],"optional":[]}'::JSON,
-        '["summary"]'::JSON,
+        '{"required":[{"component":"projectScope","projectionIdentity":"projectScope:recover-apply","baseGeneration":1,"patchWatermark":1},{"component":"selectedImport","projectionIdentity":"selectedImport:recover-apply","baseGeneration":1,"patchWatermark":1},{"component":"display","projectionIdentity":"display:recover-apply","baseGeneration":1,"patchWatermark":1},{"component":"judgmentInputContent","projectionIdentity":"judgmentInputContent:recover-apply","baseGeneration":1,"patchWatermark":1},{"component":"llmStatus","projectionIdentity":"llmStatus:recover-apply","baseGeneration":1,"patchWatermark":1},{"component":"humanStatus","projectionIdentity":"humanStatus:recover-apply","baseGeneration":1,"patchWatermark":1},{"component":"queue","projectionIdentity":"queue:recover-apply","baseGeneration":1,"patchWatermark":1},{"component":"posting","projectionIdentity":"posting:recover-apply","baseGeneration":1,"patchWatermark":1},{"component":"summary","projectionIdentity":"summary:recover-apply","baseGeneration":1,"patchWatermark":1},{"component":"payload","projectionIdentity":"payload:recover-apply","baseGeneration":1,"patchWatermark":1},{"component":"search","projectionIdentity":"search:recover-apply","baseGeneration":1,"patchWatermark":1}],"optional":[]}'::JSON,
+        '["projectScope","selectedImport","display","judgmentInputContent","llmStatus","humanStatus","queue","posting","summary","payload","search"]'::JSON,
         '[]'::JSON,
         '{}'::JSON,
         TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
@@ -283,6 +286,24 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
         0,
         'running',
         'stale-refresh-worker',
+        TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
+      );
+
+      INSERT INTO app.project_mart_refresh_state (
+        project_id,
+        dirty_token,
+        active_dirty_token,
+        last_completed_dirty_token,
+        refresh_status,
+        worker_id,
+        lease_expires_at
+      ) VALUES (
+        'recover-empty-project',
+        1,
+        1,
+        0,
+        'running',
+        'stale-empty-worker',
         TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
       );
 
@@ -345,8 +366,22 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
     recoverAttempted: boolean
-    recoveryResult: {kind: string; projectIds: string[]; reason: string; requestIds: string[]}
-    recoveryResults: Array<{kind: string; projectIds: string[]; reason: string; requestIds: string[]}>
+    recoveryResult: {
+      failedCount: number
+      failedProjects: Array<{error: string; projectId: string}>
+      kind: string
+      projectIds: string[]
+      reason: string
+      requestIds: string[]
+    }
+    recoveryResults: Array<{
+      failedCount: number
+      failedProjects: Array<{error: string; projectId: string}>
+      kind: string
+      projectIds: string[]
+      reason: string
+      requestIds: string[]
+    }>
     status: string
   }
   const [state] = runQuery<
@@ -372,14 +407,27 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
     duckdbPath,
     "SELECT refresh_status AS refreshStatus, worker_id AS workerId, lease_expires_at AS leaseExpiresAt, superseded_at AS supersededAt FROM app.project_mart_large_rebuild_state WHERE project_id = 'recover-apply-project'",
   )
+  const [emptyProjectState] = runQuery<
+    Array<{
+      activeDirtyToken: number
+      lastCompletedDirtyToken: number
+      leaseExpiresAt: string | null
+      refreshStatus: string
+    }>
+  >(
+    duckdbPath,
+    "SELECT refresh_status AS refreshStatus, CAST(active_dirty_token AS INTEGER) AS activeDirtyToken, CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken, lease_expires_at AS leaseExpiresAt FROM app.project_mart_refresh_state WHERE project_id = 'recover-empty-project'",
+  )
   const [requestCount] = runQuery<Array<{requestCount: number}>>(
     duckdbPath,
     "SELECT CAST(COUNT(*) AS INTEGER) AS requestCount FROM app.review_rebuild_request WHERE project_id = 'recover-apply-project'",
   )
 
   expect(result.recoverAttempted).toBe(true)
-  expect(result.status).toBe('recovered')
+  expect(result.status).toBe('recovered_with_failures')
   expect(result.recoveryResult).toMatchObject({
+    failedCount: 1,
+    failedProjects: [{projectId: 'recover-empty-project'}],
     kind: 'v4_rebuild_request',
     projectIds: ['recover-apply-project'],
     reason: 'recoverDirtyRefreshClaims.staleLegacyClaim',
@@ -392,6 +440,8 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
   ).toEqual(['recoverDirtyRefreshClaims.staleLegacyClaim'])
   expect(requestCount?.requestCount).toBe(1)
   expect(state).toEqual({activeDirtyToken: 0, lastCompletedDirtyToken: 1, leaseExpiresAt: null, refreshStatus: 'idle'})
+  expect(emptyProjectState).toMatchObject({activeDirtyToken: 1, lastCompletedDirtyToken: 0, refreshStatus: 'running'})
+  expect(emptyProjectState?.leaseExpiresAt).not.toBeNull()
   expect(materializationState).toEqual({
     leaseExpiresAt: null,
     materializationOwner: null,

@@ -302,6 +302,28 @@ test('V4 rebuild request service estimates status rebuild rows from written list
   expect(request.overBudgetReason).toBeNull()
 })
 
+test('V4 rebuild request service includes synthetic summary prompt rows in human status estimates', async () => {
+  const {database} = createFakeRequestDatabase({
+    ...baseStats,
+    enabledPromptCount: 1,
+    humanJudgmentCount: 0,
+    judgmentCount: 0,
+    promptCount: 1,
+    scopedArticleCount: 100_000,
+    summaryHumanJudgmentCount: 0,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['humanStatus'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      database,
+    ),
+  )
+
+  expect(request.status).toBe('blocked_over_budget')
+  expect(request.overBudgetReason).toBe('input rows: estimated 400000 > max 250000')
+})
+
 test('V4 rebuild request service includes selected-import posting facets in admission budgets', async () => {
   const {database} = createFakeRequestDatabase({
     ...baseStats,

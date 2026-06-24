@@ -768,6 +768,25 @@ export const claimReviewServingRebuildChunk = async (
   })
 }
 
+export const heartbeatReviewServingRebuildChunkLease = async (
+  input: {chunkId: string; leaseExpiresAt: Date | string; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
+) => {
+  await database.run(`
+    UPDATE app.review_rebuild_chunk_manifest
+    SET
+      lease_expires_at = ${getReviewServingChunkTimestampLiteral(input.leaseExpiresAt)},
+      updated_at = current_timestamp
+    WHERE chunk_id = ${getSqlLiteral(input.chunkId)}
+      AND status = 'running'
+      AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
+  `)
+
+  const chunk = await getReviewServingRebuildChunkManifest({chunkId: input.chunkId}, database)
+
+  return chunk?.status === 'running' && chunk.leaseOwner === input.leaseOwner ? chunk : null
+}
+
 const isPositiveInteger = (value: unknown) => {
   return typeof value === 'number' && Number.isInteger(value) && value > 0
 }

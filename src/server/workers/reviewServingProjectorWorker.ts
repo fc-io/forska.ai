@@ -11,6 +11,7 @@ import {
 import {
   claimReviewServingRebuildChunk,
   getNextClaimableReviewServingRebuildChunk,
+  heartbeatReviewServingRebuildChunkLease,
   isReviewServingRebuildChunkComplete,
   markReviewServingRebuildChunkFailed,
   type ReviewServingChunkManifestRepositoryDatabase,
@@ -83,6 +84,7 @@ type ReviewServingProjectorWorkerRebuildChunkService = {
     database: ReviewServingChunkManifestRepositoryDatabase
     now: Date
   }) => Promise<ReviewServingProjectorWorkerChunkInput | null>
+  heartbeatChunk: typeof heartbeatReviewServingRebuildChunkLease
   isChunkComplete: typeof isReviewServingRebuildChunkComplete
   runClaimedChunk: (input: {
     chunk: ReviewServingRebuildChunkManifest
@@ -112,6 +114,7 @@ type ReviewServingProjectorWorkerDependencies = {
 type ReviewServingProjectorWorkerCycleOptions = {
   batchSize?: number
   cleanupIntervalMs?: number
+  heartbeatMs?: number
   lastCleanupAtMs?: number | null
   leaseMs?: number
   maxActiveImportCount?: number
@@ -211,6 +214,7 @@ type RebuildChunkOutputChecksumRow = {actualChecksum: string; actualCount: numbe
 
 const defaultReviewServingProjectorWorkerBatchSize = 64
 const defaultReviewServingProjectorWorkerCleanupIntervalMs = 60_000
+const defaultReviewServingProjectorWorkerHeartbeatMs = 10_000
 const defaultReviewServingProjectorWorkerLeaseMs = 30_000
 const defaultReviewServingProjectorWorkerMaxRetries = 1
 const defaultReviewServingProjectorWorkerMaxRowsPerWake = 512
@@ -2259,6 +2263,7 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
     getNextChunk: ({database, now}) => {
       return getNextClaimableReviewServingRebuildChunk({now}, database)
     },
+    heartbeatChunk: heartbeatReviewServingRebuildChunkLease,
     isChunkComplete: isReviewServingRebuildChunkComplete,
     runClaimedChunk: async ({chunk, database, leaseOwner}) => {
       return runReviewServingProjectorWorkerClaimedRebuildChunk({chunk, leaseOwner}, database)
@@ -2301,6 +2306,62 @@ const getLeaseExpiresAt = (options: ReviewServingProjectorWorkerCycleOptions) =>
   return new Date(
     getWorkerNow(options).getTime() + getPositiveInteger(options.leaseMs, defaultReviewServingProjectorWorkerLeaseMs),
   )
+}
+
+const getRebuildChunkHeartbeatLeaseExpiresAt = (
+  dependencies: ReviewServingProjectorWorkerDependencies,
+  options: ReviewServingProjectorWorkerCycleOptions,
+) => {
+  return new Date(
+    (dependencies.nowMs?.() ?? Date.now())
+      + getPositiveInteger(options.leaseMs, defaultReviewServingProjectorWorkerLeaseMs),
+  )
+}
+
+const heartbeatClaimedRebuildChunkLease = async (input: {
+  chunk: ReviewServingRebuildChunkManifest
+  database: ReviewServingChunkManifestRepositoryDatabase
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+  service: ReviewServingProjectorWorkerRebuildChunkService
+  workerId: string
+}) => {
+  const chunk = await input.service.heartbeatChunk(
+    {
+      chunkId: input.chunk.chunkId,
+      leaseExpiresAt: getRebuildChunkHeartbeatLeaseExpiresAt(input.dependencies, input.options),
+      leaseOwner: input.workerId,
+    },
+    input.database,
+  )
+
+  if (chunk === null) {
+    throw new Error(`review serving rebuild chunk ${input.chunk.chunkId} is no longer claimed by ${input.workerId}`)
+  }
+}
+
+const startClaimedRebuildChunkHeartbeat = (input: {
+  chunk: ReviewServingRebuildChunkManifest
+  database: ReviewServingChunkManifestRepositoryDatabase
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+  service: ReviewServingProjectorWorkerRebuildChunkService
+  workerId: string
+}) => {
+  const interval = setInterval(
+    () => {
+      return void heartbeatClaimedRebuildChunkLease(input).catch(() => {
+        return undefined
+      })
+    },
+    getPositiveInteger(input.options.heartbeatMs, defaultReviewServingProjectorWorkerHeartbeatMs),
+  )
+
+  interval.unref()
+
+  return () => {
+    clearInterval(interval)
+  }
 }
 
 const getErrorText = (error: unknown) => {
@@ -2412,11 +2473,23 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
     return {chunkId: null, status: 'idle'}
   }
 
+  const stopHeartbeat = startClaimedRebuildChunkHeartbeat({
+    chunk: claimedChunk,
+    database,
+    dependencies,
+    options,
+    service,
+    workerId,
+  })
+
   try {
+    await heartbeatClaimedRebuildChunkLease({chunk: claimedChunk, database, dependencies, options, service, workerId})
     await service.runClaimedChunk({chunk: claimedChunk, database, leaseOwner: workerId, workloadContext})
+    stopHeartbeat()
 
     return {chunkId: claimedChunk.chunkId, status: 'completed'}
   } catch (error) {
+    stopHeartbeat()
     await service.failChunk({chunkId: claimedChunk.chunkId, error: getErrorText(error), leaseOwner: workerId}, database)
 
     return {chunkId: claimedChunk.chunkId, status: 'failed'}
@@ -2615,6 +2688,7 @@ export {
   defaultReviewServingProjectorWorkerBatchSize,
   defaultReviewServingProjectorWorkerCleanupIntervalMs,
   defaultReviewServingProjectorWorkerErrorBackoffMs,
+  defaultReviewServingProjectorWorkerHeartbeatMs,
   defaultReviewServingProjectorWorkerLeaseMs,
   defaultReviewServingProjectorWorkerMaxRetries,
   defaultReviewServingProjectorWorkerMaxRowsPerWake,
