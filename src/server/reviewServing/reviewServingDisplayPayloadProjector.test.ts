@@ -132,6 +132,11 @@ test('display routine updates write component-narrow patches for only claimed ar
   expect(selectStatement).toContain('FROM dirty_article dirty')
   expect(selectStatement).toContain('LEFT JOIN mart.project_scope_article scope')
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
+  expect(selectStatement).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
+  expect(selectStatement).toContain('COALESCE(selected.external_id, article.article_id) AS articleExternalId')
+  expect(selectStatement).toContain(
+    "COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url",
+  )
   expect(insertStatement).toContain(
     'ON CONFLICT(project_id, display_identity, base_generation, patch_watermark, article_id)',
   )
@@ -176,6 +181,7 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
       displayIdentity: 'display:identity-1',
       payloadIdentity: 'payload:identity-1',
       projectId: 'project-1',
+      selectedImportSnapshotId: 'selected-import-snapshot-1',
       snapshotId: 'snapshot-1',
       baseGeneration: 1,
     },
@@ -191,7 +197,10 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
 
   expect(result).toEqual({payloadRowCount: 1, patchWatermark: 0})
   expect(selectStatement).toContain('article.article_created_at AS articleCreatedAt')
-  expect(selectStatement).toContain('article.source_metadata AS sourceMetadata')
+  expect(selectStatement).toContain('json_merge_patch')
+  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
+  expect(selectStatement).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
+  expect(selectStatement).toContain("selected.selected_import_snapshot_id = 'selected-import-snapshot-1'")
   expect(selectStatement).toContain('LEFT(article.article_summary, 2000) AS abstractText')
   expect(insertStatement).toContain('article_created_at')
   expect(insertStatement).toContain('payload_bytes')
@@ -211,6 +220,7 @@ test('payload claimed updates delete stale rows for removed articles before inse
       payloadIdentity: 'payload:identity-1',
       projectId: 'project-1',
       projectionIdentity: 'payload:identity-1',
+      selectedImportSnapshotId: 'selected-import-snapshot-1',
       snapshotId: 'snapshot-1',
     },
     database,
@@ -255,6 +265,7 @@ test('project-scoped payload rebuilds read scoped articles and clear snapshot pa
       payloadIdentity: 'payload:identity-1',
       projectId: 'project-1',
       projectionIdentity: 'payload:identity-1',
+      selectedImportSnapshotId: 'selected-import-snapshot-1',
       snapshotId: 'snapshot-1',
     },
     database,
@@ -289,6 +300,7 @@ test('payload projection defers manifest and watermark when claims are not ackno
       payloadIdentity: 'payload:identity-1',
       projectId: 'project-1',
       projectionIdentity: 'payload:identity-1',
+      selectedImportSnapshotId: 'selected-import-snapshot-1',
       snapshotId: 'snapshot-1',
     },
     database,
@@ -362,6 +374,8 @@ test('display base rows flow through writer with display fields and selected imp
   expect(selectStatement).toContain('article.article_updated_at AS articleUpdatedAt')
   expect(selectStatement).toContain('article.doi')
   expect(selectStatement).toContain('article.full_text_fetched_at AS fullTextFetchedAt')
+  expect(selectStatement).toContain('COALESCE(selected.article_title, article.article_title) AS articleTitle')
+  expect(selectStatement).toContain('json_merge_patch')
   expect(inserts).toHaveLength(2)
   expect(inserts.join('\n')).toContain('article_title')
   expect(inserts.join('\n')).toContain('article_updated_at')

@@ -17,6 +17,14 @@ Run it with:
 bun run test:network-smoke
 ```
 
+To run against the primary runtime database without creating synthetic seed rows:
+
+```bash
+bun run test:network-smoke:current-db
+```
+
+Current-DB mode uses existing IDs discovered through read endpoints. It requires at least one active project with a linked prompt and article, one provider connection, and one active data source. It skips routes that are known to write or queue work on load, including human assessment init and comparison-project dynamic pages. Stop other servers using the same DuckDB file before using direct current-DB mode, or run against a copied database for full dynamic-route coverage.
+
 ## Audit Loop
 
 1. Build a concrete route inventory from the generated TanStack route tree.

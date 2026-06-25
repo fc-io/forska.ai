@@ -152,6 +152,38 @@ test('delta intake starts projector work at first affected component only', asyn
   expect(dirtyInserts[0]).not.toContain('display')
 })
 
+test('delta intake accepts DuckDB bigint string high-water marks', async () => {
+  const {database} = createFakeIntakeDatabase([
+    createReviewChangeDelta({
+      articleId: 'article-1',
+      judgmentId: 'judgment-1',
+      modelId: 'model-1',
+      payloadJson: {
+        articleId: 'article-1',
+        contentFlags: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+        judgmentId: 'judgment-1',
+        modelId: 'model-1',
+        projectId: 'project-1',
+        promptId: 'prompt-1',
+      },
+      projectId: 'project-1',
+      promptId: 'prompt-1',
+      sourceHighWaterMark: '7',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }),
+  ])
+
+  const result = await intakeReviewChangeDeltasToDirtyWork(
+    {endSourceHighWaterMark: 7, limit: 10, sourcePartition: 'reviewChange:project-1', startSourceHighWaterMark: 1},
+    database,
+  )
+
+  expect(result).toMatchObject({dirtyWorkCount: 5, maxSourceHighWaterMark: 7, status: 'converted'})
+})
+
 test('delta intake rejects malformed rows before dirty work writes', async () => {
   const {database, statements} = createFakeIntakeDatabase([
     createReviewChangeDelta({

@@ -8,6 +8,12 @@ test('handleApiResponse returns data for successful responses', () => {
   expect(result).toEqual({data: {id: 'article-1'}})
 })
 
+test('handleApiResponse allows raw domain objects with error fields', () => {
+  const result = handleApiResponse({data: {error: [], id: 'job-1'}})
+
+  expect(result).toEqual({error: [], id: 'job-1'})
+})
+
 test('handleApiResponse uses nested treaty error messages', () => {
   const getResult = () => {
     return handleApiResponse(

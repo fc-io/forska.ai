@@ -210,6 +210,7 @@ test('retention cleanup advances a bounded cursor and protects active, last-know
   expect(joined).toContain('released_at IS NULL AND ref_count > 0 AND expires_at > TIMESTAMPTZ')
   expect(joined).toContain('LIMIT 25')
   expect(joined).toContain('INSERT INTO app.review_serving_retention_mark')
+  expect(joined).toContain('updated_at = excluded.updated_at')
   expect(joined).toContain('"tableIndex":1')
 })
 

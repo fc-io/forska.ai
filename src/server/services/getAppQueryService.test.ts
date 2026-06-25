@@ -97,7 +97,7 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
         '{"journalTitle":"Scoped J","preprintSource":null,"preprintHostLabel":null,"isPreprint":false,"fullTextLinks":[],"covidence":{"articleKey":"covidence:42","articleKeySource":"covidence","recordKey":"record-42","recordKeySource":"covidence","studyKey":"study-1","studyKeySource":"covidence","mode":null,"sourceFileNames":[],"stageMembership":{"all":true,"excluded":false,"full_text":false,"included":false,"irrelevant":false},"tags":[],"covidenceIds":["42"],"referenceIds":["ref-42"],"duplicateStudyRecordCount":1,"hasDuplicateStudyRecords":false,"hasStudyDecisionConflict":false,"seededHumanJudgmentAnswer":null,"isSeededHumanJudgmentAnswered":false}}',
         'record-42',
         'hash-42',
-        '{"source":"covidence","id":"42"}'
+        '{"source":"covidence","id":"42","covidence":{"citation":{"url":"https://example.test/scoped-42"}}}'
       );
     `,
   ])
@@ -167,13 +167,14 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
         articleId: string
         canonicalArticleId: string
         importRoute: string
-        originalData: {source: string; id: string}
+        originalData: {source: string; id: string; covidence: {citation: {url: string}}}
         scopedImportMetadata: {journalTitle: string; covidence: {studyKey: string}}
         selectedExternalArticleId: string
         selectedImportRecordId: string
         selectedImportRouteId: string
         selectedSourceRecordKey: string
         sourceMetadata: {journalTitle: string; covidence: {studyKey: string}}
+        url: string
       }
       scopedReviewHydrationRow: {
         articleId: string
@@ -185,6 +186,7 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
         selectedImportRouteId: string
         selectedSourceRecordKey: string
         sourceMetadata: {journalTitle: string; covidence: {studyKey: string}}
+        url: string
       }
     }
 
@@ -223,11 +225,17 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
     expect(parsed.scopedReviewHydrationRow.selectedImportRecordId).toBe('air-1')
     expect(parsed.scopedReviewHydrationRow.selectedImportRouteId).toBe('route-1')
     expect(parsed.scopedReviewHydrationRow.selectedSourceRecordKey).toBe('record-42')
+    expect(parsed.scopedReviewHydrationRow.url).toBe('https://example.test/scoped-42')
     expect(parsed.scopedReviewHydrationRow.scopedImportMetadata.covidence.studyKey).toBe('study-1')
     expect(parsed.scopedReviewHydrationRow.sourceMetadata.journalTitle).toBe('Scoped J')
     expect(parsed.scopedFullArticleRow.articleId).toBe('covidence:42')
     expect(parsed.scopedFullArticleRow.canonicalArticleId).toBe('A-1')
-    expect(parsed.scopedFullArticleRow.originalData).toEqual({source: 'covidence', id: '42'})
+    expect(parsed.scopedFullArticleRow.originalData).toEqual({
+      source: 'covidence',
+      id: '42',
+      covidence: {citation: {url: 'https://example.test/scoped-42'}},
+    })
+    expect(parsed.scopedFullArticleRow.url).toBe('https://example.test/scoped-42')
     expect(parsed.scopedFullArticleRow.sourceMetadata.covidence.studyKey).toBe('study-1')
   } finally {
     removeFileIfExists(duckdbPath)

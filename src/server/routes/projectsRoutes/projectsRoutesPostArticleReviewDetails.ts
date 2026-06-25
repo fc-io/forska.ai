@@ -730,7 +730,7 @@ const getCovidenceRelatedRecords = async (params: {
         article.doi AS doi,
         article.medrxiv_id AS medrxivId,
         article.pubmed_id AS pubmedId,
-        article.url AS url,
+        COALESCE(json_extract_string(source_record.raw_payload, '$.covidence.citation.url'), article.url) AS url,
         ${currentRecordClause} AS isCurrentRecord,
         source_record.raw_payload AS rawPayload,
         source_record.import_metadata AS sourceMetadata

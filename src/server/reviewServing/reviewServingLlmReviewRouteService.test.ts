@@ -130,7 +130,7 @@ const createArticleRows = (articleCount: number, enabledPromptCount?: number) =>
       llm_status_key: 'answered',
       pmid: `1234${articleNumber}`,
       sort_key: `2026-01-01T00:00:00.${String(index).padStart(3, '0')}Z`,
-      source_metadata: {covidence: {studyId: `study-${articleNumber}`}},
+      source_metadata: JSON.stringify({covidence: {studyId: `study-${articleNumber}`}}),
       activity_sort_at: '2026-01-02T00:00:00.000Z',
       url: `https://example.test/article-${articleNumber}`,
     }

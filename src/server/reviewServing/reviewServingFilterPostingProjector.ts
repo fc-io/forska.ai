@@ -235,7 +235,7 @@ const getPostingContributionRows = async (
         scoped_article AS (
           SELECT
             scope.article_id,
-            COALESCE(scope.article_updated_at, scope.source_updated_at, scope.article_created_at, TIMESTAMPTZ ${getSqlLiteral(stalePostingSortAt)}) AS sort_key,
+            COALESCE(scope.article_updated_at, scope.article_created_at, TIMESTAMPTZ ${getSqlLiteral(stalePostingSortAt)}) AS sort_key,
             NOT (scope.in_curated_scope OR scope.in_route_scope) AS scope_tombstone
           FROM article_id_filter dirty
           INNER JOIN mart.project_scope_article scope

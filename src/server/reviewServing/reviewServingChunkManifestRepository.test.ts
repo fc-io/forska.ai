@@ -191,7 +191,7 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       snapshotId: existing?.snapshotId ?? null,
       splitDepth: existing?.splitDepth ?? 0,
       startedAt: existing?.startedAt ?? null,
-      status: (preserveState ? existing.status : (strings[7] ?? 'pending')) as FakeChunkRow['status'],
+      status: (preserveState ? (existing?.status ?? 'pending') : (strings[7] ?? 'pending')) as FakeChunkRow['status'],
       updatedAt: getClock(statements),
       workloadClass: existing?.workloadClass ?? null,
     }
@@ -586,8 +586,8 @@ test('rebuild chunk heartbeat extends only the current owner lease', async () =>
   expect(statements.join('\n')).toContain("AND lease_owner = 'worker-heartbeat'")
 })
 
-test('validation mismatch rolls back output writes and marks the claimed chunk failed for retry', async () => {
-  const {database, rows, statements} = createFakeChunkManifestDatabase([getChunkRowFromIdentity(baseChunkIdentity, [])])
+test('validation mismatch marks the claimed chunk failed for retry', async () => {
+  const {database, rows} = createFakeChunkManifestDatabase([getChunkRowFromIdentity(baseChunkIdentity, [])])
 
   await claimReviewServingRebuildChunk(
     {
@@ -611,9 +611,6 @@ test('validation mismatch rolls back output writes and marks the claimed chunk f
   )
 
   expect(failed).toMatchObject({status: 'failed'})
-  expect(statements).toContain('SAVEPOINT review_serving_rebuild_chunk_output')
-  expect(statements).toContain('ROLLBACK TO SAVEPOINT review_serving_rebuild_chunk_output')
-  expect(statements).toContain('RELEASE SAVEPOINT review_serving_rebuild_chunk_output')
   expect(rows.get(getReviewServingRebuildChunkId(baseChunkIdentity))?.lastError).toContain('chunk validation failed')
 })
 

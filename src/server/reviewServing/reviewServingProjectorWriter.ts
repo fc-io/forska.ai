@@ -145,6 +145,13 @@ export const getDeleteReviewServingProjectorRowsStatement = (input: DeleteReview
   return `DELETE FROM ${input.table} WHERE ${predicates.join(' AND ')}`
 }
 
+export const deleteReviewServingProjectorRows = async (
+  input: DeleteReviewServingProjectorRowsInput,
+  tx: ReviewServingProjectorWriterTransaction,
+) => {
+  await tx.run(getDeleteReviewServingProjectorRowsStatement(input))
+}
+
 export const getReviewServingProjectorReplayKey = (input: {
   articleId?: string | null
   baseGeneration: number
@@ -242,7 +249,7 @@ const createCandidateReviewServingSnapshotManifestFromWriter = async (
       last_known_good_snapshot_id = excluded.last_known_good_snapshot_id,
       failed_at = NULL,
       last_error = NULL,
-      updated_at = current_timestamp
+      updated_at = excluded.updated_at
   `)
 }
 
@@ -280,13 +287,13 @@ const writeReviewServingSelectedImportSnapshotCursor = async (
       status = excluded.status,
       completed_at = excluded.completed_at,
       last_error = NULL,
-      updated_at = current_timestamp
+      updated_at = excluded.updated_at
   `)
 }
 
 export const promoteReviewServingProjectorSnapshot = async (
   input: PromoteReviewServingProjectorSnapshotInput,
-  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService(),
+  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
 ): Promise<PromoteReviewServingProjectorSnapshotResult> => {
   return database.transaction(async (tx) => {
     const candidate = await getReviewServingSnapshotManifest(
@@ -367,7 +374,7 @@ export const promoteReviewServingProjectorSnapshot = async (
 
 export const writeReviewServingProjectorComponent = async (
   input: WriteReviewServingProjectorComponentInput,
-  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService(),
+  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
 ) => {
   return database.transaction(async (tx) => {
     if (input.watermark !== undefined) {

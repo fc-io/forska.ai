@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getIntegerValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {type ReviewServingDirtyWorkTransaction, upsertReviewServingDirtyWork} from './reviewServingDirtyWorkService.ts'
@@ -43,7 +43,7 @@ type ReviewChangeDeltaRow = {
   payloadVersion: number
   projectId: string | null
   promptId: string | null
-  sourceHighWaterMark: number
+  sourceHighWaterMark: bigint | number | string
   sourcePartition: string
   useAbstract: boolean | null
   useFulltext: boolean | null
@@ -57,6 +57,7 @@ type ValidatedReviewChangeDelta = {
   scope: ReviewServingDirtyWorkScope
   sourceHighWaterMark: number
 }
+type InvalidReviewChangeDelta = {deltaId: string; reason: string}
 
 const supportedPayloadVersion = 1
 
@@ -183,6 +184,12 @@ const shouldExpandArticleDeltaToProjects = (row: ReviewChangeDeltaRow) => {
   return row.projectId === null && row.articleId !== null && row.changeKind.startsWith('article.')
 }
 
+const isInvalidReviewChangeDelta = (
+  delta: InvalidReviewChangeDelta | ValidatedReviewChangeDelta,
+): delta is InvalidReviewChangeDelta => {
+  return 'reason' in delta
+}
+
 const getArticleProjectIds = async (row: ReviewChangeDeltaRow, database: ReviewChangeDeltaDirtyIntakeDatabase) => {
   return !shouldExpandArticleDeltaToProjects(row)
     ? []
@@ -200,6 +207,7 @@ const getValidatedReviewChangeDelta = (
   valuesOverride: Record<string, ReviewServingIdentityValue> = {},
 ) => {
   const rule = getReviewServingInvalidationRuleOrNull(row.changeKind)
+  const sourceHighWaterMark = getIntegerValue(row.sourceHighWaterMark)
 
   if (rule === null) {
     return {deltaId: row.deltaId, reason: `unsupported change kind: ${row.changeKind}`}
@@ -215,7 +223,7 @@ const getValidatedReviewChangeDelta = (
     return {deltaId: row.deltaId, reason: `unsupported payload version: ${row.payloadVersion}`}
   }
 
-  if (!Number.isInteger(row.sourceHighWaterMark) || row.sourceHighWaterMark < 0) {
+  if (sourceHighWaterMark === null || sourceHighWaterMark < 0) {
     return {deltaId: row.deltaId, reason: `invalid source high-water mark: ${row.sourceHighWaterMark}`}
   }
 
@@ -225,7 +233,7 @@ const getValidatedReviewChangeDelta = (
     return {deltaId: row.deltaId, reason: 'malformed payload_json'}
   }
 
-  const values = {...typedValues, ...valuesOverride}
+  const values = {...typedValues, sourceHighWaterMark, ...valuesOverride}
 
   const missingKeys = getMissingRequiredKeys(rule, values)
 
@@ -235,7 +243,7 @@ const getValidatedReviewChangeDelta = (
 
   const scope = getReviewServingDirtyWorkScopeForChange({
     changeKind: row.changeKind,
-    sourceHighWaterMark: row.sourceHighWaterMark,
+    sourceHighWaterMark,
     sourcePartition: row.sourcePartition,
     values,
   })
@@ -253,7 +261,7 @@ const getValidatedReviewChangeDelta = (
       }
     }),
     scope,
-    sourceHighWaterMark: row.sourceHighWaterMark,
+    sourceHighWaterMark,
   }
 }
 
@@ -331,7 +339,7 @@ const markReviewChangeDeltasReconciled = async (
 
 export const intakeReviewChangeDeltasToDirtyWork = async (
   params: IntakeReviewChangeDeltaDirtyWorkParams,
-  database: ReviewChangeDeltaDirtyIntakeDatabase = getAppDatabaseService(),
+  database: ReviewChangeDeltaDirtyIntakeDatabase = getAppDatabaseService() as ReviewChangeDeltaDirtyIntakeDatabase,
 ): Promise<ReviewChangeDeltaDirtyIntakeResult> => {
   const rows = await getReviewChangeDeltaRows(database, params)
   const validated = (
@@ -341,11 +349,9 @@ export const intakeReviewChangeDeltasToDirtyWork = async (
       }),
     )
   ).flat()
-  const invalid = validated.find((delta) => {
-    return 'reason' in delta
-  })
+  const invalid = validated.find(isInvalidReviewChangeDelta)
 
-  if (invalid !== undefined && 'reason' in invalid) {
+  if (invalid !== undefined) {
     return {deltaId: invalid.deltaId, reason: invalid.reason, status: 'failed'}
   }
 

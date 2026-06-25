@@ -48,6 +48,7 @@ type HumanStatusSourceRow = {
   promptOrder: number | null
   promptTextHash: string | null
   settingsVersion: string | null
+  summaryOrigin: string | null
   sourceOperation: string | null
   thresholdVersion: string | null
   tombstone: boolean
@@ -57,6 +58,7 @@ type HumanStatusArticleScopedRow = {
   articleId: string
   humanAnsweredValue: string | null
   promptId: string | null
+  summaryOrigin: string | null
   tombstone: boolean
   updatedAt: Date | string | null
 }
@@ -213,6 +215,14 @@ const getPromptOrSummaryKey = (promptId: string | null) => {
   return promptId === null || promptId.trim().length === 0 ? 'summary' : promptId
 }
 
+const getSourceHumanStatusKey = (
+  row: Pick<HumanStatusSourceRow, 'humanAnsweredValue' | 'promptOrSummaryKey' | 'summaryOrigin' | 'tombstone'>,
+) => {
+  return row.promptOrSummaryKey === 'summary' && row.summaryOrigin === 'covidence_import' && !row.tombstone
+    ? 'answered'
+    : getHumanStatusKey(row.humanAnsweredValue, row.tombstone)
+}
+
 const getJudgmentDeltaRows = async (
   input: ProjectReviewServingHumanStatusInput,
   database: ReviewServingHumanStatusProjectorDatabase,
@@ -232,6 +242,7 @@ const getJudgmentDeltaRows = async (
             delta.prompt_id AS promptId,
             COALESCE(delta.prompt_id, 'summary') AS promptOrSummaryKey,
             delta.source_operation AS sourceOperation,
+            judgment_human_summary.origin AS summaryOrigin,
             delta.tombstone OR (
               delta.prompt_id IS NOT NULL
               AND (project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE))
@@ -282,7 +293,7 @@ const getJudgmentDeltaRows = async (
       ...row,
       ...(row.promptId === null || row.promptId === 'summary' ? summaryPromptConfigRow : (promptConfigRow ?? row)),
       humanAnsweredValue,
-      humanStatusKey: getHumanStatusKey(humanAnsweredValue, row.tombstone),
+      humanStatusKey: getSourceHumanStatusKey({...row, humanAnsweredValue}),
       promptOrSummaryKey: getPromptOrSummaryKey(row.promptOrSummaryKey),
     }
   })
@@ -304,13 +315,14 @@ const getPromptScopedRows = async (
           dirty_prompt.prompt_id AS promptOrSummaryKey,
           'update' AS sourceOperation,
           project_prompt.prompt_id IS NULL AS tombstone,
+          NULL AS summaryOrigin,
           NULL AS payloadJson,
           judgment_human.answer AS humanAnsweredValue,
           CASE
             WHEN NULLIF(TRIM(COALESCE(judgment_human.answer, '')), '') IS NULL THEN 'unanswered'
             ELSE 'answered'
           END AS humanStatusKey,
-          COALESCE(judgment_human.updated_at, scope.article_updated_at, scope.source_updated_at, scope.article_created_at) AS latestHumanUpdatedAt,
+          COALESCE(judgment_human.updated_at, scope.article_updated_at, scope.article_created_at) AS latestHumanUpdatedAt,
           COALESCE(prompt.content_hash, sha256(prompt.original_text)) AS promptTextHash,
           NULL AS answerSchemaHash,
           'prompt-v1' AS settingsVersion,
@@ -367,7 +379,8 @@ const getArticleScopedRows = async (
       article_prompt.prompt_id AS promptId,
       scope.article_id IS NULL AS tombstone,
       COALESCE(judgment_human.answer, judgment_human_summary.answer) AS humanAnsweredValue,
-      COALESCE(judgment_human.updated_at, judgment_human_summary.updated_at, scope.article_updated_at, scope.source_updated_at, scope.article_created_at) AS updatedAt
+      judgment_human_summary.origin AS summaryOrigin,
+      COALESCE(judgment_human.updated_at, judgment_human_summary.updated_at, scope.article_updated_at, scope.article_created_at) AS updatedAt
     FROM article_prompt
     LEFT JOIN mart.project_scope_article scope
       ON scope.project_id = ${getSqlLiteral(input.projectId)}
@@ -394,12 +407,18 @@ const getArticleScopedRows = async (
       ...promptConfigRow,
       articleId: row.articleId,
       humanAnsweredValue,
-      humanStatusKey: getHumanStatusKey(humanAnsweredValue, row.tombstone),
+      humanStatusKey: getSourceHumanStatusKey({
+        humanAnsweredValue,
+        promptOrSummaryKey: getPromptOrSummaryKey(row.promptId),
+        summaryOrigin: row.summaryOrigin,
+        tombstone: row.tombstone,
+      }),
       latestHumanUpdatedAt: row.updatedAt,
       payloadJson: null,
       promptId: row.promptId,
       promptOrSummaryKey: getPromptOrSummaryKey(row.promptId),
       sourceOperation: 'update',
+      summaryOrigin: row.summaryOrigin,
       tombstone: row.tombstone,
     }
   })
@@ -463,11 +482,13 @@ const getProjectScopedRows = async (
       article_prompt.prompt_id AS promptId,
       article_prompt.prompt_id AS promptOrSummaryKey,
       'update' AS sourceOperation,
+      judgment_human_summary.origin AS summaryOrigin,
       NOT article_prompt.active AS tombstone,
       NULL AS payloadJson,
       COALESCE(judgment_human.answer, judgment_human_summary.answer) AS humanAnsweredValue,
       CASE
         WHEN NOT article_prompt.active THEN NULL
+        WHEN article_prompt.prompt_id = 'summary' AND judgment_human_summary.origin = 'covidence_import' THEN 'answered'
         WHEN NULLIF(TRIM(COALESCE(judgment_human.answer, judgment_human_summary.answer, '')), '') IS NULL THEN 'unanswered'
         ELSE 'answered'
       END AS humanStatusKey,
@@ -577,8 +598,9 @@ const getApplyHumanStatusServingStatement = (input: {
       SET
         human_answered_prompt_count = CAST(article_status.human_answered_prompt_count AS INTEGER),
         human_status_key = CASE
-          WHEN serving.enabled_prompt_count = 0 THEN NULL
           WHEN serving.review_config_hash = ${getSqlLiteral(input.currentSummaryReviewConfigHash)} AND article_status.human_answered_summary_count > 0 THEN 'answered'
+          WHEN serving.review_config_hash = ${getSqlLiteral(input.currentSummaryReviewConfigHash)} THEN 'unanswered'
+          WHEN serving.enabled_prompt_count = 0 THEN NULL
           WHEN serving.review_config_hash IS DISTINCT FROM ${getSqlLiteral(input.currentSummaryReviewConfigHash)} AND serving.enabled_prompt_count = article_status.human_answered_prompt_count THEN 'answered'
           ELSE 'unanswered'
         END,

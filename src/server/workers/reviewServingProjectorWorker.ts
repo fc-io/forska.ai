@@ -39,7 +39,12 @@ import {projectReviewServingFilterPostings} from '../reviewServing/reviewServing
 import {projectReviewServingHumanStatusPatches} from '../reviewServing/reviewServingHumanStatusProjector.ts'
 import {projectReviewServingJudgmentPayloadRows} from '../reviewServing/reviewServingJudgmentPayloadProjector.ts'
 import {projectReviewServingLlmStatusPatches} from '../reviewServing/reviewServingLlmStatusProjector.ts'
-import {getReviewServingProjectionIdentityManifest} from '../reviewServing/reviewServingManifestRepository.ts'
+import {
+  createCandidateReviewServingSnapshotManifest,
+  getReviewServingProjectionIdentityManifest,
+  getReviewServingSnapshotManifest,
+  type ReviewServingSnapshotManifest,
+} from '../reviewServing/reviewServingManifestRepository.ts'
 import {getReviewServingSourcePartitionWatermarks} from '../reviewServing/reviewServingProjectorDomain.ts'
 import {
   type ReviewServingProjectorRunner,
@@ -48,7 +53,11 @@ import {
   type WakeReviewServingProjectorServiceInput,
   type WakeReviewServingProjectorServiceResult,
 } from '../reviewServing/reviewServingProjectorService.ts'
-import {writeReviewServingProjectorComponent} from '../reviewServing/reviewServingProjectorWriter.ts'
+import {
+  deleteReviewServingProjectorRows,
+  promoteReviewServingProjectorSnapshot,
+  writeReviewServingProjectorComponent,
+} from '../reviewServing/reviewServingProjectorWriter.ts'
 import {projectReviewServingProjectScopePatches} from '../reviewServing/reviewServingProjectScopeProjector.ts'
 import {projectReviewServingQueuePatches} from '../reviewServing/reviewServingQueueProjector.ts'
 import {
@@ -59,6 +68,7 @@ import {
 } from '../reviewServing/reviewServingRetentionService.ts'
 import {projectReviewServingSelectedImportPatches} from '../reviewServing/reviewServingSelectedImportPatchProjector.ts'
 import {projectReviewServingSelectedImportBatch} from '../reviewServing/reviewServingSelectedImportProjector.ts'
+import {composeReviewServingCandidateSnapshotManifest} from '../reviewServing/reviewServingSnapshotPromotionService.ts'
 import {projectReviewServingSummaries} from '../reviewServing/reviewServingSummaryProjector.ts'
 import {projectReviewServingTitleSearchRows} from '../reviewServing/reviewServingTitleSearchProjector.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
@@ -134,9 +144,9 @@ type ReviewServingProjectorWorkerLoopOptions = ReviewServingProjectorWorkerCycle
 
 type ReviewServingProjectorWorkerChunkResult =
   | {chunkId: null; status: 'idle'}
-  | {chunkId: string; status: 'completed'}
-  | {chunkId: string; status: 'failed'}
-  | {chunkId: string; status: 'skipped'}
+  | {chunkId: string; requestId: string | null; status: 'completed'}
+  | {chunkId: string; requestId: string | null; status: 'failed'}
+  | {chunkId: string; requestId: string | null; status: 'skipped'}
 
 type ReviewServingProjectorWorkerCleanupResult =
   | {retentionScopes: readonly string[]; status: 'completed'}
@@ -211,6 +221,8 @@ type ProjectReviewSnapshotSettings = ProjectReviewSettingsRow & {reviewConfigHas
 type SelectedImportSnapshotStatusRow = {sourceDeltaHighWater: number; status: string}
 
 type RebuildChunkOutputChecksumRow = {actualChecksum: string; actualCount: number}
+type RebuildRequestPendingChunkCountRow = {pendingChunkCount: number}
+type RebuildRequestSnapshotPromotionRow = {projectId: string; reviewConfigHash: string | null; snapshotId: string}
 
 const defaultReviewServingProjectorWorkerBatchSize = 64
 const defaultReviewServingProjectorWorkerCleanupIntervalMs = 60_000
@@ -837,6 +849,7 @@ const runPayloadRebuildChunk = async (
               displayIdentity: requireSnapshotComponentIdentity(snapshot, 'display'),
               payloadIdentity: input.chunk.projectionIdentity,
               projectId,
+              selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
               snapshotId: snapshot.snapshotId,
             },
             chunkDatabase,
@@ -1252,8 +1265,10 @@ const getRebuildChunkProjectClaim = (input: {
   chunk: ReviewServingRebuildChunkManifest
   dirtyKind: string
   sourcePartition: string
+  sourceWatermark?: number
 }): ReviewServingDirtyWorkClaim => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
+  const sourceWatermark = input.sourceWatermark ?? input.chunk.inputWatermark
 
   return {
     articleId: null,
@@ -1261,9 +1276,9 @@ const getRebuildChunkProjectClaim = (input: {
     dirtyRangeEnd: null,
     dirtyRangeStart: null,
     dirtyWorkId: `rebuild:${input.chunk.chunkId}`,
-    firstSourceHighWaterMark: input.chunk.inputWatermark,
+    firstSourceHighWaterMark: sourceWatermark,
     latestDeltaId: input.chunk.chunkId,
-    latestSourceHighWaterMark: input.chunk.inputWatermark,
+    latestSourceHighWaterMark: sourceWatermark,
     projectId,
     projectionComponent: input.chunk.projectionComponent,
     projectionIdentity: input.chunk.projectionIdentity,
@@ -1272,6 +1287,34 @@ const getRebuildChunkProjectClaim = (input: {
     sourcePartition: input.sourcePartition,
     status: 'running',
   }
+}
+
+const getRebuildChunkProjectClaims = (input: {
+  chunk: ReviewServingRebuildChunkManifest
+  dirtyKind: string
+  fallbackSourcePartition: string
+  sourceWatermarks: Record<string, number>
+}) => {
+  const sourceWatermarkEntries = Object.entries(input.sourceWatermarks).filter((entry) => {
+    return Number.isFinite(entry[1])
+  })
+
+  return sourceWatermarkEntries.length === 0
+    ? [
+        getRebuildChunkProjectClaim({
+          chunk: input.chunk,
+          dirtyKind: input.dirtyKind,
+          sourcePartition: input.fallbackSourcePartition,
+        }),
+      ]
+    : sourceWatermarkEntries.map(([sourcePartition, sourceWatermark]) => {
+        return getRebuildChunkProjectClaim({
+          chunk: input.chunk,
+          dirtyKind: input.dirtyKind,
+          sourcePartition,
+          sourceWatermark,
+        })
+      })
 }
 
 const getProjectScopeRebuildChunkOutputChecksum = async (
@@ -1372,10 +1415,11 @@ const runProjectScopeRebuildChunk = async (
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
   const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
-  const claim = getRebuildChunkProjectClaim({
+  const claims = getRebuildChunkProjectClaims({
     chunk: input.chunk,
     dirtyKind: 'projectScope.rebuild',
-    sourcePartition: `projectScope:${projectId}`,
+    fallbackSourcePartition: `projectScope:${projectId}`,
+    sourceWatermarks: manifest.inputWatermarks,
   })
 
   return runValidatedRebuildChunkOutput(
@@ -1395,7 +1439,7 @@ const runProjectScopeRebuildChunk = async (
         await projectReviewServingProjectScopePatches(
           {
             baseGeneration: input.chunk.outputBaseGeneration,
-            claims: [claim],
+            claims,
             definitionVersion: manifest.definitionVersion,
             projectId,
             projectionIdentity: input.chunk.projectionIdentity,
@@ -1451,15 +1495,29 @@ const resetSelectedImportSnapshotForRebuild = async (
   input: {projectId: string; projectScopeIdentity: string; selectedImportSnapshotId: string},
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
+  await deleteReviewServingProjectorRows(
+    {
+      predicates: {
+        project_id: input.projectId,
+        project_scope_identity: input.projectScopeIdentity,
+        selected_import_snapshot_id: input.selectedImportSnapshotId,
+      },
+      table: 'mart.review_selected_import_patch_v4',
+    },
+    database,
+  )
+  await deleteReviewServingProjectorRows(
+    {
+      predicates: {
+        project_id: input.projectId,
+        project_scope_identity: input.projectScopeIdentity,
+        selected_import_snapshot_id: input.selectedImportSnapshotId,
+      },
+      table: 'app.review_selected_article_import_v4',
+    },
+    database,
+  )
   await database.run(`
-    DELETE FROM mart.review_selected_import_patch_v4
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)};
-    DELETE FROM app.review_selected_article_import_v4
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)};
     DELETE FROM app.review_selected_import_snapshot
     WHERE project_id = ${getSqlLiteral(input.projectId)}
       AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
@@ -1502,10 +1560,11 @@ const runSelectedImportRebuildChunk = async (
   const selectedImportSnapshotIds = snapshots.map((snapshot) => {
     return requireSelectedImportSnapshotId(snapshot)
   })
-  const claim = getRebuildChunkProjectClaim({
+  const claims = getRebuildChunkProjectClaims({
     chunk: input.chunk,
     dirtyKind: 'selectedImport.rebuild',
-    sourcePartition: `import-run-article:${projectId}`,
+    fallbackSourcePartition: `import-run-article:${projectId}`,
+    sourceWatermarks: manifest.inputWatermarks,
   })
 
   return runValidatedRebuildChunkOutput(
@@ -1542,7 +1601,7 @@ const runSelectedImportRebuildChunk = async (
             {
               acknowledgeClaims: false,
               baseGeneration: input.chunk.outputBaseGeneration,
-              claims: [claim],
+              claims,
               definitionVersion: manifest.definitionVersion,
               projectId,
               projectScopeIdentity,
@@ -1989,6 +2048,7 @@ export const getDefaultReviewServingProjectorRunners = (
             payloadIdentity: manifest.projectionIdentity,
             projectId,
             projectionIdentity: manifest.projectionIdentity,
+            selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
             snapshotId: snapshot.snapshotId,
           },
           database,
@@ -2368,6 +2428,150 @@ const getErrorText = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
 }
 
+const getRebuildRequestPendingChunkCount = async (
+  requestId: string,
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  const [row] = await database.queryJson<RebuildRequestPendingChunkCountRow>(`
+    SELECT CAST(COUNT(*) AS INTEGER) AS pendingChunkCount
+    FROM app.review_rebuild_chunk_manifest
+    WHERE request_id = ${getSqlLiteral(requestId)}
+      AND status <> 'completed'
+  `)
+
+  return Number(row?.pendingChunkCount ?? 0)
+}
+
+const getRebuildRequestSnapshotPromotions = async (
+  requestId: string,
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  return database.queryJson<RebuildRequestSnapshotPromotionRow>(`
+    SELECT DISTINCT
+      chunk.project_id AS projectId,
+      chunk.snapshot_id AS snapshotId,
+      snapshot.review_config_hash AS reviewConfigHash
+    FROM app.review_rebuild_chunk_manifest chunk
+    INNER JOIN app.review_serving_snapshot_manifest snapshot
+      ON snapshot.project_id = chunk.project_id
+      AND snapshot.snapshot_id = chunk.snapshot_id
+    WHERE chunk.request_id = ${getSqlLiteral(requestId)}
+      AND chunk.project_id IS NOT NULL
+      AND chunk.snapshot_id IS NOT NULL
+    ORDER BY chunk.project_id ASC, chunk.snapshot_id ASC
+  `)
+}
+
+const getCandidateSnapshotComponentIdentities = (candidate: ReviewServingSnapshotManifest) => {
+  const states = [...(candidate.componentState.required ?? []), ...(candidate.componentState.optional ?? [])]
+
+  return Object.fromEntries(
+    states.map((state) => {
+      return [
+        state.component,
+        {
+          projectId: candidate.projectId,
+          projectionComponent: state.component,
+          projectionIdentity: state.projectionIdentity,
+        },
+      ]
+    }),
+  )
+}
+
+const refreshRebuildRequestCandidateSnapshot = async (
+  input: {projectId: string; snapshotId: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  const candidate = await getReviewServingSnapshotManifest(input, database)
+
+  if (candidate === null || candidate.status !== 'candidate' || candidate.selectedImportSnapshotId === null) {
+    return
+  }
+
+  const refreshedCandidate = await composeReviewServingCandidateSnapshotManifest(
+    {
+      componentIdentities: getCandidateSnapshotComponentIdentities(candidate),
+      componentRequirements: {
+        optionalComponents: candidate.optionalComponents,
+        requiredComponents: candidate.requiredComponents,
+      },
+      composedIdentity: candidate.composedIdentity,
+      projectId: candidate.projectId,
+      reviewConfigHash: candidate.reviewConfigHash,
+      selectedImportSnapshotId: candidate.selectedImportSnapshotId,
+      snapshotId: candidate.snapshotId,
+      sourceWatermarks: candidate.sourceWatermarks,
+    },
+    database,
+  )
+
+  await createCandidateReviewServingSnapshotManifest(refreshedCandidate, database)
+}
+
+const markCompletedRebuildRequestFinalized = async (
+  input: {lastError: string | null; requestId: string; status: 'completed' | 'failed'},
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  await database.run(`
+    UPDATE app.review_rebuild_request
+    SET
+      status = ${getSqlLiteral(input.status)},
+      completed_at = CASE WHEN ${getSqlLiteral(input.status)} = 'completed' THEN current_timestamp ELSE completed_at END,
+      failed_at = CASE WHEN ${getSqlLiteral(input.status)} = 'failed' THEN current_timestamp ELSE failed_at END,
+      last_error = ${getSqlLiteral(input.lastError)},
+      updated_at = current_timestamp
+    WHERE request_id = ${getSqlLiteral(input.requestId)}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest chunk
+        WHERE chunk.request_id = ${getSqlLiteral(input.requestId)}
+          AND chunk.status <> 'completed'
+      )
+  `)
+}
+
+const finalizeCompletedReviewServingRebuildRequest = async (
+  chunk: ReviewServingRebuildChunkManifest,
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  if (chunk.requestId === null) {
+    return
+  }
+
+  const pendingChunkCount = await getRebuildRequestPendingChunkCount(chunk.requestId, database)
+
+  if (pendingChunkCount > 0) {
+    return
+  }
+
+  const promotionRows = await getRebuildRequestSnapshotPromotions(chunk.requestId, database)
+  const promotions = await promotionRows.reduce<
+    Promise<Awaited<ReturnType<typeof promoteReviewServingProjectorSnapshot>>[]>
+  >(async (previousPromotions, row) => {
+    const previous = await previousPromotions
+    await refreshRebuildRequestCandidateSnapshot({projectId: row.projectId, snapshotId: row.snapshotId}, database)
+    const promotion = await promoteReviewServingProjectorSnapshot(
+      {projectId: row.projectId, reviewConfigHash: row.reviewConfigHash, snapshotId: row.snapshotId},
+      database,
+    )
+
+    return [...previous, promotion]
+  }, Promise.resolve([]))
+  const failedPromotion = promotions.find((promotion) => {
+    return !promotion.promoted
+  })
+
+  await markCompletedRebuildRequestFinalized(
+    {
+      lastError: failedPromotion?.promoted === false ? failedPromotion.error : null,
+      requestId: chunk.requestId,
+      status: failedPromotion === undefined ? 'completed' : 'failed',
+    },
+    database,
+  )
+}
+
 const getReviewServingProjectorWorkerDatabase = (
   dependencies: ReviewServingProjectorWorkerDependencies,
   workloadContext: DuckdbWorkloadContext,
@@ -2433,6 +2637,18 @@ const getCycleStatus = (input: {
   return 'completed'
 }
 
+const getIdleReviewServingProjectorWorkerDeltaIntakeResult = (): ReviewServingProjectorWorkerDeltaIntakeResult => {
+  return {convertedPartitions: 0, dirtyWorkCount: 0, status: 'idle'}
+}
+
+const getBlockedReviewServingProjectorWakeResult = (): WakeReviewServingProjectorServiceResult => {
+  return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
+}
+
+const shouldPrioritizeNextRebuildChunk = (chunk: ReviewServingProjectorWorkerChunkResult) => {
+  return chunk.status === 'completed' && chunk.requestId !== null
+}
+
 const shouldRunCleanup = (input: {cleanupIntervalMs: number; lastCleanupAtMs: number | null; nowMs: number}) => {
   return input.lastCleanupAtMs === null || input.nowMs - input.lastCleanupAtMs >= input.cleanupIntervalMs
 }
@@ -2466,7 +2682,7 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
       )
 
   if (completed) {
-    return {chunkId: 'completed-manifest', status: 'skipped'}
+    return {chunkId: 'completed-manifest', requestId: chunkInput.requestId ?? null, status: 'skipped'}
   }
 
   if (claimedChunk === null) {
@@ -2485,14 +2701,15 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
   try {
     await heartbeatClaimedRebuildChunkLease({chunk: claimedChunk, database, dependencies, options, service, workerId})
     await service.runClaimedChunk({chunk: claimedChunk, database, leaseOwner: workerId, workloadContext})
+    await finalizeCompletedReviewServingRebuildRequest(claimedChunk, database)
     stopHeartbeat()
 
-    return {chunkId: claimedChunk.chunkId, status: 'completed'}
+    return {chunkId: claimedChunk.chunkId, requestId: claimedChunk.requestId, status: 'completed'}
   } catch (error) {
     stopHeartbeat()
     await service.failChunk({chunkId: claimedChunk.chunkId, error: getErrorText(error), leaseOwner: workerId}, database)
 
-    return {chunkId: claimedChunk.chunkId, status: 'failed'}
+    return {chunkId: claimedChunk.chunkId, requestId: claimedChunk.requestId, status: 'failed'}
   }
 }
 
@@ -2620,15 +2837,22 @@ export const runReviewServingProjectorWorkerCycle = async (
     workloadContext,
     workerId,
   })
-  const deltaIntake = await runReviewServingProjectorWorkerDeltaIntake({database, dependencies, options})
-  const projector = await dependencies.wakeProjectors(getWakeInput(options, wakeId), {
-    ...(dependencies.projectorServiceDependencies ?? {runners: getDefaultReviewServingProjectorRunners(database)}),
-    database,
-    nowMs: () => {
-      return getWorkerNowMs(dependencies, options)
-    },
-  })
-  const cleanup = await runReviewServingProjectorWorkerCleanup({database, dependencies, options})
+  const shouldRunOnlyRebuildChunk = shouldPrioritizeNextRebuildChunk(chunk)
+  const deltaIntake = shouldRunOnlyRebuildChunk
+    ? getIdleReviewServingProjectorWorkerDeltaIntakeResult()
+    : await runReviewServingProjectorWorkerDeltaIntake({database, dependencies, options})
+  const projector = shouldRunOnlyRebuildChunk
+    ? getBlockedReviewServingProjectorWakeResult()
+    : await dependencies.wakeProjectors(getWakeInput(options, wakeId), {
+        ...(dependencies.projectorServiceDependencies ?? {runners: getDefaultReviewServingProjectorRunners(database)}),
+        database,
+        nowMs: () => {
+          return getWorkerNowMs(dependencies, options)
+        },
+      })
+  const cleanup = shouldRunOnlyRebuildChunk
+    ? {retentionScopes: [], status: 'skipped' as const}
+    : await runReviewServingProjectorWorkerCleanup({database, dependencies, options})
   const nextCleanupAtMs =
     cleanup.status === 'completed' ? getWorkerNowMs(dependencies, options) : (options.lastCleanupAtMs ?? null)
 

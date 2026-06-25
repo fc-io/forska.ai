@@ -1,4 +1,5 @@
 import {expect, test} from 'bun:test'
+import {Effect} from 'effect'
 
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import type {ReviewServingDirtyWorkClaim, ReviewServingDirtyWorkInput} from './reviewServingDirtyWorkService.ts'
@@ -103,7 +104,7 @@ const createDependencyHarness = (
       return operation(database)
     },
   }
-  const dependencies = {
+  const dependencies: ReviewServingProjectorServiceDependencies = {
     claimDirtyWork: async (params: {limit: number; projectionComponent: ReviewServingProjectionComponent}) => {
       claimedComponents.push(params.projectionComponent)
       const claims = pending[params.projectionComponent] ?? []
@@ -125,7 +126,7 @@ const createDependencyHarness = (
       return {releasedCount: dirtyWorkIds.length}
     },
     runners: {},
-  } satisfies ReviewServingProjectorServiceDependencies
+  }
 
   return {claimedComponents, dependencies, failedClaimIds, releasedClaimIds}
 }
@@ -374,6 +375,35 @@ test('wake releases claimed work when the duration budget is exhausted after cla
   expect(releasedClaimIds).toEqual(['posting-1'])
 })
 
+test('wake requests V4 rebuild and releases claims when a snapshot is not ready yet', async () => {
+  const {dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+    queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-1'})],
+  })
+  const rebuildRequests: Array<{projectId: string; reason: string}> = []
+
+  dependencies.requestRebuild = (input) => {
+    rebuildRequests.push({projectId: input.projectId, reason: input.reason})
+
+    return Effect.succeed({} as never)
+  }
+  dependencies.runners = {
+    queue: async () => {
+      throw new Error('cannot run projector without a candidate or active snapshot for project project-1')
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['queue'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('partial')
+  expect(result.failures).toEqual([])
+  expect(rebuildRequests).toEqual([{projectId: 'project-1', reason: 'missingReviewServingSnapshot'}])
+  expect(releasedClaimIds).toEqual(['queue-1'])
+  expect(failedClaimIds).toEqual([])
+})
+
 test('wake does not claim work while queue pressure or active imports exceed configured limits', async () => {
   const {claimedComponents, dependencies} = createDependencyHarness({
     posting: [getClaim({component: 'posting', dirtyWorkId: 'posting-1'})],
@@ -442,7 +472,7 @@ test('failed snapshot promotion is reported without replacing last-known-good da
 })
 
 test('unsupported scopes fail intake instead of falling back to foreground raw serving', async () => {
-  const scope = {...getScope(), dirtyKind: 'unknown.change'} satisfies ReviewServingDirtyWorkScope
+  const scope = {...getScope(), dirtyKind: 'unknown.change'} as unknown as ReviewServingDirtyWorkScope
 
   const result = await intakeReviewServingProjectorDirtyWork({
     identityResolver: ({component}) => {

@@ -329,6 +329,6 @@ export const advanceReviewServingProjectorWatermark = async (
         app.review_serving_projector_watermark.source_high_water_mark,
         excluded.source_high_water_mark
       ),
-      updated_at = current_timestamp
+      updated_at = excluded.updated_at
   `)
 }

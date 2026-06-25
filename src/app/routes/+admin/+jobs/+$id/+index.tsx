@@ -840,11 +840,11 @@ const AdminJudgmentJobDetail = () => {
                     }
                   >
                     <div class="mt-4 min-w-0 space-y-3 border-t border-gray-200 pt-4">
-                      <RuntimeModelNotice class="break-words" notice={runtimeModelNotice()} />
+                      <RuntimeModelNotice class="break-words [overflow-wrap:anywhere]" notice={runtimeModelNotice()} />
                       <Show when={judgingRuntimeWarning()}>
                         {(warning) => {
                           return (
-                            <div class="break-words rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                            <div class="break-words rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 [overflow-wrap:anywhere]">
                               {warning()}
                             </div>
                           )
@@ -853,7 +853,7 @@ const AdminJudgmentJobDetail = () => {
                       <Show when={actionError()}>
                         {(message) => {
                           return (
-                            <div class="break-words rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                            <div class="break-words rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 [overflow-wrap:anywhere]">
                               {message()}
                             </div>
                           )
@@ -862,7 +862,7 @@ const AdminJudgmentJobDetail = () => {
                       <Show when={actionNotice()}>
                         {(message) => {
                           return (
-                            <div class="break-words rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
+                            <div class="break-words rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700 [overflow-wrap:anywhere]">
                               {message()}
                             </div>
                           )
@@ -871,7 +871,7 @@ const AdminJudgmentJobDetail = () => {
                       <Show when={resumeBlockedReason()}>
                         {(message) => {
                           return (
-                            <div class="break-words rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                            <div class="break-words rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 [overflow-wrap:anywhere]">
                               {message()}
                             </div>
                           )
@@ -882,12 +882,12 @@ const AdminJudgmentJobDetail = () => {
                 </div>
 
                 <Show when={data()?.error && Array.isArray(data()?.error) && (data()?.error?.length ?? 0) > 0}>
-                  <div class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4">
+                  <div class="mb-6 min-w-0 rounded-lg border border-red-200 bg-red-50 p-4">
                     <h2 class="mb-2 text-lg font-semibold text-red-900">Errors</h2>
-                    <ul class="list-disc space-y-1 pl-5">
+                    <ul class="min-w-0 list-disc space-y-1 pl-5">
                       <For each={data()?.error ?? []}>
                         {(err) => {
-                          return <li class="break-words text-red-700">{err}</li>
+                          return <li class="break-words text-red-700 [overflow-wrap:anywhere]">{err}</li>
                         }}
                       </For>
                     </ul>

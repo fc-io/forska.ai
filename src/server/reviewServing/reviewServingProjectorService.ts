@@ -1,7 +1,10 @@
+import {Effect} from 'effect'
+
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {
   claimReviewServingDirtyWork,
+  type ClaimReviewServingDirtyWorkParams,
   failReviewServingDirtyWorkClaims,
   releaseReviewServingDirtyWorkClaims,
   type ReviewServingDirtyWorkClaim,
@@ -25,6 +28,7 @@ import {
   type PromoteReviewServingProjectorSnapshotResult,
 } from './reviewServingProjectorWriter.ts'
 import {getCurrentReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
+import {requestReviewServingV4RebuildEffect} from './reviewServingV4RebuildRequestService.ts'
 
 export type ReviewServingProjectorRunContext = {
   claims: readonly ReviewServingDirtyWorkClaim[]
@@ -49,7 +53,10 @@ export type ReviewServingProjectorIdentityResolver = (input: {
 export type ReviewServingProjectorQueueState = {activeImportCount?: number; pendingDirtyWorkCount?: number}
 
 export type ReviewServingProjectorServiceDependencies = {
-  claimDirtyWork?: typeof claimReviewServingDirtyWork
+  claimDirtyWork?: (
+    params: ClaimReviewServingDirtyWorkParams,
+    database?: ReviewServingDirtyWorkDatabase,
+  ) => Promise<ReviewServingDirtyWorkClaim[]>
   database?: ReviewServingProjectorServiceDatabase
   ensureClaimManifests?: ReviewServingClaimManifestEnsurer
   failDirtyWork?: typeof failReviewServingDirtyWorkClaims
@@ -57,6 +64,7 @@ export type ReviewServingProjectorServiceDependencies = {
   nowMs?: () => number
   promoteSnapshot?: typeof promoteReviewServingProjectorSnapshot
   releaseDirtyWork?: typeof releaseReviewServingDirtyWorkClaims
+  requestRebuild?: typeof requestReviewServingV4RebuildEffect
   runners: Partial<Record<ReviewServingProjectionComponent, ReviewServingProjectorRunner>>
   upsertDirtyWork?: typeof upsertReviewServingDirtyWork
 }
@@ -147,6 +155,24 @@ const getDirtyWorkIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return claims.map((claim) => {
     return claim.dirtyWorkId
   })
+}
+
+const getClaimProjectIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return [
+    ...new Set(
+      claims
+        .map((claim) => {
+          return claim.projectId
+        })
+        .filter((projectId): projectId is string => {
+          return projectId !== null && projectId.trim().length > 0
+        }),
+    ),
+  ]
+}
+
+const isMissingSnapshotDiagnostic = (diagnostic: string) => {
+  return diagnostic.includes('cannot run projector without a candidate or active snapshot')
 }
 
 const getClaimInputWatermarks = (claim: ReviewServingDirtyWorkClaim): ReviewServingSourcePartitionWatermarks => {
@@ -313,6 +339,7 @@ export const wakeReviewServingProjectorService = async (
   const failDirtyWork = dependencies.failDirtyWork ?? failReviewServingDirtyWorkClaims
   const ensureClaimManifests = dependencies.ensureClaimManifests ?? ensureReviewServingClaimManifests
   const promoteSnapshot = dependencies.promoteSnapshot ?? promoteReviewServingProjectorSnapshot
+  const requestRebuild = dependencies.requestRebuild ?? requestReviewServingV4RebuildEffect
   const nowMs = dependencies.nowMs ?? Date.now
   const budget = getNormalizedBudget(input)
   const startedAt = nowMs()
@@ -401,19 +428,31 @@ export const wakeReviewServingProjectorService = async (
           ],
         }
       } catch (error) {
+        const diagnostic = getDiagnostic(error)
+        const missingSnapshotProjectIds = isMissingSnapshotDiagnostic(diagnostic) ? getClaimProjectIds(claims) : []
+
+        if (missingSnapshotProjectIds.length > 0) {
+          await Effect.runPromise(
+            Effect.forEach(
+              missingSnapshotProjectIds,
+              (projectId) => {
+                return requestRebuild({projectId, reason: 'missingReviewServingSnapshot'}, database)
+              },
+              {concurrency: 1},
+            ),
+          )
+          await releaseDirtyWork(claimIds, database)
+
+          return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
+        }
+
         await failDirtyWork(claimIds, database)
 
         return {
           ...state,
           failures: [
             ...state.failures,
-            {
-              attempts: budget.maxRetries + 1,
-              claimIds,
-              component,
-              diagnostic: getDiagnostic(error),
-              status: 'failed' as const,
-            },
+            {attempts: budget.maxRetries + 1, claimIds, component, diagnostic, status: 'failed' as const},
           ],
           processedRows: state.processedRows + claims.length,
         }

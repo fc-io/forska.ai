@@ -53,6 +53,25 @@ type FakeRequestRow = {
   updatedAt: string
 }
 
+type FakeProjectionManifestRow = {
+  baseGeneration: number
+  definitionVersion: string
+  inputDigest: string | null
+  inputWatermark: number
+  inputWatermarksJson: unknown
+  invalidationReason: string | null
+  manifestId: string
+  patchRangeEnd: number | null
+  patchRangeStart: number | null
+  patchWatermark: number
+  projectId: string
+  projectionComponent: string
+  projectionIdentity: string
+  promptConfigHash: string | null
+  reviewConfigHash: string | null
+  status: 'candidate'
+}
+
 const getSqlStrings = (statement: string) => {
   return [...statement.matchAll(/'((?:''|[^'])*)'/g)].map((match) => {
     return match[1]?.replaceAll("''", "'") ?? ''
@@ -98,6 +117,7 @@ const fakeRebuildComponents = [
 
 const createFakeRequestDatabase = (stats: FakeStats) => {
   const requests = new Map<string, FakeRequestRow>()
+  const projectionManifests = new Map<string, FakeProjectionManifestRow>()
   const statements: string[] = []
   const componentStateJson = {
     optional: [],
@@ -108,6 +128,31 @@ const createFakeRequestDatabase = (stats: FakeStats) => {
 
   const run = async (statement: string) => {
     statements.push(statement)
+
+    if (statement.includes('INSERT INTO app.review_projection_identity_manifest')) {
+      const strings = getSqlStrings(statement)
+      const manifestId = strings[0] ?? ''
+      const component = strings[2] ?? 'projectScope'
+
+      projectionManifests.set(manifestId, {
+        baseGeneration: 0,
+        definitionVersion: strings[6] ?? `${component}:dirty-claim-seed-v1`,
+        inputDigest: strings[5] ?? null,
+        inputWatermark: 0,
+        inputWatermarksJson: strings[4] ?? '{}',
+        invalidationReason: strings[9] ?? null,
+        manifestId,
+        patchRangeEnd: 0,
+        patchRangeStart: 0,
+        patchWatermark: 0,
+        projectId: strings[1] ?? 'project-v4',
+        projectionComponent: component,
+        projectionIdentity: strings[3] ?? `${component}:identity-1`,
+        promptConfigHash: null,
+        reviewConfigHash: null,
+        status: 'candidate',
+      })
+    }
 
     if (!statement.includes('INSERT INTO app.review_rebuild_request')) {
       return
@@ -164,6 +209,13 @@ const createFakeRequestDatabase = (stats: FakeStats) => {
     }
 
     if (statement.includes('FROM app.review_projection_identity_manifest')) {
+      if (statement.includes('WHERE manifest_id =')) {
+        const manifestId = getSqlStrings(statement)[0] ?? ''
+        const manifest = projectionManifests.get(manifestId)
+
+        return (manifest === undefined ? [] : [manifest]) as T[]
+      }
+
       return fakeRebuildComponents.map((component) => {
         return {
           baseGeneration: 2,
@@ -257,6 +309,26 @@ test('V4 rebuild request service estimates admission budget from project data', 
   expect(joined).not.toContain('judgment.project_id = project.id')
   expect(joined).toContain('judgment.use_fulltext_no_images = project.use_fulltext_no_images')
   expect(joined).toContain('FROM app.judgment_human_summary')
+})
+
+test('V4 rebuild request service bootstraps explicit chunks when a project has no snapshot yet', async () => {
+  const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const joined = statements.join('\n')
+
+  expect(request.status).toBe('admitted')
+  expect(request.requestedComponents).toEqual([...fakeRebuildComponents])
+  expect(joined).toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(joined).toContain('INSERT INTO app.review_serving_snapshot_manifest')
+  expect(joined).toContain('INSERT INTO app.review_rebuild_chunk_manifest')
+  expect(joined).toContain("'projectScope'")
+  expect(joined).toContain("'selectedImport'")
+  expect(joined).toContain("'search'")
+  expect(joined).toContain('snapshot:')
+  expect(joined).toContain('freshReviewServingSnapshot')
 })
 
 test('V4 rebuild request service accounts for list-mode fan-out in admission budgets', async () => {

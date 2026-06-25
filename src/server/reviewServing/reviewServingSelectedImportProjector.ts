@@ -159,13 +159,21 @@ const getSelectedImportProjectionRows = async (
             hot.conflict_flag,
             hot.tombstone,
             CASE WHEN hot.selected_rank_numeric IS NULL THEN ${nullRankNumericSort} ELSE hot.selected_rank_numeric END AS rank_numeric_sort,
-            CASE WHEN hot.selected_rank_key IS NULL THEN ${getSqlLiteral(nullRankKeySort)} ELSE hot.selected_rank_key END AS rank_key_sort
+            CASE
+              WHEN hot.selected_rank_key IS NULL THEN ${getSqlLiteral(nullRankKeySort)}
+              WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)
+              ELSE concat('1:', hot.selected_rank_key)
+            END AS rank_key_sort
           FROM mart.project_scope_article scope
           INNER JOIN app.project_import_route project_route
             ON project_route.project_id = scope.project_id
           INNER JOIN app.review_import_article_hot_field hot
             ON hot.import_route_id = project_route.import_route_id
             AND hot.article_id = scope.article_id
+          LEFT JOIN app.article_import_route current_link
+            ON current_link.import_route_id = hot.import_route_id
+            AND current_link.article_id = hot.article_id
+            AND current_link.source_record_key = hot.source_record_key
           WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
             AND (scope.in_curated_scope OR scope.in_route_scope)
             AND NOT hot.tombstone

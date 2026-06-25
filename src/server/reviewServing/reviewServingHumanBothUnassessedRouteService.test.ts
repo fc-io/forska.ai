@@ -120,7 +120,7 @@ const createReaderDatabase = () => {
             article_id: 'article-1',
             article_title: 'Article 1',
             journal_title: 'Journal',
-            source_metadata: {covidence: {studyId: 'study-1'}},
+            source_metadata: JSON.stringify({covidence: {studyId: 'study-1'}}),
             sort_key: '2026-01-01T00:00:00.000Z',
             url: 'https://example.test/article-1',
           },

@@ -253,7 +253,7 @@ export const upsertReviewServingProjectionIdentityManifest = async (
       prompt_config_hash = excluded.prompt_config_hash,
       status = excluded.status,
       invalidation_reason = excluded.invalidation_reason,
-      updated_at = current_timestamp
+      updated_at = excluded.updated_at
   `)
 
   return {manifestId}
@@ -336,7 +336,7 @@ export const createCandidateReviewServingSnapshotManifest = async (
       last_known_good_snapshot_id = excluded.last_known_good_snapshot_id,
       failed_at = NULL,
       last_error = NULL,
-      updated_at = current_timestamp
+      updated_at = excluded.updated_at
   `)
 
   return {snapshotId: input.snapshotId}

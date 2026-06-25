@@ -112,6 +112,7 @@ test('LLM answer changes write unassessed queue patches and serving rows from co
   expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
   expect(selectStatement).not.toContain('OR selected.selected_tombstone')
   expect(selectStatement).toContain('LEFT JOIN mart.project_scope_article scope')
+  expect(selectStatement).not.toContain('scope.source_updated_at')
   expect(selectStatement).toContain("VALUES ('article-1')")
   expect(servingDelete).toContain('snapshot_id =')
   expect(servingDelete).toContain("review_config_hash IN ('review-config-1')")

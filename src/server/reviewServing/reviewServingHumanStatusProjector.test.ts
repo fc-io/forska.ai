@@ -167,9 +167,13 @@ test('human prompt answer deltas write component-narrow status patches', async (
   expect(joined).toContain('human_answered_summary_count')
   expect(joined).toContain('review_config_hash')
   expect(joined).toContain('serving.review_config_hash IS NOT DISTINCT FROM article_status.review_config_hash')
+  expect(joined.indexOf('article_status.human_answered_summary_count > 0')).toBeLessThan(
+    joined.indexOf('serving.enabled_prompt_count = 0'),
+  )
   expect(joined).toContain("prompt_id <> 'summary'")
   expect(joined).toContain('human_status_key')
   expect(joined).toContain("'humanStatus'")
+  expect(joined).not.toContain('scope.source_updated_at')
   expect(joined).not.toContain("'llmStatus'")
   expect(joined).not.toContain("'selectedImport'")
 })
@@ -207,6 +211,29 @@ test('summary human answers do not require prompt IDs and write summary-key patc
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
   expect(joined).not.toContain("'llmStatus'")
+})
+
+test('Covidence summary conflicts count as reviewed while preserving null answer value', async () => {
+  const {database, statements} = createHumanStatusDatabase({
+    judgmentRows: [
+      humanStatusRow({
+        humanAnsweredValue: null,
+        promptId: null,
+        promptOrSummaryKey: 'summary',
+        summaryOrigin: 'covidence_import',
+      }),
+    ],
+  })
+
+  const result = await projectReviewServingHumanStatusPatches(projectInput([humanClaim()]), database)
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_human_status_patch_v4')
+  })
+  const joined = statements.join('\n')
+
+  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(insertStatement).toContain('NULL')
+  expect(joined).toContain("'summary', 'answered', FALSE")
 })
 
 test('human prompt and summary answer changes use delta payload values as contribution inputs', async () => {
@@ -287,5 +314,6 @@ test('prompt config claims rebuild only prompt-scoped human status rows', async 
   expect(promptSelect).toContain('LEFT JOIN app.project_prompt project_prompt')
   expect(promptSelect).toContain('project_prompt.enabled = TRUE')
   expect(promptSelect).toContain('COALESCE(prompt.archived, FALSE) = FALSE')
+  expect(promptSelect).not.toContain('scope.source_updated_at')
   expect(deltaSelect).toBeUndefined()
 })

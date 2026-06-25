@@ -134,6 +134,7 @@ test('answer changes update posting stats from old and new contribution diffs', 
 
   expect(result.patchRowCount).toBe(2)
   expect(result.servingRowCount).toBe(1)
+  expect(joined).not.toContain('scope.source_updated_at')
   expect(result.statsValues).toContainEqual({
     cardinality: 2,
     filterKind: 'promptAnswer',

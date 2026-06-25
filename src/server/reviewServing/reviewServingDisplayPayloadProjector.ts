@@ -60,6 +60,7 @@ export type ProjectReviewServingPayloadInput = {
   payloadIdentity: string
   projectId: string
   projectionIdentity?: string
+  selectedImportSnapshotId: string
   snapshotId: string
   status?: ReviewServingProjectionManifestStatus
 }
@@ -218,16 +219,22 @@ const getDisplayBaseRows = async (
       article.article_updated_at AS articleUpdatedAt,
       COALESCE(article.article_created_at, scope.article_created_at, current_timestamp) AS sortKey,
       COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at, current_timestamp) AS activitySortAt,
-      article.article_title AS articleTitle,
-      article.article_id AS articleExternalId,
+      COALESCE(selected.article_title, article.article_title) AS articleTitle,
+      COALESCE(selected.external_id, article.article_id) AS articleExternalId,
       article.arxiv_id AS arxivId,
       article.biorxiv_id AS biorxivId,
       article.medrxiv_id AS medrxivId,
       article.doi,
       article.pubmed_id AS pmid,
-      article.source_metadata AS sourceMetadata,
+      CASE
+        WHEN article.source_metadata IS NULL AND selected_source.import_metadata IS NULL THEN NULL
+        ELSE json_merge_patch(
+          COALESCE(article.source_metadata, CAST('{}' AS JSON)),
+          COALESCE(selected_source.import_metadata, CAST('{}' AS JSON))
+        )
+      END AS sourceMetadata,
       selected.journal_title AS journalTitle,
-      article.url,
+      COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
       article.full_text_pdf AS fullTextPdf,
       article.full_text_fetched_at AS fullTextFetchedAt,
       article.full_text_conversion_status AS fullTextConversionStatus,
@@ -245,6 +252,11 @@ const getDisplayBaseRows = async (
       AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
       AND selected.article_id = scope.article_id
       AND NOT selected.tombstone
+    LEFT JOIN app.article_import_route_source_record selected_source
+      ON selected_source.import_route_id = selected.import_route_id
+      AND selected_source.article_id = selected.article_id
+      AND selected_source.source_record_key = selected.source_record_key
+      AND selected_source.quarantined_at IS NULL
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope)
       ${getArticleRangePredicate(input)}
@@ -268,19 +280,25 @@ const getDisplayPatchRows = async (
           article.article_updated_at AS articleUpdatedAt,
           COALESCE(article.article_created_at, scope.article_created_at, current_timestamp) AS sortKey,
           COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at, current_timestamp) AS activitySortAt,
-          article.article_title AS articleTitle,
-          article.article_id AS articleExternalId,
+          COALESCE(selected.article_title, article.article_title) AS articleTitle,
+          COALESCE(selected.external_id, article.article_id) AS articleExternalId,
           article.arxiv_id AS arxivId,
           article.biorxiv_id AS biorxivId,
           article.medrxiv_id AS medrxivId,
           article.doi,
           article.pubmed_id AS pmid,
-          article.source_metadata AS sourceMetadata,
+          CASE
+            WHEN article.source_metadata IS NULL AND selected_source.import_metadata IS NULL THEN NULL
+            ELSE json_merge_patch(
+              COALESCE(article.source_metadata, CAST('{}' AS JSON)),
+              COALESCE(selected_source.import_metadata, CAST('{}' AS JSON))
+            )
+          END AS sourceMetadata,
           article.full_text_pdf AS fullTextPdf,
           article.full_text_fetched_at AS fullTextFetchedAt,
           article.full_text_conversion_status AS fullTextConversionStatus,
           selected.journal_title AS journalTitle,
-          article.url,
+          COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
           selected.publication_year AS publicationYear,
           article.id IS NULL AS tombstone
         FROM dirty_article dirty
@@ -296,6 +314,11 @@ const getDisplayPatchRows = async (
           AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
           AND selected.article_id = dirty.article_id
           AND NOT selected.tombstone
+        LEFT JOIN app.article_import_route_source_record selected_source
+          ON selected_source.import_route_id = selected.import_route_id
+          AND selected_source.article_id = selected.article_id
+          AND selected_source.source_record_key = selected.source_record_key
+          AND selected_source.quarantined_at IS NULL
         ORDER BY dirty.article_id ASC
       `)
 }
@@ -313,7 +336,13 @@ const getPayloadRows = async (
     SELECT
       scope.article_id AS articleId,
       article.article_created_at AS articleCreatedAt,
-      article.source_metadata AS sourceMetadata,
+      CASE
+        WHEN article.source_metadata IS NULL AND selected_source.import_metadata IS NULL THEN NULL
+        ELSE json_merge_patch(
+          COALESCE(article.source_metadata, CAST('{}' AS JSON)),
+          COALESCE(selected_source.import_metadata, CAST('{}' AS JSON))
+        )
+      END AS sourceMetadata,
       LEFT(article.article_summary, 2000) AS abstractText,
       LEFT(COALESCE(article.full_text, regexp_replace(COALESCE(article.full_text_html, ''), '<[^>]+>', '', 'g')), 2000) AS fullTextPreview,
       CAST(
@@ -321,12 +350,23 @@ const getPayloadRows = async (
         + length(COALESCE(article.full_text, ''))
         + length(COALESCE(article.full_text_html, ''))
         + length(COALESCE(CAST(article.source_metadata AS VARCHAR), ''))
+        + length(COALESCE(CAST(selected_source.import_metadata AS VARCHAR), ''))
         AS BIGINT
       ) AS payloadBytes
     FROM mart.project_scope_article scope
     ${dirtyJoinSql}
     INNER JOIN app."article" article
       ON article.id = scope.article_id
+    LEFT JOIN app.review_selected_article_import_v4 selected
+      ON selected.project_id = scope.project_id
+      AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND selected.article_id = scope.article_id
+      AND NOT selected.tombstone
+    LEFT JOIN app.article_import_route_source_record selected_source
+      ON selected_source.import_route_id = selected.import_route_id
+      AND selected_source.article_id = selected.article_id
+      AND selected_source.source_record_key = selected.source_record_key
+      AND selected_source.quarantined_at IS NULL
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope)
       ${getArticleRangePredicate(input)}

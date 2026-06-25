@@ -1,4 +1,3 @@
-import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {pruneJudgmentProviderTelemetryHistorySamples} from '../../services/judgmentProviderTelemetryHistoryService.ts'
@@ -9,6 +8,11 @@ import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobSqliteService.ts'
 import {getTransientJudgmentJobSqliteLockReasonSql} from './judgmentJobSqliteTransientLock.ts'
 import {type JudgmentRequestAttemptCloseoutProof} from './judgmentRequestAttemptManifest.ts'
+import {
+  finalizeMissingLocalSqliteDrainingJobs,
+  resumeRecoveredOomQuarantinedJob,
+  sqliteCleanupTerminalStatuses,
+} from './judgmentsJobsCleanupStaleDuckdbWrites.ts'
 import {reconcileProviderAdmissionLeasesThroughOwner} from './providerAdmissionLease.ts'
 import {abandonedSentPromptGraceMs} from './requeueAbandonedSentPrompts.ts'
 
@@ -19,7 +23,6 @@ type RecoverableOomQuarantinedJobRow = {id: string}
 const sqliteRetentionCleanupBatchSize = 1_000
 const duckdbProjectedCloseoutProbeBatchSize = 500
 const recoverableOomQuarantineRecoveryBatchSize = 3
-const sqliteCleanupTerminalStatuses = ['completed', 'paused', 'project_removed'] as const
 const transientLockedQuarantineRecoveryBatchSize = 5
 
 const getEmptyRetentionPruneResult = (): RetentionPruneResult => {
@@ -56,7 +59,7 @@ const getUniqueRequestAttemptCloseouts = <TCloseout extends {providerKey: string
 }
 
 const getDuckdbActiveRequestLeaseCloseoutProbes = async (): Promise<ActiveRequestLeaseCloseoutProbe[]> => {
-  const rows = await getAppDatabaseService().queryJson<ActiveRequestLeaseCloseoutProbe>(`
+  const rows = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<ActiveRequestLeaseCloseoutProbe>(`
     SELECT
       provider_key AS providerKey,
       request_attempt_id AS requestAttemptId
@@ -75,7 +78,7 @@ const getDuckdbActiveRequestLeaseCloseoutProbes = async (): Promise<ActiveReques
 const getDuckdbProjectedTerminalRequestAttemptCloseout = async (
   lease: ActiveRequestLeaseCloseoutProbe,
 ): Promise<JudgmentRequestAttemptCloseoutProof | null> => {
-  const [row] = await getAppDatabaseService().queryJson<JudgmentRequestAttemptCloseoutProof>(`
+  const [row] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<JudgmentRequestAttemptCloseoutProof>(`
     SELECT
       closeout.provider_key AS providerKey,
       closeout.request_attempt_id AS requestAttemptId
@@ -208,19 +211,6 @@ const getRecoverableOomQuarantinedJobIds = async () => {
   ).map((row) => {
     return row.id
   })
-}
-
-const finalizeMissingLocalSqliteDrainingJobs = async (jobIds: string[]): Promise<void> => {
-  return jobIds.length === 0
-    ? Promise.resolve()
-    : getAppDatabaseService().run(`
-        UPDATE app.judgment_job
-        SET storage_state = ${getSqlLiteral('drained')},
-            updated_at = current_timestamp
-        WHERE id IN (${getQuotedStringList(jobIds).join(', ')})
-          AND storage_state = ${getSqlLiteral('draining')}
-          AND status IN (${getQuotedStringList([...sqliteCleanupTerminalStatuses]).join(', ')})
-      `)
 }
 
 const hasFreshLiveJudgmentJobLease = async (jobId: string) => {
@@ -370,19 +360,6 @@ const recoverTransientLockedQuarantinedJobs = async ({
   }
 
   return recoverTransientLockedQuarantinedJobs({jobIds: jobIds.slice(1), serverJobId})
-}
-
-const resumeRecoveredOomQuarantinedJob = async (jobId: string): Promise<void> => {
-  await getAppDatabaseService().run(`
-    UPDATE app.judgment_job
-    SET status = ${getSqlLiteral('running')},
-        pause_requested_at = NULL,
-        updated_at = current_timestamp
-    WHERE id = ${getSqlLiteral(jobId)}
-      AND storage_state = ${getSqlLiteral('active')}
-      AND status = ${getSqlLiteral('paused')}
-      AND pause_requested_at IS NULL
-  `)
 }
 
 const recoverOomQuarantinedJobs = async ({

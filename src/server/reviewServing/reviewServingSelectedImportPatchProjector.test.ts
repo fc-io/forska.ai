@@ -107,6 +107,8 @@ test('selected-import routine updates write component-narrow patches for only cl
   expect(selectStatement).toContain('FROM dirty_article dirty')
   expect(selectStatement).toContain('LEFT JOIN mart.project_scope_article scope')
   expect(selectStatement).toContain('INNER JOIN app.review_import_article_hot_field hot')
+  expect(selectStatement).toContain('LEFT JOIN app.article_import_route current_link')
+  expect(selectStatement).toContain("WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)")
   expect(insertStatement).toContain('patch_watermark')
   expect(insertStatement).toContain('9')
   expect(insertStatement).toContain(
