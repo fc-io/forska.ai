@@ -131,12 +131,18 @@ test('display routine updates write component-narrow patches for only claimed ar
   )
   expect(selectStatement).toContain('FROM dirty_article dirty')
   expect(selectStatement).toContain('LEFT JOIN mart.project_scope_article scope')
-  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
+  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
+  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
   expect(selectStatement).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
-  expect(selectStatement).toContain('COALESCE(selected.article_title, article.article_title) AS articleTitle')
-  expect(selectStatement).toContain('COALESCE(selected.external_id, article.article_id) AS articleExternalId')
+  expect(selectStatement).toContain('WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.article_title')
+  expect(selectStatement).toContain('ELSE selected_base.article_title')
+  expect(selectStatement).toContain('WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.external_id')
+  expect(selectStatement).toContain('ELSE selected_base.external_id')
   expect(selectStatement).toContain(
     "COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url",
+  )
+  expect(selectStatement).toContain(
+    'WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key',
   )
   expect(insertStatement).toContain(
     'ON CONFLICT(project_id, display_identity, base_generation, patch_watermark, article_id)',

@@ -515,6 +515,9 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).toContain('FROM app.review_rebuild_chunk_manifest prerequisite')
   expect(statements.join('\n')).toContain('prerequisite.request_id = candidate.request_id')
   expect(statements.join('\n')).toContain("prerequisite.projection_component IN ('projectScope')")
+  expect(statements.join('\n')).toMatch(
+    /candidate\.projection_component = 'search'[\s\S]*prerequisite\.projection_component IN \('projectScope', 'selectedImport'\)/,
+  )
   expect(statements.join('\n')).toContain(
     "prerequisite.projection_component IN ('projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue')",
   )

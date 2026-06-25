@@ -1242,6 +1242,13 @@ test('base rebuild chunks regenerate project scope and selected import state bef
     database,
   )
   const joined = statements.join('\n')
+  const selectedImportPatchManifestStatement =
+    statements.find((statement) => {
+      return (
+        statement.includes('INSERT INTO app.review_projection_identity_manifest')
+        && statement.includes("'selectedImport.rebuild'")
+      )
+    }) ?? ''
 
   expect(projectScopeResult).toEqual({status: 'completed'})
   expect(selectedImportResult).toEqual({status: 'completed'})
@@ -1253,6 +1260,9 @@ test('base rebuild chunks regenerate project scope and selected import state bef
   expect(joined).toContain('DELETE FROM app.review_selected_import_snapshot')
   expect(joined).toContain('WITH selected_import_candidates')
   expect(joined).toContain('selectedImport.rebuild')
+  expect(selectedImportPatchManifestStatement).not.toHaveLength(0)
+  expect(selectedImportPatchManifestStatement).toContain('\'{"importRunArticle":7}\'::JSON')
+  expect(selectedImportPatchManifestStatement).not.toContain('reviewChange')
   expect(joined).toContain("checksum = 'checksum-project-scope'")
   expect(joined).toContain("checksum = 'checksum-selected-import'")
 })

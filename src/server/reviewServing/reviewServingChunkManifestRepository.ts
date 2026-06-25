@@ -201,7 +201,7 @@ const rebuildChunkPrerequisitesByComponent = {
   posting: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus'],
   projectScope: [],
   queue: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus'],
-  search: ['projectScope'],
+  search: ['projectScope', 'selectedImport'],
   selectedImport: ['projectScope'],
   summary: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue'],
 } as const satisfies Record<ReviewServingProjectionComponent, readonly ReviewServingProjectionComponent[]>
