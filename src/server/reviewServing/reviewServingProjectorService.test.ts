@@ -404,6 +404,43 @@ test('wake requests V4 rebuild and releases claims when a snapshot is not ready 
   expect(failedClaimIds).toEqual([])
 })
 
+test('wake fails claimed work when missing-snapshot rebuild admission fails', async () => {
+  const {dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+    queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-1'})],
+  })
+  const rebuildRequests: Array<{projectId: string; reason: string}> = []
+
+  dependencies.requestRebuild = (input) => {
+    rebuildRequests.push({projectId: input.projectId, reason: input.reason})
+
+    return Effect.fail(new Error('Review rebuild request created no rebuild chunks'))
+  }
+  dependencies.runners = {
+    queue: async () => {
+      throw new Error('cannot run projector without a candidate or active snapshot for project project-1')
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['queue'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('failed')
+  expect(result.failures).toEqual([
+    {
+      attempts: 2,
+      claimIds: ['queue-1'],
+      component: 'queue',
+      diagnostic: 'Review rebuild request created no rebuild chunks',
+      status: 'failed',
+    },
+  ])
+  expect(rebuildRequests).toEqual([{projectId: 'project-1', reason: 'missingReviewServingSnapshot'}])
+  expect(failedClaimIds).toEqual(['queue-1'])
+  expect(releasedClaimIds).toEqual([])
+})
+
 test('wake does not claim work while queue pressure or active imports exceed configured limits', async () => {
   const {claimedComponents, dependencies} = createDependencyHarness({
     posting: [getClaim({component: 'posting', dirtyWorkId: 'posting-1'})],

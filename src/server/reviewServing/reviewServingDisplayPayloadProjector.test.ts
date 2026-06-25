@@ -133,6 +133,7 @@ test('display routine updates write component-narrow patches for only claimed ar
   expect(selectStatement).toContain('LEFT JOIN mart.project_scope_article scope')
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
   expect(selectStatement).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
+  expect(selectStatement).toContain('COALESCE(selected.article_title, article.article_title) AS articleTitle')
   expect(selectStatement).toContain('COALESCE(selected.external_id, article.article_id) AS articleExternalId')
   expect(selectStatement).toContain(
     "COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url",
@@ -142,6 +143,7 @@ test('display routine updates write component-narrow patches for only claimed ar
   )
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('UPDATE mart.review_article_serving_v4')
+  expect(joined).toContain("article_external_id = 'NCT-1'")
   expect(joined).toContain("article_created_at = '2026-01-01T00:00:00.000Z'")
   expect(joined).toContain('article_updated_at = NULL')
   expect(joined).toContain("article_title = 'Updated title'")

@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-25 - Network Smoke OOM Cutover Follow-Up
+
+- Error: `Out of Memory Error: failed to pin block` class from legacy DuckDB review-serving maintenance and network-smoke cutover regressions.
+- Context: Phase 5C network-smoke regression gate, V4 rebuild chunks, missing-snapshot projector wakeups, and selected-import display patches.
+- Cause: Terminal failed chunks could leave rebuild requests admitted/running forever, validation failures could leave partial mart output behind, rebuild admission failures could strand dirty claims until lease expiry, and selected-import display updates needed patch coverage.
+- Fix: Terminal chunk failures now fail the owning rebuild request, failed output validation rolls back chunk writes before marking the chunk failed, failed missing-snapshot rebuild admission fails claimed dirty work, and selected-import patch tests cover title/external ID/source URL freshness.
+- Verification: Focused review-serving projector, worker, chunk manifest, and display payload tests.
+
 ## 2026-06-24 - Phase 5B Review Thread Follow-Up
 
 - Error: Review found V4 warning state could stay failed after superseded terminal request chunks, dirty recovery could enqueue duplicate full-project V4 rebuilds, and rebuild admission estimates ignored list-mode fan-out.

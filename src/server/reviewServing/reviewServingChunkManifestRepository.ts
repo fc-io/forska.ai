@@ -162,6 +162,11 @@ const defaultReviewServingRebuildChunkRetryPolicy = {
   terminalState: 'quarantined',
 } as const satisfies ReviewServingRebuildChunkRetryPolicy
 
+type ReviewServingRebuildChunkValidationFailure = {
+  _tag: 'ReviewServingRebuildChunkValidationFailure'
+  validationError: string
+}
+
 const getReviewServingChunkManifestDatabase = () => {
   return getAppDatabaseService() as ReviewServingChunkManifestRepositoryDatabase
 }
@@ -464,6 +469,25 @@ const getReviewServingRebuildChunkValidationError = (input: ReviewServingRebuild
   return checksumValid && countValid
     ? null
     : `chunk validation failed: expected checksum ${input.expectedChecksum} and count ${input.expectedCount ?? 'n/a'}, got checksum ${input.actualChecksum} and count ${input.actualCount ?? 'n/a'}`
+}
+
+const getReviewServingRebuildChunkValidationFailure = (
+  validationError: string,
+): ReviewServingRebuildChunkValidationFailure => {
+  return {_tag: 'ReviewServingRebuildChunkValidationFailure', validationError}
+}
+
+const isReviewServingRebuildChunkValidationFailure = (
+  value: unknown,
+): value is ReviewServingRebuildChunkValidationFailure => {
+  return (
+    value !== null
+    && typeof value === 'object'
+    && '_tag' in value
+    && value._tag === 'ReviewServingRebuildChunkValidationFailure'
+    && 'validationError' in value
+    && typeof value.validationError === 'string'
+  )
 }
 
 const getHasExpiredRunningLease = (chunk: ReviewServingRebuildChunkManifest | null, now: Date | string) => {
@@ -885,24 +909,25 @@ export const writeReviewServingRebuildChunkOutput = async (
 ) => {
   const chunkId = getReviewServingRebuildChunkId(input)
 
-  return database.transaction(async (tx) => {
-    const claimed = await getReviewServingRebuildChunkManifest({chunkId}, tx)
-    const canWrite = claimed?.status === 'running' && claimed.leaseOwner === input.leaseOwner
+  try {
+    return await database.transaction(async (tx) => {
+      const claimed = await getReviewServingRebuildChunkManifest({chunkId}, tx)
+      const canWrite = claimed?.status === 'running' && claimed.leaseOwner === input.leaseOwner
 
-    if (!canWrite) {
-      return null
-    }
+      if (!canWrite) {
+        return null
+      }
 
-    await input.writeOutput(tx)
+      await input.writeOutput(tx)
 
-    const validation = await input.validateOutput(tx)
-    const validationError = getReviewServingRebuildChunkValidationError(validation)
+      const validation = await input.validateOutput(tx)
+      const validationError = getReviewServingRebuildChunkValidationError(validation)
 
-    if (validationError !== null) {
-      return markReviewServingRebuildChunkFailed({chunkId, error: validationError, leaseOwner: input.leaseOwner}, tx)
-    }
+      if (validationError !== null) {
+        throw getReviewServingRebuildChunkValidationFailure(validationError)
+      }
 
-    await tx.run(`
+      await tx.run(`
       UPDATE app.review_rebuild_chunk_manifest
       SET
         status = 'completed',
@@ -917,6 +942,16 @@ export const writeReviewServingRebuildChunkOutput = async (
         AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
     `)
 
-    return getReviewServingRebuildChunkManifest({chunkId}, tx)
-  })
+      return getReviewServingRebuildChunkManifest({chunkId}, tx)
+    })
+  } catch (error) {
+    if (isReviewServingRebuildChunkValidationFailure(error)) {
+      return markReviewServingRebuildChunkFailed(
+        {chunkId, error: error.validationError, leaseOwner: input.leaseOwner},
+        database,
+      )
+    }
+
+    throw error
+  }
 }
