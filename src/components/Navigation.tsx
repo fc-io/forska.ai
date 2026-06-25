@@ -182,7 +182,7 @@ export const Navigation = () => {
   })
 
   return (
-    <nav class="relative overflow-x-hidden border-b border-gray-200 bg-white shadow-sm">
+    <nav class="relative border-b border-gray-200 bg-white shadow-sm">
       <Show when={duckdbOwnerWarning()}>
         {(warning) => {
           return (
@@ -197,7 +197,7 @@ export const Navigation = () => {
           )
         }}
       </Show>
-      <div class="px-4 sm:px-6 lg:px-8">
+      <div class="overflow-x-hidden px-4 sm:px-6 lg:px-8">
         <div class="flex min-h-16 flex-wrap items-center justify-between gap-x-4 gap-y-2 py-2 sm:h-16 sm:flex-nowrap sm:py-0">
           <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 sm:flex-nowrap sm:gap-x-8">
             <Link
