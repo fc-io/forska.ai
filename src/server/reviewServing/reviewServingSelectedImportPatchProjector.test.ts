@@ -141,6 +141,37 @@ test('selected-import routine updates write component-narrow patches for only cl
   expect(joined).toContain('changed.journal_title')
 })
 
+test('selected-import projector advances watermark for the max source partition', async () => {
+  const {database, statements} = createSelectedImportPatchDatabase({patchRows: []})
+
+  await projectReviewServingSelectedImportPatches(
+    projectPatchInput([
+      selectedImportClaim({
+        dirtyWorkId: 'dirty-work-import',
+        firstSourceHighWaterMark: 7,
+        latestSourceHighWaterMark: 7,
+        sourcePartition: 'importRunArticle',
+      }),
+      selectedImportClaim({
+        articleId: null,
+        dirtyWorkId: 'dirty-work-review',
+        firstSourceHighWaterMark: 9,
+        latestSourceHighWaterMark: 9,
+        scopeId: 'project-1',
+        scopeKind: 'project',
+        sourcePartition: 'reviewChange',
+      }),
+    ]),
+    database,
+  )
+  const watermarkStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_serving_projector_watermark')
+  })
+
+  expect(watermarkStatement).toContain("'reviewChange'")
+  expect(watermarkStatement).toContain('9')
+})
+
 test('selected-import tombstones replay idempotently with the same patch watermark and article key', async () => {
   const {database, statements} = createSelectedImportPatchDatabase({
     patchRows: [

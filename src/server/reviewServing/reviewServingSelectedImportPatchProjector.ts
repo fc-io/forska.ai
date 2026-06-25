@@ -161,6 +161,15 @@ const getClaimSourcePartition = (claims: readonly ReviewServingDirtyWorkClaim[])
   return claims[0]?.sourcePartition ?? 'import-run-article'
 }
 
+const getPatchWatermarkSourcePartition = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  const patchWatermark = getPatchWatermark(claims)
+  const maxClaim = claims.find((claim) => {
+    return claim.latestSourceHighWaterMark === patchWatermark
+  })
+
+  return maxClaim?.sourcePartition ?? getClaimSourcePartition(claims)
+}
+
 const getClaimKinds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return [
     ...new Set(
@@ -703,7 +712,7 @@ export const projectReviewServingSelectedImportPatches = async (
               projectionComponent: 'selectedImport',
               projectorName: selectedImportPatchProjectorName,
               sourceHighWaterMark: patchWatermark,
-              sourcePartition: getClaimSourcePartition(input.claims),
+              sourcePartition: getPatchWatermarkSourcePartition(input.claims),
             },
     },
     database,
