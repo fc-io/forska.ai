@@ -12,6 +12,7 @@ const networkSmokeSeedMode = process.env.FORSKA_NETWORK_SMOKE_SEED_MODE === 'exi
 const runtimeLogDir = process.env.LOG_DIR ?? ''
 const shouldSkipMutatingRouteLoads = process.env.FORSKA_NETWORK_SMOKE_SKIP_MUTATING_ROUTE_LOADS === 'true'
 const largeRebuildFailureText = 'Large rebuild failed'
+const warningEndpointPath = '/api/projectsreviewswarnings'
 
 type ApiDataResponse<T> = {data: T}
 type ArticleSearchResponse = Array<{articleId: string | null; articleTitle: string; id: string}>
@@ -62,6 +63,8 @@ type NetworkFailure = {
 }
 
 type PendingAuditedRequest = {promise: Promise<void>; resolve: () => void}
+type JsonParseResult = {ok: false; error: string} | {ok: true; value: unknown}
+type WarningFailureVariant = {path: string; value: number | string}
 
 const routeTreePath = path.resolve(process.cwd(), 'src/app/routeTree.gen.ts')
 
@@ -83,6 +86,74 @@ const assertTextDoesNotContainLargeRebuildFailure = (source: string, text: strin
 
 const textContainsLargeRebuildFailure = (text: string) => {
   return text.includes(largeRebuildFailureText)
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+const parseJson = (text: string): JsonParseResult => {
+  try {
+    return {ok: true, value: JSON.parse(text) as unknown}
+  } catch (error) {
+    return {ok: false, error: error instanceof Error ? error.message : 'unknown JSON parse error'}
+  }
+}
+
+const getWarningFailureVariants = (value: unknown, path: string): WarningFailureVariant[] => {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry, index) => {
+      return getWarningFailureVariants(entry, `${path}[${index}]`)
+    })
+  }
+
+  if (!isRecord(value)) {
+    return []
+  }
+
+  return Object.entries(value).flatMap(([key, child]) => {
+    const childPath = path.length === 0 ? key : `${path}.${key}`
+    const directFailures: WarningFailureVariant[] =
+      child === 'failed'
+        ? [{path: childPath, value: child}]
+        : key === 'failedCount' && typeof child === 'number' && child > 0
+          ? [{path: childPath, value: child}]
+          : []
+
+    return [...directFailures, ...getWarningFailureVariants(child, childPath)]
+  })
+}
+
+const formatWarningFailureVariant = (variant: WarningFailureVariant) => {
+  return `${variant.path}=${variant.value}`
+}
+
+const getWarningsEndpointFailureDetails = (body: string) => {
+  const parsed = parseJson(body)
+
+  if (!parsed.ok) {
+    return `warning response was not JSON: ${parsed.error}`
+  }
+
+  const data = isRecord(parsed.value) ? parsed.value.data : undefined
+
+  if (!isRecord(data)) {
+    return 'warning response did not include a data object'
+  }
+
+  const failureVariants = getWarningFailureVariants(data, 'data')
+
+  return failureVariants.length === 0
+    ? null
+    : `warning response returned failed review state: ${failureVariants.map(formatWarningFailureVariant).join(', ')}`
+}
+
+const assertWarningsEndpointBodyHasNoFailedState = (source: string, body: string) => {
+  const failureDetails = getWarningsEndpointFailureDetails(body)
+
+  if (failureDetails !== null) {
+    throw new Error(`${source}: ${failureDetails}`)
+  }
 }
 
 const assertRuntimeLogsDoNotContainLargeRebuildFailure = () => {
@@ -140,7 +211,7 @@ const getJson = async <T>(url: string, message: string): Promise<T> => {
 }
 
 const postWarningsEndpointProbe = async (projectId: string) => {
-  const response = await fetch(`${apiBaseUrl}/api/projectsreviewswarnings`, {
+  const response = await fetch(`${apiBaseUrl}${warningEndpointPath}`, {
     body: JSON.stringify({projectId}),
     headers: {'content-type': 'application/json'},
     method: 'POST',
@@ -152,6 +223,8 @@ const postWarningsEndpointProbe = async (projectId: string) => {
   if (!response.ok) {
     throw new Error(`Warnings endpoint probe failed for ${projectId}: ${response.status} ${body}`)
   }
+
+  assertWarningsEndpointBodyHasNoFailedState(`warnings endpoint response for ${projectId}`, body)
 }
 
 const getFirstExistingId = <T extends {id: string}>(values: T[]) => {
@@ -811,6 +884,12 @@ const shouldInspectResponseBodyForLargeRebuildFailure = (response: Response) => 
   return ['document', 'fetch', 'xhr'].includes(response.request().resourceType())
 }
 
+const isWarningsEndpointResponse = (response: Response) => {
+  const url = new URL(response.url())
+
+  return url.origin === apiBaseUrl && url.pathname === warningEndpointPath && response.request().method() === 'POST'
+}
+
 const isExpectedHttpFailure = (failure: Omit<NetworkFailure, 'pagePath'> & {pagePath: string}) => {
   const pathname = failure.url ? new URL(failure.url).pathname : ''
 
@@ -916,6 +995,19 @@ const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
           details,
           method: request.method(),
           source: 'large-rebuild-failure',
+          status: response.status(),
+          url: response.url(),
+        })
+      }
+
+      const warningFailureDetails =
+        response.status() < 400 && isWarningsEndpointResponse(response) ? getWarningsEndpointFailureDetails(body) : null
+
+      if (warningFailureDetails !== null) {
+        record({
+          details: warningFailureDetails,
+          method: request.method(),
+          source: 'warning-failed-state',
           status: response.status(),
           url: response.url(),
         })

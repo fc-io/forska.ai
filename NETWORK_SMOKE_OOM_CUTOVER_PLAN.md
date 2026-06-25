@@ -37,7 +37,7 @@ Before Phase 5C is marked complete:
 - The real/current-DB smoke pass runs first.
 - The synthetic smoke pass runs second.
 - The real/current-DB pass probes `POST http://127.0.0.1:3001/api/projectsreviewswarnings` with project IDs discovered from the current database, using a body such as `{ "projectId": "..." }`.
-- The warnings endpoint probe fails if any response, page error, console error, or captured server output contains `Large rebuild failed`.
+- The warnings endpoint probe fails if any warning response contains failed warning state, or if any response, page error, console error, or captured server output contains `Large rebuild failed`.
 - Any route skipped because it can queue work on load is either audited, V4-rewired, or explicitly documented as admin/debug-only with a bounded read-only reason.
 - The smoke report is recorded alongside static guard, focused test, lint, and desktop evidence.
 
@@ -75,7 +75,7 @@ The smoke audit should not claim coverage for:
 
 - [ ] `bun run test:network-smoke`
 - [ ] `bun run test:network-smoke:synthetic`
-- [ ] Current-DB warning probes call `POST http://127.0.0.1:3001/api/projectsreviewswarnings` with discovered project IDs and never report `Large rebuild failed`.
+- [ ] Current-DB warning probes call `POST http://127.0.0.1:3001/api/projectsreviewswarnings` with discovered project IDs and never report failed warning state or `Large rebuild failed`.
 - [ ] Any current-DB skipped route is classified as missing data, admin/debug-only, or unsafe pending Phase 5C rewiring.
 - [ ] No skipped normal browser route remains solely because it queues legacy V3 repair, dirty refresh, or large-rebuild work on load.
 - [ ] Focused Phase 5C tests still prove warning, health, and admin status routes are side-effect free.

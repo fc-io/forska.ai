@@ -192,7 +192,7 @@ Use `effect` for new non-trivial async and server orchestration in V4 rebuild re
 - [ ] Warning/progress UI and APIs report V4 snapshot/chunk/projector diagnostics for browser and desktop, and normal review UI does not render legacy phase names or old phase counters.
 - [ ] Admin/debug-only legacy inspection routes are route-classified, capped, guarded, read-only unless V4-rewired, and excluded from normal product flows.
 - [ ] Browser network smoke runs real/current DB first with `bun run test:network-smoke`, then synthetic temporary DB second with `bun run test:network-smoke:synthetic`.
-- [ ] Current-DB network smoke remains no-seed, probes `POST /api/projectsreviewswarnings` for discovered project IDs, and fails on any page, API response, console error, or server output containing `Large rebuild failed`.
+- [ ] Current-DB network smoke remains no-seed, probes `POST /api/projectsreviewswarnings` for discovered project IDs, and fails on any failed warning state or any page, API response, console error, or server output containing `Large rebuild failed`.
 - [ ] Any current-DB skipped route is classified as missing-data, admin/debug-only, or unsafe pending Phase 5C rewiring; no normal browser route is skipped only because it queues legacy V3 repair, dirty refresh, or large-rebuild work on load.
 - [ ] V4 owner-handoff tests prove stale owners cannot complete chunk output, snapshot promotion, or dirty-work acknowledgement after lease transfer.
 - [ ] Cross-project OOM/fairness tests prove one failing project cannot monopolize projector, append, checkpoint, or maintenance queues.

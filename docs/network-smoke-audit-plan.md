@@ -50,7 +50,7 @@ Skipped routes must also carry one of these classifications:
 
 No normal browser route may remain skipped only because it queues legacy V3 repair, dirty refresh, or large-rebuild work on load.
 
-The current-DB pass also probes `POST /api/projectsreviewswarnings` for discovered project IDs and fails if page HTML, API/document/fetch/XHR responses, console/page errors, warning probe responses, or captured server logs contain `Large rebuild failed`.
+The current-DB pass also probes `POST /api/projectsreviewswarnings` for discovered project IDs and fails if warning probe responses or route-loaded warning responses contain any failed warning state, or if page HTML, API/document/fetch/XHR responses, console/page errors, warning probe responses, or captured server logs contain `Large rebuild failed`.
 
 The synthetic pass may create deterministic fixtures only in its temporary DuckDB database.
 

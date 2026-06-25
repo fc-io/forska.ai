@@ -9,6 +9,7 @@ Implemented gates:
 - Current/real DB smoke remains no-seed through `FORSKA_NETWORK_SMOKE_DB_MODE=current` and `FORSKA_NETWORK_SMOKE_SEED_MODE=existing`.
 - Synthetic smoke writes deterministic fixtures only into the Playwright temporary DuckDB path.
 - Current-DB warning probes call `POST /api/projectsreviewswarnings` for discovered project IDs.
+- Smoke fails on any failed warning state in warning probe responses or route-loaded warning responses.
 - Smoke fails on `Large rebuild failed` in warning probe responses, page HTML, document/fetch/XHR response bodies, console/page errors, and captured runtime logs.
 - Skipped route inventory requires explicit `missing-data`, `admin-debug-only`, or `unsafe-pending-phase-5c-rewiring` classification.
 - Route inventory fails if a normal browser route is skipped only because it queues legacy V3 repair, dirty refresh, or large-rebuild work on load.

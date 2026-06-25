@@ -20,6 +20,14 @@ Entry format:
 - Fix: Added Phase 5C/master smoke gates, classified skipped routes, added current-DB warning probes for discovered projects, and fail the smoke pass on `Large rebuild failed` in warning responses, page HTML, document/fetch/XHR responses, console/page errors, or runtime logs.
 - Verification: `bunx playwright test tests/e2e/networkSmoke.spec.ts -g "network smoke route inventory stays explicit"`, `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts`, `bun run lint`, `bun run test:network-smoke`, and `bun run test:network-smoke:synthetic`.
 
+## 2026-06-25 - Network Smoke Warning Failure Variants
+
+- Error: Failed review-warning states from `POST /api/projectsreviewswarnings` could pass current-DB network smoke unless they rendered the exact `Large rebuild failed` text.
+- Context: Phase 5C current-DB browser smoke and route-loaded warning responses for review pages.
+- Cause: The smoke gate checked HTTP errors and one failure string but did not parse warning payloads for failed status variants or failed-count diagnostics.
+- Fix: Current-DB warning probes and route-loaded warning responses now fail on any `failed` warning status value or positive `failedCount` in the warning payload.
+- Verification: `bunx playwright test tests/e2e/networkSmoke.spec.ts -g "network smoke route inventory stays explicit"` and `bun run test:network-smoke:synthetic`.
+
 ## 2026-06-25 - Network Smoke OOM Cutover Follow-Up
 
 - Error: `Out of Memory Error: failed to pin block` class from legacy DuckDB review-serving maintenance and network-smoke cutover regressions.
