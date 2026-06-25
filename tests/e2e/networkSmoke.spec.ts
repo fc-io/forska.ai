@@ -12,7 +12,6 @@ const networkSmokeSeedMode = process.env.FORSKA_NETWORK_SMOKE_SEED_MODE === 'exi
 const runtimeLogDir = process.env.LOG_DIR ?? ''
 const shouldSkipMutatingRouteLoads = process.env.FORSKA_NETWORK_SMOKE_SKIP_MUTATING_ROUTE_LOADS === 'true'
 const largeRebuildFailureText = 'Large rebuild failed'
-const warningProbeProjectLimit = 5
 
 type ApiDataResponse<T> = {data: T}
 type ArticleSearchResponse = Array<{articleId: string | null; articleTitle: string; id: string}>
@@ -334,8 +333,8 @@ const getExistingProjectSeedCandidate = async (project: ProjectListItem) => {
   const prompt = getExistingProjectPrompt(projectDetail)
   const article = articlePage.articles[0]
 
-  return prompt && article
-    ? {articleId: article.id, modelId: projectDetail.project.modelId, projectId: project.id, promptId: prompt.id}
+  return prompt
+    ? {articleId: article?.id ?? '', modelId: projectDetail.project.modelId, projectId: project.id, promptId: prompt.id}
     : null
 }
 
@@ -734,7 +733,7 @@ const getCurrentDbWarningsProbeProjectIds = async () => {
           return projectId.trim().length > 0
         }),
     ),
-  ].slice(0, warningProbeProjectLimit)
+  ]
 }
 
 const runCurrentDbWarningsEndpointProbe = async () => {
