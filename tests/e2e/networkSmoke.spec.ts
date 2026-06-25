@@ -38,7 +38,13 @@ type NetworkSmokeSeed = {
   providerConnectionId: string
 }
 
-type NetworkSmokeTarget = {buildPath: (seed: NetworkSmokeSeed) => string; label: string; template: string}
+type NetworkSmokeSeedKey = keyof NetworkSmokeSeed
+type NetworkSmokeTarget = {
+  buildPath: (seed: NetworkSmokeSeed) => string
+  label: string
+  requiredSeedKeys?: NetworkSmokeSeedKey[]
+  template: string
+}
 
 type SkippedRouteTemplate = {reason: string; template: string}
 
@@ -95,14 +101,8 @@ const getJson = async <T>(url: string, message: string): Promise<T> => {
   return assertOk<T>(response, message)
 }
 
-const getFirstOrThrow = <T>(values: T[], message: string) => {
-  const first = values[0]
-
-  if (!first) {
-    throw new Error(message)
-  }
-
-  return first
+const getFirstExistingId = <T extends {id: string}>(values: T[]) => {
+  return values[0]?.id ?? ''
 }
 
 const createProviderConnection = async () => {
@@ -307,11 +307,7 @@ const getExistingProjectSeed = async () => {
   const projects = await getJson<ProjectListItem[]>(`${apiBaseUrl}/api/projects`, 'Failed to fetch existing projects')
   const candidate = await getFirstExistingProjectSeedCandidate(projects)
 
-  if (!candidate) {
-    throw new Error('Existing-data network smoke needs one active project with at least one linked prompt and article')
-  }
-
-  return candidate
+  return candidate ?? {articleId: '', modelId: '', projectId: '', promptId: ''}
 }
 
 const getExistingProviderConnectionId = async () => {
@@ -320,19 +316,13 @@ const getExistingProviderConnectionId = async () => {
     'Failed to fetch existing provider connections',
   )
 
-  return getFirstOrThrow(
-    providerConnections.connections,
-    'Existing-data network smoke needs one provider connection for /providers/$id',
-  ).id
+  return getFirstExistingId(providerConnections.connections)
 }
 
 const getExistingDataSourceId = async () => {
   const dataSources = await getJson<DataSourceListItem[]>(`${apiBaseUrl}/api/datasources`, 'Failed to fetch data sources')
 
-  return getFirstOrThrow(
-    dataSources,
-    'Existing-data network smoke needs one active data source for /admin/datasources/$id/edit',
-  ).id
+  return getFirstExistingId(dataSources)
 }
 
 const getExistingComparisonProjectId = async () => {
@@ -345,10 +335,7 @@ const getExistingComparisonProjectId = async () => {
     'Failed to fetch existing comparison projects',
   )
 
-  return getFirstOrThrow(
-    comparisonProjects,
-    'Existing-data network smoke needs one active comparison project for /compare-judgments/$id routes',
-  ).id
+  return getFirstExistingId(comparisonProjects)
 }
 
 const getExistingNetworkSmokeSeed = async (): Promise<NetworkSmokeSeed> => {
@@ -451,112 +438,148 @@ const staticAuditTargets: NetworkSmokeTarget[] = [
 ]
 
 const dynamicAuditTargets: NetworkSmokeTarget[] = [
-  {template: '/articles/$id', label: 'article detail', buildPath: (seed) => `/articles/${seed.articleId}`},
+  {
+    template: '/articles/$id',
+    label: 'article detail',
+    requiredSeedKeys: ['articleId'],
+    buildPath: (seed) => `/articles/${seed.articleId}`,
+  },
   {
     template: '/articles/$id/fulltext',
     label: 'article fulltext',
+    requiredSeedKeys: ['articleId'],
     buildPath: (seed) => `/articles/${seed.articleId}/fulltext`,
   },
   {
     template: '/compare-judgments/$id',
     label: 'comparison project detail',
+    requiredSeedKeys: ['comparisonProjectId'],
     buildPath: (seed) => `/compare-judgments/${seed.comparisonProjectId}`,
   },
   {
     template: '/compare-judgments/$id/edit',
     label: 'comparison project edit',
+    requiredSeedKeys: ['comparisonProjectId'],
     buildPath: (seed) => `/compare-judgments/${seed.comparisonProjectId}/edit`,
   },
   {
     template: '/compare-judgments/$id/export',
     label: 'comparison project export',
+    requiredSeedKeys: ['comparisonProjectId'],
     buildPath: (seed) => `/compare-judgments/${seed.comparisonProjectId}/export`,
   },
   {
     template: '/compare-judgments/$id/import-resolutions',
     label: 'comparison project import resolutions',
+    requiredSeedKeys: ['comparisonProjectId'],
     buildPath: (seed) => `/compare-judgments/${seed.comparisonProjectId}/import-resolutions`,
   },
-  {template: '/projects/$id', label: 'project detail', buildPath: (seed) => `/projects/${seed.projectId}`},
-  {template: '/projects/$id/edit', label: 'project edit', buildPath: (seed) => `/projects/${seed.projectId}/edit`},
+  {
+    template: '/projects/$id',
+    label: 'project detail',
+    requiredSeedKeys: ['projectId'],
+    buildPath: (seed) => `/projects/${seed.projectId}`,
+  },
+  {
+    template: '/projects/$id/edit',
+    label: 'project edit',
+    requiredSeedKeys: ['projectId'],
+    buildPath: (seed) => `/projects/${seed.projectId}/edit`,
+  },
   {
     template: '/projects/$id/export',
     label: 'project export',
+    requiredSeedKeys: ['projectId'],
     buildPath: (seed) => `/projects/${seed.projectId}/export`,
   },
   {
     template: '/projects/$id/export-project',
     label: 'project package export',
+    requiredSeedKeys: ['projectId'],
     buildPath: (seed) => `/projects/${seed.projectId}/export-project`,
   },
   {
     template: '/projects/$id/humanAssessment',
     label: 'project human assessment',
+    requiredSeedKeys: ['projectId'],
     buildPath: (seed) => `/projects/${seed.projectId}/humanAssessment`,
   },
   {
     template: '/projects/$id/reviews',
     label: 'project reviews redirect',
+    requiredSeedKeys: ['projectId'],
     buildPath: (seed) => `/projects/${seed.projectId}/reviews`,
   },
   {
     template: '/projects/$id/reviews-both',
     label: 'project both reviews',
+    requiredSeedKeys: ['projectId'],
     buildPath: (seed) => `/projects/${seed.projectId}/reviews-both`,
   },
   {
     template: '/projects/$id/reviews-human',
     label: 'project human reviews',
+    requiredSeedKeys: ['projectId'],
     buildPath: (seed) => `/projects/${seed.projectId}/reviews-human`,
   },
   {
     template: '/projects/$id/reviews-llm',
     label: 'project llm reviews',
+    requiredSeedKeys: ['projectId'],
     buildPath: (seed) => `/projects/${seed.projectId}/reviews-llm`,
   },
   {
     template: '/projects/$id/reviews-unassessed',
     label: 'project unassessed reviews',
+    requiredSeedKeys: ['projectId'],
     buildPath: (seed) => `/projects/${seed.projectId}/reviews-unassessed`,
   },
   {
     template: '/projects/$id/reviews-llm/$articleId',
     label: 'project llm review article',
+    requiredSeedKeys: ['projectId', 'articleId'],
     buildPath: (seed) => `/projects/${seed.projectId}/reviews-llm/${seed.articleId}`,
   },
   {
     template: '/projects/$id/reviews-llm/$articleId/fulltext',
     label: 'project llm review article fulltext',
+    requiredSeedKeys: ['projectId', 'articleId'],
     buildPath: (seed) => `/projects/${seed.projectId}/reviews-llm/${seed.articleId}/fulltext`,
   },
   {
     template: '/projects/$id/reviews/$articleId',
     label: 'project review article redirect',
+    requiredSeedKeys: ['projectId', 'articleId'],
     buildPath: (seed) => `/projects/${seed.projectId}/reviews/${seed.articleId}`,
   },
   {
     template: '/providers/$id',
     label: 'provider detail',
+    requiredSeedKeys: ['providerConnectionId'],
     buildPath: (seed) => `/providers/${seed.providerConnectionId}`,
   },
   {
     template: '/admin/datasources/$id/edit',
     label: 'admin edit data source',
+    requiredSeedKeys: ['dataSourceId'],
     buildPath: (seed) => `/admin/datasources/${seed.dataSourceId}/edit`,
   },
   {
     template: '/admin/unexpected-answers/$projectId',
     label: 'admin unexpected answers project',
+    requiredSeedKeys: ['projectId'],
     buildPath: (seed) => `/admin/unexpected-answers/${seed.projectId}`,
   },
   {
     template: '/admin/unexpected-answers/$projectId/$promptId',
     label: 'admin unexpected answers project prompt',
+    requiredSeedKeys: ['projectId', 'promptId'],
     buildPath: (seed) => `/admin/unexpected-answers/${seed.projectId}/${seed.promptId}`,
   },
   {
     template: '/admin/unexpected-answers/all-prompts/$promptId',
     label: 'admin unexpected answers prompt',
+    requiredSeedKeys: ['promptId'],
     buildPath: (seed) => `/admin/unexpected-answers/all-prompts/${seed.promptId}`,
   },
 ]
@@ -610,6 +633,41 @@ const routeLoadSkippedTemplateSet = new Set(
 const allAuditTargets = [...staticAuditTargets, ...dynamicAuditTargets].filter((target) => {
   return !routeLoadSkippedTemplateSet.has(target.template)
 })
+
+const getMissingSeedKeys = (target: NetworkSmokeTarget, seed: NetworkSmokeSeed) => {
+  return (target.requiredSeedKeys ?? []).filter((key) => {
+    return seed[key] === ''
+  })
+}
+
+const getAuditTargetsForSeed = (seed: NetworkSmokeSeed) => {
+  return allAuditTargets.filter((target) => {
+    return getMissingSeedKeys(target, seed).length === 0
+  })
+}
+
+const getMissingExistingDataSkippedTargets = (seed: NetworkSmokeSeed) => {
+  return allAuditTargets.flatMap((target) => {
+    const missingSeedKeys = getMissingSeedKeys(target, seed)
+    return missingSeedKeys.length === 0 ? [] : [{missingSeedKeys, target}]
+  })
+}
+
+const logMissingExistingDataSkippedTargets = (seed: NetworkSmokeSeed) => {
+  const skippedTargets = networkSmokeSeedMode === 'existing' ? getMissingExistingDataSkippedTargets(seed) : []
+
+  if (skippedTargets.length === 0) {
+    return
+  }
+
+  console.warn(
+    `[network-smoke] skipped ${skippedTargets.length} dynamic routes without existing IDs: ${skippedTargets
+      .map((entry) => {
+        return `${entry.target.template} missing ${entry.missingSeedKeys.join(',')}`
+      })
+      .join('; ')}`,
+  )
+}
 
 const getRouteInventoryReport = () => {
   const generated = readGeneratedRouteTemplates()
@@ -833,13 +891,16 @@ test('audited app pages have no unexpected local network errors', async ({page})
   test.skip(!isNetworkSmokeAudit, 'Network smoke audit only runs via bun run test:network-smoke')
 
   const seed = await createNetworkSmokeSeed()
+  const auditTargets = getAuditTargetsForSeed(seed)
+  logMissingExistingDataSkippedTargets(seed)
+
   let currentPagePath = 'seed'
   const recorder = createNetworkFailureRecorder(page, () => {
     return currentPagePath
   })
 
   try {
-    for (const target of allAuditTargets) {
+    for (const target of auditTargets) {
       currentPagePath = `${target.label} (${target.template})`
       await test.step(currentPagePath, async () => {
         await visitRoute(page, target.buildPath(seed), recorder.waitForAuditedRequests)
