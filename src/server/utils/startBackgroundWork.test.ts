@@ -20,7 +20,10 @@ const getLastJsonLine = (value: string) => {
   return lastLine
 }
 
-const runStartBackgroundWork = (input: {role: 'api' | 'judge-worker' | 'maintenance-worker'}) => {
+const runStartBackgroundWork = (input: {
+  disableServerMutations?: boolean
+  role: 'api' | 'judge-worker' | 'maintenance-worker'
+}) => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -36,6 +39,7 @@ const runStartBackgroundWork = (input: {role: 'api' | 'judge-worker' | 'maintena
         const reviewServingProjectorWorkerHeartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
         const requestAttemptCloseoutBackfillSchedulerModulePath = getModulePath('./src/server/utils/startRequestAttemptCloseoutBackfillScheduler.ts')
         const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const serverMutationModeModulePath = getModulePath('./src/server/utils/serverMutationMode.ts')
         const duckdbOwnerConnectionHeartbeatModulePath = getModulePath('./src/server/utils/duckdbOwnerConnectionHeartbeat.ts')
         const calls = []
         const input = ${JSON.stringify(input)}
@@ -68,6 +72,13 @@ const runStartBackgroundWork = (input: {role: 'api' | 'judge-worker' | 'maintena
             },
             startServerRuntimeRoleMonitor: () => {
               calls.push('serverRuntimeRoleMonitor')
+            },
+          }
+        })
+        void mock.module(serverMutationModeModulePath, () => {
+          return {
+            shouldDisableServerMutationWork: () => {
+              return input.disableServerMutations === true
             },
           }
         })
@@ -110,4 +121,10 @@ test('startBackgroundWork skips maintenance work when the current role lacks mai
   const result = runStartBackgroundWork({role: 'judge-worker'})
 
   expect(result.calls).toEqual(['serverRuntimeRoleMonitor', 'duckdbOwnerConnectionHeartbeat'])
+})
+
+test('startBackgroundWork skips all background work when server mutations are disabled', () => {
+  const result = runStartBackgroundWork({disableServerMutations: true, role: 'maintenance-worker'})
+
+  expect(result.calls).toEqual([])
 })

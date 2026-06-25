@@ -1,5 +1,5 @@
 import {expect, type Page, type Request, type Response, test} from '@playwright/test'
-import {readFileSync} from 'node:fs'
+import {existsSync, readdirSync, readFileSync} from 'node:fs'
 import path from 'node:path'
 
 import {routeErrorSurfaceTestId} from '../../src/app/routerErrorSurface'
@@ -7,8 +7,12 @@ import {routeErrorSurfaceTestId} from '../../src/app/routerErrorSurface'
 const apiBaseUrl = 'http://127.0.0.1:43101'
 const appBaseUrl = 'http://127.0.0.1:43100'
 const isNetworkSmokeAudit = process.env.FORSKA_NETWORK_SMOKE_AUDIT === 'true'
+const networkSmokeDbMode = process.env.FORSKA_NETWORK_SMOKE_DB_MODE === 'current' ? 'current' : 'synthetic'
 const networkSmokeSeedMode = process.env.FORSKA_NETWORK_SMOKE_SEED_MODE === 'existing' ? 'existing' : 'synthetic'
+const runtimeLogDir = process.env.LOG_DIR ?? ''
 const shouldSkipMutatingRouteLoads = process.env.FORSKA_NETWORK_SMOKE_SKIP_MUTATING_ROUTE_LOADS === 'true'
+const largeRebuildFailureText = 'Large rebuild failed'
+const warningProbeProjectLimit = 5
 
 type ApiDataResponse<T> = {data: T}
 type ArticleSearchResponse = Array<{articleId: string | null; articleTitle: string; id: string}>
@@ -61,6 +65,36 @@ type PendingAuditedRequest = {promise: Promise<void>; resolve: () => void}
 
 const routeTreePath = path.resolve(process.cwd(), 'src/app/routeTree.gen.ts')
 
+const getRuntimeLogFiles = () => {
+  return runtimeLogDir.trim().length === 0 || !existsSync(runtimeLogDir)
+    ? []
+    : readdirSync(runtimeLogDir, {withFileTypes: true})
+        .filter((entry) => {
+          return entry.isFile() && entry.name.endsWith('.jsonl')
+        })
+        .map((entry) => {
+          return path.join(runtimeLogDir, entry.name)
+        })
+}
+
+const assertTextDoesNotContainLargeRebuildFailure = (source: string, text: string) => {
+  expect(text, `${source} must not contain ${largeRebuildFailureText}`).not.toContain(largeRebuildFailureText)
+}
+
+const assertRuntimeLogsDoNotContainLargeRebuildFailure = () => {
+  const logFiles = getRuntimeLogFiles()
+
+  expect(logFiles.length, 'Expected current smoke runtime logs to be captured').toBeGreaterThan(0)
+  assertTextDoesNotContainLargeRebuildFailure(
+    'current smoke runtime logs',
+    logFiles
+      .map((filePath) => {
+        return readFileSync(filePath, 'utf8')
+      })
+      .join('\n'),
+  )
+}
+
 const readGeneratedRouteTemplates = () => {
   const source = readFileSync(routeTreePath, 'utf8')
   const match = /export interface FileRoutesByTo \{([\s\S]*?)\n\}/.exec(source)
@@ -99,6 +133,21 @@ const getJson = async <T>(url: string, message: string): Promise<T> => {
   const response = await fetch(url)
 
   return assertOk<T>(response, message)
+}
+
+const postWarningsEndpointProbe = async (projectId: string) => {
+  const response = await fetch(`${apiBaseUrl}/api/projectsreviewswarnings`, {
+    body: JSON.stringify({projectId}),
+    headers: {'content-type': 'application/json'},
+    method: 'POST',
+  })
+  const body = await response.text()
+
+  assertTextDoesNotContainLargeRebuildFailure(`warnings endpoint response for ${projectId}`, body)
+
+  if (!response.ok) {
+    throw new Error(`Warnings endpoint probe failed for ${projectId}: ${response.status} ${body}`)
+  }
 }
 
 const getFirstExistingId = <T extends {id: string}>(values: T[]) => {
@@ -669,6 +718,41 @@ const logMissingExistingDataSkippedTargets = (seed: NetworkSmokeSeed) => {
   )
 }
 
+const getCurrentDbWarningsProbeProjectIds = async () => {
+  const projects = await getJson<ProjectListItem[]>(
+    `${apiBaseUrl}/api/projects`,
+    'Failed to fetch warning probe projects',
+  )
+
+  return [
+    ...new Set(
+      projects
+        .map((project) => {
+          return project.id
+        })
+        .filter((projectId) => {
+          return projectId.trim().length > 0
+        }),
+    ),
+  ].slice(0, warningProbeProjectLimit)
+}
+
+const runCurrentDbWarningsEndpointProbe = async () => {
+  if (networkSmokeDbMode !== 'current') {
+    return
+  }
+
+  const projectIds = await getCurrentDbWarningsProbeProjectIds()
+
+  expect(projectIds.length, 'Current-DB warning probe needs at least one existing project').toBeGreaterThan(0)
+  await Promise.all(
+    projectIds.map((projectId) => {
+      return postWarningsEndpointProbe(projectId)
+    }),
+  )
+  assertRuntimeLogsDoNotContainLargeRebuildFailure()
+}
+
 const getRouteInventoryReport = () => {
   const generated = readGeneratedRouteTemplates()
   const audited = allAuditTargets.map((target) => {
@@ -893,6 +977,7 @@ test('audited app pages have no unexpected local network errors', async ({page})
   const seed = await createNetworkSmokeSeed()
   const auditTargets = getAuditTargetsForSeed(seed)
   logMissingExistingDataSkippedTargets(seed)
+  await runCurrentDbWarningsEndpointProbe()
 
   let currentPagePath = 'seed'
   const recorder = createNetworkFailureRecorder(page, () => {
@@ -908,6 +993,9 @@ test('audited app pages have no unexpected local network errors', async ({page})
     }
 
     await recorder.assertNoFailures()
+    if (networkSmokeDbMode === 'current') {
+      assertRuntimeLogsDoNotContainLargeRebuildFailure()
+    }
   } finally {
     recorder.dispose()
   }

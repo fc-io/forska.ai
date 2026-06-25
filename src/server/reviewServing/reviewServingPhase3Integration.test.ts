@@ -374,6 +374,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
     'selectedImport',
     'posting',
     'summary',
+    'payload',
   ])
   expect(
     result.runs.map((run) => {
