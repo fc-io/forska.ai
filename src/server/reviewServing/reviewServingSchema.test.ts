@@ -39,6 +39,10 @@ const facetSummaryScopeForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0101_reviewServingFacetSummaryScope.sql']
 const articleMetadataStatusForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0105_reviewServingArticleMetadataStatus.sql']
+const selectedImportPatchDisplayFieldsForwardMigrationSql = readFileSync(
+  resolve(import.meta.dir, '../../db/duckdbMigrations/0108_reviewSelectedImportPatchDisplayFields.sql'),
+  'utf8',
+)
 const hotServingTables = [
   'mart.review_article_serving_v4',
   'mart.review_article_display_patch_v4',
@@ -288,6 +292,22 @@ test('Phase 1 article serving schema preserves review table display metadata', (
   expect(articleMetadataStatusForwardMigrationSql).toContain(
     'ALTER TABLE mart.review_article_serving_v4 ADD COLUMN IF NOT EXISTS article_updated_at TIMESTAMPTZ;',
   )
+})
+
+test('selected import patch display migration rebuilds legacy patch rows', () => {
+  expect(selectedImportPatchDisplayFieldsForwardMigrationSql).toContain('WITH legacy_patch AS')
+  expect(selectedImportPatchDisplayFieldsForwardMigrationSql).toContain(
+    'UPDATE mart.review_selected_import_patch_v4 AS patch',
+  )
+  expect(selectedImportPatchDisplayFieldsForwardMigrationSql).toContain('WHERE NOT patch.tombstone')
+  expect(selectedImportPatchDisplayFieldsForwardMigrationSql).toContain('AND patch.source_record_key IS NULL')
+  expect(selectedImportPatchDisplayFieldsForwardMigrationSql).toContain(
+    'INNER JOIN app.review_import_article_hot_field hot',
+  )
+  expect(selectedImportPatchDisplayFieldsForwardMigrationSql).toContain(
+    'source_record_key = CASE WHEN rebuild.tombstone THEN NULL ELSE rebuild.source_record_key END',
+  )
+  expect(selectedImportPatchDisplayFieldsForwardMigrationSql).toContain('tombstone = rebuild.tombstone')
 })
 
 test('Phase 1 schema migration creates contract cursor and sort columns on non-job serving tables', () => {

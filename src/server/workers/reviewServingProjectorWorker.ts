@@ -1317,14 +1317,6 @@ const getRebuildChunkProjectClaims = (input: {
       })
 }
 
-const getSelectedImportRebuildPatchSourceWatermarks = (sourceWatermarks: Record<string, number>) => {
-  const importRunArticleWatermark = sourceWatermarks.importRunArticle
-
-  return typeof importRunArticleWatermark === 'number' && Number.isFinite(importRunArticleWatermark)
-    ? {importRunArticle: importRunArticleWatermark}
-    : {}
-}
-
 const getProjectScopeRebuildChunkOutputChecksum = async (
   input: {chunk: ReviewServingRebuildChunkManifest},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -1579,7 +1571,7 @@ const runSelectedImportRebuildChunk = async (
     chunk: input.chunk,
     dirtyKind: 'selectedImport.rebuild',
     fallbackSourcePartition: `import-run-article:${projectId}`,
-    sourceWatermarks: getSelectedImportRebuildPatchSourceWatermarks(manifest.inputWatermarks),
+    sourceWatermarks: manifest.inputWatermarks,
   })
 
   return runValidatedRebuildChunkOutput(
