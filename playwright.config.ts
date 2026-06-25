@@ -7,7 +7,10 @@ const appServerPort = 43100
 const syntheticDuckdbPath = '/tmp/forska-playwright-project-edit-smoke.duckdb'
 const syntheticDuckdbTempDirectory = '/tmp/forska-playwright-project-edit-smoke.duckdb-temp'
 const currentDuckdbTempDirectory = '/tmp/forska-playwright-current-network-smoke.duckdb-temp'
-const networkSmokeLogDirectory = `/tmp/forska-playwright-network-smoke-runtime-logs-${process.pid}`
+const networkSmokeLogDirectory =
+  process.env.FORSKA_NETWORK_SMOKE_LOG_DIR
+  ?? process.env.LOG_DIR
+  ?? `/tmp/forska-playwright-network-smoke-runtime-logs-${process.pid}`
 const networkSmokeDbMode = process.env.FORSKA_NETWORK_SMOKE_DB_MODE === 'current' ? 'current' : 'synthetic'
 const currentDuckdbPath =
   process.env.FORSKA_NETWORK_SMOKE_DUCKDB_PATH
@@ -16,6 +19,8 @@ const currentDuckdbPath =
 const duckdbPath = networkSmokeDbMode === 'current' ? currentDuckdbPath : syntheticDuckdbPath
 const duckdbTempDirectory =
   networkSmokeDbMode === 'current' ? currentDuckdbTempDirectory : syntheticDuckdbTempDirectory
+process.env.FORSKA_NETWORK_SMOKE_LOG_DIR = networkSmokeLogDirectory
+process.env.LOG_DIR = networkSmokeLogDirectory
 const apiServerCommand =
   networkSmokeDbMode === 'current'
     ? `sh -c 'rm -rf "${duckdbTempDirectory}" "${networkSmokeLogDirectory}" && bun run build && bun run src/server/index.ts'`

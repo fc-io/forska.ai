@@ -280,8 +280,22 @@ const getDisplayPatchRows = async (
           article.article_updated_at AS articleUpdatedAt,
           COALESCE(article.article_created_at, scope.article_created_at, current_timestamp) AS sortKey,
           COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at, current_timestamp) AS activitySortAt,
-          COALESCE(selected.article_title, article.article_title) AS articleTitle,
-          COALESCE(selected.external_id, article.article_id) AS articleExternalId,
+          COALESCE(
+            CASE
+              WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
+              WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.article_title
+              ELSE selected_base.article_title
+            END,
+            article.article_title
+          ) AS articleTitle,
+          COALESCE(
+            CASE
+              WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
+              WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.external_id
+              ELSE selected_base.external_id
+            END,
+            article.article_id
+          ) AS articleExternalId,
           article.arxiv_id AS arxivId,
           article.biorxiv_id AS biorxivId,
           article.medrxiv_id AS medrxivId,
@@ -297,9 +311,17 @@ const getDisplayPatchRows = async (
           article.full_text_pdf AS fullTextPdf,
           article.full_text_fetched_at AS fullTextFetchedAt,
           article.full_text_conversion_status AS fullTextConversionStatus,
-          selected.journal_title AS journalTitle,
+          CASE
+            WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
+            WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.journal_title
+            ELSE selected_base.journal_title
+          END AS journalTitle,
           COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
-          selected.publication_year AS publicationYear,
+          CASE
+            WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
+            WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.publication_year
+            ELSE selected_base.publication_year
+          END AS publicationYear,
           article.id IS NULL AS tombstone
         FROM dirty_article dirty
         LEFT JOIN app."article" article
@@ -308,16 +330,36 @@ const getDisplayPatchRows = async (
           ON scope.project_id = ${getSqlLiteral(input.projectId)}
           AND scope.article_id = dirty.article_id
           AND (scope.in_curated_scope OR scope.in_route_scope)
-        LEFT JOIN app.review_selected_article_import_v4 selected
-          ON selected.project_id = ${getSqlLiteral(input.projectId)}
-          AND selected.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-          AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-          AND selected.article_id = dirty.article_id
-          AND NOT selected.tombstone
+        LEFT JOIN app.review_selected_article_import_v4 selected_base
+          ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
+          AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+          AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+          AND selected_base.article_id = dirty.article_id
+        LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
+          ON selected_patch.project_id = ${getSqlLiteral(input.projectId)}
+          AND selected_patch.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+          AND selected_patch.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+          AND selected_patch.article_id = dirty.article_id
+          AND selected_patch.patch_watermark = (
+            SELECT MAX(newer.patch_watermark)
+            FROM mart.review_selected_import_patch_v4 newer
+            WHERE newer.project_id = selected_patch.project_id
+              AND newer.project_scope_identity = selected_patch.project_scope_identity
+              AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
+              AND newer.article_id = selected_patch.article_id
+          )
         LEFT JOIN app.article_import_route_source_record selected_source
-          ON selected_source.import_route_id = selected.import_route_id
-          AND selected_source.article_id = selected.article_id
-          AND selected_source.source_record_key = selected.source_record_key
+          ON selected_source.import_route_id = CASE
+            WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
+            WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id
+            ELSE selected_base.import_route_id
+          END
+          AND selected_source.article_id = dirty.article_id
+          AND selected_source.source_record_key = CASE
+            WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
+            WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key
+            ELSE selected_base.source_record_key
+          END
           AND selected_source.quarantined_at IS NULL
         ORDER BY dirty.article_id ASC
       `)
