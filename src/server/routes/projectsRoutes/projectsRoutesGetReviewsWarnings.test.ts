@@ -60,6 +60,7 @@ type ReviewsWarningsResponse = {
       inFlightProjectRefreshCount: number
       inFlightRefreshCount: number
       largeRebuild: null | {
+        refreshStatus: 'idle' | 'paused' | 'running' | null
         progress: null | {
           remainingCurrentPhaseArticleCount: number | null
           rowsPerMinute: number | null
@@ -1808,7 +1809,7 @@ test('reviews warnings keep later phase denominator frozen after route scope cha
   expect(body.data.indexing.largeRebuild?.progress?.remainingCurrentPhaseArticleCount).toBe(0)
 })
 
-test('reviews warnings report failed when a staged large rebuild has failed', async () => {
+test('reviews warnings ignore failed legacy large rebuild state in normal indexing health', async () => {
   const projectId = 'project-large-rebuild-failed-warning'
 
   await insertProjectFixture(projectId)
@@ -1822,7 +1823,39 @@ test('reviews warnings report failed when a staged large rebuild has failed', as
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.status).toBe('failed')
+  expect(body.data.indexing.largeRebuild).toBe(null)
+  expect(body.data.indexing.pendingProjectRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('stalled')
+  expect(body.data.indexing.status).toBe('stale')
+})
+
+test('reviews warnings keep active serving ready when legacy large rebuild has failed', async () => {
+  const projectId = 'project-active-serving-legacy-large-rebuild-failed-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-active-serving-legacy-large-rebuild-failed-warning',
+  })
+  await insertLargeRebuildState(projectId, {
+    rebuildPhase: 'prompt_answer_fact',
+    refreshStatus: 'failed',
+    refreshToken: 5,
+    lastError: 'Out of Memory Error: failed to pin block',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.largeRebuild).toBe(null)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.status).toBe('ready')
 })
 
 test('reviews warnings production api path remains owner-routed unless an ownerless backend is declared', async () => {

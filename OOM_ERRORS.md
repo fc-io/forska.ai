@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-25 - Current DB Warning Legacy Rebuild State
+
+- Error: `warning response returned failed review state: data.indexing.largeRebuild.refreshStatus=failed, data.indexing.progressState=failed, data.indexing.status=failed`.
+- Context: Current-DB `bun run test:network-smoke:current-db` probing `POST /api/projectsreviewswarnings` for project `d03fe24a-cfcf-41ed-b09f-7b554a393d80`.
+- Cause: The normal warning route still treated retired legacy V3 `app.project_mart_large_rebuild_state.refresh_status = 'failed'` as product review indexing failure, even when current V4 serving state is the read path.
+- Fix: Failed legacy large-rebuild rows are no longer returned as normal `largeRebuild` progress and no longer contribute pending or failed warning health; dirty refresh/materialization and V4 rebuild chunk failures still drive failed state.
+- Verification: `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts`.
+
 ## 2026-06-25 - Network Smoke OOM Cutover Gate
 
 - Error: `Large rebuild failed` browser/API/server output could pass network smoke without being treated as an OOM cutover regression.
