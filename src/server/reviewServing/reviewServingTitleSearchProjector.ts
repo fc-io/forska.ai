@@ -113,6 +113,40 @@ const getArticleRangePredicate = (input: {chunkEndArticleId?: string | null; chu
       ${endPredicate}`
 }
 
+const getSelectedImportTitleSql = (input: ProjectReviewServingTitleSearchInput) => {
+  return input.selectedImportSnapshotId === null || input.selectedImportSnapshotId === undefined
+    ? 'article.article_title'
+    : `CASE
+        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN article.article_title
+        WHEN selected_patch.patch_watermark IS NOT NULL THEN COALESCE(selected_patch.article_title, article.article_title)
+        ELSE COALESCE(selected_base.article_title, article.article_title)
+      END`
+}
+
+const getSelectedImportTitleJoinSql = (input: ProjectReviewServingTitleSearchInput) => {
+  return input.selectedImportSnapshotId === null || input.selectedImportSnapshotId === undefined
+    ? ''
+    : `
+    LEFT JOIN app.review_selected_article_import_v4 selected_base
+      ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
+      AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND selected_base.article_id = scope.article_id
+    LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
+      ON selected_patch.project_id = ${getSqlLiteral(input.projectId)}
+      AND selected_patch.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND selected_patch.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND selected_patch.article_id = scope.article_id
+      AND selected_patch.patch_watermark = (
+        SELECT MAX(newer.patch_watermark)
+        FROM mart.review_selected_import_patch_v4 newer
+        WHERE newer.project_id = selected_patch.project_id
+          AND newer.project_scope_identity = selected_patch.project_scope_identity
+          AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
+          AND newer.article_id = selected_patch.article_id
+      )`
+}
+
 const getNormalizedTitleToken = (value: string) => {
   return value
     .normalize('NFKD')
@@ -150,13 +184,14 @@ const getTitleSearchRows = async (
     ${withSql}
     SELECT
       scope.article_id AS articleId,
-      article.article_title AS articleTitle,
+      ${getSelectedImportTitleSql(input)} AS articleTitle,
       COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at) AS activitySortAt,
       article.id IS NULL OR NOT (scope.in_curated_scope OR scope.in_route_scope) AS tombstone
     FROM mart.project_scope_article scope
     ${dirtyJoinSql}
     LEFT JOIN app."article" article
       ON article.id = scope.article_id
+    ${getSelectedImportTitleJoinSql(input)}
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope OR ${articleIds.length > 0 ? 'TRUE' : 'FALSE'})
       ${getArticleRangePredicate(input)}

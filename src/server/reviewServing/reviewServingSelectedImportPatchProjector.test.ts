@@ -89,6 +89,7 @@ test('selected-import routine updates write component-narrow patches for only cl
         publicationYear: 2026,
         selectedRankKey: '0001:article-1',
         selectedRankNumeric: 1,
+        sourceRecordKey: 'source-record-1',
         selectedSourceUrl: 'https://selected.example/article-1',
         scopeTombstone: false,
         tombstone: false,
@@ -113,10 +114,14 @@ test('selected-import routine updates write component-narrow patches for only cl
   expect(selectStatement).toContain('LEFT JOIN app.article_import_route current_link')
   expect(selectStatement).toContain('hot.article_title')
   expect(selectStatement).toContain('hot.external_id')
+  expect(selectStatement).toContain('winner.source_record_key AS sourceRecordKey')
   expect(selectStatement).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
   expect(selectStatement).toContain("json_extract_string(selected_source.raw_payload, '$.covidence.citation.url')")
   expect(selectStatement).toContain("WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)")
   expect(insertStatement).toContain('patch_watermark')
+  expect(insertStatement).toContain('source_record_key')
+  expect(insertStatement).toContain('article_title')
+  expect(insertStatement).toContain('external_id')
   expect(insertStatement).toContain('9')
   expect(insertStatement).toContain(
     'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, patch_watermark, article_id)',
@@ -150,6 +155,7 @@ test('selected-import tombstones replay idempotently with the same patch waterma
         publicationYear: null,
         selectedRankKey: null,
         selectedRankNumeric: null,
+        sourceRecordKey: null,
         selectedSourceUrl: null,
         scopeTombstone: false,
         tombstone: true,
@@ -188,6 +194,7 @@ test('selected-import tombstones clear selected columns without deleting curated
         publicationYear: null,
         selectedRankKey: null,
         selectedRankNumeric: null,
+        sourceRecordKey: null,
         selectedSourceUrl: null,
         scopeTombstone: false,
         tombstone: true,
@@ -257,6 +264,7 @@ test('selected-import serving insert can seed rows from snapshot templates witho
         publicationYear: 2026,
         selectedRankKey: '0001:article-1',
         selectedRankNumeric: 1,
+        sourceRecordKey: 'source-record-1',
         selectedSourceUrl: 'https://selected.example/article-1',
         scopeTombstone: false,
         tombstone: false,

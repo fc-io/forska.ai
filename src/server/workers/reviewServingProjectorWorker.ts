@@ -1466,6 +1466,9 @@ const getSelectedImportRebuildChunkOutputChecksum = async (
         COALESCE(CAST(selected_rank_key AS VARCHAR), '') || ':' ||
         COALESCE(CAST(selected_rank_numeric AS VARCHAR), '') || ':' ||
         COALESCE(CAST(publication_year AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(article_title AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(journal_title AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(external_id AS VARCHAR), '') || ':' ||
         COALESCE(CAST(tombstone AS VARCHAR), '') AS row_value
       FROM app.review_selected_article_import_v4
       WHERE project_id = ${getSqlLiteral(projectId)}
@@ -1474,9 +1477,13 @@ const getSelectedImportRebuildChunkOutputChecksum = async (
       SELECT
         'patch:' || CAST(selected_import_snapshot_id AS VARCHAR) || ':' || CAST(patch_watermark AS VARCHAR) || ':' || CAST(article_id AS VARCHAR) AS row_key,
         COALESCE(CAST(import_route_id AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(source_record_key AS VARCHAR), '') || ':' ||
         COALESCE(CAST(selected_rank_key AS VARCHAR), '') || ':' ||
         COALESCE(CAST(selected_rank_numeric AS VARCHAR), '') || ':' ||
         COALESCE(CAST(publication_year AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(article_title AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(journal_title AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(external_id AS VARCHAR), '') || ':' ||
         COALESCE(CAST(tombstone AS VARCHAR), '') AS row_value
       FROM mart.review_selected_import_patch_v4
       WHERE project_id = ${getSqlLiteral(projectId)}
