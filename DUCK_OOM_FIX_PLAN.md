@@ -926,6 +926,9 @@ complete and no normal product review flow can reach legacy raw fallback.
 - [ ] Route-specific parity validation has passed for semantic fixtures, sampled safe-size parity, named counts, freshness states, cursor behavior, SQL shape, latency, and response-size budgets for every migrated route/flow.
 - [ ] A single normal V4 serving writer owns all `mart.review_*_v4` writes and active V4 snapshot promotion; legacy mart refresh/rebuild paths cannot promote competing V4 review snapshots.
 - [ ] No normal startup, heartbeat, warning, health, admin run control, package script, repair command, recovery command, dirty-refresh worker, or adjacent browser route can schedule legacy mart refresh/rebuild or use old facts as fallback.
+- [ ] Phase 5C browser network smoke evidence runs the current/real DB pass first with `bun run test:network-smoke`, then the temporary synthetic pass with `bun run test:network-smoke:synthetic`; the current pass stays no-seed and the synthetic pass owns deterministic fixture writes.
+- [ ] Phase 5C current-DB smoke probes `POST /api/projectsreviewswarnings` for discovered project IDs and fails on `Large rebuild failed` in page, API, console, or server output.
+- [ ] Phase 5C smoke skips are explicitly classified as missing-data, admin/debug-only, or unsafe pending Phase 5C rewiring, with no normal browser route skipped only because it queues legacy V3 repair, dirty refresh, or large-rebuild work on load.
 - [ ] Serving manifests classify required versus optional components, and optional search/count work cannot block unrelated review-list activation.
 - [ ] Logical snapshot/base/patch behavior is benchmarked, and routine deltas cannot full-copy project-scale serving rows.
 - [ ] Layered projection identities prove model/prompt/content changes do not rebuild article/import/title/payload/search projections when those inputs are unchanged.
@@ -1006,6 +1009,7 @@ is treated as complete. This master tracks only final cross-phase gates.
 - [ ] Every row in the DuckDB usage migration inventory is either migrated to serving/admission/job logic or explicitly classified as admin/maintenance/debug-only.
 - [ ] No normal browser or desktop review flow can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
 - [ ] No normal maintenance, warning, health, admin, recovery, startup, or operator path can reach legacy V3 mart rebuild/fallback for review-serving freshness.
+- [ ] `bun run test:network-smoke` runs before `bun run test:network-smoke:synthetic` as the Phase 5C browser regression gate; this gate complements, but does not replace, SQL-shape guards, workload admission tests, V4 projector tests, benchmarks, desktop checks, and Phase 6 physical evidence.
 - [x] `bun run lint`
 - [ ] `bun run db:mig` if schema/projection migrations are added.
 - [ ] Add an `OOM_ERRORS.md` entry in the same change as any OOM fix implementation.
