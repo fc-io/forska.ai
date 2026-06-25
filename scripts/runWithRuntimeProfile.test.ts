@@ -296,3 +296,78 @@ test(
     }
   },
 )
+
+test(
+  'server stack startup takes over a live conflicting DuckDB owner before spawning its maintenance role',
+  {timeout: 30_000},
+  async () => {
+    if (!canStartLocalListener) {
+      expect(canStartLocalListener).toBe(false)
+      return
+    }
+
+    const dataRoot = join(process.cwd(), 'data', 'runtime', `run-with-runtime-profile-owner-takeover-${Date.now()}`)
+    const duckdbPath = join(dataRoot, 'forska.duckdb')
+    const [vitePort, apiPort, maintenancePort, judgePort] = await getAvailableLocalPorts(4)
+
+    mkdirSync(dataRoot, {recursive: true})
+
+    const conflictingMaintenanceProcess = globalThis.Bun.spawn(['bun', 'run', 'src/server/index.ts'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: String(maintenancePort),
+        DUCKDB_PATH: duckdbPath,
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_DUCKDB_OWNER_URL: '',
+        SERVER_ROLE: 'maintenance-worker',
+        VITE_PORT: String(vitePort),
+      },
+      stderr: 'pipe',
+      stdout: 'pipe',
+    })
+
+    let stackProcess: SpawnedProcess | null = null
+
+    try {
+      await waitForRuntimeReady(maintenancePort, 20_000)
+
+      stackProcess = globalThis.Bun.spawn(['bun', 'scripts/startServerStack.ts'], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          API_SERVER_PORT: String(apiPort),
+          BACKGROUND_JUDGE_PORT: String(judgePort),
+          BACKGROUND_MAINTENANCE_PORT: String(maintenancePort),
+          DUCKDB_PATH: duckdbPath,
+          JUDGE_WORKER_ID: 'run-with-runtime-profile-owner-takeover-judge',
+          JUDGE_WORKER_JOURNAL_PATH: '',
+          RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+          RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+          VITE_PORT: String(vitePort),
+        },
+        stderr: 'pipe',
+        stdout: 'pipe',
+      })
+
+      const [apiReady, maintenanceReady, judgeReady] = await Promise.all([
+        waitForRuntimeReady(apiPort, 20_000),
+        waitForRuntimeReady(maintenancePort, 20_000),
+        waitForRuntimeReady(judgePort, 20_000),
+        waitForProcessExit(conflictingMaintenanceProcess, 20_000),
+      ])
+
+      expect(apiReady.data).toMatchObject({ready: true, role: 'api'})
+      expect(maintenanceReady.data).toMatchObject({ready: true, role: 'maintenance-worker'})
+      expect(judgeReady.data).toMatchObject({ready: true, role: 'judge-worker'})
+    } finally {
+      if (stackProcess !== null) {
+        await stopProcess(stackProcess)
+      }
+
+      await stopProcess(conflictingMaintenanceProcess)
+      removePathIfExists(dataRoot)
+    }
+  },
+)

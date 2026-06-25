@@ -3,9 +3,13 @@ import {tmpdir} from 'node:os'
 import {dirname, join} from 'node:path'
 
 import {spawn, type Subprocess} from 'bun'
+import {Effect} from 'effect'
 
 import {getBackgroundServerEnv, getBackgroundServerStackConfig} from '../src/server/utils/backgroundServerStack.ts'
+import {isDuckdbOwnerLeaseProcessAlive, readDuckdbOwnerLease} from '../src/server/utils/duckdbOwnerLease.ts'
+import {getConfiguredDuckdbPath} from '../src/server/utils/getDuckdbPath.ts'
 import {readJudgeWorkerJournalLock} from '../src/server/utils/judgeWorkerJournalIdentity.ts'
+import {isLockOwnedByCurrentMachine} from '../src/server/utils/localMachineIdentity.ts'
 import {runtimeReadyPath} from '../src/server/utils/runtimeReadyContract.ts'
 
 type ManagedRole = 'api' | 'judge' | 'maintenance'
@@ -24,10 +28,12 @@ type ManagedServerState = {
   apiReadyPromise: Promise<void> | null
   judgeProcess: ServerProcess | null
   judgeReadyPromise: Promise<void> | null
+  lastExitedProcesses: Partial<Record<ManagedRole, ManagedProcessExitRecord>>
   shuttingDown: boolean
   maintenanceProcess: ServerProcess | null
   maintenanceReadyPromise: Promise<void> | null
 }
+type ManagedProcessExitRecord = {exitedAtMs: number; pid: number}
 
 const restartDelayMs = 1_000
 const startupTimeoutMs = 20_000
@@ -143,6 +149,7 @@ const managedServerState: ManagedServerState = {
   apiReadyPromise: null,
   judgeProcess: null,
   judgeReadyPromise: null,
+  lastExitedProcesses: {},
   maintenanceProcess: null,
   maintenanceReadyPromise: null,
   shuttingDown: false,
@@ -257,10 +264,61 @@ const stopExternalProcess = async ({pid, processName}: {pid: number; processName
   throw new Error(`Timed out waiting for ${processName} pid=${pid} to exit`)
 }
 
+const removeFileIfExists = async (filePath: string) => {
+  await unlink(filePath).catch((error) => {
+    if (!isMissingFileError(error)) {
+      throw error
+    }
+  })
+}
+
+const getLastExitedManagedProcess = (role: ManagedRole) => {
+  return managedServerState.lastExitedProcesses[role] ?? null
+}
+
+const setLastExitedManagedProcess = (role: ManagedRole, serverProcess: ServerProcess) => {
+  const pid = serverProcess.pid
+
+  if (pid === undefined) {
+    return
+  }
+
+  managedServerState.lastExitedProcesses = {
+    ...managedServerState.lastExitedProcesses,
+    [role]: {exitedAtMs: Date.now(), pid},
+  }
+}
+
+const isLockFromExitedProcess = (
+  currentLock: NonNullable<ReturnType<typeof readJudgeWorkerJournalLock>>,
+  exitedProcess: ManagedProcessExitRecord | null,
+) => {
+  const acquiredAtMs = new Date(currentLock.metadata.acquiredAt).getTime()
+
+  return (
+    exitedProcess !== null
+    && currentLock.metadata.pid === exitedProcess.pid
+    && !Number.isNaN(acquiredAtMs)
+    && acquiredAtMs <= exitedProcess.exitedAtMs
+  )
+}
+
 const stopConflictingJudgeWorker = async (envValues: Record<string, string | undefined>) => {
   const currentLock = readJudgeWorkerJournalLock({cwd: process.cwd(), envValues})
 
-  if (currentLock === null || !currentLock.ownedByCurrentHost || !currentLock.processAlive) {
+  if (currentLock === null) {
+    return
+  }
+
+  if (currentLock.ownedByCurrentHost && isLockFromExitedProcess(currentLock, getLastExitedManagedProcess('judge'))) {
+    console.log(
+      `[server:stack] clearing stale judge worker lock from exited pid=${currentLock.metadata.pid} journal=${currentLock.identity.journalPath}`,
+    )
+    await removeFileIfExists(currentLock.identity.lockPath)
+    return
+  }
+
+  if (!currentLock.ownedByCurrentHost || !currentLock.processAlive) {
     return
   }
 
@@ -270,8 +328,31 @@ const stopConflictingJudgeWorker = async (envValues: Record<string, string | und
   await stopExternalProcess({pid: currentLock.metadata.pid, processName: 'judge worker'})
 }
 
+const stopConflictingDuckdbOwner = async (envValues: Record<string, string | undefined>) => {
+  const duckdbPath = getConfiguredDuckdbPath({envValues})
+  const currentLease = duckdbPath === ':memory:' ? null : await Effect.runPromise(readDuckdbOwnerLease(duckdbPath))
+
+  if (
+    currentLease === null
+    || !isLockOwnedByCurrentMachine(currentLease)
+    || !isDuckdbOwnerLeaseProcessAlive(currentLease)
+    || currentLease.apiServerPort !== config.maintenancePort
+  ) {
+    return
+  }
+
+  console.log(
+    `[server:stack] taking over existing DuckDB owner pid=${currentLease.pid} port=${currentLease.apiServerPort}`,
+  )
+  await stopExternalProcess({pid: currentLease.pid, processName: 'DuckDB owner'})
+}
+
 const startServerProcess = async (role: ManagedRole): Promise<ServerProcess> => {
   const env = getBackgroundServerEnv({baseEnv: process.env, role: getBackgroundServerRole(role)})
+
+  if (role === 'maintenance') {
+    await stopConflictingDuckdbOwner(env)
+  }
 
   if (role === 'judge') {
     await stopConflictingJudgeWorker(env)
@@ -407,6 +488,19 @@ const waitForJudgeReady = async (deadlineMs = Date.now() + judgeStartupTimeoutMs
         })
 }
 
+const shouldSkipRestartForReadyReplacement = async (role: ManagedRole, exitCode: number | null) => {
+  if (role !== 'judge' || exitCode !== 143) {
+    return false
+  }
+
+  if (!(await isJudgeReady())) {
+    return false
+  }
+
+  console.error('[server:stack] judge replacement is already ready after SIGTERM; not restarting duplicate')
+  return true
+}
+
 const ensureJudgeReadyAttempt = async (): Promise<void> => {
   await ensureMaintenanceReady()
   const judgeProcess = await ensureManagedServerProcess('judge')
@@ -442,9 +536,16 @@ const monitorManagedServerExit = async (role: ManagedRole, serverProcess: Server
     return
   }
 
+  setLastExitedManagedProcess(role, serverProcess)
   setManagedServerProcess(role, null)
-  console.error(`[server:stack] ${role} exited with code ${String(exitCode)}; restarting`)
+  console.error(`[server:stack] ${role} pid=${serverProcess.pid ?? 'unknown'} exited with code ${String(exitCode)}`)
   await waitFor(restartDelayMs)
+
+  if (await shouldSkipRestartForReadyReplacement(role, exitCode)) {
+    return
+  }
+
+  console.error(`[server:stack] restarting ${role}`)
 
   return role === 'maintenance'
     ? ensureMaintenanceReady().then(() => {
