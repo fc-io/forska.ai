@@ -379,7 +379,7 @@ test('display base rows flow through writer with display fields and selected imp
     database,
   )
   const selectStatement = statements.find((statement) => {
-    return statement.includes('LEFT JOIN app.review_selected_article_import_v4 selected')
+    return statement.includes('LEFT JOIN app.review_selected_article_import_v4 selected_base')
   })
   const inserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO mart.review_article_serving_v4')
@@ -391,7 +391,16 @@ test('display base rows flow through writer with display fields and selected imp
   expect(selectStatement).toContain('article.article_updated_at AS articleUpdatedAt')
   expect(selectStatement).toContain('article.doi')
   expect(selectStatement).toContain('article.full_text_fetched_at AS fullTextFetchedAt')
-  expect(selectStatement).toContain('COALESCE(selected.article_title, article.article_title) AS articleTitle')
+  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
+  expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
+  expect(selectStatement).toContain('WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.article_title')
+  expect(selectStatement).toContain('WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.external_id')
+  expect(selectStatement).toContain(
+    'WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id',
+  )
+  expect(selectStatement).toContain(
+    'WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key',
+  )
   expect(selectStatement).toContain('json_merge_patch')
   expect(inserts).toHaveLength(2)
   expect(inserts.join('\n')).toContain('article_title')

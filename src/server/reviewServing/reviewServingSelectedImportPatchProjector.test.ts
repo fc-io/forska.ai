@@ -172,6 +172,56 @@ test('selected-import projector advances watermark for the max source partition'
   expect(watermarkStatement).toContain('9')
 })
 
+test('selected-import projector keeps explicit manifest watermarks separate from patch row watermarks', async () => {
+  const {database, statements} = createSelectedImportPatchDatabase({
+    patchRows: [
+      {
+        articleId: 'article-1',
+        articleTitle: 'Selected Import Title',
+        conflictFlag: false,
+        duplicateFlag: false,
+        externalId: 'selected-external-1',
+        importRouteId: 'import-route-1',
+        journalTitle: null,
+        publicationYear: null,
+        selectedRankKey: '0001:article-1',
+        selectedRankNumeric: 1,
+        sourceRecordKey: 'source-record-1',
+        selectedSourceUrl: null,
+        scopeTombstone: false,
+        tombstone: false,
+      },
+    ],
+  })
+
+  const result = await projectReviewServingSelectedImportPatches(
+    {
+      ...projectPatchInput([
+        selectedImportClaim({
+          firstSourceHighWaterMark: 7,
+          latestSourceHighWaterMark: 7,
+          sourcePartition: 'importRunArticle',
+        }),
+      ]),
+      manifestInputWatermarks: {importRunArticle: 7, reviewChange: 9},
+    },
+    database,
+  )
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_selected_import_patch_v4')
+  })
+  const manifestStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_projection_identity_manifest')
+  })
+
+  expect(result).toEqual({patchRowCount: 1, patchWatermark: 7})
+  expect(insertStatement).toContain('patch_watermark')
+  expect(insertStatement).toContain(`
+      7,
+      'project-1'`)
+  expect(manifestStatement).toContain('\'{"importRunArticle":7,"reviewChange":9}\'::JSON')
+})
+
 test('selected-import tombstones replay idempotently with the same patch watermark and article key', async () => {
   const {database, statements} = createSelectedImportPatchDatabase({
     patchRows: [

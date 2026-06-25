@@ -1665,6 +1665,7 @@ test('project transfer commit writer consumes same-connection operation tables f
   const result = runCommitWriterScript<{
     articleImportRouteRow: {articleId: string; sourceRecordKey: string}
     createdArticle: {articleId: string | null; articleSummary: string | null; articleTitle: string}
+    hotFieldRow: {conflictFlag: boolean | null; duplicateFlag: boolean | null}
     identifierRows: Array<{articleId: string; normalizedValue: string}>
     projectArticleCount: number
     projectImportRouteCount: number
@@ -1725,7 +1726,7 @@ test('project transfer commit writer consumes same-connection operation tables f
     const stagedArticleRoute = {
       ...payloadArticleRoute,
       externalArticleId: 'EXT-staged',
-      importMetadata: {route: 'staged'},
+      importMetadata: {route: 'staged', covidence: {hasDuplicateStudyRecords: true, hasStudyDecisionConflict: true}},
       rawPayload: {raw: 'staged'},
       sourceRecordHash: 'staged-hash',
       sourceRecordKey: 'staged-key',
@@ -1834,6 +1835,7 @@ test('project transfer commit writer consumes same-connection operation tables f
     const [createdArticle] = await database.queryJson("SELECT article_id AS articleId, article_title AS articleTitle, article_summary AS articleSummary FROM app.article WHERE id = '" + targetArticleId + "'")
     const [reusedArticleRow] = await database.queryJson("SELECT article_summary AS articleSummary FROM app.article WHERE id = 'reuse-set-based-article'")
     const [articleImportRouteRow] = await database.queryJson("SELECT article_id AS articleId, source_record_key AS sourceRecordKey FROM app.article_import_route WHERE import_route_id = 'target-route'")
+    const [hotFieldRow] = await database.queryJson("SELECT conflict_flag AS conflictFlag, duplicate_flag AS duplicateFlag FROM app.review_import_article_hot_field WHERE import_route_id = 'target-route'")
     const [projectArticleCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project_article WHERE project_id = '" + writeResult.projectId + "'")
     const [projectImportRouteCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project_import_route WHERE project_id = '" + writeResult.projectId + "'")
     const identifierRows = await database.queryJson("SELECT article_id AS articleId, normalized_value AS normalizedValue FROM app.article_identifier ORDER BY normalized_value ASC")
@@ -1841,6 +1843,7 @@ test('project transfer commit writer consumes same-connection operation tables f
     console.log(JSON.stringify({
       articleImportRouteRow,
       createdArticle,
+      hotFieldRow,
       identifierRows,
       projectArticleCount: projectArticleCount.count,
       projectImportRouteCount: projectImportRouteCount.count,
@@ -1856,6 +1859,7 @@ test('project transfer commit writer consumes same-connection operation tables f
   })
   expect(result.reusedArticle.articleSummary).toBe('Set based filled summary')
   expect(result.articleImportRouteRow).toEqual({articleId: result.targetArticleId, sourceRecordKey: 'staged-key'})
+  expect(result.hotFieldRow).toEqual({conflictFlag: true, duplicateFlag: true})
   expect(result.projectArticleCount).toBe(1)
   expect(result.projectImportRouteCount).toBe(1)
   expect(result.identifierRows).toEqual([{articleId: result.targetArticleId, normalizedValue: '10.1000/set-based-new'}])
