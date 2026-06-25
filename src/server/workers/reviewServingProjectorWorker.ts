@@ -2567,6 +2567,25 @@ const finalizeFailedReviewServingRebuildRequest = async (
   )
 }
 
+const finalizeErroredCompletedReviewServingRebuildRequest = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; error: unknown},
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  if (input.chunk.requestId === null) {
+    return
+  }
+
+  await markFailedRebuildRequestFinalized(
+    {
+      chunkId: input.chunk.chunkId,
+      lastError: getErrorText(input.error),
+      requestId: input.chunk.requestId,
+      status: 'finalization_failed',
+    },
+    database,
+  )
+}
+
 const finalizeCompletedReviewServingRebuildRequest = async (
   chunk: ReviewServingRebuildChunkManifest,
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
@@ -2737,10 +2756,7 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
   try {
     await heartbeatClaimedRebuildChunkLease({chunk: claimedChunk, database, dependencies, options, service, workerId})
     await service.runClaimedChunk({chunk: claimedChunk, database, leaseOwner: workerId, workloadContext})
-    await finalizeCompletedReviewServingRebuildRequest(claimedChunk, database)
     stopHeartbeat()
-
-    return {chunkId: claimedChunk.chunkId, requestId: claimedChunk.requestId, status: 'completed'}
   } catch (error) {
     stopHeartbeat()
     const failedChunk = await service.failChunk(
@@ -2748,6 +2764,16 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
       database,
     )
     await finalizeFailedReviewServingRebuildRequest(failedChunk, database)
+
+    return {chunkId: claimedChunk.chunkId, requestId: claimedChunk.requestId, status: 'failed'}
+  }
+
+  try {
+    await finalizeCompletedReviewServingRebuildRequest(claimedChunk, database)
+
+    return {chunkId: claimedChunk.chunkId, requestId: claimedChunk.requestId, status: 'completed'}
+  } catch (error) {
+    await finalizeErroredCompletedReviewServingRebuildRequest({chunk: claimedChunk, error}, database)
 
     return {chunkId: claimedChunk.chunkId, requestId: claimedChunk.requestId, status: 'failed'}
   }

@@ -946,10 +946,12 @@ export const writeReviewServingRebuildChunkOutput = async (
     })
   } catch (error) {
     if (isReviewServingRebuildChunkValidationFailure(error)) {
-      return markReviewServingRebuildChunkFailed(
+      const failedChunk = await markReviewServingRebuildChunkFailed(
         {chunkId, error: error.validationError, leaseOwner: input.leaseOwner},
         database,
       )
+
+      throw new Error(failedChunk?.lastError ?? error.validationError, {cause: error})
     }
 
     throw error
