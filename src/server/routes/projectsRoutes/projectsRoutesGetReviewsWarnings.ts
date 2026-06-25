@@ -111,7 +111,7 @@ type QuarantinedArticleRefresh = {
 }
 
 const getLargeRebuildDetails = (state: ProjectLargeRebuildState, progress: ProjectLargeRebuildProgress | null) => {
-  return state.refreshToken === null || state.refreshToken <= 0
+  return state.refreshToken === null || state.refreshToken <= 0 || state.refreshStatus === 'failed'
     ? null
     : {
         cursorArticleCreatedAt: state.cursorArticleCreatedAt,
@@ -835,12 +835,12 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const hasActiveLargeRebuildLease =
       getHasActiveLease(projectLargeRebuildState.leaseExpiresAt, currentNow) || freshLargeRebuildLeaseCount > 0
     const hasLargeRebuild = projectLargeRebuildState.refreshToken !== null && projectLargeRebuildState.refreshToken > 0
-    const largeRebuildProgress = hasLargeRebuild
+    const hasReportableLargeRebuild = hasLargeRebuild && projectLargeRebuildState.refreshStatus !== 'failed'
+    const largeRebuildProgress = hasReportableLargeRebuild
       ? await getLargeRebuildProgress(projectId, projectLargeRebuildState)
       : null
     const isLargeRebuildRunning = projectLargeRebuildState.refreshStatus === 'running' && hasActiveLargeRebuildLease
-    const isLargeRebuildQueued = hasLargeRebuild && projectLargeRebuildState.refreshStatus === 'idle'
-    const isLargeRebuildFailed = projectLargeRebuildState.refreshStatus === 'failed'
+    const isLargeRebuildQueued = hasReportableLargeRebuild && projectLargeRebuildState.refreshStatus === 'idle'
     const canRunMaintenanceWork =
       maintenanceConsumerAvailability.canRunMaintenanceWork || shouldCurrentServerRunMaintenanceLoops()
     const canRunMartRefreshDrain =
@@ -855,7 +855,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const rawInFlightProjectRefreshCount = isProjectRunning ? 1 : isLargeRebuildRunning ? 1 : 0
     const inFlightProjectRefreshCount = rawInFlightProjectRefreshCount
     const queuedProjectRefreshCount =
-      projectRefreshState.isFresh && !hasLargeRebuild && !isProjectRunning
+      projectRefreshState.isFresh && !hasReportableLargeRebuild && !isProjectRunning
         ? 0
         : isLargeRebuildQueued
           ? 1
@@ -910,7 +910,6 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       (!projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'failed')
       || projectRefreshState.dirtyMaterialization.failedCount > 0
       || projectRefreshState.dirtyMaterialization.unreconciledCount > 0
-      || isLargeRebuildFailed
       || terminalRebuildChunkCount > 0
     const indexingStatus = getReviewsIndexingStatus({
       activeWorkCount,
