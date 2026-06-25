@@ -6,7 +6,10 @@ import {
   type ReviewServingProjectionIdentityManifestInput,
   type ReviewServingProjectionManifestStatus,
 } from './reviewServingManifestRepository.ts'
-import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
+import {
+  getReviewServingSourcePartitionWatermarks,
+  type ReviewServingSourcePartitionWatermarks,
+} from './reviewServingProjectorDomain.ts'
 import {
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
@@ -20,6 +23,7 @@ export type ProjectReviewServingSelectedImportPatchInput = {
   baseGeneration: number
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
+  manifestInputWatermarks?: ReviewServingSourcePartitionWatermarks
   projectId: string
   projectScopeIdentity: string
   projectionIdentity: string
@@ -667,7 +671,7 @@ const getSelectedImportPatchManifest = (
     definitionVersion: input.definitionVersion,
     inputDigest: getClaimKinds(input.claims),
     inputWatermark: patchWatermark,
-    inputWatermarks: getReviewServingSourcePartitionWatermarks(input.claims),
+    inputWatermarks: input.manifestInputWatermarks ?? getReviewServingSourcePartitionWatermarks(input.claims),
     invalidationReason: getClaimKinds(input.claims),
     patchRangeEnd: patchWatermark,
     patchRangeStart: getPatchRangeStart(input.claims),

@@ -1262,6 +1262,9 @@ test('base rebuild chunks regenerate project scope and selected import state bef
   expect(joined).toContain('selectedImport.rebuild')
   expect(selectedImportPatchManifestStatement).not.toHaveLength(0)
   expect(selectedImportPatchManifestStatement).toContain('\'{"importRunArticle":7,"reviewChange":9}\'::JSON')
+  expect(selectedImportPatchManifestStatement).toMatch(
+    /7,\s+7,\s+7,\s+7,\s+'\{"importRunArticle":7,"reviewChange":9}'::JSON/,
+  )
   expect(joined).toContain("checksum = 'checksum-project-scope'")
   expect(joined).toContain("checksum = 'checksum-selected-import'")
 })
