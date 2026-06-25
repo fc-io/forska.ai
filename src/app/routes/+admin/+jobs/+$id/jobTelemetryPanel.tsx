@@ -51,14 +51,18 @@ const getDetailValueWrapClass = (machine: boolean | undefined): string => {
 
 const TelemetryMetric = (props: TelemetryMetricProps): JSX.Element => {
   return (
-    <div class={`min-w-0 rounded-md border px-3 py-2 ${getMetricToneClass(props.tone)}`}>
+    <div class={`min-w-0 rounded-md border px-3 py-2 [overflow-wrap:anywhere] ${getMetricToneClass(props.tone)}`}>
       <div class="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-        <p class="min-w-0 break-words text-xs font-medium uppercase opacity-70 sm:w-5/12">{props.label}</p>
-        <div class="min-w-0 break-words text-base font-semibold sm:w-7/12 sm:text-right">{props.children}</div>
+        <p class="min-w-0 break-words text-xs font-medium uppercase opacity-70 sm:w-5/12 [overflow-wrap:anywhere]">
+          {props.label}
+        </p>
+        <div class="min-w-0 break-words text-base font-semibold sm:w-7/12 sm:text-right [overflow-wrap:anywhere]">
+          {props.children}
+        </div>
       </div>
       <Show when={props.description}>
         {(description) => {
-          return <p class="mt-1 break-words text-xs leading-4 opacity-75">{description()}</p>
+          return <p class="mt-1 break-words text-xs leading-4 opacity-75 [overflow-wrap:anywhere]">{description()}</p>
         }}
       </Show>
     </div>
@@ -69,8 +73,10 @@ const TelemetryDetailRow = (props: TelemetryDetailRowProps): JSX.Element => {
   return (
     <div class={`min-w-0 ${props.class ?? ''}`}>
       <div class="flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-start sm:justify-between sm:gap-2">
-        <span class="font-medium text-gray-800">{props.label}</span>
-        <span class={`min-w-0 ${getDetailValueWrapClass(props.machine)} sm:text-right`}>{props.children}</span>
+        <span class="min-w-0 break-words font-medium text-gray-800 [overflow-wrap:anywhere]">{props.label}</span>
+        <span class={`min-w-0 ${getDetailValueWrapClass(props.machine)} sm:text-right [overflow-wrap:anywhere]`}>
+          {props.children}
+        </span>
       </div>
     </div>
   )
@@ -123,7 +129,7 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
       {(provider) => {
         return (
           <div
-            class="mb-6 rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-5"
+            class="mb-6 min-w-0 rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-5"
             data-testid="provider-capacity-telemetry"
           >
             <div class="flex min-w-0 flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -135,7 +141,7 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                   backlog.
                 </p>
               </div>
-              <span class="max-w-full self-start rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-800">
+              <span class="max-w-full self-start break-words rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-800 [overflow-wrap:anywhere]">
                 {getObservedAggregateTelemetryLabel(telemetrySource())}
               </span>
             </div>
@@ -486,14 +492,14 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                       {(endpoint) => {
                         return (
                           <div class="min-w-0 rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
-                            <div class="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                            <div class="flex min-w-0 flex-col gap-2 md:flex-row md:items-start md:justify-between">
                               <div class="min-w-0">
                                 <p class="break-all font-medium text-gray-900">{getEndpointIdentityText(endpoint)}</p>
                                 <p class="mt-1 break-all font-mono text-xs text-gray-500">
                                   {endpoint.endpointAvailabilityKey}
                                 </p>
                               </div>
-                              <span class="max-w-full self-start rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-700">
+                              <span class="max-w-full self-start break-words rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-700 [overflow-wrap:anywhere]">
                                 {getEndpointProbeStateLabel(endpoint.localProbeState)}
                               </span>
                             </div>

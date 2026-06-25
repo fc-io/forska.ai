@@ -107,6 +107,19 @@ export const getDateValue = (value: unknown) => {
   return parsedDate && !Number.isNaN(parsedDate.getTime()) ? parsedDate : null
 }
 
+export const getIntegerValue = (value: unknown) => {
+  const numericValue =
+    typeof value === 'bigint'
+      ? Number(value)
+      : typeof value === 'number'
+        ? value
+        : typeof value === 'string' && value.trim().length > 0
+          ? Number(value)
+          : Number.NaN
+
+  return Number.isInteger(numericValue) ? numericValue : null
+}
+
 export const getJsonValue = (value: unknown): unknown => {
   if (typeof value !== 'string') {
     return value

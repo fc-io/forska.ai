@@ -518,7 +518,7 @@ const getResponseRows = (
       originalData: row.original_data ?? row.originalData ?? null,
       pubmedId: row.pmid ?? null,
       selectedImportRouteId: row.selected_import_route_id ?? row.selectedImportRouteId ?? null,
-      sourceMetadata: row.source_metadata ?? row.sourceMetadata ?? null,
+      sourceMetadata: getJsonValue(row.source_metadata ?? row.sourceMetadata ?? null),
       url: row.url ?? null,
       judgments,
       judgedPromptIds: judgments.map((judgment) => {

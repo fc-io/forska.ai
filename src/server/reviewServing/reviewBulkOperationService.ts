@@ -235,7 +235,8 @@ const insertBulkOperationJob = async (input: {
       total_estimate,
       cancel_requested,
       retry_count,
-      last_error
+      last_error,
+      updated_at
     ) VALUES (
       ${getSqlLiteral(input.jobId)},
       ${getSqlLiteral(input.request.jobKind)},
@@ -255,9 +256,10 @@ const insertBulkOperationJob = async (input: {
       ${totalEstimateSql},
       FALSE,
       0,
-      NULL
+      NULL,
+      current_timestamp
     ) ON CONFLICT (job_id) DO UPDATE SET
-      updated_at = current_timestamp,
+      updated_at = EXCLUDED.updated_at,
       cursor_json = EXCLUDED.cursor_json,
       status = 'pending',
       result_manifest_json = EXCLUDED.result_manifest_json,

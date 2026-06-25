@@ -247,7 +247,7 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
         scoped_article AS (
           SELECT
             dirty.article_id,
-            COALESCE(scope.article_updated_at, scope.source_updated_at, scope.article_created_at, TIMESTAMPTZ ${getSqlLiteral(staleQueueSortAt)}) AS activity_sort_at,
+            COALESCE(scope.article_updated_at, scope.article_created_at, TIMESTAMPTZ ${getSqlLiteral(staleQueueSortAt)}) AS activity_sort_at,
             scope.article_id IS NULL OR NOT (scope.in_curated_scope OR scope.in_route_scope) AS scope_tombstone
           FROM article_id_filter dirty
           LEFT JOIN mart.project_scope_article scope

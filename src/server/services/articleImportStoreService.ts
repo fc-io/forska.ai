@@ -257,6 +257,19 @@ const getNullableMetadataString = (metadata: unknown, keys: string[]) => {
   return typeof value === 'string' ? value : null
 }
 
+const getMetadataPathValue = (metadata: unknown, keys: readonly string[]) => {
+  return keys.reduce<unknown>((value, key) => {
+    return isObjectRecord(value) ? value[key] : undefined
+  }, metadata)
+}
+
+const getNullableMetadataBoolean = (metadata: unknown, keys: readonly string[]) => {
+  const value = getMetadataPathValue(metadata, keys)
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : null
+
+  return typeof value === 'boolean' ? value : normalized === 'true' ? true : normalized === 'false' ? false : null
+}
+
 const getNullableMetadataInteger = (metadata: unknown, keys: string[]) => {
   const record = isObjectRecord(metadata) ? metadata : {}
   const value = keys
@@ -897,11 +910,16 @@ const getArticleImportRouteLinkHotFieldInput = (
   record: ArticleImportRouteLinkRecord,
   tombstone = false,
 ): ReviewImportHotFieldInput => {
+  const duplicateKey = getNullableMetadataString(record.matchMetadata, ['duplicateKey'])
+
   return {
     articleId: record.articleId,
     articleTitle: getNullableMetadataString(record.importMetadata, ['articleTitle', 'title']),
-    duplicateFlag: getNullableMetadataString(record.matchMetadata, ['duplicateKey']) !== null,
-    duplicateKey: getNullableMetadataString(record.matchMetadata, ['duplicateKey']),
+    conflictFlag: getNullableMetadataBoolean(record.importMetadata, ['covidence', 'hasStudyDecisionConflict']),
+    duplicateFlag:
+      duplicateKey !== null
+      || getNullableMetadataBoolean(record.importMetadata, ['covidence', 'hasDuplicateStudyRecords']),
+    duplicateKey,
     externalId: record.externalArticleId,
     filterBucketKey: record.sourceKind ? 'source_kind' : null,
     filterBucketValue: record.sourceKind,

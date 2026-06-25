@@ -182,7 +182,7 @@ export const Navigation = () => {
   })
 
   return (
-    <nav class="relative bg-white shadow-sm border-b border-gray-200">
+    <nav class="relative overflow-x-hidden border-b border-gray-200 bg-white shadow-sm">
       <Show when={duckdbOwnerWarning()}>
         {(warning) => {
           return (
@@ -198,40 +198,40 @@ export const Navigation = () => {
         }}
       </Show>
       <div class="px-4 sm:px-6 lg:px-8">
-        <div class="flex justify-between h-16">
-          <div class="flex items-center space-x-8">
+        <div class="flex min-h-16 flex-wrap items-center justify-between gap-x-4 gap-y-2 py-2 sm:h-16 sm:flex-nowrap sm:py-0">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 sm:flex-nowrap sm:gap-x-8">
             <Link
               to="/"
-              class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
+              class="px-2 py-2 text-sm font-medium text-gray-900 hover:text-blue-600 sm:px-3 [&.active]:font-semibold [&.active]:text-blue-600"
             >
               Home
             </Link>
             <Link
               to="/prompts"
-              class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
+              class="px-2 py-2 text-sm font-medium text-gray-900 hover:text-blue-600 sm:px-3 [&.active]:font-semibold [&.active]:text-blue-600"
             >
               Prompts
             </Link>
             <Link
               to="/compare-judgments"
-              class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
+              class="px-2 py-2 text-sm font-medium text-gray-900 hover:text-blue-600 sm:px-3 [&.active]:font-semibold [&.active]:text-blue-600"
             >
               Compare Judgments
             </Link>
             <Link
               to="/articles"
-              class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
+              class="px-2 py-2 text-sm font-medium text-gray-900 hover:text-blue-600 sm:px-3 [&.active]:font-semibold [&.active]:text-blue-600"
             >
               Article Search
             </Link>
             <Link
               to="/settings"
-              class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
+              class="px-2 py-2 text-sm font-medium text-gray-900 hover:text-blue-600 sm:px-3 [&.active]:font-semibold [&.active]:text-blue-600"
             >
               Settings
             </Link>
           </div>
-          <div class="flex items-center space-x-4">
+          <div class="flex shrink-0 items-center space-x-4">
             <Show when={llmMetrics()?.hasMetricsCompatibleJob}>
               <div
                 class="flex flex-col items-end px-2 py-1"
@@ -249,7 +249,7 @@ export const Navigation = () => {
               ref={(element) => {
                 adminMenuTriggerElement = element
               }}
-              class="group -mx-2 mr-4 flex h-full cursor-pointer select-none items-center px-2"
+              class="group -mx-2 flex h-full cursor-pointer select-none items-center px-2 sm:mr-4"
               role="button"
               tabIndex={0}
               aria-haspopup="true"
@@ -278,8 +278,8 @@ export const Navigation = () => {
           onPointerEnter={handleAdminMenuPointerEnter}
           onPointerLeave={handleAdminMenuPointerLeave}
         >
-          <div class="px-4 sm:px-6 lg:px-8 py-6">
-            <div class="flex items-stretch gap-6 min-h-64">
+          <div class="px-4 py-6 sm:px-6 lg:px-8">
+            <div class="flex min-h-64 flex-wrap items-stretch gap-6">
               <div class="grid flex-1 grid-cols-1 gap-10 sm:grid-cols-2 lg:grid-cols-3">
                 <div class="flex flex-col gap-4">
                   <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">Data</div>
@@ -388,7 +388,7 @@ export const Navigation = () => {
                   </div>
                 </div>
               </div>
-              <div class="flex items-stretch gap-4">
+              <div class="flex flex-wrap items-stretch gap-4">
                 <Link
                   to="/admin/jobs"
                   class="flex h-full w-44 sm:w-52 md:w-60 flex-col justify-between rounded-xl border border-stone-200 bg-white/60 px-6 py-6 font-semibold text-gray-900 hover:bg-white"

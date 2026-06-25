@@ -7,16 +7,26 @@ import {routeErrorSurfaceTestId} from '../../src/app/routerErrorSurface'
 const apiBaseUrl = 'http://127.0.0.1:43101'
 const appBaseUrl = 'http://127.0.0.1:43100'
 const isNetworkSmokeAudit = process.env.FORSKA_NETWORK_SMOKE_AUDIT === 'true'
+const networkSmokeSeedMode = process.env.FORSKA_NETWORK_SMOKE_SEED_MODE === 'existing' ? 'existing' : 'synthetic'
+const shouldSkipMutatingRouteLoads = process.env.FORSKA_NETWORK_SMOKE_SKIP_MUTATING_ROUTE_LOADS === 'true'
 
 type ApiDataResponse<T> = {data: T}
 type ArticleSearchResponse = Array<{articleId: string | null; articleTitle: string; id: string}>
 type ArticleUpsertResponse = {count: number; success: boolean}
 type ProjectCreateResponse = {id: string}
-type ProjectDetailResponse = {prompts: Array<{id: string}>}
+type ProjectDetailResponse = {
+  project: {modelId: string}
+  prompts: Array<{enabled?: boolean; id: string; linkedToProject?: boolean}>
+}
+type ProjectListItem = {id: string}
+type ProjectArticlesResponse = {articles: Array<{id: string}>}
 type ProviderConnectionCreateResponse = {connection: {id: string}}
 type ProviderModelCreateResponse = {modelId: string}
+type ProviderConnectionsResponse = {connections: Array<{id: string}>}
 type DataSourceCreateResponse = {id: string}
+type DataSourceListItem = {id: string}
 type ComparisonProjectCreateResponse = {id: string}
+type ComparisonProjectListItem = {id: string}
 
 type NetworkSmokeSeed = {
   articleId: string
@@ -83,6 +93,16 @@ const getJson = async <T>(url: string, message: string): Promise<T> => {
   const response = await fetch(url)
 
   return assertOk<T>(response, message)
+}
+
+const getFirstOrThrow = <T>(values: T[], message: string) => {
+  const first = values[0]
+
+  if (!first) {
+    throw new Error(message)
+  }
+
+  return first
 }
 
 const createProviderConnection = async () => {
@@ -216,7 +236,7 @@ const createComparisonProject = async (seed: {modelId: string; projectId: string
   )
 }
 
-const createNetworkSmokeSeed = async (): Promise<NetworkSmokeSeed> => {
+const createSyntheticNetworkSmokeSeed = async (): Promise<NetworkSmokeSeed> => {
   const providerConnectionId = await createProviderConnection()
   const modelId = await createProviderModel(providerConnectionId)
   const project = await createProject(modelId)
@@ -237,6 +257,113 @@ const createNetworkSmokeSeed = async (): Promise<NetworkSmokeSeed> => {
     promptId,
     providerConnectionId,
   }
+}
+
+const getExistingProjectPrompt = (project: ProjectDetailResponse) => {
+  return (
+    project.prompts.find((prompt) => {
+      return prompt.linkedToProject !== false && prompt.enabled !== false
+    })
+    ?? project.prompts.find((prompt) => {
+      return prompt.linkedToProject !== false
+    })
+    ?? project.prompts[0]
+  )
+}
+
+const getExistingProjectSeedCandidate = async (project: ProjectListItem) => {
+  const [projectDetail, articlePage] = await Promise.all([
+    getJson<ProjectDetailResponse>(
+      `${apiBaseUrl}/api/projects/${encodeURIComponent(project.id)}`,
+      `Failed to fetch existing project ${project.id}`,
+    ),
+    getJson<ProjectArticlesResponse>(
+      `${apiBaseUrl}/api/projects/${encodeURIComponent(project.id)}/articles?page=1&limit=1`,
+      `Failed to fetch existing project articles for ${project.id}`,
+    ),
+  ])
+  const prompt = getExistingProjectPrompt(projectDetail)
+  const article = articlePage.articles[0]
+
+  return prompt && article
+    ? {articleId: article.id, modelId: projectDetail.project.modelId, projectId: project.id, promptId: prompt.id}
+    : null
+}
+
+const getFirstExistingProjectSeedCandidate = async (
+  projects: ProjectListItem[],
+): Promise<Pick<NetworkSmokeSeed, 'articleId' | 'modelId' | 'projectId' | 'promptId'> | null> => {
+  const [project, ...remainingProjects] = projects
+
+  if (!project) {
+    return null
+  }
+
+  const candidate = await getExistingProjectSeedCandidate(project)
+  return candidate ?? getFirstExistingProjectSeedCandidate(remainingProjects)
+}
+
+const getExistingProjectSeed = async () => {
+  const projects = await getJson<ProjectListItem[]>(`${apiBaseUrl}/api/projects`, 'Failed to fetch existing projects')
+  const candidate = await getFirstExistingProjectSeedCandidate(projects)
+
+  if (!candidate) {
+    throw new Error('Existing-data network smoke needs one active project with at least one linked prompt and article')
+  }
+
+  return candidate
+}
+
+const getExistingProviderConnectionId = async () => {
+  const providerConnections = await getJson<ProviderConnectionsResponse>(
+    `${apiBaseUrl}/api/provider-connections`,
+    'Failed to fetch existing provider connections',
+  )
+
+  return getFirstOrThrow(
+    providerConnections.connections,
+    'Existing-data network smoke needs one provider connection for /providers/$id',
+  ).id
+}
+
+const getExistingDataSourceId = async () => {
+  const dataSources = await getJson<DataSourceListItem[]>(`${apiBaseUrl}/api/datasources`, 'Failed to fetch data sources')
+
+  return getFirstOrThrow(
+    dataSources,
+    'Existing-data network smoke needs one active data source for /admin/datasources/$id/edit',
+  ).id
+}
+
+const getExistingComparisonProjectId = async () => {
+  if (shouldSkipMutatingRouteLoads) {
+    return ''
+  }
+
+  const comparisonProjects = await getJson<ComparisonProjectListItem[]>(
+    `${apiBaseUrl}/api/comparison-projects`,
+    'Failed to fetch existing comparison projects',
+  )
+
+  return getFirstOrThrow(
+    comparisonProjects,
+    'Existing-data network smoke needs one active comparison project for /compare-judgments/$id routes',
+  ).id
+}
+
+const getExistingNetworkSmokeSeed = async (): Promise<NetworkSmokeSeed> => {
+  const [projectSeed, providerConnectionId, dataSourceId, comparisonProjectId] = await Promise.all([
+    getExistingProjectSeed(),
+    getExistingProviderConnectionId(),
+    getExistingDataSourceId(),
+    getExistingComparisonProjectId(),
+  ])
+
+  return {...projectSeed, comparisonProjectId, dataSourceId, providerConnectionId}
+}
+
+const createNetworkSmokeSeed = async (): Promise<NetworkSmokeSeed> => {
+  return networkSmokeSeedMode === 'existing' ? getExistingNetworkSmokeSeed() : createSyntheticNetworkSmokeSeed()
 }
 
 const staticAuditTargets: NetworkSmokeTarget[] = [
@@ -434,7 +561,7 @@ const dynamicAuditTargets: NetworkSmokeTarget[] = [
   },
 ]
 
-const skippedRouteTemplates: SkippedRouteTemplate[] = [
+const baseSkippedRouteTemplates: SkippedRouteTemplate[] = [
   {
     template: '/admin/failed_requests/$id',
     reason:
@@ -450,7 +577,39 @@ const skippedRouteTemplates: SkippedRouteTemplate[] = [
   },
 ]
 
-const allAuditTargets = [...staticAuditTargets, ...dynamicAuditTargets]
+const mutatingRouteLoadSkippedTemplates: SkippedRouteTemplate[] = [
+  {
+    template: '/compare-judgments/$id',
+    reason: 'direct existing-DB read-only mode skips pages that can queue comparison-serving rebuild work on load',
+  },
+  {
+    template: '/compare-judgments/$id/edit',
+    reason: 'direct existing-DB read-only mode skips comparison-project dynamic pages as one route family',
+  },
+  {
+    template: '/compare-judgments/$id/export',
+    reason: 'direct existing-DB read-only mode skips pages that load comparison metadata through the rebuild-capable route',
+  },
+  {
+    template: '/compare-judgments/$id/import-resolutions',
+    reason: 'direct existing-DB read-only mode skips pages that load comparison metadata through the rebuild-capable route',
+  },
+  {
+    template: '/projects/$id/humanAssessment',
+    reason: 'direct existing-DB read-only mode skips POST /api/humanassessment/init because it can create pending human judgments',
+  },
+]
+
+const routeLoadSkippedTemplates = shouldSkipMutatingRouteLoads ? mutatingRouteLoadSkippedTemplates : []
+const skippedRouteTemplates = [...baseSkippedRouteTemplates, ...routeLoadSkippedTemplates]
+const routeLoadSkippedTemplateSet = new Set(
+  routeLoadSkippedTemplates.map((route) => {
+    return route.template
+  }),
+)
+const allAuditTargets = [...staticAuditTargets, ...dynamicAuditTargets].filter((target) => {
+  return !routeLoadSkippedTemplateSet.has(target.template)
+})
 
 const getRouteInventoryReport = () => {
   const generated = readGeneratedRouteTemplates()
@@ -482,6 +641,21 @@ const isAuditedOrigin = (url: string) => {
 const isBenignRequest = (request: Request) => {
   const url = new URL(request.url())
   return url.origin === appBaseUrl && url.pathname === '/favicon.ico'
+}
+
+const isBrowserResourceLoadConsoleError = (message: string) => {
+  return message.startsWith('Failed to load resource: the server responded with a status of')
+}
+
+const isExpectedHttpFailure = (failure: Omit<NetworkFailure, 'pagePath'> & {pagePath: string}) => {
+  const pathname = failure.url ? new URL(failure.url).pathname : ''
+
+  return (
+    failure.pagePath.includes('/projects/$id/humanAssessment')
+    && failure.status === 404
+    && pathname === '/api/humanassessment/init'
+    && failure.details?.includes('No articles left to judge') === true
+  )
 }
 
 const getResponseBodySnippet = async (response: Response) => {
@@ -564,7 +738,20 @@ const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
     }
 
     const bodyRead = getResponseBodySnippet(response).then((details) => {
-      record({details, method: request.method(), source: 'http', status: response.status(), url: response.url()})
+      const failure = {
+        details,
+        method: request.method(),
+        pagePath: pagePath(),
+        source: 'http',
+        status: response.status(),
+        url: response.url(),
+      }
+
+      if (isExpectedHttpFailure(failure)) {
+        return
+      }
+
+      record(failure)
     })
     pendingHttpFailureReads.push(bodyRead)
   }
@@ -574,7 +761,7 @@ const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
   }
 
   const onConsole = (message: {text: () => string; type: () => string}) => {
-    if (message.type() !== 'error') {
+    if (message.type() !== 'error' || isBrowserResourceLoadConsoleError(message.text())) {
       return
     }
 

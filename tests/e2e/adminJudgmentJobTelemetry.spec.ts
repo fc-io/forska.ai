@@ -26,7 +26,7 @@ const detailSectionHeadings = [
   'Pipeline Summary',
   'Prompt Queue',
   'Request Activity',
-  'Token Usage Timeline',
+  'Project Token Usage Timeline',
   'Request And Capacity Debug',
   ...providerCapacityTelemetryHeadings,
   'Provider Utilization History',
@@ -42,11 +42,39 @@ const longOpaqueValue = (prefix: string) => {
 }
 
 const assertPageHasNoHorizontalOverflow = async (page: Page) => {
-  const hasNoHorizontalOverflow = await page.evaluate(() => {
-    return document.documentElement.scrollWidth <= document.documentElement.clientWidth
+  const overflowDiagnostics = await page.evaluate(() => {
+    const viewportWidth = document.documentElement.clientWidth
+    const documentWidth = document.documentElement.scrollWidth
+    const getElementDescription = (element: Element) => {
+      const rect = element.getBoundingClientRect()
+      const className = typeof element.className === 'string' ? element.className : ''
+      const text = element.textContent?.trim().replace(/\s+/g, ' ').slice(0, 160) ?? ''
+
+      return {
+        className,
+        clientWidth: element.clientWidth,
+        left: Math.floor(rect.left),
+        right: Math.ceil(rect.right),
+        scrollWidth: element.scrollWidth,
+        tagName: element.tagName.toLowerCase(),
+        text,
+        width: Math.ceil(rect.width),
+      }
+    }
+    const offenders = Array.from(document.querySelectorAll('body *'))
+      .map(getElementDescription)
+      .filter((element) => {
+        return element.left < 0 || element.right > viewportWidth || element.scrollWidth > element.clientWidth + 1
+      })
+      .slice(0, 20)
+
+    return {documentWidth, offenders, viewportWidth}
   })
 
-  expect(hasNoHorizontalOverflow).toBe(true)
+  expect(
+    overflowDiagnostics.documentWidth <= overflowDiagnostics.viewportWidth,
+    JSON.stringify(overflowDiagnostics, null, 2),
+  ).toBe(true)
 }
 
 const assertElementHasNoHorizontalOverflow = async (locator: Locator) => {
@@ -85,7 +113,7 @@ test('admin job telemetry separates admission leases, observed aggregates, and l
     await expect(page.getByText('Some remote worker telemetry is stale or missing')).toBeVisible()
     await expect(page.getByText('Request leases are the shared admission authority')).toBeVisible()
     await expect(page.getByText('Local Prompt Backlog')).toBeVisible()
-    await expect(page.getByText('Request-Work Backlog')).toBeVisible()
+    await expect(page.getByText('Request-Work Backlog', {exact: true})).toBeVisible()
     await expect(page.getByText('Local Target And Lease Headroom')).toBeVisible()
     await expect(page.getByText('Worker Prompt Slots', {exact: true})).toHaveCount(1)
     await expect(page.getByText('Worker Queued Prompts', {exact: true})).toHaveCount(1)
@@ -143,7 +171,7 @@ test('admin job telemetry history chart switches ranges and shows empty history 
     await expect(chart.getByText('92.5%')).toBeVisible()
     await expect(chart.getByText('Provider at target (3 samples)')).toBeVisible()
 
-    await chart.getByRole('button', {name: '5m'}).click()
+    await chart.getByRole('button', {exact: true, name: '5m'}).click()
     await expect(chart.getByText('No telemetry history samples for Last 5 minutes')).toBeVisible()
     await assertPageHasNoHorizontalOverflow(page)
     await expect(page.getByTestId(routeErrorSurfaceTestId)).toHaveCount(0)
@@ -300,12 +328,16 @@ test('admin job telemetry shows endpoint probe state when claiming is held', asy
     await installAdminTelemetryMocks(page, job)
     await page.goto(`/admin/jobs/${job.id}`)
 
-    await expect(page.getByText('Endpoint unavailable: claiming held')).toBeVisible()
-    await expect(page.getByText('Claiming held by endpoint probe state')).toBeVisible()
-    await expect(page.getByRole('heading', {name: 'Endpoint Diagnostics'})).toBeVisible()
-    await expect(page.getByText('Cooldown')).toBeVisible()
-    await expect(page.getByText('Provider endpoint outage: runtime returned 503')).toBeVisible()
-    await expect(page.getByText('endpoint:provider-telemetry::https://runtime-paused.example.com')).toBeVisible()
+    const providerCapacityTelemetry = page.getByTestId('provider-capacity-telemetry')
+
+    await expect(providerCapacityTelemetry.getByText('Endpoint unavailable: claiming held')).toBeVisible()
+    await expect(providerCapacityTelemetry.getByText('Claiming held by endpoint probe state')).toBeVisible()
+    await expect(providerCapacityTelemetry.getByRole('heading', {name: 'Endpoint Diagnostics'})).toBeVisible()
+    await expect(providerCapacityTelemetry.getByText('Endpoint Cooldown', {exact: true})).toBeVisible()
+    await expect(providerCapacityTelemetry.getByText('Provider endpoint outage: runtime returned 503')).toBeVisible()
+    await expect(
+      providerCapacityTelemetry.getByText('endpoint:provider-telemetry::https://runtime-paused.example.com'),
+    ).toBeVisible()
     await expect(page.getByTestId(routeErrorSurfaceTestId)).toHaveCount(0)
 
     browserFailures.assertNoFailures()

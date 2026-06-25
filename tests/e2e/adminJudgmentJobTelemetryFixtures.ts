@@ -21,7 +21,26 @@ type TelemetryHistoryBucketData = {
 }
 type TelemetryHistory = ReturnType<typeof buildTelemetryHistory>
 
-type MockJob = ReturnType<typeof buildTelemetryJob>
+type MockPromptStats = {claimed: number; judged: number; ready: number; running: number; skipped: number}
+type MockProviderTelemetry = {
+  endpointDiagnostics: Array<{
+    effectiveBaseURL: string | null
+    endpointAvailabilityKey: string
+    endpointIdentity: string | null
+    lastFailureMessage: string | null
+    [key: string]: unknown
+  }>
+  endpointDiagnosticsSummary: {providerKey: string; [key: string]: unknown}
+  leaseAuthority: {providerKey: string; [key: string]: unknown}
+  providerKey: string
+  [key: string]: unknown
+}
+type MockJob = {
+  id: string
+  promptStats: MockPromptStats
+  requestStats: {providerTelemetry: MockProviderTelemetry; [key: string]: unknown}
+  [key: string]: unknown
+}
 
 const telemetryProjectId = 'project-telemetry'
 const telemetryModelId = 'model-telemetry'
@@ -366,10 +385,10 @@ export const buildTelemetryJob = (scenario: TelemetryScenario) => {
   return {
     id: `telemetry-${scenario}`,
     createdAt: '2026-05-04T12:00:00.000Z',
-    error: [],
+    error: [] as string[],
     health: {badges: ['Healthy']},
     importFailureCount: 0,
-    judgingRuntime: {enabled: true, reason: null},
+    judgingRuntime: {enabled: true, reason: null as string | null},
     lastImportCompletedAt: null,
     lastImportError: null,
     lastImportErrorAt: null,
@@ -526,6 +545,14 @@ type AdminTelemetryMocksOptions = {
   startCleanError?: string
 }
 
+const isMockJobDetailRequest = (url: URL, jobId: string) => {
+  return (
+    (url.pathname === '/api/judgmentsjobs' && url.searchParams.get('id') === jobId)
+    || url.pathname === `/api/judgmentsjobs/${jobId}`
+    || url.pathname === `/api/judgmentsjobs/${encodeURIComponent(jobId)}`
+  )
+}
+
 const repairResponse = (job: MockJob, message: string) => {
   return {
     action: 'preflight',
@@ -572,12 +599,17 @@ export const installAdminTelemetryMocks = async (
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url())
 
+    if (url.pathname === '/api/runtime/ready') {
+      await route.fulfill({json: {data: {ready: true}, error: null}})
+      return
+    }
+
     if (url.pathname === '/api/judgmentsjobs') {
       await route.fulfill({json: {data: options.jobs ?? [job], error: null}})
       return
     }
 
-    if (url.pathname === `/api/judgmentsjobs/${job.id}`) {
+    if (route.request().method() === 'GET' && isMockJobDetailRequest(url, job.id)) {
       await route.fulfill({json: job})
       return
     }

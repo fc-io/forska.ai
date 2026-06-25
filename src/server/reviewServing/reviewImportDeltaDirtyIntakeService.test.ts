@@ -141,6 +141,19 @@ test('import delta intake bounds source rows before route fanout', async () => {
   expect(dirtyInserts).toHaveLength(18)
 })
 
+test('import delta intake accepts DuckDB bigint string high-water marks', async () => {
+  const {database} = createFakeIntakeDatabase([
+    createReviewImportDelta({deltaId: 'delta-string-watermark', sourceHighWaterMark: '4'}),
+  ])
+
+  const result = await intakeReviewImportDeltasToDirtyWork(
+    {endSourceHighWaterMark: 4, limit: 10, sourcePartition: 'importRoute:route-1', startSourceHighWaterMark: 1},
+    database,
+  )
+
+  expect(result).toMatchObject({dirtyWorkCount: 9, maxSourceHighWaterMark: 4, status: 'converted'})
+})
+
 test('repeated import changes collapse into one dirty row per project component identity', async () => {
   const repeated = createReviewImportDelta({
     deltaId: 'delta-rank',

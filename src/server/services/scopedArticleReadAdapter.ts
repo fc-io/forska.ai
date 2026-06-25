@@ -147,6 +147,11 @@ export const getScopedArticleOriginalDataExpression = (params: {articleAlias: st
   return `COALESCE(${scopedImportAlias}.raw_payload, ${params.articleAlias}.original_data)`
 }
 
+export const getScopedArticleUrlExpression = (params: {articleAlias: string; scopedImportAlias?: string}) => {
+  const scopedImportAlias = params.scopedImportAlias ?? 'scoped_import'
+  return `COALESCE(json_extract_string(${scopedImportAlias}.raw_payload, '$.covidence.citation.url'), json_extract_string(${scopedImportAlias}.raw_payload, '$.citation.url'), ${params.articleAlias}.url)`
+}
+
 const isSourceMetadataRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

@@ -893,20 +893,14 @@ export const writeReviewServingRebuildChunkOutput = async (
       return null
     }
 
-    await tx.run('SAVEPOINT review_serving_rebuild_chunk_output')
     await input.writeOutput(tx)
 
     const validation = await input.validateOutput(tx)
     const validationError = getReviewServingRebuildChunkValidationError(validation)
 
     if (validationError !== null) {
-      await tx.run('ROLLBACK TO SAVEPOINT review_serving_rebuild_chunk_output')
-      await tx.run('RELEASE SAVEPOINT review_serving_rebuild_chunk_output')
-
       return markReviewServingRebuildChunkFailed({chunkId, error: validationError, leaseOwner: input.leaseOwner}, tx)
     }
-
-    await tx.run('RELEASE SAVEPOINT review_serving_rebuild_chunk_output')
 
     await tx.run(`
       UPDATE app.review_rebuild_chunk_manifest

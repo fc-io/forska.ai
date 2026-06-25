@@ -1,8 +1,24 @@
 import {defineConfig} from '@playwright/test'
 
+import {getRuntimeProfileDuckdbPath} from './src/utils/runtimeProfile.ts'
+
 const apiServerPort = 43101
 const appServerPort = 43100
-const duckdbPath = '/tmp/forska-playwright-project-edit-smoke.duckdb'
+const syntheticDuckdbPath = '/tmp/forska-playwright-project-edit-smoke.duckdb'
+const syntheticDuckdbTempDirectory = '/tmp/forska-playwright-project-edit-smoke.duckdb-temp'
+const currentDuckdbTempDirectory = '/tmp/forska-playwright-current-network-smoke.duckdb-temp'
+const networkSmokeDbMode = process.env.FORSKA_NETWORK_SMOKE_DB_MODE === 'current' ? 'current' : 'synthetic'
+const currentDuckdbPath =
+  process.env.FORSKA_NETWORK_SMOKE_DUCKDB_PATH
+  ?? process.env.DUCKDB_PATH
+  ?? getRuntimeProfileDuckdbPath({profileName: 'primary'})
+const duckdbPath = networkSmokeDbMode === 'current' ? currentDuckdbPath : syntheticDuckdbPath
+const duckdbTempDirectory =
+  networkSmokeDbMode === 'current' ? currentDuckdbTempDirectory : syntheticDuckdbTempDirectory
+const apiServerCommand =
+  networkSmokeDbMode === 'current'
+    ? `sh -c 'rm -rf "${duckdbTempDirectory}" && bun run build && bun run src/server/index.ts'`
+    : `sh -c 'rm -f "${duckdbPath}" "${duckdbPath}.wal" && rm -rf "${duckdbTempDirectory}" && bun run build && bun run src/server/index.ts'`
 
 const smokeEnv = {
   API_SERVER_PORT: String(apiServerPort),
@@ -22,10 +38,10 @@ export default defineConfig({
   use: {baseURL: `http://127.0.0.1:${appServerPort}`, screenshot: 'only-on-failure', trace: 'retain-on-failure'},
   webServer: [
     {
-      command: `sh -c 'rm -f "${duckdbPath}" "${duckdbPath}.wal" && rm -rf "/tmp/forska-playwright-project-edit-smoke.duckdb-temp" && bun run build && bun run src/server/index.ts'`,
+      command: apiServerCommand,
       env: {
         ...smokeEnv,
-        DUCKDB_TEMP_DIRECTORY: '/tmp/forska-playwright-project-edit-smoke.duckdb-temp',
+        DUCKDB_TEMP_DIRECTORY: duckdbTempDirectory,
         FORSKA_EXPOSE_LOCAL_OPERATOR_API: process.env.FORSKA_NETWORK_SMOKE_AUDIT === 'true' ? 'true' : 'false',
       },
       port: apiServerPort,

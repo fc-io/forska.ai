@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getIntegerValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {reviewImportHotFieldProjectorColumns} from './reviewImportHotFieldService.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
@@ -49,7 +49,7 @@ type ReviewImportDeltaRow = {
   publicationYear: number | null
   selectedRankKey: string | null
   selectedRankNumeric: number | null
-  sourceHighWaterMark: number
+  sourceHighWaterMark: bigint | number | string
   sourcePartition: string
   sourceRecordKey: string | null
   tombstone: boolean
@@ -61,6 +61,7 @@ type ValidatedReviewImportDelta = {
   scope: ReviewServingDirtyWorkScope
   sourceHighWaterMark: number
 }
+type InvalidReviewImportDelta = {reason: string}
 
 const supportedPayloadVersion = 1
 
@@ -129,8 +130,15 @@ const getProjectionIdentity = (input: {
   })}`
 }
 
+const isInvalidReviewImportDelta = (
+  delta: InvalidReviewImportDelta | ValidatedReviewImportDelta | null,
+): delta is InvalidReviewImportDelta => {
+  return delta !== null && 'reason' in delta
+}
+
 const getValidatedReviewImportDelta = (row: ReviewImportDeltaRow) => {
   const rule = getReviewServingInvalidationRuleOrNull(row.changeKind)
+  const sourceHighWaterMark = getIntegerValue(row.sourceHighWaterMark)
 
   if (rule === null) {
     return {reason: `unsupported change kind: ${row.changeKind}`}
@@ -142,7 +150,7 @@ const getValidatedReviewImportDelta = (row: ReviewImportDeltaRow) => {
     return {reason: ruleValidationError}
   }
 
-  if (!Number.isInteger(row.sourceHighWaterMark) || row.sourceHighWaterMark < 0) {
+  if (sourceHighWaterMark === null || sourceHighWaterMark < 0) {
     return {reason: `invalid source high-water mark: ${row.sourceHighWaterMark}`}
   }
 
@@ -150,7 +158,7 @@ const getValidatedReviewImportDelta = (row: ReviewImportDeltaRow) => {
     return {reason: `unsupported payload version: ${row.payloadVersion}`}
   }
 
-  const values = getImportDeltaValues(row)
+  const values = {...getImportDeltaValues(row), sourceHighWaterMark}
   const missingKeys = getMissingRequiredKeys(rule, values)
 
   if (missingKeys.length > 0) {
@@ -163,7 +171,7 @@ const getValidatedReviewImportDelta = (row: ReviewImportDeltaRow) => {
 
   const scope = getReviewServingDirtyWorkScopeForChange({
     changeKind: row.changeKind,
-    sourceHighWaterMark: row.sourceHighWaterMark,
+    sourceHighWaterMark,
     sourcePartition: row.sourcePartition,
     values,
   })
@@ -181,7 +189,7 @@ const getValidatedReviewImportDelta = (row: ReviewImportDeltaRow) => {
       }
     }),
     scope,
-    sourceHighWaterMark: row.sourceHighWaterMark,
+    sourceHighWaterMark,
   }
 }
 
@@ -267,15 +275,13 @@ const markReviewImportDeltasReconciled = async (
 
 export const intakeReviewImportDeltasToDirtyWork = async (
   params: IntakeReviewImportDeltaDirtyWorkParams,
-  database: ReviewImportDeltaDirtyIntakeDatabase = getAppDatabaseService(),
+  database: ReviewImportDeltaDirtyIntakeDatabase = getAppDatabaseService() as ReviewImportDeltaDirtyIntakeDatabase,
 ): Promise<ReviewImportDeltaDirtyIntakeResult> => {
   const rows = await getReviewImportDeltaRows(database, params)
   const validated = rows.map(getValidatedReviewImportDelta)
-  const invalid = validated.find((delta) => {
-    return delta !== null && 'reason' in delta
-  })
+  const invalid = validated.find(isInvalidReviewImportDelta)
 
-  if (invalid !== undefined && invalid !== null && 'reason' in invalid) {
+  if (invalid !== undefined) {
     const row = rows[validated.indexOf(invalid)]
 
     return {deltaId: row?.deltaId ?? 'unknown', reason: invalid.reason, status: 'failed'}
@@ -313,7 +319,7 @@ export const intakeReviewImportDeltasToDirtyWork = async (
       dirtyWorkCount: upserts.filter((result) => {
         return !result.skipped
       }).length,
-      maxSourceHighWaterMark: rows.at(-1)?.sourceHighWaterMark ?? null,
+      maxSourceHighWaterMark: deltas.at(-1)?.sourceHighWaterMark ?? null,
       status: 'converted' as const,
     }
   })

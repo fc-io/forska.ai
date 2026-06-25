@@ -294,7 +294,7 @@ const writeRetentionMark = async (
       cutoff_patch_watermark = excluded.cutoff_patch_watermark,
       cleanup_cursor_json = excluded.cleanup_cursor_json,
       last_cleaned_at = excluded.last_cleaned_at,
-      updated_at = current_timestamp
+      updated_at = excluded.updated_at
   `)
 }
 

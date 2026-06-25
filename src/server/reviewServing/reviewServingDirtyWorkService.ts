@@ -390,7 +390,7 @@ export const upsertReviewServingDirtyWork = async (
         ELSE GREATEST(app.review_serving_dirty_work.dirty_range_end, excluded.dirty_range_end)
       END,
       status = 'pending',
-      updated_at = current_timestamp
+      updated_at = excluded.updated_at
   `)
 
   return {dirtyWorkId, skipped}
@@ -581,7 +581,7 @@ export const compactReviewServingDirtyWorkAcknowledgements = async (
         app.review_serving_dirty_work_ack.completed_source_high_water_mark,
         excluded.completed_source_high_water_mark
       ),
-      completed_at = current_timestamp
+      completed_at = excluded.completed_at
   `)
 
   await database.run(`

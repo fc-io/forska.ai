@@ -7,6 +7,7 @@ import {
   getScopedArticleImportSelectionCteSql,
   getScopedArticleMetadataExpression,
   getScopedArticleOriginalDataExpression,
+  getScopedArticleUrlExpression,
 } from './scopedArticleReadAdapter.ts'
 
 export type AppQueryDatabaseService = {queryJson: <T>(statement: string) => Promise<T[]>}
@@ -212,6 +213,7 @@ const getScopedArticleReadSqlParts = (articleIds: string[], projectId: string | 
     selectedImportRouteIdExpression: hasProjectScope ? 'scoped_import.import_route_id' : 'NULL',
     selectedSourceKindExpression: hasProjectScope ? 'scoped_import.source_kind' : 'NULL',
     selectedSourceRecordKeyExpression: hasProjectScope ? 'scoped_import.source_record_key' : 'NULL',
+    urlExpression: hasProjectScope ? getScopedArticleUrlExpression({articleAlias: 'a'}) : 'a.url',
     withClause: hasProjectScope
       ? `WITH ${getScopedArticleImportSelectionCteSql({articleIds, projectIds: [scopedProjectId]})}`
       : '',
@@ -267,7 +269,7 @@ const getReviewHydrationRows = (database: AppQueryDatabaseService) => {
         a.medrxiv_id AS medrxivId,
         ${readSql.originalDataExpression} AS originalData,
         a.pubmed_id AS pubmedId,
-        a.url,
+        ${readSql.urlExpression} AS url,
         a.full_text_pdf AS fullTextPDF,
         a.full_text_fetched_at AS fullTextFetchedAt,
         a.full_text_conversion_status AS fullTextConversionStatus,
@@ -400,7 +402,7 @@ const getFullArticlesByIds = (database: AppQueryDatabaseService) => {
         a.medrxiv_id AS medrxivId,
         a.doi,
         a.pubmed_id AS pubmedId,
-        a.url,
+        ${readSql.urlExpression} AS url,
         a.full_text_fetched_at AS fullTextFetchedAt,
         ${includeFullText ? 'a.full_text' : 'NULL'} AS fullText,
         ${includeFullText ? 'a.full_text_html' : 'NULL'} AS fullTextHtml,

@@ -1,4 +1,3 @@
-import {useNavigate} from '@tanstack/solid-router'
 import type {Setter} from 'solid-js'
 import {createEffect, createSignal, on, onMount} from 'solid-js'
 
@@ -36,8 +35,6 @@ type UseUrlFiltersResult = {
  * Parses URL params on mount and updates URL when filters change.
  */
 export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResult => {
-  const navigate = useNavigate()
-
   // State signals
   const [fromDate, setFromDate] = createSignal('')
   const [toDate, setToDate] = createSignal('')
@@ -158,13 +155,10 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
       () => {
         if (!initialized()) return
 
-        const searchParams = buildSearchParams()
-        void navigate({
-          to: options.routePath as '/',
-          params: options.routeParams,
-          search: searchParams,
-          replace: true, // Replace history entry instead of pushing
-        })
+        const nextSearch = new URLSearchParams(buildSearchParams()).toString()
+        const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}`
+
+        window.history.replaceState(window.history.state, '', nextUrl)
       },
     ),
   )

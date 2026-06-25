@@ -290,6 +290,7 @@ test('project review details resolves covidence related records through scoped s
           articleTitle: 'Article 1',
           id: 'source-record-1',
           isCurrentRecord: true,
+          url: 'https://example.test/covidence-1',
           sourceMetadata: {
             covidence: {
               articleKey: 'covidence:1',
@@ -322,6 +323,7 @@ test('project review details resolves covidence related records through scoped s
           articleTitle: 'Article 1 duplicate',
           id: 'source-record-2',
           isCurrentRecord: false,
+          url: 'https://example.test/covidence-2',
           sourceMetadata: {
             covidence: {
               articleKey: 'covidence:2',
@@ -361,19 +363,42 @@ test('project review details resolves covidence related records through scoped s
 
   const response = await postReviewDetailsRequest()
   const body = (await response.json()) as {
-    covidenceRelatedRecords: Array<{articleExternalId: string | null; id: string; isCurrentRecord: boolean}>
+    covidenceRelatedRecords: Array<{
+      articleExternalId: string | null
+      articleUrl: string | null
+      id: string
+      isCurrentRecord: boolean
+    }>
   }
 
   expect(response.status).toBe(200)
   expect(
     body.covidenceRelatedRecords.map((record) => {
-      return {articleExternalId: record.articleExternalId, id: record.id, isCurrentRecord: record.isCurrentRecord}
+      return {
+        articleExternalId: record.articleExternalId,
+        articleUrl: record.articleUrl,
+        id: record.id,
+        isCurrentRecord: record.isCurrentRecord,
+      }
     }),
   ).toEqual([
-    {articleExternalId: 'covidence:1', id: 'source-record-1', isCurrentRecord: true},
-    {articleExternalId: 'covidence:2', id: 'source-record-2', isCurrentRecord: false},
+    {
+      articleExternalId: 'covidence:1',
+      articleUrl: 'https://example.test/covidence-1',
+      id: 'source-record-1',
+      isCurrentRecord: true,
+    },
+    {
+      articleExternalId: 'covidence:2',
+      articleUrl: 'https://example.test/covidence-2',
+      id: 'source-record-2',
+      isCurrentRecord: false,
+    },
   ])
   expect(covidenceStatement).toContain("source_record.import_route_id = 'route-1'")
+  expect(covidenceStatement).toContain(
+    "COALESCE(json_extract_string(source_record.raw_payload, '$.covidence.citation.url'), article.url) AS url",
+  )
 })
 
 test('project review details falls back to legacy covidence related records when source records are absent', async () => {

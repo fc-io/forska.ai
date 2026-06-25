@@ -53,6 +53,7 @@ const chunkManifest = {
   lastError: null,
   leaseExpiresAt: '2026-06-16T10:00:30.000Z',
   leaseOwner: 'worker-1',
+  requestId: null,
   startedAt: '2026-06-16T10:00:00.000Z',
   status: 'running',
   updatedAt: '2026-06-16T10:00:00.000Z',
@@ -66,6 +67,7 @@ const createWorkerHarness = (input?: {
   wakeStatus?: 'blocked' | 'completed' | 'failed' | 'partial'
 }) => {
   const workloadContexts: DuckdbWorkloadContext[] = []
+  const runStatements: string[] = []
   const database: TestDatabase = {
     queryJson: async <T>(_statement: string, workloadContext?: DuckdbWorkloadContext) => {
       if (workloadContext) {
@@ -75,6 +77,8 @@ const createWorkerHarness = (input?: {
       return [] as T[]
     },
     run: async (_statement: string, workloadContext?: DuckdbWorkloadContext) => {
+      runStatements.push(_statement)
+
       if (workloadContext) {
         workloadContexts.push(workloadContext)
       }
@@ -164,6 +168,7 @@ const createWorkerHarness = (input?: {
     failedChunks,
     heartbeatInputs,
     runChunkInputs,
+    runStatements,
     wakeInputs,
     workloadContexts,
   }
@@ -293,6 +298,152 @@ test('worker heartbeats claimed rebuild chunks before running long executors', a
   expect(heartbeatInput).toMatchObject({chunkId: 'chunk-1', leaseOwner: 'worker-heartbeat'})
   expect(heartbeatInput?.leaseExpiresAt).toBeInstanceOf(Date)
   expect(harness.runChunkInputs).toEqual([chunkManifest])
+})
+
+test('worker marks rebuild requests completed after their final chunk completes', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const requestChunk = {...chunkManifest, requestId: 'rebuild-1'} satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return requestChunk
+    },
+    heartbeatChunk: async () => {
+      return requestChunk
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+  const joined = harness.runStatements.join('\n')
+
+  expect(result.chunk.status).toBe('completed')
+  expect(result.deltaIntake.status).toBe('idle')
+  expect(result.projector.status).toBe('blocked')
+  expect(harness.wakeInputs).toEqual([])
+  expect(joined).toContain('UPDATE app.review_rebuild_request')
+  expect(joined).toContain("status = 'completed'")
+  expect(joined).toContain("request_id = 'rebuild-1'")
+})
+
+test('worker refreshes request candidate snapshot state before promotion', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const requestChunk = {
+    ...chunkManifest,
+    requestId: 'rebuild-refresh-candidate',
+    snapshotId: 'snapshot-refresh-candidate',
+  } satisfies ReviewServingRebuildChunkManifest
+  const staleComponentState = {
+    optional: [],
+    required: [
+      {
+        baseGeneration: '0',
+        component: 'projectScope',
+        patchWatermark: '0',
+        projectionIdentity: 'projectScope:identity-1',
+        requirement: 'required',
+      },
+    ],
+  }
+  const freshComponentState = {optional: [], required: [{...staleComponentState.required[0], patchWatermark: '14'}]}
+  let snapshotManifestReads = 0
+
+  harness.database.queryJson = async <T>(statement: string) => {
+    if (statement.includes('COUNT(*) AS pendingChunkCount')) {
+      return [{pendingChunkCount: 0}] as T[]
+    }
+
+    if (statement.includes('SELECT DISTINCT') && statement.includes('FROM app.review_rebuild_chunk_manifest chunk')) {
+      return [
+        {projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-refresh-candidate'},
+      ] as T[]
+    }
+
+    if (statement.includes('FROM app.review_projection_identity_manifest')) {
+      return [
+        {
+          baseGeneration: 0,
+          definitionVersion: 'project-scope-v4-test',
+          inputDigest: 'digest-1',
+          inputWatermark: 14,
+          inputWatermarksJson: JSON.stringify({projectScope: 14}),
+          invalidationReason: null,
+          manifestId: 'manifest-project-scope-1',
+          patchRangeEnd: 14,
+          patchRangeStart: 1,
+          patchWatermark: 14,
+          projectId: 'project-1',
+          projectionComponent: 'projectScope',
+          projectionIdentity: 'projectScope:identity-1',
+          promptConfigHash: null,
+          reviewConfigHash: null,
+          status: 'candidate',
+        },
+      ] as T[]
+    }
+
+    if (statement.includes('FROM app.review_selected_import_snapshot')) {
+      return [{status: 'completed'}] as T[]
+    }
+
+    if (
+      statement.includes('FROM app.review_serving_snapshot_manifest')
+      && statement.includes("snapshot_status = 'active'")
+    ) {
+      return [] as T[]
+    }
+
+    if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+      snapshotManifestReads += 1
+
+      return [
+        {
+          componentStateJson: JSON.stringify(snapshotManifestReads === 1 ? staleComponentState : freshComponentState),
+          composedIdentityJson: JSON.stringify({projectId: 'project-1'}),
+          lastError: null,
+          lastKnownGoodSnapshotId: null,
+          optionalComponentsJson: JSON.stringify([]),
+          projectId: 'project-1',
+          requiredComponentsJson: JSON.stringify(['projectScope']),
+          reviewConfigHash: 'review-config-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          snapshotId: 'snapshot-refresh-candidate',
+          snapshotStatus: 'candidate',
+          sourceWatermarksJson: JSON.stringify({projectScope: 14}),
+          validationResultJson: null,
+        },
+      ] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return requestChunk
+    },
+    heartbeatChunk: async () => {
+      return requestChunk
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+  const joined = harness.runStatements.join('\n')
+
+  expect(result.chunk.status).toBe('completed')
+  expect(joined).toContain('INSERT INTO app.review_serving_snapshot_manifest')
+  expect(joined).toContain('UPDATE app.review_rebuild_request')
+  expect(joined).toContain("status = 'completed'")
 })
 
 test('worker schedules cleanup only after its cleanup interval elapses', async () => {
@@ -596,7 +747,6 @@ test('display rebuild chunk executor writes bounded base rows and completes the 
   const joined = statements.join('\n')
 
   expect(result).toEqual({status: 'completed'})
-  expect(joined).toContain('SAVEPOINT review_serving_rebuild_chunk_output')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
   expect(joined).toContain("scope.article_id >= 'article-001'")
   expect(joined).toContain("scope.article_id <= 'article-099'")
@@ -793,7 +943,7 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
             definitionVersion: `${activeChunk.projectionComponent}-v1`,
             inputDigest: activeChunk.inputDigest,
             inputWatermark: activeChunk.inputWatermark,
-            inputWatermarksJson: {},
+            inputWatermarksJson: {importRunArticle: 7, reviewChange: 9},
             invalidationReason: activeChunk.inputDigest,
             manifestId: `manifest-${activeChunk.projectionComponent}`,
             patchRangeEnd: activeChunk.inputWatermark,
@@ -950,7 +1100,7 @@ test('base rebuild chunks regenerate project scope and selected import state bef
             definitionVersion: `${activeChunk.projectionComponent}-v1`,
             inputDigest: activeChunk.inputDigest,
             inputWatermark: activeChunk.inputWatermark,
-            inputWatermarksJson: {},
+            inputWatermarksJson: {importRunArticle: 7, reviewChange: 9},
             invalidationReason: activeChunk.inputDigest,
             manifestId: `manifest-${activeChunk.projectionComponent}`,
             patchRangeEnd: activeChunk.inputWatermark,
@@ -1018,6 +1168,7 @@ test('base rebuild chunks regenerate project scope and selected import state bef
   expect(joined).toContain('DELETE FROM mart.project_scope_article')
   expect(joined).toContain('INSERT INTO mart.project_scope_article')
   expect(joined).toContain('projectScope.rebuild')
+  expect(joined).toContain('reviewChange')
   expect(joined).toContain('DELETE FROM app.review_selected_article_import_v4')
   expect(joined).toContain('DELETE FROM app.review_selected_import_snapshot')
   expect(joined).toContain('WITH selected_import_candidates')

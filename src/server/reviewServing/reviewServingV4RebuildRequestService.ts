@@ -1,14 +1,33 @@
+import {createHash} from 'node:crypto'
+
 import {Effect} from 'effect'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
-import type {ReviewServingChunkManifestRepositoryDatabase} from './reviewServingChunkManifestRepository.ts'
+import {
+  buildReviewDirtyProjectionIdentity,
+  getStableReviewServingJson,
+  type ReviewServingIdentityValue,
+} from './reviewProjectionIdentity.ts'
+import type {
+  ReviewServingChunkManifestRepositoryDatabase,
+  ReviewServingChunkManifestRepositoryTransaction,
+  ReviewServingRebuildChunkManifestInput,
+} from './reviewServingChunkManifestRepository.ts'
 import {reviewServingListModes, type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {
+  createCandidateReviewServingSnapshotManifest,
+  upsertReviewServingProjectionIdentityManifest,
+} from './reviewServingManifestRepository.ts'
+import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
   createReviewServingRebuildRequest,
   type ReviewServingRebuildRequest,
   type ReviewServingRebuildRequestEstimate,
 } from './reviewServingRebuildRequestRepository.ts'
+import {getCurrentReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
+import {getReviewServingSelectedImportSnapshotId} from './reviewServingSelectedImportProjector.ts'
+import {composeReviewServingCandidateSnapshotManifest} from './reviewServingSnapshotPromotionService.ts'
 
 export const defaultReviewServingV4RebuildComponents = [
   'projectScope',
@@ -67,6 +86,14 @@ type ReviewServingV4RebuildStatsRow = {
   summaryHumanJudgmentUpdatedAt: string | null
 }
 
+type ReviewServingV4BootstrapArticleBoundsRow = {
+  chunkEndKey: string | null
+  chunkStartKey: string | null
+  scopedArticleCount: number
+}
+
+type ReviewServingV4BootstrapDirtyWatermarkRow = {latestSourceHighWaterMark: number | string; sourcePartition: string}
+
 export type RequestReviewServingV4RebuildInput = {
   components?: readonly ReviewServingProjectionComponent[]
   projectId: string
@@ -80,6 +107,7 @@ const queuePayloadFanOut = 2
 const selectedImportPostingFilterFanOut = 4
 const selectedImportPostingFanOut = listModeFanOut * selectedImportPostingFilterFanOut
 const syntheticHumanStatusPromptCount = 1
+const bootstrapOptionalComponents = ['search'] as const satisfies readonly ReviewServingProjectionComponent[]
 const articleScaledComponentFanOut = {
   display: listModeFanOut,
   humanStatus: 0,
@@ -152,6 +180,246 @@ const getSafeCount = (value: number | string | null | undefined) => {
 
 const getEstimatedOutputBytes = (estimatedOutputRows: number) => {
   return estimatedOutputRows * 512
+}
+
+const getReviewServingV4BootstrapHash = (label: string, value: ReviewServingIdentityValue) => {
+  return createHash('sha256')
+    .update(`${label}:${getStableReviewServingJson(value)}`)
+    .digest('hex')
+}
+
+const getReviewServingV4BootstrapSnapshotId = (input: {
+  projectId: string
+  reviewConfigHash: string | null
+  selectedImportSnapshotId: string
+  sourceWatermarks: Record<string, number>
+}) => {
+  return `snapshot:${getReviewServingV4BootstrapHash('review-serving-v4-bootstrap-snapshot', input).slice(0, 32)}`
+}
+
+const getReviewServingV4BootstrapInputWatermark = (sourceWatermarks: Record<string, number>) => {
+  return Math.max(0, ...Object.values(sourceWatermarks))
+}
+
+const getReviewServingV4BootstrapComponents = (components: readonly ReviewServingProjectionComponent[]) => {
+  return [...new Set([...components, ...defaultReviewServingV4RebuildComponents])]
+}
+
+const getReviewServingV4BootstrapComponentRequirements = (components: readonly ReviewServingProjectionComponent[]) => {
+  const optionalComponentSet = new Set<ReviewServingProjectionComponent>(bootstrapOptionalComponents)
+
+  return {
+    optionalComponents: components.filter((component) => {
+      return optionalComponentSet.has(component)
+    }),
+    requiredComponents: components.filter((component) => {
+      return !optionalComponentSet.has(component)
+    }),
+  }
+}
+
+const getReviewServingV4BootstrapProjectionIdentity = (input: {
+  component: ReviewServingProjectionComponent
+  projectId: string
+}) => {
+  return buildReviewDirtyProjectionIdentity({projectId: input.projectId, projectionComponent: input.component})
+}
+
+const getReviewServingV4BootstrapArticleBounds = async (
+  input: {projectId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const [row] = await database.queryJson<ReviewServingV4BootstrapArticleBoundsRow>(`
+    SELECT
+      MIN(article_id) AS chunkStartKey,
+      MAX(article_id) AS chunkEndKey,
+      CAST(COUNT(*) AS INTEGER) AS scopedArticleCount
+    FROM (
+      SELECT project_article.article_id
+      FROM app.project_article project_article
+      INNER JOIN app.project project ON project.id = project_article.project_id
+      INNER JOIN app.article article ON article.id = project_article.article_id
+      WHERE project_article.project_id = ${getSqlLiteral(input.projectId)}
+        AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+        AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+      UNION
+      SELECT article_import_route.article_id
+      FROM app.project_import_route project_import_route
+      INNER JOIN app.project project ON project.id = project_import_route.project_id
+      INNER JOIN app.article_import_route article_import_route
+        ON article_import_route.import_route_id = project_import_route.import_route_id
+      INNER JOIN app.article article ON article.id = article_import_route.article_id
+      WHERE project_import_route.project_id = ${getSqlLiteral(input.projectId)}
+        AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+        AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+    ) scoped_article
+  `)
+  const scopedArticleCount = Number(row?.scopedArticleCount ?? 0)
+
+  return row?.chunkStartKey === null
+    || row?.chunkStartKey === undefined
+    || row.chunkEndKey === null
+    || scopedArticleCount === 0
+    ? null
+    : {chunkEndKey: row.chunkEndKey, chunkStartKey: row.chunkStartKey}
+}
+
+const getReviewServingV4BootstrapSourceWatermarks = async (
+  input: {projectId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const rows = await database.queryJson<ReviewServingV4BootstrapDirtyWatermarkRow>(`
+    SELECT
+      source_partition AS sourcePartition,
+      MAX(latest_source_high_water_mark) AS latestSourceHighWaterMark
+    FROM app.review_serving_dirty_work
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+    GROUP BY source_partition
+  `)
+  const normalizedRows = rows.flatMap((row) => {
+    const latestSourceHighWaterMark = Number(row.latestSourceHighWaterMark)
+
+    return Number.isFinite(latestSourceHighWaterMark)
+      ? [{latestSourceHighWaterMark, sourcePartition: row.sourcePartition}]
+      : []
+  })
+
+  return getReviewServingSourcePartitionWatermarks(normalizedRows)
+}
+
+const upsertReviewServingV4BootstrapProjectionManifests = async (
+  input: {
+    components: readonly ReviewServingProjectionComponent[]
+    inputWatermark: number
+    projectId: string
+    reviewConfigHash: string | null
+    sourceWatermarks: Record<string, number>
+  },
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  await input.components.reduce<Promise<void>>(async (previous, component) => {
+    await previous
+    await upsertReviewServingProjectionIdentityManifest(
+      {
+        baseGeneration: 0,
+        definitionVersion: `${component}:dirty-claim-seed-v1`,
+        inputDigest: 'freshReviewServingSnapshot',
+        inputWatermark: input.inputWatermark,
+        inputWatermarks: input.sourceWatermarks,
+        invalidationReason: 'missingReviewServingSnapshot',
+        patchRangeEnd: input.inputWatermark,
+        patchRangeStart: 0,
+        patchWatermark: 0,
+        projectId: input.projectId,
+        projectionComponent: component,
+        projectionIdentity: getReviewServingV4BootstrapProjectionIdentity({component, projectId: input.projectId}),
+        reviewConfigHash: input.reviewConfigHash,
+        status: 'candidate',
+      },
+      database,
+    )
+  }, Promise.resolve())
+}
+
+const getReviewServingV4BootstrapChunks = (input: {
+  articleBounds: {chunkEndKey: string; chunkStartKey: string}
+  components: readonly ReviewServingProjectionComponent[]
+  inputWatermark: number
+  projectId: string
+  snapshotId: string
+}): readonly ReviewServingRebuildChunkManifestInput[] => {
+  return input.components.map((component) => {
+    return {
+      chunkEndKey: input.articleBounds.chunkEndKey,
+      chunkStartKey: input.articleBounds.chunkStartKey,
+      inputDigest: 'freshReviewServingSnapshot',
+      inputWatermark: input.inputWatermark,
+      outputBaseGeneration: 0,
+      projectId: input.projectId,
+      projectionComponent: component,
+      projectionIdentity: getReviewServingV4BootstrapProjectionIdentity({component, projectId: input.projectId}),
+      snapshotId: input.snapshotId,
+      snapshotCount: 1,
+    }
+  })
+}
+
+const createReviewServingV4Bootstrap = async (
+  input: {components: readonly ReviewServingProjectionComponent[]; projectId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const articleBounds = await getReviewServingV4BootstrapArticleBounds(input, database)
+
+  if (articleBounds === null) {
+    return null
+  }
+
+  const components = getReviewServingV4BootstrapComponents(input.components)
+  const componentRequirements = getReviewServingV4BootstrapComponentRequirements(components)
+  const reviewConfigHash = await getCurrentReviewServingReviewConfigHash(input.projectId, database)
+  const sourceWatermarks = await getReviewServingV4BootstrapSourceWatermarks(input, database)
+  const inputWatermark = getReviewServingV4BootstrapInputWatermark(sourceWatermarks)
+  const projectScopeIdentity = getReviewServingV4BootstrapProjectionIdentity({
+    component: 'projectScope',
+    projectId: input.projectId,
+  })
+  const selectedImportSnapshotId = getReviewServingSelectedImportSnapshotId({
+    projectId: input.projectId,
+    projectScopeIdentity,
+    sourceDeltaHighWater: sourceWatermarks.importRunArticle ?? 0,
+  })
+  const snapshotId = getReviewServingV4BootstrapSnapshotId({
+    projectId: input.projectId,
+    reviewConfigHash,
+    selectedImportSnapshotId,
+    sourceWatermarks,
+  })
+
+  await upsertReviewServingV4BootstrapProjectionManifests(
+    {components, inputWatermark, projectId: input.projectId, reviewConfigHash, sourceWatermarks},
+    database,
+  )
+
+  const componentIdentities = Object.fromEntries(
+    components.map((component) => {
+      return [
+        component,
+        {
+          projectId: input.projectId,
+          projectionComponent: component,
+          projectionIdentity: getReviewServingV4BootstrapProjectionIdentity({component, projectId: input.projectId}),
+        },
+      ]
+    }),
+  )
+  const candidateSnapshot = await composeReviewServingCandidateSnapshotManifest(
+    {
+      componentIdentities,
+      componentRequirements,
+      composedIdentity: {
+        componentSet: components,
+        requestKind: 'v4-review-serving-bootstrap',
+        reviewConfigHash,
+        selectedImportSnapshotId,
+      },
+      projectId: input.projectId,
+      reviewConfigHash,
+      selectedImportSnapshotId,
+      snapshotId,
+      sourceWatermarks,
+    },
+    database,
+  )
+
+  await createCandidateReviewServingSnapshotManifest(candidateSnapshot, database)
+
+  return getReviewServingV4BootstrapChunks({
+    articleBounds,
+    components,
+    inputWatermark,
+    projectId: input.projectId,
+    snapshotId,
+  })
 }
 
 const getReviewServingV4RebuildEstimate = (
@@ -458,23 +726,48 @@ export const requestReviewServingV4RebuildEffect = (
   database: ReviewServingChunkManifestRepositoryDatabase = getAppDatabaseService() as ReviewServingChunkManifestRepositoryDatabase,
 ) => {
   return Effect.tryPromise(async () => {
-    const components = input.components ?? defaultReviewServingV4RebuildComponents
+    const requestedComponents = input.components ?? defaultReviewServingV4RebuildComponents
     const stats = await getReviewServingV4RebuildStats({projectId: input.projectId}, database)
+    const isFreshBootstrap = getSafeCount(stats.snapshotCount) === 0
+    const components = isFreshBootstrap
+      ? getReviewServingV4BootstrapComponents(requestedComponents)
+      : requestedComponents
+    const estimateStats = isFreshBootstrap ? {...stats, snapshotCount: 1} : stats
 
-    return createReviewServingRebuildRequest(
-      {
-        budget: defaultRequestBudget,
-        diagnostics: {source: 'phase5b-v4-rebuild-request-service', v4Cutover: true},
-        estimate: getReviewServingV4RebuildEstimate(stats, components),
-        identity: {componentSet: components, requestKind: 'v4-review-serving-rebuild'},
-        projectId: input.projectId,
-        reason: input.reason,
-        requestedComponents: components,
-        retryPolicy: {maxAttempts: 3, retryAfterMs: 60_000, terminalState: 'blocked_over_budget'},
-        sourceWatermarks: getReviewServingV4RebuildSourceWatermarks(stats),
-      },
-      database,
-    )
+    return database.transaction(async (tx) => {
+      const bootstrapChunks = isFreshBootstrap
+        ? await createReviewServingV4Bootstrap({components, projectId: input.projectId}, tx)
+        : null
+      const requestDatabase = {
+        queryJson: tx.queryJson,
+        run: tx.run,
+        transaction: async <T>(
+          operation: (operationTx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>,
+        ) => {
+          return operation(tx)
+        },
+      }
+
+      return createReviewServingRebuildRequest(
+        {
+          budget: defaultRequestBudget,
+          chunks: bootstrapChunks ?? undefined,
+          diagnostics: {
+            bootstrapSnapshot: isFreshBootstrap,
+            source: 'phase5b-v4-rebuild-request-service',
+            v4Cutover: true,
+          },
+          estimate: getReviewServingV4RebuildEstimate(estimateStats, components),
+          identity: {componentSet: components, requestKind: 'v4-review-serving-rebuild'},
+          projectId: input.projectId,
+          reason: input.reason,
+          requestedComponents: components,
+          retryPolicy: {maxAttempts: 3, retryAfterMs: 60_000, terminalState: 'blocked_over_budget'},
+          sourceWatermarks: getReviewServingV4RebuildSourceWatermarks(stats),
+        },
+        requestDatabase,
+      )
+    })
   })
 }
 

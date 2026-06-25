@@ -52,10 +52,6 @@ export const handleApiResponse = <T>(
   }
 
   if (response.data && typeof response.data === 'object' && response.data !== null) {
-    if ('error' in response.data && response.data.error) {
-      throw new Error(getApiErrorMessage(response.data.error, errorMessage))
-    }
-
     if ('data' in response.data && response.data.data === null && 'error' in response.data && response.data.error) {
       throw new Error(getApiErrorMessage(response.data.error, errorMessage))
     }

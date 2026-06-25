@@ -316,7 +316,11 @@ const getSelectedImportPatchRows = async (
             hot.conflict_flag,
             hot.tombstone,
             CASE WHEN hot.selected_rank_numeric IS NULL THEN 1e308 ELSE hot.selected_rank_numeric END AS rank_numeric_sort,
-            CASE WHEN hot.selected_rank_key IS NULL THEN '~' ELSE hot.selected_rank_key END AS rank_key_sort,
+            CASE
+              WHEN hot.selected_rank_key IS NULL THEN '~'
+              WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)
+              ELSE concat('1:', hot.selected_rank_key)
+            END AS rank_key_sort,
             hot.source_record_key
           FROM dirty_article dirty
           LEFT JOIN mart.project_scope_article scope
@@ -328,6 +332,10 @@ const getSelectedImportPatchRows = async (
             ON hot.import_route_id = project_route.import_route_id
             AND hot.article_id = dirty.article_id
             AND NOT hot.tombstone
+          LEFT JOIN app.article_import_route current_link
+            ON current_link.import_route_id = hot.import_route_id
+            AND current_link.article_id = hot.article_id
+            AND current_link.source_record_key = hot.source_record_key
           WHERE COALESCE(scope.in_curated_scope, FALSE) OR COALESCE(scope.in_route_scope, FALSE)
         ),
         selected_import_winner AS (

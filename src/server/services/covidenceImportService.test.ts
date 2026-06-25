@@ -3003,6 +3003,17 @@ test('importCovidencePackageFromConfig stores duplicate Covidence records on imp
           WHERE ir.route = '\${importRoute}'
           ORDER BY source_record.source_record_key ASC
         \`)
+        const hotFieldRows = await database.queryJson(\`
+          SELECT
+            hot.external_id AS externalArticleId,
+            CAST(hot.duplicate_flag AS VARCHAR) AS duplicateFlag,
+            CAST(hot.conflict_flag AS VARCHAR) AS conflictFlag,
+            hot.source_record_key AS sourceRecordKey
+          FROM app.review_import_article_hot_field hot
+          INNER JOIN app.import_route ir ON ir.id = hot.import_route_id
+          WHERE ir.route = '\${importRoute}'
+          ORDER BY hot.source_record_key ASC
+        \`)
         const currentLinkRows = await database.queryJson(\`
           SELECT COUNT(*)::INTEGER AS count
           FROM app.article_import_route air
@@ -3010,7 +3021,7 @@ test('importCovidencePackageFromConfig stores duplicate Covidence records on imp
           WHERE ir.route = '\${importRoute}'
         \`)
 
-        console.log(JSON.stringify({articleRows, currentLinkRows, sourceRecordRows}))
+        console.log(JSON.stringify({articleRows, currentLinkRows, hotFieldRows, sourceRecordRows}))
         covidenceImportService.deleteCovidencePackageFiles(datasourceId)
         await database.close()
       `,
@@ -3046,6 +3057,12 @@ test('importCovidencePackageFromConfig stores duplicate Covidence records on imp
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
       articleRows: Array<{doi: string; id: string; legacyArticleId: string | null}>
       currentLinkRows: Array<{count: number}>
+      hotFieldRows: Array<{
+        conflictFlag: string
+        duplicateFlag: string
+        externalArticleId: string
+        sourceRecordKey: string
+      }>
       sourceRecordRows: Array<{
         articleId: string
         externalArticleId: string
@@ -3096,6 +3113,29 @@ test('importCovidencePackageFromConfig stores duplicate Covidence records on imp
         isFullText: 'true',
         isIrrelevant: 'false',
         seededHumanJudgmentAnswer: 'yes',
+        sourceRecordKey: 'covidence:#1002',
+      },
+    ])
+    expect(
+      parsed.hotFieldRows.map((row) => {
+        return {
+          conflictFlag: row.conflictFlag,
+          duplicateFlag: row.duplicateFlag,
+          externalArticleId: row.externalArticleId,
+          sourceRecordKey: row.sourceRecordKey,
+        }
+      }),
+    ).toEqual([
+      {
+        conflictFlag: 'true',
+        duplicateFlag: 'true',
+        externalArticleId: `${importRoute}:covidence%3A%231001`,
+        sourceRecordKey: 'covidence:#1001',
+      },
+      {
+        conflictFlag: 'true',
+        duplicateFlag: 'true',
+        externalArticleId: `${importRoute}:covidence%3A%231002`,
         sourceRecordKey: 'covidence:#1002',
       },
     ])

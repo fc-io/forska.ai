@@ -370,13 +370,17 @@ const upsertDisplayWork = (
 }
 
 test('dirty-work creation coalesces by project component identity and scope', async () => {
-  const {database, dirtyWork} = createFakeDirtyWorkDatabase()
+  const {database, dirtyWork, statements} = createFakeDirtyWorkDatabase()
   const first = await upsertDisplayWork(database, getBaseScope(5))
   const second = await upsertDisplayWork(database, getBaseScope(5), 'delta-1-replay')
   const row = await getReviewServingDirtyWork(first.dirtyWorkId, database)
+  const dirtyWorkUpsert = statements.find((statement) => {
+    return statement.includes('ON CONFLICT(dirty_work_id) DO UPDATE SET')
+  })
 
   expect(second.dirtyWorkId).toBe(first.dirtyWorkId)
   expect(dirtyWork.size).toBe(1)
+  expect(dirtyWorkUpsert).toContain('updated_at = excluded.updated_at')
   expect(row).toMatchObject({
     dirtyRangeEnd: '1',
     dirtyRangeStart: '1',

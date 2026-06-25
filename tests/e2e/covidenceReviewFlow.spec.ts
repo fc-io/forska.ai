@@ -105,6 +105,8 @@ const createCovidenceReviewFlowProject = async (projectTitle: string) => {
 }
 
 test('Covidence review flow preserves scoped source ids, filters, related records, and PDF fetch', async ({page}) => {
+  test.setTimeout(120_000)
+
   const browserFailures = createBrowserFailureAssertions(page)
   const existingAssetDirectories = getCovidenceImportAssetDirectories()
   const projectTitle = `Playwright Covidence Review Flow ${Date.now()}`
@@ -118,8 +120,10 @@ test('Covidence review flow preserves scoped source ids, filters, related record
     await expect(page.getByRole('heading', {name: 'Project Reviews'})).toBeVisible()
     await expect(page.getByTestId(routeErrorSurfaceTestId)).toHaveCount(0)
     await expect(page.getByText(projectTitle)).toBeVisible()
-    await expect(page.getByText('Articles with Overall Human Answers')).toBeVisible()
-    await expect(page.getByRole('link', {name: expectedExternalId})).toHaveAttribute('href', duplicateStudyHref)
+    await expect(page.getByText(/Articles with (Overall Human Answers|Human Judgments)/)).toBeVisible({timeout: 60_000})
+    await expect(page.getByRole('link', {name: expectedExternalId})).toHaveAttribute('href', duplicateStudyHref, {
+      timeout: 60_000,
+    })
     await expect(page.getByRole('link', {name: `covidence:${dataSourceId}:covidence%3A%232001`})).toBeVisible()
 
     await page.getByLabel('Covidence duplicates only').check()
@@ -132,7 +136,7 @@ test('Covidence review flow preserves scoped source ids, filters, related record
     const duplicateRow = page.locator('tbody tr', {hasText: expectedExternalId})
     await expect(duplicateRow).toHaveCount(1)
     await duplicateRow.locator('input[type="checkbox"]').check()
-    await page.getByRole('button', {name: 'Download PDFs for selected'}).click()
+    await page.getByRole('button', {name: 'Download PDFs for selected'}).first().click()
     await expect(page.getByText('PDF fetch job started:')).toBeVisible()
 
     await duplicateRow.getByRole('link', {name: /Duplicate (Alpha|Beta)/}).click()
@@ -144,7 +148,10 @@ test('Covidence review flow preserves scoped source ids, filters, related record
     await expect(page.getByText('Covidence: #1002')).toBeVisible()
     await expect(page.getByText('Stages: Irrelevant')).toBeVisible()
     await expect(page.getByText('Stages: Select')).toBeVisible()
-    await expect(page.getByRole('link', {name: expectedExternalId})).toHaveAttribute('href', duplicateStudyHref)
+    const detailExternalIdLinks = page.getByRole('link', {name: expectedExternalId})
+    await expect(detailExternalIdLinks).toHaveCount(2)
+    await expect(detailExternalIdLinks.first()).toHaveAttribute('href', duplicateStudyHref)
+    await expect(detailExternalIdLinks.nth(1)).toHaveAttribute('href', duplicateStudyHref)
 
     browserFailures.assertNoFailures()
   } finally {

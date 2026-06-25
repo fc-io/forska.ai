@@ -629,12 +629,14 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   }
 
   return (
-    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <div class="min-w-0 rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-6">
       <div class="mb-6">
-        <div class="flex justify-between items-center mb-4">
-          <div>
-            <div class="flex items-center gap-2">
-              <h2 class="text-lg font-semibold text-gray-900">{timelineTitle()}</h2>
+        <div class="mb-4 flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="min-w-0">
+            <div class="flex min-w-0 items-center gap-2">
+              <h2 class="break-words text-lg font-semibold text-gray-900 [overflow-wrap:anywhere]">
+                {timelineTitle()}
+              </h2>
             </div>
             <div>
               <TokenUsageTimelineStats
@@ -648,11 +650,13 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
           </div>
         </div>
 
-        <div class="flex flex-col items-end gap-2">
+        <div class="flex min-w-0 flex-col items-start gap-2 sm:items-end">
           <Show when={formattedActiveRange()}>
-            <p class="text-xs text-gray-500">{formattedActiveRange()}</p>
+            <p class="max-w-full break-words text-xs text-gray-500 [overflow-wrap:anywhere]">
+              {formattedActiveRange()}
+            </p>
           </Show>
-          <div class="flex items-center gap-2">
+          <div class="flex max-w-full flex-wrap items-center gap-2">
             <TokenUsageTimelineDatePicker
               hasCustomRange={hasCustomRange}
               maxSelectableDate={maxSelectableDate}
@@ -672,7 +676,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
                 setPendingPickerValues(undefined)
                 return setSelectedInterval(newInterval)
               }}
-              class="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              class="max-w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="1min">1 minute</option>
               <option value="5min">5 minutes</option>
@@ -690,7 +694,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
         ref={(element) => {
           timelineChartContainer = element
         }}
-        class="relative h-64"
+        class="relative h-64 min-w-0"
       >
         <Show when={hasTimelineData() && !tokenData.isError}>
           <>
@@ -885,8 +889,10 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
             && (tokenData.data?.data as TokenTimelineData[])?.length === 0
           }
         >
-          <div class="absolute inset-0 flex items-center justify-center">
-            <p class="text-gray-500">No token usage data available for this period</p>
+          <div class="absolute inset-0 flex items-center justify-center px-2 text-center">
+            <p class="break-words text-gray-500 [overflow-wrap:anywhere]">
+              No token usage data available for this period
+            </p>
           </div>
         </Show>
       </div>
