@@ -27,6 +27,7 @@ import {
   type PromoteReviewServingProjectorSnapshotInput,
   type PromoteReviewServingProjectorSnapshotResult,
 } from './reviewServingProjectorWriter.ts'
+import type {ReviewServingRebuildRequest} from './reviewServingRebuildRequestRepository.ts'
 import {getCurrentReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
 import {requestReviewServingV4RebuildEffect} from './reviewServingV4RebuildRequestService.ts'
 
@@ -137,6 +138,24 @@ const defaultComponentOrder: readonly ReviewServingProjectionComponent[] = [
 
 const getDiagnostic = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
+}
+
+const getBlockedRebuildRequests = (requests: readonly ReviewServingRebuildRequest[]) => {
+  return requests.filter((request) => {
+    return request.status !== 'admitted'
+  })
+}
+
+const getBlockedRebuildRequestDiagnostic = (requests: readonly ReviewServingRebuildRequest[]) => {
+  return requests
+    .map((request) => {
+      return (
+        request.overBudgetReason
+        ?? request.lastError
+        ?? `review rebuild request ${request.requestId} was not admitted: ${request.status}`
+      )
+    })
+    .join('; ')
 }
 
 const getNormalizedBudget = (input: WakeReviewServingProjectorServiceInput) => {
@@ -456,6 +475,27 @@ export const wakeReviewServingProjectorService = async (
                   claimIds,
                   component,
                   diagnostic: getDiagnostic(rebuildResult.left),
+                  status: 'failed' as const,
+                },
+              ],
+              processedRows: state.processedRows + claims.length,
+            }
+          }
+
+          const blockedRebuildRequests = getBlockedRebuildRequests(rebuildResult.right)
+
+          if (blockedRebuildRequests.length > 0) {
+            await failDirtyWork(claimIds, database)
+
+            return {
+              ...state,
+              failures: [
+                ...state.failures,
+                {
+                  attempts: budget.maxRetries + 1,
+                  claimIds,
+                  component,
+                  diagnostic: getBlockedRebuildRequestDiagnostic(blockedRebuildRequests),
                   status: 'failed' as const,
                 },
               ],

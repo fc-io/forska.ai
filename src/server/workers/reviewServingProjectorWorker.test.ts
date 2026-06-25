@@ -367,6 +367,50 @@ test('worker marks rebuild requests failed after terminal chunk failure', async 
   expect(joined).toContain("request_id = 'rebuild-terminal'")
 })
 
+test('worker marks rebuild requests failed when completion finalization throws', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const requestChunk = {...chunkManifest, requestId: 'rebuild-finalizer'} satisfies ReviewServingRebuildChunkManifest
+
+  harness.database.queryJson = async <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => {
+    if (workloadContext) {
+      harness.workloadContexts.push(workloadContext)
+    }
+
+    if (statement.includes('CAST(COUNT(*) AS INTEGER) AS pendingChunkCount')) {
+      throw new Error('request finalizer failed')
+    }
+
+    return [] as T[]
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return requestChunk
+    },
+    failChunk: async () => {
+      throw new Error('completed chunk should not be failed')
+    },
+    heartbeatChunk: async () => {
+      return requestChunk
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+  const joined = harness.runStatements.join('\n')
+
+  expect(result.chunk).toEqual({chunkId: 'chunk-1', requestId: 'rebuild-finalizer', status: 'failed'})
+  expect(harness.failedChunks).toEqual([])
+  expect(joined).toContain('UPDATE app.review_rebuild_request')
+  expect(joined).toContain("status = 'failed'")
+  expect(joined).toContain("last_error = 'request finalizer failed'")
+  expect(joined).toContain("request_id = 'rebuild-finalizer'")
+})
+
 test('worker refreshes request candidate snapshot state before promotion', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const requestChunk = {

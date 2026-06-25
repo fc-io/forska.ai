@@ -68,6 +68,21 @@ const getClock = (statements: readonly string[]) => {
   return new Date(2026, 5, 16, 14, statements.length).toISOString()
 }
 
+const getPromiseRejection = async (promise: Promise<unknown>) => {
+  return promise.then(
+    () => {
+      return null
+    },
+    (error: unknown) => {
+      return error
+    },
+  )
+}
+
+const getErrorMessage = (error: unknown) => {
+  return error instanceof Error ? error.message : String(error)
+}
+
 const shouldPreserveChunkStateOnUpsert = (row: FakeChunkRow | undefined) => {
   return row === undefined
     ? false
@@ -616,19 +631,22 @@ test('validation mismatch marks the claimed chunk failed for retry', async () =>
     },
     database,
   )
-  const failed = await writeReviewServingRebuildChunkOutput(
-    {
-      ...baseChunkIdentity,
-      leaseOwner: 'worker-3',
-      validateOutput: async () => {
-        return {actualChecksum: 'bad-checksum', actualCount: 24, expectedChecksum: 'checksum-v3', expectedCount: 25}
+  const rejection = await getPromiseRejection(
+    writeReviewServingRebuildChunkOutput(
+      {
+        ...baseChunkIdentity,
+        leaseOwner: 'worker-3',
+        validateOutput: async () => {
+          return {actualChecksum: 'bad-checksum', actualCount: 24, expectedChecksum: 'checksum-v3', expectedCount: 25}
+        },
+        writeOutput: async () => {},
       },
-      writeOutput: async () => {},
-    },
-    database,
+      database,
+    ),
   )
 
-  expect(failed).toMatchObject({status: 'failed'})
+  expect(getErrorMessage(rejection)).toContain('chunk validation failed')
+  expect(rows.get(getReviewServingRebuildChunkId(baseChunkIdentity))?.status).toBe('failed')
   expect(rows.get(getReviewServingRebuildChunkId(baseChunkIdentity))?.lastError).toContain('chunk validation failed')
 })
 
@@ -646,24 +664,64 @@ test('validation mismatch rolls back chunk output before marking the chunk faile
     },
     database,
   )
-  await writeReviewServingRebuildChunkOutput(
-    {
-      ...baseChunkIdentity,
-      leaseOwner: 'worker-rollback',
-      validateOutput: async () => {
-        return {actualChecksum: 'bad-checksum', actualCount: 24, expectedChecksum: 'checksum-v3', expectedCount: 25}
+  const rejection = await getPromiseRejection(
+    writeReviewServingRebuildChunkOutput(
+      {
+        ...baseChunkIdentity,
+        leaseOwner: 'worker-rollback',
+        validateOutput: async () => {
+          return {actualChecksum: 'bad-checksum', actualCount: 24, expectedChecksum: 'checksum-v3', expectedCount: 25}
+        },
+        writeOutput: async (tx) => {
+          await tx.run('INSERT INTO mart.fake_chunk_output VALUES (24)')
+        },
       },
-      writeOutput: async (tx) => {
-        await tx.run('INSERT INTO mart.fake_chunk_output VALUES (24)')
-      },
-    },
-    database,
+      database,
+    ),
   )
   const failedRow = rows.get(getReviewServingRebuildChunkId(baseChunkIdentity))
 
+  expect(getErrorMessage(rejection)).toContain('chunk validation failed')
   expect(outputWrites).toEqual([])
   expect(failedRow?.lastError).toContain('chunk validation failed')
   expect(failedRow?.status).toBe('failed')
+})
+
+test('validation mismatch rejects after exhausting retries to a request terminal state', async () => {
+  const retryIdentity = {
+    ...baseChunkIdentity,
+    requestId: 'rebuild:validation-terminal',
+  } satisfies ReviewServingRebuildChunkIdentity
+  const running = {
+    ...getChunkRowFromIdentity(retryIdentity, []),
+    leaseOwner: 'worker-validation-terminal',
+    retryCount: 1,
+    status: 'running' as const,
+  }
+  const {database, rows} = createFakeChunkManifestDatabase([running])
+  const chunkId = getReviewServingRebuildChunkId(retryIdentity)
+
+  const rejection = await getPromiseRejection(
+    writeReviewServingRebuildChunkOutput(
+      {
+        ...retryIdentity,
+        leaseOwner: 'worker-validation-terminal',
+        validateOutput: async () => {
+          return {actualChecksum: 'bad-checksum', actualCount: 24, expectedChecksum: 'checksum-v3', expectedCount: 25}
+        },
+        writeOutput: async () => {},
+      },
+      database,
+    ),
+  )
+
+  expect(getErrorMessage(rejection)).toContain('chunk validation failed')
+  expect(rows.get(chunkId)).toMatchObject({
+    admissionState: 'blocked_over_budget',
+    leaseOwner: null,
+    retryCount: 2,
+    status: 'blocked_over_budget',
+  })
 })
 
 test('failed rebuild chunks record retry backoff and exhaust to the request terminal state', async () => {
