@@ -200,9 +200,18 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
   expect(result).toEqual({payloadRowCount: 1, patchWatermark: 0})
   expect(selectStatement).toContain('article.article_created_at AS articleCreatedAt')
   expect(selectStatement).toContain('json_merge_patch')
-  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
+  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
+  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
   expect(selectStatement).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
-  expect(selectStatement).toContain("selected.selected_import_snapshot_id = 'selected-import-snapshot-1'")
+  expect(selectStatement).toContain("selected_base.selected_import_snapshot_id = 'selected-import-snapshot-1'")
+  expect(selectStatement).toContain("selected_patch.selected_import_snapshot_id = 'selected-import-snapshot-1'")
+  expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
+  expect(selectStatement).toContain(
+    'WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id',
+  )
+  expect(selectStatement).toContain(
+    'WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key',
+  )
   expect(selectStatement).toContain('LEFT(article.article_summary, 2000) AS abstractText')
   expect(insertStatement).toContain('article_created_at')
   expect(insertStatement).toContain('payload_bytes')

@@ -72,6 +72,7 @@ test('title search projection writes token rows and search-only component state 
       projectScopeIdentity: 'projectScope:identity-1',
       projectionIdentity: 'search:identity-1',
       searchIdentity: 'search:identity-1',
+      selectedImportSnapshotId: 'selected-import-snapshot-1',
       snapshotId: 'snapshot-1',
     },
     database,
@@ -89,6 +90,13 @@ test('title search projection writes token rows and search-only component state 
 
   expect(result).toEqual({patchWatermark: 9, searchRowCount: 2})
   expect(selectStatement).toContain("VALUES ('article-1')")
+  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
+  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
+  expect(selectStatement).toContain(
+    'WHEN selected_patch.patch_watermark IS NOT NULL THEN COALESCE(selected_patch.article_title, article.article_title)',
+  )
+  expect(selectStatement).toContain('ELSE COALESCE(selected_base.article_title, article.article_title)')
+  expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
   expect(deleteStatement).toContain('search_identity')
   expect(inserts).toHaveLength(2)
   expect(inserts.join('\n')).toContain("'alpha'")

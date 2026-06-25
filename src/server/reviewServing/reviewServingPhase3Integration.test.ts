@@ -373,6 +373,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
     'search',
     'selectedImport',
     'posting',
+    'search',
     'summary',
     'payload',
   ])

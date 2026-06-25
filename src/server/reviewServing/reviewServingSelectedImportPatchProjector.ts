@@ -76,6 +76,7 @@ type SelectedImportPatchRow = {
   publicationYear: number | null
   selectedRankKey: string | null
   selectedRankNumeric: number | null
+  sourceRecordKey: string | null
   selectedSourceUrl: string | null
   scopeTombstone: boolean
   tombstone: boolean
@@ -384,6 +385,7 @@ const getSelectedImportPatchRows = async (
         SELECT
           dirty.article_id AS articleId,
           winner.import_route_id AS importRouteId,
+          winner.source_record_key AS sourceRecordKey,
           winner.selected_rank_key AS selectedRankKey,
           winner.selected_rank_numeric AS selectedRankNumeric,
           winner.publication_year AS publicationYear,
@@ -429,7 +431,9 @@ const getSelectedImportPatchRecord = (
       article_id: row.articleId,
       conflict_flag: row.tombstone ? null : row.conflictFlag,
       duplicate_flag: row.tombstone ? null : row.duplicateFlag,
+      external_id: row.tombstone ? null : row.externalId,
       import_route_id: row.tombstone ? null : row.importRouteId,
+      journal_title: row.tombstone ? null : row.journalTitle,
       patch_updated_at: new Date(),
       patch_watermark: patchWatermark,
       project_id: input.projectId,
@@ -438,6 +442,8 @@ const getSelectedImportPatchRecord = (
       selected_import_snapshot_id: input.selectedImportSnapshotId,
       selected_rank_key: row.tombstone ? null : row.selectedRankKey,
       selected_rank_numeric: row.tombstone ? null : row.selectedRankNumeric,
+      source_record_key: row.tombstone ? null : row.sourceRecordKey,
+      article_title: row.tombstone ? null : row.articleTitle,
       tombstone: row.tombstone,
     },
   } satisfies ReviewServingProjectorRecord

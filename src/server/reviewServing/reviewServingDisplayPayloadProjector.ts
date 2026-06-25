@@ -357,15 +357,34 @@ const getPayloadRows = async (
     ${dirtyJoinSql}
     INNER JOIN app."article" article
       ON article.id = scope.article_id
-    LEFT JOIN app.review_selected_article_import_v4 selected
-      ON selected.project_id = scope.project_id
-      AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-      AND selected.article_id = scope.article_id
-      AND NOT selected.tombstone
+    LEFT JOIN app.review_selected_article_import_v4 selected_base
+      ON selected_base.project_id = scope.project_id
+      AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND selected_base.article_id = scope.article_id
+    LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
+      ON selected_patch.project_id = scope.project_id
+      AND selected_patch.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND selected_patch.article_id = scope.article_id
+      AND selected_patch.patch_watermark = (
+        SELECT MAX(newer.patch_watermark)
+        FROM mart.review_selected_import_patch_v4 newer
+        WHERE newer.project_id = selected_patch.project_id
+          AND newer.project_scope_identity = selected_patch.project_scope_identity
+          AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
+          AND newer.article_id = selected_patch.article_id
+      )
     LEFT JOIN app.article_import_route_source_record selected_source
-      ON selected_source.import_route_id = selected.import_route_id
-      AND selected_source.article_id = selected.article_id
-      AND selected_source.source_record_key = selected.source_record_key
+      ON selected_source.import_route_id = CASE
+        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
+        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id
+        ELSE selected_base.import_route_id
+      END
+      AND selected_source.article_id = scope.article_id
+      AND selected_source.source_record_key = CASE
+        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
+        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key
+        ELSE selected_base.source_record_key
+      END
       AND selected_source.quarantined_at IS NULL
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope)
