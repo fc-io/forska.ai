@@ -4,7 +4,11 @@ The browser network smoke audit is a reproducible Playwright pass over the local
 
 ## Runtime
 
-- Start from a clean test database.
+- Default to the current primary runtime database.
+- Do not create synthetic seed rows in the default run.
+- Discover existing project, article, prompt, provider, and data source IDs through read endpoints.
+- Visit only routes that have the existing IDs they need.
+- Skip routes that are known to write or queue work on load when running against the current DB.
 - Start the API/server stack with the Playwright `webServer` config.
 - Start the app server with the Playwright `webServer` config.
 - Point the browser bundle at the direct local API origin for the test ports.
@@ -17,21 +21,24 @@ Run it with:
 bun run test:network-smoke
 ```
 
-To run against the primary runtime database without creating synthetic seed rows:
+This is the real-data, no-seed-write path. It starts Playwright-controlled app/API servers against the primary DuckDB path, unless `DUCKDB_PATH` or `FORSKA_NETWORK_SMOKE_DUCKDB_PATH` points elsewhere. Stop other servers using the same DuckDB file before running it directly.
+
+To run the older clean synthetic fixture instead:
 
 ```bash
-bun run test:network-smoke:current-db
+bun run test:network-smoke:synthetic
 ```
 
-Current-DB mode uses existing IDs discovered through read endpoints. It requires at least one active project with a linked prompt and article, one provider connection, and one active data source. It skips routes that are known to write or queue work on load, including human assessment init and comparison-project dynamic pages. Stop other servers using the same DuckDB file before using direct current-DB mode, or run against a copied database for full dynamic-route coverage.
+Synthetic mode starts from a clean test database and writes local fixture rows only into that temporary database. Use it when you need deterministic coverage for routes that do not currently have representative data in the real DB.
 
 ## Audit Loop
 
 1. Build a concrete route inventory from the generated TanStack route tree.
-2. Seed only local data needed to give dynamic routes real IDs.
-3. Navigate each audited route directly.
-4. Record app/API-origin request failures, HTTP 4xx/5xx responses, page errors, and console errors.
-5. Fail with a grouped report containing the page, request URL, method, status, and a short response snippet.
+2. Resolve dynamic route IDs from existing data without writing to the current database.
+3. Skip dynamic routes whose IDs do not exist in the current database.
+4. Navigate each audited route directly.
+5. Record app/API-origin request failures, HTTP 4xx/5xx responses, page errors, and console errors.
+6. Fail with a grouped report containing the page, request URL, method, status, and a short response snippet.
 
 The audit keeps a second explicit list for routes that are not yet safe to visit in the generic smoke pass. That list must include a reason, so new coverage gaps stay visible in review.
 
