@@ -72,6 +72,10 @@ type FakeProjectionManifestRow = {
   status: 'candidate'
 }
 
+type FakeDirtyWatermark = {latestSourceHighWaterMark: number; sourcePartition: string}
+
+type FakeRequestDatabaseOptions = {dirtyWatermarks?: readonly FakeDirtyWatermark[]}
+
 const getSqlStrings = (statement: string) => {
   return [...statement.matchAll(/'((?:''|[^'])*)'/g)].map((match) => {
     return match[1]?.replaceAll("''", "'") ?? ''
@@ -115,7 +119,7 @@ const fakeRebuildComponents = [
   'search',
 ] as const
 
-const createFakeRequestDatabase = (stats: FakeStats) => {
+const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabaseOptions = {}) => {
   const requests = new Map<string, FakeRequestRow>()
   const projectionManifests = new Map<string, FakeProjectionManifestRow>()
   const statements: string[] = []
@@ -202,6 +206,10 @@ const createFakeRequestDatabase = (stats: FakeStats) => {
       return [
         {chunkEndKey: 'article-z', chunkStartKey: 'article-a', scopedArticleCount: stats.scopedArticleCount},
       ] as T[]
+    }
+
+    if (statement.includes('FROM app.review_serving_dirty_work')) {
+      return (options.dirtyWatermarks ?? []) as T[]
     }
 
     if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
@@ -329,6 +337,57 @@ test('V4 rebuild request service bootstraps explicit chunks when a project has n
   expect(joined).toContain("'search'")
   expect(joined).toContain('snapshot:')
   expect(joined).toContain('freshReviewServingSnapshot')
+})
+
+test('V4 rebuild request service keeps selected-import bootstrap chunks on import watermarks', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {...baseStats, snapshotCount: 0, snapshotUpdatedAt: null},
+    {
+      dirtyWatermarks: [
+        {latestSourceHighWaterMark: 4, sourcePartition: 'importRunArticle:project-v4'},
+        {latestSourceHighWaterMark: 10, sourcePartition: 'reviewChange:project-v4'},
+      ],
+    },
+  )
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const selectedImportChunk = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'selectedImport'")
+  })
+  const projectScopeChunk = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'projectScope'")
+  })
+
+  expect(request.status).toBe('admitted')
+  expect(selectedImportChunk).toMatch(
+    /'selectedImport',\s*'[^']+',\s*'freshReviewServingSnapshot',\s*4,\s*'article-a'/u,
+  )
+  expect(projectScopeChunk).toMatch(/'projectScope',\s*'[^']+',\s*'freshReviewServingSnapshot',\s*10,\s*'article-a'/u)
+})
+
+test('V4 rebuild request service does not seed candidate state for over-budget bootstraps', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    ...baseStats,
+    humanJudgmentCount: 0,
+    judgmentCount: 0,
+    promptCount: 0,
+    scopedArticleCount: 100_000,
+    snapshotCount: 0,
+    snapshotUpdatedAt: null,
+    summaryHumanJudgmentCount: 0,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const joined = statements.join('\n')
+
+  expect(request.status).toBe('blocked_over_budget')
+  expect(joined).toContain('INSERT INTO app.review_rebuild_chunk_manifest')
+  expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_snapshot_manifest')
 })
 
 test('V4 rebuild request service accounts for list-mode fan-out in admission budgets', async () => {

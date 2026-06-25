@@ -157,3 +157,11 @@ test('selected-import V4 projector does not use the runtime selected scoped impo
 
   expect(source).not.toContain('selected_scoped_article_import')
 })
+
+test('selected-import snapshot identity is bumped for rank-key sort format changes', () => {
+  const source = readFileSync(join(import.meta.dir, 'reviewServingSelectedImportProjector.ts'), 'utf8')
+
+  expect(source).toContain("const selectedImportProjectorDefinitionVersion = 'review-serving-selected-import-v2'")
+  expect(source).toContain("WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)")
+  expect(source).toContain("ELSE concat('1:', hot.selected_rank_key)")
+})

@@ -14,7 +14,11 @@ import type {
   ReviewServingChunkManifestRepositoryTransaction,
   ReviewServingRebuildChunkManifestInput,
 } from './reviewServingChunkManifestRepository.ts'
-import {reviewServingListModes, type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {
+  type ReviewServingComponentRequirements,
+  reviewServingListModes,
+  type ReviewServingProjectionComponent,
+} from './reviewServingContracts.ts'
 import {
   createCandidateReviewServingSnapshotManifest,
   upsertReviewServingProjectionIdentityManifest,
@@ -98,6 +102,18 @@ export type RequestReviewServingV4RebuildInput = {
   components?: readonly ReviewServingProjectionComponent[]
   projectId: string
   reason: string
+}
+
+type PreparedReviewServingV4Bootstrap = {
+  chunks: readonly ReviewServingRebuildChunkManifestInput[]
+  componentRequirements: ReviewServingComponentRequirements
+  components: readonly ReviewServingProjectionComponent[]
+  inputWatermark: number
+  projectId: string
+  reviewConfigHash: string | null
+  selectedImportSnapshotId: string
+  snapshotId: string
+  sourceWatermarks: Record<string, number>
 }
 
 const listModeFanOut = reviewServingListModes.length
@@ -327,13 +343,15 @@ const getReviewServingV4BootstrapChunks = (input: {
   inputWatermark: number
   projectId: string
   snapshotId: string
+  sourceWatermarks: Record<string, number>
 }): readonly ReviewServingRebuildChunkManifestInput[] => {
   return input.components.map((component) => {
     return {
       chunkEndKey: input.articleBounds.chunkEndKey,
       chunkStartKey: input.articleBounds.chunkStartKey,
       inputDigest: 'freshReviewServingSnapshot',
-      inputWatermark: input.inputWatermark,
+      inputWatermark:
+        component === 'selectedImport' ? (input.sourceWatermarks.importRunArticle ?? 0) : input.inputWatermark,
       outputBaseGeneration: 0,
       projectId: input.projectId,
       projectionComponent: component,
@@ -344,10 +362,10 @@ const getReviewServingV4BootstrapChunks = (input: {
   })
 }
 
-const createReviewServingV4Bootstrap = async (
+const prepareReviewServingV4Bootstrap = async (
   input: {components: readonly ReviewServingProjectionComponent[]; projectId: string},
   database: ReviewServingChunkManifestRepositoryTransaction,
-) => {
+): Promise<PreparedReviewServingV4Bootstrap | null> => {
   const articleBounds = await getReviewServingV4BootstrapArticleBounds(input, database)
 
   if (articleBounds === null) {
@@ -375,13 +393,43 @@ const createReviewServingV4Bootstrap = async (
     sourceWatermarks,
   })
 
+  return {
+    chunks: getReviewServingV4BootstrapChunks({
+      articleBounds,
+      components,
+      inputWatermark,
+      projectId: input.projectId,
+      snapshotId,
+      sourceWatermarks,
+    }),
+    componentRequirements,
+    components,
+    inputWatermark,
+    projectId: input.projectId,
+    reviewConfigHash,
+    selectedImportSnapshotId,
+    snapshotId,
+    sourceWatermarks,
+  }
+}
+
+const seedReviewServingV4Bootstrap = async (
+  input: PreparedReviewServingV4Bootstrap,
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
   await upsertReviewServingV4BootstrapProjectionManifests(
-    {components, inputWatermark, projectId: input.projectId, reviewConfigHash, sourceWatermarks},
+    {
+      components: input.components,
+      inputWatermark: input.inputWatermark,
+      projectId: input.projectId,
+      reviewConfigHash: input.reviewConfigHash,
+      sourceWatermarks: input.sourceWatermarks,
+    },
     database,
   )
 
   const componentIdentities = Object.fromEntries(
-    components.map((component) => {
+    input.components.map((component) => {
       return [
         component,
         {
@@ -395,31 +443,23 @@ const createReviewServingV4Bootstrap = async (
   const candidateSnapshot = await composeReviewServingCandidateSnapshotManifest(
     {
       componentIdentities,
-      componentRequirements,
+      componentRequirements: input.componentRequirements,
       composedIdentity: {
-        componentSet: components,
+        componentSet: input.components,
         requestKind: 'v4-review-serving-bootstrap',
-        reviewConfigHash,
-        selectedImportSnapshotId,
+        reviewConfigHash: input.reviewConfigHash,
+        selectedImportSnapshotId: input.selectedImportSnapshotId,
       },
       projectId: input.projectId,
-      reviewConfigHash,
-      selectedImportSnapshotId,
-      snapshotId,
-      sourceWatermarks,
+      reviewConfigHash: input.reviewConfigHash,
+      selectedImportSnapshotId: input.selectedImportSnapshotId,
+      snapshotId: input.snapshotId,
+      sourceWatermarks: input.sourceWatermarks,
     },
     database,
   )
 
   await createCandidateReviewServingSnapshotManifest(candidateSnapshot, database)
-
-  return getReviewServingV4BootstrapChunks({
-    articleBounds,
-    components,
-    inputWatermark,
-    projectId: input.projectId,
-    snapshotId,
-  })
 }
 
 const getReviewServingV4RebuildEstimate = (
@@ -735,8 +775,8 @@ export const requestReviewServingV4RebuildEffect = (
     const estimateStats = isFreshBootstrap ? {...stats, snapshotCount: 1} : stats
 
     return database.transaction(async (tx) => {
-      const bootstrapChunks = isFreshBootstrap
-        ? await createReviewServingV4Bootstrap({components, projectId: input.projectId}, tx)
+      const bootstrap = isFreshBootstrap
+        ? await prepareReviewServingV4Bootstrap({components, projectId: input.projectId}, tx)
         : null
       const requestDatabase = {
         queryJson: tx.queryJson,
@@ -748,10 +788,10 @@ export const requestReviewServingV4RebuildEffect = (
         },
       }
 
-      return createReviewServingRebuildRequest(
+      const request = await createReviewServingRebuildRequest(
         {
           budget: defaultRequestBudget,
-          chunks: bootstrapChunks ?? undefined,
+          chunks: bootstrap?.chunks ?? undefined,
           diagnostics: {
             bootstrapSnapshot: isFreshBootstrap,
             source: 'phase5b-v4-rebuild-request-service',
@@ -767,6 +807,12 @@ export const requestReviewServingV4RebuildEffect = (
         },
         requestDatabase,
       )
+
+      if (bootstrap !== null && request.status === 'admitted') {
+        await seedReviewServingV4Bootstrap(bootstrap, tx)
+      }
+
+      return request
     })
   })
 }
