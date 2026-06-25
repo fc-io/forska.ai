@@ -49,7 +49,8 @@ type NetworkSmokeTarget = {
   template: string
 }
 
-type SkippedRouteTemplate = {reason: string; template: string}
+type SkippedRouteClassification = 'admin-debug-only' | 'missing-data' | 'unsafe-pending-phase-5c-rewiring'
+type SkippedRouteTemplate = {classification: SkippedRouteClassification; reason: string; template: string}
 
 type NetworkFailure = {
   details?: string
@@ -78,6 +79,10 @@ const getRuntimeLogFiles = () => {
 
 const assertTextDoesNotContainLargeRebuildFailure = (source: string, text: string) => {
   expect(text, `${source} must not contain ${largeRebuildFailureText}`).not.toContain(largeRebuildFailureText)
+}
+
+const textContainsLargeRebuildFailure = (text: string) => {
+  return text.includes(largeRebuildFailureText)
 }
 
 const assertRuntimeLogsDoNotContainLargeRebuildFailure = () => {
@@ -634,15 +639,18 @@ const dynamicAuditTargets: NetworkSmokeTarget[] = [
 
 const baseSkippedRouteTemplates: SkippedRouteTemplate[] = [
   {
+    classification: 'missing-data',
     template: '/admin/failed_requests/$id',
     reason:
       'needs a real failed token-usage request row; generic smoke seeding should not manufacture failed provider traffic',
   },
   {
+    classification: 'missing-data',
     template: '/admin/jobs/$id',
     reason: 'creating a real judgment job requires runtime/model admission and local SQLite preflight state',
   },
   {
+    classification: 'missing-data',
     template: '/admin/jobs/$id/unassessed_articles',
     reason: 'depends on the same safely-created judgment job fixture as the job detail route',
   },
@@ -650,22 +658,27 @@ const baseSkippedRouteTemplates: SkippedRouteTemplate[] = [
 
 const mutatingRouteLoadSkippedTemplates: SkippedRouteTemplate[] = [
   {
+    classification: 'unsafe-pending-phase-5c-rewiring',
     template: '/compare-judgments/$id',
     reason: 'direct existing-DB read-only mode skips pages that can queue comparison-serving rebuild work on load',
   },
   {
+    classification: 'unsafe-pending-phase-5c-rewiring',
     template: '/compare-judgments/$id/edit',
     reason: 'direct existing-DB read-only mode skips comparison-project dynamic pages as one route family',
   },
   {
+    classification: 'unsafe-pending-phase-5c-rewiring',
     template: '/compare-judgments/$id/export',
     reason: 'direct existing-DB read-only mode skips pages that load comparison metadata through the rebuild-capable route',
   },
   {
+    classification: 'unsafe-pending-phase-5c-rewiring',
     template: '/compare-judgments/$id/import-resolutions',
     reason: 'direct existing-DB read-only mode skips pages that load comparison metadata through the rebuild-capable route',
   },
   {
+    classification: 'unsafe-pending-phase-5c-rewiring',
     template: '/projects/$id/humanAssessment',
     reason: 'direct existing-DB read-only mode skips POST /api/humanassessment/init because it can create pending human judgments',
   },
@@ -770,8 +783,14 @@ const getRouteInventoryReport = () => {
   const duplicateAudited = audited.filter((route, index) => {
     return audited.indexOf(route) !== index
   })
+  const invalidSkipped = skippedRouteTemplates.filter((route) => {
+    return !['admin-debug-only', 'missing-data', 'unsafe-pending-phase-5c-rewiring'].includes(route.classification)
+  })
+  const legacySideEffectSkipped = skippedRouteTemplates.filter((route) => {
+    return /legacy V3 repair|dirty refresh|large-rebuild work on load/i.test(route.reason)
+  })
 
-  return {duplicateAudited, extra, generated, missing}
+  return {duplicateAudited, extra, generated, invalidSkipped, legacySideEffectSkipped, missing}
 }
 
 const isAuditedOrigin = (url: string) => {
@@ -788,6 +807,10 @@ const isBrowserResourceLoadConsoleError = (message: string) => {
   return message.startsWith('Failed to load resource: the server responded with a status of')
 }
 
+const shouldInspectResponseBodyForLargeRebuildFailure = (response: Response) => {
+  return ['document', 'fetch', 'xhr'].includes(response.request().resourceType())
+}
+
 const isExpectedHttpFailure = (failure: Omit<NetworkFailure, 'pagePath'> & {pagePath: string}) => {
   const pathname = failure.url ? new URL(failure.url).pathname : ''
 
@@ -799,13 +822,16 @@ const isExpectedHttpFailure = (failure: Omit<NetworkFailure, 'pagePath'> & {page
   )
 }
 
-const getResponseBodySnippet = async (response: Response) => {
+const getResponseBodyText = async (response: Response) => {
   try {
-    const body = await response.text()
-    return body.replace(/\s+/g, ' ').trim().slice(0, 500)
+    return response.text()
   } catch (error) {
     return error instanceof Error ? `Could not read response body: ${error.message}` : 'Could not read response body'
   }
+}
+
+const getResponseBodySnippet = (body: string) => {
+  return body.replace(/\s+/g, ' ').trim().slice(0, 500)
 }
 
 const formatNetworkFailure = (failure: NetworkFailure, index: number) => {
@@ -874,11 +900,31 @@ const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
   const onResponse = (response: Response) => {
     const request = response.request()
 
-    if (!isAuditedOrigin(response.url()) || isBenignRequest(request) || response.status() < 400) {
+    if (!isAuditedOrigin(response.url()) || isBenignRequest(request)) {
       return
     }
 
-    const bodyRead = getResponseBodySnippet(response).then((details) => {
+    if (response.status() < 400 && !shouldInspectResponseBodyForLargeRebuildFailure(response)) {
+      return
+    }
+
+    const bodyRead = getResponseBodyText(response).then((body) => {
+      const details = getResponseBodySnippet(body)
+
+      if (shouldInspectResponseBodyForLargeRebuildFailure(response) && textContainsLargeRebuildFailure(body)) {
+        record({
+          details,
+          method: request.method(),
+          source: 'large-rebuild-failure',
+          status: response.status(),
+          url: response.url(),
+        })
+      }
+
+      if (response.status() < 400) {
+        return
+      }
+
       const failure = {
         details,
         method: request.method(),
@@ -898,15 +944,27 @@ const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
   }
 
   const onPageError = (error: Error) => {
-    record({details: error.stack ?? error.message, source: 'pageerror'})
+    const details = error.stack ?? error.message
+
+    if (textContainsLargeRebuildFailure(details)) {
+      record({details, source: 'large-rebuild-failure'})
+    }
+
+    record({details, source: 'pageerror'})
   }
 
   const onConsole = (message: {text: () => string; type: () => string}) => {
-    if (message.type() !== 'error' || isBrowserResourceLoadConsoleError(message.text())) {
+    const details = message.text()
+
+    if (textContainsLargeRebuildFailure(details)) {
+      record({details, source: 'large-rebuild-failure'})
+    }
+
+    if (message.type() !== 'error' || isBrowserResourceLoadConsoleError(details)) {
       return
     }
 
-    record({details: message.text(), source: 'console.error'})
+    record({details, source: 'console.error'})
   }
 
   page.on('requestfailed', onRequestFailed)
@@ -959,6 +1017,7 @@ const visitRoute = async (page: Page, pathToVisit: string, waitForAuditedRequest
     return undefined
   })
   await waitForAuditedRequests()
+  assertTextDoesNotContainLargeRebuildFailure(`page HTML for ${pathToVisit}`, await page.content())
   await expect(page.getByTestId(routeErrorSurfaceTestId)).toHaveCount(0)
 }
 
@@ -968,6 +1027,11 @@ test('network smoke route inventory stays explicit', () => {
   expect(report.missing, 'Add new routes to audited or skipped network smoke inventory').toEqual([])
   expect(report.extra, 'Remove stale routes from network smoke inventory').toEqual([])
   expect(report.duplicateAudited, 'Each audited route template should appear once').toEqual([])
+  expect(report.invalidSkipped, 'Skipped network smoke routes need an explicit allowed classification').toEqual([])
+  expect(
+    report.legacySideEffectSkipped,
+    'No normal browser route may remain skipped only because it queues legacy V3 repair, dirty refresh, or large-rebuild work on load',
+  ).toEqual([])
 })
 
 test('audited app pages have no unexpected local network errors', async ({page}) => {
