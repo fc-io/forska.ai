@@ -1,5 +1,6 @@
 import {beforeEach, expect, mock, test} from 'bun:test'
 
+import type {ProjectMartLargeRebuildPhase} from '../../db/schemaTypes.ts'
 import {
   getProjectMartLargeRebuildRuntimeMetrics,
   resetProjectMartLargeRebuildRuntimeMetricsForTests,
@@ -49,7 +50,7 @@ const createRunnerContext = (params: {
     cursorArticleCreatedAt: Date | null
     cursorArticleId: string | null
     projectId: string
-    rebuildPhase: string
+    rebuildPhase: ProjectMartLargeRebuildPhase
     sourceDirtyToken?: number | null
     sourceHighWaterDirtyToken?: number | null
     targetGeneration: number | null
@@ -870,6 +871,8 @@ test('completion uses frozen source high-water token for refresh completion and 
 })
 
 test('fails unsupported phases explicitly', async () => {
+  const originalConsoleError = console.error
+  const errorCalls: Array<unknown[]> = []
   const context = createRunnerContext({
     claim: {
       leaseExpiresAt: new Date('2026-04-03T10:00:00.000Z'),
@@ -880,24 +883,41 @@ test('fails unsupported phases explicitly', async () => {
     },
     state: null,
   })
+  console.error = ((...args: unknown[]) => {
+    errorCalls.push(args)
+  }) as typeof console.error
 
-  const result = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, context.dependencies)
-  const runtimeMetrics = getProjectMartLargeRebuildRuntimeMetrics()
+  try {
+    const result = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, context.dependencies)
+    const runtimeMetrics = getProjectMartLargeRebuildRuntimeMetrics()
 
-  expect(result).toEqual({
-    error: 'Missing large rebuild state for project-1',
-    projectId: 'project-1',
-    status: 'failed',
-    workerId: 'worker-1',
-  })
-  expect(context.failed).toEqual([{error: 'Missing large rebuild state for project-1', projectId: 'project-1'}])
-  expect(runtimeMetrics.totals.cyclesFailed).toBe(1)
-  expect(runtimeMetrics.recentCycles[0]).toMatchObject({
-    articleCount: 0,
-    error: 'Missing large rebuild state for project-1',
-    phase: 'review_article_rollup',
-    projectId: 'project-1',
-    status: 'failed',
-    workerId: 'worker-1',
-  })
+    expect(result).toEqual({
+      error: 'Missing large rebuild state for project-1',
+      projectId: 'project-1',
+      status: 'failed',
+      workerId: 'worker-1',
+    })
+    expect(errorCalls).toHaveLength(1)
+    expect(errorCalls[0]?.[0]).toBe('Large rebuild failed: review_article_rollup')
+    expect(errorCalls[0]?.[1]).toMatchObject({
+      error: 'Missing large rebuild state for project-1',
+      projectId: 'project-1',
+      rebuildPhase: 'review_article_rollup',
+      refreshToken: 9,
+      targetGeneration: null,
+      workerId: 'worker-1',
+    })
+    expect(context.failed).toEqual([{error: 'Missing large rebuild state for project-1', projectId: 'project-1'}])
+    expect(runtimeMetrics.totals.cyclesFailed).toBe(1)
+    expect(runtimeMetrics.recentCycles[0]).toMatchObject({
+      articleCount: 0,
+      error: 'Missing large rebuild state for project-1',
+      phase: 'review_article_rollup',
+      projectId: 'project-1',
+      status: 'failed',
+      workerId: 'worker-1',
+    })
+  } finally {
+    console.error = originalConsoleError
+  }
 })
