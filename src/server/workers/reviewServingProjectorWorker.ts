@@ -1320,7 +1320,9 @@ const getRebuildChunkProjectClaims = (input: {
 const getSelectedImportRebuildPatchSourceWatermarks = (sourceWatermarks: Record<string, number>) => {
   const importRunArticleWatermark = sourceWatermarks.importRunArticle ?? sourceWatermarks['import-run-article']
 
-  return Number.isFinite(importRunArticleWatermark) ? {importRunArticle: importRunArticleWatermark} : {}
+  return Number.isFinite(importRunArticleWatermark)
+    ? {importRunArticle: importRunArticleWatermark}
+    : {importRunArticle: 0}
 }
 
 const getProjectScopeRebuildChunkOutputChecksum = async (

@@ -326,7 +326,7 @@ writeRuntimeOperatorLogEvent({
   message: `[server] configured_role=${env.SERVER_ROLE} role=${getCurrentServerRole()} duckdb_owner=${canCurrentServerOwnDuckdb()}`,
   severity: 'INFO',
 })
-if (getCurrentServerRole() === 'judge-worker') {
+if (shouldRunMutatingServerWork && getCurrentServerRole() === 'judge-worker') {
   void startJudgeWorkerStartupRolloutCleanup().catch((error) => {
     writeRuntimeOperatorLogEvent({
       attrs: {error},

@@ -1268,3 +1268,118 @@ test('base rebuild chunks regenerate project scope and selected import state bef
   expect(joined).toContain("checksum = 'checksum-project-scope'")
   expect(joined).toContain("checksum = 'checksum-selected-import'")
 })
+
+test('selected import rebuild uses import scoped zero watermark when manifest has no import watermark', async () => {
+  const statements: string[] = []
+  const selectedImportChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    chunkId: 'chunk-selected-import-no-import-watermark',
+    checksum: null,
+    inputWatermark: 9,
+    outputBaseGeneration: 7,
+    projectionComponent: 'selectedImport',
+    projectionIdentity: 'selectedImport:project-1',
+  }
+  const componentState = {
+    optional: [],
+    required: [
+      {
+        baseGeneration: '7',
+        component: 'projectScope',
+        patchWatermark: '9',
+        projectionIdentity: 'projectScope:project-1',
+      },
+      {
+        baseGeneration: '7',
+        component: 'selectedImport',
+        patchWatermark: '9',
+        projectionIdentity: 'selectedImport:project-1',
+      },
+      {baseGeneration: '7', component: 'display', patchWatermark: '9', projectionIdentity: 'display:project-1'},
+      {baseGeneration: '7', component: 'llmStatus', patchWatermark: '9', projectionIdentity: 'llmStatus:project-1'},
+      {baseGeneration: '7', component: 'humanStatus', patchWatermark: '9', projectionIdentity: 'humanStatus:project-1'},
+      {baseGeneration: '7', component: 'posting', patchWatermark: '9', projectionIdentity: 'posting:project-1'},
+      {baseGeneration: '7', component: 'summary', patchWatermark: '9', projectionIdentity: 'summary:project-1'},
+      {baseGeneration: '7', component: 'payload', patchWatermark: '9', projectionIdentity: 'payload:project-1'},
+    ],
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+        return [selectedImportChunk] as T[]
+      }
+
+      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+        return [
+          {
+            baseGeneration: selectedImportChunk.outputBaseGeneration,
+            definitionVersion: `${selectedImportChunk.projectionComponent}-v1`,
+            inputDigest: selectedImportChunk.inputDigest,
+            inputWatermark: selectedImportChunk.inputWatermark,
+            inputWatermarksJson: {reviewChange: 9},
+            invalidationReason: selectedImportChunk.inputDigest,
+            manifestId: `manifest-${selectedImportChunk.projectionComponent}`,
+            patchRangeEnd: selectedImportChunk.inputWatermark,
+            patchRangeStart: selectedImportChunk.inputWatermark,
+            patchWatermark: selectedImportChunk.inputWatermark,
+            projectId: selectedImportChunk.projectId,
+            projectionComponent: selectedImportChunk.projectionComponent,
+            projectionIdentity: selectedImportChunk.projectionIdentity,
+            promptConfigHash: null,
+            reviewConfigHash: 'review-config-1',
+            status: 'candidate',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return [
+          {
+            componentStateJson: componentState,
+            reviewConfigHash: 'review-config-1',
+            selectedImportSnapshotId: 'selected-import-snapshot-1',
+            snapshotId: 'snapshot-base-rebuild-1',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.review_selected_import_snapshot')) {
+        return [{cursorJson: null, sourceDeltaHighWater: 0, status: 'completed'}] as T[]
+      }
+
+      if (statement.includes('WITH selected_import_candidates')) {
+        return [] as T[]
+      }
+
+      if (statement.includes('WITH output_row')) {
+        return [{actualChecksum: 'checksum-selected-import', actualCount: 1}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+  const selectedImportResult = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: selectedImportChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const selectedImportPatchManifestStatement =
+    statements.find((statement) => {
+      return (
+        statement.includes('INSERT INTO app.review_projection_identity_manifest')
+        && statement.includes("'selectedImport.rebuild'")
+      )
+    }) ?? ''
+
+  expect(selectedImportResult).toEqual({status: 'completed'})
+  expect(selectedImportPatchManifestStatement).not.toHaveLength(0)
+  expect(selectedImportPatchManifestStatement).toContain('\'{"reviewChange":9}\'::JSON')
+  expect(selectedImportPatchManifestStatement).toMatch(/7,\s+0,\s+0,\s+0,\s+0,\s+'\{"reviewChange":9}'::JSON/)
+})

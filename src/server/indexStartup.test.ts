@@ -434,6 +434,58 @@ test('judge-worker startup replays unacked completions for the same durable iden
   }
 })
 
+test('judge-worker startup skips rollout cleanup when server mutations are disabled', async () => {
+  const testDirectory = getStartupTestDirectory()
+  const apiPort = 34975
+  const journalPath = join(testDirectory, 'journal.sqlite')
+  const completionRequests: unknown[] = []
+  const ownerServer = globalThis.Bun.serve({
+    port: 0,
+    fetch: async (request) => {
+      const requestUrl = new URL(request.url)
+
+      if (requestUrl.pathname === '/__duckdb-owner-rpc/api/judgmentsjobs/job-replay-startup/completions') {
+        const body = (await request.json()) as {claimId: string; queueRecordId: string}
+
+        completionRequests.push(body)
+        return Response.json({
+          data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'acked'},
+          error: null,
+        })
+      }
+
+      return Response.json({data: {ready: true}, error: null})
+    },
+  })
+
+  writeUnackedJudgeWorkerCompletion(journalPath)
+
+  const server = startServer({
+    ...getJudgeWorkerStartupEnv({
+      apiPort,
+      duckdbPath: join(testDirectory, 'forska.duckdb'),
+      journalPath,
+      workerId: 'startup-no-mutation-worker',
+    }),
+    FORSKA_DISABLE_SERVER_MUTATIONS: 'true',
+    SERVER_DUCKDB_OWNER_URL: `http://127.0.0.1:${ownerServer.port}`,
+  })
+
+  try {
+    await waitForServer(apiPort, 10_000)
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250)
+    })
+
+    expect(completionRequests).toHaveLength(0)
+    expect(getCompletionAckedAt(journalPath, 'claim-replay-startup')).toBe(null)
+  } finally {
+    await stopServer(server)
+    await ownerServer.stop(true)
+    rmSync(testDirectory, {force: true, recursive: true})
+  }
+})
+
 test('judge-worker startup replays unacked completions from worker-id durable journal', async () => {
   const testDirectory = getStartupTestDirectory()
   const apiPort = 34976
