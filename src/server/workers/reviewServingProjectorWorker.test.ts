@@ -331,6 +331,42 @@ test('worker marks rebuild requests completed after their final chunk completes'
   expect(joined).toContain("request_id = 'rebuild-1'")
 })
 
+test('worker marks rebuild requests failed after terminal chunk failure', async () => {
+  const harness = createWorkerHarness({runChunkThrows: true, wakeStatus: 'completed'})
+  const requestChunk = {...chunkManifest, requestId: 'rebuild-terminal'} satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return requestChunk
+    },
+    failChunk: async () => {
+      return {
+        ...requestChunk,
+        lastError: 'chunk executor failed',
+        leaseOwner: null,
+        status: 'blocked_over_budget' as const,
+      }
+    },
+    heartbeatChunk: async () => {
+      return requestChunk
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+      throw new Error('chunk executor failed')
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+  const joined = harness.runStatements.join('\n')
+
+  expect(result.chunk).toEqual({chunkId: 'chunk-1', requestId: 'rebuild-terminal', status: 'failed'})
+  expect(joined).toContain('UPDATE app.review_rebuild_request')
+  expect(joined).toContain("status = 'failed'")
+  expect(joined).toContain("last_error = 'chunk executor failed'")
+  expect(joined).toContain("request_id = 'rebuild-terminal'")
+})
+
 test('worker refreshes request candidate snapshot state before promotion', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const requestChunk = {

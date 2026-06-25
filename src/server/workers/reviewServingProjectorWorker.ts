@@ -2531,6 +2531,42 @@ const markCompletedRebuildRequestFinalized = async (
   `)
 }
 
+const isTerminalRebuildChunkFailure = (chunk: ReviewServingRebuildChunkManifest | null) => {
+  return chunk?.status === 'blocked_over_budget' || chunk?.status === 'quarantined'
+}
+
+const markFailedRebuildRequestFinalized = async (
+  input: {chunkId: string; lastError: string | null; requestId: string; status: string},
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  await database.run(`
+    UPDATE app.review_rebuild_request
+    SET
+      status = 'failed',
+      failed_at = current_timestamp,
+      last_error = ${getSqlLiteral(
+        input.lastError ?? `review rebuild chunk ${input.chunkId} reached terminal status ${input.status}`,
+      )},
+      updated_at = current_timestamp
+    WHERE request_id = ${getSqlLiteral(input.requestId)}
+      AND status IN ('admitted', 'running')
+  `)
+}
+
+const finalizeFailedReviewServingRebuildRequest = async (
+  chunk: ReviewServingRebuildChunkManifest | null,
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  if (chunk?.requestId === null || chunk?.requestId === undefined || !isTerminalRebuildChunkFailure(chunk)) {
+    return
+  }
+
+  await markFailedRebuildRequestFinalized(
+    {chunkId: chunk.chunkId, lastError: chunk.lastError, requestId: chunk.requestId, status: chunk.status},
+    database,
+  )
+}
+
 const finalizeCompletedReviewServingRebuildRequest = async (
   chunk: ReviewServingRebuildChunkManifest,
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
@@ -2707,7 +2743,11 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
     return {chunkId: claimedChunk.chunkId, requestId: claimedChunk.requestId, status: 'completed'}
   } catch (error) {
     stopHeartbeat()
-    await service.failChunk({chunkId: claimedChunk.chunkId, error: getErrorText(error), leaseOwner: workerId}, database)
+    const failedChunk = await service.failChunk(
+      {chunkId: claimedChunk.chunkId, error: getErrorText(error), leaseOwner: workerId},
+      database,
+    )
+    await finalizeFailedReviewServingRebuildRequest(failedChunk, database)
 
     return {chunkId: claimedChunk.chunkId, requestId: claimedChunk.requestId, status: 'failed'}
   }

@@ -367,7 +367,25 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
     queryJson,
     run,
     transaction: async <T>(operation: (tx: {queryJson: typeof queryJson; run: typeof run}) => Promise<T>) => {
-      return operation({queryJson, run})
+      const rowSnapshot = new Map(rows)
+      const claimedRowSnapshot = new Map(claimedRows)
+      const outputWriteSnapshot = [...outputWrites]
+
+      try {
+        return await operation({queryJson, run})
+      } catch (error) {
+        rows.clear()
+        rowSnapshot.forEach((row, chunkId) => {
+          rows.set(chunkId, row)
+        })
+        claimedRows.clear()
+        claimedRowSnapshot.forEach((row, chunkId) => {
+          claimedRows.set(chunkId, row)
+        })
+        outputWrites.splice(0, outputWrites.length, ...outputWriteSnapshot)
+
+        throw error
+      }
     },
   } satisfies ReviewServingChunkManifestRepositoryDatabase
 
@@ -612,6 +630,40 @@ test('validation mismatch marks the claimed chunk failed for retry', async () =>
 
   expect(failed).toMatchObject({status: 'failed'})
   expect(rows.get(getReviewServingRebuildChunkId(baseChunkIdentity))?.lastError).toContain('chunk validation failed')
+})
+
+test('validation mismatch rolls back chunk output before marking the chunk failed', async () => {
+  const {database, outputWrites, rows} = createFakeChunkManifestDatabase([
+    getChunkRowFromIdentity(baseChunkIdentity, []),
+  ])
+
+  await claimReviewServingRebuildChunk(
+    {
+      ...baseChunkIdentity,
+      leaseExpiresAt: '2026-06-16T14:05:00.000Z',
+      leaseOwner: 'worker-rollback',
+      now: '2026-06-16T14:00:00.000Z',
+    },
+    database,
+  )
+  await writeReviewServingRebuildChunkOutput(
+    {
+      ...baseChunkIdentity,
+      leaseOwner: 'worker-rollback',
+      validateOutput: async () => {
+        return {actualChecksum: 'bad-checksum', actualCount: 24, expectedChecksum: 'checksum-v3', expectedCount: 25}
+      },
+      writeOutput: async (tx) => {
+        await tx.run('INSERT INTO mart.fake_chunk_output VALUES (24)')
+      },
+    },
+    database,
+  )
+  const failedRow = rows.get(getReviewServingRebuildChunkId(baseChunkIdentity))
+
+  expect(outputWrites).toEqual([])
+  expect(failedRow?.lastError).toContain('chunk validation failed')
+  expect(failedRow?.status).toBe('failed')
 })
 
 test('failed rebuild chunks record retry backoff and exhaust to the request terminal state', async () => {

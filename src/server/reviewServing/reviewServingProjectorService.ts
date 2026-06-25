@@ -432,15 +432,37 @@ export const wakeReviewServingProjectorService = async (
         const missingSnapshotProjectIds = isMissingSnapshotDiagnostic(diagnostic) ? getClaimProjectIds(claims) : []
 
         if (missingSnapshotProjectIds.length > 0) {
-          await Effect.runPromise(
-            Effect.forEach(
-              missingSnapshotProjectIds,
-              (projectId) => {
-                return requestRebuild({projectId, reason: 'missingReviewServingSnapshot'}, database)
-              },
-              {concurrency: 1},
+          const rebuildResult = await Effect.runPromise(
+            Effect.either(
+              Effect.forEach(
+                missingSnapshotProjectIds,
+                (projectId) => {
+                  return requestRebuild({projectId, reason: 'missingReviewServingSnapshot'}, database)
+                },
+                {concurrency: 1},
+              ),
             ),
           )
+
+          if (rebuildResult._tag === 'Left') {
+            await failDirtyWork(claimIds, database)
+
+            return {
+              ...state,
+              failures: [
+                ...state.failures,
+                {
+                  attempts: budget.maxRetries + 1,
+                  claimIds,
+                  component,
+                  diagnostic: getDiagnostic(rebuildResult.left),
+                  status: 'failed' as const,
+                },
+              ],
+              processedRows: state.processedRows + claims.length,
+            }
+          }
+
           await releaseDirtyWork(claimIds, database)
 
           return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
