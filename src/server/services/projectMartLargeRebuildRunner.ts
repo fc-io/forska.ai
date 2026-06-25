@@ -1,9 +1,11 @@
+import type {ProjectMartLargeRebuildPhase} from '../../db/schemaTypes.ts'
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getDuckdbQueueRuntimeMetricsSnapshot, getDuckdbTempSpillMetricsSnapshot} from '../utils/duckdbService.ts'
 import {
   getProjectMartLargeRebuildCycleQueueDelta,
   recordProjectMartLargeRebuildCycleMetric,
 } from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
+import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
 import {getArchivedProjectCleanupService} from './archivedProjectCleanupService.ts'
 import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
 import {
@@ -30,7 +32,7 @@ type ProjectMartLargeRebuildRunnerDependencies = {
       projectId: string,
       targetGeneration: number,
       guard?: {
-        expectedRebuildPhase?: string
+        expectedRebuildPhase?: ProjectMartLargeRebuildPhase
         expectedRefreshToken?: number
         expectedTargetGeneration?: number | null
         now?: Date
@@ -78,7 +80,7 @@ type ProjectMartLargeRebuildRunnerDependencies = {
     }) => Promise<LargeRebuildClaim[]>
     clearArchivedLargeRebuildStates: () => Promise<unknown>
     completeLargeRebuild: (params: {
-      expectedRebuildPhase?: string
+      expectedRebuildPhase?: ProjectMartLargeRebuildPhase
       expectedRefreshToken?: number
       expectedTargetGeneration?: number | null
       now?: Date
@@ -92,14 +94,14 @@ type ProjectMartLargeRebuildRunnerDependencies = {
       cursorArticleCreatedAt: Date | null
       cursorArticleId: string | null
       projectId: string
-      rebuildPhase: string
+      rebuildPhase: ProjectMartLargeRebuildPhase
       sourceDirtyToken?: number | null
       sourceHighWaterDirtyToken?: number | null
       targetGeneration: number | null
     } | null>
     failLargeRebuild: (params: {
       error: string
-      expectedRebuildPhase?: string
+      expectedRebuildPhase?: ProjectMartLargeRebuildPhase
       expectedRefreshToken?: number
       expectedTargetGeneration?: number | null
       now?: Date
@@ -112,7 +114,7 @@ type ProjectMartLargeRebuildRunnerDependencies = {
       cursorArticleCreatedAt: Date | null
       cursorArticleId: string | null
       projectId: string
-      rebuildPhase: string
+      rebuildPhase: ProjectMartLargeRebuildPhase
       sourceDirtyToken?: number | null
       sourceHighWaterDirtyToken?: number | null
       targetGeneration: number | null
@@ -121,13 +123,13 @@ type ProjectMartLargeRebuildRunnerDependencies = {
       leaseMs: number
       now?: Date
       projectId: string
-      expectedRebuildPhase?: string
+      expectedRebuildPhase?: ProjectMartLargeRebuildPhase
       expectedRefreshToken?: number
       expectedTargetGeneration?: number | null
       workerId: string
     }) => Promise<LargeRebuildClaim | null>
     recordLargeRebuildFrozenScope: (params: {
-      expectedRebuildPhase?: string
+      expectedRebuildPhase?: ProjectMartLargeRebuildPhase
       expectedRefreshToken?: number
       expectedTargetGeneration?: number | null
       now?: Date
@@ -141,19 +143,12 @@ type ProjectMartLargeRebuildRunnerDependencies = {
     resetLargeRebuild: (params: {
       cursorArticleCreatedAt?: Date | null
       cursorArticleId?: string | null
-      expectedRebuildPhase?: string
+      expectedRebuildPhase?: ProjectMartLargeRebuildPhase
       expectedRefreshToken?: number
       expectedTargetGeneration?: number | null
       now?: Date
       projectId: string
-      rebuildPhase?:
-        | 'project_scope_article'
-        | 'judgment_fact'
-        | 'prompt_answer_fact'
-        | 'review_answer_dictionary'
-        | 'review_article_filter_member'
-        | 'review_article_rollup'
-        | 'review_article_serving'
+      rebuildPhase?: ProjectMartLargeRebuildPhase
       targetGeneration?: number | null
       workerId?: string
     }) => Promise<unknown>
@@ -980,6 +975,20 @@ export const runProjectMartLargeRebuildCycle = async (
     return result
   } catch (error) {
     const errorText = getErrorText(error)
+    const failureLogAttrs = {
+      error: errorText,
+      projectId: claim.projectId,
+      rebuildPhase: claim.rebuildPhase,
+      refreshToken: claim.refreshToken,
+      targetGeneration: claim.targetGeneration ?? null,
+      workerId: options.workerId,
+    }
+    writeRuntimeFailureLogEvent({
+      attrs: {...failureLogAttrs, cause: error},
+      event: 'project-mart.large-rebuild.failed',
+      message: `Large rebuild failed: ${claim.rebuildPhase}`,
+      terminalArgs: [failureLogAttrs],
+    })
     const failureState = await dependencies.largeRebuildStateService.getLargeRebuildState(claim.projectId)
     await dependencies.largeRebuildStateService.failLargeRebuild({
       error: errorText,
