@@ -29,9 +29,14 @@ Current explicit skipped routes:
 Commands run during implementation:
 
 - `bunx playwright test tests/e2e/networkSmoke.spec.ts -g "network smoke route inventory stays explicit"`
+- `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts`
+- `bun run lint`
+
+Coordinator smoke run:
+
+- `bun run test:network-smoke`: passed after stopping the already-running local `bun run dev:server` stack that held the primary DuckDB owner lease.
+- `bun run test:network-smoke:synthetic`: passed.
 
 Commands intentionally not run:
 
-- `bun run test:network-smoke`: left for the coordinator smoke run as requested.
-- `bun run test:network-smoke:synthetic`: left for the coordinator smoke run as requested.
 - `bun run desktop:build`: not required for this browser smoke/test-doc change; desktop evidence remains separate.
