@@ -51,7 +51,7 @@ type SelectedImportProjectionRow = {
   tombstone: boolean
 }
 
-const selectedImportProjectorDefinitionVersion = 'review-serving-selected-import-v1'
+const selectedImportProjectorDefinitionVersion = 'review-serving-selected-import-v2'
 const nullRankKeySort = '~'
 const nullRankNumericSort = 1e308
 

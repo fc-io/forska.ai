@@ -14,6 +14,14 @@ test('handleApiResponse allows raw domain objects with error fields', () => {
   expect(result).toEqual({error: [], id: 'job-1'})
 })
 
+test('handleApiResponse preserves nested API envelope errors with fallback data', () => {
+  const getResult = () => {
+    return handleApiResponse({data: {data: [], error: 'Failed to fetch tokens'}}, 'Failed to load tokens')
+  }
+
+  expect(getResult).toThrow('Failed to fetch tokens')
+})
+
 test('handleApiResponse uses nested treaty error messages', () => {
   const getResult = () => {
     return handleApiResponse(
