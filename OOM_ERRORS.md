@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-25 - Network Smoke OOM Cutover Gate
+
+- Error: `Large rebuild failed` browser/API/server output could pass network smoke without being treated as an OOM cutover regression.
+- Context: Phase 5C current-DB browser smoke, `POST /api/projectsreviewswarnings`, route load diagnostics, and captured Playwright server logs.
+- Cause: The smoke gate needed real-first then synthetic-second documentation, explicit skipped-route classifications, and broader `Large rebuild failed` detection across page, API, console, and server output.
+- Fix: Added Phase 5C/master smoke gates, classified skipped routes, added current-DB warning probes for discovered projects, and fail the smoke pass on `Large rebuild failed` in warning responses, page HTML, document/fetch/XHR responses, console/page errors, or runtime logs.
+- Verification: `bunx playwright test tests/e2e/networkSmoke.spec.ts -g "network smoke route inventory stays explicit"`.
+
 ## 2026-06-25 - Network Smoke OOM Cutover Follow-Up
 
 - Error: `Out of Memory Error: failed to pin block` class from legacy DuckDB review-serving maintenance and network-smoke cutover regressions.

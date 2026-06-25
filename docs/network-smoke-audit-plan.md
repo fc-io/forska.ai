@@ -42,6 +42,18 @@ Synthetic mode starts from a clean test database and writes local fixture rows o
 
 The audit keeps a second explicit list for routes that are not yet safe to visit in the generic smoke pass. That list must include a reason, so new coverage gaps stay visible in review.
 
+Skipped routes must also carry one of these classifications:
+
+- `missing-data`: the current DB lacks a representative ID or row, and the real pass must not synthesize it.
+- `admin-debug-only`: the route is intentionally excluded from normal product flow coverage.
+- `unsafe-pending-phase-5c-rewiring`: the route can write or queue work on load in the current DB pass and must be audited, V4-rewired, or retained only with an explicit bounded reason before Phase 5C closes.
+
+No normal browser route may remain skipped only because it queues legacy V3 repair, dirty refresh, or large-rebuild work on load.
+
+The current-DB pass also probes `POST /api/projectsreviewswarnings` for discovered project IDs and fails if page HTML, API/document/fetch/XHR responses, console/page errors, warning probe responses, or captured server logs contain `Large rebuild failed`.
+
+The synthetic pass may create deterministic fixtures only in its temporary DuckDB database.
+
 ## Triage And Fix Guidance
 
 - Treat app/API-origin failures as bugs unless the route inventory explicitly documents why they are expected.
