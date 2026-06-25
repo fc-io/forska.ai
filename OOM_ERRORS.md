@@ -18,7 +18,7 @@ Entry format:
 - Context: Phase 5C current-DB browser smoke, `POST /api/projectsreviewswarnings`, route load diagnostics, and captured Playwright server logs.
 - Cause: The smoke gate needed real-first then synthetic-second documentation, explicit skipped-route classifications, and broader `Large rebuild failed` detection across page, API, console, and server output.
 - Fix: Added Phase 5C/master smoke gates, classified skipped routes, added current-DB warning probes for discovered projects, and fail the smoke pass on `Large rebuild failed` in warning responses, page HTML, document/fetch/XHR responses, console/page errors, or runtime logs.
-- Verification: `bunx playwright test tests/e2e/networkSmoke.spec.ts -g "network smoke route inventory stays explicit"`.
+- Verification: `bunx playwright test tests/e2e/networkSmoke.spec.ts -g "network smoke route inventory stays explicit"`, `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts`, `bun run lint`, `bun run test:network-smoke`, and `bun run test:network-smoke:synthetic`.
 
 ## 2026-06-25 - Network Smoke OOM Cutover Follow-Up
 
