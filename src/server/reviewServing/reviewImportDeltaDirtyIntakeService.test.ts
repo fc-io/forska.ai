@@ -174,10 +174,10 @@ test('repeated import changes collapse into one dirty row per project component 
     return statement.includes('INSERT INTO app.review_serving_dirty_work')
   })
 
-  expect(dirtyInserts).toHaveLength(6)
-  expect(dirtyWorkIds.size).toBe(3)
+  expect(dirtyInserts).toHaveLength(8)
+  expect(dirtyWorkIds.size).toBe(4)
   expect(parseProjectionKey(dirtyInserts[0] ?? '').projectionComponent).toBe('selectedImport')
-  expect(getProjectionKey(dirtyInserts[0] ?? '')).toBe(getProjectionKey(dirtyInserts[3] ?? ''))
+  expect(getProjectionKey(dirtyInserts[0] ?? '')).toBe(getProjectionKey(dirtyInserts[4] ?? ''))
 })
 
 test('import projection identity is stable across per-mutation article values', async () => {
@@ -215,7 +215,7 @@ test('import projection identity is stable across per-mutation article values', 
   expect(uniqueProjectionKeys.size).toBe(9)
 })
 
-test('selected import rank-field changes do not dirty display or judgment input components', async () => {
+test('selected import rank-field changes dirty payload but not display or judgment input components', async () => {
   const {database, statements} = createFakeIntakeDatabase([
     createReviewImportDelta({deltaId: 'delta-selected', changeKind: 'importRoute.article.rankFields.updated'}),
   ])
@@ -227,10 +227,17 @@ test('selected import rank-field changes do not dirty display or judgment input 
   const dirtyInsert = statements.find((statement) => {
     return statement.includes('INSERT INTO app.review_serving_dirty_work')
   })
+  const dirtyInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_serving_dirty_work')
+  })
   const projectionKey = dirtyInsert === undefined ? {} : parseProjectionKey(dirtyInsert)
+  const projectionComponents = dirtyInserts.map((statement) => {
+    return parseProjectionKey(statement).projectionComponent
+  })
 
-  expect(result).toMatchObject({dirtyWorkCount: 3, maxSourceHighWaterMark: 1, status: 'converted'})
+  expect(result).toMatchObject({dirtyWorkCount: 4, maxSourceHighWaterMark: 1, status: 'converted'})
   expect(projectionKey).toMatchObject({projectionComponent: 'selectedImport'})
+  expect(projectionComponents).toEqual(['selectedImport', 'posting', 'summary', 'payload'])
   expect(dirtyInsert).toContain('importRoute.article.rankFields.updated')
   expect(dirtyInsert).not.toContain('display')
   expect(dirtyInsert).not.toContain('judgmentInputContent')

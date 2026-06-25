@@ -31,6 +31,7 @@ import {inferenceRuntimeConfig} from './utils/getInferenceRuntimeConfig.ts'
 import {initializeJudgeWorkerJournalIdentity} from './utils/judgeWorkerJournalIdentity.ts'
 import {validateOwnerlessRouteBackends} from './utils/ownerlessReadableBackends.ts'
 import {writeRuntimeFailureLogEvent, writeRuntimeOperatorLogEvent} from './utils/runtimeLogger.ts'
+import {shouldDisableServerMutationWork} from './utils/serverMutationMode.ts'
 import {
   shouldServerRoleMountJudgingCrons,
   shouldServerRoleMountMaintenanceCrons,
@@ -192,7 +193,9 @@ const allowedOrigins = [
 await initializeServerRuntimeRole()
 await validateOwnerlessRouteBackends()
 
-if (getCurrentServerRole() === 'judge-worker') {
+const shouldRunMutatingServerWork = !shouldDisableServerMutationWork()
+
+if (shouldRunMutatingServerWork && getCurrentServerRole() === 'judge-worker') {
   const judgeWorkerJournalIdentity = initializeJudgeWorkerJournalIdentity()
 
   writeRuntimeOperatorLogEvent({
@@ -203,13 +206,15 @@ if (getCurrentServerRole() === 'judge-worker') {
   })
 }
 
-if (canCurrentServerOwnDuckdb()) {
+if (shouldRunMutatingServerWork && canCurrentServerOwnDuckdb()) {
   await migrateDuckdb()
   await runProjectTransferStartupRecoveryWithLogging()
 }
-startProjectTransferTtlRecoveryScheduler()
+if (shouldRunMutatingServerWork) {
+  startProjectTransferTtlRecoveryScheduler()
+}
 
-if (getCurrentServerRole() !== 'judge-worker' && shouldCurrentServerRunJudgingLoops()) {
+if (shouldRunMutatingServerWork && getCurrentServerRole() !== 'judge-worker' && shouldCurrentServerRunJudgingLoops()) {
   await getJudgmentJobSqliteService().recoverJudgmentJobLeasesOnStartup()
   const startupRolloutCleanup = await runStartupJudgmentRolloutCleanup({claimedBy: getDefaultJudgmentServerJobId()})
 
@@ -250,8 +255,9 @@ if (getCurrentServerRole() !== 'judge-worker' && shouldCurrentServerRunJudgingLo
   }
 }
 
-const shouldMountMaintenanceCrons = shouldServerRoleMountMaintenanceCrons(getCurrentServerRole())
-const shouldMountJudgingCrons = shouldServerRoleMountJudgingCrons(getCurrentServerRole())
+const shouldMountMaintenanceCrons =
+  shouldRunMutatingServerWork && shouldServerRoleMountMaintenanceCrons(getCurrentServerRole())
+const shouldMountJudgingCrons = shouldRunMutatingServerWork && shouldServerRoleMountJudgingCrons(getCurrentServerRole())
 const maintenanceCronRoutes = shouldMountMaintenanceCrons
   ? new Elysia()
       .use(fullTextJobsCron)

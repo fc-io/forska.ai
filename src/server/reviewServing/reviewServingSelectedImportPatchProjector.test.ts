@@ -80,13 +80,16 @@ test('selected-import routine updates write component-narrow patches for only cl
     patchRows: [
       {
         articleId: 'article-1',
+        articleTitle: 'Selected Import Title',
         conflictFlag: false,
         duplicateFlag: true,
+        externalId: 'selected-external-1',
         importRouteId: 'import-route-1',
         journalTitle: 'Selected Journal',
         publicationYear: 2026,
         selectedRankKey: '0001:article-1',
         selectedRankNumeric: 1,
+        selectedSourceUrl: 'https://selected.example/article-1',
         scopeTombstone: false,
         tombstone: false,
       },
@@ -108,6 +111,10 @@ test('selected-import routine updates write component-narrow patches for only cl
   expect(selectStatement).toContain('LEFT JOIN mart.project_scope_article scope')
   expect(selectStatement).toContain('INNER JOIN app.review_import_article_hot_field hot')
   expect(selectStatement).toContain('LEFT JOIN app.article_import_route current_link')
+  expect(selectStatement).toContain('hot.article_title')
+  expect(selectStatement).toContain('hot.external_id')
+  expect(selectStatement).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
+  expect(selectStatement).toContain("json_extract_string(selected_source.raw_payload, '$.covidence.citation.url')")
   expect(selectStatement).toContain("WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)")
   expect(insertStatement).toContain('patch_watermark')
   expect(insertStatement).toContain('9')
@@ -119,7 +126,13 @@ test('selected-import routine updates write component-narrow patches for only cl
   expect(joined).toContain('serving_template AS')
   expect(joined).toContain('selected_import_route_id = changed.import_route_id')
   expect(joined).toContain('selected_rank_key = changed.selected_rank_key')
+  expect(joined).toContain('article_title = COALESCE(changed.article_title, article.article_title)')
+  expect(joined).toContain('article_external_id = COALESCE(changed.external_id, article.article_id)')
   expect(joined).toContain('journal_title = changed.journal_title')
+  expect(joined).toContain('url = COALESCE(changed.selected_source_url, article.url)')
+  expect(joined).toContain('COALESCE(changed.article_title, article.article_title) AS article_title')
+  expect(joined).toContain('COALESCE(changed.external_id, article.article_id) AS article_external_id')
+  expect(joined).toContain('COALESCE(changed.selected_source_url, article.url) AS url')
   expect(joined).toContain('changed.journal_title')
 })
 
@@ -128,13 +141,16 @@ test('selected-import tombstones replay idempotently with the same patch waterma
     patchRows: [
       {
         articleId: 'article-1',
+        articleTitle: null,
         conflictFlag: null,
         duplicateFlag: null,
+        externalId: null,
         importRouteId: null,
         journalTitle: null,
         publicationYear: null,
         selectedRankKey: null,
         selectedRankNumeric: null,
+        selectedSourceUrl: null,
         scopeTombstone: false,
         tombstone: true,
       },
@@ -163,13 +179,16 @@ test('selected-import tombstones clear selected columns without deleting curated
     patchRows: [
       {
         articleId: 'article-1',
+        articleTitle: null,
         conflictFlag: null,
         duplicateFlag: null,
+        externalId: null,
         importRouteId: null,
         journalTitle: null,
         publicationYear: null,
         selectedRankKey: null,
         selectedRankNumeric: null,
+        selectedSourceUrl: null,
         scopeTombstone: false,
         tombstone: true,
       },
@@ -229,13 +248,16 @@ test('selected-import serving insert can seed rows from snapshot templates witho
     patchRows: [
       {
         articleId: 'article-1',
+        articleTitle: 'Selected Import Title',
         conflictFlag: false,
         duplicateFlag: false,
+        externalId: 'selected-external-1',
         importRouteId: 'import-route-1',
         journalTitle: 'Selected Journal',
         publicationYear: 2026,
         selectedRankKey: '0001:article-1',
         selectedRankNumeric: 1,
+        selectedSourceUrl: 'https://selected.example/article-1',
         scopeTombstone: false,
         tombstone: false,
       },

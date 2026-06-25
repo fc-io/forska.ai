@@ -109,7 +109,7 @@ test('every emitted delta kind declares complete invalidation metadata', () => {
     [
       'importRoute.article.rankFields.updated',
       'selectedImport',
-      ['posting', 'summary'],
+      ['posting', 'summary', 'payload'],
       ['importRouteId', 'articleId', 'changedRankFilterFields', 'sourceHighWaterMark'],
       'componentPatch',
     ],

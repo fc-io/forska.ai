@@ -67,13 +67,16 @@ type SnapshotComponentStates = {
 
 type SelectedImportPatchRow = {
   articleId: string
+  articleTitle: string | null
   conflictFlag: boolean | null
   duplicateFlag: boolean | null
+  externalId: string | null
   importRouteId: string | null
   journalTitle: string | null
   publicationYear: number | null
   selectedRankKey: string | null
   selectedRankNumeric: number | null
+  selectedSourceUrl: string | null
   scopeTombstone: boolean
   tombstone: boolean
 }
@@ -311,7 +314,9 @@ const getSelectedImportPatchRows = async (
             hot.selected_rank_key,
             hot.selected_rank_numeric,
             hot.publication_year,
+            hot.article_title,
             hot.journal_title,
+            hot.external_id,
             hot.duplicate_flag,
             hot.conflict_flag,
             hot.tombstone,
@@ -342,10 +347,13 @@ const getSelectedImportPatchRows = async (
           SELECT
             candidate.article_id,
             candidate.import_route_id,
+            candidate.source_record_key,
             candidate.selected_rank_key,
             candidate.selected_rank_numeric,
             candidate.publication_year,
+            candidate.article_title,
             candidate.journal_title,
+            candidate.external_id,
             candidate.duplicate_flag,
             candidate.conflict_flag
           FROM selected_import_candidates candidate
@@ -379,7 +387,10 @@ const getSelectedImportPatchRows = async (
           winner.selected_rank_key AS selectedRankKey,
           winner.selected_rank_numeric AS selectedRankNumeric,
           winner.publication_year AS publicationYear,
+          winner.article_title AS articleTitle,
           winner.journal_title AS journalTitle,
+          winner.external_id AS externalId,
+          json_extract_string(selected_source.raw_payload, '$.covidence.citation.url') AS selectedSourceUrl,
           winner.duplicate_flag AS duplicateFlag,
           winner.conflict_flag AS conflictFlag,
           NOT (COALESCE(scope.in_curated_scope, FALSE) OR COALESCE(scope.in_route_scope, FALSE)) AS scopeTombstone,
@@ -390,6 +401,11 @@ const getSelectedImportPatchRows = async (
           AND scope.article_id = dirty.article_id
         LEFT JOIN selected_import_winner winner
           ON winner.article_id = dirty.article_id
+        LEFT JOIN app.article_import_route_source_record selected_source
+          ON selected_source.import_route_id = winner.import_route_id
+          AND selected_source.article_id = winner.article_id
+          AND selected_source.source_record_key = winner.source_record_key
+          AND selected_source.quarantined_at IS NULL
         ORDER BY dirty.article_id ASC
       `)
 }
@@ -438,7 +454,7 @@ const getApplySelectedImportServingStatements = (input: {
 }) => {
   const values = input.rows
     .map((row) => {
-      return `(${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.tombstone ? null : row.importRouteId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedRankKey)}, ${getSqlLiteral(row.tombstone ? null : row.publicationYear)}, ${getSqlLiteral(row.tombstone ? null : row.journalTitle)}, ${getSqlLiteral(row.tombstone ? false : (row.duplicateFlag ?? false))}, ${getSqlLiteral(row.tombstone ? false : (row.conflictFlag ?? false))}, ${getSqlLiteral(row.tombstone)}, ${getSqlLiteral(row.scopeTombstone)})`
+      return `(${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.tombstone ? null : row.importRouteId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedRankKey)}, ${getSqlLiteral(row.tombstone ? null : row.publicationYear)}, ${getSqlLiteral(row.tombstone ? null : row.articleTitle)}, ${getSqlLiteral(row.tombstone ? null : row.journalTitle)}, ${getSqlLiteral(row.tombstone ? null : row.externalId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedSourceUrl)}, ${getSqlLiteral(row.tombstone ? false : (row.duplicateFlag ?? false))}, ${getSqlLiteral(row.tombstone ? false : (row.conflictFlag ?? false))}, ${getSqlLiteral(row.tombstone)}, ${getSqlLiteral(row.scopeTombstone)})`
     })
     .join(', ')
   const fallbackTemplateCte = getFallbackTemplateCte({projectId: input.projectId, templates: input.templates})
@@ -446,7 +462,7 @@ const getApplySelectedImportServingStatements = (input: {
   return values.length === 0
     ? []
     : [
-        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, journal_title, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
+        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, article_title, journal_title, external_id, selected_source_url, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
            SELECT * FROM (VALUES ${values})
          )
          DELETE FROM mart.review_article_serving_v4 serving
@@ -467,7 +483,7 @@ const getApplySelectedImportServingStatements = (input: {
               WHERE changed.article_id = serving.article_id
                 AND changed.scope_tombstone = TRUE
             )`,
-        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, journal_title, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
+        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, article_title, journal_title, external_id, selected_source_url, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
            SELECT * FROM (VALUES ${values})
           ), serving_template AS (
             SELECT DISTINCT
@@ -562,15 +578,15 @@ const getApplySelectedImportServingStatements = (input: {
             article.article_updated_at,
             COALESCE(article.article_created_at, current_timestamp) AS sort_key,
             COALESCE(article.article_updated_at, article.article_created_at, current_timestamp) AS activity_sort_at,
-            article.article_title,
-            article.article_id AS article_external_id,
+            COALESCE(changed.article_title, article.article_title) AS article_title,
+            COALESCE(changed.external_id, article.article_id) AS article_external_id,
             article.arxiv_id,
             article.biorxiv_id,
             article.medrxiv_id,
             article.doi,
             article.pubmed_id AS pmid,
             changed.journal_title,
-            article.url,
+            COALESCE(changed.selected_source_url, article.url) AS url,
             article.full_text_pdf,
             article.full_text_fetched_at,
             article.full_text_conversion_status,
@@ -591,11 +607,14 @@ const getApplySelectedImportServingStatements = (input: {
           CROSS JOIN serving_template template
           WHERE changed.scope_tombstone = FALSE
           ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING`,
-        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, journal_title, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
+        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, article_title, journal_title, external_id, selected_source_url, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
            SELECT * FROM (VALUES ${values})
            )
           UPDATE mart.review_article_serving_v4 serving
          SET
+            article_title = COALESCE(changed.article_title, article.article_title),
+            article_external_id = COALESCE(changed.external_id, article.article_id),
+            url = COALESCE(changed.selected_source_url, article.url),
             selected_import_route_id = changed.import_route_id,
             selected_rank_key = changed.selected_rank_key,
             journal_title = changed.journal_title,
@@ -605,6 +624,8 @@ const getApplySelectedImportServingStatements = (input: {
            patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}),
            serving_updated_at = current_timestamp
          FROM changed
+         INNER JOIN app."article" article
+           ON article.id = changed.article_id
           WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
              AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
              AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}

@@ -21,6 +21,7 @@ import {
   probeDuckdbOwnerCutoverCompatibility,
 } from './runtimeCutover.ts'
 import {exitWithRuntimeLogFlush} from './runtimeLogger.ts'
+import {shouldDisableServerMutationWork} from './serverMutationMode.ts'
 import {
   canServerRoleOwnDuckdb,
   canServerRoleProxyApiToOwner,
@@ -463,7 +464,7 @@ export const canCurrentServerOwnDuckdb = () => {
 }
 
 export const shouldCurrentServerRunMaintenanceLoops = () => {
-  return canServerRoleRunMaintenanceLoops(getCurrentServerRole())
+  return !shouldDisableServerMutationWork() && canServerRoleRunMaintenanceLoops(getCurrentServerRole())
 }
 
 export const canCurrentServerRunMaintenanceLoops = shouldCurrentServerRunMaintenanceLoops
@@ -471,7 +472,7 @@ export const canCurrentServerRunMaintenanceLoops = shouldCurrentServerRunMainten
 export const shouldCurrentServerRunMaintenanceWork = shouldCurrentServerRunMaintenanceLoops
 
 export const shouldCurrentServerRunJudgingLoops = () => {
-  return canServerRoleRunJudgingLoops(getCurrentServerRole())
+  return !shouldDisableServerMutationWork() && canServerRoleRunJudgingLoops(getCurrentServerRole())
 }
 
 export const canCurrentServerRunJudgingLoops = shouldCurrentServerRunJudgingLoops
