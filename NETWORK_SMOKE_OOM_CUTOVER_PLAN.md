@@ -36,6 +36,8 @@ Before Phase 5C is marked complete:
 
 - The real/current-DB smoke pass runs first.
 - The synthetic smoke pass runs second.
+- The real/current-DB pass probes `POST http://127.0.0.1:3001/api/projectsreviewswarnings` with project IDs discovered from the current database, using a body such as `{ "projectId": "..." }`.
+- The warnings endpoint probe fails if any response, page error, console error, or captured server output contains `Large rebuild failed`.
 - Any route skipped because it can queue work on load is either audited, V4-rewired, or explicitly documented as admin/debug-only with a bounded read-only reason.
 - The smoke report is recorded alongside static guard, focused test, lint, and desktop evidence.
 
@@ -45,6 +47,7 @@ The smoke audit should cover these Phase 5C-visible surfaces:
 
 - Review list routes for LLM, human, both, and unassessed modes.
 - Review warning, progress, health, and freshness UI states.
+- Direct warning API reads through `POST /api/projectsreviewswarnings` for existing project IDs in the database.
 - Admin investigation, DuckDB append, job health, and project-mart status pages that are safe to load.
 - Project export, package export, article detail, and fulltext routes that depend on review-serving state.
 - Route error boundaries, console errors, failed local app/API requests, and HTTP 4xx/5xx responses.
@@ -63,6 +66,7 @@ The smoke audit should not claim coverage for:
 |---|---|---|
 | [ ] | Gate documentation | `DUCK_CQRS_PLAN_PHASE_5C.md` and `DUCK_OOM_FIX_PLAN.md` list the real-first, synthetic-second smoke sequence where relevant. |
 | [ ] | Skipped-route resolution | Routes skipped because they write or queue work on load are audited after cutover, or retained only with explicit admin/debug classification. |
+| [ ] | Warning endpoint probe | The real/current-DB pass calls `POST /api/projectsreviewswarnings` for discovered project IDs and fails on `Large rebuild failed`. |
 | [ ] | Evidence capture | Phase 5C release notes include commands run, failures fixed, skipped routes, and whether skips are data-missing or intentional admin/debug exclusions. |
 | [ ] | Current-DB safety | The real/current-DB command remains no-seed and does not write synthetic fixture rows to the primary runtime database. |
 | [ ] | Synthetic fallback | The synthetic pass creates deterministic fixture state only in its temporary DuckDB database. |
@@ -71,6 +75,7 @@ The smoke audit should not claim coverage for:
 
 - [ ] `bun run test:network-smoke`
 - [ ] `bun run test:network-smoke:synthetic`
+- [ ] Current-DB warning probes call `POST http://127.0.0.1:3001/api/projectsreviewswarnings` with discovered project IDs and never report `Large rebuild failed`.
 - [ ] Any current-DB skipped route is classified as missing data, admin/debug-only, or unsafe pending Phase 5C rewiring.
 - [ ] No skipped normal browser route remains solely because it queues legacy V3 repair, dirty refresh, or large-rebuild work on load.
 - [ ] Focused Phase 5C tests still prove warning, health, and admin status routes are side-effect free.
