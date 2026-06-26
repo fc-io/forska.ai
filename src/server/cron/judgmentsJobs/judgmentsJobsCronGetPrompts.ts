@@ -26,7 +26,6 @@ export const judgmentsJobsCronGetPrompts = async (
   jobId: string,
   numberOfPromptsToGet: number,
   cursor: JobCursor | null = null,
-  _preferRawFallback = false,
 ): Promise<QueuePromptsResult> => {
   const [projectResult, enabledPromptCount] = await Promise.all([
     getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{id: string; archived: boolean}>(
@@ -162,7 +161,6 @@ export const judgmentsJobsCronGetPrompts = async (
       nextCursor: nextCursorSummary,
       cursorAction,
       durationMs,
-      preferRawFallback: false,
       readSource: 'review_unassessed_queue_serving_v4',
     })
   } else if (durationMs > 5_000) {
@@ -177,7 +175,6 @@ export const judgmentsJobsCronGetPrompts = async (
       nextCursor: nextCursorSummary,
       cursorAction,
       durationMs,
-      preferRawFallback: false,
       readSource: 'review_unassessed_queue_serving_v4',
     })
   }

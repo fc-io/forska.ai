@@ -541,12 +541,6 @@ const getProjectDirtyToken = async (jobId: string): Promise<number | null> => {
   return (await getProjectMartVisibilityState(jobId))?.dirtyToken ?? null
 }
 
-const hasFreshProjectMartVisibility = (state: ProjectMartVisibilityState | null): boolean => {
-  return state?.dirtyToken == null || state.lastCompletedDirtyToken == null
-    ? false
-    : state.lastCompletedDirtyToken >= state.dirtyToken
-}
-
 const getWrapVisibilityToken = ({
   lastProjectRefreshAckSeq,
   projectDirtyToken,
@@ -555,26 +549,6 @@ const getWrapVisibilityToken = ({
   projectDirtyToken: number | null
 }) => {
   return projectDirtyToken ?? lastProjectRefreshAckSeq
-}
-
-const getMaxVisibilityToken = (tokens: Array<number | null>) => {
-  return tokens.reduce<number | null>((maxToken, token) => {
-    return token == null ? maxToken : maxToken == null ? token : Math.max(maxToken, token)
-  }, null)
-}
-
-const hasWrapVisibility = ({
-  lastProjectRefreshAckSeq,
-  wrapVisibilityAckSeq,
-}: {
-  lastProjectRefreshAckSeq: number | null
-  wrapVisibilityAckSeq: number | null
-}) => {
-  return wrapVisibilityAckSeq == null
-    ? true
-    : lastProjectRefreshAckSeq == null
-      ? false
-      : lastProjectRefreshAckSeq >= wrapVisibilityAckSeq
 }
 
 const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
@@ -629,22 +603,8 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
   }
 
   const scanState = await sqliteService.getScanState(job.id)
-  const exhaustedProjectMartState = scanState.exhaustedAt ? await getProjectMartVisibilityState(job.id) : null
-  const exhaustedProjectDirtyToken = exhaustedProjectMartState?.dirtyToken ?? null
-  const wrapVisibilityAckSeq = getMaxVisibilityToken([
-    scanState.wrapVisibilityAckSeq,
-    scanState.exhaustedAt
-      ? getWrapVisibilityToken({
-          lastProjectRefreshAckSeq: scanState.lastProjectRefreshAckSeq,
-          projectDirtyToken: exhaustedProjectDirtyToken,
-        })
-      : null,
-  ])
-  const shouldForceRawFallback =
-    !hasFreshProjectMartVisibility(exhaustedProjectMartState)
-    && !hasWrapVisibility({lastProjectRefreshAckSeq: scanState.lastProjectRefreshAckSeq, wrapVisibilityAckSeq})
 
-  if (hasSqliteExhaustedCooldown(scanState.exhaustedAt) && !shouldForceRawFallback) {
+  if (hasSqliteExhaustedCooldown(scanState.exhaustedAt)) {
     return
   }
 
@@ -654,7 +614,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
         cursor: null,
         exhaustedAt: null,
         scanEpoch: scanState.scanEpoch + 1,
-        wrapVisibilityAckSeq: shouldForceRawFallback ? wrapVisibilityAckSeq : null,
+        wrapVisibilityAckSeq: null,
       })
     : Promise.resolve()
 
@@ -675,13 +635,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
 
     const readyDeficit = Math.max(0, readyTargetPerJob - readyCount)
     const requestedWindowSize = getSqliteWindowSize(readyDeficit, addToQueueMaxBatchSize)
-    const promptData = await judgmentsJobsCronGetPrompts(
-      job.projectId,
-      job.id,
-      requestedWindowSize,
-      cursor,
-      shouldForceRawFallback,
-    )
+    const promptData = await judgmentsJobsCronGetPrompts(job.projectId, job.id, requestedWindowSize, cursor)
     const filteredEntries = await filterAlreadyJudged(
       promptData.promptEntries,
       job.id,
@@ -710,11 +664,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
       sqliteService,
     })
     const nextScanState = promptData.nextCursor
-      ? {
-          cursor: promptData.nextCursor,
-          exhaustedAt: null,
-          wrapVisibilityAckSeq: shouldForceRawFallback ? wrapVisibilityAckSeq : null,
-        }
+      ? {cursor: promptData.nextCursor, exhaustedAt: null, wrapVisibilityAckSeq: null}
       : {
           cursor: null,
           exhaustedAt: new Date(),
