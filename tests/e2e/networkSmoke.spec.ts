@@ -210,12 +210,26 @@ const formatIndexingState = (indexing: ReviewsWarningsData['indexing']) => {
   ].join(', ')
 }
 
+const isNonActionableStaleWarningState = (indexing: ReviewsWarningsData['indexing']) => {
+  return (
+    indexing.status === 'stale'
+    && indexing.progressState === 'stalled'
+    && indexing.blockedReason === null
+    && indexing.pendingRefreshCount === 0
+    && indexing.queuedRefreshCount === 0
+    && indexing.inFlightRefreshCount === 0
+    && indexing.activeWorkCount === 0
+  )
+}
+
 const getBlockingWarningDetails = (indexing: ReviewsWarningsData['indexing']) => {
   return indexing.progressState === 'blocked' || indexing.status === 'blocked'
     ? `warning response returned blocked review indexing: ${formatIndexingState(indexing)}`
-    : indexing.progressState === 'stalled' || indexing.status === 'stale'
-      ? `warning response returned stalled review indexing: ${formatIndexingState(indexing)}`
-      : null
+    : isNonActionableStaleWarningState(indexing)
+      ? null
+      : indexing.progressState === 'stalled' || indexing.status === 'stale'
+        ? `warning response returned stalled review indexing: ${formatIndexingState(indexing)}`
+        : null
 }
 
 const getQueuedWarningStateFailureDetails = (indexing: ReviewsWarningsData['indexing']) => {
@@ -659,7 +673,10 @@ const getExistingProviderConnectionId = async () => {
 }
 
 const getExistingDataSourceId = async () => {
-  const dataSources = await getJson<DataSourceListItem[]>(`${apiBaseUrl}/api/datasources`, 'Failed to fetch data sources')
+  const dataSources = await getJson<DataSourceListItem[]>(
+    `${apiBaseUrl}/api/datasources`,
+    'Failed to fetch data sources',
+  )
 
   return getFirstExistingId(dataSources)
 }
@@ -956,17 +973,20 @@ const mutatingRouteLoadSkippedTemplates: SkippedRouteTemplate[] = [
   {
     classification: 'unsafe-pending-phase-5c-rewiring',
     template: '/compare-judgments/$id/export',
-    reason: 'direct existing-DB read-only mode skips pages that load comparison metadata through the rebuild-capable route',
+    reason:
+      'direct existing-DB read-only mode skips pages that load comparison metadata through the rebuild-capable route',
   },
   {
     classification: 'unsafe-pending-phase-5c-rewiring',
     template: '/compare-judgments/$id/import-resolutions',
-    reason: 'direct existing-DB read-only mode skips pages that load comparison metadata through the rebuild-capable route',
+    reason:
+      'direct existing-DB read-only mode skips pages that load comparison metadata through the rebuild-capable route',
   },
   {
     classification: 'unsafe-pending-phase-5c-rewiring',
     template: '/projects/$id/humanAssessment',
-    reason: 'direct existing-DB read-only mode skips POST /api/humanassessment/init because it can create pending human judgments',
+    reason:
+      'direct existing-DB read-only mode skips POST /api/humanassessment/init because it can create pending human judgments',
   },
 ]
 
@@ -1229,15 +1249,17 @@ const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
       }
 
       if (warningInspection.kind === 'queued') {
-        await assertQueuedWarningsEndpointProgresses(warningInspection.projectId, warningInspection.data).catch((error) => {
-          record({
-            details: error instanceof Error ? error.message : 'queued review indexing did not progress',
-            method: request.method(),
-            source: 'warning-indexing-state',
-            status: response.status(),
-            url: response.url(),
-          })
-        })
+        await assertQueuedWarningsEndpointProgresses(warningInspection.projectId, warningInspection.data).catch(
+          (error) => {
+            record({
+              details: error instanceof Error ? error.message : 'queued review indexing did not progress',
+              method: request.method(),
+              source: 'warning-indexing-state',
+              status: response.status(),
+              url: response.url(),
+            })
+          },
+        )
       }
 
       if (response.status() < 400) {
