@@ -762,6 +762,10 @@ const getReviewsIndexingProgressState = (params: {
             : 'stalled'
 }
 
+const isUsableReviewServingWarningSnapshot = (status: string) => {
+  return status === 'active' || status === 'retired'
+}
+
 export const projectsRoutesGetReviewsWarnings = new Elysia().post(
   '/api/projectsreviewswarnings',
   async ({body}) => {
@@ -802,7 +806,8 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       getMaintenanceConsumerAvailability(),
     ])
     const hasReviewServingRows =
-      warningSnapshot.status === 'accepted' && warningSnapshot.diagnostics.manifest.status === 'active'
+      warningSnapshot.status === 'accepted'
+      && isUsableReviewServingWarningSnapshot(warningSnapshot.diagnostics.manifest.status)
     const hasReadableReviewServingRows = warningSnapshot.status === 'accepted'
     const projectRefreshState = initialProjectRefreshState
     const projectLargeRebuildState = initialProjectLargeRebuildState

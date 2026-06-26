@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-26 - Current DB Retired Serving Warning Health
+
+- Error: `warning response returned stalled review indexing: progressState=stalled, status=stale, pendingRefreshCount=0, queuedRefreshCount=0, inFlightRefreshCount=0, activeWorkCount=0`.
+- Context: Current-DB `bun run test:network-smoke:current-db` probing `POST /api/projectsreviewswarnings` for project `8e26a3a8-2797-41da-864e-2c6cec7615c4`.
+- Cause: The warning route treated accepted retired V4 serving manifests as readable but not usable, so last-known-good serving state with no pending work was reported as stalled indexing.
+- Fix: Warning health now classifies accepted active or retired V4 serving manifests as usable while candidate, failed, missing, pending, and failed work states still drive their own health.
+- Verification: `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts`.
+
 ## 2026-06-25 - Current DB Warning Legacy Rebuild State
 
 - Error: `warning response returned failed review state: data.indexing.largeRebuild.refreshStatus=failed, data.indexing.progressState=failed, data.indexing.status=failed`.
