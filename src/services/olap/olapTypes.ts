@@ -172,7 +172,12 @@ export type DatabaseFilterParams = {
 
 export type PaginationCursor = {lastDate: Date; lastArticleId: string}
 
-export type UnassessedPairsCursor = {lastDate: Date; lastArticleId: string; priorityBucket: number}
+export type UnassessedPairsCursor = {
+  lastArticleId: string
+  lastDate: Date
+  lastPromptId?: string | null
+  priorityBucket: number
+}
 
 export type UnassessedCountParams = {
   projectId: string

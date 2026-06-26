@@ -68,7 +68,7 @@ afterAll(async () => {
   tempRuntimeRoot.cleanup()
 })
 
-type MockCursor = {lastArticleId: string; lastDate: Date; priorityBucket: number}
+type MockCursor = {lastArticleId: string; lastDate: Date; lastPromptId?: string | null; priorityBucket: number}
 
 type MockScanState = {
   cursor: MockCursor | null
@@ -909,8 +909,18 @@ test('round-trips priority-aware SQLite cursors through prompt fetching and scan
   const setScanStateCalls: Array<{jobId: string; state: Record<string, unknown>}> = []
   const savedCursorDate = new Date('2025-03-01T00:00:00.000Z')
   const nextCursorDate = new Date('2025-02-28T00:00:00.000Z')
-  const savedCursor = {lastArticleId: 'saved-article', lastDate: savedCursorDate, priorityBucket: 1}
-  const nextCursor = {lastArticleId: 'next-article', lastDate: nextCursorDate, priorityBucket: 0}
+  const savedCursor = {
+    lastArticleId: 'saved-article',
+    lastDate: savedCursorDate,
+    lastPromptId: 'prompt-b',
+    priorityBucket: 1,
+  }
+  const nextCursor = {
+    lastArticleId: 'next-article',
+    lastDate: nextCursorDate,
+    lastPromptId: 'prompt-a',
+    priorityBucket: 0,
+  }
   let readyCountCalls = 0
   const sqliteService: MockSqliteService = {
     addReadyPrompts: async () => {

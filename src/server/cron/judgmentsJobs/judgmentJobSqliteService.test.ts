@@ -1718,11 +1718,21 @@ test('stores full SQLite scan state without clearing existing cursor fields', as
   })
 
   await service.setScanState(jobId, {
-    cursor: {lastArticleId: 'priority-article', lastDate: seededCursorDate, priorityBucket: 1},
+    cursor: {
+      lastArticleId: 'priority-article',
+      lastDate: seededCursorDate,
+      lastPromptId: 'prompt-2',
+      priorityBucket: 1,
+    },
   })
 
   expect(await service.getScanState(jobId)).toEqual({
-    cursor: {lastArticleId: 'priority-article', lastDate: seededCursorDate, priorityBucket: 1},
+    cursor: {
+      lastArticleId: 'priority-article',
+      lastDate: seededCursorDate,
+      lastPromptId: 'prompt-2',
+      priorityBucket: 1,
+    },
     exhaustedAt: null,
     lastProjectRefreshAckSeq: 17,
     scanEpoch: 2,
@@ -1732,7 +1742,12 @@ test('stores full SQLite scan state without clearing existing cursor fields', as
   await service.setExhaustedAt(jobId, updatedExhaustedAt)
 
   expect(await service.getScanState(jobId)).toEqual({
-    cursor: {lastArticleId: 'priority-article', lastDate: seededCursorDate, priorityBucket: 1},
+    cursor: {
+      lastArticleId: 'priority-article',
+      lastDate: seededCursorDate,
+      lastPromptId: 'prompt-2',
+      priorityBucket: 1,
+    },
     exhaustedAt: updatedExhaustedAt,
     lastProjectRefreshAckSeq: 17,
     scanEpoch: 2,
@@ -1742,7 +1757,12 @@ test('stores full SQLite scan state without clearing existing cursor fields', as
   await service.setLastProjectRefreshAckSeq(jobId, 23)
 
   expect(await service.getScanState(jobId)).toEqual({
-    cursor: {lastArticleId: 'priority-article', lastDate: seededCursorDate, priorityBucket: 1},
+    cursor: {
+      lastArticleId: 'priority-article',
+      lastDate: seededCursorDate,
+      lastPromptId: 'prompt-2',
+      priorityBucket: 1,
+    },
     exhaustedAt: updatedExhaustedAt,
     lastProjectRefreshAckSeq: 23,
     scanEpoch: 2,
@@ -1753,7 +1773,12 @@ test('stores full SQLite scan state without clearing existing cursor fields', as
   await service.setScanState(jobId, {lastProjectRefreshAckSeq: 11})
 
   expect(await service.getScanState(jobId)).toEqual({
-    cursor: {lastArticleId: 'priority-article', lastDate: seededCursorDate, priorityBucket: 1},
+    cursor: {
+      lastArticleId: 'priority-article',
+      lastDate: seededCursorDate,
+      lastPromptId: 'prompt-2',
+      priorityBucket: 1,
+    },
     exhaustedAt: updatedExhaustedAt,
     lastProjectRefreshAckSeq: 23,
     scanEpoch: 2,
@@ -1763,7 +1788,12 @@ test('stores full SQLite scan state without clearing existing cursor fields', as
   await service.setScanState(jobId, {wrapVisibilityAckSeq: null})
 
   expect(await service.getScanState(jobId)).toEqual({
-    cursor: {lastArticleId: 'priority-article', lastDate: seededCursorDate, priorityBucket: 1},
+    cursor: {
+      lastArticleId: 'priority-article',
+      lastDate: seededCursorDate,
+      lastPromptId: 'prompt-2',
+      priorityBucket: 1,
+    },
     exhaustedAt: updatedExhaustedAt,
     lastProjectRefreshAckSeq: 23,
     scanEpoch: 2,
@@ -1877,6 +1907,7 @@ test('upgrades legacy job_scan_state ack columns in place without losing row dat
 
   expect(upgradedColumns).toContain('last_project_refresh_ack_token')
   expect(upgradedColumns).toContain('wrap_visibility_ack_token')
+  expect(upgradedColumns).toContain('cursor_last_prompt_id')
   expect(upgradedColumns).not.toContain('last_project_refresh_ack_seq')
   expect(upgradedColumns).not.toContain('wrap_visibility_ack_seq')
   expect(upgradedRow).toEqual({

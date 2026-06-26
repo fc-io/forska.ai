@@ -110,6 +110,7 @@ export const judgmentsJobsCronGetPrompts = async (
     ? {
         lastDate: cursor.lastDate.toISOString(),
         lastArticleId: cursor.lastArticleId.slice(0, 8),
+        lastPromptId: cursor.lastPromptId?.slice(0, 8) ?? null,
         priorityBucket: cursor.priorityBucket ?? 0,
       }
     : null
@@ -143,6 +144,7 @@ export const judgmentsJobsCronGetPrompts = async (
     ? {
         lastDate: result.nextCursor.lastDate.toISOString(),
         lastArticleId: result.nextCursor.lastArticleId.slice(0, 8),
+        lastPromptId: result.nextCursor.lastPromptId?.slice(0, 8) ?? null,
         priorityBucket: result.nextCursor.priorityBucket,
       }
     : null

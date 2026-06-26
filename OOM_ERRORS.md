@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-26 - Judgment Job Serving Queue Cutover
+
+- Error: `Out of Memory Error: failed to pin block` risk from normal judgment-job unassessed count, preview, and refill reads falling back to broad legacy DuckDB paths.
+- Context: PR 92 DuckDB OOM call-site audit for judgment job serving routes and queue refill.
+- Cause: Foreground job paths still depended on legacy OLAP-style unassessed reads or insufficiently bounded serving-queue reads during config, prompt, and cursor edge cases.
+- Fix: Job unassessed reads use current V4 serving snapshots, current enabled prompts, stable priority/date/article/prompt keyset pagination, distinct preview articles, inclusive project end dates, and no-spill workload contexts.
+- Verification: Focused Bun tests for review-serving SQL guards and judgment-job SQLite/add-to-queue cursor behavior.
+
 ## 2026-06-26 - Current DB Retired Serving Warning Health
 
 - Error: `warning response returned stalled review indexing: progressState=stalled, status=stale, pendingRefreshCount=0, queuedRefreshCount=0, inFlightRefreshCount=0, activeWorkCount=0`.

@@ -1063,6 +1063,25 @@ test('judgment job foreground routes do not import legacy OLAP unassessed helper
   expect(cronText).toContain('getJudgmentJobUnassessedPairsFromServing')
 })
 
+test('judgment job serving queue SQL keeps current config and stable keyset semantics', () => {
+  const serviceText = readFileSync(
+    join(workspaceRoot, 'src/server/reviewServing/reviewServingJudgmentJobQueueService.ts'),
+    'utf8',
+  )
+
+  expect(serviceText).toContain('getCurrentReviewServingReviewConfigHash')
+  expect(serviceText).toContain('AND review_config_hash = ${getSqlLiteral(currentReviewConfigHash)}')
+  expect(serviceText).toContain('INNER JOIN app.project_prompt current_prompt')
+  expect(serviceText).toContain('AND current_prompt.enabled = TRUE')
+  expect(serviceText).toContain('AND NOT current_prompt.archived')
+  expect(serviceText).toContain("date_trunc('millisecond', queue.activity_sort_at)")
+  expect(serviceText).toContain('queue.priority_bucket < ${priorityBucket}')
+  expect(serviceText).toContain('AND queue.prompt_id < ${getSqlLiteral(cursor.lastPromptId)}')
+  expect(serviceText).toContain('ORDER BY queue.priority_bucket DESC')
+  expect(serviceText).toContain('queue.prompt_id DESC')
+  expect(serviceText).not.toContain('GROUP BY queue.article_id, queue.priority_bucket, queue.activity_sort_at')
+})
+
 test('duckdbOlap imports stay quarantined away from normal review and judgment job foreground paths', () => {
   const allowedImportFiles = new Set([
     'src/services/olap/articlesReviewsBothOlap.ts',
