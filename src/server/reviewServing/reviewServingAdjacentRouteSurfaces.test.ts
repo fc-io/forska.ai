@@ -71,8 +71,6 @@ test('US-013 out-of-scope adjacent surfaces are guarded and excluded from normal
     ['GET', '/api/articles/latest', 'out-of-scope-non-review'],
     ['GET', '/api/articles/search', 'out-of-scope-non-review'],
     ['GET', '/api/projects/:id/articles', 'out-of-scope-non-review'],
-    ['GET', '/api/judgmentsjobs-unassessed-count', 'out-of-scope-admin-debug'],
-    ['GET', '/api/judgmentsjobs-unassessed-articles', 'out-of-scope-admin-debug'],
     ['GET', '/api/humanassessment/overview', 'out-of-scope-admin-debug'],
     ['GET', '/api/humanassessment/overview-both-projects', 'out-of-scope-admin-debug'],
   ])
@@ -104,9 +102,27 @@ test('US-013 admin UI adjacent surfaces stay product-classified in route invento
   })
 
   expect(adminDebugRouteCategories).toEqual([
-    'GET /api/judgmentsjobs-unassessed-count supported-local-api',
-    'GET /api/judgmentsjobs-unassessed-articles supported-local-api',
     'GET /api/humanassessment/overview supported-local-api',
     'GET /api/humanassessment/overview-both-projects supported-local-api',
+  ])
+})
+
+test('US-013 migrated judgment job adjacent surfaces stay product-classified in route inventory', () => {
+  const routeSurfaceByKey = new Map(
+    routeSurfaceRoutes.map((route) => {
+      return [getRouteSurfaceRouteKey(route), route]
+    }),
+  )
+  const migratedJobRouteCategories = reviewServingAdjacentRouteClassifications.flatMap((entry) => {
+    const routeSurface = routeSurfaceByKey.get(getReviewServingAdjacentRouteClassificationKey(entry))
+
+    return entry.classification === 'migrated-job'
+      ? [`${entry.method} ${entry.routePath} ${routeSurface?.category ?? 'missing'}`]
+      : []
+  })
+
+  expect(migratedJobRouteCategories).toEqual([
+    'GET /api/judgmentsjobs-unassessed-count supported-local-api',
+    'GET /api/judgmentsjobs-unassessed-articles supported-local-api',
   ])
 })

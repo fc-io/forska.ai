@@ -153,14 +153,107 @@ const getCurrentPromptJoin = () => {
   `
 }
 
-const getImportRoutePredicate = (importRouteIds: readonly string[]) => {
-  return importRouteIds.length === 0
-    ? ''
-    : `AND article.selected_import_route_id IN (${importRouteIds
-        .map((routeId) => {
-          return getSqlLiteral(routeId)
-        })
-        .join(', ')})`
+const getProjectArticleMembershipPredicate = (input: {
+  articleIdExpression: string
+  projectArticleAlias: string
+  projectIdExpression: string
+}) => {
+  return `EXISTS (
+      SELECT 1
+      FROM app.project_article ${input.projectArticleAlias}
+      WHERE ${input.projectArticleAlias}.project_id = ${input.projectIdExpression}
+        AND ${input.projectArticleAlias}.article_id = ${input.articleIdExpression}
+    )`
+}
+
+const getConfiguredRouteMembershipPredicate = (input: {
+  articleIdExpression: string
+  articleRouteAlias: string
+  importRouteIds: readonly string[]
+}) => {
+  return input.importRouteIds.length === 0
+    ? null
+    : `EXISTS (
+      SELECT 1
+      FROM app.article_import_route ${input.articleRouteAlias}
+      WHERE ${input.articleRouteAlias}.article_id = ${input.articleIdExpression}
+        AND ${input.articleRouteAlias}.import_route_id IN (${input.importRouteIds
+          .map((routeId) => {
+            return getSqlLiteral(routeId)
+          })
+          .join(', ')})
+    )`
+}
+
+const getCurrentProjectRouteMembershipPredicate = (input: {
+  articleIdExpression: string
+  articleRouteAlias: string
+  projectIdExpression: string
+  projectRouteAlias: string
+}) => {
+  return `EXISTS (
+      SELECT 1
+      FROM app.project_import_route ${input.projectRouteAlias}
+      INNER JOIN app.article_import_route ${input.articleRouteAlias}
+        ON ${input.articleRouteAlias}.import_route_id = ${input.projectRouteAlias}.import_route_id
+        AND ${input.articleRouteAlias}.article_id = ${input.articleIdExpression}
+      WHERE ${input.projectRouteAlias}.project_id = ${input.projectIdExpression}
+    )`
+}
+
+const getConfiguredArticleScopePredicate = (importRouteIds: readonly string[]) => {
+  const routePredicate = getConfiguredRouteMembershipPredicate({
+    articleIdExpression: 'article.article_id',
+    articleRouteAlias: 'article_route_scope',
+    importRouteIds,
+  })
+  const curatedPredicate = getProjectArticleMembershipPredicate({
+    articleIdExpression: 'article.article_id',
+    projectArticleAlias: 'project_article_scope',
+    projectIdExpression: 'article.project_id',
+  })
+
+  return routePredicate === null ? `AND ${curatedPredicate}` : `AND (${routePredicate} OR ${curatedPredicate})`
+}
+
+const getCurrentProjectScopeJoin = () => {
+  return `
+    INNER JOIN app.project current_project
+      ON current_project.id = queue.project_id
+      AND current_project.archived = FALSE
+    INNER JOIN app.article current_article
+      ON current_article.id = queue.article_id
+  `
+}
+
+const getCurrentProjectDateScopePredicate = () => {
+  const dateToIsDateOnlyExpression = "current_project.date_to = date_trunc('day', current_project.date_to)"
+  const dateToHasTimeExpression = "current_project.date_to != date_trunc('day', current_project.date_to)"
+
+  return `
+      AND (current_project.date_from IS NULL OR current_article.article_created_at >= current_project.date_from)
+      AND (
+        current_project.date_to IS NULL
+        OR (${dateToIsDateOnlyExpression} AND current_article.article_created_at < current_project.date_to + INTERVAL 1 DAY)
+        OR (${dateToHasTimeExpression} AND current_article.article_created_at <= current_project.date_to)
+      )
+  `
+}
+
+const getCurrentProjectArticleScopePredicate = () => {
+  return `AND (
+        ${getCurrentProjectRouteMembershipPredicate({
+          articleIdExpression: 'queue.article_id',
+          articleRouteAlias: 'current_article_route_scope',
+          projectIdExpression: 'queue.project_id',
+          projectRouteAlias: 'current_project_route_scope',
+        })}
+        OR ${getProjectArticleMembershipPredicate({
+          articleIdExpression: 'queue.article_id',
+          projectArticleAlias: 'current_project_article_scope',
+          projectIdExpression: 'queue.project_id',
+        })}
+      )`
 }
 
 export const getJudgmentJobUnassessedCountFromServing = async (params: {
@@ -193,7 +286,7 @@ export const getJudgmentJobUnassessedCountFromServing = async (params: {
       AND queue.queue_kind = 'unassessed'
       AND queue.prompt_id IS NOT NULL
       ${getDatePredicate('article.article_created_at', params.projectDateFrom, params.projectDateTo)}
-      ${getImportRoutePredicate(params.importRouteIds)}
+      ${getConfiguredArticleScopePredicate(params.importRouteIds)}
   `,
     getJudgmentJobQueueWorkloadContext('judgmentJobs.unassessedCount', params.projectId, 1),
   )
@@ -240,7 +333,7 @@ export const getJudgmentJobUnassessedArticlesFromServing = async (params: {
         AND queue.queue_kind = 'unassessed'
         AND queue.prompt_id IS NOT NULL
         ${getDatePredicate('article.article_created_at', params.projectDateFrom, params.projectDateTo)}
-        ${getImportRoutePredicate(params.importRouteIds)}
+        ${getConfiguredArticleScopePredicate(params.importRouteIds)}
     ), article_queue AS (
       SELECT
         article_id,
@@ -317,11 +410,14 @@ export const getJudgmentJobUnassessedPairsFromServing = async (params: {
     INNER JOIN app.judgment_job job
       ON job.id = ${getSqlLiteral(params.jobId)}
       AND job.project_id = queue.project_id
+    ${getCurrentProjectScopeJoin()}
     WHERE queue.project_id = ${getSqlLiteral(scope.projectId)}
       AND queue.review_config_hash = ${getSqlLiteral(scope.reviewConfigHash)}
       AND queue.snapshot_id = ${getSqlLiteral(scope.snapshotId)}
       AND queue.queue_kind = 'unassessed'
       AND queue.prompt_id IS NOT NULL
+      ${getCurrentProjectDateScopePredicate()}
+      ${getCurrentProjectArticleScopePredicate()}
       ${getCursorPredicate(params.cursor)}
     ORDER BY queue.priority_bucket DESC, ${getQueueActivitySortAtExpression()} DESC, queue.article_id DESC, queue.prompt_id DESC
     LIMIT ${limit + 1}
