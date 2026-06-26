@@ -2,7 +2,12 @@ import {existsSync} from 'node:fs'
 
 import {DuckDBConnection, DuckDBInstance} from '@duckdb/node-api'
 
-import {type DuckdbWorkloadContext, runDuckdbJsonQuery, runMeasuredDuckdbJsonWorkload} from '../utils/duckdbService.ts'
+import {
+  type DuckdbWorkloadContext,
+  getReadOnlyDuckdbRuntimeOptions,
+  runDuckdbJsonQuery,
+  runMeasuredDuckdbJsonWorkload,
+} from '../utils/duckdbService.ts'
 import {getEnv} from '../utils/env.ts'
 import {canCurrentServerOwnDuckdb} from '../utils/serverRuntimeRole.ts'
 
@@ -54,7 +59,7 @@ const getNormalizedDisableValue = (value: string | undefined) => {
     .toLowerCase()
 }
 
-const getTrimmedValue = (value: string | undefined) => {
+const getTrimmedValue = (value: string | null | undefined) => {
   return String(value ?? '').trim()
 }
 
@@ -123,10 +128,10 @@ const closeReadOnlyDuckdbServiceDirect = () => {
 }
 
 const createReadOnlyDuckdbInstance = async (runtimeConfig: ReadOnlyDuckdbRuntimeConfig) => {
-  return DuckDBInstance.create(runtimeConfig.databasePath, {
-    access_mode: 'READ_ONLY',
-    memory_limit: runtimeConfig.memoryLimit,
-  })
+  return DuckDBInstance.create(
+    runtimeConfig.databasePath,
+    getReadOnlyDuckdbRuntimeOptions({memoryLimit: runtimeConfig.memoryLimit}),
+  )
 }
 
 const startReadOnlyDuckdbService = async (context: ReadOnlyDuckdbContext): Promise<DuckDBConnection> => {

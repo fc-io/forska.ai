@@ -27,6 +27,12 @@ type DuckdbRuntimeConfig = {
   tempDirectory: string | null
   threads: string
 }
+export type ReadOnlyDuckdbRuntimeOptionsInput = {
+  accessMode?: 'READ_ONLY'
+  memoryLimit?: string
+  tempDirectory?: string | null
+  threads?: string
+}
 export type DuckdbSnapshot = {createdAt: string; snapshotPath: string}
 export type DuckdbAppendRuntimeMetrics = {
   batchesCompleted: number
@@ -318,6 +324,28 @@ const getDuckdbInstanceOptions = (runtimeConfig: DuckdbRuntimeConfig): Record<st
         temp_directory: runtimeConfig.tempDirectory,
         threads: runtimeConfig.threads,
       }
+}
+
+export const getReadOnlyDuckdbRuntimeOptions = (input: ReadOnlyDuckdbRuntimeOptionsInput = {}) => {
+  const runtimeConfig = getDuckdbRuntimeConfigValue()
+  const tempDirectory = input.tempDirectory ?? runtimeConfig.tempDirectory
+  const baseOptions = {
+    access_mode: input.accessMode ?? 'READ_ONLY',
+    memory_limit: input.memoryLimit ?? runtimeConfig.memoryLimit,
+    preserve_insertion_order: String(runtimeConfig.preserveInsertionOrder),
+    threads: input.threads ?? runtimeConfig.threads,
+  }
+
+  return tempDirectory === null ? baseOptions : {...baseOptions, temp_directory: tempDirectory}
+}
+
+export const getMaintenanceDuckdbWorkloadContext = (taskName: string): DuckdbWorkloadContext => {
+  return {
+    allowsTempSpill: true,
+    fallbackIntent: 'reject',
+    routeOrJobKey: `maintenance.${taskName}`,
+    workloadClass: 'maintenance',
+  }
 }
 
 const getDirectorySizeSnapshot = (directoryPath: string): {fileCount: number; totalBytes: number} => {

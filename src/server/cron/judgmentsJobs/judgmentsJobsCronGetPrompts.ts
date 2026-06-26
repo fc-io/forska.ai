@@ -1,4 +1,4 @@
-import {getUnassessedPairsFromOlap} from '../../../services/olap/unassessedArticlesOlap.ts'
+import {getJudgmentJobUnassessedPairsFromServing} from '../../reviewServing/reviewServingJudgmentJobQueueService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
@@ -18,7 +18,7 @@ const getUnassessedPairsCursor = (cursor: JobCursor | null) => {
 /**
  * Gets prompts (article × prompt pairs) that need to be judged for a project.
  *
- * Uses the OLAP layer to find unassessed pairs (articles without judgments for all prompts).
+ * Uses the V4 serving queue to find unassessed pairs without raw DuckDB fallback windows.
  * Uses cursor-based pagination to avoid re-fetching already-queued pairs.
  */
 export const judgmentsJobsCronGetPrompts = async (
@@ -26,22 +26,43 @@ export const judgmentsJobsCronGetPrompts = async (
   jobId: string,
   numberOfPromptsToGet: number,
   cursor: JobCursor | null = null,
-  preferRawFallback = false,
+  _preferRawFallback = false,
 ): Promise<QueuePromptsResult> => {
-  const shouldPreferRawFallback = Boolean(preferRawFallback)
   const [projectResult, enabledPromptCount] = await Promise.all([
-    getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{id: string; archived: boolean}>(`
+    getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{id: string; archived: boolean}>(
+      `
       SELECT id, archived
       FROM app.project
       WHERE id = '${escapeSqlString(projectId)}'
       LIMIT 1
-    `),
-    getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{count: number}>(`
+    `,
+      {
+        allowsTempSpill: false,
+        fallbackIntent: 'reject',
+        maxResultRows: 1,
+        projectId,
+        routeOrJobKey: `judgmentQueue.${jobId}.project`,
+        timeoutMs: 2_000,
+        workloadClass: 'judgmentJobMetadata',
+      },
+    ),
+    getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{count: number}>(
+      `
       SELECT COUNT(*) AS count
       FROM app.project_prompt
       WHERE project_id = '${escapeSqlString(projectId)}'
         AND enabled = TRUE
-    `),
+    `,
+      {
+        allowsTempSpill: false,
+        fallbackIntent: 'reject',
+        maxResultRows: 1,
+        projectId,
+        routeOrJobKey: `judgmentQueue.${jobId}.enabledPromptCount`,
+        timeoutMs: 2_000,
+        workloadClass: 'judgmentJobMetadata',
+      },
+    ),
   ])
 
   const [project] = projectResult
@@ -96,24 +117,23 @@ export const judgmentsJobsCronGetPrompts = async (
   const slowLogMs = 30_000
   const startedAtMs = Date.now()
   const slowTimer = setTimeout(() => {
-    getPromptsLogger.warn(`judgmentQueue.getPrompts.slowTimer.${jobId}`, '[getPrompts] slow OLAP query', {
+    getPromptsLogger.warn(`judgmentQueue.getPrompts.slowTimer.${jobId}`, '[getPrompts] slow serving queue query', {
       component: getPromptsComponent,
-      event: 'slowOlapQueryTimer',
+      event: 'slowServingQueueQueryTimer',
       jobId,
       projectId,
       requested: numberOfPromptsToGet,
       cursor: cursorSummary,
-      olapDb: 'duckdb',
+      readSource: 'review_unassessed_queue_serving_v4',
       runningForMs: Date.now() - startedAtMs,
     })
   }, slowLogMs)
 
-  const result = await getUnassessedPairsFromOlap({
+  const result = await getJudgmentJobUnassessedPairsFromServing({
     projectId,
     jobId,
     numberOfPromptsToGet,
     cursor: getUnassessedPairsCursor(cursor),
-    preferRawFallback: shouldPreferRawFallback,
   }).finally(() => {
     clearTimeout(slowTimer)
   })
@@ -130,9 +150,9 @@ export const judgmentsJobsCronGetPrompts = async (
   const cursorAction = result.nextCursor ? 'advance' : cursor ? 'clear' : 'none'
 
   if (numberOfPromptsToGet > 0 && result.promptEntries.length === 0) {
-    getPromptsLogger.warn(`judgmentQueue.getPrompts.empty.${jobId}`, '[getPrompts] OLAP returned 0 pairs', {
+    getPromptsLogger.warn(`judgmentQueue.getPrompts.empty.${jobId}`, '[getPrompts] serving queue returned 0 pairs', {
       component: getPromptsComponent,
-      event: 'emptyOlapResult',
+      event: 'emptyServingQueueResult',
       projectId,
       jobId,
       requested: numberOfPromptsToGet,
@@ -140,13 +160,13 @@ export const judgmentsJobsCronGetPrompts = async (
       nextCursor: nextCursorSummary,
       cursorAction,
       durationMs,
-      preferRawFallback: shouldPreferRawFallback,
-      olapDb: 'duckdb',
+      preferRawFallback: false,
+      readSource: 'review_unassessed_queue_serving_v4',
     })
   } else if (durationMs > 5_000) {
-    getPromptsLogger.warn(`judgmentQueue.getPrompts.slow.${jobId}`, '[getPrompts] slow OLAP query', {
+    getPromptsLogger.warn(`judgmentQueue.getPrompts.slow.${jobId}`, '[getPrompts] slow serving queue query', {
       component: getPromptsComponent,
-      event: 'slowOlapQuery',
+      event: 'slowServingQueueQuery',
       projectId,
       jobId,
       requested: numberOfPromptsToGet,
@@ -155,8 +175,8 @@ export const judgmentsJobsCronGetPrompts = async (
       nextCursor: nextCursorSummary,
       cursorAction,
       durationMs,
-      preferRawFallback: shouldPreferRawFallback,
-      olapDb: 'duckdb',
+      preferRawFallback: false,
+      readSource: 'review_unassessed_queue_serving_v4',
     })
   }
 

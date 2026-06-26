@@ -7,6 +7,7 @@ import {getSqlLiteral, getTimestampLiteral} from '../src/server/services/appQuer
 import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 import {getProjectMartLargeRebuildStateService} from '../src/server/services/projectMartLargeRebuildStateService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 import {sleep} from '../src/utils/sleep.ts'
 
 type Rebuild2CutoverOptions = {
@@ -54,21 +55,12 @@ type Rebuild2CutoverReport = {
 }
 
 type ActiveWorkerLeaseSnapshot = {count: number; nextLeaseExpiresAt: Date | null}
-type QuarantineRederiveRow = {
-  articleId: string
-  detectedBy: string | null
-  error: string
-  projectId: string | null
-}
-type QuarantineRederiveCandidate = {
-  articleId: string
-  detectedBy: string | null
-  error: string
-  projectId: string
-}
+type QuarantineRederiveRow = {articleId: string; detectedBy: string | null; error: string; projectId: string | null}
+type QuarantineRederiveCandidate = {articleId: string; detectedBy: string | null; error: string; projectId: string}
 
 const cutoverFenceId = 'rebuild2'
 const cutoverReason = 'rebuild2-cutover'
+const workloadContext = getMaintenanceDuckdbWorkloadContext('rebuild2Cutover')
 const defaultFenceLeaseMs = 30 * 60 * 1000
 const defaultMaxWaitMs = 60_000
 const defaultPollMs = 250
@@ -725,12 +717,7 @@ const getQuarantineRederiveCandidates = async (runner: CutoverRunner, rows: Quar
     return [
       ...acc,
       ...projects.map((project) => {
-        return {
-          articleId: row.articleId,
-          detectedBy: row.detectedBy,
-          error: row.error,
-          projectId: project.projectId,
-        }
+        return {articleId: row.articleId, detectedBy: row.detectedBy, error: row.error, projectId: project.projectId}
       }),
     ]
   }, Promise.resolve([]))
@@ -927,21 +914,20 @@ const runAppliedRebuild2Cutover = async (
 
     await getAppDatabaseService().transaction(async (tx) => {
       await clearObsoleteRebuild2State(tx, options)
-    })
+    }, workloadContext)
 
     const afterClearProof = await getRebuild2CutoverProof(runner, options.ownerToken)
     assertNoObsoleteRows(afterClearProof, 'after-clear')
     const codeProofAfterClear = await assertCleanCutCodeProof()
 
     await touchRebuild2CutoverFence(runner, options, 'rederiving-replacement-work')
-    const {rederivedDirtyProjectCount, rederivedQuarantineCount} = await getAppDatabaseService().transaction(
-      async (tx) => {
-        const dirtyProjectCount = await rederiveReplacementWork(tx, options, projectIds, largeRebuildProjectIds)
-        const quarantineCount = await rederiveQuarantineWork(tx, options, quarantineRows)
+    const rederiveResult = (await getAppDatabaseService().transaction(async (tx) => {
+      const dirtyProjectCount = await rederiveReplacementWork(tx, options, projectIds, largeRebuildProjectIds)
+      const quarantineCount = await rederiveQuarantineWork(tx, options, quarantineRows)
 
-        return {rederivedDirtyProjectCount: dirtyProjectCount, rederivedQuarantineCount: quarantineCount}
-      },
-    )
+      return {rederivedDirtyProjectCount: dirtyProjectCount, rederivedQuarantineCount: quarantineCount}
+    }, workloadContext)) as {rederivedDirtyProjectCount: number; rederivedQuarantineCount: number}
+    const {rederivedDirtyProjectCount, rederivedQuarantineCount} = rederiveResult
     const afterRederiveProof = await getRebuild2CutoverProof(runner, options.ownerToken)
     assertNoObsoleteRows(afterRederiveProof, 'after-rederive')
 

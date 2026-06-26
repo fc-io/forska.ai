@@ -1,6 +1,5 @@
 import {Elysia, t} from 'elysia'
 
-import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
 import type {OwnerBackedJudgmentJobInfo} from '../cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
 import {
   getJudgmentEndpointAvailability,
@@ -49,6 +48,10 @@ import {getProviderConnectionConfigFromJson} from '../providers/providerDbUtils.
 import {resolveProviderConnectionRuntimeMatch} from '../providers/providerRuntimeMatchResolver.ts'
 import {assertStoredProviderModelRuntimeMatch} from '../providers/providerRuntimeModelGuard.ts'
 import {getProviderConnectionEffectiveBaseURL} from '../providers/providerRuntimeState.ts'
+import {
+  getJudgmentJobUnassessedArticlesFromServing,
+  getJudgmentJobUnassessedCountFromServing,
+} from '../reviewServing/reviewServingJudgmentJobQueueService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -3106,17 +3109,11 @@ export const judgmentsJobsRoutes = new Elysia()
         }
       }
 
-      const count = await getUnassessedCountFromOlap({
+      const count = await getJudgmentJobUnassessedCountFromServing({
         projectId: job.projectId,
-        projectModelId,
         projectDateFrom,
         projectDateTo,
         importRouteIds,
-        useTitle: job.useTitle,
-        useAbstract: job.useAbstract,
-        useFulltext: job.useFulltext,
-        useFulltextNoImages: job.useFulltextNoImages,
-        disableRawFallback: !freshness.isFresh,
       })
 
       if (freshness.isFresh) {
@@ -3130,25 +3127,15 @@ export const judgmentsJobsRoutes = new Elysia()
   .get(
     '/api/judgmentsjobs-unassessed-articles',
     async ({query}) => {
-      const {projectDateFrom, projectDateTo, importRouteIds, projectModelId, job} = await getJobContext({
-        jobId: query.jobId,
-      })
+      const {projectDateFrom, projectDateTo, importRouteIds, job} = await getJobContext({jobId: query.jobId})
       const freshness = await getProjectMartFreshnessState(job.projectId)
 
-      const {articles} = await getUnassessedArticlesFromOlap({
+      const {articles} = await getJudgmentJobUnassessedArticlesFromServing({
         projectId: job.projectId,
-        projectModelId,
         projectDateFrom,
         projectDateTo,
         importRouteIds,
-        useTitle: job.useTitle,
-        useAbstract: job.useAbstract,
-        useFulltext: job.useFulltext,
-        useFulltextNoImages: job.useFulltextNoImages,
         limit: 100,
-        offset: 0,
-        preferRawFallback: !freshness.isFresh,
-        boundedRawPreview: true,
       })
 
       const unassessedArticles = articles.map((a) => {
@@ -3159,6 +3146,13 @@ export const judgmentsJobsRoutes = new Elysia()
           articleAuthors: null,
           articleCreatedAt: a.articleCreatedAt,
           articleUpdatedAt: a.articleUpdatedAt,
+          arxivId: null,
+          biorxivId: null,
+          doi: null,
+          medrxivId: null,
+          pubmedId: null,
+          sourceMetadata: null,
+          url: null,
         }
       })
 

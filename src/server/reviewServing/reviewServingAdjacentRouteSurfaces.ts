@@ -55,26 +55,25 @@ export const reviewServingAdjacentRouteClassifications = [
     routePath: '/api/projects/:id/articles/:articleId',
   },
   {
-    classification: 'out-of-scope-admin-debug',
-    contractKeys: [],
+    classification: 'migrated-job',
+    contractKeys: ['review.queue.unassessed'],
     excludedFromNormalReviewFlow: true,
     guard:
       'owner-dependent local product API for browser and desktop admin job pages; not linked from normal review row flows',
     method: 'GET',
-    reason:
-      'Judgment-job unassessed count is an operational queue diagnostic for a job, not a production review route.',
+    reason: 'Judgment-job unassessed count is served from the V4 unassessed queue with no legacy OLAP raw fallback.',
     routeFile: 'src/server/routes/JudgmentsJobsRoutes.ts',
     routePath: '/api/judgmentsjobs-unassessed-count',
   },
   {
-    classification: 'out-of-scope-admin-debug',
-    contractKeys: [],
+    classification: 'migrated-job',
+    contractKeys: ['review.queue.unassessed'],
     excludedFromNormalReviewFlow: true,
     guard:
       'owner-dependent local product API for browser and desktop admin job pages; bounded preview route outside normal review row flows',
     method: 'GET',
     reason:
-      'Judgment-job unassessed article preview is an operational diagnostic for a job, not a production review route.',
+      'Judgment-job unassessed article preview is served from the V4 unassessed queue with no legacy OLAP raw fallback.',
     routeFile: 'src/server/routes/JudgmentsJobsRoutes.ts',
     routePath: '/api/judgmentsjobs-unassessed-articles',
   },

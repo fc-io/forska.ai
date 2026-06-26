@@ -3,6 +3,7 @@ import {Effect} from 'effect'
 
 import {type AppDatabaseSnapshot, getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {createDuckdbSnapshotForCli} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getReadOnlyDuckdbRuntimeOptions} from '../src/server/utils/duckdbService.ts'
 
 const getSqlArg = () => {
   const sqlArg = process.argv.slice(2).find((argument) => {
@@ -37,7 +38,7 @@ const deleteSnapshot = (snapshot: AppDatabaseSnapshot) => {
 }
 
 const getSnapshotQueryRuntime = async (snapshotPath: string) => {
-  const duckdbInstance = await DuckDBInstance.create(snapshotPath, {access_mode: 'READ_ONLY'})
+  const duckdbInstance = await DuckDBInstance.create(snapshotPath, getReadOnlyDuckdbRuntimeOptions())
   const connection = await duckdbInstance.connect()
 
   return {connection, duckdbInstance}
