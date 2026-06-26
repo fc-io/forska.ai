@@ -186,7 +186,6 @@ const registerSharedMocks = (
       jobId: string,
       numberOfPromptsToGet: number,
       cursor?: MockCursor | null,
-      preferRawFallback?: boolean,
     ) => Promise<{nextCursor: MockCursor | null; promptEntries: Array<{articleId: string; promptId: string}>}>
     answeredHumanRows?: Array<{articleId: string; promptId: string}>
     answeredHumanSummaryRows?: Array<{articleId: string}>
@@ -251,11 +250,10 @@ const registerSharedMocks = (
         jobId: string,
         numberOfPromptsToGet: number,
         cursor?: MockCursor | null,
-        preferRawFallback?: boolean,
       ) => {
         getPromptsCalls.count += 1
         return getPromptsImpl
-          ? getPromptsImpl(projectId, jobId, numberOfPromptsToGet, cursor, preferRawFallback)
+          ? getPromptsImpl(projectId, jobId, numberOfPromptsToGet, cursor)
           : {nextCursor: null, promptEntries: []}
       },
       judgmentsJobsGetRunningJobs: async () => {
@@ -331,9 +329,8 @@ test('skips a transient SQLite lock for one job and continues filling later jobs
   expect(getPromptsCalls.count).toBe(2)
 })
 
-test('uses raw OLAP fallback when exhausted SQLite jobs are waiting on mart visibility', async () => {
+test('restarts exhausted SQLite scans after cooldown when mart visibility is stale', async () => {
   const getPromptsCalls = {count: 0}
-  const preferRawFallbackValues: boolean[] = []
   const setScanStateCalls: Array<{jobId: string; state: Record<string, unknown>}> = []
   const sqliteService: MockSqliteService = {
     addReadyPrompts: async () => {
@@ -369,8 +366,7 @@ test('uses raw OLAP fallback when exhausted SQLite jobs are waiting on mart visi
   }
 
   registerSharedMocks(sqliteService, getPromptsCalls, {
-    getPromptsImpl: async (_projectId, _jobId, _numberOfPromptsToGet, _cursor, preferRawFallback) => {
-      preferRawFallbackValues.push(Boolean(preferRawFallback))
+    getPromptsImpl: async () => {
       return {nextCursor: null, promptEntries: []}
     },
     projectDirtyToken: 12,
@@ -383,17 +379,15 @@ test('uses raw OLAP fallback when exhausted SQLite jobs are waiting on mart visi
   await module.judgmentsJobsAddToQueue('server-1')
 
   expect(getPromptsCalls.count).toBe(1)
-  expect(preferRawFallbackValues).toEqual([true])
   expect(setScanStateCalls).toHaveLength(2)
   expect(setScanStateCalls[0]).toEqual({
     jobId: 'job-1',
-    state: {cursor: null, exhaustedAt: null, scanEpoch: 4, wrapVisibilityAckSeq: 12},
+    state: {cursor: null, exhaustedAt: null, scanEpoch: 4, wrapVisibilityAckSeq: null},
   })
 })
 
-test('continues raw OLAP fallback during exhausted cooldown when mart visibility is stale', async () => {
+test('keeps exhausted SQLite cooldown active when mart visibility is stale', async () => {
   const getPromptsCalls = {count: 0}
-  const preferRawFallbackValues: boolean[] = []
   const setScanStateCalls: Array<{jobId: string; state: Record<string, unknown>}> = []
   const sqliteService: MockSqliteService = {
     addReadyPrompts: async () => {
@@ -435,31 +429,24 @@ test('continues raw OLAP fallback during exhausted cooldown when mart visibility
   }
 
   registerSharedMocks(sqliteService, getPromptsCalls, {
-    getPromptsImpl: async (_projectId, _jobId, _numberOfPromptsToGet, _cursor, preferRawFallback) => {
-      preferRawFallbackValues.push(Boolean(preferRawFallback))
+    getPromptsImpl: async () => {
       return {nextCursor: null, promptEntries: []}
     },
     projectDirtyToken: 12,
   })
 
   const module = (await import(
-    `${judgmentsJobsAddToQueueModulePath}?cooldown-raw-fallback=${Date.now()}`
+    `${judgmentsJobsAddToQueueModulePath}?cooldown-serving-queue=${Date.now()}`
   )) as JudgmentsJobsAddToQueueModule
 
   await module.judgmentsJobsAddToQueue('server-1')
 
-  expect(getPromptsCalls.count).toBe(1)
-  expect(preferRawFallbackValues).toEqual([true])
-  expect(setScanStateCalls).toHaveLength(2)
-  expect(setScanStateCalls[0]).toEqual({
-    jobId: 'job-1',
-    state: {cursor: null, exhaustedAt: null, scanEpoch: 4, wrapVisibilityAckSeq: 12},
-  })
+  expect(getPromptsCalls.count).toBe(0)
+  expect(setScanStateCalls).toEqual([])
 })
 
-test('uses serving OLAP when mart visibility is fresh despite a stale SQLite ack', async () => {
+test('restarts exhausted SQLite scans after cooldown and clears stale wrap visibility', async () => {
   const getPromptsCalls = {count: 0}
-  const preferRawFallbackValues: boolean[] = []
   const setScanStateCalls: Array<{jobId: string; state: Record<string, unknown>}> = []
   const sqliteService: MockSqliteService = {
     addReadyPrompts: async () => {
@@ -495,8 +482,7 @@ test('uses serving OLAP when mart visibility is fresh despite a stale SQLite ack
   }
 
   registerSharedMocks(sqliteService, getPromptsCalls, {
-    getPromptsImpl: async (_projectId, _jobId, _numberOfPromptsToGet, _cursor, preferRawFallback) => {
-      preferRawFallbackValues.push(Boolean(preferRawFallback))
+    getPromptsImpl: async () => {
       return {nextCursor: null, promptEntries: []}
     },
     projectDirtyToken: 12,
@@ -510,7 +496,6 @@ test('uses serving OLAP when mart visibility is fresh despite a stale SQLite ack
   await module.judgmentsJobsAddToQueue('server-1')
 
   expect(getPromptsCalls.count).toBe(1)
-  expect(preferRawFallbackValues).toEqual([false])
   expect(setScanStateCalls).toHaveLength(2)
   expect(setScanStateCalls[0]).toEqual({
     jobId: 'job-1',
