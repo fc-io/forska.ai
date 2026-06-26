@@ -192,6 +192,9 @@ const getJsonSqlLiteral = (value: unknown) => {
 }
 
 const activeRebuildChunkStatusSql = "('completed', 'running', 'failed', 'blocked_over_budget', 'quarantined')"
+const activeRebuildChunkPreservePredicate = `
+  app.review_rebuild_chunk_manifest.status IN ${activeRebuildChunkStatusSql}
+`
 const rebuildChunkPrerequisitesByComponent = {
   display: ['projectScope', 'selectedImport'],
   humanStatus: ['projectScope', 'display'],
@@ -208,6 +211,44 @@ const rebuildChunkPrerequisitesByComponent = {
 
 const getComponentSqlList = (components: readonly ReviewServingProjectionComponent[]) => {
   return `(${components.map(getSqlLiteral).join(', ')})`
+}
+
+const releaseInactiveRequestRebuildChunkManifestsForUpsert = async (
+  chunkIds: readonly string[],
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const uniqueChunkIds = [...new Set(chunkIds)]
+
+  if (uniqueChunkIds.length === 0) {
+    return
+  }
+
+  await database.run(`
+    UPDATE app.review_rebuild_chunk_manifest
+    SET status = 'pending',
+        request_id = NULL,
+        admission_state = 'admitted',
+        retry_after = NULL,
+        retry_count = 0,
+        oom_category = NULL,
+        over_budget_reason = NULL,
+        budget_json = NULL,
+        diagnostics_json = NULL,
+        checksum = NULL,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        last_error = NULL,
+        updated_at = current_timestamp
+    WHERE chunk_id IN (${uniqueChunkIds.map(getSqlLiteral).join(', ')})
+      AND status IN ${activeRebuildChunkStatusSql}
+      AND request_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_request request
+        WHERE request.request_id = app.review_rebuild_chunk_manifest.request_id
+          AND request.status IN ('admitted', 'running')
+      )
+  `)
 }
 
 const getRebuildChunkComponentPrerequisitePredicate = (tableAlias?: string) => {
@@ -581,6 +622,13 @@ export const upsertReviewServingRebuildChunkManifests = async (
   inputs: readonly ReviewServingRebuildChunkManifestInput[],
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
 ) => {
+  await releaseInactiveRequestRebuildChunkManifestsForUpsert(
+    inputs.map((input) => {
+      return getReviewServingRebuildChunkId(input)
+    }),
+    database,
+  )
+
   await Promise.all(
     inputs.map(async (input) => {
       const chunkId = getReviewServingRebuildChunkId(input)
@@ -680,55 +728,55 @@ export const upsertReviewServingRebuildChunkManifests = async (
         )
         ON CONFLICT(chunk_id) DO UPDATE SET
           request_id = CASE
-            WHEN app.review_rebuild_chunk_manifest.status IN ${activeRebuildChunkStatusSql} THEN app.review_rebuild_chunk_manifest.request_id
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.request_id
             ELSE excluded.request_id
           END,
           status = CASE
-            WHEN app.review_rebuild_chunk_manifest.status IN ${activeRebuildChunkStatusSql} THEN app.review_rebuild_chunk_manifest.status
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.status
             ELSE excluded.status
           END,
           admission_state = CASE
-            WHEN app.review_rebuild_chunk_manifest.status IN ${activeRebuildChunkStatusSql} THEN app.review_rebuild_chunk_manifest.admission_state
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.admission_state
             ELSE excluded.admission_state
           END,
           retry_after = CASE
-            WHEN app.review_rebuild_chunk_manifest.status IN ${activeRebuildChunkStatusSql} THEN app.review_rebuild_chunk_manifest.retry_after
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.retry_after
             ELSE excluded.retry_after
           END,
           retry_count = CASE
-            WHEN app.review_rebuild_chunk_manifest.status IN ${activeRebuildChunkStatusSql} THEN app.review_rebuild_chunk_manifest.retry_count
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.retry_count
             ELSE excluded.retry_count
           END,
           oom_category = CASE
-            WHEN app.review_rebuild_chunk_manifest.status IN ${activeRebuildChunkStatusSql} THEN app.review_rebuild_chunk_manifest.oom_category
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.oom_category
             ELSE excluded.oom_category
           END,
           over_budget_reason = CASE
-            WHEN app.review_rebuild_chunk_manifest.status IN ${activeRebuildChunkStatusSql} THEN app.review_rebuild_chunk_manifest.over_budget_reason
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.over_budget_reason
             ELSE excluded.over_budget_reason
           END,
           budget_json = CASE
-            WHEN app.review_rebuild_chunk_manifest.status IN ${activeRebuildChunkStatusSql} THEN app.review_rebuild_chunk_manifest.budget_json
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.budget_json
             ELSE excluded.budget_json
           END,
           diagnostics_json = CASE
-            WHEN app.review_rebuild_chunk_manifest.status IN ${activeRebuildChunkStatusSql} THEN app.review_rebuild_chunk_manifest.diagnostics_json
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.diagnostics_json
             ELSE excluded.diagnostics_json
           END,
           checksum = CASE
-            WHEN app.review_rebuild_chunk_manifest.status IN ${activeRebuildChunkStatusSql} THEN app.review_rebuild_chunk_manifest.checksum
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.checksum
             ELSE excluded.checksum
           END,
           lease_owner = CASE
-            WHEN app.review_rebuild_chunk_manifest.status IN ${activeRebuildChunkStatusSql} THEN lease_owner
+            WHEN ${activeRebuildChunkPreservePredicate} THEN lease_owner
             ELSE NULL
           END,
           lease_expires_at = CASE
-            WHEN app.review_rebuild_chunk_manifest.status IN ${activeRebuildChunkStatusSql} THEN lease_expires_at
+            WHEN ${activeRebuildChunkPreservePredicate} THEN lease_expires_at
             ELSE NULL
           END,
           last_error = CASE
-            WHEN app.review_rebuild_chunk_manifest.status IN ${activeRebuildChunkStatusSql} THEN last_error
+            WHEN ${activeRebuildChunkPreservePredicate} THEN last_error
             ELSE NULL
           END,
           updated_at = ${nowSql}

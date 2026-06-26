@@ -26,6 +26,7 @@ import {
 import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
   createReviewServingRebuildRequest,
+  getActiveReviewServingRebuildRequestForProject,
   type ReviewServingRebuildRequest,
   type ReviewServingRebuildRequestEstimate,
 } from './reviewServingRebuildRequestRepository.ts'
@@ -766,6 +767,15 @@ export const requestReviewServingV4RebuildEffect = (
   database: ReviewServingChunkManifestRepositoryDatabase = getAppDatabaseService() as ReviewServingChunkManifestRepositoryDatabase,
 ) => {
   return Effect.tryPromise(async () => {
+    const activeRequest =
+      input.reason === 'missingReviewServingSnapshot'
+        ? await getActiveReviewServingRebuildRequestForProject({projectId: input.projectId}, database)
+        : null
+
+    if (activeRequest !== null) {
+      return activeRequest
+    }
+
     const requestedComponents = input.components ?? defaultReviewServingV4RebuildComponents
     const stats = await getReviewServingV4RebuildStats({projectId: input.projectId}, database)
     const isFreshBootstrap = getSafeCount(stats.snapshotCount) === 0

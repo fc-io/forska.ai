@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto'
 
+import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
 import {
@@ -22,6 +23,7 @@ type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
 type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|maybe' | 'yes_no' | 'yes_no_maybe'
 type CovidencePromptGrouping = 'per_field' | 'per_section' | 'single_prompt'
+type CreatedCovidenceProject = {id: string} & Record<string, unknown>
 type CovidencePackageUploadInput = Blob & {name?: string; type?: string}
 type CovidenceEligibilityFieldDisposition = 'include' | 'exclude'
 type CovidenceEligibilityField = {
@@ -84,6 +86,19 @@ const getCovidencePromptDefinitions = (body: {
         }),
       ]
     : null
+}
+
+const getCreatedCovidenceProject = (result: unknown): CreatedCovidenceProject | null => {
+  const value =
+    result !== null && typeof result === 'object' && 'covidenceProject' in result ? result.covidenceProject : null
+
+  return value !== null && typeof value === 'object' && 'id' in value && typeof value.id === 'string'
+    ? (value as CreatedCovidenceProject)
+    : null
+}
+
+const getCanRequestReviewServingBootstrap = () => {
+  return typeof (getAppDatabaseService() as {queryJson?: unknown}).queryJson === 'function'
 }
 
 export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
@@ -204,16 +219,25 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
     })) as Awaited<ReturnType<typeof importCovidencePackageFromConfig>>
 
   const dataSource = await getDataSourceQueryService().getDataSourceById(dataSourceId)
+  const covidenceProject = getCreatedCovidenceProject(result)
 
   if (!dataSource) {
     throw new Error('Data source not found after Covidence import create')
+  }
+
+  if (covidenceProject !== null && getCanRequestReviewServingBootstrap()) {
+    requestReviewServingV4Rebuild({projectId: covidenceProject.id, reason: 'missingReviewServingSnapshot'}).catch(
+      () => {
+        return undefined
+      },
+    )
   }
 
   return {
     success: true,
     data: {
       covidencePackageConfig: config,
-      covidenceProject: 'covidenceProject' in result ? result.covidenceProject : null,
+      covidenceProject,
       covidencePrompts: 'covidencePrompts' in result ? result.covidencePrompts : [],
       dataSource,
       stats: result.stats,

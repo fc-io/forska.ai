@@ -320,6 +320,7 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       statement.includes('UPDATE app.review_rebuild_chunk_manifest')
       && statement.includes('last_error =')
       && statement.match(/retry_count\s*=\s*\d+/u) !== null
+      && !statement.includes('NOT EXISTS')
     ) {
       failChunk(statement)
     }

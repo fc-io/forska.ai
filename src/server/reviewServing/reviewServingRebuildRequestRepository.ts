@@ -561,6 +561,22 @@ export const getReviewServingRebuildRequest = async (
   return row === undefined ? null : getRequestFromRow(row)
 }
 
+export const getActiveReviewServingRebuildRequestForProject = async (
+  input: {projectId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingRebuildRequestDatabase(),
+) => {
+  const [row] = await database.queryJson<ReviewServingRebuildRequestRow>(`
+    ${getRequestSelectSql()}
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND status IN ('admitted', 'running')
+      AND admission_state = 'admitted'
+    ORDER BY priority DESC, updated_at ASC, request_id ASC
+    LIMIT 1
+  `)
+
+  return row === undefined ? null : getRequestFromRow(row)
+}
+
 export const createReviewServingRebuildRequestEffect = (
   input: ReviewServingRebuildRequestInput,
   database: ReviewServingChunkManifestRepositoryDatabase = getReviewServingRebuildRequestDatabase(),
