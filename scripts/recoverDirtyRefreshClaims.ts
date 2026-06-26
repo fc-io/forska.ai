@@ -16,6 +16,7 @@ type RecoveryResult = {
   requestIds: string[]
 }
 
+const staleDirtyRefreshClaimRecoveryReason = 'recoverDirtyRefreshClaims.staleDirtyRefreshClaim'
 const staleLegacyClaimRecoveryReason = 'recoverDirtyRefreshClaims.staleLegacyClaim'
 const workloadContext = getMaintenanceDuckdbWorkloadContext('recoverDirtyRefreshClaims')
 
@@ -255,7 +256,7 @@ const requestProjectRecovery = async (
   }
 }
 
-const queueV4RecoveryRequests = async (params: {projectIds: string[]; reason: string}): Promise<RecoveryResult[]> => {
+const requestReviewServingV4Rebuilds = async (params: {projectIds: string[]; reason: string}): Promise<RecoveryResult[]> => {
   const projectIds = getUniqueProjectIds(params.projectIds)
 
   if (projectIds.length === 0) {
@@ -398,14 +399,26 @@ const getStaleLegacyClaimProjectIds = (input: {
   ])
 }
 
+const getStaleLegacyClaimRecoveryReason = (input: {
+  dirtyMaterializations: StaleDirtyMaterializationClaimRow[]
+  dirtyRefreshClaims: StaleDirtyRefreshClaimRow[]
+  largeRebuildClaims: StaleLargeRebuildClaimRow[]
+}) => {
+  return input.dirtyRefreshClaims.length > 0
+    && input.dirtyMaterializations.length === 0
+    && input.largeRebuildClaims.length === 0
+    ? staleDirtyRefreshClaimRecoveryReason
+    : staleLegacyClaimRecoveryReason
+}
+
 const recoverStaleLegacyClaims = async (input: {
   dirtyMaterializations: StaleDirtyMaterializationClaimRow[]
   dirtyRefreshClaims: StaleDirtyRefreshClaimRow[]
   largeRebuildClaims: StaleLargeRebuildClaimRow[]
 }) => {
-  const recoveryResults = await queueV4RecoveryRequests({
+  const recoveryResults = await requestReviewServingV4Rebuilds({
     projectIds: getStaleLegacyClaimProjectIds(input),
-    reason: staleLegacyClaimRecoveryReason,
+    reason: getStaleLegacyClaimRecoveryReason(input),
   })
   const recoveredProjectIds = recoveryResults.flatMap((result) => {
     return result.projectIds

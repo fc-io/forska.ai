@@ -75,6 +75,9 @@ test('human assessment init resyncs pending prompt rows after project prompt dri
 
     INSERT INTO app.project_article (id, project_id, article_id)
     VALUES ('human-drift-project-article', 'human-drift-project', 'human-drift-article');
+
+    INSERT INTO mart.project_scope_article (project_id, article_id, in_curated_scope, in_route_scope, article_created_at, article_updated_at)
+    VALUES ('human-drift-project', 'human-drift-article', TRUE, FALSE, current_timestamp, current_timestamp);
   `)
 
   const firstSet: {status: number} = {status: 200}
@@ -141,6 +144,9 @@ test('human assessment submit rejects when project prompts are added after init'
 
     INSERT INTO app.project_article (id, project_id, article_id)
     VALUES ('human-submit-drift-project-article', 'human-submit-drift-project', 'human-submit-drift-article');
+
+    INSERT INTO mart.project_scope_article (project_id, article_id, in_curated_scope, in_route_scope, article_created_at, article_updated_at)
+    VALUES ('human-submit-drift-project', 'human-submit-drift-article', TRUE, FALSE, current_timestamp, current_timestamp);
   `)
 
   const initSet: {status: number} = {status: 200}

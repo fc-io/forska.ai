@@ -302,7 +302,7 @@ test('article-set judgment hydration reads bounded payload rows with stable orde
   })
 
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
-  expect(sql).toContain('AND article_id IN (SELECT unnest($articleIds))')
+  expect(sql).toContain('article_id IN (SELECT unnest($articleIds))')
   expect(sql).toContain("AND list_mode_key = 'both'")
   expect(sql).toContain("AND payload_kind = 'human'")
   expect(sql).toContain('ORDER BY article_id ASC, prompt_order ASC NULLS LAST, prompt_id ASC')

@@ -254,23 +254,37 @@ const recoverDrainingQueueRows = async ({
 
 const repairOrphanedDrainingJobs = async (jobIds: string[]): Promise<void> => {
   const [currentJobId = ''] = jobIds
-  const sqliteService = getJudgmentJobSqliteService()
 
   if (!currentJobId) {
     return
   }
 
-  const healthSnapshot = await sqliteService.getHealthSnapshot(currentJobId)
-
-  if (healthSnapshot.orphanedJudgedRowCount > 0) {
-    await runJudgmentJobRepairAction({
-      action: 'repair',
-      claimedBy: getDefaultJudgmentServerJobId(),
-      jobId: currentJobId,
-    })
-  }
+  await runJudgmentJobRepairAction({
+    action: 'repair',
+    claimedBy: getDefaultJudgmentServerJobId(),
+    jobId: currentJobId,
+  })
 
   return repairOrphanedDrainingJobs(jobIds.slice(1))
+}
+
+const getOrphanedDrainingJobIds = async (jobIds: string[]) => {
+  const sqliteService = getJudgmentJobSqliteService()
+  const healthRows = await Promise.all(
+    jobIds.map(async (jobId) => {
+      const healthSnapshot = await sqliteService.getHealthSnapshot(jobId)
+
+      return {jobId, orphanedJudgedRowCount: healthSnapshot.orphanedJudgedRowCount}
+    }),
+  )
+
+  return healthRows
+    .filter((row) => {
+      return row.orphanedJudgedRowCount > 0
+    })
+    .map((row) => {
+      return row.jobId
+    })
 }
 
 const repairUnavailableRequestAttemptDiagnostics = async ({
@@ -400,6 +414,7 @@ export const judgmentsJobsCleanupStale = async (): Promise<void> => {
     getRecoverableOomQuarantinedJobIds(),
     getTransientLockedQuarantinedSqliteJobIds(),
   ])
+  const orphanedDrainingJobIds = await getOrphanedDrainingJobIds(drainingJobIds)
 
   await recoverTransientLockedQuarantinedJobs({jobIds: transientLockedQuarantinedJobIds, serverJobId})
   await recoverOomQuarantinedJobs({jobIds: recoverableOomQuarantinedJobIds, serverJobId})
@@ -407,7 +422,7 @@ export const judgmentsJobsCleanupStale = async (): Promise<void> => {
   await recoverDrainingQueueRows({jobIds: drainingJobIds, serverJobId})
   await sqliteService.pruneVisibilityAckedRetention({maxRows: sqliteRetentionCleanupBatchSize})
   await pruneDrainingVisibilityAckedRetention({jobIds: drainingJobIds, serverJobId})
-  await repairOrphanedDrainingJobs(drainingJobIds)
+  await repairOrphanedDrainingJobs(orphanedDrainingJobIds)
   await repairUnavailableRequestAttemptDiagnostics({jobIds: sqliteJobIds, serverJobId, staleBefore: sixteenMinutesAgo})
   await finalizeMissingLocalSqliteDrainingJobs(missingLocalSqliteDrainingJobIds)
   await pruneJudgmentProviderTelemetryHistorySamples()

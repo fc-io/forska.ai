@@ -444,6 +444,7 @@ export const createCodexAppServerClient = ({
   let activeTurnCount = 0
   let completedTurnCount = 0
   let recycleWhenIdle = false
+  let recycleTimer: ReturnType<typeof setTimeout> | null = null
   let clientInstance: CodexAppServerClient | null = null
 
   let buffer = ''
@@ -532,10 +533,19 @@ export const createCodexAppServerClient = ({
     failAppServer(getRecycleError(), {stopProcess: true})
   }
 
+  const scheduleRecycleAppServerIfIdle = (): void => {
+    if (recycleTimer !== null) return
+
+    recycleTimer = setTimeout(() => {
+      recycleTimer = null
+      recycleAppServerIfIdle()
+    }, 0)
+  }
+
   const markRecycleWhenIdle = (): void => {
     recycleWhenIdle = true
     clearSingletonIfCurrent(clientInstance)
-    recycleAppServerIfIdle()
+    scheduleRecycleAppServerIfIdle()
   }
 
   const startTrackedTurn = (): void => {
@@ -691,10 +701,6 @@ export const createCodexAppServerClient = ({
     timeoutMs?: number
   }): Promise<{text: string; usage: CodexThreadTokenUsage | null}> => {
     await initPromise
-    if (recycleWhenIdle) {
-      recycleAppServerIfIdle()
-      throw new Error('codex app-server: turn failed: app-server recycling after failed turn')
-    }
 
     startTrackedTurn()
     let completedTurn = false

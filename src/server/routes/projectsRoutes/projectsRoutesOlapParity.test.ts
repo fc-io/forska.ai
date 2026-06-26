@@ -7,6 +7,14 @@ const articlesReviewsBothOlapModulePath = new URL('../../../services/olap/articl
   .pathname
 const unassessedArticlesOlapModulePath = new URL('../../../services/olap/unassessedArticlesOlap.ts', import.meta.url)
   .pathname
+const llmReviewRouteServiceModulePath = new URL(
+  '../../reviewServing/reviewServingLlmReviewRouteService.ts',
+  import.meta.url,
+).pathname
+const humanBothUnassessedRouteServiceModulePath = new URL(
+  '../../reviewServing/reviewServingHumanBothUnassessedRouteService.ts',
+  import.meta.url,
+).pathname
 const projectAccessGuardModulePath = new URL('./projectAccessGuard.ts', import.meta.url).pathname
 
 const reviewHydrationRowsRef = {
@@ -93,6 +101,30 @@ void mock.module(unassessedArticlesOlapModulePath, () => {
   return {
     getUnassessedArticlesFromOlap: (params: unknown) => {
       return queryUnassessedRef.current(params)
+    },
+  }
+})
+
+void mock.module(llmReviewRouteServiceModulePath, () => {
+  return {
+    countLlmReviewArticlesFromServing: (params: unknown) => {
+      return countReviewsRef.current(params)
+    },
+    getLlmReviewArticlesFromServing: (params: unknown) => {
+      queryReviewsParamsRef.current = [...queryReviewsParamsRef.current, params]
+      return queryReviewsRef.current(params)
+    },
+  }
+})
+
+void mock.module(humanBothUnassessedRouteServiceModulePath, () => {
+  return {
+    getBothReviewArticlesFromServing: (params: unknown) => {
+      return queryBothRef.current(params)
+    },
+    getUnassessedReviewArticlesFromServing: async (params: unknown) => {
+      const result = (await queryUnassessedRef.current(params)) as {articles?: unknown[]}
+      return result.articles ? {...result, data: result.articles} : result
     },
   }
 })
@@ -256,7 +288,20 @@ test('articles reviews count route forwards llmStatus to olap when present', asy
   )
 
   expect(response.status).toBe(200)
-  expect(receivedParams).toEqual([{projectId: 'project-1', limit: 10, prompts: {}, llmStatus: 'complete'}])
+  expect(receivedParams).toEqual([
+    {
+      projectId: 'project-1',
+      page: 1,
+      limit: 10,
+      from: undefined,
+      to: undefined,
+      search: undefined,
+      prompts: {},
+      hasDuplicateStudyRecords: undefined,
+      hasStudyDecisionConflict: undefined,
+      llmStatus: 'complete',
+    },
+  ])
 })
 
 test('articles reviews count route forwards llmStatus modes to olap unchanged', async () => {
@@ -282,9 +327,42 @@ test('articles reviews count route forwards llmStatus modes to olap unchanged', 
   )
 
   expect(receivedParams).toEqual([
-    {projectId: 'project-1', limit: 10, prompts: {}, llmStatus: 'complete'},
-    {projectId: 'project-1', limit: 10, prompts: {}, llmStatus: 'both'},
-    {projectId: 'project-1', limit: 10, prompts: {}, llmStatus: 'partial'},
+    {
+      projectId: 'project-1',
+      page: 1,
+      limit: 10,
+      from: undefined,
+      to: undefined,
+      search: undefined,
+      prompts: {},
+      hasDuplicateStudyRecords: undefined,
+      hasStudyDecisionConflict: undefined,
+      llmStatus: 'complete',
+    },
+    {
+      projectId: 'project-1',
+      page: 1,
+      limit: 10,
+      from: undefined,
+      to: undefined,
+      search: undefined,
+      prompts: {},
+      hasDuplicateStudyRecords: undefined,
+      hasStudyDecisionConflict: undefined,
+      llmStatus: 'both',
+    },
+    {
+      projectId: 'project-1',
+      page: 1,
+      limit: 10,
+      from: undefined,
+      to: undefined,
+      search: undefined,
+      prompts: {},
+      hasDuplicateStudyRecords: undefined,
+      hasStudyDecisionConflict: undefined,
+      llmStatus: 'partial',
+    },
   ])
 })
 
@@ -381,12 +459,6 @@ test('articles reviews route falls back to olap article fields when sqlite row i
     judgedPromptIds: ['prompt-1'],
     isFullyJudged: true,
     journalTitle: 'Journal 1',
-    articleId: null,
-    url: null,
-    fullTextPDF: null,
-    fullTextFetchedAt: null,
-    fullTextConversionStatus: null,
-    sourceMetadata: null,
   })
 })
 
@@ -445,12 +517,6 @@ test('articles reviews both route preserves page echo and missing-article fallba
     articleCreatedAt: '2024-02-01T00:00:00.000Z',
     articleUpdatedAt: null,
     journalTitle: 'Journal 2',
-    articleId: null,
-    url: null,
-    fullTextPDF: null,
-    fullTextFetchedAt: null,
-    fullTextConversionStatus: null,
-    sourceMetadata: null,
     judgments: [
       {
         id: 'judgment-1',
@@ -512,12 +578,6 @@ test('articles reviews both route preserves summary-mode overall answers', async
     articleCreatedAt: '2024-02-01T00:00:00.000Z',
     articleUpdatedAt: null,
     journalTitle: 'Journal 3',
-    articleId: null,
-    url: null,
-    fullTextPDF: null,
-    fullTextFetchedAt: null,
-    fullTextConversionStatus: null,
-    sourceMetadata: null,
     judgments: [],
     humanJudgmentMode: 'summary',
     humanSummaryAnswer: 'no',

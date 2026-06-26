@@ -446,7 +446,23 @@ const updateProjectTransferSessionProgressMock = mock(
 void mock.module(appDatabaseServiceModulePath, () => {
   return {
     getAppDatabaseService: () => {
-      return {queryJson: queryJsonMock}
+      return {
+        maintenance: async () => {
+          return undefined
+        },
+        queryJson: queryJsonMock,
+        run: async (statement: string) => {
+          routeState.queryStatements.push(statement)
+        },
+        transaction: async <T>(callback: (tx: {queryJson: typeof queryJsonMock; run: (statement: string) => Promise<void>}) => Promise<T>) => {
+          return callback({
+            queryJson: queryJsonMock,
+            run: async (statement: string) => {
+              routeState.queryStatements.push(statement)
+            },
+          })
+        },
+      }
     },
   }
 })

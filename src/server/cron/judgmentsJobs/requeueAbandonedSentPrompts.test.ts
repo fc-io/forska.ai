@@ -114,6 +114,7 @@ test('requeues sent SQLite prompts claimed by an older server job', async () => 
   }
 
   const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+  const staleHeartbeatAt = new Date(Date.now() - 45_000).toISOString()
 
   try {
     sqliteDatabase
@@ -147,6 +148,9 @@ test('requeues sent SQLite prompts claimed by an older server job', async () => 
         stalePrompt.recordId,
         currentPrompt.recordId,
       )
+    sqliteDatabase
+      .query(`UPDATE judge_worker_heartbeat SET heartbeat_at = ?, updated_at = ? WHERE server_id = ?`)
+      .run(staleHeartbeatAt, staleHeartbeatAt, oldServerJobId)
   } finally {
     sqliteDatabase.close()
   }
@@ -214,6 +218,7 @@ test('keeps older ready rows ahead of newer inserts and preserves stale sent que
   )
 
   const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+  const staleHeartbeatAt = new Date(Date.now() - 45_000).toISOString()
 
   try {
     sqliteDatabase
@@ -229,6 +234,9 @@ test('keeps older ready rows ahead of newer inserts and preserves stale sent que
         new Date(Date.now() - 45_000).toISOString(),
         stalePrompt.recordId,
       )
+    sqliteDatabase
+      .query(`UPDATE judge_worker_heartbeat SET heartbeat_at = ?, updated_at = ? WHERE server_id = ?`)
+      .run(staleHeartbeatAt, staleHeartbeatAt, oldServerJobId)
   } finally {
     sqliteDatabase.close()
   }
@@ -314,6 +322,7 @@ test('requeues stale sent, claimed, and running prompts while leaving terminal r
   await sqliteService.closeAll()
 
   const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+  const staleHeartbeatAt = new Date(Date.now() - 45_000).toISOString()
 
   try {
     sqliteDatabase
@@ -361,6 +370,9 @@ test('requeues stale sent, claimed, and running prompts while leaving terminal r
         claimedPrompt.recordId,
         runningPrompt.recordId,
       )
+    sqliteDatabase
+      .query(`UPDATE judge_worker_heartbeat SET heartbeat_at = ?, updated_at = ? WHERE server_id = ?`)
+      .run(staleHeartbeatAt, staleHeartbeatAt, oldServerJobId)
   } finally {
     sqliteDatabase.close()
   }

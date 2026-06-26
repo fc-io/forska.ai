@@ -424,45 +424,46 @@ export const createProviderModel = async ({
     source: source === 'manual' ? 'manual' : 'provider',
   })
   const createdRow = (await getAppDatabaseService().transaction(async (databaseRunner) => {
-    const [created] = await queryProviderModelReturnRows({
+    const existingRow = await getProviderModelRowByNaturalKey({
       databaseRunner,
       providerConnectionId: connection.id,
       remoteModelId,
-      statement: `
-        INSERT INTO app.model (
-          id,
-          provider_connection_id,
-          name,
-          remote_model_id,
-          display_name,
-          variant,
-          source,
-          enabled,
-          metadata_json
-        )
-        VALUES (
-          ${getSqlLiteral(crypto.randomUUID())},
-          ${getSqlLiteral(connection.id)},
-          ${getSqlLiteral(displayName)},
-          ${getSqlLiteral(remoteModelId)},
-          ${getSqlLiteral(displayName)},
-          ${getSqlLiteral(variant)},
-          ${getSqlLiteral(source)},
-          TRUE,
-          ${getJsonSqlLiteral(persistedMetadataJson)}
-        )
-        ON CONFLICT DO NOTHING
-      `,
       variant,
     })
-    const row =
-      created
-      ?? (await getProviderModelRowByNaturalKey({
-        databaseRunner,
-        providerConnectionId: connection.id,
-        remoteModelId,
-        variant,
-      }))
+    const [created] = existingRow
+      ? [existingRow]
+      : await queryProviderModelReturnRows({
+          databaseRunner,
+          providerConnectionId: connection.id,
+          remoteModelId,
+          statement: `
+            INSERT INTO app.model (
+              id,
+              provider_connection_id,
+              name,
+              remote_model_id,
+              display_name,
+              variant,
+              source,
+              enabled,
+              metadata_json
+            )
+            VALUES (
+              ${getSqlLiteral(crypto.randomUUID())},
+              ${getSqlLiteral(connection.id)},
+              ${getSqlLiteral(displayName)},
+              ${getSqlLiteral(remoteModelId)},
+              ${getSqlLiteral(displayName)},
+              ${getSqlLiteral(variant)},
+              ${getSqlLiteral(source)},
+              TRUE,
+              ${getJsonSqlLiteral(persistedMetadataJson)}
+            )
+            ON CONFLICT DO NOTHING
+          `,
+          variant,
+        })
+    const row = created
 
     if (row) {
       await advanceProviderModelProjectTransferDirtyTokens({databaseRunner, reason: 'providerModel.create'})

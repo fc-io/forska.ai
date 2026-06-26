@@ -82,6 +82,14 @@ const queryJson = async (statement: string) => {
     return [{id: 'article-1'}]
   }
 
+  if (statement.includes('FROM app.review_change_delta')) {
+    return []
+  }
+
+  if (statement.includes('FROM app.review_delta_reconciliation_cursor')) {
+    return [{sourceHighWaterMark: 1}]
+  }
+
   throw new Error(`Unhandled query: ${statement}`)
 }
 

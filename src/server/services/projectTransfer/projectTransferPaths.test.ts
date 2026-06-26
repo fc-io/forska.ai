@@ -15,10 +15,7 @@ import {
   validateProjectTransferRuntimeAssetPath,
   validateProjectTransferRuntimeAssetPaths,
 } from './projectTransferPaths.ts'
-import {
-  projectTransferManifestSchemaVersion,
-  projectTransferSchemaVNextManifestSchemaVersion,
-} from './projectTransferSchemas.ts'
+import {projectTransferCurrentManifestSchemaVersion, projectTransferSchemaVNextManifestSchemaVersion} from './projectTransferSchemas.ts'
 
 const expectInvalidPath = <TValue>(
   result: ProjectTransferPathValidationResult<TValue>,
@@ -48,17 +45,26 @@ test('accepts allowlisted project transfer archive roots and asset members', () 
     'assets/article-pdfs/article-1.pdf',
     'assets/project-transfer/session-1/image-1.png',
   ]
-  const result = validateProjectTransferArchiveMemberPaths({paths})
+  const result = validateProjectTransferArchiveMemberPaths({
+    paths,
+    schemaVersion: projectTransferCurrentManifestSchemaVersion,
+  })
 
   expect(result.ok).toBe(true)
   expect(getValidatedPaths(result)).toEqual(paths)
 })
 
 test('uses schema-version-aware project transfer archive root allowlists', () => {
-  const currentAllowlist = getProjectTransferArchiveRootAllowlist(projectTransferManifestSchemaVersion)
+  const currentAllowlist = getProjectTransferArchiveRootAllowlist(projectTransferCurrentManifestSchemaVersion)
   const schemaVNextAllowlist = getProjectTransferArchiveRootAllowlist(projectTransferSchemaVNextManifestSchemaVersion)
-  const currentRootPayload = validateProjectTransferArchiveMemberPath({pathValue: 'articles.ndjson'})
-  const currentPayloadFolder = validateProjectTransferArchiveMemberPath({pathValue: 'payloads/articles.ndjson'})
+  const currentRootPayload = validateProjectTransferArchiveMemberPath({
+    pathValue: 'articles.ndjson',
+    schemaVersion: projectTransferCurrentManifestSchemaVersion,
+  })
+  const currentPayloadFolder = validateProjectTransferArchiveMemberPath({
+    pathValue: 'payloads/articles.ndjson',
+    schemaVersion: projectTransferCurrentManifestSchemaVersion,
+  })
   const schemaVNextPayloadFolder = validateProjectTransferArchiveMemberPath({
     pathValue: 'payloads/articles.ndjson',
     schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
