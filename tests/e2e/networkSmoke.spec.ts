@@ -2,6 +2,7 @@ import {expect, type Page, type Request, type Response, test} from '@playwright/
 import {existsSync, readdirSync, readFileSync} from 'node:fs'
 import path from 'node:path'
 
+import type {ReviewsWarningsData} from '../../src/components/main/reviews/reviewsWarningsQuery.ts'
 import {routeErrorSurfaceTestId} from '../../src/app/routerErrorSurface'
 
 const apiBaseUrl = 'http://127.0.0.1:43101'
@@ -13,6 +14,8 @@ const runtimeLogDir = process.env.LOG_DIR ?? ''
 const shouldSkipMutatingRouteLoads = process.env.FORSKA_NETWORK_SMOKE_SKIP_MUTATING_ROUTE_LOADS === 'true'
 const largeRebuildFailureText = 'Large rebuild failed'
 const warningEndpointPath = '/api/projectsreviewswarnings'
+const queuedWarningProbeIntervalMs = 2_000
+const queuedWarningProbeTimeoutMs = 20_000
 
 type ApiDataResponse<T> = {data: T}
 type ArticleSearchResponse = Array<{articleId: string | null; articleTitle: string; id: string}>
@@ -65,8 +68,22 @@ type NetworkFailure = {
 type PendingAuditedRequest = {promise: Promise<void>; resolve: () => void}
 type JsonParseResult = {ok: false; error: string} | {ok: true; value: unknown}
 type WarningFailureVariant = {path: string; value: number | string}
+type WarningsEndpointParseResult =
+  | {ok: false; error: string}
+  | {data: ReviewsWarningsData; indexing: ReviewsWarningsData['indexing']; ok: true; projectId: string}
+type WarningsEndpointInspection =
+  | {kind: 'failure'; details: string}
+  | {data: ReviewsWarningsData; kind: 'queued'; projectId: string}
+  | {kind: 'ok'}
 
 const routeTreePath = path.resolve(process.cwd(), 'src/app/routeTree.gen.ts')
+const queuedWarningProbePromises = new Map<string, Promise<void>>()
+
+const sleep = (ms: number) => {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
 
 const getRuntimeLogFiles = () => {
   return runtimeLogDir.trim().length === 0 || !existsSync(runtimeLogDir)
@@ -128,19 +145,36 @@ const formatWarningFailureVariant = (variant: WarningFailureVariant) => {
   return `${variant.path}=${variant.value}`
 }
 
-const getWarningsEndpointFailureDetails = (body: string) => {
+const getWarningsEndpointData = (body: string): WarningsEndpointParseResult => {
   const parsed = parseJson(body)
 
   if (!parsed.ok) {
-    return `warning response was not JSON: ${parsed.error}`
+    return {error: `warning response was not JSON: ${parsed.error}`, ok: false}
   }
 
   const data = isRecord(parsed.value) ? parsed.value.data : undefined
 
   if (!isRecord(data)) {
-    return 'warning response did not include a data object'
+    return {error: 'warning response did not include a data object', ok: false}
   }
 
+  if (!isRecord(data.indexing)) {
+    return {error: 'warning response did not include an indexing object', ok: false}
+  }
+
+  if (typeof data.projectId !== 'string' || data.projectId.trim().length === 0) {
+    return {error: 'warning response did not include a projectId', ok: false}
+  }
+
+  return {
+    data: data as ReviewsWarningsData,
+    indexing: data.indexing as ReviewsWarningsData['indexing'],
+    ok: true,
+    projectId: data.projectId,
+  }
+}
+
+const getWarningFailureDetails = (data: ReviewsWarningsData) => {
   const failureVariants = getWarningFailureVariants(data, 'data')
 
   return failureVariants.length === 0
@@ -148,11 +182,170 @@ const getWarningsEndpointFailureDetails = (body: string) => {
     : `warning response returned failed review state: ${failureVariants.map(formatWarningFailureVariant).join(', ')}`
 }
 
-const assertWarningsEndpointBodyHasNoFailedState = (source: string, body: string) => {
-  const failureDetails = getWarningsEndpointFailureDetails(body)
+const formatIndexingState = (indexing: ReviewsWarningsData['indexing']) => {
+  return [
+    `progressState=${indexing.progressState}`,
+    `status=${indexing.status}`,
+    `blockedReason=${indexing.blockedReason ?? 'none'}`,
+    `pendingRefreshCount=${indexing.pendingRefreshCount}`,
+    `queuedRefreshCount=${indexing.queuedRefreshCount}`,
+    `inFlightRefreshCount=${indexing.inFlightRefreshCount}`,
+    `activeWorkCount=${indexing.activeWorkCount}`,
+    `eligibleConsumerPresent=${indexing.eligibleConsumerPresent}`,
+    `oldestQueuedAt=${indexing.oldestQueuedAt ?? 'none'}`,
+    `lastProgressedAt=${indexing.lastProgressedAt ?? 'none'}`,
+    `lastStartedAt=${indexing.lastStartedAt ?? 'none'}`,
+    `lastProcessedAt=${indexing.lastProcessedAt ?? 'none'}`,
+  ].join(', ')
+}
 
-  if (failureDetails !== null) {
-    throw new Error(`${source}: ${failureDetails}`)
+const getBlockingWarningDetails = (indexing: ReviewsWarningsData['indexing']) => {
+  return indexing.progressState === 'blocked' || indexing.status === 'blocked'
+    ? `warning response returned blocked review indexing: ${formatIndexingState(indexing)}`
+    : indexing.progressState === 'stalled' || indexing.status === 'stale'
+      ? `warning response returned stalled review indexing: ${formatIndexingState(indexing)}`
+      : null
+}
+
+const getQueuedWarningStateFailureDetails = (indexing: ReviewsWarningsData['indexing']) => {
+  const failureDetails = [
+    indexing.pendingRefreshCount <= 0 ? `pendingRefreshCount=${indexing.pendingRefreshCount}` : null,
+    indexing.queuedRefreshCount <= 0 ? `queuedRefreshCount=${indexing.queuedRefreshCount}` : null,
+    indexing.inFlightRefreshCount > 0 ? `inFlightRefreshCount=${indexing.inFlightRefreshCount}` : null,
+    indexing.activeWorkCount > 0 ? `activeWorkCount=${indexing.activeWorkCount}` : null,
+    !indexing.eligibleConsumerPresent ? 'eligibleConsumerPresent=false' : null,
+  ].filter((detail) => {
+    return detail !== null
+  })
+
+  return failureDetails.length === 0
+    ? null
+    : `warning response returned queued review indexing that is not actually queueable: ${failureDetails.join(', ')}; ${formatIndexingState(indexing)}`
+}
+
+const getWarningsEndpointInspection = (body: string): WarningsEndpointInspection => {
+  const parsed = getWarningsEndpointData(body)
+
+  if (!parsed.ok) {
+    return {details: parsed.error, kind: 'failure'}
+  }
+
+  const failedDetails = getWarningFailureDetails(parsed.data)
+
+  if (failedDetails !== null) {
+    return {details: failedDetails, kind: 'failure'}
+  }
+
+  const blockingDetails = getBlockingWarningDetails(parsed.indexing)
+
+  if (blockingDetails !== null) {
+    return {details: blockingDetails, kind: 'failure'}
+  }
+
+  if (parsed.indexing.progressState !== 'queued') {
+    return {kind: 'ok'}
+  }
+
+  const queuedFailureDetails = getQueuedWarningStateFailureDetails(parsed.indexing)
+
+  return queuedFailureDetails === null
+    ? {data: parsed.data, kind: 'queued', projectId: parsed.projectId}
+    : {details: queuedFailureDetails, kind: 'failure'}
+}
+
+const hasQueuedWarningProgressed = (
+  initial: ReviewsWarningsData['indexing'],
+  current: ReviewsWarningsData['indexing'],
+) => {
+  return (
+    current.progressState === 'processing'
+    || current.progressState === 'completed'
+    || current.inFlightRefreshCount > 0
+    || current.activeWorkCount > 0
+    || current.pendingRefreshCount < initial.pendingRefreshCount
+    || current.queuedRefreshCount < initial.queuedRefreshCount
+    || (current.lastProgressedAt !== null && current.lastProgressedAt !== initial.lastProgressedAt)
+    || (current.lastStartedAt !== null && current.lastStartedAt !== initial.lastStartedAt)
+    || (current.lastProcessedAt !== null && current.lastProcessedAt !== initial.lastProcessedAt)
+  )
+}
+
+const fetchWarningsEndpointInspection = async (projectId: string) => {
+  const response = await fetch(`${apiBaseUrl}${warningEndpointPath}`, {
+    body: JSON.stringify({projectId}),
+    headers: {'content-type': 'application/json'},
+    method: 'POST',
+  })
+  const body = await response.text()
+
+  assertTextDoesNotContainLargeRebuildFailure(`warnings endpoint response for ${projectId}`, body)
+
+  if (!response.ok) {
+    throw new Error(`Warnings endpoint probe failed for ${projectId}: ${response.status} ${body}`)
+  }
+
+  return getWarningsEndpointInspection(body)
+}
+
+const assertQueuedWarningsEndpointProgressesFrom = async (
+  projectId: string,
+  initial: ReviewsWarningsData,
+  deadlineAt: number,
+): Promise<void> => {
+  await sleep(queuedWarningProbeIntervalMs)
+
+  const inspection = await fetchWarningsEndpointInspection(projectId)
+
+  if (inspection.kind === 'failure') {
+    throw new Error(`warnings endpoint response for ${projectId}: ${inspection.details}`)
+  }
+
+  if (inspection.kind === 'ok') {
+    return
+  }
+
+  if (hasQueuedWarningProgressed(initial.indexing, inspection.data.indexing)) {
+    return
+  }
+
+  if (Date.now() < deadlineAt) {
+    return assertQueuedWarningsEndpointProgressesFrom(projectId, initial, deadlineAt)
+  }
+
+  throw new Error(
+    `warnings endpoint response for ${projectId}: queued review indexing did not progress within ${queuedWarningProbeTimeoutMs}ms; initial=${formatIndexingState(initial.indexing)}; latest=${formatIndexingState(inspection.data.indexing)}`,
+  )
+}
+
+const assertQueuedWarningsEndpointProgresses = (projectId: string, initial: ReviewsWarningsData) => {
+  const existingProbe = queuedWarningProbePromises.get(projectId)
+
+  if (existingProbe) {
+    return existingProbe
+  }
+
+  const probe = assertQueuedWarningsEndpointProgressesFrom(
+    projectId,
+    initial,
+    Date.now() + queuedWarningProbeTimeoutMs,
+  ).finally(() => {
+    queuedWarningProbePromises.delete(projectId)
+  })
+
+  queuedWarningProbePromises.set(projectId, probe)
+
+  return probe
+}
+
+const assertWarningsEndpointBodyHasHealthyIndexing = async (source: string, body: string) => {
+  const inspection = getWarningsEndpointInspection(body)
+
+  if (inspection.kind === 'failure') {
+    throw new Error(`${source}: ${inspection.details}`)
+  }
+
+  if (inspection.kind === 'queued') {
+    await assertQueuedWarningsEndpointProgresses(inspection.projectId, inspection.data)
   }
 }
 
@@ -224,7 +417,7 @@ const postWarningsEndpointProbe = async (projectId: string) => {
     throw new Error(`Warnings endpoint probe failed for ${projectId}: ${response.status} ${body}`)
   }
 
-  assertWarningsEndpointBodyHasNoFailedState(`warnings endpoint response for ${projectId}`, body)
+  await assertWarningsEndpointBodyHasHealthyIndexing(`warnings endpoint response for ${projectId}`, body)
 }
 
 const getFirstExistingId = <T extends {id: string}>(values: T[]) => {
@@ -987,7 +1180,7 @@ const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
       return
     }
 
-    const bodyRead = getResponseBodyText(response).then((body) => {
+    const bodyRead = getResponseBodyText(response).then(async (body) => {
       const details = getResponseBodySnippet(body)
 
       if (shouldInspectResponseBodyForLargeRebuildFailure(response) && textContainsLargeRebuildFailure(body)) {
@@ -1000,16 +1193,30 @@ const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
         })
       }
 
-      const warningFailureDetails =
-        response.status() < 400 && isWarningsEndpointResponse(response) ? getWarningsEndpointFailureDetails(body) : null
+      const warningInspection =
+        response.status() < 400 && isWarningsEndpointResponse(response)
+          ? getWarningsEndpointInspection(body)
+          : ({kind: 'ok'} as const)
 
-      if (warningFailureDetails !== null) {
+      if (warningInspection.kind === 'failure') {
         record({
-          details: warningFailureDetails,
+          details: warningInspection.details,
           method: request.method(),
-          source: 'warning-failed-state',
+          source: 'warning-indexing-state',
           status: response.status(),
           url: response.url(),
+        })
+      }
+
+      if (warningInspection.kind === 'queued') {
+        await assertQueuedWarningsEndpointProgresses(warningInspection.projectId, warningInspection.data).catch((error) => {
+          record({
+            details: error instanceof Error ? error.message : 'queued review indexing did not progress',
+            method: request.method(),
+            source: 'warning-indexing-state',
+            status: response.status(),
+            url: response.url(),
+          })
         })
       }
 
