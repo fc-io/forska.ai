@@ -13,6 +13,17 @@ const networkSmokeSeedMode = process.env.FORSKA_NETWORK_SMOKE_SEED_MODE === 'exi
 const runtimeLogDir = process.env.LOG_DIR ?? ''
 const shouldSkipMutatingRouteLoads = process.env.FORSKA_NETWORK_SMOKE_SKIP_MUTATING_ROUTE_LOADS === 'true'
 const largeRebuildFailureText = 'Large rebuild failed'
+const forbiddenRuntimeLogPatterns = [
+  {label: 'large rebuild failure', pattern: /Large rebuild failed/},
+  {label: 'articles reviews request failure', pattern: /Articles reviews request failed/},
+  {label: 'review serving snapshot unavailable', pattern: /Review serving snapshot is unavailable/},
+  {label: 'DuckDB owner heartbeat failure', pattern: /\[duckdb-owner\] heartbeat failed/},
+  {label: 'DuckDB owner heartbeat event', pattern: /duckdb-owner-connection-heartbeat/},
+  {label: 'maintenance restart loop', pattern: /\[server:stack\] restarting maintenance/},
+  {label: 'maintenance unexpected exit', pattern: /\[server:stack\] maintenance pid=\d+ exited with code 0/},
+  {label: 'judge duplicate replacement', pattern: /judge replacement is already ready after SIGTERM/},
+  {label: 'judge unexpected SIGTERM exit', pattern: /\[server:stack\] judge pid=\d+ exited with code 143/},
+] as const
 const warningEndpointPath = '/api/projectsreviewswarnings'
 const queuedWarningProbeIntervalMs = 2_000
 const queuedWarningProbeTimeoutMs = 20_000
@@ -349,18 +360,27 @@ const assertWarningsEndpointBodyHasHealthyIndexing = async (source: string, body
   }
 }
 
-const assertRuntimeLogsDoNotContainLargeRebuildFailure = () => {
+const getForbiddenRuntimeLogMatches = (text: string) => {
+  return forbiddenRuntimeLogPatterns.flatMap(({label, pattern}) => {
+    return pattern.test(text) ? [label] : []
+  })
+}
+
+const getRuntimeLogsText = () => {
   const logFiles = getRuntimeLogFiles()
 
-  expect(logFiles.length, 'Expected current smoke runtime logs to be captured').toBeGreaterThan(0)
-  assertTextDoesNotContainLargeRebuildFailure(
-    'current smoke runtime logs',
-    logFiles
-      .map((filePath) => {
-        return readFileSync(filePath, 'utf8')
-      })
-      .join('\n'),
-  )
+  expect(logFiles.length, 'Expected smoke runtime logs to be captured').toBeGreaterThan(0)
+  return logFiles
+    .map((filePath) => {
+      return readFileSync(filePath, 'utf8')
+    })
+    .join('\n')
+}
+
+const assertRuntimeLogsDoNotContainForbiddenServerErrors = () => {
+  const runtimeLogsText = getRuntimeLogsText()
+
+  expect(getForbiddenRuntimeLogMatches(runtimeLogsText), runtimeLogsText).toEqual([])
 }
 
 const readGeneratedRouteTemplates = () => {
@@ -1028,7 +1048,7 @@ const runCurrentDbWarningsEndpointProbe = async () => {
       return postWarningsEndpointProbe(projectId)
     }),
   )
-  assertRuntimeLogsDoNotContainLargeRebuildFailure()
+  assertRuntimeLogsDoNotContainForbiddenServerErrors()
 }
 
 const getRouteInventoryReport = () => {
@@ -1355,9 +1375,7 @@ test('audited app pages have no unexpected local network errors', async ({page})
     }
 
     await recorder.assertNoFailures()
-    if (networkSmokeDbMode === 'current') {
-      assertRuntimeLogsDoNotContainLargeRebuildFailure()
-    }
+    assertRuntimeLogsDoNotContainForbiddenServerErrors()
   } finally {
     recorder.dispose()
   }

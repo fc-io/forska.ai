@@ -6,7 +6,7 @@ import {
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {canCurrentServerOwnDuckdb, getCurrentServerWorkerRegistryOwnerUrl} from './serverRuntimeRole.ts'
 
-const duckdbOwnerConnectionHeartbeatLogger = createRateLimitedLogger({windowMs: 30_000})
+const duckdbOwnerConnectionHeartbeatLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 const duckdbOwnerConnectionHeartbeatIntervalMs = 15_000
 
 const sendDuckdbOwnerConnectionHeartbeat = async () => {

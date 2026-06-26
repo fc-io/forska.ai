@@ -43,6 +43,7 @@ const shutdownTimeoutMs = 20_000
 const forcedKillTimeoutMs = 5_000
 const duckdbOwnerPollIntervalMs = 250
 const parentMonitorIntervalMs = 1_000
+const serverStackLockHeartbeatIntervalMs = 1_000
 
 const config = getBackgroundServerStackConfig(process.env)
 const serverStackLockPath = join(
@@ -105,18 +106,10 @@ const releaseServerStackLock = async () => {
 }
 
 const acquireServerStackLock = async (): Promise<void> => {
-  const metadata = {
-    apiPort: config.apiPort,
-    cwd: process.cwd(),
-    judgePort: config.judgePort,
-    maintenancePort: config.maintenancePort,
-    pid: process.pid,
-    startedAt: new Date().toISOString(),
-  } satisfies ServerStackLockMetadata
+  const metadata = getServerStackLockMetadata()
 
   try {
-    await mkdir(dirname(serverStackLockPath), {recursive: true})
-    await writeFile(serverStackLockPath, JSON.stringify(metadata, null, 2), {flag: 'wx'})
+    await writeServerStackLock(metadata, 'wx')
   } catch (error) {
     if (!isExistingFileError(error)) {
       throw error
@@ -157,9 +150,64 @@ const managedServerState: ManagedServerState = {
 }
 
 let parentMonitor: ReturnType<typeof setInterval> | null = null
+let serverStackLockHeartbeat: ReturnType<typeof setInterval> | null = null
 
 const parentPid = process.ppid
 const bunExecutablePath = realpathSync(process.execPath)
+const serverStackStartedAt = new Date().toISOString()
+
+const getServerStackLockMetadata = (): ServerStackLockMetadata => {
+  return {
+    apiPort: config.apiPort,
+    cwd: process.cwd(),
+    judgePort: config.judgePort,
+    maintenancePort: config.maintenancePort,
+    pid: process.pid,
+    startedAt: serverStackStartedAt,
+  }
+}
+
+const writeServerStackLock = async (metadata: ServerStackLockMetadata, flag: 'w' | 'wx') => {
+  await mkdir(dirname(serverStackLockPath), {recursive: true})
+  await writeFile(serverStackLockPath, JSON.stringify(metadata, null, 2), {flag})
+}
+
+const refreshServerStackLock = async () => {
+  if (managedServerState.shuttingDown) {
+    return
+  }
+
+  const currentLock = await readServerStackLock()
+
+  if (currentLock !== null && currentLock.pid !== process.pid && isProcessAlive(currentLock.pid)) {
+    return
+  }
+
+  await writeServerStackLock(getServerStackLockMetadata(), 'w')
+}
+
+const startServerStackLockHeartbeat = () => {
+  if (serverStackLockHeartbeat !== null) {
+    return
+  }
+
+  serverStackLockHeartbeat = setInterval(() => {
+    return void refreshServerStackLock().catch((error) => {
+      console.error('[server:stack] failed to refresh supervisor lock', error)
+    })
+  }, serverStackLockHeartbeatIntervalMs)
+
+  serverStackLockHeartbeat.unref?.()
+}
+
+const stopServerStackLockHeartbeat = () => {
+  if (serverStackLockHeartbeat === null) {
+    return
+  }
+
+  clearInterval(serverStackLockHeartbeat)
+  serverStackLockHeartbeat = null
+}
 
 const getServerCommand = () => {
   return [bunExecutablePath, 'src/server/index.ts']
@@ -543,7 +591,15 @@ const monitorManagedServerExit = async (role: ManagedRole, serverProcess: Server
   console.error(`[server:stack] ${role} pid=${serverProcess.pid ?? 'unknown'} exited with code ${String(exitCode)}`)
   await waitFor(restartDelayMs)
 
+  if (managedServerState.shuttingDown) {
+    return
+  }
+
   if (await shouldSkipRestartForReadyReplacement(role, exitCode)) {
+    return
+  }
+
+  if (managedServerState.shuttingDown) {
     return
   }
 
@@ -597,6 +653,7 @@ const shutdown = async (exitCode = 0) => {
 
   managedServerState.shuttingDown = true
   stopParentMonitor()
+  stopServerStackLockHeartbeat()
   await Promise.all([
     stopManagedServerProcess('api'),
     stopManagedServerProcess('judge'),
@@ -618,6 +675,7 @@ startParentMonitor()
 
 try {
   await acquireServerStackLock()
+  startServerStackLockHeartbeat()
   await ensureMaintenanceReady()
   await Promise.all([ensureApiReady(), ensureJudgeReady()])
   await new Promise(() => {})

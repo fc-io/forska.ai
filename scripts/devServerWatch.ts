@@ -22,7 +22,7 @@ import {
   readDuckdbOwnerLease,
 } from '../src/server/utils/duckdbOwnerLease.ts'
 import {loadEnv} from '../src/server/utils/env.ts'
-import {runtimeReadyPath} from '../src/server/utils/runtimeReadyContract.ts'
+import {runtimeReadyPath, runtimeStatePath} from '../src/server/utils/runtimeReadyContract.ts'
 
 const watchedPaths = ['src', 'package.json', 'tsconfig.json']
 const restartDelayMs = 150
@@ -30,6 +30,7 @@ const stackShutdownTimeoutMs = 20_000
 const forcedKillTimeoutMs = 5_000
 const healthProbeTimeoutMs = 1_500
 const parentMonitorIntervalMs = 1_000
+const devWatcherLockHeartbeatIntervalMs = 1_000
 
 type ServerProcess = Subprocess<'inherit', 'inherit', 'inherit'>
 type DevWatcherLockMetadata = {
@@ -52,6 +53,7 @@ type ExistingStackState = {
   apiHealth: {counts: null | Record<string, number>; reachable: boolean}
   duckdbLease: null | {alive: boolean; metadata: DuckdbOwnerLeaseMetadata; stale: boolean}
   judgeHealth: {reachable: boolean}
+  runtimePids: {api: number | null; judge: number | null; maintenance: number | null}
   sqliteHealth: {
     jobCounts: null | Record<string, number>
     leasesAlive: number
@@ -61,15 +63,19 @@ type ExistingStackState = {
   stackLock: ServerStackLockMetadata
   maintenanceHealth: {martRefresh: null | {articleQueued: number; projectQueued: number}; reachable: boolean}
 }
+type RuntimeStateResponse = {data?: {pid?: number}}
+type ProcessInfo = {command: string; parentPid: number}
 
 let restartTimer: ReturnType<typeof setTimeout> | null = null
 let serverProcess: ServerProcess | null = null
 let shuttingDown = false
 let attachedToExistingStack = false
 let parentMonitor: ReturnType<typeof setInterval> | null = null
+let devWatcherLockHeartbeat: ReturnType<typeof setInterval> | null = null
 
 const parentPid = process.ppid
 const bunExecutablePath = realpathSync(process.execPath)
+const devWatcherStartedAt = new Date().toISOString()
 
 const stackConfig = getBackgroundServerStackConfig(process.env)
 const serverStackLockPath = join(
@@ -152,6 +158,58 @@ const readDevWatcherLock = async () => {
   }
 }
 
+const getDevWatcherLockMetadata = (): DevWatcherLockMetadata => {
+  return {
+    apiPort: stackConfig.apiPort,
+    judgePort: stackConfig.judgePort,
+    maintenancePort: stackConfig.maintenancePort,
+    pid: process.pid,
+    startedAt: devWatcherStartedAt,
+  }
+}
+
+const writeDevWatcherLock = async (metadata: DevWatcherLockMetadata, flag: 'w' | 'wx') => {
+  await mkdir(dirname(devWatcherLockPath), {recursive: true})
+  await writeFile(devWatcherLockPath, JSON.stringify(metadata, null, 2), {flag})
+}
+
+const refreshDevWatcherLock = async () => {
+  if (shuttingDown) {
+    return
+  }
+
+  const currentLock = await readDevWatcherLock()
+
+  if (currentLock !== null && currentLock.pid !== process.pid && isProcessAlive(currentLock.pid)) {
+    return
+  }
+
+  await writeDevWatcherLock(getDevWatcherLockMetadata(), 'w')
+}
+
+const startDevWatcherLockHeartbeat = () => {
+  if (devWatcherLockHeartbeat !== null) {
+    return
+  }
+
+  devWatcherLockHeartbeat = setInterval(() => {
+    return void refreshDevWatcherLock().catch((error) => {
+      log(`failed to refresh watcher lock: ${error instanceof Error ? error.message : String(error)}`)
+    })
+  }, devWatcherLockHeartbeatIntervalMs)
+
+  devWatcherLockHeartbeat.unref?.()
+}
+
+const stopDevWatcherLockHeartbeat = () => {
+  if (devWatcherLockHeartbeat === null) {
+    return
+  }
+
+  clearInterval(devWatcherLockHeartbeat)
+  devWatcherLockHeartbeat = null
+}
+
 const getActionOverride = (): ExistingAction | null => {
   const value = String(process.env.FORSKA_DEV_SERVER_WATCH_ACTION ?? '')
     .trim()
@@ -205,9 +263,12 @@ const getExistingStackState = async (stackLock: ServerStackLockMetadata): Promis
       Effect.runPromise(readDuckdbOwnerLease(loadEnv().DUCKDB_PATH)),
       readJudgmentJobLeaseFiles(),
     ])
-  const judgeHealthResponse = await fetchJson<{data?: {ready?: boolean}}>(
-    `http://127.0.0.1:${judgePort}/api/runtime/ready`,
-  )
+  const [apiRuntimeState, maintenanceRuntimeState, judgeRuntimeState, judgeHealthResponse] = await Promise.all([
+    fetchJson<RuntimeStateResponse>(`http://127.0.0.1:${stackLock.apiPort}${runtimeStatePath}`),
+    fetchJson<RuntimeStateResponse>(`http://127.0.0.1:${stackLock.maintenancePort}${runtimeStatePath}`),
+    fetchJson<RuntimeStateResponse>(`http://127.0.0.1:${judgePort}${runtimeStatePath}`),
+    fetchJson<{data?: {ready?: boolean}}>(`http://127.0.0.1:${judgePort}/api/runtime/ready`),
+  ])
 
   return {
     apiHealth: {counts: apiHealthResponse?.data ?? null, reachable: apiHealthResponse !== null},
@@ -219,6 +280,11 @@ const getExistingStackState = async (stackLock: ServerStackLockMetadata): Promis
         }
       : null,
     judgeHealth: {reachable: judgeHealthResponse !== null},
+    runtimePids: {
+      api: apiRuntimeState?.data?.pid ?? null,
+      judge: judgeRuntimeState?.data?.pid ?? null,
+      maintenance: maintenanceRuntimeState?.data?.pid ?? null,
+    },
     sqliteHealth: {
       jobCounts: apiHealthResponse?.data ?? null,
       leasesAlive: sqliteLeases.filter((lease) => {
@@ -240,6 +306,26 @@ const getExistingStackState = async (stackLock: ServerStackLockMetadata): Promis
       reachable: maintenanceReadyResponse !== null,
     },
   }
+}
+
+const getUnlockedExistingStackState = async (): Promise<ExistingStackState | null> => {
+  const syntheticStackLock = {
+    apiPort: stackConfig.apiPort,
+    cwd: process.cwd(),
+    judgePort: stackConfig.judgePort,
+    maintenancePort: stackConfig.maintenancePort,
+    pid: 0,
+    startedAt: new Date().toISOString(),
+  } satisfies ServerStackLockMetadata
+  const existingStack = await getExistingStackState(syntheticStackLock)
+  const replacementPid =
+    existingStack.runtimePids.api ?? existingStack.runtimePids.maintenance ?? existingStack.runtimePids.judge ?? 0
+
+  return existingStack.apiHealth.reachable
+    || existingStack.maintenanceHealth.reachable
+    || existingStack.judgeHealth.reachable
+    ? {...existingStack, stackLock: {...syntheticStackLock, pid: replacementPid}}
+    : null
 }
 
 const printExistingStackState = async ({
@@ -344,14 +430,16 @@ const promptForExistingAction = async ({
 
 const getExistingLocks = async () => {
   const [existingWatcher, existingStack] = await Promise.all([readDevWatcherLock(), readServerStackLock()])
+  const shouldProbeUnlockedStack = existingStack === null || !isProcessAlive(existingStack.pid)
+  const lockedExistingStack =
+    existingStack && isProcessAlive(existingStack.pid)
+      ? await getExistingStackState(existingStack)
+      : existingStack
+        ? null
+        : null
 
   return {
-    existingStack:
-      existingStack && isProcessAlive(existingStack.pid)
-        ? await getExistingStackState(existingStack)
-        : existingStack
-          ? null
-          : null,
+    existingStack: lockedExistingStack ?? (shouldProbeUnlockedStack ? await getUnlockedExistingStackState() : null),
     existingWatcher: existingWatcher && isProcessAlive(existingWatcher.pid) ? existingWatcher : null,
   }
 }
@@ -380,6 +468,76 @@ const stopExternalProcess = async ({pid, processName}: {pid: number; processName
   throw new Error(`Timed out waiting for ${processName} pid=${pid} to exit`)
 }
 
+const getProcessInfo = (pid: number): ProcessInfo | null => {
+  const result = globalThis.Bun.spawnSync(['ps', '-o', 'ppid=', '-o', 'command=', '-p', String(pid)], {
+    stderr: 'pipe',
+    stdout: 'pipe',
+  })
+  const output = result.stdout.toString().trim()
+  const match = /^(\d+)\s+([\s\S]+)$/.exec(output)
+
+  if (result.exitCode !== 0 || match === null || match[1] === undefined || match[2] === undefined) {
+    return null
+  }
+
+  const parentPidValue = Number.parseInt(match[1], 10)
+
+  return Number.isInteger(parentPidValue) ? {command: match[2], parentPid: parentPidValue} : null
+}
+
+const getRuntimePid = async (port: number) => {
+  return (await fetchJson<RuntimeStateResponse>(`http://127.0.0.1:${port}${runtimeStatePath}`))?.data?.pid ?? null
+}
+
+const getConfiguredRuntimePids = async () => {
+  const [api, maintenance, judge] = await Promise.all([
+    getRuntimePid(stackConfig.apiPort),
+    getRuntimePid(stackConfig.maintenancePort),
+    getRuntimePid(stackConfig.judgePort),
+  ])
+
+  return {api, judge, maintenance}
+}
+
+const uniquePids = (pids: Array<number | null>) => {
+  return [...new Set(pids)].filter((pid): pid is number => {
+    return typeof pid === 'number' && Number.isInteger(pid) && pid > 1 && pid !== process.pid && pid !== parentPid
+  })
+}
+
+const getRuntimeSupervisorStopChain = (supervisorPid: number) => {
+  const supervisorInfo = getProcessInfo(supervisorPid)
+  const watcherPid =
+    supervisorInfo !== null && getProcessInfo(supervisorInfo.parentPid)?.command.includes('scripts/devServerWatch.ts')
+      ? supervisorInfo.parentPid
+      : null
+
+  return uniquePids([watcherPid, supervisorPid])
+}
+
+const getUnlockedStackStopPids = (runtimePids: number[]) => {
+  const supervisorPids = uniquePids(
+    runtimePids.map((runtimePid) => {
+      return getProcessInfo(runtimePid)?.parentPid ?? null
+    }),
+  )
+  const stopPids = supervisorPids.flatMap((supervisorPid) => {
+    return getRuntimeSupervisorStopChain(supervisorPid)
+  })
+
+  return stopPids.length === 0 ? runtimePids : uniquePids(stopPids)
+}
+
+const stopExistingUnlockedStack = async () => {
+  const runtimePids = uniquePids(Object.values(await getConfiguredRuntimePids()))
+  const stopPids = getUnlockedStackStopPids(runtimePids)
+
+  await stopPids.reduce<Promise<void>>(async (previous, pid) => {
+    await previous
+    return stopExternalProcess({pid, processName: 'unlocked server stack process'})
+  }, Promise.resolve())
+}
+
 const stopExistingWatcher = async (existingWatcher: DevWatcherLockMetadata | null) => {
   if (!existingWatcher || !isProcessAlive(existingWatcher.pid)) {
     return
@@ -404,17 +562,11 @@ const releaseDevWatcherLock = async () => {
 }
 
 const acquireDevWatcherLock = async (): Promise<void> => {
-  const metadata = {
-    apiPort: stackConfig.apiPort,
-    judgePort: stackConfig.judgePort,
-    maintenancePort: stackConfig.maintenancePort,
-    pid: process.pid,
-    startedAt: new Date().toISOString(),
-  } satisfies DevWatcherLockMetadata
+  const metadata = getDevWatcherLockMetadata()
 
   try {
-    await mkdir(dirname(devWatcherLockPath), {recursive: true})
-    await writeFile(devWatcherLockPath, JSON.stringify(metadata, null, 2), {flag: 'wx'})
+    await writeDevWatcherLock(metadata, 'wx')
+    startDevWatcherLockHeartbeat()
   } catch (error) {
     if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') {
       throw error
@@ -473,6 +625,7 @@ const stopExistingLockedStack = async () => {
   const currentLock = await readServerStackLock()
 
   if (!currentLock) {
+    await stopExistingUnlockedStack()
     return
   }
 
@@ -604,6 +757,7 @@ const shutdown = async () => {
 
   shuttingDown = true
   stopParentMonitor()
+  stopDevWatcherLockHeartbeat()
 
   if (restartTimer) {
     clearTimeout(restartTimer)

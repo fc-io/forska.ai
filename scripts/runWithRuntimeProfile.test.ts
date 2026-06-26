@@ -1,4 +1,5 @@
-import {existsSync, mkdirSync, realpathSync, rmSync} from 'node:fs'
+import {existsSync, mkdirSync, readFileSync, realpathSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
@@ -10,13 +11,100 @@ type SpawnedProcess = ReturnType<typeof globalThis.Bun.spawn>
 type RuntimeReadyBody = {data?: {ready?: boolean; role?: string}}
 type RuntimeStateBody = {data?: {pid?: number; role?: string}}
 type StackStartedPids = {api: number | null; judge: number | null; maintenance: number | null}
+type PipeTextCollector = {done: Promise<void>; getText: () => string}
 
 const bunExecutablePath = realpathSync(process.execPath)
+const realDevServerSmokeEnabled = process.env.FORSKA_REAL_DEV_SERVER_SMOKE === 'true'
+const forbiddenDevServerOutputPatterns = [
+  {label: 'DuckDB owner heartbeat failure', pattern: /\[duckdb-owner\] heartbeat failed/},
+  {label: 'maintenance restart', pattern: /\[server:stack\] restarting maintenance/},
+  {label: 'maintenance unexpected exit', pattern: /\[server:stack\] maintenance pid=\d+ exited with code 0/},
+  {label: 'judge duplicate replacement', pattern: /judge replacement is already ready after SIGTERM/},
+  {label: 'judge unexpected SIGTERM exit', pattern: /\[server:stack\] judge pid=\d+ exited with code 143/},
+] as const
 
 const removePathIfExists = (path: string) => {
   if (existsSync(path)) {
     rmSync(path, {force: true, recursive: true})
   }
+}
+
+const getServerStackLockPath = (apiPort: number, maintenancePort: number, judgePort: number) => {
+  return join(tmpdir(), 'forska-server-stack', `${apiPort}-${maintenancePort}-${judgePort}.lock.json`)
+}
+
+const waitForPathUntil = async (path: string, deadlineMs: number): Promise<void> => {
+  if (existsSync(path)) {
+    return
+  }
+
+  if (Date.now() >= deadlineMs) {
+    throw new Error(`Timed out waiting for ${path}`)
+  }
+
+  await waitFor(100)
+  return waitForPathUntil(path, deadlineMs)
+}
+
+const waitForPath = async (path: string, timeoutMs: number) => {
+  return waitForPathUntil(path, Date.now() + timeoutMs)
+}
+
+const getForbiddenDevServerOutputMatches = (output: string) => {
+  return forbiddenDevServerOutputPatterns.flatMap(({label, pattern}) => {
+    return pattern.test(output) ? [label] : []
+  })
+}
+
+const expectNoForbiddenDevServerOutput = (output: string) => {
+  expect(getForbiddenDevServerOutputMatches(output), output).toEqual([])
+}
+
+const createPipeTextCollector = (pipe: SpawnedProcess['stdout']): PipeTextCollector => {
+  let text = ''
+
+  if (!(pipe instanceof ReadableStream)) {
+    return {
+      done: Promise.resolve(),
+      getText: () => {
+        return text
+      },
+    }
+  }
+
+  const decoder = new TextDecoder()
+  const done = pipe
+    .pipeTo(
+      new WritableStream<Uint8Array>({
+        abort: () => {
+          text += decoder.decode()
+        },
+        close: () => {
+          text += decoder.decode()
+        },
+        write: (chunk) => {
+          text += decoder.decode(chunk, {stream: true})
+        },
+      }),
+    )
+    .catch(() => {
+      text += decoder.decode()
+    })
+
+  return {
+    done,
+    getText: () => {
+      return text
+    },
+  }
+}
+
+const getCollectedProcessOutput = (collectors: PipeTextCollector[]) => {
+  return collectors
+    .map((collector) => {
+      return collector.getText()
+    })
+    .join('\n')
 }
 
 const waitForRuntimeReadyUntil = async (port: number, deadlineMs: number): Promise<RuntimeReadyBody> => {
@@ -310,6 +398,12 @@ test(
         expect(await getRuntimePids([apiPort, maintenancePort, judgePort])).toEqual(runtimePids)
         return runtimePids
       })()
+      const stackLockPath = getServerStackLockPath(apiPort, maintenancePort, judgePort)
+
+      expect(existsSync(stackLockPath)).toBe(true)
+      removePathIfExists(stackLockPath)
+      await waitForPath(stackLockPath, 5_000)
+      expect((JSON.parse(readFileSync(stackLockPath, 'utf8')) as {pid?: number}).pid).toBe(stackProcess.pid)
 
       await stopProcess(stackProcess)
 
@@ -320,12 +414,63 @@ test(
         judge: pidsAfterReady[2],
         maintenance: pidsAfterReady[1],
       })
+      expectNoForbiddenDevServerOutput(stackOutput)
     } finally {
       await stopProcess(stackProcess)
       removePathIfExists(dataRoot)
     }
   },
   {timeout: 30_000},
+)
+
+test(
+  'real primary dev:server startup has no DuckDB owner heartbeat or restart errors',
+  async () => {
+    if (!realDevServerSmokeEnabled) {
+      expect(realDevServerSmokeEnabled).toBe(false)
+      return
+    }
+
+    const devServerProcess = globalThis.Bun.spawn([bunExecutablePath, 'run', 'dev:server'], {
+      cwd: process.cwd(),
+      env: {...process.env, FORSKA_DEV_SERVER_WATCH_ACTION: 'restart'},
+      stderr: 'pipe',
+      stdout: 'pipe',
+    })
+    const stdout = createPipeTextCollector(devServerProcess.stdout)
+    const stderr = createPipeTextCollector(devServerProcess.stderr)
+    const collectors = [stdout, stderr]
+
+    try {
+      await Promise.race([
+        Promise.all([
+          waitForRuntimeReady(3001, 45_000),
+          waitForRuntimeReady(3002, 45_000),
+          waitForRuntimeReady(3003, 45_000),
+        ]),
+        devServerProcess.exited.then((exitCode) => {
+          throw new Error(`dev:server exited before all roles became ready with code ${String(exitCode)}`)
+        }),
+      ])
+
+      await Promise.race([
+        waitFor(17_000),
+        devServerProcess.exited.then((exitCode) => {
+          throw new Error(`dev:server exited during startup settle with code ${String(exitCode)}`)
+        }),
+      ])
+    } finally {
+      await stopProcess(devServerProcess)
+    }
+
+    await Promise.all(
+      collectors.map((collector) => {
+        return collector.done
+      }),
+    )
+    expectNoForbiddenDevServerOutput(getCollectedProcessOutput(collectors))
+  },
+  {timeout: 90_000},
 )
 
 test(
