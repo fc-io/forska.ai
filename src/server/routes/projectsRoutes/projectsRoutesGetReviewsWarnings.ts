@@ -726,6 +726,7 @@ const getHasReviewServingStateThatCanProgress = (diagnostics: ReviewServingDiagn
     diagnostics.dirtyWork.failedCount
       + diagnostics.dirtyWork.pendingCount
       + diagnostics.dirtyWork.runningCount
+      + diagnostics.quarantine.unresolvedOutboxCount
       + diagnostics.rebuildChunks.blockedOverBudgetCount
       + diagnostics.rebuildChunks.failedCount
       + diagnostics.rebuildChunks.pendingCount
@@ -745,7 +746,6 @@ const getReviewsIndexingStatus = (params: {
   hasFailedRefresh: boolean
   hasAnyArticlesInScope: boolean
   hasReviewRollupRows: boolean
-  hasReviewServingStateThatCanProgress: boolean
   hasUnresolvedQuarantineBarrier: boolean
   eligibleConsumerPresent: boolean
   pendingRefreshCount: number
@@ -764,9 +764,7 @@ const getReviewsIndexingStatus = (params: {
             ? 'refreshing'
             : params.hasReviewRollupRows
               ? 'ready'
-              : !params.hasReviewServingStateThatCanProgress
-                ? 'ready'
-                : 'stale'
+              : 'stale'
 }
 
 const getReviewsIndexingProgressState = (params: {
@@ -878,12 +876,18 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       || (shouldCurrentServerRunMaintenanceLoops() && shouldCurrentRuntimeRunMartRefreshDrain())
     const legacyRefreshConsumerPresent =
       maintenanceConsumerAvailability.eligibleConsumerPresent || canRunMartRefreshDrain
+    const hasFailedDirtyMaterialization =
+      projectRefreshState.dirtyMaterialization.failedCount > 0
+      || projectRefreshState.dirtyMaterialization.unreconciledCount > 0
+    const hasLedgerProjectRefreshRunning = projectRefreshState.refreshStatus === 'running' && hasActiveProjectLease
     const hasLegacyRefreshWorkThatMustBeReported =
       freshProjectRefreshLeaseCount > 0
       || freshArticleRefreshLeaseCount > 0
       || projectRefreshState.dirtyMaterialization.isActive
+      || hasFailedDirtyMaterialization
       || projectRefreshState.hasUnresolvedQuarantineBarrier
       || projectRefreshState.refreshStatus === 'failed'
+      || hasLedgerProjectRefreshRunning
       || isLargeRebuildRunning
       || isLargeRebuildQueued
     const shouldReportLegacyRefreshWork =
@@ -892,7 +896,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       shouldReportLegacyRefreshWork
       && (freshProjectRefreshLeaseCount > 0
         || projectRefreshState.dirtyMaterialization.isActive
-        || (!projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'running' && hasActiveProjectLease))
+        || (!projectRefreshState.isFresh && hasLedgerProjectRefreshRunning))
     const rawInFlightProjectRefreshCount = isProjectRunning ? 1 : isLargeRebuildRunning ? 1 : 0
     const inFlightProjectRefreshCount = rawInFlightProjectRefreshCount
     const queuedProjectRefreshCount =
@@ -962,7 +966,6 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       hasFailedRefresh,
       hasAnyArticlesInScope,
       hasReviewRollupRows: hasReviewServingRows,
-      hasReviewServingStateThatCanProgress,
       hasUnresolvedQuarantineBarrier: projectRefreshState.hasUnresolvedQuarantineBarrier,
       pendingRefreshCount,
     })

@@ -95,7 +95,11 @@ type ReviewsWarningsResponse = {
         optionalComponent: boolean
         snapshotId: string | null
       }
-      serving: {readable: boolean; usable: boolean}
+      serving: {
+        diagnostics: {quarantine: {retryableOutboxCount: number; unresolvedOutboxCount: number}}
+        readable: boolean
+        usable: boolean
+      }
       status: 'blocked' | 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
     }
     projectId: string
@@ -132,6 +136,7 @@ type LargeRebuildStateOverrides = {
 }
 
 type ReviewRebuildChunkStatus = 'blocked_over_budget' | 'completed' | 'failed' | 'pending' | 'quarantined' | 'running'
+type DirtyMaterializationStatus = 'completed' | 'failed' | 'pending' | 'running' | 'unreconciled'
 
 let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
@@ -270,6 +275,75 @@ const insertDirtyArticleRefreshState = async (projectId: string, articleId: stri
       ${dirtyToken},
       ${dirtyToken},
       TIMESTAMPTZ '2026-04-02T12:01:00.000Z'
+    )
+  `)
+}
+
+const insertDirtyMaterializationState = async (input: {
+  projectId: string
+  sourceKind: string
+  status: DirtyMaterializationStatus
+  targetDirtyToken: number
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.project_mart_dirty_materialization_state (
+      project_id,
+      source_kind,
+      target_dirty_token,
+      source_scope_generation,
+      source_scope_expected_row_count,
+      materialization_status,
+      created_at,
+      updated_at
+    ) VALUES (
+      '${input.projectId}',
+      '${input.sourceKind}',
+      ${input.targetDirtyToken},
+      1,
+      1,
+      '${input.status}',
+      TIMESTAMPTZ '2026-04-02T12:02:00.000Z',
+      TIMESTAMPTZ '2026-04-02T12:03:00.000Z'
+    )
+  `)
+}
+
+const insertReviewSourceChangeOutbox = async (projectId: string) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.review_source_change_outbox (
+      outbox_id,
+      source_table,
+      source_row_id,
+      source_operation,
+      source_partition,
+      source_high_water_mark,
+      idempotency_key,
+      payload_version,
+      recovery_payload_json,
+      status,
+      created_at,
+      updated_at
+    ) VALUES (
+      'outbox-${projectId}',
+      'app.review_change_delta',
+      'review-change-${projectId}',
+      'insert',
+      'review-change:${projectId}',
+      1,
+      'outbox-key-${projectId}',
+      1,
+      '{}'::JSON,
+      'pending',
+      TIMESTAMPTZ '2026-04-02T12:00:00.000Z',
+      TIMESTAMPTZ '2026-04-02T12:00:00.000Z'
     )
   `)
 }
@@ -946,6 +1020,26 @@ test('reviews warnings keep retryable V4 rebuild chunk failures queued', async (
   expect(body.data.indexing.status).toBe('refreshing')
 })
 
+test('reviews warnings keep pending V4 outbox barriers non-ready without a serving snapshot', async () => {
+  const projectId = 'project-v4-outbox-barrier-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewSourceChangeOutbox(projectId)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('stalled')
+  expect(body.data.indexing.serving.diagnostics.quarantine).toMatchObject({
+    retryableOutboxCount: 1,
+    unresolvedOutboxCount: 1,
+  })
+  expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
+  expect(body.data.indexing.status).toBe('stale')
+})
+
 test('reviews warnings search diagnostic ignores active snapshots for older review configs', async () => {
   const projectId = 'project-search-diagnostic-current-config-warning'
 
@@ -1031,7 +1125,7 @@ test('reviews warnings expose quarantined article refreshes without pending heal
   expect(body.data.indexing.status).toBe('blocked')
 })
 
-test('reviews warnings report completed indexing without queueing repair for idle fresh missing legacy judgment facts', async () => {
+test('reviews warnings report stale indexing without queueing repair for idle fresh missing legacy judgment facts', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
@@ -1099,9 +1193,9 @@ test('reviews warnings report completed indexing without queueing repair for idl
   expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
   expect(body.data.indexing.queuedArticleRefreshCount).toBe(0)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
-  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
-  expect(body.data.indexing.status).toBe('ready')
+  expect(body.data.indexing.status).toBe('stale')
 })
 
 test('reviews warnings report refreshing from ledger and worker progress state', async () => {
@@ -1155,6 +1249,33 @@ test('reviews warnings report refreshing from ledger and worker progress state',
   expect(body.data.indexing.status).toBe('refreshing')
 })
 
+test('reviews warnings report ledger-only running project refreshes without V4 state', async () => {
+  const projectId = 'project-ledger-only-running-refresh-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {
+    dirtyToken: 2,
+    lastCompletedDirtyToken: 1,
+    lastRequestedAt: '2026-04-02T12:00:00.000Z',
+    lastStartedAt: '2026-04-02T12:05:00.000Z',
+    leaseExpiresAt: '2035-04-02T12:05:30.000Z',
+    refreshStatus: 'running',
+    workerId: 'maintenance-worker-ledger-only',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.activeConsumerCount).toBe(1)
+  expect(body.data.indexing.activeWorkCount).toBe(1)
+  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('processing')
+  expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
 test('reviews warnings count only dirty articles still in live project scope', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -1200,7 +1321,7 @@ test('reviews warnings count only dirty articles still in live project scope', a
   expect(body.data.indexing.status).toBe('refreshing')
 })
 
-test('reviews warnings report completed indexing without queueing a large rebuild when fresh idle serving is missing', async () => {
+test('reviews warnings report stale indexing without queueing a large rebuild when fresh idle serving is missing', async () => {
   const projectId = 'project-missing-serving-bootstrap-warning'
 
   await insertProjectFixture(projectId)
@@ -1211,13 +1332,13 @@ test('reviews warnings report completed indexing without queueing a large rebuil
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
   expect(body.data.indexing.largeRebuild).toBe(null)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
-  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
-  expect(body.data.indexing.status).toBe('ready')
+  expect(body.data.indexing.status).toBe('stale')
 })
 
-test('reviews warnings do not report stalled indexing for fresh idle route scope without V4 state', async () => {
+test('reviews warnings report stale indexing for fresh idle route scope without V4 state', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
@@ -1249,9 +1370,9 @@ test('reviews warnings do not report stalled indexing for fresh idle route scope
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
   expect(body.data.indexing.freshness.isFresh).toBe(true)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
-  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
-  expect(body.data.indexing.status).toBe('ready')
+  expect(body.data.indexing.status).toBe('stale')
 })
 
 test('reviews warnings do not bootstrap missing serving rows for archived prompt links', async () => {
@@ -1475,6 +1596,34 @@ test('reviews warnings report failed when refresh work is still dirty after a fa
   expect(body.data.indexing.oldestQueuedAt).toBe('2026-04-02 12:00:00+00')
   expect(body.data.indexing.queuedProjectRefreshCount).toBe(1)
   expect(body.data.indexing.inFlightProjectRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.status).toBe('failed')
+})
+
+test('reviews warnings surface failed dirty materializations without V4 state', async () => {
+  const projectId = 'project-failed-dirty-materialization-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {
+    dirtyToken: 2,
+    lastCompletedDirtyToken: 1,
+    lastRequestedAt: '2026-04-02T12:00:00.000Z',
+    refreshStatus: 'idle',
+  })
+  await insertDirtyMaterializationState({projectId, sourceKind: 'project_scope', status: 'failed', targetDirtyToken: 2})
+  await insertDirtyMaterializationState({
+    projectId,
+    sourceKind: 'review_facts',
+    status: 'unreconciled',
+    targetDirtyToken: 2,
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.dirtyMaterialization).toMatchObject({failedCount: 1, unreconciledCount: 1})
   expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
   expect(body.data.indexing.progressState).toBe('failed')
@@ -1909,7 +2058,7 @@ test('reviews warnings keep later phase denominator frozen after route scope cha
   expect(body.data.indexing.largeRebuild?.progress?.remainingCurrentPhaseArticleCount).toBe(0)
 })
 
-test('reviews warnings ignore failed legacy large rebuild state in normal indexing health', async () => {
+test('reviews warnings ignore failed legacy large rebuild state while keeping unreadable indexing stale', async () => {
   const projectId = 'project-large-rebuild-failed-warning'
 
   await insertProjectFixture(projectId)
@@ -1926,9 +2075,9 @@ test('reviews warnings ignore failed legacy large rebuild state in normal indexi
   expect(body.data.indexing.largeRebuild).toBe(null)
   expect(body.data.indexing.pendingProjectRefreshCount).toBe(0)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
-  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
-  expect(body.data.indexing.status).toBe('ready')
+  expect(body.data.indexing.status).toBe('stale')
 })
 
 test('reviews warnings keep active serving ready when legacy large rebuild has failed', async () => {
