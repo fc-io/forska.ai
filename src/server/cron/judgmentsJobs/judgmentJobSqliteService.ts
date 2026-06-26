@@ -116,7 +116,7 @@ export type JudgmentJobSqliteInfo = {
   useTitle: boolean
 }
 
-export type JobCursor = {lastDate: Date; lastArticleId: string; priorityBucket: number}
+export type JobCursor = {lastArticleId: string; lastDate: Date; lastPromptId?: string | null; priorityBucket: number}
 
 type QueueCountRow = {count: number; status: string}
 
@@ -349,6 +349,7 @@ export type JudgmentJobSystemSqliteFallbackResult = {
 type ScanStateRow = {
   cursorLastArticleId: string | null
   cursorLastDate: string | null
+  cursorLastPromptId: string | null
   cursorPriorityBucket: number | null
   exhaustedAt: string | null
   lastProjectRefreshAckToken: number | null
@@ -792,6 +793,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       job_id TEXT PRIMARY KEY,
       cursor_last_date TEXT,
       cursor_last_article_id TEXT,
+      cursor_last_prompt_id TEXT,
       cursor_priority_bucket INTEGER NOT NULL DEFAULT 0,
       scan_epoch INTEGER NOT NULL DEFAULT 0,
       exhausted_at TEXT,
@@ -945,6 +947,7 @@ const judgmentJobSqliteRequiredSchema = {
     'job_id',
     'cursor_last_date',
     'cursor_last_article_id',
+    'cursor_last_prompt_id',
     'cursor_priority_bucket',
     'scan_epoch',
     'exhausted_at',
@@ -1001,6 +1004,7 @@ const judgmentJobSqliteRequiredSchema = {
 } as const
 
 const jobScanStateColumns = [
+  {name: 'cursor_last_prompt_id', sql: 'TEXT'},
   {name: 'cursor_priority_bucket', sql: 'INTEGER NOT NULL DEFAULT 0'},
   {name: 'scan_epoch', sql: 'INTEGER NOT NULL DEFAULT 0'},
   {name: 'last_project_refresh_ack_token', sql: 'INTEGER'},
@@ -1190,7 +1194,12 @@ const getJobScanState = (row: ScanStateRow | null | undefined): JobScanState => 
   return {
     cursor:
       lastDate && row?.cursorLastArticleId
-        ? {lastArticleId: row.cursorLastArticleId, lastDate, priorityBucket: Number(row.cursorPriorityBucket ?? 0)}
+        ? {
+            lastArticleId: row.cursorLastArticleId,
+            lastDate,
+            ...(row.cursorLastPromptId ? {lastPromptId: row.cursorLastPromptId} : {}),
+            priorityBucket: Number(row.cursorPriorityBucket ?? 0),
+          }
         : null,
     exhaustedAt,
     lastProjectRefreshAckSeq: row?.lastProjectRefreshAckToken == null ? null : Number(row.lastProjectRefreshAckToken),
@@ -1295,6 +1304,7 @@ const getStoredScanState = (database: Database, jobId: string) => {
         SELECT
           cursor_last_date AS cursorLastDate,
           cursor_last_article_id AS cursorLastArticleId,
+          cursor_last_prompt_id AS cursorLastPromptId,
           cursor_priority_bucket AS cursorPriorityBucket,
           exhausted_at AS exhaustedAt,
           scan_epoch AS scanEpoch,
@@ -4283,6 +4293,7 @@ const sqliteService = {
           UPDATE job_scan_state
           SET cursor_last_date = NULL,
               cursor_last_article_id = NULL,
+              cursor_last_prompt_id = NULL,
               cursor_priority_bucket = 0,
               scan_epoch = 0,
               exhausted_at = NULL,
@@ -4318,6 +4329,7 @@ const sqliteService = {
                   UPDATE job_scan_state
                   SET cursor_last_date = NULL,
                       cursor_last_article_id = NULL,
+                      cursor_last_prompt_id = NULL,
                       cursor_priority_bucket = 0,
                       scan_epoch = 0,
                       exhausted_at = NULL,
@@ -4917,19 +4929,21 @@ const sqliteService = {
             job_id,
             cursor_last_date,
             cursor_last_article_id,
+            cursor_last_prompt_id,
             cursor_priority_bucket,
             scan_epoch,
             exhausted_at,
             last_project_refresh_ack_token,
             wrap_visibility_ack_token,
             updated_at
-          ) VALUES (?, ?, ?, ?, 0, NULL, NULL, NULL, ?)
+          ) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?)
         `,
           )
           .run(
             jobId,
             jobInfo.cursor?.lastDate.toISOString() ?? null,
             jobInfo.cursor?.lastArticleId ?? null,
+            jobInfo.cursor?.lastPromptId ?? null,
             jobInfo.cursor?.priorityBucket ?? 0,
             createdAt,
           )
@@ -5774,6 +5788,7 @@ const sqliteService = {
         UPDATE job_scan_state
         SET cursor_last_date = ?,
             cursor_last_article_id = ?,
+            cursor_last_prompt_id = ?,
             cursor_priority_bucket = ?,
             scan_epoch = ?,
             exhausted_at = ?,
@@ -5786,6 +5801,7 @@ const sqliteService = {
         .run(
           nextState.cursor?.lastDate.toISOString() ?? null,
           nextState.cursor?.lastArticleId ?? null,
+          nextState.cursor?.lastPromptId ?? null,
           nextState.cursor?.priorityBucket ?? 0,
           nextState.scanEpoch,
           nextState.exhaustedAt?.toISOString() ?? null,
