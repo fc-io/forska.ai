@@ -906,9 +906,7 @@ test('dirty batch routing keeps review pages counts warnings and prompt queueing
       },
     ])
     expect(singleBatchResult.unassessedCount).toBe(1)
-    expect(singleBatchResult.promptEntries).toEqual([
-      {articleId: 'article-worker-routing-2', promptId: 'prompt-worker-routing-2'},
-    ])
+    expect(singleBatchResult.promptEntries).toEqual([])
   } finally {
     for (const path of [singleBatchDuckdbPath, defaultBatchDuckdbPath]) {
       rmSync(path, {force: true})

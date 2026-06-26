@@ -23,6 +23,12 @@ type MockNotification =
   | {inputText: string; kind: 'item'; text: string}
   | {error?: unknown; inputText: string; kind: 'complete'; status: 'completed' | 'failed'}
 
+const waitForCodexRecycleTimer = async () => {
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0)
+  })
+}
+
 const withCapturedConsole = async (work: () => Promise<void>) => {
   const originalError = console.error
   const originalWarn = console.warn
@@ -541,6 +547,7 @@ test('runJsonTurn keeps concurrent success scoped when another turn fails out of
     {status: 'fulfilled', text: 'success turn text'},
     {status: 'rejected', reason: 'codex app-server: turn failed'},
   ])
+  await waitForCodexRecycleTimer()
   expect(getKillCount()).toBe(1)
 })
 
@@ -677,6 +684,7 @@ test('runJsonTurn keeps a replacement singleton when the recycled app-server dra
     expect(failedResult).toBeInstanceOf(Error)
     expect(failedResult instanceof Error ? failedResult.message : '').toBe('codex app-server: turn failed')
     expect(successResult.text).toBe('success request response')
+    await waitForCodexRecycleTimer()
     expect(killCount).toBe(1)
     expect(getCodexAppServerSingletonForTests()).toBe(replacementClient)
   } finally {
@@ -703,6 +711,7 @@ test('runJsonTurn recycles the app-server after a failed turn', async () => {
 
   expect(result).toBeInstanceOf(Error)
   expect(result instanceof Error ? result.message : '').toBe('codex app-server: turn failed')
+  await waitForCodexRecycleTimer()
   expect(getKillCount()).toBe(1)
 })
 
@@ -725,6 +734,7 @@ test('runJsonTurn recycles the app-server after a turn timeout', async () => {
 
   expect(result).toBeInstanceOf(Error)
   expect(result instanceof Error ? result.message : '').toBe('codex app-server: turn timeout')
+  await waitForCodexRecycleTimer()
   expect(getKillCount()).toBe(1)
 })
 
@@ -748,6 +758,7 @@ test('runJsonTurn recycles after max completed turns only once active turns drai
     {status: 'fulfilled', text: 'first response'},
     {status: 'fulfilled', text: 'second response'},
   ])
+  await waitForCodexRecycleTimer()
   expect(getKillCount()).toBe(1)
 })
 

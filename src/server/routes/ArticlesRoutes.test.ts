@@ -20,7 +20,12 @@ const queryJsonRef = {
 
 const transactionRef = {
   current: async <T>(callback: (tx: unknown) => Promise<T>): Promise<T> => {
-    return await callback({})
+    return await callback({
+      queryJson: queryJsonRef.current,
+      run: async () => {
+        return undefined
+      },
+    })
   },
 }
 
@@ -38,6 +43,9 @@ const registerModuleMocks = () => {
           queryJson: (statement: string) => {
             return queryJsonRef.current(statement)
           },
+          maintenance: async () => {
+            return undefined
+          },
           run: async () => {
             return undefined
           },
@@ -51,7 +59,16 @@ const registerModuleMocks = () => {
 
   void mock.module(articleImportStoreServiceModulePath, () => {
     return {
+      markImportedArticleProjectsDirty: async () => {
+        return undefined
+      },
+      storeImportedArticles: async (rows: unknown[]) => {
+        await storeImportedArticlesWithTxRef.current({}, rows)
+      },
       storeImportedArticlesWithTx: (tx: unknown, rows: unknown[]) => {
+        return storeImportedArticlesWithTxRef.current(tx, rows)
+      },
+      syncImportedArticlesWithTx: ({rows, tx}: {rows: unknown[]; tx: unknown}) => {
         return storeImportedArticlesWithTxRef.current(tx, rows)
       },
     }
@@ -162,6 +179,9 @@ test('PDF explicit bulk route admits durable article-id-only jobs', async () => 
           queryJson: async () => {
             return []
           },
+          maintenance: async () => {
+            return undefined
+          },
           run: async (statement: string) => {
             statements.push(statement)
           },
@@ -173,7 +193,18 @@ test('PDF explicit bulk route admits durable article-id-only jobs', async () => 
     }
   })
   void mock.module(articleImportStoreServiceModulePath, () => {
-    return {storeImportedArticlesWithTx: storeImportedArticlesWithTxRef.current}
+    return {
+      markImportedArticleProjectsDirty: async () => {
+        return undefined
+      },
+      storeImportedArticles: async (rows: unknown[]) => {
+        await storeImportedArticlesWithTxRef.current({}, rows)
+      },
+      storeImportedArticlesWithTx: storeImportedArticlesWithTxRef.current,
+      syncImportedArticlesWithTx: ({rows, tx}: {rows: unknown[]; tx: unknown}) => {
+        return storeImportedArticlesWithTxRef.current(tx, rows)
+      },
+    }
   })
 
   const routesModule = (await import(
@@ -211,6 +242,9 @@ test('PDF project route preserves date-only upper bounds and request identity in
           queryJson: async () => {
             return []
           },
+          maintenance: async () => {
+            return undefined
+          },
           run: async () => {
             return undefined
           },
@@ -222,7 +256,18 @@ test('PDF project route preserves date-only upper bounds and request identity in
     }
   })
   void mock.module(articleImportStoreServiceModulePath, () => {
-    return {storeImportedArticlesWithTx: storeImportedArticlesWithTxRef.current}
+    return {
+      markImportedArticleProjectsDirty: async () => {
+        return undefined
+      },
+      storeImportedArticles: async (rows: unknown[]) => {
+        await storeImportedArticlesWithTxRef.current({}, rows)
+      },
+      storeImportedArticlesWithTx: storeImportedArticlesWithTxRef.current,
+      syncImportedArticlesWithTx: ({rows, tx}: {rows: unknown[]; tx: unknown}) => {
+        return storeImportedArticlesWithTxRef.current(tx, rows)
+      },
+    }
   })
   void mock.module(appQueryServiceModulePath, () => {
     return {

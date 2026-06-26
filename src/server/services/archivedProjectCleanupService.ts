@@ -51,7 +51,6 @@ const archivedProjectMartCleanupMutations: CleanupMutation[] = [
   'mart.project_scope_article',
   'app.project_article_ordinal',
   'app.project_review_serving_generation',
-  'app.review_answer_dictionary',
 ].map((tableName) => {
   return {
     phase: 'mart_cleanup',
@@ -65,6 +64,7 @@ const archivedProjectMartCleanupMutations: CleanupMutation[] = [
 const archivedProjectRuntimeCleanupMutations: CleanupMutation[] = [
   'app.project_mart_dirty_refresh_article_quarantine',
   'app.project_mart_dirty_materialization_state',
+  'app.project_mart_refresh_article_state',
   'app.project_mart_refresh_state',
   'app.project_mart_large_rebuild_state',
 ].map((tableName) => {

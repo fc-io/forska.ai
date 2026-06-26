@@ -754,8 +754,9 @@ test('owner-backed claim snapshots resolve legacy scoped article ids through imp
           canonicalImportRoute: string
           externalArticleId: string
           importRoute: string
-          originalData: {covidenceId: string; row: string}
+          originalData: unknown
           scopedImportMetadata: {stage: string; studyId: string}
+          scopedRawPayload: unknown
           selectedExternalArticleId: string
           selectedImportRoute: string
           selectedImportRouteId: string
@@ -776,8 +777,9 @@ test('owner-backed claim snapshots resolve legacy scoped article ids through imp
     canonicalImportRoute: 'legacy:first-source',
     externalArticleId,
     importRoute: `covidence:review-${suffix}`,
-    originalData: {covidenceId: externalArticleId, row: 'raw scoped payload'},
+    originalData: null,
     scopedImportMetadata: {stage: 'title_abstract', studyId: `study-${suffix}`},
+    scopedRawPayload: null,
     selectedExternalArticleId: externalArticleId,
     selectedImportRoute: `covidence:review-${suffix}`,
     selectedImportRouteId: importRouteId,
@@ -4396,7 +4398,7 @@ test('drain route only acts on the requested job and can finalize a drained sqli
   expect(await sqliteService.getReadyCount(secondJobId)).toBe(1)
 })
 
-test('unassessed endpoints keep stale count serving-only while preview uses bounded raw rows', async () => {
+test('unassessed endpoints stay serving-only while project marts are stale', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')
   }
@@ -4439,8 +4441,7 @@ test('unassessed endpoints keep stale count serving-only while preview uses boun
 
   expect(previewResponse.status).toBe(200)
   expect(previewBody.error).toBeNull()
-  expect(previewBody.data).toHaveLength(1)
-  expect(previewBody.data[0]?.articleTitle).toBe('Unassessed stale preview article')
+  expect(previewBody.data).toHaveLength(0)
 })
 
 test('deleting an existing judgments job succeeds when prompts and token usage reference the job', async () => {

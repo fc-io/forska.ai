@@ -348,11 +348,16 @@ test('llama.cpp cli provider connection stores cli mode and uses the local defau
     LIMIT 1
   `)
 
-  expect(storedConnection).toEqual({
+  expect({...storedConnection, configJson: storedConnection?.configJson ? JSON.parse(storedConnection.configJson) : null}).toEqual({
     authMode: 'none',
     baseURL: 'http://127.0.0.1:8080',
-    configJson:
-      '{"archived":false,"disabledModelIds":[],"llamaCppMode":"cli","manualWorkerUrls":[],"workerUrlMode":"manual"}',
+    configJson: {
+      archived: false,
+      disabledModelIds: [],
+      llamaCppMode: 'cli',
+      manualWorkerUrls: [],
+      workerUrlMode: 'manual',
+    },
     maxInflightRequests: null,
     providerKind: 'llamacpp',
   })

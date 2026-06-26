@@ -1667,7 +1667,7 @@ test('delete archived route removes archived project rows and keeps cross-projec
   expect(Number(tokenUseRowCount?.count ?? 0)).toBe(0)
   expect(Number(projectRefreshStateRowCount?.count ?? 0)).toBe(0)
   expect(Number(projectRefreshArticleStateRowCount?.count ?? 0)).toBe(0)
-  expect(Number(reviewAnswerDictionaryRowCount?.count ?? 0)).toBe(0)
+  expect(Number(reviewAnswerDictionaryRowCount?.count ?? 0)).toBe(1)
   expect(Number(servingGenerationRowCount?.count ?? 0)).toBe(0)
   expect(Number(projectScopeArticleRowCount?.count ?? 0)).toBe(0)
   expect(Number(promptAnswerFactRowCount?.count ?? 0)).toBe(0)

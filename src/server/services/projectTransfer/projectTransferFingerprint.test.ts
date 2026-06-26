@@ -12,6 +12,7 @@ import {
 import {buildProjectTransferManifest, getProjectTransferManifestPayloadEntry} from './projectTransferManifest.ts'
 import {getProjectTransferSchemaVNextFingerprintSortKey} from './projectTransferPayloadSchemas.ts'
 import {
+  projectTransferCurrentManifestSchemaVersion,
   projectTransferPayloadFormatByKey,
   type ProjectTransferPayloadKey,
   projectTransferPayloadKeys,
@@ -99,6 +100,7 @@ const getManifest = (checksumSeed: string) => {
       providerConnections: `provider-connections-${checksumSeed}`,
     }),
     project: getProjectSummary(checksumSeed),
+    schemaVersion: projectTransferCurrentManifestSchemaVersion,
     sourceAppVersion: '0.2.1',
   })
 }
@@ -108,6 +110,7 @@ const getAssetManifest = (checksumSeed: string) => {
     exportedAt: `2026-05-21T07:00:0${checksumSeed}.000Z`,
     payloads: getPayloadManifestEntries({assetManifest: `asset-manifest-${checksumSeed}`}),
     project: getProjectSummary(checksumSeed),
+    schemaVersion: projectTransferCurrentManifestSchemaVersion,
     sourceAppVersion: '0.2.1',
   })
 }
@@ -122,6 +125,7 @@ const getProvenanceIdManifest = (checksumSeed: string) => {
       reviews: `reviews-${checksumSeed}`,
     }),
     project: getProjectSummary(checksumSeed),
+    schemaVersion: projectTransferCurrentManifestSchemaVersion,
     sourceAppVersion: '0.2.1',
   })
 }

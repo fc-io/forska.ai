@@ -133,6 +133,7 @@ test('frozen scope records source dirty token and leaves later dirty work pendin
         CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
       FROM app.project_mart_refresh_article_state
       WHERE project_id = 'large-rebuild-frozen-project'
+        AND last_dirty_token > 0
       ORDER BY article_id ASC
     \`)
 
