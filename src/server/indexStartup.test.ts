@@ -1,4 +1,4 @@
-import {existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs'
+import {existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync} from 'node:fs'
 import {hostname} from 'node:os'
 import {join} from 'node:path'
 
@@ -9,6 +9,7 @@ import {upsertDuckdbOwnerConnectionHeartbeat} from './utils/duckdbOwnerConnectio
 import {getRuntimeCutoverVersion} from './utils/runtimeCutover.ts'
 
 type SpawnedServer = ReturnType<typeof globalThis.Bun.spawn>
+const bunExecutablePath = realpathSync(process.execPath)
 
 const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {
@@ -46,7 +47,7 @@ const stopServer = async (server: SpawnedServer) => {
 }
 
 const startServer = (envValues: Record<string, string>) => {
-  return globalThis.Bun.spawn(['bun', 'run', 'src/server/index.ts'], {
+  return globalThis.Bun.spawn([bunExecutablePath, 'src/server/index.ts'], {
     cwd: process.cwd(),
     env: {...process.env, ...envValues},
     stdout: 'pipe',

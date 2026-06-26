@@ -1,4 +1,4 @@
-import {existsSync, mkdtempSync, readdirSync, rmSync} from 'node:fs'
+import {existsSync, mkdtempSync, readdirSync, realpathSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -7,6 +7,7 @@ import {expect, test} from 'bun:test'
 type SpawnedServer = ReturnType<typeof globalThis.Bun.spawn>
 
 const projectRoot = process.cwd()
+const bunExecutablePath = realpathSync(process.execPath)
 
 const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {
@@ -44,7 +45,7 @@ const stopServer = async (server: SpawnedServer) => {
 }
 
 const startServer = (envValues: Record<string, string>) => {
-  return globalThis.Bun.spawn(['bun', 'run', 'src/server/index.ts'], {
+  return globalThis.Bun.spawn([bunExecutablePath, 'src/server/index.ts'], {
     cwd: projectRoot,
     env: {...process.env, ...envValues},
     stdout: 'pipe',
@@ -80,7 +81,7 @@ test('db backup script creates a DuckDB backup while the owner server is running
 
     await waitForServer(ownerPort, 10_000)
 
-    const result = globalThis.Bun.spawnSync(['bun', join(projectRoot, 'scripts/dbBackup.ts')], {
+    const result = globalThis.Bun.spawnSync([bunExecutablePath, join(projectRoot, 'scripts/dbBackup.ts')], {
       cwd: workingDirectory,
       env: {
         ...process.env,

@@ -1,4 +1,4 @@
-import {existsSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
+import {existsSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs'
 import {hostname} from 'node:os'
 
 import {expect, test} from 'bun:test'
@@ -14,6 +14,7 @@ import {projectTransferRouteSpecs} from './projectTransferRoutes.ts'
 import {exposeLocalOperatorApiEnvVar} from './publicRouteSurfaceGate.ts'
 
 type SpawnedServer = ReturnType<typeof globalThis.Bun.spawn>
+const bunExecutablePath = realpathSync(process.execPath)
 
 const csvExportRoute = {endpoint: 'csv-export', method: 'POST', samplePath: '/api/projects/project-1/export'} as const
 const ownerRoutedProjectRoutes = [...projectTransferRouteSpecs, csvExportRoute]
@@ -107,7 +108,7 @@ const stopServer = async (server: SpawnedServer) => {
 }
 
 const startServer = (envValues: Record<string, string>) => {
-  return globalThis.Bun.spawn(['bun', 'run', 'src/server/index.ts'], {
+  return globalThis.Bun.spawn([bunExecutablePath, 'src/server/index.ts'], {
     cwd: process.cwd(),
     env: {...process.env, ...envValues},
     stdout: 'pipe',

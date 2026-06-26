@@ -1,21 +1,29 @@
+import {realpathSync} from 'node:fs'
+
+const bunExecutablePath = realpathSync(process.execPath)
+
 export const devStartCommands = [
   {
-    command: ['bun', 'scripts/runWithRuntimeProfile.ts', '--profile', 'primary', '--mode', 'app'],
+    command: [bunExecutablePath, 'scripts/runWithRuntimeProfile.ts', '--profile', 'primary', '--mode', 'app'],
     name: 'app',
     stdin: 'ignore',
   },
   {
-    command: ['bun', 'scripts/runWithRuntimeProfile.ts', '--profile', 'primary', '--mode', 'stacked-server'],
+    command: [
+      bunExecutablePath,
+      'scripts/runWithRuntimeProfile.ts',
+      '--profile',
+      'primary',
+      '--mode',
+      'stacked-server',
+    ],
     name: 'api',
     stdin: 'inherit',
   },
 ] as const
 
 type DevStartCommand = (typeof devStartCommands)[number]
-type DevStartProcess = {
-  childProcess: ReturnType<typeof globalThis.Bun.spawn>
-  name: DevStartCommand['name']
-}
+type DevStartProcess = {childProcess: ReturnType<typeof globalThis.Bun.spawn>; name: DevStartCommand['name']}
 
 const activeProcesses: DevStartProcess[] = []
 let shuttingDown = false

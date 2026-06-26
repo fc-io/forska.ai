@@ -21,8 +21,8 @@ process.env.FORSKA_NETWORK_SMOKE_LOG_DIR = networkSmokeLogDirectory
 process.env.LOG_DIR = networkSmokeLogDirectory
 const apiServerCommand =
   networkSmokeDbMode === 'current'
-    ? `sh -c 'rm -rf "${duckdbTempDirectory}" "${networkSmokeLogDirectory}" && bun run build && bun run src/server/index.ts'`
-    : `sh -c 'rm -f "${duckdbPath}" "${duckdbPath}.wal" && rm -rf "${duckdbTempDirectory}" "${networkSmokeLogDirectory}" && bun run build && bun run src/server/index.ts'`
+    ? `sh -c 'rm -rf "${duckdbTempDirectory}" "${networkSmokeLogDirectory}" && bun run build && bun src/server/index.ts'`
+    : `sh -c 'rm -f "${duckdbPath}" "${duckdbPath}.wal" && rm -rf "${duckdbTempDirectory}" "${networkSmokeLogDirectory}" && bun run build && bun src/server/index.ts'`
 
 const smokeEnv = {
   API_SERVER_PORT: String(apiServerPort),
@@ -57,7 +57,7 @@ export default defineConfig({
       timeout: 180_000,
     },
     {
-      command: 'bun run src/appServer.ts',
+      command: 'bun src/appServer.ts',
       env: smokeEnv,
       port: appServerPort,
       reuseExistingServer: false,

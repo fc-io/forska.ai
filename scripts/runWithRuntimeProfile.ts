@@ -1,3 +1,5 @@
+import {realpathSync} from 'node:fs'
+
 import {getBackgroundServerEnv} from '../src/server/utils/backgroundServerStack.ts'
 import {mergeRuntimeProfileEnv, type RuntimeProfileName} from '../src/utils/runtimeProfile.ts'
 
@@ -20,6 +22,7 @@ type RuntimeProfileCommandConfig = {
 }
 
 type ForwardedSignal = 'SIGINT' | 'SIGTERM'
+const bunExecutablePath = realpathSync(process.execPath)
 
 const getRuntimeProfileBaseEnv = (profileName: RuntimeProfileName) => {
   return mergeRuntimeProfileEnv({profileName})
@@ -39,49 +42,49 @@ const getRuntimeProfileJudgeWorkerEnv = (profileName: RuntimeProfileName) => {
 
 const runtimeProfileModes: Record<RuntimeProfileMode, RuntimeProfileCommandConfig> = {
   'api-only-server': {
-    command: ['bun', 'run', '--watch', 'src/server/index.ts'],
+    command: [bunExecutablePath, '--watch', 'src/server/index.ts'],
     env: (commandOptions) => {
       return getRuntimeProfileServerEnv(commandOptions, 'api')
     },
   },
   app: {
-    command: ['bunx', '--bun', 'vite'],
+    command: [bunExecutablePath, 'x', '--bun', 'vite'],
     env: ({profileName}) => {
       return getRuntimeProfileBaseEnv(profileName)
     },
   },
   'app-server': {
-    command: ['bun', 'run', 'src/appServer.ts'],
+    command: [bunExecutablePath, 'src/appServer.ts'],
     env: ({profileName}) => {
       return getAppServerEnv(profileName)
     },
   },
   'duckdb-migration': {
-    command: ['bun', 'src/db/migrateDuckdb.ts'],
+    command: [bunExecutablePath, 'src/db/migrateDuckdb.ts'],
     env: ({profileName}) => {
       return getRuntimeProfileBaseEnv(profileName)
     },
   },
   'judge-only-server': {
-    command: ['bun', 'run', '--watch', 'src/server/index.ts'],
+    command: [bunExecutablePath, '--watch', 'src/server/index.ts'],
     env: ({profileName}) => {
       return getRuntimeProfileJudgeWorkerEnv(profileName)
     },
   },
   'server-stack': {
-    command: ['bun', 'scripts/startServerStack.ts'],
+    command: [bunExecutablePath, 'scripts/startServerStack.ts'],
     env: ({profileName}) => {
       return {...getRuntimeProfileBaseEnv(profileName), FORSKA_RUNTIME_SERVICE: 'dev-single-server'}
     },
   },
   'stacked-server': {
-    command: ['bun', 'scripts/devServerWatch.ts'],
+    command: [bunExecutablePath, 'scripts/devServerWatch.ts'],
     env: ({profileName}) => {
       return {...getRuntimeProfileBaseEnv(profileName), FORSKA_RUNTIME_SERVICE: 'dev-single-server'}
     },
   },
   'maintenance-only-server': {
-    command: ['bun', 'run', '--watch', 'src/server/index.ts'],
+    command: [bunExecutablePath, '--watch', 'src/server/index.ts'],
     env: (commandOptions) => {
       return getRuntimeProfileServerEnv(commandOptions, 'maintenance-worker')
     },

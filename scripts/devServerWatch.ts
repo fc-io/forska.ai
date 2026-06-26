@@ -1,4 +1,4 @@
-import {existsSync, watch} from 'node:fs'
+import {existsSync, realpathSync, watch} from 'node:fs'
 import {mkdir, readdir, readFile, unlink, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {dirname, join} from 'node:path'
@@ -69,6 +69,7 @@ let attachedToExistingStack = false
 let parentMonitor: ReturnType<typeof setInterval> | null = null
 
 const parentPid = process.ppid
+const bunExecutablePath = realpathSync(process.execPath)
 
 const stackConfig = getBackgroundServerStackConfig(process.env)
 const serverStackLockPath = join(
@@ -504,7 +505,7 @@ const getServerEnv = () => {
 const startServer = async () => {
   attachedToExistingStack = false
   await stopExistingLockedStack()
-  serverProcess = spawn(['bun', 'scripts/startServerStack.ts'], {
+  serverProcess = spawn([bunExecutablePath, 'scripts/startServerStack.ts'], {
     cwd: process.cwd(),
     env: getServerEnv(),
     stderr: 'inherit',

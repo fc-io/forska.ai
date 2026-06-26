@@ -1,4 +1,4 @@
-import {existsSync, mkdirSync, rmSync} from 'node:fs'
+import {existsSync, mkdirSync, realpathSync, rmSync} from 'node:fs'
 import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
@@ -8,6 +8,10 @@ import {getRuntimeProfileCommandEnv} from './runWithRuntimeProfile.ts'
 
 type SpawnedProcess = ReturnType<typeof globalThis.Bun.spawn>
 type RuntimeReadyBody = {data?: {ready?: boolean; role?: string}}
+type RuntimeStateBody = {data?: {pid?: number; role?: string}}
+type StackStartedPids = {api: number | null; judge: number | null; maintenance: number | null}
+
+const bunExecutablePath = realpathSync(process.execPath)
 
 const removePathIfExists = (path: string) => {
   if (existsSync(path)) {
@@ -39,6 +43,69 @@ const waitForRuntimeReadyUntil = async (port: number, deadlineMs: number): Promi
 
 const waitForRuntimeReady = async (port: number, timeoutMs: number): Promise<RuntimeReadyBody> => {
   return waitForRuntimeReadyUntil(port, Date.now() + timeoutMs)
+}
+
+const waitFor = async (ms: number) => {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+const getRuntimeState = async (port: number): Promise<RuntimeStateBody> => {
+  const response = await fetch(`http://127.0.0.1:${port}/api/runtime/state`)
+
+  if (!response.ok) {
+    throw new Error(`Runtime state on port ${port} returned ${response.status}`)
+  }
+
+  return (await response.json()) as RuntimeStateBody
+}
+
+const getRuntimePids = async (ports: number[]) => {
+  return Promise.all(
+    ports.map(async (port) => {
+      return (await getRuntimeState(port)).data?.pid ?? null
+    }),
+  )
+}
+
+const getRequiredRuntimePids = async (ports: [number, number, number]) => {
+  const pids = await getRuntimePids(ports)
+
+  if (
+    !pids.every((pid) => {
+      return typeof pid === 'number'
+    })
+  ) {
+    throw new Error(`Expected runtime pids for ports ${ports.join(', ')}, received ${pids.join(', ')}`)
+  }
+
+  return pids as [number, number, number]
+}
+
+const readPipeText = async (pipe: SpawnedProcess['stdout']) => {
+  return pipe instanceof ReadableStream ? await new Response(pipe).text() : ''
+}
+
+const readProcessOutput = async (processToRead: SpawnedProcess) => {
+  const [stdout, stderr] = await Promise.all([readPipeText(processToRead.stdout), readPipeText(processToRead.stderr)])
+
+  return `${stdout}\n${stderr}`
+}
+
+const getStackStartedPid = (output: string, role: keyof StackStartedPids) => {
+  const matches = [...output.matchAll(new RegExp(`\\[server:stack\\] started ${role} pid=(\\d+)`, 'g'))]
+  const latestMatch = matches.at(-1)
+
+  return latestMatch ? Number(latestMatch[1]) : null
+}
+
+const getStackStartedPids = (output: string): StackStartedPids => {
+  return {
+    api: getStackStartedPid(output, 'api'),
+    judge: getStackStartedPid(output, 'judge'),
+    maintenance: getStackStartedPid(output, 'maintenance'),
+  }
 }
 
 const waitForProcessExit = async (processToWaitFor: SpawnedProcess, timeoutMs: number) => {
@@ -79,6 +146,26 @@ const getAvailableLocalPorts = async (count: number) => {
   )
 
   return ports
+}
+
+const getFourAvailableLocalPorts = async () => {
+  const ports = await getAvailableLocalPorts(4)
+
+  if (ports.length !== 4) {
+    throw new Error(`Expected 4 available ports, received ${ports.length}`)
+  }
+
+  return ports as [number, number, number, number]
+}
+
+const getFiveAvailableLocalPorts = async () => {
+  const ports = await getAvailableLocalPorts(5)
+
+  if (ports.length !== 5) {
+    throw new Error(`Expected 5 available ports, received ${ports.length}`)
+  }
+
+  return ports as [number, number, number, number, number]
 }
 
 const getCanStartLocalListener = async () => {
@@ -175,54 +262,74 @@ test('stacked server launcher carries split-role port and journal identity wirin
   })
 })
 
-test('server stack script starts api, maintenance-worker, and judge-worker together', {timeout: 30_000}, async () => {
-  if (!canStartLocalListener) {
-    expect(canStartLocalListener).toBe(false)
-    return
-  }
+test(
+  'server stack script starts api, maintenance-worker, and judge-worker together',
+  async () => {
+    if (!canStartLocalListener) {
+      expect(canStartLocalListener).toBe(false)
+      return
+    }
 
-  const dataRoot = join(process.cwd(), 'data', 'runtime', `run-with-runtime-profile-stack-${Date.now()}`)
-  const duckdbPath = join(dataRoot, 'forska.duckdb')
-  const [vitePort, apiPort, maintenancePort, judgePort] = await getAvailableLocalPorts(4)
+    const dataRoot = join(process.cwd(), 'data', 'runtime', `run-with-runtime-profile-stack-${Date.now()}`)
+    const duckdbPath = join(dataRoot, 'forska.duckdb')
+    const [vitePort, apiPort, maintenancePort, judgePort] = await getFourAvailableLocalPorts()
 
-  mkdirSync(dataRoot, {recursive: true})
+    mkdirSync(dataRoot, {recursive: true})
 
-  const stackProcess = globalThis.Bun.spawn(['bun', 'scripts/startServerStack.ts'], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      API_SERVER_PORT: String(apiPort),
-      BACKGROUND_JUDGE_PORT: String(judgePort),
-      BACKGROUND_MAINTENANCE_PORT: String(maintenancePort),
-      DUCKDB_PATH: duckdbPath,
-      JUDGE_WORKER_ID: 'run-with-runtime-profile-stack-judge',
-      RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
-      RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-      VITE_PORT: String(vitePort),
-    },
-    stderr: 'pipe',
-    stdout: 'pipe',
-  })
+    const stackProcess = globalThis.Bun.spawn([bunExecutablePath, 'scripts/startServerStack.ts'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: String(apiPort),
+        BACKGROUND_JUDGE_PORT: String(judgePort),
+        BACKGROUND_MAINTENANCE_PORT: String(maintenancePort),
+        DUCKDB_PATH: duckdbPath,
+        JUDGE_WORKER_ID: 'run-with-runtime-profile-stack-judge',
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        VITE_PORT: String(vitePort),
+      },
+      stderr: 'pipe',
+      stdout: 'pipe',
+    })
 
-  try {
-    const [apiReady, maintenanceReady, judgeReady] = await Promise.all([
-      waitForRuntimeReady(apiPort, 20_000),
-      waitForRuntimeReady(maintenancePort, 20_000),
-      waitForRuntimeReady(judgePort, 20_000),
-    ])
+    try {
+      const pidsAfterReady = await (async (): Promise<[number, number, number]> => {
+        const [apiReady, maintenanceReady, judgeReady] = await Promise.all([
+          waitForRuntimeReady(apiPort, 20_000),
+          waitForRuntimeReady(maintenancePort, 20_000),
+          waitForRuntimeReady(judgePort, 20_000),
+        ])
 
-    expect(apiReady.data).toMatchObject({ready: true, role: 'api'})
-    expect(maintenanceReady.data).toMatchObject({ready: true, role: 'maintenance-worker'})
-    expect(judgeReady.data).toMatchObject({ready: true, role: 'judge-worker'})
-  } finally {
-    await stopProcess(stackProcess)
-    removePathIfExists(dataRoot)
-  }
-})
+        expect(apiReady.data).toMatchObject({ready: true, role: 'api'})
+        expect(maintenanceReady.data).toMatchObject({ready: true, role: 'maintenance-worker'})
+        expect(judgeReady.data).toMatchObject({ready: true, role: 'judge-worker'})
+
+        const runtimePids = await getRequiredRuntimePids([apiPort, maintenancePort, judgePort])
+        await waitFor(2_500)
+        expect(await getRuntimePids([apiPort, maintenancePort, judgePort])).toEqual(runtimePids)
+        return runtimePids
+      })()
+
+      await stopProcess(stackProcess)
+
+      const stackOutput = await readProcessOutput(stackProcess)
+
+      expect(getStackStartedPids(stackOutput)).toEqual({
+        api: pidsAfterReady[0],
+        judge: pidsAfterReady[2],
+        maintenance: pidsAfterReady[1],
+      })
+    } finally {
+      await stopProcess(stackProcess)
+      removePathIfExists(dataRoot)
+    }
+  },
+  {timeout: 30_000},
+)
 
 test(
   'server stack startup takes over a live conflicting judge worker before spawning its own judge role',
-  {timeout: 30_000},
   async () => {
     if (!canStartLocalListener) {
       expect(canStartLocalListener).toBe(false)
@@ -231,11 +338,11 @@ test(
 
     const dataRoot = join(process.cwd(), 'data', 'runtime', `run-with-runtime-profile-judge-takeover-${Date.now()}`)
     const duckdbPath = join(dataRoot, 'forska.duckdb')
-    const [vitePort, standaloneJudgePort, apiPort, maintenancePort, judgePort] = await getAvailableLocalPorts(5)
+    const [vitePort, standaloneJudgePort, apiPort, maintenancePort, judgePort] = await getFiveAvailableLocalPorts()
 
     mkdirSync(dataRoot, {recursive: true})
 
-    const conflictingJudgeProcess = globalThis.Bun.spawn(['bun', 'run', 'src/server/index.ts'], {
+    const conflictingJudgeProcess = globalThis.Bun.spawn([bunExecutablePath, 'src/server/index.ts'], {
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -258,7 +365,7 @@ test(
     try {
       await waitForRuntimeReady(standaloneJudgePort, 20_000)
 
-      stackProcess = globalThis.Bun.spawn(['bun', 'scripts/startServerStack.ts'], {
+      stackProcess = globalThis.Bun.spawn([bunExecutablePath, 'scripts/startServerStack.ts'], {
         cwd: process.cwd(),
         env: {
           ...process.env,
@@ -295,11 +402,11 @@ test(
       removePathIfExists(dataRoot)
     }
   },
+  {timeout: 30_000},
 )
 
 test(
   'server stack startup takes over a live conflicting DuckDB owner before spawning its maintenance role',
-  {timeout: 30_000},
   async () => {
     if (!canStartLocalListener) {
       expect(canStartLocalListener).toBe(false)
@@ -308,11 +415,11 @@ test(
 
     const dataRoot = join(process.cwd(), 'data', 'runtime', `run-with-runtime-profile-owner-takeover-${Date.now()}`)
     const duckdbPath = join(dataRoot, 'forska.duckdb')
-    const [vitePort, apiPort, maintenancePort, judgePort] = await getAvailableLocalPorts(4)
+    const [vitePort, apiPort, maintenancePort, judgePort] = await getFourAvailableLocalPorts()
 
     mkdirSync(dataRoot, {recursive: true})
 
-    const conflictingMaintenanceProcess = globalThis.Bun.spawn(['bun', 'run', 'src/server/index.ts'], {
+    const conflictingMaintenanceProcess = globalThis.Bun.spawn([bunExecutablePath, 'src/server/index.ts'], {
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -333,7 +440,7 @@ test(
     try {
       await waitForRuntimeReady(maintenancePort, 20_000)
 
-      stackProcess = globalThis.Bun.spawn(['bun', 'scripts/startServerStack.ts'], {
+      stackProcess = globalThis.Bun.spawn([bunExecutablePath, 'scripts/startServerStack.ts'], {
         cwd: process.cwd(),
         env: {
           ...process.env,
@@ -370,4 +477,5 @@ test(
       removePathIfExists(dataRoot)
     }
   },
+  {timeout: 30_000},
 )

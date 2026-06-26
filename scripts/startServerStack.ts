@@ -1,3 +1,4 @@
+import {realpathSync} from 'node:fs'
 import {mkdir, readFile, unlink, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {dirname, join} from 'node:path'
@@ -158,9 +159,10 @@ const managedServerState: ManagedServerState = {
 let parentMonitor: ReturnType<typeof setInterval> | null = null
 
 const parentPid = process.ppid
+const bunExecutablePath = realpathSync(process.execPath)
 
 const getServerCommand = () => {
-  return ['bun', 'run', 'src/server/index.ts']
+  return [bunExecutablePath, 'src/server/index.ts']
 }
 
 const waitFor = async (ms: number) => {
