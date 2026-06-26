@@ -683,7 +683,7 @@ test('reviews warnings report ready when serving rows are fresh', async () => {
   expect(body.data.indexing.status).toBe('ready')
 })
 
-test('reviews warnings mark stale snapshots readable but not usable during refresh', async () => {
+test('reviews warnings mark stale snapshots usable during refresh without hiding pending work', async () => {
   const projectId = 'project-stale-readable-warning'
 
   await insertProjectFixture(projectId)
@@ -700,8 +700,33 @@ test('reviews warnings mark stale snapshots readable but not usable during refre
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: false})
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
   expect(body.data.indexing.status).toBe('refreshing')
+})
+
+test('reviews warnings report completed health for last-known-good serving with no pending work', async () => {
+  const projectId = 'project-retired-completed-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-retired-completed-warning',
+    status: 'retired',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
+  expect(body.data.indexing.status).toBe('ready')
 })
 
 test('reviews warnings expose bounded cleanup lease progress without blocking ready reads', async () => {
