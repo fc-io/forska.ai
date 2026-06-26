@@ -1,6 +1,7 @@
 import {requestReviewServingV4Rebuild} from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 
 type CliOptions = {recover: boolean; yes: boolean}
 
@@ -16,6 +17,7 @@ type RecoveryResult = {
 }
 
 const staleLegacyClaimRecoveryReason = 'recoverDirtyRefreshClaims.staleLegacyClaim'
+const workloadContext = getMaintenanceDuckdbWorkloadContext('recoverDirtyRefreshClaims')
 
 type StaleDirtyRefreshClaimRow = {
   activeDirtyToken: number | string
@@ -60,7 +62,8 @@ const toNumber = (value: number | string | null | undefined) => {
 }
 
 const getStaleDirtyRefreshClaims = async () => {
-  return getAppDatabaseService().queryJson<StaleDirtyRefreshClaimRow>(`
+  return getAppDatabaseService().queryJson<StaleDirtyRefreshClaimRow>(
+    `
     SELECT
       project_id AS projectId,
       dirty_token AS dirtyToken,
@@ -74,11 +77,14 @@ const getStaleDirtyRefreshClaims = async () => {
       AND lease_expires_at < NOW()
       AND dirty_token > last_completed_dirty_token
     ORDER BY lease_expires_at ASC, project_id ASC
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const getStaleDirtyMaterializationClaims = async () => {
-  return getAppDatabaseService().queryJson<StaleDirtyMaterializationClaimRow>(`
+  return getAppDatabaseService().queryJson<StaleDirtyMaterializationClaimRow>(
+    `
     SELECT
       project_id AS projectId,
       source_kind AS sourceKind,
@@ -91,11 +97,14 @@ const getStaleDirtyMaterializationClaims = async () => {
       AND lease_expires_at IS NOT NULL
       AND lease_expires_at < NOW()
     ORDER BY lease_expires_at ASC, target_dirty_token ASC, project_id ASC, source_kind ASC
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const getStaleLargeRebuildClaims = async () => {
-  return getAppDatabaseService().queryJson<StaleLargeRebuildClaimRow>(`
+  return getAppDatabaseService().queryJson<StaleLargeRebuildClaimRow>(
+    `
     SELECT
       project_id AS projectId,
       refresh_token AS refreshToken,
@@ -109,11 +118,14 @@ const getStaleLargeRebuildClaims = async () => {
       AND lease_expires_at IS NOT NULL
       AND lease_expires_at < NOW()
     ORDER BY lease_expires_at ASC, refresh_token ASC, project_id ASC
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const getQuarantineBarriers = async () => {
-  return getAppDatabaseService().queryJson<QuarantineBarrierRow>(`
+  return getAppDatabaseService().queryJson<QuarantineBarrierRow>(
+    `
     SELECT
       project_id AS projectId,
       article_id AS articleId,
@@ -121,7 +133,9 @@ const getQuarantineBarriers = async () => {
     FROM app.project_mart_dirty_refresh_article_quarantine
     WHERE resolved_at IS NULL
     ORDER BY project_id ASC, dirty_token ASC, article_id ASC
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const getDirtyRefreshSummary = (rows: StaleDirtyRefreshClaimRow[]) => {
@@ -275,7 +289,8 @@ const releaseStaleDirtyRefreshClaims = async (rows: StaleDirtyRefreshClaimRow[])
     return
   }
 
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     UPDATE app.project_mart_refresh_state
     SET
       active_dirty_token = 0,
@@ -297,7 +312,9 @@ const releaseStaleDirtyRefreshClaims = async (rows: StaleDirtyRefreshClaimRow[])
       AND lease_expires_at IS NOT NULL
       AND lease_expires_at < NOW()
       AND dirty_token > last_completed_dirty_token
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const releaseStaleDirtyMaterializationClaims = async (rows: StaleDirtyMaterializationClaimRow[]) => {
@@ -305,7 +322,8 @@ const releaseStaleDirtyMaterializationClaims = async (rows: StaleDirtyMaterializ
     return
   }
 
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     UPDATE app.project_mart_dirty_materialization_state
     SET
       materialization_status = 'completed',
@@ -324,7 +342,9 @@ const releaseStaleDirtyMaterializationClaims = async (rows: StaleDirtyMaterializ
       AND materialization_status = 'running'
       AND lease_expires_at IS NOT NULL
       AND lease_expires_at < NOW()
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const releaseStaleLargeRebuildClaims = async (rows: StaleLargeRebuildClaimRow[]) => {
@@ -332,7 +352,8 @@ const releaseStaleLargeRebuildClaims = async (rows: StaleLargeRebuildClaimRow[])
     return
   }
 
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     UPDATE app.project_mart_large_rebuild_state
     SET
       refresh_status = 'idle',
@@ -354,7 +375,9 @@ const releaseStaleLargeRebuildClaims = async (rows: StaleLargeRebuildClaimRow[])
       AND superseded_at IS NULL
       AND lease_expires_at IS NOT NULL
       AND lease_expires_at < NOW()
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const getStaleLegacyClaimProjectIds = (input: {

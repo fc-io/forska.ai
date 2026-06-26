@@ -1,7 +1,9 @@
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 
 const bucketCount = 128
+const workloadContext = getMaintenanceDuckdbWorkloadContext('backfillArticleSourceMetadata')
 
 const getNormalizedSourceSql = (expression: string) => {
   return `CASE
@@ -87,12 +89,15 @@ const isPreprintSql = `(
 const fullTextLinksSql = `coalesce(json_extract(original_data, '$.fullTextUrlList.fullTextUrl'), json('[]'))`
 
 const getRemainingCount = async () => {
-  const [row] = await getAppDatabaseService().queryJson<{remainingCount: number}>(`
+  const [row] = await getAppDatabaseService().queryJson<{remainingCount: number}>(
+    `
     SELECT COUNT(*) AS remainingCount
     FROM app.article
     WHERE source_metadata IS NULL
       AND original_data IS NOT NULL
-  `)
+  `,
+    workloadContext,
+  )
 
   return Number(row?.remainingCount ?? 0)
 }
@@ -127,7 +132,7 @@ const processBucket = async (bucketIndex: number): Promise<void> => {
   }
 
   console.log(`[backfillArticleSourceMetadata] bucket ${bucketIndex + 1}/${bucketCount}`)
-  await getAppDatabaseService().run(getBackfillBucketSql(bucketIndex))
+  await getAppDatabaseService().run(getBackfillBucketSql(bucketIndex), workloadContext)
 
   if ((bucketIndex + 1) % 8 === 0 || bucketIndex === bucketCount - 1) {
     console.log(`[backfillArticleSourceMetadata] remaining rows: ${await getRemainingCount()}`)
@@ -146,9 +151,9 @@ const runBackfillArticleSourceMetadata = async () => {
     }
 
     console.log(`[backfillArticleSourceMetadata] rows before backfill: ${beforeCount}`)
-    await getAppDatabaseService().run('SET threads = 4')
+    await getAppDatabaseService().run('SET threads = 4', workloadContext)
     await processBucket(0)
-    await getAppDatabaseService().maintenance('checkpoint')
+    await getAppDatabaseService().maintenance('checkpoint', workloadContext)
     console.log(`[backfillArticleSourceMetadata] rows after backfill: ${await getRemainingCount()}`)
   })
 }

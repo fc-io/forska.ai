@@ -21,7 +21,7 @@ export const reviewServingResidualReadAllowlist = [
       'FROM app.project_article',
       'FROM app.project_mart_refresh_state',
       'FROM app.project_mart_large_rebuild_state',
-      'INNER JOIN app.judgment judgment',
+      'getReviewServingDiagnostics({projectId',
     ],
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts',
   },

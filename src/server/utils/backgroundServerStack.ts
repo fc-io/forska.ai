@@ -4,6 +4,7 @@ import {totalmem} from 'node:os'
 import {DuckDBInstance} from '@duckdb/node-api'
 
 import {DEFAULT_API_SERVER_PORT} from '../../utils/runtimePortDefaults.ts'
+import {getReadOnlyDuckdbRuntimeOptions} from './duckdbService.ts'
 import {getConfiguredDuckdbPath} from './getDuckdbPath.ts'
 import {type LocalAppSettings, readLocalAppSettings} from './localAppSettings.ts'
 
@@ -98,7 +99,7 @@ const getStoredBackgroundMaintenanceDuckdbMemoryLimitFromDb = async (
   let duckdbInstance: DuckDBInstance | null = null
 
   try {
-    duckdbInstance = await DuckDBInstance.create(duckdbPath, {access_mode: 'READ_ONLY'})
+    duckdbInstance = await DuckDBInstance.create(duckdbPath, getReadOnlyDuckdbRuntimeOptions())
     const connection = await duckdbInstance.connect()
     const reader = await connection.runAndReadAll(`
       SELECT maintenance_worker_duckdb_memory_limit AS value

@@ -3,7 +3,9 @@ import {join, relative} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
+import {reviewServingAdjacentRouteClassifications} from './reviewServingAdjacentRouteSurfaces.ts'
 import {getReviewServingReadContract} from './reviewServingReadContracts.ts'
+import {reviewServingResidualReadAllowlist} from './reviewServingResidualReadAllowlist.ts'
 import {
   assertReviewServingSqlShape,
   buildReviewServingRowsSql,
@@ -17,11 +19,22 @@ const reviewServingSourceRoot = import.meta.dir
 const sqlGuardDefinitionFile = join(reviewServingSourceRoot, 'reviewServingSqlForbiddenPatterns.ts')
 const sqlGuardExcludedFiles = new Set([
   sqlGuardDefinitionFile,
+  join(reviewServingSourceRoot, 'reviewServingChunkManifestRepository.ts'),
+  join(reviewServingSourceRoot, 'reviewServingRebuildRequestRepository.ts'),
   join(reviewServingSourceRoot, 'reviewServingRetentionService.ts'),
   join(reviewServingSourceRoot, 'reviewServingReviewConfig.ts'),
   join(reviewServingSourceRoot, 'reviewServingDiagnosticsRepository.ts'),
+  join(reviewServingSourceRoot, 'reviewServingJudgmentJobQueueService.ts'),
   join(reviewServingSourceRoot, 'reviewServingResidualReadAllowlist.ts'),
+  join(reviewServingSourceRoot, 'reviewServingV4RebuildRequestService.ts'),
 ])
+const reviewServingMaintenanceAdmissionFiles = [
+  'reviewServingChunkManifestRepository.ts',
+  'reviewServingJudgmentJobQueueService.ts',
+  'reviewServingRebuildRequestRepository.ts',
+  'reviewServingV4RebuildRequestService.ts',
+] as const
+const workspaceRoot = process.cwd()
 
 const getRequiredReviewServingReadContract = (contractKey: string) => {
   const contract = getReviewServingReadContract(contractKey)
@@ -1008,4 +1021,106 @@ test('reviewServing read source files are statically guarded without scanning pr
   })
 
   expect(sourceViolations).toEqual([])
+})
+
+test('reviewServing SQL guard exclusions are classified maintenance or admission code', () => {
+  const excludedReviewServingFiles = [...sqlGuardExcludedFiles].map((filePath) => {
+    return relative(reviewServingSourceRoot, filePath)
+  })
+  const expectedExcludedFiles = [...reviewServingMaintenanceAdmissionFiles, 'reviewServingResidualReadAllowlist.ts']
+
+  expectedExcludedFiles.forEach((fileName) => {
+    expect(excludedReviewServingFiles).toContain(fileName)
+  })
+})
+
+test('mounted review residual reads are explicitly allowlisted', () => {
+  const violations = reviewServingResidualReadAllowlist.flatMap((entry) => {
+    const fileText = readFileSync(join(workspaceRoot, entry.routeFile), 'utf8')
+    const missingMarkers = entry.allowedMarkers.filter((marker) => {
+      return !fileText.includes(marker)
+    })
+
+    return missingMarkers.map((marker) => {
+      return `${entry.routeFile}: missing residual read marker ${marker}`
+    })
+  })
+
+  expect(violations).toEqual([])
+})
+
+test('judgment job foreground routes do not import legacy OLAP unassessed helpers', () => {
+  const routeText = readFileSync(join(workspaceRoot, 'src/server/routes/JudgmentsJobsRoutes.ts'), 'utf8')
+  const cronText = readFileSync(
+    join(workspaceRoot, 'src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts'),
+    'utf8',
+  )
+
+  expect(routeText).not.toContain('getUnassessedCountFromOlap')
+  expect(routeText).not.toContain('getUnassessedArticlesFromOlap')
+  expect(cronText).not.toContain('getUnassessedPairsFromOlap')
+  expect(routeText).toContain('getJudgmentJobUnassessedCountFromServing')
+  expect(cronText).toContain('getJudgmentJobUnassessedPairsFromServing')
+})
+
+test('duckdbOlap imports stay quarantined away from normal review and judgment job foreground paths', () => {
+  const allowedImportFiles = new Set([
+    'src/services/olap/articlesReviewsBothOlap.ts',
+    'src/services/olap/articlesReviewsFiltersOlap.ts',
+    'src/services/olap/articlesReviewsOlap.ts',
+    'src/services/olap/selectArticleIdsOlap.ts',
+    'src/services/olap/unassessedArticlesOlap.ts',
+  ])
+  const candidateFiles = [
+    ...reviewServingAdjacentRouteClassifications.map((entry) => {
+      return entry.routeFile
+    }),
+    ...reviewServingResidualReadAllowlist.map((entry) => {
+      return entry.routeFile
+    }),
+    'src/server/routes/JudgmentsJobsRoutes.ts',
+    'src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts',
+  ]
+  const violations = [...new Set(candidateFiles)].filter((routeFile) => {
+    return (
+      !allowedImportFiles.has(routeFile) && readFileSync(join(workspaceRoot, routeFile), 'utf8').includes('duckdbOlap')
+    )
+  })
+
+  expect(violations).toEqual([])
+})
+
+test('mounted review and job foreground DuckDB calls use serving readers or explicit residual classifications', () => {
+  const allowedRouteFiles = new Set<string>([
+    ...reviewServingResidualReadAllowlist.map((entry) => {
+      return entry.routeFile
+    }),
+    ...reviewServingAdjacentRouteClassifications
+      .filter((entry) => {
+        return entry.excludedFromNormalReviewFlow
+      })
+      .map((entry) => {
+        return entry.routeFile
+      }),
+  ])
+  const routeFiles = [
+    ...reviewServingAdjacentRouteClassifications.map((entry) => {
+      return entry.routeFile
+    }),
+    ...reviewServingResidualReadAllowlist.map((entry) => {
+      return entry.routeFile
+    }),
+    'src/server/routes/JudgmentsJobsRoutes.ts',
+  ]
+  const violations = [...new Set(routeFiles)].filter((routeFile) => {
+    const fileText = readFileSync(join(workspaceRoot, routeFile), 'utf8')
+    const hasGenericDuckdbCall =
+      /get(?:AppDatabaseService|ApiReadOnlyAppDatabaseService|JudgeWorkerReadOnlyAppDatabaseService)\(\)/u.test(
+        fileText,
+      )
+
+    return hasGenericDuckdbCall && !allowedRouteFiles.has(routeFile) && !fileText.includes('readReviewServingRows')
+  })
+
+  expect(violations).toEqual([])
 })

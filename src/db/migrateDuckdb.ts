@@ -3,9 +3,11 @@ import {resolve} from 'path'
 
 import {getAppDatabaseService} from '../server/services/appDatabaseService.ts'
 import {withDuckdbMaintenanceAccess} from '../server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../server/utils/duckdbService.ts'
 import {getEnv} from '../server/utils/env.ts'
 
 const migrationsFolder = resolve(import.meta.dir, 'duckdbMigrations')
+const workloadContext = getMaintenanceDuckdbWorkloadContext('migrateDuckdb')
 
 const nonTransactionalDuckdbMigrationFiles = new Set([
   '0013_rebuildArticleWithoutOpenalexId.sql',
@@ -53,7 +55,7 @@ const getChainedDuckdbMigrationError = (error: unknown, nextError: unknown, cont
 
 const getDuckdbMigrationRollbackError = async () => {
   try {
-    await getAppDatabaseService().run('ROLLBACK')
+    await getAppDatabaseService().run('ROLLBACK', workloadContext)
     return null
   } catch (error) {
     return getNormalizedDuckdbMigrationError(error)
@@ -61,27 +63,36 @@ const getDuckdbMigrationRollbackError = async () => {
 }
 
 const insertDuckdbMigrationName = async (fileName: string) => {
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     INSERT INTO app_schema_migration (name)
     VALUES ('${escapeSqlString(fileName)}')
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const ensureDuckdbMigrationsTable = async () => {
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     CREATE TABLE IF NOT EXISTS app_schema_migration (
       name VARCHAR PRIMARY KEY,
       applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const getAppliedDuckdbMigrationNames = async () => {
-  const rows = await getAppDatabaseService().queryJson<{name: string}>(`
+  const rows = await getAppDatabaseService().queryJson<{name: string}>(
+    `
     SELECT name
     FROM app_schema_migration
     ORDER BY name ASC
-  `)
+  `,
+    workloadContext,
+  )
 
   return new Set(
     rows.map((row) => {
@@ -99,15 +110,15 @@ const applyDuckdbMigrationFile = async (fileName: string) => {
   }
 
   if (nonTransactionalDuckdbMigrationFiles.has(fileName)) {
-    await getAppDatabaseService().run(sqlText)
+    await getAppDatabaseService().run(sqlText, workloadContext)
     return insertDuckdbMigrationName(fileName)
   }
 
   try {
-    await getAppDatabaseService().run('BEGIN TRANSACTION')
-    await getAppDatabaseService().run(sqlText)
+    await getAppDatabaseService().run('BEGIN TRANSACTION', workloadContext)
+    await getAppDatabaseService().run(sqlText, workloadContext)
     await insertDuckdbMigrationName(fileName)
-    await getAppDatabaseService().run('COMMIT')
+    await getAppDatabaseService().run('COMMIT', workloadContext)
   } catch (error) {
     const rollbackError = await getDuckdbMigrationRollbackError()
 
@@ -143,7 +154,7 @@ export const migrateDuckdb = async (): Promise<void> => {
 
   await ensureDuckdbMigrationsTable()
   await applyDuckdbMigrationFiles(migrationFiles, await getAppliedDuckdbMigrationNames())
-  await getAppDatabaseService().maintenance('checkpoint')
+  await getAppDatabaseService().maintenance('checkpoint', workloadContext)
 
   console.log('[db:duck:mig] DuckDB migrations applied successfully')
 }
