@@ -1,6 +1,7 @@
 import {Effect} from 'effect'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {
   claimReviewServingDirtyWork,
@@ -135,9 +136,24 @@ const defaultComponentOrder: readonly ReviewServingProjectionComponent[] = [
   'payload',
   'summary',
 ]
+const projectorFailureLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 
-const getDiagnostic = (error: unknown) => {
-  return error instanceof Error ? error.message : String(error)
+const getDiagnosticCause = (error: unknown) => {
+  if (typeof error !== 'object' || error === null) {
+    return null
+  }
+
+  const cause = 'cause' in error ? (error as {cause?: unknown}).cause : null
+  const nestedError = 'error' in error ? (error as {error?: unknown}).error : null
+
+  return cause ?? nestedError
+}
+
+const getDiagnostic = (error: unknown): string => {
+  const cause = getDiagnosticCause(error)
+  const message = error instanceof Error ? error.message : String(error)
+
+  return cause === null || cause === undefined ? message : `${message}: ${getDiagnostic(cause)}`
 }
 
 const getBlockedRebuildRequests = (requests: readonly ReviewServingRebuildRequest[]) => {
@@ -190,8 +206,40 @@ const getClaimProjectIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   ]
 }
 
+const logDirtyWorkProjectorFailure = (input: {
+  claimIds: readonly string[]
+  claims: readonly ReviewServingDirtyWorkClaim[]
+  component: ReviewServingProjectionComponent
+  diagnostic: string
+}) => {
+  return projectorFailureLogger.warn(
+    `review-serving-projector:dirty-work-failed:${input.component}`,
+    '[reviewServingProjector] dirty work failed',
+    {
+      claimIds: input.claimIds,
+      component: input.component,
+      diagnostic: input.diagnostic,
+      claims: input.claims.map((claim) => {
+        return {
+          dirtyKind: claim.dirtyKind,
+          dirtyWorkId: claim.dirtyWorkId,
+          latestSourceHighWaterMark: claim.latestSourceHighWaterMark,
+          projectId: claim.projectId,
+          projectionIdentity: claim.projectionIdentity,
+          scopeId: claim.scopeId,
+          sourcePartition: claim.sourcePartition,
+        }
+      }),
+    },
+  )
+}
+
 const isMissingSnapshotDiagnostic = (diagnostic: string) => {
-  return diagnostic.includes('cannot run projector without a candidate or active snapshot')
+  return (
+    diagnostic.includes('cannot run projector without a candidate or active snapshot')
+    || diagnostic.includes('cannot run projector without selected import snapshot id')
+    || diagnostic.includes('selected import snapshot is not completed')
+  )
 }
 
 const getClaimInputWatermarks = (claim: ReviewServingDirtyWorkClaim): ReviewServingSourcePartitionWatermarks => {
@@ -464,7 +512,9 @@ export const wakeReviewServingProjectorService = async (
           )
 
           if (rebuildResult._tag === 'Left') {
+            const rebuildDiagnostic = getDiagnostic(rebuildResult.left)
             await failDirtyWork(claimIds, database)
+            logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic: rebuildDiagnostic})
 
             return {
               ...state,
@@ -474,7 +524,7 @@ export const wakeReviewServingProjectorService = async (
                   attempts: budget.maxRetries + 1,
                   claimIds,
                   component,
-                  diagnostic: getDiagnostic(rebuildResult.left),
+                  diagnostic: rebuildDiagnostic,
                   status: 'failed' as const,
                 },
               ],
@@ -485,7 +535,9 @@ export const wakeReviewServingProjectorService = async (
           const blockedRebuildRequests = getBlockedRebuildRequests(rebuildResult.right)
 
           if (blockedRebuildRequests.length > 0) {
+            const blockedDiagnostic = getBlockedRebuildRequestDiagnostic(blockedRebuildRequests)
             await failDirtyWork(claimIds, database)
+            logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic: blockedDiagnostic})
 
             return {
               ...state,
@@ -495,7 +547,7 @@ export const wakeReviewServingProjectorService = async (
                   attempts: budget.maxRetries + 1,
                   claimIds,
                   component,
-                  diagnostic: getBlockedRebuildRequestDiagnostic(blockedRebuildRequests),
+                  diagnostic: blockedDiagnostic,
                   status: 'failed' as const,
                 },
               ],
@@ -509,6 +561,7 @@ export const wakeReviewServingProjectorService = async (
         }
 
         await failDirtyWork(claimIds, database)
+        logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic})
 
         return {
           ...state,

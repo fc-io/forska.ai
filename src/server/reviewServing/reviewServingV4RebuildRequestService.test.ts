@@ -236,6 +236,17 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     }
 
     if (statement.includes('FROM app.review_rebuild_request')) {
+      if (statement.includes("status IN ('admitted', 'running')")) {
+        const projectId = getSqlStrings(statement)[0] ?? ''
+        const activeRequest = Array.from(requests.values()).find((request) => {
+          return (
+            request.projectId === projectId && request.status === 'admitted' && request.admissionState === 'admitted'
+          )
+        })
+
+        return (activeRequest === undefined ? [] : [activeRequest]) as T[]
+      }
+
       const requestId = getSqlStrings(statement)[0] ?? ''
       const request = requests.get(requestId)
 
@@ -365,6 +376,23 @@ test('V4 rebuild request service keeps selected-import bootstrap chunks on impor
     /'selectedImport',\s*'[^']+',\s*'freshReviewServingSnapshot',\s*4,\s*'article-a'/u,
   )
   expect(projectScopeChunk).toMatch(/'projectScope',\s*'[^']+',\s*'freshReviewServingSnapshot',\s*10,\s*'article-a'/u)
+})
+
+test('V4 missing snapshot rebuild requests reuse active admitted work', async () => {
+  const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
+
+  const firstRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const secondRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const rebuildRequestInsertCount = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_request')
+  }).length
+
+  expect(secondRequest.requestId).toBe(firstRequest.requestId)
+  expect(rebuildRequestInsertCount).toBe(1)
 })
 
 test('V4 rebuild request service does not seed candidate state for over-budget bootstraps', async () => {

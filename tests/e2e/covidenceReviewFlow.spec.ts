@@ -11,6 +11,23 @@ import {
 } from './covidenceImportFixtures'
 
 type CovidenceCreateResponse = {data: {covidenceProject: {id: string} | null; dataSource: {id: string}}}
+type ReviewsWarningsResponse = {
+  data: {
+    indexing: {
+      pendingRefreshCount: number
+      progressState: string
+      serving: {
+        diagnostics: {
+          dirtyWork: {failedCount: number; pendingCount: number; runningCount: number}
+          rebuildChunks: {failedCount: number; pendingCount: number; runningCount: number}
+          snapshot: {activeCount: number; candidateCount: number; failedCount: number}
+        }
+        readable: boolean
+      }
+      status: string
+    }
+  }
+}
 
 const apiBaseUrl = 'http://127.0.0.1:43101'
 
@@ -104,8 +121,34 @@ const createCovidenceReviewFlowProject = async (projectTitle: string) => {
   return {dataSourceId: payload.data.dataSource.id, projectId}
 }
 
+const waitForReviewServingReadiness = async (projectId: string, deadlineMs: number): Promise<void> => {
+  const response = await fetch(`${apiBaseUrl}/api/projectsreviewswarnings`, {
+    body: JSON.stringify({projectId}),
+    headers: {'content-type': 'application/json'},
+    method: 'POST',
+  })
+  const payload = await assertOk<ReviewsWarningsResponse>(response, 'Failed to load review serving readiness')
+
+  if (payload.data.indexing.serving.readable) {
+    return
+  }
+
+  if (Date.now() >= deadlineMs) {
+    const serving = payload.data.indexing.serving.diagnostics
+    throw new Error(
+      `Review serving did not become readable: ${payload.data.indexing.status}/${payload.data.indexing.progressState}, pending ${payload.data.indexing.pendingRefreshCount}, dirty ${serving.dirtyWork.pendingCount}/${serving.dirtyWork.runningCount}/${serving.dirtyWork.failedCount}, chunks ${serving.rebuildChunks.pendingCount}/${serving.rebuildChunks.runningCount}/${serving.rebuildChunks.failedCount}, snapshots ${serving.snapshot.activeCount}/${serving.snapshot.candidateCount}/${serving.snapshot.failedCount}`,
+    )
+  }
+
+  await new Promise((resolve) => {
+    setTimeout(resolve, 2000)
+  })
+
+  return waitForReviewServingReadiness(projectId, deadlineMs)
+}
+
 test('Covidence review flow preserves scoped source ids, filters, related records, and PDF fetch', async ({page}) => {
-  test.setTimeout(120_000)
+  test.setTimeout(360_000)
 
   const browserFailures = createBrowserFailureAssertions(page)
   const existingAssetDirectories = getCovidenceImportAssetDirectories()
@@ -115,6 +158,7 @@ test('Covidence review flow preserves scoped source ids, filters, related record
     const {dataSourceId, projectId} = await createCovidenceReviewFlowProject(projectTitle)
     const expectedExternalId = `covidence:${dataSourceId}:covidence%3A%231002`
 
+    await waitForReviewServingReadiness(projectId, Date.now() + 300_000)
     await page.goto(`/projects/${projectId}/reviews-human`)
 
     await expect(page.getByRole('heading', {name: 'Project Reviews'})).toBeVisible()
