@@ -1,6 +1,9 @@
 import {Elysia, t} from 'elysia'
 
-import {getReviewServingDiagnostics} from '../../reviewServing/reviewServingDiagnosticsRepository.ts'
+import {
+  getReviewServingDiagnostics,
+  type ReviewServingDiagnostics,
+} from '../../reviewServing/reviewServingDiagnosticsRepository.ts'
 import {readReviewServingRows} from '../../reviewServing/reviewServingReader.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
@@ -718,12 +721,31 @@ const getHasActiveLease = (leaseExpiresAt: string | null, now: Date) => {
   return leaseExpiresAt !== null && new Date(leaseExpiresAt) > now
 }
 
+const getHasReviewServingStateThatCanProgress = (diagnostics: ReviewServingDiagnostics) => {
+  return (
+    diagnostics.dirtyWork.failedCount
+      + diagnostics.dirtyWork.pendingCount
+      + diagnostics.dirtyWork.runningCount
+      + diagnostics.rebuildChunks.blockedOverBudgetCount
+      + diagnostics.rebuildChunks.failedCount
+      + diagnostics.rebuildChunks.pendingCount
+      + diagnostics.rebuildChunks.quarantinedCount
+      + diagnostics.rebuildChunks.runningCount
+      + diagnostics.snapshot.activeCount
+      + diagnostics.snapshot.candidateCount
+      + diagnostics.snapshot.failedCount
+      + diagnostics.snapshot.retiredCount
+    > 0
+  )
+}
+
 const getReviewsIndexingStatus = (params: {
   activeWorkCount: number
   enabledPromptCount: number
   hasFailedRefresh: boolean
   hasAnyArticlesInScope: boolean
   hasReviewRollupRows: boolean
+  hasReviewServingStateThatCanProgress: boolean
   hasUnresolvedQuarantineBarrier: boolean
   eligibleConsumerPresent: boolean
   pendingRefreshCount: number
@@ -742,7 +764,9 @@ const getReviewsIndexingStatus = (params: {
             ? 'refreshing'
             : params.hasReviewRollupRows
               ? 'ready'
-              : 'stale'
+              : !params.hasReviewServingStateThatCanProgress
+                ? 'ready'
+                : 'stale'
 }
 
 const getReviewsIndexingProgressState = (params: {
@@ -809,6 +833,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       warningSnapshot.status === 'accepted'
       && isUsableReviewServingWarningSnapshot(warningSnapshot.diagnostics.manifest.status)
     const hasReadableReviewServingRows = warningSnapshot.status === 'accepted'
+    const hasReviewServingStateThatCanProgress = getHasReviewServingStateThatCanProgress(servingDiagnostics)
     const projectRefreshState = initialProjectRefreshState
     const projectLargeRebuildState = initialProjectLargeRebuildState
     const pendingArticleRefreshInfo = initialPendingArticleRefreshInfo
@@ -853,27 +878,40 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       || (shouldCurrentServerRunMaintenanceLoops() && shouldCurrentRuntimeRunMartRefreshDrain())
     const legacyRefreshConsumerPresent =
       maintenanceConsumerAvailability.eligibleConsumerPresent || canRunMartRefreshDrain
-    const isProjectRunning =
+    const hasLegacyRefreshWorkThatMustBeReported =
       freshProjectRefreshLeaseCount > 0
+      || freshArticleRefreshLeaseCount > 0
       || projectRefreshState.dirtyMaterialization.isActive
-      || (!projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'running' && hasActiveProjectLease)
+      || projectRefreshState.hasUnresolvedQuarantineBarrier
+      || projectRefreshState.refreshStatus === 'failed'
+      || isLargeRebuildRunning
+      || isLargeRebuildQueued
+    const shouldReportLegacyRefreshWork =
+      hasReviewServingRows || hasReviewServingStateThatCanProgress || hasLegacyRefreshWorkThatMustBeReported
+    const isProjectRunning =
+      shouldReportLegacyRefreshWork
+      && (freshProjectRefreshLeaseCount > 0
+        || projectRefreshState.dirtyMaterialization.isActive
+        || (!projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'running' && hasActiveProjectLease))
     const rawInFlightProjectRefreshCount = isProjectRunning ? 1 : isLargeRebuildRunning ? 1 : 0
     const inFlightProjectRefreshCount = rawInFlightProjectRefreshCount
     const queuedProjectRefreshCount =
-      projectRefreshState.isFresh && !hasReportableLargeRebuild && !isProjectRunning
+      !shouldReportLegacyRefreshWork || (projectRefreshState.isFresh && !hasReportableLargeRebuild && !isProjectRunning)
         ? 0
         : isLargeRebuildQueued
           ? 1
           : getNonNegativeDifference(1, inFlightProjectRefreshCount)
-    const rawInFlightArticleRefreshCount =
-      freshArticleRefreshLeaseCount > 0
+    const rawInFlightArticleRefreshCount = !shouldReportLegacyRefreshWork
+      ? 0
+      : freshArticleRefreshLeaseCount > 0
         ? freshArticleRefreshLeaseCount
         : isProjectRunning
           ? pendingArticleRefreshInfo.queuedRefreshCount
           : 0
     const inFlightArticleRefreshCount = rawInFlightArticleRefreshCount
-    const queuedArticleRefreshCount =
-      freshArticleRefreshLeaseCount > 0
+    const queuedArticleRefreshCount = !shouldReportLegacyRefreshWork
+      ? 0
+      : freshArticleRefreshLeaseCount > 0
         ? getNonNegativeDifference(pendingArticleRefreshInfo.queuedRefreshCount, freshArticleRefreshLeaseCount)
         : isProjectRunning
           ? 0
@@ -912,9 +950,10 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       pendingRefreshCount,
     })
     const hasFailedRefresh =
-      (!projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'failed')
-      || projectRefreshState.dirtyMaterialization.failedCount > 0
-      || projectRefreshState.dirtyMaterialization.unreconciledCount > 0
+      (shouldReportLegacyRefreshWork
+        && ((!projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'failed')
+          || projectRefreshState.dirtyMaterialization.failedCount > 0
+          || projectRefreshState.dirtyMaterialization.unreconciledCount > 0))
       || terminalRebuildChunkCount > 0
     const indexingStatus = getReviewsIndexingStatus({
       activeWorkCount,
@@ -923,6 +962,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       hasFailedRefresh,
       hasAnyArticlesInScope,
       hasReviewRollupRows: hasReviewServingRows,
+      hasReviewServingStateThatCanProgress,
       hasUnresolvedQuarantineBarrier: projectRefreshState.hasUnresolvedQuarantineBarrier,
       pendingRefreshCount,
     })

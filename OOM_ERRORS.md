@@ -16,9 +16,9 @@ Entry format:
 
 - Error: `warning response returned stalled review indexing: progressState=stalled, status=stale, pendingRefreshCount=0, queuedRefreshCount=0, inFlightRefreshCount=0, activeWorkCount=0`.
 - Context: Current-DB `bun run test:network-smoke:current-db` probing `POST /api/projectsreviewswarnings` for project `8e26a3a8-2797-41da-864e-2c6cec7615c4`.
-- Cause: The warning route treated accepted retired V4 serving manifests as readable but not usable, so last-known-good serving state with no pending work was reported as stalled indexing.
-- Fix: Warning health now classifies accepted active or retired V4 serving manifests as usable while candidate, failed, missing, pending, and failed work states still drive their own health.
-- Verification: `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts`.
+- Cause: The warning route treated accepted retired V4 serving manifests as readable but not usable, and then still classified no-current-V4-state projects as stalled or queueable based on retired legacy dirty-refresh/large-rebuild rows that warning reads must not repair.
+- Fix: Warning health now classifies accepted active or retired V4 serving manifests as usable, treats no-current-V4-state warning health as completed indexing while keeping missing V4 serving diagnostics marked unreadable/unusable, and only reports legacy refresh counters when usable/current V4 state exists or active/blocking legacy work must still be surfaced.
+- Verification: `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts`; `bun run test:network-smoke:current-db`.
 
 ## 2026-06-25 - Current DB Warning Legacy Rebuild State
 

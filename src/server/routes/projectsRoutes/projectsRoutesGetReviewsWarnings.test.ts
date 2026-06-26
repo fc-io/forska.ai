@@ -1031,7 +1031,7 @@ test('reviews warnings expose quarantined article refreshes without pending heal
   expect(body.data.indexing.status).toBe('blocked')
 })
 
-test('reviews warnings report stale state without queueing repair for missing legacy judgment facts', async () => {
+test('reviews warnings report completed indexing without queueing repair for idle fresh missing legacy judgment facts', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
@@ -1099,8 +1099,9 @@ test('reviews warnings report stale state without queueing repair for missing le
   expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
   expect(body.data.indexing.queuedArticleRefreshCount).toBe(0)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
-  expect(body.data.indexing.progressState).toBe('stalled')
-  expect(body.data.indexing.status).toBe('stale')
+  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
+  expect(body.data.indexing.status).toBe('ready')
 })
 
 test('reviews warnings report refreshing from ledger and worker progress state', async () => {
@@ -1118,6 +1119,12 @@ test('reviews warnings report refreshing from ledger and worker progress state',
     lastStartedAt: '2026-04-02T12:05:00.000Z',
     leaseExpiresAt: '2035-04-02T12:05:30.000Z',
     refreshStatus: 'running',
+  })
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-refreshing-warning',
   })
   await insertDirtyArticleRefreshState(projectId, `article-${projectId}`, 2)
   setProgressSnapshotForTests({
@@ -1159,6 +1166,12 @@ test('reviews warnings count only dirty articles still in live project scope', a
 
   await insertProjectFixture(projectId)
   await insertProjectRefreshState(projectId, {dirtyToken: 2, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-live-scope-dirty-warning',
+  })
   await runDatabase(`
     INSERT INTO app.import_route (id, route, name, active)
     VALUES ('route-${projectId}', 'route-${projectId}', 'Live Scope Route', TRUE)
@@ -1187,7 +1200,7 @@ test('reviews warnings count only dirty articles still in live project scope', a
   expect(body.data.indexing.status).toBe('refreshing')
 })
 
-test('reviews warnings report stale state without queueing a large rebuild when serving is missing', async () => {
+test('reviews warnings report completed indexing without queueing a large rebuild when fresh idle serving is missing', async () => {
   const projectId = 'project-missing-serving-bootstrap-warning'
 
   await insertProjectFixture(projectId)
@@ -1198,9 +1211,47 @@ test('reviews warnings report stale state without queueing a large rebuild when 
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
   expect(body.data.indexing.largeRebuild).toBe(null)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
-  expect(body.data.indexing.progressState).toBe('stalled')
+  expect(body.data.indexing.progressState).toBe('completed')
   expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
-  expect(body.data.indexing.status).toBe('stale')
+  expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
+  expect(body.data.indexing.status).toBe('ready')
+})
+
+test('reviews warnings do not report stalled indexing for fresh idle route scope without V4 state', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-fresh-idle-route-scope-missing-v4-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 4, lastCompletedDirtyToken: 4, refreshStatus: 'idle'})
+  await runDatabase(`
+    DELETE FROM app.project_article
+    WHERE project_id = '${projectId}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.import_route (id, route, name, active)
+    VALUES ('route-${projectId}', 'route-${projectId}', 'Route Scope', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_import_route (id, project_id, import_route_id)
+    VALUES ('project-route-${projectId}', '${projectId}', 'route-${projectId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article_import_route (id, article_id, import_route_id)
+    VALUES ('article-route-${projectId}', 'article-${projectId}', 'route-${projectId}')
+  `)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
+  expect(body.data.indexing.freshness.isFresh).toBe(true)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
+  expect(body.data.indexing.status).toBe('ready')
 })
 
 test('reviews warnings do not bootstrap missing serving rows for archived prompt links', async () => {
@@ -1381,6 +1432,12 @@ test('reviews warnings report active project-scoped claims without inferring unr
     refreshStatus: 'running',
     workerId: 'maintenance-worker-active-claim',
   })
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-active-claim-warning',
+  })
   await insertDirtyArticleRefreshState(projectId, `article-${projectId}`, 2)
 
   const {body, response} = await withCurrentServerRoleOverride('api', () => {
@@ -1436,6 +1493,12 @@ test('reviews warnings treat expired running leases as queued instead of in-flig
     leaseExpiresAt: '2026-04-02T12:05:30.000Z',
     refreshStatus: 'running',
   })
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-expired-lease-warning',
+  })
   await insertDirtyArticleRefreshState(projectId, `article-${projectId}`, 2)
 
   const {body, response} = await postWarningsRequest(projectId)
@@ -1462,6 +1525,12 @@ test('reviews warnings report blocked when pending work has no local refresh con
     lastCompletedDirtyToken: 1,
     lastRequestedAt: '2026-04-02T12:00:00.000Z',
     refreshStatus: 'idle',
+  })
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-blocked-no-consumer-warning',
   })
 
   const {body, response} = await withCurrentServerRoleOverride('api', () => {
@@ -1493,6 +1562,12 @@ test('reviews warnings report blocked when memory policy disables mart refresh d
       lastCompletedDirtyToken: 1,
       lastRequestedAt: '2026-04-02T12:00:00.000Z',
       refreshStatus: 'idle',
+    })
+    await insertActiveReviewServingManifest({
+      includeSearchState: false,
+      optionalComponents: [],
+      projectId,
+      snapshotId: 'snapshot-blocked-low-memory-warning',
     })
 
     const {body, response} = await postWarningsRequest(projectId)
@@ -1851,8 +1926,9 @@ test('reviews warnings ignore failed legacy large rebuild state in normal indexi
   expect(body.data.indexing.largeRebuild).toBe(null)
   expect(body.data.indexing.pendingProjectRefreshCount).toBe(0)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
-  expect(body.data.indexing.progressState).toBe('stalled')
-  expect(body.data.indexing.status).toBe('stale')
+  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
+  expect(body.data.indexing.status).toBe('ready')
 })
 
 test('reviews warnings keep active serving ready when legacy large rebuild has failed', async () => {
