@@ -728,7 +728,30 @@ const postWarningsRequest = async (projectId: string) => {
     }),
   )
 
-  return {body: (await response.json()) as ReviewsWarningsResponse, response}
+  const responseText = await response.text()
+  try {
+    return {body: JSON.parse(responseText) as ReviewsWarningsResponse, response}
+  } catch (error) {
+    throw new Error(`Failed to parse warnings response ${response.status}: ${responseText}`, {cause: error})
+  }
+}
+
+const withServerMutationsDisabled = async <_T>(work: () => Promise<_T>) => {
+  const {resetDuckdbOwnerConnectionsForTests} = await import('../../utils/duckdbOwnerConnections.ts')
+  const previousValue = process.env.FORSKA_DISABLE_SERVER_MUTATIONS
+  process.env.FORSKA_DISABLE_SERVER_MUTATIONS = 'true'
+  await resetDuckdbOwnerConnectionsForTests()
+
+  try {
+    return await work()
+  } finally {
+    if (previousValue === undefined) {
+      delete process.env.FORSKA_DISABLE_SERVER_MUTATIONS
+    } else {
+      process.env.FORSKA_DISABLE_SERVER_MUTATIONS = previousValue
+    }
+    await resetDuckdbOwnerConnectionsForTests()
+  }
 }
 
 beforeAll(async () => {
@@ -1020,7 +1043,6 @@ test('reviews warnings ignore superseded terminal V4 rebuild chunks', async () =
 
 test('reviews warnings treat expired V4 rebuild chunk leases as queued instead of in-flight', async () => {
   const projectId = 'project-v4-expired-rebuild-lease-warning'
-  const {withCurrentServerRoleOverride} = await import('../../utils/serverRuntimeRole.ts')
 
   await insertProjectFixture(projectId)
   await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
@@ -1041,7 +1063,7 @@ test('reviews warnings treat expired V4 rebuild chunk leases as queued instead o
     updatedAt: '2026-04-02T12:01:00.000Z',
   })
 
-  const {body, response} = await withCurrentServerRoleOverride('api', () => {
+  const {body, response} = await withServerMutationsDisabled(() => {
     return postWarningsRequest(projectId)
   })
 
@@ -1801,7 +1823,6 @@ test('reviews warnings report processing from fresh persisted article leases', a
 
 test('reviews warnings report active project-scoped claims without inferring unrelated consumers', async () => {
   const projectId = 'project-active-claim-warning'
-  const {withCurrentServerRoleOverride} = await import('../../utils/serverRuntimeRole.ts')
 
   await insertProjectFixture(projectId)
   await insertProjectRefreshState(projectId, {
@@ -1821,7 +1842,7 @@ test('reviews warnings report active project-scoped claims without inferring unr
   })
   await insertDirtyArticleRefreshState(projectId, `article-${projectId}`, 2)
 
-  const {body, response} = await withCurrentServerRoleOverride('api', () => {
+  const {body, response} = await withServerMutationsDisabled(() => {
     return postWarningsRequest(projectId)
   })
 
@@ -1926,7 +1947,6 @@ test('reviews warnings treat expired running leases as queued instead of in-flig
 
 test('reviews warnings report blocked when pending work has no local refresh consumer', async () => {
   const projectId = 'project-blocked-no-consumer-warning'
-  const {withCurrentServerRoleOverride} = await import('../../utils/serverRuntimeRole.ts')
 
   await insertProjectFixture(projectId)
   await insertProjectRefreshState(projectId, {
@@ -1942,7 +1962,7 @@ test('reviews warnings report blocked when pending work has no local refresh con
     snapshotId: 'snapshot-blocked-no-consumer-warning',
   })
 
-  const {body, response} = await withCurrentServerRoleOverride('api', () => {
+  const {body, response} = await withServerMutationsDisabled(() => {
     return postWarningsRequest(projectId)
   })
 

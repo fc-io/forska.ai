@@ -402,6 +402,7 @@ const canSplitRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
 
 const articleRangeRebuildChunkPresplitInputRowLimit = 50_000
 const splittableArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjectionComponent> = new Set([
+  'projectScope',
   'selectedImport',
   'display',
   'payload',

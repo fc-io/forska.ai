@@ -26,6 +26,7 @@ import {
 } from './runtimeCutover.ts'
 import type {RuntimeLogProfile} from './runtimeLogger.ts'
 import {getRuntimeProcessIdentity, type RuntimeProcessServiceName} from './runtimeProcessIdentity.ts'
+import {shouldDisableServerMutationWork} from './serverMutationMode.ts'
 import {getServerRoleCapabilities, isAutoServerRole, type ServerRole, type ServerRoleCapability} from './serverRole.ts'
 import {
   canCurrentServerOwnDuckdb,
@@ -230,11 +231,21 @@ const getCurrentMemoryLimit = () => {
   return String(process.env.DUCKDB_MEMORY_LIMIT ?? env.DUCKDB_MEMORY_LIMIT ?? '').trim() || null
 }
 
+const getCurrentServerRoleRegistryCapabilities = (serverRole: ServerRole) => {
+  const capabilities = getServerRoleCapabilities(serverRole)
+
+  return shouldDisableServerMutationWork()
+    ? capabilities.filter((capability) => {
+        return capability !== 'maintenance' && capability !== 'judging'
+      })
+    : capabilities
+}
+
 const getDefaultThroughputProfile = (
   serverRole: ServerRole,
   memoryLimit: string | null = getCurrentMemoryLimit(),
+  capabilities: ServerRoleCapability[] = getServerRoleCapabilities(serverRole),
 ): WorkerRegistryThroughputProfile => {
-  const capabilities = getServerRoleCapabilities(serverRole)
   const hasMaintenanceCapability = capabilities.includes('maintenance')
   const martRefreshDrainEligible =
     hasMaintenanceCapability && shouldRunMartRefreshDrainForDuckdbMemoryLimit(memoryLimit ?? undefined)
@@ -283,10 +294,11 @@ const getCurrentDuckdbOwnerConnectionIdentity = (): DuckdbOwnerConnectionIdentit
   const runtimeIdentity = getRuntimeProcessIdentity({listenPort: env.API_SERVER_PORT})
   const serverRole = getCurrentServerRole()
   const memoryLimit = getCurrentMemoryLimit()
+  const capabilities = getCurrentServerRoleRegistryCapabilities(serverRole)
 
   return {
     apiServerPort: env.API_SERVER_PORT,
-    capabilities: getServerRoleCapabilities(serverRole),
+    capabilities,
     hostname: runtimeIdentity.hostname,
     instanceId: runtimeIdentity.instanceId,
     listenPort: runtimeIdentity.listenPort,
@@ -298,7 +310,7 @@ const getCurrentDuckdbOwnerConnectionIdentity = (): DuckdbOwnerConnectionIdentit
     serverRole,
     service: runtimeIdentity.service,
     startedAt: runtimeIdentity.processStartedAt,
-    throughputProfile: getDefaultThroughputProfile(serverRole, memoryLimit),
+    throughputProfile: getDefaultThroughputProfile(serverRole, memoryLimit, capabilities),
     takeover: getDefaultTakeoverState(),
     duckdbOwnerUrl: getKnownDuckdbOwnerUrl() ?? (canCurrentServerOwnDuckdb() ? getCurrentDuckdbOwnerUrl() : null),
   }

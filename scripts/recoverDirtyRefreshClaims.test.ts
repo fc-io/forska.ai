@@ -424,15 +424,15 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
   )
 
   expect(result.recoverAttempted).toBe(true)
-  expect(result.status).toBe('recovered_with_failures')
+  expect(result.status).toBe('recovered')
   expect(result.recoveryResult).toMatchObject({
-    failedCount: 1,
-    failedProjects: [{projectId: 'recover-empty-project'}],
+    failedCount: 0,
+    failedProjects: [],
     kind: 'v4_rebuild_request',
-    projectIds: ['recover-apply-project'],
+    projectIds: ['recover-apply-project', 'recover-empty-project'],
     reason: 'recoverDirtyRefreshClaims.staleLegacyClaim',
   })
-  expect(result.recoveryResult.requestIds).toHaveLength(1)
+  expect(result.recoveryResult.requestIds).toHaveLength(2)
   expect(
     result.recoveryResults.map((recoveryResult) => {
       return recoveryResult.reason
@@ -440,8 +440,12 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
   ).toEqual(['recoverDirtyRefreshClaims.staleLegacyClaim'])
   expect(requestCount?.requestCount).toBe(1)
   expect(state).toEqual({activeDirtyToken: 0, lastCompletedDirtyToken: 1, leaseExpiresAt: null, refreshStatus: 'idle'})
-  expect(emptyProjectState).toMatchObject({activeDirtyToken: 1, lastCompletedDirtyToken: 0, refreshStatus: 'running'})
-  expect(emptyProjectState?.leaseExpiresAt).not.toBeNull()
+  expect(emptyProjectState).toEqual({
+    activeDirtyToken: 0,
+    lastCompletedDirtyToken: 1,
+    leaseExpiresAt: null,
+    refreshStatus: 'idle',
+  })
   expect(materializationState).toEqual({
     leaseExpiresAt: null,
     materializationOwner: null,

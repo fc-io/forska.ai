@@ -1342,6 +1342,74 @@ test('selected import rebuild chunk presplits large ranges before dense rebuild 
   expect(joined).not.toContain("status = 'failed'")
 })
 
+test('project scope rebuild chunk presplits large ranges before dense scope rebuild work', async () => {
+  const statements: string[] = []
+  const projectScopeChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    budgetJson: {maxInputRows: 250_000},
+    chunkId: 'chunk-project-scope-oom',
+    diagnosticsJson: {source: 'test'},
+    estimatedInputRows: 240_000,
+    estimatedOutputBytes: 96_000_000,
+    estimatedOutputRows: 240_000,
+    inputWatermark: 9,
+    maxInputRows: 250_000,
+    maxOutputBytes: 128_000_000,
+    maxOutputRows: 250_000,
+    outputBaseGeneration: 7,
+    parentChunkId: null,
+    projectionComponent: 'projectScope',
+    projectionIdentity: 'projectScope:project-1',
+    requestId: 'request-1',
+    snapshotCount: 1,
+    splitDepth: 0,
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('NTILE(5)') && statement.includes('FROM mart.project_scope_article scope')) {
+        return [
+          {articleCount: 50, chunkEndKey: 'article-050', chunkStartKey: 'article-001'},
+          {articleCount: 49, chunkEndKey: 'article-099', chunkStartKey: 'article-051'},
+        ] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: projectScopeChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+  const childInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain('NTILE(5)')
+  expect(joined).not.toContain('DELETE FROM mart.project_scope_article')
+  expect(joined).not.toContain('projectScope.rebuild')
+  expect(childInserts).toHaveLength(2)
+  expect(childInserts[0]).toContain("'chunk-project-scope-oom'")
+  expect(childInserts[0]).toContain("'projectScope'")
+  expect(childInserts[0]).toContain("'article-001'")
+  expect(childInserts[0]).toContain("'article-050'")
+  expect(childInserts[1]).toContain("'article-051'")
+  expect(childInserts[1]).toContain("'article-099'")
+  expect(joined).toContain("status = 'completed'")
+  expect(joined).toContain("oom_category = 'input_row_budget_split'")
+  expect(joined).not.toContain("status = 'failed'")
+})
+
 test('base rebuild chunks regenerate project scope and selected import state before completion', async () => {
   const statements: string[] = []
   const projectScopeChunk: ReviewServingRebuildChunkManifest = {

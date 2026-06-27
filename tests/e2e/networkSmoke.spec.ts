@@ -12,6 +12,8 @@ const networkSmokeDbMode = process.env.FORSKA_NETWORK_SMOKE_DB_MODE === 'current
 const networkSmokeSeedMode = process.env.FORSKA_NETWORK_SMOKE_SEED_MODE === 'existing' ? 'existing' : 'synthetic'
 const runtimeLogDir = process.env.LOG_DIR ?? ''
 const shouldSkipMutatingRouteLoads = process.env.FORSKA_NETWORK_SMOKE_SKIP_MUTATING_ROUTE_LOADS === 'true'
+const areServerMutationsDisabled =
+  networkSmokeDbMode === 'current' || process.env.FORSKA_DISABLE_SERVER_MUTATIONS === 'true'
 const largeRebuildFailureText = 'Large rebuild failed'
 const forbiddenRuntimeLogPatterns = [
   {label: 'API role DuckDB ownership', pattern: /Current server role api cannot own DuckDB/},
@@ -221,14 +223,30 @@ const isReadableStaleWarningState = (indexing: ReviewsWarningsData['indexing']) 
   )
 }
 
+const isMutationDisabledCurrentDbQueuedBacklog = (indexing: ReviewsWarningsData['indexing']) => {
+  return (
+    networkSmokeDbMode === 'current'
+    && areServerMutationsDisabled
+    && indexing.status === 'blocked'
+    && indexing.progressState === 'blocked'
+    && indexing.blockedReason === 'waiting_for_maintenance_worker'
+    && indexing.pendingRefreshCount > 0
+    && indexing.queuedRefreshCount > 0
+    && indexing.inFlightRefreshCount === 0
+    && indexing.activeWorkCount === 0
+  )
+}
+
 const getBlockingWarningDetails = (indexing: ReviewsWarningsData['indexing']) => {
-  return indexing.progressState === 'blocked' || indexing.status === 'blocked'
-    ? `warning response returned blocked review indexing: ${formatIndexingState(indexing)}`
-    : isReadableStaleWarningState(indexing)
-      ? null
-      : indexing.progressState === 'stalled' || indexing.status === 'stale'
-        ? `warning response returned stalled review indexing: ${formatIndexingState(indexing)}`
-        : null
+  return isMutationDisabledCurrentDbQueuedBacklog(indexing)
+    ? null
+    : indexing.progressState === 'blocked' || indexing.status === 'blocked'
+      ? `warning response returned blocked review indexing: ${formatIndexingState(indexing)}`
+      : isReadableStaleWarningState(indexing)
+        ? null
+        : indexing.progressState === 'stalled' || indexing.status === 'stale'
+          ? `warning response returned stalled review indexing: ${formatIndexingState(indexing)}`
+          : null
 }
 
 const getQueuedWarningStateFailureDetails = (indexing: ReviewsWarningsData['indexing']) => {

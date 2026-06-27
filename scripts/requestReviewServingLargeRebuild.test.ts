@@ -114,15 +114,13 @@ test('requestReviewServingLargeRebuild CLI continues after an empty active proje
   ) as Array<{admissionState: string; projectId: string; reason: string; status: string}>
 
   expect(response).toMatchObject({
-    failedCount: 1,
+    failedCount: 0,
+    failedProjects: [],
     projectCount: 2,
-    requestedCount: 1,
-    status: 'requested_with_failures',
+    requestedCount: 2,
+    status: 'requested',
   })
-  expect(response.failedProjects).toHaveLength(1)
-  expect(response.failedProjects[0]?.projectId).toBe('project-empty-review-serving-large-rebuild')
-  expect(response.failedProjects[0]?.error).toContain('created no rebuild chunks')
-  expect(response.requestIds).toHaveLength(1)
+  expect(response.requestIds).toHaveLength(2)
   expect(requestRows).toEqual([
     {
       admissionState: 'admitted',
