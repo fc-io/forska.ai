@@ -161,6 +161,34 @@ test('getProjectAccess maps owner-backed project not found to null', async () =>
   }
 })
 
+test('getProjectAccess preserves owner-backed API failures with null data', async () => {
+  const ownerServer = globalThis.Bun.serve({
+    port: 0,
+    fetch: () => {
+      return Response.json({data: null, error: 'DuckDB owner failed'}, {status: 500})
+    },
+  })
+
+  canOwnDuckdbRef.current = false
+  ownerUrlRef.current = async () => {
+    return `http://127.0.0.1:${ownerServer.port}`
+  }
+
+  try {
+    const {getProjectAccess} = await loadProjectAccessGuard()
+    let error: unknown = null
+
+    await getProjectAccess('project-api').catch((caught: unknown) => {
+      error = caught
+    })
+
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe('Project access read model is unavailable')
+  } finally {
+    await ownerServer.stop(true)
+  }
+})
+
 test('getProjectAccess reports unavailable instead of owning DuckDB when API has no owner URL', async () => {
   let localDuckdbReadCount = 0
 

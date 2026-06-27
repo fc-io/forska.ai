@@ -30,12 +30,12 @@ const getProjectAccessFromDuckdbOwner = async (projectId: string): Promise<Proje
     return null
   }
 
-  if (body?.data === null) {
-    return null
-  }
-
   if (!response.ok || body?.error !== undefined || body?.data === undefined) {
     throw new Error(projectAccessUnavailableErrorMessage)
+  }
+
+  if (body.data === null) {
+    return null
   }
 
   return body.data

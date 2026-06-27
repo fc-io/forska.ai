@@ -1274,7 +1274,7 @@ test('judgment input content rebuild chunk presplits large ranges and completes 
   expect(joined).not.toContain("status = 'failed'")
 })
 
-test('selected import rebuild chunk presplits large ranges before dense rebuild work', async () => {
+test('selected import rebuild chunk does not presplit because rebuild output is not range-scoped', async () => {
   const statements: string[] = []
   const selectedImportChunk: ReviewServingRebuildChunkManifest = {
     ...chunkManifest,
@@ -1317,32 +1317,19 @@ test('selected import rebuild chunk presplits large ranges before dense rebuild 
     },
   }
 
-  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
-    {chunk: selectedImportChunk, leaseOwner: 'worker-1'},
-    database,
-  )
+  await expect(
+    runReviewServingProjectorWorkerClaimedRebuildChunk({chunk: selectedImportChunk, leaseOwner: 'worker-1'}, database),
+  ).rejects.toThrow('cannot run selectedImport rebuild chunk without an identity manifest')
   const joined = statements.join('\n')
   const childInserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
   })
 
-  expect(result).toEqual({status: 'completed'})
-  expect(joined).toContain('NTILE(5)')
-  expect(joined).not.toContain('scope.project_scope_identity')
-  expect(joined).not.toContain('DELETE FROM mart.review_selected_import_serving_v4')
-  expect(childInserts).toHaveLength(2)
-  expect(childInserts[0]).toContain("'chunk-selected-import-oom'")
-  expect(childInserts[0]).toContain("'selectedImport'")
-  expect(childInserts[0]).toContain("'article-001'")
-  expect(childInserts[0]).toContain("'article-050'")
-  expect(childInserts[1]).toContain("'article-051'")
-  expect(childInserts[1]).toContain("'article-099'")
-  expect(joined).toContain("status = 'completed'")
-  expect(joined).toContain("oom_category = 'input_row_budget_split'")
-  expect(joined).not.toContain("status = 'failed'")
+  expect(joined).not.toContain('NTILE(5)')
+  expect(childInserts).toHaveLength(0)
 })
 
-test('project scope rebuild chunk presplits large ranges before dense scope rebuild work', async () => {
+test('project scope rebuild chunk does not presplit because rebuild output is not range-scoped', async () => {
   const statements: string[] = []
   const projectScopeChunk: ReviewServingRebuildChunkManifest = {
     ...chunkManifest,
@@ -1385,29 +1372,16 @@ test('project scope rebuild chunk presplits large ranges before dense scope rebu
     },
   }
 
-  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
-    {chunk: projectScopeChunk, leaseOwner: 'worker-1'},
-    database,
-  )
+  await expect(
+    runReviewServingProjectorWorkerClaimedRebuildChunk({chunk: projectScopeChunk, leaseOwner: 'worker-1'}, database),
+  ).rejects.toThrow('cannot run projectScope rebuild chunk without an identity manifest')
   const joined = statements.join('\n')
   const childInserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
   })
 
-  expect(result).toEqual({status: 'completed'})
-  expect(joined).toContain('NTILE(5)')
-  expect(joined).not.toContain('DELETE FROM mart.project_scope_article')
-  expect(joined).not.toContain('projectScope.rebuild')
-  expect(childInserts).toHaveLength(2)
-  expect(childInserts[0]).toContain("'chunk-project-scope-oom'")
-  expect(childInserts[0]).toContain("'projectScope'")
-  expect(childInserts[0]).toContain("'article-001'")
-  expect(childInserts[0]).toContain("'article-050'")
-  expect(childInserts[1]).toContain("'article-051'")
-  expect(childInserts[1]).toContain("'article-099'")
-  expect(joined).toContain("status = 'completed'")
-  expect(joined).toContain("oom_category = 'input_row_budget_split'")
-  expect(joined).not.toContain("status = 'failed'")
+  expect(joined).not.toContain('NTILE(5)')
+  expect(childInserts).toHaveLength(0)
 })
 
 test('base rebuild chunks regenerate project scope and selected import state before completion', async () => {
