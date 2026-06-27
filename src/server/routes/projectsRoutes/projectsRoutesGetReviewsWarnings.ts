@@ -840,8 +840,10 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const hasInitialLegacyRefreshBlocker =
       initialProjectRefreshState.hasUnresolvedQuarantineBarrier
       || initialProjectRefreshState.refreshStatus === 'failed'
+      || initialProjectRefreshState.refreshStatus === 'running'
       || initialProjectRefreshState.dirtyMaterialization.isActive
       || initialProjectRefreshState.dirtyMaterialization.pendingCount > 0
+      || initialProjectRefreshState.dirtyMaterialization.runningCount > 0
       || initialProjectRefreshState.dirtyMaterialization.failedCount > 0
       || initialProjectRefreshState.dirtyMaterialization.unreconciledCount > 0
       || getHasActiveLease(initialProjectRefreshState.leaseExpiresAt, currentNow)
@@ -913,9 +915,11 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       || freshArticleRefreshLeaseCount > 0
       || projectRefreshState.dirtyMaterialization.isActive
       || projectRefreshState.dirtyMaterialization.pendingCount > 0
+      || projectRefreshState.dirtyMaterialization.runningCount > 0
       || hasFailedDirtyMaterialization
       || projectRefreshState.hasUnresolvedQuarantineBarrier
       || projectRefreshState.refreshStatus === 'failed'
+      || projectRefreshState.refreshStatus === 'running'
       || pendingArticleRefreshInfo.queuedRefreshCount > 0
       || hasLedgerProjectRefreshRunning
       || isLargeRebuildRunning

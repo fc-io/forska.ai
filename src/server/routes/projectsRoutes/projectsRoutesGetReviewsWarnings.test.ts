@@ -280,6 +280,8 @@ const insertDirtyArticleRefreshState = async (projectId: string, articleId: stri
 }
 
 const insertDirtyMaterializationState = async (input: {
+  leaseExpiresAt?: string | null
+  materializationOwner?: string | null
   projectId: string
   sourceKind: string
   status: DirtyMaterializationStatus
@@ -297,7 +299,10 @@ const insertDirtyMaterializationState = async (input: {
       source_scope_generation,
       source_scope_expected_row_count,
       materialization_status,
+      materialization_owner,
+      lease_expires_at,
       created_at,
+      last_started_at,
       updated_at
     ) VALUES (
       '${input.projectId}',
@@ -306,7 +311,10 @@ const insertDirtyMaterializationState = async (input: {
       1,
       1,
       '${input.status}',
+      ${input.materializationOwner === undefined || input.materializationOwner === null ? 'NULL' : `'${input.materializationOwner}'`},
+      ${input.leaseExpiresAt === undefined || input.leaseExpiresAt === null ? 'NULL' : `TIMESTAMPTZ '${input.leaseExpiresAt}'`},
       TIMESTAMPTZ '2026-04-02T12:02:00.000Z',
+      ${input.status === 'running' ? "TIMESTAMPTZ '2026-04-02T12:02:30.000Z'" : 'NULL'},
       TIMESTAMPTZ '2026-04-02T12:03:00.000Z'
     )
   `)
@@ -1455,6 +1463,53 @@ test('reviews warnings respect queued dirty materializations before missing snap
   expect(response.status).toBe(200)
   expect(body.data.indexing.dirtyMaterialization).toMatchObject({failedCount: 0, pendingCount: 1})
   expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.status).toBe('refreshing')
+  expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
+})
+
+test('reviews warnings respect running dirty materializations before missing snapshot repair', async () => {
+  const projectId = 'project-missing-serving-running-dirty-materialization-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 2, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertDirtyMaterializationState({
+    leaseExpiresAt: '2026-04-02T11:59:00.000Z',
+    materializationOwner: null,
+    projectId,
+    sourceKind: 'project_scope',
+    status: 'running',
+    targetDirtyToken: 2,
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.dirtyMaterialization).toMatchObject({activeOwnerCount: 0, runningCount: 1})
+  expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.status).toBe('refreshing')
+  expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
+})
+
+test('reviews warnings respect expired running legacy refresh before missing snapshot repair', async () => {
+  const projectId = 'project-missing-serving-expired-running-refresh-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {
+    dirtyToken: 2,
+    lastCompletedDirtyToken: 1,
+    lastStartedAt: '2026-04-02T11:58:00.000Z',
+    leaseExpiresAt: '2026-04-02T11:59:00.000Z',
+    refreshStatus: 'running',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.activeWorkCount).toBe(0)
+  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
   expect(body.data.indexing.progressState).toBe('queued')
   expect(body.data.indexing.status).toBe('refreshing')
   expect(await getReviewRebuildRequestCount(projectId)).toBe(0)

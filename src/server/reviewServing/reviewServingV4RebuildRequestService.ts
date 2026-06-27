@@ -92,7 +92,21 @@ type ReviewServingV4RebuildStatsRow = {
   summaryHumanJudgmentUpdatedAt: string | null
 }
 
-type ReviewServingV4BootstrapArticleRangeRow = {chunkEndKey: string | null; chunkStartKey: string | null}
+type ReviewServingV4BootstrapArticleRangeRow = {
+  chunkEndKey: string | null
+  chunkStartKey: string | null
+  humanJudgmentCount: number
+  scopedArticleCount: number
+  summaryHumanJudgmentCount: number
+}
+
+type ReviewServingV4BootstrapArticleRange = {
+  chunkEndKey: string
+  chunkStartKey: string
+  humanJudgmentCount: number
+  scopedArticleCount: number
+  summaryHumanJudgmentCount: number
+}
 
 type ReviewServingV4BootstrapDirtyWatermarkRow = {latestSourceHighWaterMark: number | string; sourcePartition: string}
 
@@ -299,16 +313,6 @@ const getReviewServingV4BootstrapChunkCount = (input: {
   return Math.max(1, Math.min(input.articleCount, requestedChunkCount))
 }
 
-const getPerBootstrapChunkStats = (input: {chunkCount: number; stats: ReviewServingV4RebuildStatsRow}) => {
-  return {
-    ...input.stats,
-    humanJudgmentCount: Math.ceil(getSafeCount(input.stats.humanJudgmentCount) / input.chunkCount),
-    judgmentCount: Math.ceil(getSafeCount(input.stats.judgmentCount) / input.chunkCount),
-    scopedArticleCount: Math.ceil(getSafeCount(input.stats.scopedArticleCount) / input.chunkCount),
-    summaryHumanJudgmentCount: Math.ceil(getSafeCount(input.stats.summaryHumanJudgmentCount) / input.chunkCount),
-  }
-}
-
 const getReviewServingV4BootstrapHash = (label: string, value: ReviewServingIdentityValue) => {
   return createHash('sha256')
     .update(`${label}:${getStableReviewServingJson(value)}`)
@@ -357,7 +361,12 @@ const getReviewServingV4BootstrapArticleRanges = async (
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
   const rows = await database.queryJson<ReviewServingV4BootstrapArticleRangeRow>(`
-    WITH scoped_article AS (
+    WITH project_settings AS (
+      SELECT id
+      FROM app.project
+      WHERE id = ${getSqlLiteral(input.projectId)}
+    ),
+    scoped_article AS (
       SELECT project_article.article_id
       FROM app.project_article project_article
       INNER JOIN app.project project ON project.id = project_article.project_id
@@ -376,6 +385,26 @@ const getReviewServingV4BootstrapArticleRanges = async (
         AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
         AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
     ),
+    rebuild_prompt_source AS (
+      SELECT project_prompt.prompt_id
+      FROM app.project_prompt project_prompt
+      INNER JOIN project_settings project ON project.id = project_prompt.project_id
+      INNER JOIN app.prompt prompt ON prompt.id = project_prompt.prompt_id
+      UNION ALL
+      SELECT llm.prompt_id
+      FROM mart.review_llm_status_patch_v4 llm
+      INNER JOIN project_settings project ON project.id = llm.project_id
+      UNION ALL
+      SELECT human.prompt_id
+      FROM mart.review_human_status_patch_v4 human
+      INNER JOIN project_settings project ON project.id = human.project_id
+      WHERE human.prompt_id <> 'summary'
+    ),
+    rebuild_prompt AS (
+      SELECT prompt_id
+      FROM rebuild_prompt_source
+      GROUP BY prompt_id
+    ),
     chunked_article AS (
       SELECT
         article_id,
@@ -384,19 +413,61 @@ const getReviewServingV4BootstrapArticleRanges = async (
         SELECT DISTINCT article_id
         FROM scoped_article
       ) distinct_article
+    ),
+    chunk_article_count AS (
+      SELECT
+        chunk_index,
+        MIN(article_id) AS chunkStartKey,
+        MAX(article_id) AS chunkEndKey,
+        CAST(COUNT(*) AS INTEGER) AS scopedArticleCount
+      FROM chunked_article
+      GROUP BY chunk_index
+    ),
+    chunk_human_judgment_count AS (
+      SELECT
+        chunked_article.chunk_index,
+        CAST(COUNT(*) AS INTEGER) AS humanJudgmentCount
+      FROM chunked_article
+      INNER JOIN app.judgment_human human ON human.article_id = chunked_article.article_id
+      INNER JOIN rebuild_prompt ON rebuild_prompt.prompt_id = human.prompt_id
+      INNER JOIN project_settings project ON human.project_id IS NOT DISTINCT FROM project.id
+      GROUP BY chunked_article.chunk_index
+    ),
+    chunk_summary_human_judgment_count AS (
+      SELECT
+        chunked_article.chunk_index,
+        CAST(COUNT(*) AS INTEGER) AS summaryHumanJudgmentCount
+      FROM chunked_article
+      INNER JOIN app.judgment_human_summary human ON human.article_id = chunked_article.article_id
+      INNER JOIN project_settings project ON human.project_id = project.id
+      GROUP BY chunked_article.chunk_index
     )
     SELECT
-      MIN(article_id) AS chunkStartKey,
-      MAX(article_id) AS chunkEndKey
-    FROM chunked_article
-    GROUP BY chunk_index
-    ORDER BY chunk_index
+      chunk_article_count.chunkStartKey,
+      chunk_article_count.chunkEndKey,
+      chunk_article_count.scopedArticleCount,
+      COALESCE(chunk_human_judgment_count.humanJudgmentCount, 0) AS humanJudgmentCount,
+      COALESCE(chunk_summary_human_judgment_count.summaryHumanJudgmentCount, 0) AS summaryHumanJudgmentCount
+    FROM chunk_article_count
+    LEFT JOIN chunk_human_judgment_count
+      ON chunk_human_judgment_count.chunk_index = chunk_article_count.chunk_index
+    LEFT JOIN chunk_summary_human_judgment_count
+      ON chunk_summary_human_judgment_count.chunk_index = chunk_article_count.chunk_index
+    ORDER BY chunk_article_count.chunk_index
   `)
 
   return rows.flatMap((row) => {
     return row.chunkStartKey === null || row.chunkEndKey === null
       ? []
-      : [{chunkEndKey: row.chunkEndKey, chunkStartKey: row.chunkStartKey}]
+      : [
+          {
+            chunkEndKey: row.chunkEndKey,
+            chunkStartKey: row.chunkStartKey,
+            humanJudgmentCount: getSafeCount(row.humanJudgmentCount),
+            scopedArticleCount: getSafeCount(row.scopedArticleCount),
+            summaryHumanJudgmentCount: getSafeCount(row.summaryHumanJudgmentCount),
+          },
+        ]
   })
 }
 
@@ -458,7 +529,7 @@ const upsertReviewServingV4BootstrapProjectionManifests = async (
 }
 
 const getReviewServingV4BootstrapChunks = (input: {
-  articleRanges: readonly {chunkEndKey: string; chunkStartKey: string}[]
+  articleRanges: readonly ReviewServingV4BootstrapArticleRange[]
   components: readonly ReviewServingProjectionComponent[]
   inputWatermark: number
   projectId: string
@@ -640,16 +711,35 @@ const getReviewServingV4RebuildEstimate = (
 }
 
 const getCombinedBootstrapRebuildEstimate = (input: {
+  articleRanges: readonly ReviewServingV4BootstrapArticleRange[]
   articleRangeComponents: readonly ReviewServingProjectionComponent[]
-  chunkCount: number
   fullProjectComponents: readonly ReviewServingProjectionComponent[]
   stats: ReviewServingV4RebuildStatsRow
 }) => {
   const fullProjectEstimate = getReviewServingV4RebuildEstimate(input.stats, input.fullProjectComponents)
-  const articleRangeEstimate = getReviewServingV4RebuildEstimate(
-    getPerBootstrapChunkStats({chunkCount: input.chunkCount, stats: input.stats}),
-    input.articleRangeComponents,
-  )
+  const articleRangeEstimate = input.articleRanges
+    .map((articleRange) => {
+      return getReviewServingV4RebuildEstimate(
+        {
+          ...input.stats,
+          humanJudgmentCount: articleRange.humanJudgmentCount,
+          scopedArticleCount: articleRange.scopedArticleCount,
+          summaryHumanJudgmentCount: articleRange.summaryHumanJudgmentCount,
+        },
+        input.articleRangeComponents,
+      )
+    })
+    .reduce<ReviewServingRebuildRequestEstimate>((maxEstimate, estimate) => {
+      return {
+        estimatedInputRows: Math.max(maxEstimate.estimatedInputRows ?? 0, estimate.estimatedInputRows ?? 0),
+        estimatedOutputBytes: Math.max(maxEstimate.estimatedOutputBytes ?? 0, estimate.estimatedOutputBytes ?? 0),
+        estimatedOutputRows: Math.max(maxEstimate.estimatedOutputRows ?? 0, estimate.estimatedOutputRows ?? 0),
+        estimatedPayloadBytes: Math.max(maxEstimate.estimatedPayloadBytes ?? 0, estimate.estimatedPayloadBytes ?? 0),
+        estimatedPromptCount: Math.max(maxEstimate.estimatedPromptCount ?? 0, estimate.estimatedPromptCount ?? 0),
+        estimatedSnapshotCount: Math.max(maxEstimate.estimatedSnapshotCount ?? 0, estimate.estimatedSnapshotCount ?? 0),
+        estimatedTempBytes: Math.max(maxEstimate.estimatedTempBytes ?? 0, estimate.estimatedTempBytes ?? 0),
+      }
+    }, {})
 
   return {
     estimatedInputRows: (fullProjectEstimate.estimatedInputRows ?? 0) + (articleRangeEstimate.estimatedInputRows ?? 0),
@@ -975,25 +1065,31 @@ export const requestReviewServingV4RebuildEffect = (
             scalableEstimate: articleRangeBootstrapEstimate,
           })
         : 1
+    const bootstrapArticleRanges =
+      isFreshBootstrap && bootstrapChunkCount > 1
+        ? await getReviewServingV4BootstrapArticleRanges(
+            {chunkCount: bootstrapChunkCount, projectId: input.projectId},
+            database,
+          )
+        : []
     const requestEstimate =
       bootstrapChunkCount === 1
         ? totalEstimate
         : getCombinedBootstrapRebuildEstimate({
+            articleRanges: bootstrapArticleRanges,
             articleRangeComponents: articleRangeBootstrapComponents,
-            chunkCount: bootstrapChunkCount,
             fullProjectComponents: fullProjectBootstrapComponents,
             stats: estimateStats,
           })
     const requestOverBudgetReason = getReviewServingV4RebuildOverBudgetReason(requestEstimate, defaultRequestBudget)
     const sourceWatermarks = getReviewServingV4RebuildSourceWatermarks(stats)
     return database.transaction(async (tx) => {
-      const bootstrap =
-        isFreshBootstrap && requestOverBudgetReason === null
-          ? await prepareReviewServingV4Bootstrap(
-              {chunkCount: bootstrapChunkCount, components, projectId: input.projectId},
-              tx,
-            )
-          : null
+      const bootstrap = isFreshBootstrap
+        ? await prepareReviewServingV4Bootstrap(
+            {chunkCount: bootstrapChunkCount, components, projectId: input.projectId},
+            tx,
+          )
+        : null
 
       if (isFreshBootstrap && requestOverBudgetReason === null && bootstrap === null) {
         return null

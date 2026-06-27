@@ -119,11 +119,14 @@ const fakeRebuildComponents = [
   'search',
 ] as const
 
-const getFakeArticleRanges = (chunkCount: number) => {
+const getFakeArticleRanges = (chunkCount: number, stats: FakeStats) => {
   return Array.from({length: chunkCount}, (_, index) => {
     return {
       chunkEndKey: `article-${String(index).padStart(3, '0')}-z`,
       chunkStartKey: `article-${String(index).padStart(3, '0')}-a`,
+      humanJudgmentCount: index === 0 ? stats.humanJudgmentCount : 0,
+      scopedArticleCount: 1,
+      summaryHumanJudgmentCount: index === 0 ? stats.summaryHumanJudgmentCount : 0,
     }
   })
 }
@@ -207,14 +210,14 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
   const queryJson = async <T>(statement: string) => {
     statements.push(statement)
 
-    if (statement.includes('WITH project_settings')) {
-      return [stats] as T[]
-    }
-
     if (statement.includes('NTILE(')) {
       const chunkCount = Number(statement.match(/NTILE\((\d+)\)/u)?.[1] ?? 1)
 
-      return (stats.scopedArticleCount === 0 ? [] : getFakeArticleRanges(chunkCount)) as T[]
+      return (stats.scopedArticleCount === 0 ? [] : getFakeArticleRanges(chunkCount, stats)) as T[]
+    }
+
+    if (statement.includes('WITH project_settings')) {
+      return [stats] as T[]
     }
 
     if (statement.includes('FROM app.project_article')) {
@@ -533,7 +536,33 @@ test('V4 rebuild request service splits missing snapshot bootstraps into bounded
   expect(joined).toContain('INSERT INTO app.review_serving_snapshot_manifest')
 })
 
-test('V4 rebuild request service blocks terminally over-budget missing snapshot repair before article chunking', async () => {
+test('V4 rebuild request service budgets split missing snapshot bootstraps by the largest article chunk', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    ...baseStats,
+    enabledPromptCount: 0,
+    humanJudgmentCount: 150_000,
+    judgmentCount: 0,
+    promptCount: 0,
+    scopedArticleCount: 20_000,
+    snapshotCount: 0,
+    snapshotUpdatedAt: null,
+    summaryHumanJudgmentCount: 0,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['judgmentInputContent'], projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
+  )
+
+  expect(request.status).toBe('blocked_over_budget')
+  expect(request.overBudgetReason).toBe('input rows: estimated 480025 > max 250000')
+  expect(statements.join('\n')).toContain('INSERT INTO app.review_rebuild_chunk_manifest')
+  expect(statements.join('\n')).not.toContain('INSERT INTO app.review_serving_snapshot_manifest')
+})
+
+test('V4 rebuild request service blocks terminally over-budget missing snapshot repair with explicit chunks', async () => {
   const {database, statements} = createFakeRequestDatabase({
     ...baseStats,
     humanJudgmentCount: 0,
@@ -551,7 +580,7 @@ test('V4 rebuild request service blocks terminally over-budget missing snapshot 
 
   expect(request.status).toBe('blocked_over_budget')
   expect(request.overBudgetReason).toBe('prompt count: estimated 10001 > max 10000')
-  expect(joined).not.toContain('NTILE(')
+  expect(joined).toContain('NTILE(')
   expect(joined).toContain('INSERT INTO app.review_rebuild_chunk_manifest')
   expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).not.toContain('INSERT INTO app.review_serving_snapshot_manifest')
