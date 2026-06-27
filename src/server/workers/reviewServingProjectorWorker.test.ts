@@ -1236,6 +1236,10 @@ test('judgment input content rebuild chunk presplits large ranges and completes 
         ] as T[]
       }
 
+      if (statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('RETURNING chunk_id')) {
+        return [{chunkId: 'chunk-judgment-input-content-oom'}] as T[]
+      }
+
       return [] as T[]
     },
     run: async (statement: string) => {
@@ -1263,6 +1267,8 @@ test('judgment input content rebuild chunk presplits large ranges and completes 
   expect(joined).toContain('NTILE(5)')
   expect(joined).not.toContain('scope.project_scope_identity')
   expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
+  expect(joined).toContain('lease_expires_at > current_timestamp')
+  expect(joined).toContain('RETURNING chunk_id AS chunkId')
   expect(childInserts).toHaveLength(2)
   expect(childInserts[0]).toContain("'chunk-judgment-input-content-oom'")
   expect(childInserts[0]).toContain("'article-001'")

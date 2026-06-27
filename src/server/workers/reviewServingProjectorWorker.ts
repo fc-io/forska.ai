@@ -1304,6 +1304,29 @@ const splitClaimedArticleRangeRebuildChunk = async (
       return false
     }
 
+    const acceptedParentRows = await tx.queryJson<{chunkId: string}>(`
+      UPDATE app.review_rebuild_chunk_manifest
+      SET
+        status = 'completed',
+        checksum = ${getSqlLiteral(`split:${input.chunk.chunkId}`)},
+        oom_category = ${getSqlLiteral(input.splitReason === 'duckdb_oom' ? 'duckdb_oom_split' : 'input_row_budget_split')},
+        over_budget_reason = NULL,
+        last_error = NULL,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        completed_at = current_timestamp,
+        updated_at = current_timestamp
+      WHERE chunk_id = ${getSqlLiteral(input.chunk.chunkId)}
+        AND status = 'running'
+        AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
+        AND (lease_expires_at IS NULL OR lease_expires_at > current_timestamp)
+      RETURNING chunk_id AS chunkId
+    `)
+
+    if (acceptedParentRows.length !== 1) {
+      return false
+    }
+
     await upsertReviewServingRebuildChunkManifests(
       splittableRanges.map((range) => {
         return {
@@ -1358,23 +1381,6 @@ const splitClaimedArticleRangeRebuildChunk = async (
       }),
       tx,
     )
-
-    await tx.run(`
-      UPDATE app.review_rebuild_chunk_manifest
-      SET
-        status = 'completed',
-        checksum = ${getSqlLiteral(`split:${input.chunk.chunkId}`)},
-        oom_category = ${getSqlLiteral(input.splitReason === 'duckdb_oom' ? 'duckdb_oom_split' : 'input_row_budget_split')},
-        over_budget_reason = NULL,
-        last_error = NULL,
-        lease_owner = NULL,
-        lease_expires_at = NULL,
-        completed_at = current_timestamp,
-        updated_at = current_timestamp
-      WHERE chunk_id = ${getSqlLiteral(input.chunk.chunkId)}
-        AND status = 'running'
-        AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
-    `)
 
     return true
   })
