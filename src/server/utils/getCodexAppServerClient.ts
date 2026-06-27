@@ -444,6 +444,7 @@ export const createCodexAppServerClient = ({
   let activeTurnCount = 0
   let completedTurnCount = 0
   let recycleWhenIdle = false
+  let recycleReason: 'completedLimit' | 'turnError' | null = null
   let recycleTimer: ReturnType<typeof setTimeout> | null = null
   let clientInstance: CodexAppServerClient | null = null
 
@@ -542,14 +543,15 @@ export const createCodexAppServerClient = ({
     }, 0)
   }
 
-  const markRecycleWhenIdle = (): void => {
+  const markRecycleWhenIdle = (reason: 'completedLimit' | 'turnError'): void => {
     recycleWhenIdle = true
+    recycleReason = recycleReason === 'completedLimit' ? recycleReason : reason
     clearSingletonIfCurrent(clientInstance)
     scheduleRecycleAppServerIfIdle()
   }
 
   const startTrackedTurn = (): void => {
-    if (recycleWhenIdle) {
+    if (recycleWhenIdle && recycleReason === 'completedLimit') {
       throw getRecycleError()
     }
 
@@ -561,8 +563,13 @@ export const createCodexAppServerClient = ({
     if (completed) {
       completedTurnCount += 1
     }
-    if (recycle || recycleWhenIdle || completedTurnCount >= resolvedMaxTurnsBeforeRecycle) {
-      markRecycleWhenIdle()
+    if (completedTurnCount >= resolvedMaxTurnsBeforeRecycle) {
+      markRecycleWhenIdle('completedLimit')
+      return
+    }
+
+    if (recycle || recycleWhenIdle) {
+      markRecycleWhenIdle('turnError')
     }
   }
 
