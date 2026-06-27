@@ -72,13 +72,13 @@ SET
   failed_at = NULL,
   last_error = NULL,
   updated_at = current_timestamp
-WHERE request.status = 'failed'
+WHERE request.status IN ('failed', 'blocked_over_budget')
   AND EXISTS (
     SELECT 1
     FROM app.review_rebuild_chunk_manifest chunk
     WHERE chunk.request_id = request.request_id
       AND chunk.projection_component = 'judgmentInputContent'
-      AND chunk.status IN ('failed', 'quarantined')
+      AND chunk.status IN ('failed', 'blocked_over_budget', 'quarantined')
       AND chunk.last_error ILIKE '%Referenced column "payload_kind" not found%'
   );
 
@@ -95,5 +95,5 @@ SET
   last_error = NULL,
   updated_at = current_timestamp
 WHERE projection_component = 'judgmentInputContent'
-  AND status IN ('failed', 'quarantined')
+  AND status IN ('failed', 'blocked_over_budget', 'quarantined')
   AND last_error ILIKE '%Referenced column "payload_kind" not found%';

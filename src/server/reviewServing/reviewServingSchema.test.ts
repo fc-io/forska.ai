@@ -423,6 +423,15 @@ test('judgment detail payload-kind forward migration repairs already-applied V4 
   expect(judgmentDetailPayloadKindForwardMigrationSql).toContain('UPDATE app.review_rebuild_chunk_manifest')
   expect(judgmentDetailPayloadKindForwardMigrationSql).toContain("projection_component = 'judgmentInputContent'")
   expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
+    "request.status IN ('failed', 'blocked_over_budget')",
+  )
+  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
+    "chunk.status IN ('failed', 'blocked_over_budget', 'quarantined')",
+  )
+  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
+    "status IN ('failed', 'blocked_over_budget', 'quarantined')",
+  )
+  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
     'last_error ILIKE \'%Referenced column "payload_kind" not found%\'',
   )
 })
