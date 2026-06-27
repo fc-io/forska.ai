@@ -71,6 +71,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
             request_id VARCHAR PRIMARY KEY,
             project_id VARCHAR NOT NULL,
             status VARCHAR NOT NULL,
+            admission_state VARCHAR NOT NULL DEFAULT 'pending',
             retry_after TIMESTAMPTZ,
             failed_at TIMESTAMPTZ,
             last_error VARCHAR,
@@ -154,10 +155,11 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
           )
         \`)
         await database.run(\`
-          INSERT INTO app.review_rebuild_request (request_id, project_id, status, retry_after, failed_at, last_error, created_at)
+          INSERT INTO app.review_rebuild_request (request_id, project_id, status, admission_state, retry_after, failed_at, last_error, created_at)
           VALUES (
             'request-a',
             'project-a',
+            'blocked_over_budget',
             'blocked_over_budget',
             TIMESTAMPTZ '2026-06-27T12:10:00Z',
             TIMESTAMPTZ '2026-06-27T12:00:00Z',
@@ -205,7 +207,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
           "SELECT project_id AS projectId, payload_kind AS payloadKind, judgment_id AS judgmentId FROM mart.review_article_judgment_detail_serving_v4 ORDER BY project_id"
         )
         const requestRows = await database.queryJson(
-          "SELECT failed_at AS failedAt, last_error AS lastError, retry_after AS retryAfter, status FROM app.review_rebuild_request ORDER BY request_id"
+          "SELECT admission_state AS admissionState, failed_at AS failedAt, last_error AS lastError, retry_after AS retryAfter, status FROM app.review_rebuild_request ORDER BY request_id"
         )
         const primaryKeyRows = await database.queryJson(
           "SELECT constraint_column_names AS columnNames FROM duckdb_constraints() WHERE schema_name = 'mart' AND table_name = 'review_article_judgment_detail_serving_v4' AND constraint_type = 'PRIMARY KEY'"
@@ -270,14 +272,22 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
         status: string
       }>
       primaryKeyRows: Array<{columnNames: string[]}>
-      requestRows: Array<{failedAt: string | null; lastError: string | null; retryAfter: string | null; status: string}>
+      requestRows: Array<{
+        admissionState: string
+        failedAt: string | null
+        lastError: string | null
+        retryAfter: string | null
+        status: string
+      }>
       rows: Array<{judgmentId: string; payloadKind: string; projectId: string}>
     }
 
     expect(parsed.chunkRows).toEqual([
       {admissionState: 'admitted', lastError: null, retryAfter: null, retryCount: 0, status: 'pending'},
     ])
-    expect(parsed.requestRows).toEqual([{failedAt: null, lastError: null, retryAfter: null, status: 'admitted'}])
+    expect(parsed.requestRows).toEqual([
+      {admissionState: 'admitted', failedAt: null, lastError: null, retryAfter: null, status: 'admitted'},
+    ])
     expect(parsed.rows).toEqual([{judgmentId: 'judgment-a', payloadKind: 'llm', projectId: 'project-a'}])
     expect(parsed.primaryKeyRows).toEqual([
       {
