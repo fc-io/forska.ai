@@ -1121,6 +1121,227 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   expect(joined).toContain("article_id <= 'article-099'")
 })
 
+test('judgment input content rebuild chunk presplits large ranges and completes parent container', async () => {
+  const statements: string[] = []
+  const judgmentChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    budgetJson: {maxInputRows: 250_000},
+    chunkId: 'chunk-judgment-input-content-oom',
+    diagnosticsJson: {source: 'test'},
+    estimatedInputRows: 240_000,
+    estimatedOutputBytes: 96_000_000,
+    estimatedOutputRows: 240_000,
+    inputWatermark: 9,
+    maxInputRows: 250_000,
+    maxOutputBytes: 128_000_000,
+    maxOutputRows: 250_000,
+    outputBaseGeneration: 7,
+    parentChunkId: null,
+    projectionComponent: 'judgmentInputContent',
+    projectionIdentity: 'judgmentInputContent:project-1',
+    requestId: 'request-1',
+    snapshotCount: 1,
+    splitDepth: 0,
+  }
+  const reviewConfigHash = buildReviewConfigHash({
+    humanJudgmentMode: 'prompt',
+    modelExecutionIdentity: {
+      modelExecutionOptions: null,
+      modelId: 'model-1',
+      providerBaseUrl: null,
+      providerConnectionId: null,
+      providerKind: null,
+      remoteModelId: null,
+      variant: null,
+    },
+    modelId: 'model-1',
+    promptConfigs: [],
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+  const componentState = {
+    optional: [],
+    required: [
+      {baseGeneration: '7', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+      {baseGeneration: '7', component: 'judgmentInputContent', projectionIdentity: 'judgmentInputContent:project-1'},
+    ],
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+        return [judgmentChunk] as T[]
+      }
+
+      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+        return [
+          {
+            baseGeneration: 7,
+            definitionVersion: 'judgmentInputContent:v1',
+            inputDigest: judgmentChunk.inputDigest,
+            inputWatermark: judgmentChunk.inputWatermark,
+            inputWatermarksJson: {reviewChange: 9},
+            invalidationReason: judgmentChunk.inputDigest,
+            manifestId: 'manifest-judgment-input-content',
+            patchRangeEnd: judgmentChunk.inputWatermark,
+            patchRangeStart: judgmentChunk.inputWatermark,
+            patchWatermark: judgmentChunk.inputWatermark,
+            projectId: judgmentChunk.projectId,
+            projectionComponent: judgmentChunk.projectionComponent,
+            projectionIdentity: judgmentChunk.projectionIdentity,
+            promptConfigHash: null,
+            reviewConfigHash,
+            status: 'candidate',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return [
+          {
+            componentStateJson: componentState,
+            reviewConfigHash,
+            selectedImportSnapshotId: 'selected-import-snapshot-1',
+            snapshotId: 'snapshot-rebuild-1',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.project project') && statement.includes('LIMIT 1')) {
+        return [
+          {
+            humanJudgmentMode: 'prompt',
+            modelExecutionOptions: null,
+            modelId: 'model-1',
+            modelProviderBaseUrl: null,
+            modelProviderConnectionId: null,
+            modelProviderKind: null,
+            modelRemoteModelId: null,
+            modelVariant: null,
+            useAbstract: true,
+            useFulltext: false,
+            useFulltextNoImages: false,
+            useTitle: true,
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('NTILE(5)') && statement.includes('FROM mart.project_scope_article scope')) {
+        return [
+          {articleCount: 50, chunkEndKey: 'article-050', chunkStartKey: 'article-001'},
+          {articleCount: 49, chunkEndKey: 'article-099', chunkStartKey: 'article-051'},
+        ] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('DELETE FROM mart.review_article_judgment_detail_serving_v4')) {
+        throw new Error('DuckDB Out of Memory Error: failed to allocate 32KiB (18.6 GiB/18.6 GiB used)')
+      }
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: judgmentChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+  const childInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain('NTILE(5)')
+  expect(joined).not.toContain('scope.project_scope_identity')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
+  expect(childInserts).toHaveLength(2)
+  expect(childInserts[0]).toContain("'chunk-judgment-input-content-oom'")
+  expect(childInserts[0]).toContain("'article-001'")
+  expect(childInserts[0]).toContain("'article-050'")
+  expect(childInserts[1]).toContain("'article-051'")
+  expect(childInserts[1]).toContain("'article-099'")
+  expect(joined).toContain("status = 'completed'")
+  expect(joined).toContain("oom_category = 'input_row_budget_split'")
+  expect(joined).not.toContain("status = 'failed'")
+})
+
+test('selected import rebuild chunk presplits large ranges before dense rebuild work', async () => {
+  const statements: string[] = []
+  const selectedImportChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    budgetJson: {maxInputRows: 250_000},
+    chunkId: 'chunk-selected-import-oom',
+    diagnosticsJson: {source: 'test'},
+    estimatedInputRows: 240_000,
+    estimatedOutputBytes: 96_000_000,
+    estimatedOutputRows: 240_000,
+    inputWatermark: 9,
+    maxInputRows: 250_000,
+    maxOutputBytes: 128_000_000,
+    maxOutputRows: 250_000,
+    outputBaseGeneration: 7,
+    parentChunkId: null,
+    projectionComponent: 'selectedImport',
+    projectionIdentity: 'selectedImport:project-1',
+    requestId: 'request-1',
+    snapshotCount: 1,
+    splitDepth: 0,
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('NTILE(5)') && statement.includes('FROM mart.project_scope_article scope')) {
+        return [
+          {articleCount: 50, chunkEndKey: 'article-050', chunkStartKey: 'article-001'},
+          {articleCount: 49, chunkEndKey: 'article-099', chunkStartKey: 'article-051'},
+        ] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: selectedImportChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+  const childInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain('NTILE(5)')
+  expect(joined).not.toContain('scope.project_scope_identity')
+  expect(joined).not.toContain('DELETE FROM mart.review_selected_import_serving_v4')
+  expect(childInserts).toHaveLength(2)
+  expect(childInserts[0]).toContain("'chunk-selected-import-oom'")
+  expect(childInserts[0]).toContain("'selectedImport'")
+  expect(childInserts[0]).toContain("'article-001'")
+  expect(childInserts[0]).toContain("'article-050'")
+  expect(childInserts[1]).toContain("'article-051'")
+  expect(childInserts[1]).toContain("'article-099'")
+  expect(joined).toContain("status = 'completed'")
+  expect(joined).toContain("oom_category = 'input_row_budget_split'")
+  expect(joined).not.toContain("status = 'failed'")
+})
+
 test('base rebuild chunks regenerate project scope and selected import state before completion', async () => {
   const statements: string[] = []
   const projectScopeChunk: ReviewServingRebuildChunkManifest = {

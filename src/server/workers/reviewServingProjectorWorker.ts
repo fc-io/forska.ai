@@ -18,6 +18,7 @@ import {
   type ReviewServingChunkManifestRepositoryTransaction,
   type ReviewServingRebuildChunkIdentity,
   type ReviewServingRebuildChunkManifest,
+  upsertReviewServingRebuildChunkManifests,
   writeReviewServingRebuildChunkOutput,
 } from '../reviewServing/reviewServingChunkManifestRepository.ts'
 import {reviewServingListModes, type ReviewServingProjectionComponent} from '../reviewServing/reviewServingContracts.ts'
@@ -80,6 +81,8 @@ type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorSe
 type ReviewServingProjectorWorkerCleanupTarget = ReviewServingRetentionCleanupInput
 
 type ReviewServingProjectorWorkerChunkInput = ReviewServingRebuildChunkIdentity & {checksum?: string | null}
+
+type RebuildChunkSplitRangeRow = {articleCount: number; chunkEndKey: string | null; chunkStartKey: string | null}
 
 type DeltaIntakePartitionRow = {
   endSourceHighWaterMark: number
@@ -381,6 +384,87 @@ const requireRebuildChunkProjectId = (chunk: ReviewServingRebuildChunkManifest) 
 const getChunkArticleRangePredicate = (input: {alias: string; chunk: ReviewServingRebuildChunkManifest}) => {
   return `${input.alias}.article_id >= ${getSqlLiteral(input.chunk.chunkStartKey)}
     AND ${input.alias}.article_id <= ${getSqlLiteral(input.chunk.chunkEndKey)}`
+}
+
+const isDuckDbOutOfMemoryError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error)
+
+  return (
+    message.includes('Out of Memory Error')
+    || message.includes('failed to allocate')
+    || message.includes('failed to pin block')
+  )
+}
+
+const canSplitRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
+  return chunk.chunkStartKey < chunk.chunkEndKey && (chunk.splitDepth ?? 0) < 12
+}
+
+const articleRangeRebuildChunkPresplitInputRowLimit = 50_000
+const splittableArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjectionComponent> = new Set([
+  'selectedImport',
+  'display',
+  'payload',
+  'search',
+  'llmStatus',
+  'humanStatus',
+  'queue',
+  'posting',
+  'summary',
+  'judgmentInputContent',
+])
+
+const getArticleRangeRebuildChunkEstimatedInputRows = (chunk: ReviewServingRebuildChunkManifest) => {
+  return chunk.estimatedInputRows ?? chunk.estimatedOutputRows ?? null
+}
+
+const getArticleRangeRebuildChunkSplitBucketCount = (chunk: ReviewServingRebuildChunkManifest) => {
+  const estimatedInputRows = getArticleRangeRebuildChunkEstimatedInputRows(chunk)
+
+  if (estimatedInputRows === null) {
+    return 2
+  }
+
+  return Math.min(16, Math.max(2, Math.ceil(estimatedInputRows / articleRangeRebuildChunkPresplitInputRowLimit)))
+}
+
+const shouldPresplitArticleRangeRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
+  const estimatedInputRows = getArticleRangeRebuildChunkEstimatedInputRows(chunk)
+
+  return (
+    splittableArticleRangeRebuildComponents.has(chunk.projectionComponent)
+    && estimatedInputRows !== null
+    && estimatedInputRows > articleRangeRebuildChunkPresplitInputRowLimit
+  )
+}
+
+const getArticleRangeRebuildChunkSplitRanges = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; projectId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const splitBucketCount = getArticleRangeRebuildChunkSplitBucketCount(input.chunk)
+  const rows = await database.queryJson<RebuildChunkSplitRangeRow>(`
+    WITH scoped_article AS (
+      SELECT
+        scope.article_id,
+        NTILE(${splitBucketCount}) OVER (ORDER BY scope.article_id) AS split_bucket
+      FROM mart.project_scope_article scope
+      WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
+        AND ${getChunkArticleRangePredicate({alias: 'scope', chunk: input.chunk})}
+    )
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS articleCount,
+      MIN(article_id) AS chunkStartKey,
+      MAX(article_id) AS chunkEndKey
+    FROM scoped_article
+    GROUP BY split_bucket
+    HAVING COUNT(*) > 0
+    ORDER BY split_bucket
+  `)
+
+  return rows.filter((row) => {
+    return row.chunkStartKey !== null && row.chunkEndKey !== null && row.articleCount > 0
+  })
 }
 
 const getSnapshotIdPredicate = (snapshotIds: readonly string[]) => {
@@ -1199,6 +1283,105 @@ const runSummaryRebuildChunk = async (
   )
 }
 
+const splitClaimedArticleRangeRebuildChunk = async (
+  input: {
+    chunk: ReviewServingRebuildChunkManifest
+    leaseOwner: string
+    projectId: string
+    splitReason: 'duckdb_oom' | 'input_row_budget'
+  },
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  if (!canSplitRebuildChunk(input.chunk)) {
+    return false
+  }
+
+  return database.transaction(async (tx) => {
+    const ranges = await getArticleRangeRebuildChunkSplitRanges(input, tx)
+    const splittableRanges = ranges.filter((range) => {
+      return range.chunkStartKey !== null && range.chunkEndKey !== null
+    })
+
+    if (splittableRanges.length < 2) {
+      return false
+    }
+
+    await upsertReviewServingRebuildChunkManifests(
+      splittableRanges.map((range) => {
+        return {
+          actualInputRows: null,
+          actualOutputBytes: null,
+          actualOutputRows: null,
+          actualPayloadBytes: null,
+          actualPromptCount: null,
+          actualTempBytes: null,
+          admissionState: 'admitted' as const,
+          budgetJson: input.chunk.budgetJson,
+          checksum: null,
+          chunkEndKey: range.chunkEndKey ?? input.chunk.chunkEndKey,
+          chunkStartKey: range.chunkStartKey ?? input.chunk.chunkStartKey,
+          diagnosticsJson: {
+            ...(input.chunk.diagnosticsJson && typeof input.chunk.diagnosticsJson === 'object'
+              ? input.chunk.diagnosticsJson
+              : {}),
+            parentChunkId: input.chunk.chunkId,
+            splitReason: input.splitReason,
+          },
+          estimatedInputRows: Math.ceil((input.chunk.estimatedInputRows ?? 0) / splittableRanges.length),
+          estimatedOutputBytes: Math.ceil((input.chunk.estimatedOutputBytes ?? 0) / splittableRanges.length),
+          estimatedOutputRows: Math.ceil((input.chunk.estimatedOutputRows ?? 0) / splittableRanges.length),
+          estimatedPayloadBytes: Math.ceil((input.chunk.estimatedPayloadBytes ?? 0) / splittableRanges.length),
+          estimatedPromptCount: input.chunk.estimatedPromptCount,
+          estimatedTempBytes: input.chunk.estimatedTempBytes,
+          inputDigest: input.chunk.inputDigest,
+          inputWatermark: input.chunk.inputWatermark,
+          maxInputRows: input.chunk.maxInputRows,
+          maxOutputBytes: input.chunk.maxOutputBytes,
+          maxOutputRows: input.chunk.maxOutputRows,
+          maxPayloadBytes: input.chunk.maxPayloadBytes,
+          maxPromptCount: input.chunk.maxPromptCount,
+          maxTempBytes: input.chunk.maxTempBytes,
+          oomCategory: null,
+          outputBaseGeneration: input.chunk.outputBaseGeneration,
+          overBudgetReason: null,
+          parentChunkId: input.chunk.chunkId,
+          projectId: input.chunk.projectId,
+          projectionComponent: input.chunk.projectionComponent,
+          projectionIdentity: input.chunk.projectionIdentity,
+          requestId: input.chunk.requestId,
+          retryAfter: null,
+          retryCount: 0,
+          snapshotCount: input.chunk.snapshotCount,
+          snapshotId: input.chunk.snapshotId,
+          splitDepth: (input.chunk.splitDepth ?? 0) + 1,
+          status: 'pending' as const,
+          workloadClass: input.chunk.workloadClass,
+        }
+      }),
+      tx,
+    )
+
+    await tx.run(`
+      UPDATE app.review_rebuild_chunk_manifest
+      SET
+        status = 'completed',
+        checksum = ${getSqlLiteral(`split:${input.chunk.chunkId}`)},
+        oom_category = ${getSqlLiteral(input.splitReason === 'duckdb_oom' ? 'duckdb_oom_split' : 'input_row_budget_split')},
+        over_budget_reason = NULL,
+        last_error = NULL,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        completed_at = current_timestamp,
+        updated_at = current_timestamp
+      WHERE chunk_id = ${getSqlLiteral(input.chunk.chunkId)}
+        AND status = 'running'
+        AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
+    `)
+
+    return true
+  })
+}
+
 const runJudgmentInputContentRebuildChunk = async (
   input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
@@ -1212,53 +1395,84 @@ const runJudgmentInputContentRebuildChunk = async (
     return getSnapshotReviewSettings(snapshot, currentSettings) !== null
   })
 
-  return runValidatedRebuildChunkOutput(
-    {
-      ...input,
-      validateOutput: async (tx) => {
-        const checksum = await getJudgmentInputContentRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+  if (shouldPresplitArticleRangeRebuildChunk(input.chunk)) {
+    const split = await splitClaimedArticleRangeRebuildChunk(
+      {chunk: input.chunk, leaseOwner: input.leaseOwner, projectId, splitReason: 'input_row_budget'},
+      database,
+    )
 
-        return {
-          actualChecksum: checksum.actualChecksum,
-          actualCount: checksum.actualCount,
-          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
-        }
-      },
-      writeOutput: async (tx) => {
-        const chunkDatabase = getChunkProjectorDatabase(tx)
+    if (split) {
+      return {status: 'completed' as const}
+    }
+  }
 
-        await payloadSnapshots.reduce<Promise<void>>(async (previous, snapshot) => {
-          await previous
-          const project = getSnapshotReviewSettings(snapshot, currentSettings)
+  try {
+    return await runValidatedRebuildChunkOutput(
+      {
+        ...input,
+        validateOutput: async (tx) => {
+          const checksum = await getJudgmentInputContentRebuildChunkOutputChecksum(
+            {chunk: input.chunk, snapshotIds},
+            tx,
+          )
 
-          if (project !== null) {
-            await projectReviewServingJudgmentPayloadRows(
-              {
-                acknowledgeClaims: false,
-                baseGeneration: input.chunk.outputBaseGeneration,
-                chunkEndArticleId: input.chunk.chunkEndKey,
-                chunkStartArticleId: input.chunk.chunkStartKey,
-                claims: [],
-                definitionVersion: manifest.definitionVersion,
-                listModeKeys: reviewServingListModes,
-                modelId: project.modelId,
-                projectId,
-                projectionIdentity: input.chunk.projectionIdentity,
-                reviewConfigHash: requireReviewConfigHash(snapshot),
-                snapshotId: snapshot.snapshotId,
-                useAbstract: project.useAbstract,
-                useFulltext: project.useFulltext,
-                useFulltextNoImages: project.useFulltextNoImages,
-                useTitle: project.useTitle,
-              },
-              chunkDatabase,
-            )
+          return {
+            actualChecksum: checksum.actualChecksum,
+            actualCount: checksum.actualCount,
+            expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
           }
-        }, Promise.resolve())
+        },
+        writeOutput: async (tx) => {
+          const chunkDatabase = getChunkProjectorDatabase(tx)
+
+          await payloadSnapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+            await previous
+            const project = getSnapshotReviewSettings(snapshot, currentSettings)
+
+            if (project !== null) {
+              await projectReviewServingJudgmentPayloadRows(
+                {
+                  acknowledgeClaims: false,
+                  baseGeneration: input.chunk.outputBaseGeneration,
+                  chunkEndArticleId: input.chunk.chunkEndKey,
+                  chunkStartArticleId: input.chunk.chunkStartKey,
+                  claims: [],
+                  definitionVersion: manifest.definitionVersion,
+                  listModeKeys: reviewServingListModes,
+                  modelId: project.modelId,
+                  projectId,
+                  projectionIdentity: input.chunk.projectionIdentity,
+                  reviewConfigHash: requireReviewConfigHash(snapshot),
+                  snapshotId: snapshot.snapshotId,
+                  useAbstract: project.useAbstract,
+                  useFulltext: project.useFulltext,
+                  useFulltextNoImages: project.useFulltextNoImages,
+                  useTitle: project.useTitle,
+                },
+                chunkDatabase,
+              )
+            }
+          }, Promise.resolve())
+        },
       },
-    },
-    database,
-  )
+      database,
+    )
+  } catch (error) {
+    const splitSnapshot = payloadSnapshots[0]
+    const split =
+      isDuckDbOutOfMemoryError(error) && splitSnapshot !== undefined
+        ? await splitClaimedArticleRangeRebuildChunk(
+            {chunk: input.chunk, leaseOwner: input.leaseOwner, projectId, splitReason: 'duckdb_oom'},
+            database,
+          )
+        : false
+
+    if (split) {
+      return {status: 'completed' as const}
+    }
+
+    throw error
+  }
 }
 
 const getRebuildChunkProjectClaim = (input: {
@@ -1637,6 +1851,22 @@ export const runReviewServingProjectorWorkerClaimedRebuildChunk = async (
   input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
+  if (shouldPresplitArticleRangeRebuildChunk(input.chunk)) {
+    const split = await splitClaimedArticleRangeRebuildChunk(
+      {
+        chunk: input.chunk,
+        leaseOwner: input.leaseOwner,
+        projectId: requireRebuildChunkProjectId(input.chunk),
+        splitReason: 'input_row_budget',
+      },
+      database,
+    )
+
+    if (split) {
+      return {status: 'completed' as const}
+    }
+  }
+
   if (input.chunk.projectionComponent === 'projectScope') {
     return runProjectScopeRebuildChunk(input, database)
   }
