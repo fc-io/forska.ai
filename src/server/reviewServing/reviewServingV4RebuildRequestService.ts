@@ -126,6 +126,7 @@ const bootstrapOptionalComponents = ['search'] as const satisfies readonly Revie
 const fullProjectBootstrapComponents = [
   'projectScope',
   'selectedImport',
+  'summary',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 const articleScaledComponentFanOut = {
   display: listModeFanOut,
