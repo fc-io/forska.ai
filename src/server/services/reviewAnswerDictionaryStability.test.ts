@@ -189,7 +189,7 @@ test('project refresh appends dictionary values and stores judgment display meta
   ])
 })
 
-test('archived cleanup preserves dictionary rows while deleting project-scoped metadata', () => {
+test('archived cleanup deletes dictionary rows with project-scoped metadata', () => {
   const result = runScript<{
     dictionaryRows: Array<{answerId: number; answerValue: string; projectId: string}>
     projectRows: number
@@ -230,9 +230,7 @@ test('archived cleanup preserves dictionary rows while deleting project-scoped m
   `)
 
   expect(result.projectRows).toBe(0)
-  expect(result.dictionaryRows).toEqual([
-    {answerId: 3, answerValue: 'archived-answer', projectId: 'dictionary-archived-project'},
-  ])
+  expect(result.dictionaryRows).toEqual([])
 })
 
 test('dictionary pruning deletes only rows with no serving generation or filter references', () => {
