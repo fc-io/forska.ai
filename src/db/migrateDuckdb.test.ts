@@ -69,10 +69,12 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
         await database.run(\`
           CREATE TABLE app.review_rebuild_request (
             request_id VARCHAR PRIMARY KEY,
+            project_id VARCHAR NOT NULL,
             status VARCHAR NOT NULL,
             retry_after TIMESTAMPTZ,
             failed_at TIMESTAMPTZ,
             last_error VARCHAR,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
           )
         \`)
@@ -152,13 +154,15 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
           )
         \`)
         await database.run(\`
-          INSERT INTO app.review_rebuild_request (request_id, status, retry_after, failed_at, last_error)
+          INSERT INTO app.review_rebuild_request (request_id, project_id, status, retry_after, failed_at, last_error, created_at)
           VALUES (
             'request-a',
+            'project-a',
             'blocked_over_budget',
             TIMESTAMPTZ '2026-06-27T12:10:00Z',
             TIMESTAMPTZ '2026-06-27T12:00:00Z',
-            'Binder Error: Referenced column "payload_kind" not found in FROM clause'
+            'Binder Error: Referenced column "payload_kind" not found in FROM clause',
+            TIMESTAMPTZ '2026-06-27T11:55:00Z'
           )
         \`)
         await database.run(\`
