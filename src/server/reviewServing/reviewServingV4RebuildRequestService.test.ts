@@ -386,7 +386,7 @@ test('V4 rebuild request service bootstraps explicit chunks when a project has n
   expect(joined).toContain('freshReviewServingSnapshot')
 })
 
-test('V4 rebuild request service skips fresh bootstrap admission when there are no scoped articles', async () => {
+test('V4 rebuild request service returns a no-op rebuild request when there are no scoped articles', async () => {
   const {database, statements} = createFakeRequestDatabase({
     ...baseStats,
     scopedArticleCount: 0,
@@ -398,7 +398,9 @@ test('V4 rebuild request service skips fresh bootstrap admission when there are 
     requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
   )
 
-  expect(request).toBeNull()
+  expect(request.status).toBe('completed')
+  expect(request.requestId).toStartWith('rebuild:')
+  expect(request.diagnosticsJson).toMatchObject({noScopedArticles: true})
   expect(statements.join('\n')).not.toContain('INSERT INTO app.review_rebuild_request')
   expect(statements.join('\n')).not.toContain('INSERT INTO app.review_rebuild_chunk_manifest')
 })
