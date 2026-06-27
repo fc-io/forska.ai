@@ -1417,6 +1417,9 @@ test('reviews warnings respect queued dirty materializations before missing snap
 
   expect(response.status).toBe(200)
   expect(body.data.indexing.dirtyMaterialization).toMatchObject({failedCount: 0, pendingCount: 1})
+  expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.status).toBe('refreshing')
   expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
 })
 

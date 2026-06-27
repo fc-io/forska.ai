@@ -56,10 +56,15 @@ const getClock = (statements: readonly string[]) => {
   return new Date(2026, 5, 23, 16, statements.length).toISOString()
 }
 
-const getThrownError = async (run: () => Promise<unknown>) => {
-  return run().catch((error: unknown) => {
-    return error instanceof Error ? error : new Error(String(error))
-  })
+const getThrownError = async (run: () => Promise<unknown>): Promise<Error> => {
+  return run().then(
+    () => {
+      return new Error('Expected operation to throw')
+    },
+    (error: unknown) => {
+      return error instanceof Error ? error : new Error(String(error))
+    },
+  )
 }
 
 const createFakeRequestDatabase = (options: FakeRequestDatabaseOptions = {}) => {
@@ -242,6 +247,35 @@ test('V4 rebuild requests admit budgeted component chunks above the chunk manife
   expect(statements.join('\n')).toContain('INSERT INTO app.review_rebuild_chunk_manifest')
   expect(statements.join('\n')).toContain("'rebuild:admitted'")
   expect(statements.join('\n')).toContain("'admitted'")
+})
+
+test('V4 rebuild request re-admission does not delete obsolete running chunks', async () => {
+  const {database, statements} = createFakeRequestDatabase()
+
+  await createReviewServingRebuildRequest(
+    {
+      chunks: [
+        {
+          chunkEndKey: 'article:010',
+          chunkStartKey: 'article:001',
+          inputDigest: 'digest-v1',
+          inputWatermark: 5,
+          outputBaseGeneration: 1,
+          projectId: 'project-v4',
+          projectionComponent: 'summary',
+          projectionIdentity: 'summary:v1',
+        },
+      ],
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['summary'],
+      requestId: 'rebuild:readmitted-running',
+    },
+    database,
+  )
+
+  expect(statements.join('\n')).toContain('DELETE FROM app.review_rebuild_chunk_manifest')
+  expect(statements.join('\n')).toContain("AND status <> 'running'")
 })
 
 test('over-budget V4 rebuild requests park before their chunks can be claimable', async () => {

@@ -593,6 +593,7 @@ const deleteObsoleteReviewServingRebuildChunks = async (
     DELETE FROM app.review_rebuild_chunk_manifest
     WHERE request_id = ${getSqlLiteral(input.requestId)}
       AND chunk_id NOT IN (${getSqlStringList(chunkIds)})
+      AND status <> 'running'
   `)
 }
 

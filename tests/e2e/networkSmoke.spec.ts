@@ -25,6 +25,8 @@ const forbiddenRuntimeLogPatterns = [
   {label: 'judge unexpected SIGTERM exit', pattern: /\[server:stack\] judge pid=\d+ exited with code 143/},
 ] as const
 const warningEndpointPath = '/api/projectsreviewswarnings'
+const warningsEndpointQueuedProbeDelayMs = 1_000
+const warningsEndpointQueuedProbeMaxAttempts = 20
 
 type ApiDataResponse<T> = {data: T}
 type ArticleSearchResponse = Array<{articleId: string | null; articleTitle: string; id: string}>
@@ -290,14 +292,10 @@ const fetchWarningsEndpointInspection = async (projectId: string) => {
   return getWarningsEndpointInspection(body)
 }
 
-const assertWarningsEndpointBodyHasHealthyIndexing = async (source: string, body: string) => {
-  const inspection = getWarningsEndpointInspection(body)
-
-  if (inspection.kind === 'failure') {
-    throw new Error(`${source}: ${inspection.details}`)
-  }
-
-  return inspection
+const waitForWarningsEndpointQueuedProbeRetry = async () => {
+  return new Promise((resolve) => {
+    setTimeout(resolve, warningsEndpointQueuedProbeDelayMs)
+  })
 }
 
 const getForbiddenRuntimeLogMatches = (text: string) => {
@@ -363,21 +361,25 @@ const getJson = async <T>(url: string, message: string): Promise<T> => {
   return assertOk<T>(response, message)
 }
 
-const postWarningsEndpointProbe = async (projectId: string) => {
-  const response = await fetch(`${apiBaseUrl}${warningEndpointPath}`, {
-    body: JSON.stringify({projectId}),
-    headers: {'content-type': 'application/json'},
-    method: 'POST',
-  })
-  const body = await response.text()
+const postWarningsEndpointProbe = async (projectId: string, attempt = 1): Promise<void> => {
+  const inspection = await fetchWarningsEndpointInspection(projectId)
 
-  assertTextDoesNotContainLargeRebuildFailure(`warnings endpoint response for ${projectId}`, body)
-
-  if (!response.ok) {
-    throw new Error(`Warnings endpoint probe failed for ${projectId}: ${response.status} ${body}`)
+  if (inspection.kind === 'failure') {
+    throw new Error(`warnings endpoint response for ${projectId}: ${inspection.details}`)
   }
 
-  await assertWarningsEndpointBodyHasHealthyIndexing(`warnings endpoint response for ${projectId}`, body)
+  if (inspection.kind === 'ok') {
+    return
+  }
+
+  if (attempt >= warningsEndpointQueuedProbeMaxAttempts) {
+    throw new Error(
+      `warnings endpoint response for ${projectId} stayed queued after ${attempt} probes: ${formatIndexingState(inspection.data.indexing)}`,
+    )
+  }
+
+  await waitForWarningsEndpointQueuedProbeRetry()
+  return postWarningsEndpointProbe(projectId, attempt + 1)
 }
 
 const getFirstExistingId = <T extends {id: string}>(values: T[]) => {
