@@ -839,7 +839,7 @@ test('dirty batch routing keeps review pages counts warnings and prompt queueing
               indexing: {
                 inFlightArticleRefreshCount: warnings.indexing.inFlightArticleRefreshCount,
                 inFlightProjectRefreshCount: warnings.indexing.inFlightProjectRefreshCount,
-                oldestQueuedAt: warnings.indexing.oldestQueuedAt,
+                hasOldestQueuedAt: Boolean(warnings.indexing.oldestQueuedAt),
                 queuedArticleRefreshCount: warnings.indexing.queuedArticleRefreshCount,
                 queuedProjectRefreshCount: warnings.indexing.queuedProjectRefreshCount,
                 queuedRefreshCount: warnings.indexing.queuedRefreshCount,
