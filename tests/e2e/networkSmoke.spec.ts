@@ -12,8 +12,7 @@ const networkSmokeDbMode = process.env.FORSKA_NETWORK_SMOKE_DB_MODE === 'current
 const networkSmokeSeedMode = process.env.FORSKA_NETWORK_SMOKE_SEED_MODE === 'existing' ? 'existing' : 'synthetic'
 const runtimeLogDir = process.env.LOG_DIR ?? ''
 const shouldSkipMutatingRouteLoads = process.env.FORSKA_NETWORK_SMOKE_SKIP_MUTATING_ROUTE_LOADS === 'true'
-const areServerMutationsDisabled =
-  networkSmokeDbMode === 'current' || process.env.FORSKA_DISABLE_SERVER_MUTATIONS === 'true'
+const areServerMutationsDisabled = process.env.FORSKA_DISABLE_SERVER_MUTATIONS === 'true'
 const largeRebuildFailureText = 'Large rebuild failed'
 const forbiddenRuntimeLogPatterns = [
   {label: 'API role DuckDB ownership', pattern: /Current server role api cannot own DuckDB/},
