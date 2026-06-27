@@ -16,7 +16,10 @@ type PipeTextCollector = {done: Promise<void>; getText: () => string}
 const bunExecutablePath = realpathSync(process.execPath)
 const realDevServerSmokeEnabled = process.env.FORSKA_REAL_DEV_SERVER_SMOKE === 'true'
 const forbiddenDevServerOutputPatterns = [
+  {label: 'API role DuckDB ownership', pattern: /Current server role api cannot own DuckDB/},
+  {label: 'DuckDB fatal runtime restart', pattern: /\[duckdb\] restarting embedded runtime after fatal invalidation/},
   {label: 'DuckDB owner heartbeat failure', pattern: /\[duckdb-owner\] heartbeat failed/},
+  {label: 'review bulk worker loop failure', pattern: /\[reviewBulkOperationWorker\] background loop failed/},
   {label: 'maintenance restart', pattern: /\[server:stack\] restarting maintenance/},
   {label: 'maintenance unexpected exit', pattern: /\[server:stack\] maintenance pid=\d+ exited with code 0/},
   {label: 'judge duplicate replacement', pattern: /judge replacement is already ready after SIGTERM/},
