@@ -73,6 +73,12 @@ SET
   last_error = NULL,
   updated_at = current_timestamp
 WHERE request.status IN ('failed', 'blocked_over_budget')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM app.review_rebuild_request newer_request
+    WHERE newer_request.project_id = request.project_id
+      AND newer_request.created_at > request.created_at
+  )
   AND EXISTS (
     SELECT 1
     FROM app.review_rebuild_chunk_manifest chunk
@@ -82,7 +88,7 @@ WHERE request.status IN ('failed', 'blocked_over_budget')
       AND chunk.last_error ILIKE '%Referenced column "payload_kind" not found%'
   );
 
-UPDATE app.review_rebuild_chunk_manifest
+UPDATE app.review_rebuild_chunk_manifest AS chunk
 SET
   status = 'pending',
   admission_state = 'admitted',
@@ -94,6 +100,17 @@ SET
   lease_expires_at = NULL,
   last_error = NULL,
   updated_at = current_timestamp
-WHERE projection_component = 'judgmentInputContent'
-  AND status IN ('failed', 'blocked_over_budget', 'quarantined')
-  AND last_error ILIKE '%Referenced column "payload_kind" not found%';
+WHERE chunk.projection_component = 'judgmentInputContent'
+  AND chunk.status IN ('failed', 'blocked_over_budget', 'quarantined')
+  AND chunk.last_error ILIKE '%Referenced column "payload_kind" not found%'
+  AND EXISTS (
+    SELECT 1
+    FROM app.review_rebuild_request request
+    WHERE request.request_id = chunk.request_id
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_request newer_request
+        WHERE newer_request.project_id = request.project_id
+          AND newer_request.created_at > request.created_at
+      )
+  );

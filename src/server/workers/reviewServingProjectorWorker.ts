@@ -409,7 +409,6 @@ const splittableArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjecti
   'humanStatus',
   'queue',
   'posting',
-  'summary',
   'judgmentInputContent',
 ])
 

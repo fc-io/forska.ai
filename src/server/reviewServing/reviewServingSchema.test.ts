@@ -429,6 +429,9 @@ test('judgment detail payload-kind forward migration repairs already-applied V4 
     "chunk.status IN ('failed', 'blocked_over_budget', 'quarantined')",
   )
   expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
+    'newer_request.project_id = request.project_id',
+  )
+  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
     "status IN ('failed', 'blocked_over_budget', 'quarantined')",
   )
   expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
