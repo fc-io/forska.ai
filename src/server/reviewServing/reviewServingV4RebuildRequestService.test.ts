@@ -49,7 +49,7 @@ type FakeRequestRow = {
   retryCount: number
   retryPolicyJson: unknown
   sourceWatermarksJson: unknown
-  status: 'admitted' | 'blocked_over_budget'
+  status: 'admitted' | 'blocked_over_budget' | 'running'
   updatedAt: string
 }
 
@@ -236,14 +236,17 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     }
 
     if (statement.includes('FROM app.review_rebuild_request')) {
-      if (statement.includes("status IN ('admitted', 'running')")) {
+      if (statement.includes("status = 'admitted'") || statement.includes("status IN ('admitted', 'running')")) {
         const strings = getSqlStrings(statement)
         const projectId = strings[0] ?? ''
         const reasonFilter = statement.includes('AND reason =') ? strings[1] : undefined
+        const allowedStatuses = statement.includes("status IN ('admitted', 'running')")
+          ? ['admitted', 'running']
+          : ['admitted']
         const activeRequest = Array.from(requests.values()).find((request) => {
           return (
             request.projectId === projectId
-            && request.status === 'admitted'
+            && allowedStatuses.includes(request.status)
             && request.admissionState === 'admitted'
             && (reasonFilter === undefined || request.reason === reasonFilter)
           )
@@ -268,7 +271,17 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     },
   } satisfies ReviewServingChunkManifestRepositoryDatabase
 
-  return {database, statements}
+  const setRequestStatus = (requestId: string, status: FakeRequestRow['status']) => {
+    const request = requests.get(requestId)
+
+    if (!request) {
+      throw new Error(`Expected fake rebuild request ${requestId} to exist`)
+    }
+
+    requests.set(requestId, {...request, status})
+  }
+
+  return {database, setRequestStatus, statements}
 }
 
 test('V4 rebuild request service estimates admission budget from project data', async () => {
@@ -398,6 +411,28 @@ test('V4 missing snapshot rebuild requests reuse active admitted work', async ()
 
   expect(secondRequest.requestId).toBe(firstRequest.requestId)
   expect(rebuildRequestInsertCount).toBe(1)
+})
+
+test('V4 missing snapshot rebuild requests do not reuse running active work', async () => {
+  const {database, setRequestStatus, statements} = createFakeRequestDatabase({
+    ...baseStats,
+    snapshotCount: 0,
+    snapshotUpdatedAt: null,
+  })
+
+  const firstRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  setRequestStatus(firstRequest.requestId, 'running')
+  const secondRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const rebuildRequestInsertCount = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_request')
+  }).length
+
+  expect(secondRequest.status).toBe('admitted')
+  expect(rebuildRequestInsertCount).toBe(2)
 })
 
 test('V4 missing snapshot rebuild requests do not reuse unrelated active work', async () => {
