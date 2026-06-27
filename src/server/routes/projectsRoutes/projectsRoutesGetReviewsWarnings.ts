@@ -5,6 +5,7 @@ import {
   type ReviewServingDiagnostics,
 } from '../../reviewServing/reviewServingDiagnosticsRepository.ts'
 import {readReviewServingRows} from '../../reviewServing/reviewServingReader.ts'
+import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getDuckdbMartMaintenanceService} from '../../services/getDuckdbMartMaintenanceService.ts'
@@ -797,7 +798,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const throughputSnapshot = martRefreshService.getThroughputSnapshot()
     const currentNow = new Date()
     const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
-    const servingDiagnostics = await getReviewServingDiagnostics({projectId, reviewConfigHash})
+    let servingDiagnostics = await getReviewServingDiagnostics({projectId, reviewConfigHash})
     const warningSnapshot = await readReviewServingRows({
       allowStale: true,
       contractKey: 'review.warning.snapshot',
@@ -831,6 +832,17 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       warningSnapshot.status === 'accepted'
       && isUsableReviewServingWarningSnapshot(warningSnapshot.diagnostics.manifest.status)
     const hasReadableReviewServingRows = warningSnapshot.status === 'accepted'
+    const shouldRequestMissingSnapshotRepair =
+      !hasReadableReviewServingRows
+      && enabledPromptCount > 0
+      && hasAnyArticlesInScope
+      && servingDiagnostics.rebuildChunks.blockedOverBudgetCount > 0
+
+    if (shouldRequestMissingSnapshotRepair) {
+      await requestReviewServingV4Rebuild({projectId, reason: 'missingReviewServingSnapshot'})
+      servingDiagnostics = await getReviewServingDiagnostics({projectId, reviewConfigHash})
+    }
+
     const hasReviewServingStateThatCanProgress = getHasReviewServingStateThatCanProgress(servingDiagnostics)
     const projectRefreshState = initialProjectRefreshState
     const projectLargeRebuildState = initialProjectLargeRebuildState

@@ -1338,6 +1338,34 @@ test('reviews warnings report stale indexing without queueing a large rebuild wh
   expect(body.data.indexing.status).toBe('stale')
 })
 
+test('reviews warnings queue bounded V4 repair when missing serving snapshot was blocked over budget', async () => {
+  const projectId = 'project-missing-serving-blocked-bootstrap-warning'
+
+  await insertProjectFixture(projectId)
+  await insertReviewRebuildRequest({
+    createdAt: '2026-04-02T12:00:00.000Z',
+    projectId,
+    requestId: 'request-missing-serving-blocked-bootstrap-warning',
+    status: 'blocked_over_budget',
+    updatedAt: '2026-04-02T12:00:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-missing-serving-blocked-bootstrap-warning',
+    createdAt: '2026-04-02T12:00:00.000Z',
+    projectId,
+    requestId: 'request-missing-serving-blocked-bootstrap-warning',
+    status: 'blocked_over_budget',
+    updatedAt: '2026-04-02T12:00:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
 test('reviews warnings report stale indexing for fresh idle route scope without V4 state', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')

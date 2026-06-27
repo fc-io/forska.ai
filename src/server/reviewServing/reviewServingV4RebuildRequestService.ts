@@ -91,11 +91,7 @@ type ReviewServingV4RebuildStatsRow = {
   summaryHumanJudgmentUpdatedAt: string | null
 }
 
-type ReviewServingV4BootstrapArticleBoundsRow = {
-  chunkEndKey: string | null
-  chunkStartKey: string | null
-  scopedArticleCount: number
-}
+type ReviewServingV4BootstrapArticleRangeRow = {chunkEndKey: string | null; chunkStartKey: string | null}
 
 type ReviewServingV4BootstrapDirtyWatermarkRow = {latestSourceHighWaterMark: number | string; sourcePartition: string}
 
@@ -107,6 +103,7 @@ export type RequestReviewServingV4RebuildInput = {
 
 type PreparedReviewServingV4Bootstrap = {
   chunks: readonly ReviewServingRebuildChunkManifestInput[]
+  chunkCount: number
   componentRequirements: ReviewServingComponentRequirements
   components: readonly ReviewServingProjectionComponent[]
   inputWatermark: number
@@ -199,6 +196,39 @@ const getEstimatedOutputBytes = (estimatedOutputRows: number) => {
   return estimatedOutputRows * 512
 }
 
+const getPositiveBudgetRatio = (estimate: number | null | undefined, budget: number | null | undefined) => {
+  return estimate === undefined || estimate === null || budget === undefined || budget === null || budget <= 0
+    ? 0
+    : estimate / budget
+}
+
+const getReviewServingV4BootstrapChunkCount = (input: {
+  articleCount: number
+  budget: typeof defaultRequestBudget
+  estimate: ReviewServingRebuildRequestEstimate
+}) => {
+  const scalableRatio = Math.max(
+    getPositiveBudgetRatio(input.estimate.estimatedInputRows, input.budget.maxInputRows),
+    getPositiveBudgetRatio(input.estimate.estimatedOutputBytes, input.budget.maxOutputBytes),
+    getPositiveBudgetRatio(input.estimate.estimatedOutputRows, input.budget.maxOutputRows),
+    getPositiveBudgetRatio(input.estimate.estimatedPayloadBytes, input.budget.maxPayloadBytes),
+    getPositiveBudgetRatio(input.estimate.estimatedTempBytes, input.budget.maxTempBytes),
+  )
+  const requestedChunkCount = Math.max(1, Math.ceil(scalableRatio))
+
+  return Math.max(1, Math.min(input.articleCount, requestedChunkCount))
+}
+
+const getPerBootstrapChunkStats = (input: {chunkCount: number; stats: ReviewServingV4RebuildStatsRow}) => {
+  return {
+    ...input.stats,
+    humanJudgmentCount: Math.ceil(getSafeCount(input.stats.humanJudgmentCount) / input.chunkCount),
+    judgmentCount: Math.ceil(getSafeCount(input.stats.judgmentCount) / input.chunkCount),
+    scopedArticleCount: Math.ceil(getSafeCount(input.stats.scopedArticleCount) / input.chunkCount),
+    summaryHumanJudgmentCount: Math.ceil(getSafeCount(input.stats.summaryHumanJudgmentCount) / input.chunkCount),
+  }
+}
+
 const getReviewServingV4BootstrapHash = (label: string, value: ReviewServingIdentityValue) => {
   return createHash('sha256')
     .update(`${label}:${getStableReviewServingJson(value)}`)
@@ -242,16 +272,12 @@ const getReviewServingV4BootstrapProjectionIdentity = (input: {
   return buildReviewDirtyProjectionIdentity({projectId: input.projectId, projectionComponent: input.component})
 }
 
-const getReviewServingV4BootstrapArticleBounds = async (
-  input: {projectId: string},
+const getReviewServingV4BootstrapArticleRanges = async (
+  input: {chunkCount: number; projectId: string},
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
-  const [row] = await database.queryJson<ReviewServingV4BootstrapArticleBoundsRow>(`
-    SELECT
-      MIN(article_id) AS chunkStartKey,
-      MAX(article_id) AS chunkEndKey,
-      CAST(COUNT(*) AS INTEGER) AS scopedArticleCount
-    FROM (
+  const rows = await database.queryJson<ReviewServingV4BootstrapArticleRangeRow>(`
+    WITH scoped_article AS (
       SELECT project_article.article_id
       FROM app.project_article project_article
       INNER JOIN app.project project ON project.id = project_article.project_id
@@ -269,16 +295,29 @@ const getReviewServingV4BootstrapArticleBounds = async (
       WHERE project_import_route.project_id = ${getSqlLiteral(input.projectId)}
         AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
         AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
-    ) scoped_article
+    ),
+    chunked_article AS (
+      SELECT
+        article_id,
+        NTILE(${input.chunkCount}) OVER (ORDER BY article_id) AS chunk_index
+      FROM (
+        SELECT DISTINCT article_id
+        FROM scoped_article
+      ) distinct_article
+    )
+    SELECT
+      MIN(article_id) AS chunkStartKey,
+      MAX(article_id) AS chunkEndKey
+    FROM chunked_article
+    GROUP BY chunk_index
+    ORDER BY chunk_index
   `)
-  const scopedArticleCount = Number(row?.scopedArticleCount ?? 0)
 
-  return row?.chunkStartKey === null
-    || row?.chunkStartKey === undefined
-    || row.chunkEndKey === null
-    || scopedArticleCount === 0
-    ? null
-    : {chunkEndKey: row.chunkEndKey, chunkStartKey: row.chunkStartKey}
+  return rows.flatMap((row) => {
+    return row.chunkStartKey === null || row.chunkEndKey === null
+      ? []
+      : [{chunkEndKey: row.chunkEndKey, chunkStartKey: row.chunkStartKey}]
+  })
 }
 
 const getReviewServingV4BootstrapSourceWatermarks = async (
@@ -339,37 +378,39 @@ const upsertReviewServingV4BootstrapProjectionManifests = async (
 }
 
 const getReviewServingV4BootstrapChunks = (input: {
-  articleBounds: {chunkEndKey: string; chunkStartKey: string}
+  articleRanges: readonly {chunkEndKey: string; chunkStartKey: string}[]
   components: readonly ReviewServingProjectionComponent[]
   inputWatermark: number
   projectId: string
   snapshotId: string
   sourceWatermarks: Record<string, number>
 }): readonly ReviewServingRebuildChunkManifestInput[] => {
-  return input.components.map((component) => {
-    return {
-      chunkEndKey: input.articleBounds.chunkEndKey,
-      chunkStartKey: input.articleBounds.chunkStartKey,
-      inputDigest: 'freshReviewServingSnapshot',
-      inputWatermark:
-        component === 'selectedImport' ? (input.sourceWatermarks.importRunArticle ?? 0) : input.inputWatermark,
-      outputBaseGeneration: 0,
-      projectId: input.projectId,
-      projectionComponent: component,
-      projectionIdentity: getReviewServingV4BootstrapProjectionIdentity({component, projectId: input.projectId}),
-      snapshotId: input.snapshotId,
-      snapshotCount: 1,
-    }
+  return input.articleRanges.flatMap((articleRange) => {
+    return input.components.map((component) => {
+      return {
+        chunkEndKey: articleRange.chunkEndKey,
+        chunkStartKey: articleRange.chunkStartKey,
+        inputDigest: 'freshReviewServingSnapshot',
+        inputWatermark:
+          component === 'selectedImport' ? (input.sourceWatermarks.importRunArticle ?? 0) : input.inputWatermark,
+        outputBaseGeneration: 0,
+        projectId: input.projectId,
+        projectionComponent: component,
+        projectionIdentity: getReviewServingV4BootstrapProjectionIdentity({component, projectId: input.projectId}),
+        snapshotId: input.snapshotId,
+        snapshotCount: 1,
+      }
+    })
   })
 }
 
 const prepareReviewServingV4Bootstrap = async (
-  input: {components: readonly ReviewServingProjectionComponent[]; projectId: string},
+  input: {chunkCount: number; components: readonly ReviewServingProjectionComponent[]; projectId: string},
   database: ReviewServingChunkManifestRepositoryTransaction,
 ): Promise<PreparedReviewServingV4Bootstrap | null> => {
-  const articleBounds = await getReviewServingV4BootstrapArticleBounds(input, database)
+  const articleRanges = await getReviewServingV4BootstrapArticleRanges(input, database)
 
-  if (articleBounds === null) {
+  if (articleRanges.length === 0) {
     return null
   }
 
@@ -396,13 +437,14 @@ const prepareReviewServingV4Bootstrap = async (
 
   return {
     chunks: getReviewServingV4BootstrapChunks({
-      articleBounds,
+      articleRanges,
       components,
       inputWatermark,
       projectId: input.projectId,
       snapshotId,
       sourceWatermarks,
     }),
+    chunkCount: articleRanges.length,
     componentRequirements,
     components,
     inputWatermark,
@@ -786,10 +828,29 @@ export const requestReviewServingV4RebuildEffect = (
       ? getReviewServingV4BootstrapComponents(requestedComponents)
       : requestedComponents
     const estimateStats = isFreshBootstrap ? {...stats, snapshotCount: 1} : stats
+    const totalEstimate = getReviewServingV4RebuildEstimate(estimateStats, components)
+    const bootstrapChunkCount =
+      isFreshBootstrap && input.reason === 'missingReviewServingSnapshot'
+        ? getReviewServingV4BootstrapChunkCount({
+            articleCount: getSafeCount(stats.scopedArticleCount),
+            budget: defaultRequestBudget,
+            estimate: totalEstimate,
+          })
+        : 1
+    const requestEstimate =
+      bootstrapChunkCount === 1
+        ? totalEstimate
+        : getReviewServingV4RebuildEstimate(
+            getPerBootstrapChunkStats({chunkCount: bootstrapChunkCount, stats: estimateStats}),
+            components,
+          )
 
     return database.transaction(async (tx) => {
       const bootstrap = isFreshBootstrap
-        ? await prepareReviewServingV4Bootstrap({components, projectId: input.projectId}, tx)
+        ? await prepareReviewServingV4Bootstrap(
+            {chunkCount: bootstrapChunkCount, components, projectId: input.projectId},
+            tx,
+          )
         : null
       const requestDatabase = {
         queryJson: tx.queryJson,
@@ -807,10 +868,12 @@ export const requestReviewServingV4RebuildEffect = (
           chunks: bootstrap?.chunks ?? undefined,
           diagnostics: {
             bootstrapSnapshot: isFreshBootstrap,
+            bootstrapChunkCount: bootstrap?.chunkCount ?? null,
             source: 'phase5b-v4-rebuild-request-service',
+            totalEstimate,
             v4Cutover: true,
           },
-          estimate: getReviewServingV4RebuildEstimate(estimateStats, components),
+          estimate: requestEstimate,
           identity: {componentSet: components, requestKind: 'v4-review-serving-rebuild'},
           projectId: input.projectId,
           reason: input.reason,

@@ -119,6 +119,15 @@ const fakeRebuildComponents = [
   'search',
 ] as const
 
+const getFakeArticleRanges = (chunkCount: number) => {
+  return Array.from({length: chunkCount}, (_, index) => {
+    return {
+      chunkEndKey: `article-${String(index).padStart(3, '0')}-z`,
+      chunkStartKey: `article-${String(index).padStart(3, '0')}-a`,
+    }
+  })
+}
+
 const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabaseOptions = {}) => {
   const requests = new Map<string, FakeRequestRow>()
   const projectionManifests = new Map<string, FakeProjectionManifestRow>()
@@ -200,6 +209,12 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
 
     if (statement.includes('WITH project_settings')) {
       return [stats] as T[]
+    }
+
+    if (statement.includes('NTILE(')) {
+      const chunkCount = Number(statement.match(/NTILE\((\d+)\)/u)?.[1] ?? 1)
+
+      return getFakeArticleRanges(chunkCount) as T[]
     }
 
     if (statement.includes('FROM app.project_article')) {
@@ -391,9 +406,11 @@ test('V4 rebuild request service keeps selected-import bootstrap chunks on impor
 
   expect(request.status).toBe('admitted')
   expect(selectedImportChunk).toMatch(
-    /'selectedImport',\s*'[^']+',\s*'freshReviewServingSnapshot',\s*4,\s*'article-a'/u,
+    /'selectedImport',\s*'[^']+',\s*'freshReviewServingSnapshot',\s*4,\s*'article-000-a'/u,
   )
-  expect(projectScopeChunk).toMatch(/'projectScope',\s*'[^']+',\s*'freshReviewServingSnapshot',\s*10,\s*'article-a'/u)
+  expect(projectScopeChunk).toMatch(
+    /'projectScope',\s*'[^']+',\s*'freshReviewServingSnapshot',\s*10,\s*'article-000-a'/u,
+  )
 })
 
 test('V4 missing snapshot rebuild requests reuse active admitted work', async () => {
@@ -456,7 +473,7 @@ test('V4 missing snapshot rebuild requests do not reuse unrelated active work', 
   expect(rebuildRequestInsertCount).toBe(2)
 })
 
-test('V4 rebuild request service does not seed candidate state for over-budget bootstraps', async () => {
+test('V4 rebuild request service splits missing snapshot bootstraps into bounded article chunks', async () => {
   const {database, statements} = createFakeRequestDatabase({
     ...baseStats,
     humanJudgmentCount: 0,
@@ -473,10 +490,14 @@ test('V4 rebuild request service does not seed candidate state for over-budget b
   )
   const joined = statements.join('\n')
 
-  expect(request.status).toBe('blocked_over_budget')
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+  expect(joined).toContain('NTILE(')
   expect(joined).toContain('INSERT INTO app.review_rebuild_chunk_manifest')
-  expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
-  expect(joined).not.toContain('INSERT INTO app.review_serving_snapshot_manifest')
+  expect(joined).toContain('article-000-a')
+  expect(joined).toContain('article-001-a')
+  expect(joined).toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(joined).toContain('INSERT INTO app.review_serving_snapshot_manifest')
 })
 
 test('V4 rebuild request service accounts for list-mode fan-out in admission budgets', async () => {
