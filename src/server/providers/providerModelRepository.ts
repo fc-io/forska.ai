@@ -463,7 +463,14 @@ export const createProviderModel = async ({
           `,
           variant,
         })
-    const row = created
+    const row =
+      created
+      ?? (await getProviderModelRowByNaturalKey({
+        databaseRunner,
+        providerConnectionId: connection.id,
+        remoteModelId,
+        variant,
+      }))
 
     if (row) {
       await advanceProviderModelProjectTransferDirtyTokens({databaseRunner, reason: 'providerModel.create'})

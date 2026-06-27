@@ -570,7 +570,7 @@ export const getActiveReviewServingRebuildRequestForProject = async (
     ${getRequestSelectSql()}
     WHERE project_id = ${getSqlLiteral(input.projectId)}
       ${reasonFilter}
-      AND status IN ('admitted', 'running')
+      AND status = 'admitted'
       AND admission_state = 'admitted'
     ORDER BY priority DESC, updated_at ASC, request_id ASC
     LIMIT 1
