@@ -841,6 +841,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       initialProjectRefreshState.hasUnresolvedQuarantineBarrier
       || initialProjectRefreshState.refreshStatus === 'failed'
       || initialProjectRefreshState.dirtyMaterialization.isActive
+      || initialProjectRefreshState.dirtyMaterialization.pendingCount > 0
       || initialProjectRefreshState.dirtyMaterialization.failedCount > 0
       || initialProjectRefreshState.dirtyMaterialization.unreconciledCount > 0
       || getHasActiveLease(initialProjectRefreshState.leaseExpiresAt, currentNow)

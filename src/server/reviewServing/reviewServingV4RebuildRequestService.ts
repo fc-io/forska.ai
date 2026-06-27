@@ -28,6 +28,7 @@ import {
   createReviewServingRebuildRequest,
   getActiveReviewServingRebuildRequestForProject,
   type ReviewServingRebuildRequest,
+  type ReviewServingRebuildRequestBudget,
   type ReviewServingRebuildRequestEstimate,
 } from './reviewServingRebuildRequestRepository.ts'
 import {getCurrentReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
@@ -218,17 +219,79 @@ const getPositiveBudgetRatio = (estimate: number | null | undefined, budget: num
     : estimate / budget
 }
 
+const getPositiveRemainingBudgetRatio = (input: {
+  budget: number | null | undefined
+  fixedEstimate: number | null | undefined
+  scalableEstimate: number | null | undefined
+}) => {
+  const scalableEstimate = input.scalableEstimate ?? 0
+  const remainingBudget = (input.budget ?? 0) - (input.fixedEstimate ?? 0)
+
+  return scalableEstimate <= 0 ? 0 : getPositiveBudgetRatio(scalableEstimate, remainingBudget)
+}
+
+const requestBudgetPairs = [
+  ['estimatedInputRows', 'maxInputRows', 'input rows'],
+  ['estimatedOutputRows', 'maxOutputRows', 'output rows'],
+  ['estimatedOutputBytes', 'maxOutputBytes', 'output bytes'],
+  ['estimatedPayloadBytes', 'maxPayloadBytes', 'payload bytes'],
+  ['estimatedPromptCount', 'maxPromptCount', 'prompt count'],
+  ['estimatedSnapshotCount', 'maxSnapshotCount', 'snapshot count'],
+  ['estimatedTempBytes', 'maxTempBytes', 'temp bytes'],
+] as const
+
+const getReviewServingV4RebuildOverBudgetReason = (
+  estimate: ReviewServingRebuildRequestEstimate,
+  budget: ReviewServingRebuildRequestBudget,
+) => {
+  const exceeded = requestBudgetPairs.flatMap(([estimateKey, budgetKey, label]) => {
+    const estimatedValue = estimate[estimateKey]
+    const maxValue = budget[budgetKey]
+
+    return estimatedValue !== null
+      && estimatedValue !== undefined
+      && maxValue !== null
+      && maxValue !== undefined
+      && estimatedValue > maxValue
+      ? [`${label}: estimated ${estimatedValue} > max ${maxValue}`]
+      : []
+  })
+
+  return exceeded[0] ?? null
+}
+
 const getReviewServingV4BootstrapChunkCount = (input: {
   articleCount: number
   budget: typeof defaultRequestBudget
-  estimate: ReviewServingRebuildRequestEstimate
+  fixedEstimate: ReviewServingRebuildRequestEstimate
+  scalableEstimate: ReviewServingRebuildRequestEstimate
 }) => {
   const scalableRatio = Math.max(
-    getPositiveBudgetRatio(input.estimate.estimatedInputRows, input.budget.maxInputRows),
-    getPositiveBudgetRatio(input.estimate.estimatedOutputBytes, input.budget.maxOutputBytes),
-    getPositiveBudgetRatio(input.estimate.estimatedOutputRows, input.budget.maxOutputRows),
-    getPositiveBudgetRatio(input.estimate.estimatedPayloadBytes, input.budget.maxPayloadBytes),
-    getPositiveBudgetRatio(input.estimate.estimatedTempBytes, input.budget.maxTempBytes),
+    getPositiveRemainingBudgetRatio({
+      budget: input.budget.maxInputRows,
+      fixedEstimate: input.fixedEstimate.estimatedInputRows,
+      scalableEstimate: input.scalableEstimate.estimatedInputRows,
+    }),
+    getPositiveRemainingBudgetRatio({
+      budget: input.budget.maxOutputBytes,
+      fixedEstimate: input.fixedEstimate.estimatedOutputBytes,
+      scalableEstimate: input.scalableEstimate.estimatedOutputBytes,
+    }),
+    getPositiveRemainingBudgetRatio({
+      budget: input.budget.maxOutputRows,
+      fixedEstimate: input.fixedEstimate.estimatedOutputRows,
+      scalableEstimate: input.scalableEstimate.estimatedOutputRows,
+    }),
+    getPositiveRemainingBudgetRatio({
+      budget: input.budget.maxPayloadBytes,
+      fixedEstimate: input.fixedEstimate.estimatedPayloadBytes,
+      scalableEstimate: input.scalableEstimate.estimatedPayloadBytes,
+    }),
+    getPositiveRemainingBudgetRatio({
+      budget: input.budget.maxTempBytes,
+      fixedEstimate: input.fixedEstimate.estimatedTempBytes,
+      scalableEstimate: input.scalableEstimate.estimatedTempBytes,
+    }),
   )
   const requestedChunkCount = Math.max(1, Math.ceil(scalableRatio))
 
@@ -286,6 +349,28 @@ const getReviewServingV4BootstrapProjectionIdentity = (input: {
   projectId: string
 }) => {
   return buildReviewDirtyProjectionIdentity({projectId: input.projectId, projectionComponent: input.component})
+}
+
+const getReviewServingV4BootstrapPlaceholderChunks = (input: {
+  components: readonly ReviewServingProjectionComponent[]
+  inputWatermark: number
+  projectId: string
+  sourceWatermarks: Record<string, number>
+}) => {
+  return getReviewServingV4BootstrapComponents(input.components).map((component) => {
+    return {
+      chunkEndKey: '',
+      chunkStartKey: '',
+      inputDigest: 'freshReviewServingSnapshot',
+      inputWatermark:
+        component === 'selectedImport' ? (input.sourceWatermarks.importRunArticle ?? 0) : input.inputWatermark,
+      outputBaseGeneration: 0,
+      projectId: input.projectId,
+      projectionComponent: component,
+      projectionIdentity: getReviewServingV4BootstrapProjectionIdentity({component, projectId: input.projectId}),
+      snapshotCount: 1,
+    }
+  })
 }
 
 const getReviewServingV4BootstrapArticleRanges = async (
@@ -894,12 +979,21 @@ export const requestReviewServingV4RebuildEffect = (
     const totalEstimate = getReviewServingV4RebuildEstimate(estimateStats, components)
     const articleRangeBootstrapComponents = getArticleRangeBootstrapComponents(components)
     const fullProjectBootstrapComponents = getFullProjectBootstrapComponents(components)
+    const fullProjectBootstrapEstimate = getReviewServingV4RebuildEstimate(
+      estimateStats,
+      fullProjectBootstrapComponents,
+    )
+    const articleRangeBootstrapEstimate = getReviewServingV4RebuildEstimate(
+      estimateStats,
+      articleRangeBootstrapComponents,
+    )
     const bootstrapChunkCount =
       isFreshBootstrap && input.reason === 'missingReviewServingSnapshot'
         ? getReviewServingV4BootstrapChunkCount({
             articleCount: getSafeCount(stats.scopedArticleCount),
             budget: defaultRequestBudget,
-            estimate: totalEstimate,
+            fixedEstimate: fullProjectBootstrapEstimate,
+            scalableEstimate: articleRangeBootstrapEstimate,
           })
         : 1
     const requestEstimate =
@@ -911,14 +1005,37 @@ export const requestReviewServingV4RebuildEffect = (
             fullProjectComponents: fullProjectBootstrapComponents,
             stats: estimateStats,
           })
+    const requestOverBudgetReason = getReviewServingV4RebuildOverBudgetReason(requestEstimate, defaultRequestBudget)
+    const sourceWatermarks = getReviewServingV4RebuildSourceWatermarks(stats)
+    const bootstrapSourceWatermarks = Object.fromEntries(
+      Object.entries(sourceWatermarks).flatMap(([sourcePartition, sourceWatermark]) => {
+        return typeof sourceWatermark === 'object'
+          && sourceWatermark !== null
+          && 'count' in sourceWatermark
+          && typeof sourceWatermark.count === 'number'
+          ? [[sourcePartition, sourceWatermark.count]]
+          : []
+      }),
+    )
 
     return database.transaction(async (tx) => {
-      const bootstrap = isFreshBootstrap
-        ? await prepareReviewServingV4Bootstrap(
-            {chunkCount: bootstrapChunkCount, components, projectId: input.projectId},
-            tx,
-          )
-        : null
+      const bootstrap =
+        isFreshBootstrap && requestOverBudgetReason === null
+          ? await prepareReviewServingV4Bootstrap(
+              {chunkCount: bootstrapChunkCount, components, projectId: input.projectId},
+              tx,
+            )
+          : null
+      const chunks =
+        bootstrap?.chunks
+        ?? (isFreshBootstrap
+          ? getReviewServingV4BootstrapPlaceholderChunks({
+              components,
+              inputWatermark: getReviewServingV4BootstrapInputWatermark(bootstrapSourceWatermarks),
+              projectId: input.projectId,
+              sourceWatermarks: bootstrapSourceWatermarks,
+            })
+          : undefined)
       const requestDatabase = {
         queryJson: tx.queryJson,
         run: tx.run,
@@ -932,7 +1049,7 @@ export const requestReviewServingV4RebuildEffect = (
       const request = await createReviewServingRebuildRequest(
         {
           budget: defaultRequestBudget,
-          chunks: bootstrap?.chunks ?? undefined,
+          chunks,
           diagnostics: {
             bootstrapSnapshot: isFreshBootstrap,
             bootstrapChunkCount: bootstrap?.chunkCount ?? null,
@@ -946,7 +1063,7 @@ export const requestReviewServingV4RebuildEffect = (
           reason: input.reason,
           requestedComponents: components,
           retryPolicy: {maxAttempts: 3, retryAfterMs: 60_000, terminalState: 'blocked_over_budget'},
-          sourceWatermarks: getReviewServingV4RebuildSourceWatermarks(stats),
+          sourceWatermarks,
         },
         requestDatabase,
       )

@@ -7,6 +7,7 @@ import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
 import {
   getReviewServingRebuildChunkId,
+  releaseInactiveRequestRebuildChunkManifestsForUpsert,
   type ReviewServingChunkManifestRepositoryDatabase,
   type ReviewServingChunkManifestRepositoryTransaction,
   type ReviewServingRebuildChunkBudgetFields,
@@ -628,6 +629,15 @@ export const createReviewServingRebuildRequestEffect = (
 
         if (chunks.length === 0) {
           throw new Error(`Review rebuild request ${requestId} created no rebuild chunks`)
+        }
+
+        if (input.chunks !== undefined) {
+          await releaseInactiveRequestRebuildChunkManifestsForUpsert(
+            chunks.map((chunk) => {
+              return getReviewServingRebuildChunkId({...chunk, requestId})
+            }),
+            tx,
+          )
         }
 
         await tx.run(`

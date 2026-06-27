@@ -213,7 +213,7 @@ const getComponentSqlList = (components: readonly ReviewServingProjectionCompone
   return `(${components.map(getSqlLiteral).join(', ')})`
 }
 
-const releaseInactiveRequestRebuildChunkManifestsForUpsert = async (
+export const releaseInactiveRequestRebuildChunkManifestsForUpsert = async (
   chunkIds: readonly string[],
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
