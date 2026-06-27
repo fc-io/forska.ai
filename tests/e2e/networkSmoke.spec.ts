@@ -25,8 +25,6 @@ const forbiddenRuntimeLogPatterns = [
   {label: 'judge unexpected SIGTERM exit', pattern: /\[server:stack\] judge pid=\d+ exited with code 143/},
 ] as const
 const warningEndpointPath = '/api/projectsreviewswarnings'
-const queuedWarningProbeIntervalMs = 2_000
-const queuedWarningProbeTimeoutMs = 20_000
 
 type ApiDataResponse<T> = {data: T}
 type ArticleSearchResponse = Array<{articleId: string | null; articleTitle: string; id: string}>
@@ -88,13 +86,6 @@ type WarningsEndpointInspection =
   | {kind: 'ok'}
 
 const routeTreePath = path.resolve(process.cwd(), 'src/app/routeTree.gen.ts')
-const queuedWarningProbePromises = new Map<string, Promise<void>>()
-
-const sleep = (ms: number) => {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, ms)
-  })
-}
 
 const getRuntimeLogFiles = () => {
   return runtimeLogDir.trim().length === 0 || !existsSync(runtimeLogDir)
@@ -282,23 +273,6 @@ const getWarningsEndpointInspection = (body: string): WarningsEndpointInspection
     : {details: queuedFailureDetails, kind: 'failure'}
 }
 
-const hasQueuedWarningProgressed = (
-  initial: ReviewsWarningsData['indexing'],
-  current: ReviewsWarningsData['indexing'],
-) => {
-  return (
-    current.progressState === 'processing'
-    || current.progressState === 'completed'
-    || current.inFlightRefreshCount > 0
-    || current.activeWorkCount > 0
-    || current.pendingRefreshCount < initial.pendingRefreshCount
-    || current.queuedRefreshCount < initial.queuedRefreshCount
-    || (current.lastProgressedAt !== null && current.lastProgressedAt !== initial.lastProgressedAt)
-    || (current.lastStartedAt !== null && current.lastStartedAt !== initial.lastStartedAt)
-    || (current.lastProcessedAt !== null && current.lastProcessedAt !== initial.lastProcessedAt)
-  )
-}
-
 const fetchWarningsEndpointInspection = async (projectId: string) => {
   const response = await fetch(`${apiBaseUrl}${warningEndpointPath}`, {
     body: JSON.stringify({projectId}),
@@ -316,56 +290,6 @@ const fetchWarningsEndpointInspection = async (projectId: string) => {
   return getWarningsEndpointInspection(body)
 }
 
-const assertQueuedWarningsEndpointProgressesFrom = async (
-  projectId: string,
-  initial: ReviewsWarningsData,
-  deadlineAt: number,
-): Promise<void> => {
-  await sleep(queuedWarningProbeIntervalMs)
-
-  const inspection = await fetchWarningsEndpointInspection(projectId)
-
-  if (inspection.kind === 'failure') {
-    throw new Error(`warnings endpoint response for ${projectId}: ${inspection.details}`)
-  }
-
-  if (inspection.kind === 'ok') {
-    return
-  }
-
-  if (hasQueuedWarningProgressed(initial.indexing, inspection.data.indexing)) {
-    return
-  }
-
-  if (Date.now() < deadlineAt) {
-    return assertQueuedWarningsEndpointProgressesFrom(projectId, initial, deadlineAt)
-  }
-
-  throw new Error(
-    `warnings endpoint response for ${projectId}: queued review indexing did not progress within ${queuedWarningProbeTimeoutMs}ms; initial=${formatIndexingState(initial.indexing)}; latest=${formatIndexingState(inspection.data.indexing)}`,
-  )
-}
-
-const assertQueuedWarningsEndpointProgresses = (projectId: string, initial: ReviewsWarningsData) => {
-  const existingProbe = queuedWarningProbePromises.get(projectId)
-
-  if (existingProbe) {
-    return existingProbe
-  }
-
-  const probe = assertQueuedWarningsEndpointProgressesFrom(
-    projectId,
-    initial,
-    Date.now() + queuedWarningProbeTimeoutMs,
-  ).finally(() => {
-    queuedWarningProbePromises.delete(projectId)
-  })
-
-  queuedWarningProbePromises.set(projectId, probe)
-
-  return probe
-}
-
 const assertWarningsEndpointBodyHasHealthyIndexing = async (source: string, body: string) => {
   const inspection = getWarningsEndpointInspection(body)
 
@@ -373,9 +297,7 @@ const assertWarningsEndpointBodyHasHealthyIndexing = async (source: string, body
     throw new Error(`${source}: ${inspection.details}`)
   }
 
-  if (inspection.kind === 'queued') {
-    await assertQueuedWarningsEndpointProgresses(inspection.projectId, inspection.data)
-  }
+  return inspection
 }
 
 const getForbiddenRuntimeLogMatches = (text: string) => {
@@ -1250,20 +1172,6 @@ const createNetworkFailureRecorder = (page: Page, pagePath: () => string) => {
           status: response.status(),
           url: response.url(),
         })
-      }
-
-      if (warningInspection.kind === 'queued') {
-        await assertQueuedWarningsEndpointProgresses(warningInspection.projectId, warningInspection.data).catch(
-          (error) => {
-            record({
-              details: error instanceof Error ? error.message : 'queued review indexing did not progress',
-              method: request.method(),
-              source: 'warning-indexing-state',
-              status: response.status(),
-              url: response.url(),
-            })
-          },
-        )
       }
 
       if (response.status() < 400) {

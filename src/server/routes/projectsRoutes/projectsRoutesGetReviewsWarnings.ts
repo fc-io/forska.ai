@@ -832,11 +832,20 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       warningSnapshot.status === 'accepted'
       && isUsableReviewServingWarningSnapshot(warningSnapshot.diagnostics.manifest.status)
     const hasReadableReviewServingRows = warningSnapshot.status === 'accepted'
+    const initialHasReviewServingStateThatCanProgress = getHasReviewServingStateThatCanProgress(servingDiagnostics)
+    const hasInitialLegacyRefreshBlocker =
+      initialProjectRefreshState.hasUnresolvedQuarantineBarrier
+      || initialProjectRefreshState.refreshStatus === 'failed'
+      || initialProjectRefreshState.dirtyMaterialization.isActive
+      || initialProjectRefreshState.dirtyMaterialization.failedCount > 0
+      || initialProjectRefreshState.dirtyMaterialization.unreconciledCount > 0
+      || getHasActiveLease(initialProjectRefreshState.leaseExpiresAt, currentNow)
     const shouldRequestMissingSnapshotRepair =
       !hasReadableReviewServingRows
       && enabledPromptCount > 0
       && hasAnyArticlesInScope
-      && servingDiagnostics.rebuildChunks.blockedOverBudgetCount > 0
+      && (servingDiagnostics.rebuildChunks.blockedOverBudgetCount > 0
+        || (!initialHasReviewServingStateThatCanProgress && !hasInitialLegacyRefreshBlocker))
 
     if (shouldRequestMissingSnapshotRepair) {
       await requestReviewServingV4Rebuild({projectId, reason: 'missingReviewServingSnapshot'})

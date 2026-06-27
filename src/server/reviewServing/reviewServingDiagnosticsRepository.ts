@@ -350,7 +350,7 @@ const getRebuildChunkRowsEffect = (
     database,
     `
       WITH latest_request AS (
-        SELECT request_id
+        SELECT request_id, admission_state, status
         FROM app.review_rebuild_request
         WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
         ORDER BY updated_at DESC, created_at DESC, request_id DESC
@@ -365,14 +365,21 @@ const getRebuildChunkRowsEffect = (
           WHERE chunk.status = 'blocked_over_budget'
             AND (
               latest_request.request_id IS NULL
-              OR chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
+              OR (
+                chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
+                AND latest_request.status = 'blocked_over_budget'
+                AND latest_request.admission_state = 'blocked_over_budget'
+              )
             )
         ) AS INTEGER) AS blockedOverBudgetCount,
         CAST(COUNT(*) FILTER (
           WHERE chunk.status = 'quarantined'
             AND (
               latest_request.request_id IS NULL
-              OR chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
+              OR (
+                chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
+                AND latest_request.status = 'quarantined'
+              )
             )
         ) AS INTEGER) AS quarantinedCount,
         CAST(COUNT(*) FILTER (WHERE chunk.status = 'running' AND chunk.lease_expires_at <= ${getSqlLiteral(now)}) AS INTEGER) AS expiredLeaseCount,
