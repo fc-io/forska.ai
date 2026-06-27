@@ -16,6 +16,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0105_reviewServingArticleMetadataStatus.sql',
   '../../db/duckdbMigrations/0106_reviewServingRemoveHotSourceMetadata.sql',
   '../../db/duckdbMigrations/0107_reviewServingRebuildRequest.sql',
+  '../../db/duckdbMigrations/0109_reviewServingJudgmentDetailPayloadKindForwardMigration.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -39,6 +40,10 @@ const facetSummaryScopeForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0101_reviewServingFacetSummaryScope.sql']
 const articleMetadataStatusForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0105_reviewServingArticleMetadataStatus.sql']
+const judgmentDetailPayloadKindForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath[
+    '../../db/duckdbMigrations/0109_reviewServingJudgmentDetailPayloadKindForwardMigration.sql'
+  ]
 const selectedImportPatchDisplayFieldsForwardMigrationSql = readFileSync(
   resolve(import.meta.dir, '../../db/duckdbMigrations/0108_reviewSelectedImportPatchDisplayFields.sql'),
   'utf8',
@@ -396,6 +401,30 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
   expect(countScopeForwardMigrationSql).toContain('option_value_key VARCHAR NOT NULL')
   expect(filterOptionValueForwardMigrationSql).toContain('DROP TABLE IF EXISTS mart.review_filter_option_serving_v4')
   expect(filterOptionValueForwardMigrationSql).toContain('option_value_key VARCHAR NOT NULL')
+})
+
+test('judgment detail payload-kind forward migration repairs already-applied V4 table shape', () => {
+  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
+    "ALTER TABLE mart.review_article_judgment_detail_serving_v4\nADD COLUMN IF NOT EXISTS payload_kind VARCHAR DEFAULT 'llm';",
+  )
+  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_judgment_detail_serving_v4_payload_kind_next',
+  )
+  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
+    'PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id)',
+  )
+  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
+    "SELECT\n  project_id,\n  review_config_hash,\n  snapshot_id,\n  list_mode_key,\n  COALESCE(payload_kind, 'llm') AS payload_kind,",
+  )
+  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
+    'ON mart.review_article_judgment_detail_serving_v4(project_id, review_config_hash, snapshot_id, article_id, payload_kind, prompt_order);',
+  )
+  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain('UPDATE app.review_rebuild_request AS request')
+  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain('UPDATE app.review_rebuild_chunk_manifest')
+  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain("projection_component = 'judgmentInputContent'")
+  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
+    'last_error ILIKE \'%Referenced column "payload_kind" not found%\'',
+  )
 })
 
 test('Phase 1 schema migration keeps facets scoped by summary and facet kind in the final table shape', () => {

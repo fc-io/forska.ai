@@ -39,6 +39,264 @@ test('DuckDB migrations drop the obsolete review article filter row mart without
   expect(dropMigrationSql).toBe('DROP TABLE IF EXISTS mart.review_article_filter_row;')
 })
 
+test('DuckDB migrations repair legacy review serving judgment detail payload-kind schema drift', async () => {
+  const duckdbPath = `/tmp/forska-review-serving-judgment-detail-payload-kind-${Date.now()}.duckdb`
+  const targetMigrationFile = '0109_reviewServingJudgmentDetailPayloadKindForwardMigration.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(\`
+          CREATE TABLE app.review_rebuild_request (
+            request_id VARCHAR PRIMARY KEY,
+            status VARCHAR NOT NULL,
+            retry_after TIMESTAMPTZ,
+            failed_at TIMESTAMPTZ,
+            last_error VARCHAR,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE app.review_rebuild_chunk_manifest (
+            chunk_id VARCHAR PRIMARY KEY,
+            request_id VARCHAR,
+            projection_component VARCHAR NOT NULL,
+            status VARCHAR NOT NULL,
+            admission_state VARCHAR NOT NULL DEFAULT 'admitted',
+            retry_count INTEGER DEFAULT 0,
+            retry_after TIMESTAMPTZ,
+            oom_category VARCHAR,
+            over_budget_reason VARCHAR,
+            lease_owner VARCHAR,
+            lease_expires_at TIMESTAMPTZ,
+            last_error VARCHAR,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_judgment_detail_serving_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            list_mode_key VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            prompt_id VARCHAR NOT NULL,
+            prompt_order INTEGER,
+            judgment_id VARCHAR,
+            model_id VARCHAR,
+            answered_original VARCHAR,
+            answered_original_as_array VARCHAR[],
+            judgment_payload_json JSON,
+            placeholder_kind VARCHAR,
+            detail_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, article_id, prompt_id)
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_judgment_detail_serving_v4 (
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            list_mode_key,
+            article_id,
+            prompt_id,
+            prompt_order,
+            judgment_id,
+            model_id,
+            answered_original,
+            answered_original_as_array,
+            judgment_payload_json,
+            placeholder_kind
+          )
+          VALUES (
+            'project-a',
+            'config-a',
+            'snapshot-a',
+            'global',
+            'article-a',
+            'prompt-a',
+            1,
+            'judgment-a',
+            'model-a',
+            'include',
+            ['include'],
+            '{"answer":"include"}',
+            NULL
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.review_rebuild_request (request_id, status, retry_after, failed_at, last_error)
+          VALUES (
+            'request-a',
+            'failed',
+            TIMESTAMPTZ '2026-06-27T12:10:00Z',
+            TIMESTAMPTZ '2026-06-27T12:00:00Z',
+            'Binder Error: Referenced column "payload_kind" not found in FROM clause'
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.review_rebuild_chunk_manifest (
+            chunk_id,
+            request_id,
+            projection_component,
+            status,
+            admission_state,
+            retry_count,
+            retry_after,
+            oom_category,
+            over_budget_reason,
+            lease_owner,
+            lease_expires_at,
+            last_error
+          )
+          VALUES (
+            'chunk-a',
+            'request-a',
+            'judgmentInputContent',
+            'quarantined',
+            'admitted',
+            3,
+            TIMESTAMPTZ '2026-06-27T12:10:00Z',
+            'binder',
+            'schema drift',
+            'worker-a',
+            TIMESTAMPTZ '2026-06-27T12:05:00Z',
+            'Binder Error: Referenced column "payload_kind" not found in FROM clause'
+          )
+        \`)
+
+        await migrateDuckdb()
+
+        const chunkRows = await database.queryJson(
+          "SELECT admission_state AS admissionState, last_error AS lastError, retry_after AS retryAfter, retry_count AS retryCount, status FROM app.review_rebuild_chunk_manifest ORDER BY chunk_id"
+        )
+        const rows = await database.queryJson(
+          "SELECT project_id AS projectId, payload_kind AS payloadKind, judgment_id AS judgmentId FROM mart.review_article_judgment_detail_serving_v4 ORDER BY project_id"
+        )
+        const requestRows = await database.queryJson(
+          "SELECT failed_at AS failedAt, last_error AS lastError, retry_after AS retryAfter, status FROM app.review_rebuild_request ORDER BY request_id"
+        )
+        const primaryKeyRows = await database.queryJson(
+          "SELECT constraint_column_names AS columnNames FROM duckdb_constraints() WHERE schema_name = 'mart' AND table_name = 'review_article_judgment_detail_serving_v4' AND constraint_type = 'PRIMARY KEY'"
+        )
+        const duplicatePayloadKindAccepted = await database
+          .run(\`
+            INSERT INTO mart.review_article_judgment_detail_serving_v4 (
+              project_id,
+              review_config_hash,
+              snapshot_id,
+              list_mode_key,
+              payload_kind,
+              article_id,
+              prompt_id,
+              prompt_order,
+              judgment_id
+            )
+            VALUES ('project-a', 'config-a', 'snapshot-a', 'global', 'human', 'article-a', 'prompt-a', 1, 'human-a')
+          \`)
+          .then(
+            () => true,
+            () => false,
+          )
+
+        console.log(JSON.stringify({chunkRows, duplicatePayloadKindAccepted, primaryKeyRows, requestRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39993',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39994',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      duplicatePayloadKindAccepted: boolean
+      chunkRows: Array<{
+        admissionState: string
+        lastError: string | null
+        retryAfter: string | null
+        retryCount: number
+        status: string
+      }>
+      primaryKeyRows: Array<{columnNames: string[]}>
+      requestRows: Array<{failedAt: string | null; lastError: string | null; retryAfter: string | null; status: string}>
+      rows: Array<{judgmentId: string; payloadKind: string; projectId: string}>
+    }
+
+    expect(parsed.chunkRows).toEqual([
+      {admissionState: 'admitted', lastError: null, retryAfter: null, retryCount: 0, status: 'pending'},
+    ])
+    expect(parsed.requestRows).toEqual([{failedAt: null, lastError: null, retryAfter: null, status: 'admitted'}])
+    expect(parsed.rows).toEqual([{judgmentId: 'judgment-a', payloadKind: 'llm', projectId: 'project-a'}])
+    expect(parsed.primaryKeyRows).toEqual([
+      {
+        columnNames: [
+          'project_id',
+          'review_config_hash',
+          'snapshot_id',
+          'list_mode_key',
+          'payload_kind',
+          'article_id',
+          'prompt_id',
+        ],
+      },
+    ])
+    expect(parsed.duplicatePayloadKindAccepted).toBe(true)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('DuckDB migrations add canonical article identifiers and keep legacy article ids non-unique', async () => {
   const duckdbPath = `/tmp/forska-canonical-article-identifier-${Date.now()}.duckdb`
   const canonicalSchemaMigrationSql = readFileSync(
