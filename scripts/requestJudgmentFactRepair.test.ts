@@ -231,10 +231,10 @@ test('requestJudgmentFactRepair continues all-active repairs after an empty proj
     `,
   )
 
-  const runScript = globalThis.Bun.spawnSync(
-    ['bun', 'scripts/requestJudgmentFactRepair.ts', '--all-active-projects'],
-    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
-  )
+  const runScript = globalThis.Bun.spawnSync(['bun', 'scripts/requestJudgmentFactRepair.ts', '--all-active-projects'], {
+    cwd: projectRoot,
+    env: {...defaultEnv, DUCKDB_PATH: duckdbPath},
+  })
 
   if (runScript.exitCode !== 0) {
     throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'request all-active repair failed')
@@ -258,13 +258,13 @@ test('requestJudgmentFactRepair continues all-active repairs after an empty proj
   ) as Array<{count: number}>
 
   expect(result).toMatchObject({
-    failedCount: 1,
-    failedProjects: [{projectId: 'judgment-empty-project'}],
+    failedCount: 0,
+    failedProjects: [],
     projectIds: ['judgment-empty-project', 'judgment-fact-repair-project'],
-    requestedCount: 1,
-    status: 'requested_with_failures',
+    requestedCount: 2,
+    status: 'requested',
   })
-  expect(result.requestIds).toHaveLength(1)
+  expect(result.requestIds).toHaveLength(2)
   expect(validRequestCount).toEqual({count: 1})
   expect(emptyRequestCount).toEqual({count: 0})
 })
