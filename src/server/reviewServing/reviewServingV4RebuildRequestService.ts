@@ -27,6 +27,7 @@ import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjecto
 import {
   createReviewServingRebuildRequest,
   getActiveReviewServingRebuildRequestForProject,
+  getReviewServingRebuildRequestId,
   type ReviewServingRebuildRequest,
   type ReviewServingRebuildRequestBudget,
   type ReviewServingRebuildRequestEstimate,
@@ -785,6 +786,57 @@ const getReviewServingV4RebuildSourceWatermarks = (stats: ReviewServingV4Rebuild
   }
 }
 
+const getNoopReviewServingV4RebuildRequest = (input: {
+  components: readonly ReviewServingProjectionComponent[]
+  projectId: string
+  reason: string
+  requestEstimate: ReviewServingRebuildRequestEstimate
+  sourceWatermarks: ReturnType<typeof getReviewServingV4RebuildSourceWatermarks>
+  totalEstimate: ReviewServingRebuildRequestEstimate
+}): ReviewServingRebuildRequest => {
+  const now = new Date().toISOString()
+  const identity = {componentSet: input.components, requestKind: 'v4-review-serving-rebuild'}
+
+  return {
+    admissionState: 'admitted',
+    admittedAt: now,
+    completedAt: now,
+    createdAt: now,
+    diagnosticsJson: {
+      bootstrapSnapshot: true,
+      noScopedArticles: true,
+      source: 'phase5b-v4-rebuild-request-service',
+      totalEstimate: input.totalEstimate,
+      v4Cutover: true,
+    },
+    failedAt: null,
+    identityJson: identity,
+    lastError: null,
+    leaseExpiresAt: null,
+    leaseOwner: null,
+    oomCategory: null,
+    overBudgetReason: null,
+    priority: 100,
+    projectId: input.projectId,
+    reason: input.reason,
+    requestedComponents: [...input.components],
+    requestId: getReviewServingRebuildRequestId({
+      estimate: input.requestEstimate,
+      identity,
+      projectId: input.projectId,
+      reason: input.reason,
+      requestedComponents: input.components,
+      sourceWatermarks: input.sourceWatermarks,
+    }),
+    retryAfter: null,
+    retryCount: 0,
+    retryPolicyJson: {maxAttempts: 0, retryAfterMs: 0, terminalState: 'completed'},
+    sourceWatermarksJson: input.sourceWatermarks,
+    status: 'completed',
+    updatedAt: now,
+  }
+}
+
 const getReviewServingV4RebuildStats = async (
   input: {projectId: string},
   database: {queryJson: <T>(statement: string) => Promise<T[]>},
@@ -1092,7 +1144,14 @@ export const requestReviewServingV4RebuildEffect = (
         : null
 
       if (isFreshBootstrap && requestOverBudgetReason === null && bootstrap === null) {
-        return null
+        return getNoopReviewServingV4RebuildRequest({
+          components,
+          projectId: input.projectId,
+          reason: input.reason,
+          requestEstimate,
+          sourceWatermarks,
+          totalEstimate,
+        })
       }
 
       const chunks = bootstrap?.chunks
@@ -1141,12 +1200,6 @@ export const requestReviewServingV4Rebuild = (input: RequestReviewServingV4Rebui
   return Effect.runPromise(requestReviewServingV4RebuildEffect(input))
 }
 
-const isReviewServingRebuildRequest = (
-  request: ReviewServingRebuildRequest | null,
-): request is ReviewServingRebuildRequest => {
-  return request !== null
-}
-
 export const requestReviewServingV4RebuildsEffect = (inputs: readonly RequestReviewServingV4RebuildInput[]) => {
   return Effect.forEach(
     inputs,
@@ -1160,7 +1213,5 @@ export const requestReviewServingV4RebuildsEffect = (inputs: readonly RequestRev
 export const requestReviewServingV4Rebuilds = (
   inputs: readonly RequestReviewServingV4RebuildInput[],
 ): Promise<ReviewServingRebuildRequest[]> => {
-  return Effect.runPromise(requestReviewServingV4RebuildsEffect(inputs)).then((requests) => {
-    return requests.filter(isReviewServingRebuildRequest)
-  })
+  return Effect.runPromise(requestReviewServingV4RebuildsEffect(inputs))
 }

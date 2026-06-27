@@ -636,7 +636,7 @@ const insertActiveReviewServingManifest = async (input: {
   projectId: string
   reviewConfigHash?: string | null
   snapshotId: string
-  status?: 'active' | 'candidate' | 'retired'
+  status?: 'active' | 'candidate' | 'failed' | 'retired'
 }) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -844,6 +844,29 @@ test('reviews warnings report completed health for last-known-good serving with 
   expect(body.data.indexing.progressState).toBe('completed')
   expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
   expect(body.data.indexing.status).toBe('ready')
+})
+
+test('reviews warnings do not treat failed serving snapshots as progressable repair state', async () => {
+  const projectId = 'project-failed-serving-snapshot-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-failed-serving-warning',
+    status: 'failed',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('stalled')
+  expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
+  expect(body.data.indexing.status).toBe('stale')
 })
 
 test('reviews warnings expose bounded cleanup lease progress without blocking ready reads', async () => {
@@ -1168,7 +1191,7 @@ test('reviews warnings expose quarantined article refreshes without pending heal
   expect(body.data.indexing.status).toBe('blocked')
 })
 
-test('reviews warnings queue V4 repair without legacy judgment fact fallback', async () => {
+test('reviews warnings request V4 repair without legacy judgment fact fallback outside the foreground response', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
@@ -1235,12 +1258,10 @@ test('reviews warnings queue V4 repair without legacy judgment fact fallback', a
   expect(response.status).toBe(200)
   expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
   expect(body.data.indexing.queuedArticleRefreshCount).toBe(0)
-  expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
-  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
-  expect(body.data.indexing.status).toBe('refreshing')
-  expect(await getReviewRebuildRequestCount(projectId)).toBe(1)
-  expect(await getPendingReviewRebuildChunkCount(projectId)).toBeGreaterThan(0)
+  expect(body.data.indexing.status).toBe('stale')
 })
 
 test('reviews warnings do not queue V4 repair over queued legacy article refreshes', async () => {
@@ -1403,7 +1424,7 @@ test('reviews warnings count only dirty articles still in live project scope', a
   expect(body.data.indexing.status).toBe('refreshing')
 })
 
-test('reviews warnings queue bounded V4 repair when fresh idle serving is missing', async () => {
+test('reviews warnings request bounded V4 repair when fresh idle serving is missing outside the foreground response', async () => {
   const projectId = 'project-missing-serving-bootstrap-warning'
 
   await insertProjectFixture(projectId)
@@ -1413,16 +1434,14 @@ test('reviews warnings queue bounded V4 repair when fresh idle serving is missin
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
   expect(body.data.indexing.largeRebuild).toBe(null)
-  expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
-  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
-  expect(body.data.indexing.status).toBe('refreshing')
-  expect(await getReviewRebuildRequestCount(projectId)).toBe(1)
-  expect(await getPendingReviewRebuildChunkCount(projectId)).toBeGreaterThan(0)
+  expect(body.data.indexing.status).toBe('stale')
 })
 
-test('reviews warnings queue bounded V4 repair for stale idle legacy no-work state', async () => {
+test('reviews warnings request bounded V4 repair for stale idle legacy no-work state outside the foreground response', async () => {
   const projectId = 'project-missing-serving-stale-idle-warning'
 
   await insertProjectFixture(projectId)
@@ -1437,13 +1456,11 @@ test('reviews warnings queue bounded V4 repair for stale idle legacy no-work sta
 
   expect(response.status).toBe(200)
   expect(body.data.indexing.activeWorkCount).toBe(0)
-  expect(body.data.indexing.queuedRefreshCount).toBeGreaterThan(0)
-  expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
-  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.queuedRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
-  expect(body.data.indexing.status).toBe('refreshing')
-  expect(await getReviewRebuildRequestCount(projectId)).toBe(1)
-  expect(await getPendingReviewRebuildChunkCount(projectId)).toBeGreaterThan(0)
+  expect(body.data.indexing.status).toBe('stale')
 })
 
 test('reviews warnings respect queued dirty materializations before missing snapshot repair', async () => {
@@ -1581,7 +1598,7 @@ test('reviews warnings ignore stale terminal chunks after same request is re-adm
   expect(body.data.indexing.status).toBe('refreshing')
 })
 
-test('reviews warnings queue bounded V4 repair for fresh idle route scope without V4 state', async () => {
+test('reviews warnings request bounded V4 repair for fresh idle route scope without V4 state outside the foreground response', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
@@ -1612,12 +1629,10 @@ test('reviews warnings queue bounded V4 repair for fresh idle route scope withou
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
   expect(body.data.indexing.freshness.isFresh).toBe(true)
-  expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
-  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
-  expect(body.data.indexing.status).toBe('refreshing')
-  expect(await getReviewRebuildRequestCount(projectId)).toBe(1)
-  expect(await getPendingReviewRebuildChunkCount(projectId)).toBeGreaterThan(0)
+  expect(body.data.indexing.status).toBe('stale')
 })
 
 test('reviews warnings do not bootstrap missing serving rows for archived prompt links', async () => {
@@ -2303,7 +2318,7 @@ test('reviews warnings keep later phase denominator frozen after route scope cha
   expect(body.data.indexing.largeRebuild?.progress?.remainingCurrentPhaseArticleCount).toBe(0)
 })
 
-test('reviews warnings ignore failed legacy large rebuild state while queueing V4 repair', async () => {
+test('reviews warnings ignore failed legacy large rebuild state while requesting V4 repair outside the foreground response', async () => {
   const projectId = 'project-large-rebuild-failed-warning'
 
   await insertProjectFixture(projectId)
@@ -2319,12 +2334,10 @@ test('reviews warnings ignore failed legacy large rebuild state while queueing V
   expect(response.status).toBe(200)
   expect(body.data.indexing.largeRebuild).toBe(null)
   expect(body.data.indexing.pendingProjectRefreshCount).toBe(0)
-  expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
-  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
-  expect(body.data.indexing.status).toBe('refreshing')
-  expect(await getReviewRebuildRequestCount(projectId)).toBe(1)
-  expect(await getPendingReviewRebuildChunkCount(projectId)).toBeGreaterThan(0)
+  expect(body.data.indexing.status).toBe('stale')
 })
 
 test('reviews warnings respect queued legacy large rebuild before queueing V4 repair', async () => {

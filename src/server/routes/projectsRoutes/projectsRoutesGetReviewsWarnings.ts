@@ -735,8 +735,6 @@ const getHasReviewServingStateThatCanProgress = (diagnostics: ReviewServingDiagn
       + diagnostics.rebuildChunks.runningCount
       + diagnostics.snapshot.activeCount
       + diagnostics.snapshot.candidateCount
-      + diagnostics.snapshot.failedCount
-      + diagnostics.snapshot.retiredCount
     > 0
   )
 }
@@ -798,7 +796,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const throughputSnapshot = martRefreshService.getThroughputSnapshot()
     const currentNow = new Date()
     const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
-    let servingDiagnostics = await getReviewServingDiagnostics({projectId, reviewConfigHash})
+    const servingDiagnostics = await getReviewServingDiagnostics({projectId, reviewConfigHash})
     const warningSnapshot = await readReviewServingRows({
       allowStale: true,
       contractKey: 'review.warning.snapshot',
@@ -857,8 +855,9 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       && !hasInitialLegacyRefreshBlocker
 
     if (shouldRequestMissingSnapshotRepair) {
-      await requestReviewServingV4Rebuild({projectId, reason: 'missingReviewServingSnapshot'})
-      servingDiagnostics = await getReviewServingDiagnostics({projectId, reviewConfigHash})
+      requestReviewServingV4Rebuild({projectId, reason: 'missingReviewServingSnapshot'}).catch(() => {
+        return undefined
+      })
     }
 
     const hasReviewServingStateThatCanProgress = getHasReviewServingStateThatCanProgress(servingDiagnostics)

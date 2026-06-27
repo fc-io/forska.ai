@@ -158,7 +158,7 @@ const getDiagnostic = (error: unknown): string => {
 
 const getBlockedRebuildRequests = (requests: readonly ReviewServingRebuildRequest[]) => {
   return requests.filter((request) => {
-    return request.status !== 'admitted'
+    return request.status !== 'admitted' && request.status !== 'completed'
   })
 }
 
