@@ -492,6 +492,15 @@ test('V4 rebuild request service splits missing snapshot bootstraps into bounded
     ),
   )
   const joined = statements.join('\n')
+  const chunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+  const displayChunkInserts = chunkInserts.filter((statement) => {
+    return statement.includes('display')
+  })
+  const summaryChunkInserts = chunkInserts.filter((statement) => {
+    return statement.includes('summary')
+  })
 
   expect(request.status).toBe('admitted')
   expect(request.overBudgetReason).toBeNull()
@@ -499,6 +508,10 @@ test('V4 rebuild request service splits missing snapshot bootstraps into bounded
   expect(joined).toContain('INSERT INTO app.review_rebuild_chunk_manifest')
   expect(joined).toContain('article-000-a')
   expect(joined).toContain('article-001-a')
+  expect(displayChunkInserts.length).toBeGreaterThan(1)
+  expect(summaryChunkInserts).toHaveLength(1)
+  expect(summaryChunkInserts[0]).toContain('article-000-a')
+  expect(summaryChunkInserts[0]).toContain('article-008-z')
   expect(joined).toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).toContain('INSERT INTO app.review_serving_snapshot_manifest')
 })
@@ -542,7 +555,7 @@ test('V4 rebuild request service does not split full-project bootstrap component
   const request = await Effect.runPromise(
     requestReviewServingV4RebuildEffect(
       {
-        components: ['projectScope', 'selectedImport', 'display'],
+        components: ['projectScope', 'selectedImport', 'summary', 'display'],
         projectId: 'project-v4',
         reason: 'missingReviewServingSnapshot',
       },
@@ -561,13 +574,19 @@ test('V4 rebuild request service does not split full-project bootstrap component
   const displayChunkInserts = chunkInserts.filter((statement) => {
     return statement.includes('display')
   })
+  const summaryChunkInserts = chunkInserts.filter((statement) => {
+    return statement.includes('summary')
+  })
 
   expect(request.status).toBe('admitted')
   expect(selectedImportChunkInserts).toHaveLength(1)
   expect(projectScopeChunkInserts).toHaveLength(1)
+  expect(summaryChunkInserts).toHaveLength(1)
   expect(displayChunkInserts.length).toBeGreaterThan(1)
   expect(selectedImportChunkInserts[0]).toContain('article-000-a')
-  expect(selectedImportChunkInserts[0]).toContain('article-004-z')
+  expect(selectedImportChunkInserts[0]).toContain('article-008-z')
+  expect(summaryChunkInserts[0]).toContain('article-000-a')
+  expect(summaryChunkInserts[0]).toContain('article-008-z')
 })
 
 test('V4 rebuild request service accounts for list-mode fan-out in admission budgets', async () => {
