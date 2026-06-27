@@ -1401,6 +1401,25 @@ test('reviews warnings queue bounded V4 repair for stale idle legacy no-work sta
   expect(await getPendingReviewRebuildChunkCount(projectId)).toBeGreaterThan(0)
 })
 
+test('reviews warnings respect queued dirty materializations before missing snapshot repair', async () => {
+  const projectId = 'project-missing-serving-pending-dirty-materialization-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 2, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertDirtyMaterializationState({
+    projectId,
+    sourceKind: 'project_scope',
+    status: 'pending',
+    targetDirtyToken: 2,
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.dirtyMaterialization).toMatchObject({failedCount: 0, pendingCount: 1})
+  expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
+})
+
 test('reviews warnings report blocked V4 repair without retrying terminal missing snapshot work', async () => {
   const projectId = 'project-missing-serving-blocked-bootstrap-warning'
 

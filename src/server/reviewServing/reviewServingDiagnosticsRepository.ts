@@ -367,7 +367,7 @@ const getRebuildChunkRowsEffect = (
               latest_request.request_id IS NULL
               OR (
                 chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
-                AND latest_request.status = 'blocked_over_budget'
+                AND latest_request.status IN ('blocked_over_budget', 'failed')
                 AND latest_request.admission_state = 'blocked_over_budget'
               )
             )
