@@ -845,6 +845,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       || initialProjectRefreshState.dirtyMaterialization.failedCount > 0
       || initialProjectRefreshState.dirtyMaterialization.unreconciledCount > 0
       || getHasActiveLease(initialProjectRefreshState.leaseExpiresAt, currentNow)
+      || initialPendingArticleRefreshInfo.queuedRefreshCount > 0
       || hasInitialReportableLargeRebuild
     const shouldRequestMissingSnapshotRepair =
       !hasReadableReviewServingRows
@@ -915,6 +916,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       || hasFailedDirtyMaterialization
       || projectRefreshState.hasUnresolvedQuarantineBarrier
       || projectRefreshState.refreshStatus === 'failed'
+      || pendingArticleRefreshInfo.queuedRefreshCount > 0
       || hasLedgerProjectRefreshRunning
       || isLargeRebuildRunning
       || isLargeRebuildQueued

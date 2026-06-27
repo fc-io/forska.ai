@@ -378,7 +378,7 @@ const getRebuildChunkRowsEffect = (
               latest_request.request_id IS NULL
               OR (
                 chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
-                AND latest_request.status = 'quarantined'
+                AND latest_request.status IN ('quarantined', 'failed')
               )
             )
         ) AS INTEGER) AS quarantinedCount,
