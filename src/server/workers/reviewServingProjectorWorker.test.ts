@@ -1231,8 +1231,8 @@ test('judgment input content rebuild chunk presplits large ranges and completes 
 
       if (statement.includes('NTILE(5)') && statement.includes('FROM mart.project_scope_article scope')) {
         return [
-          {articleCount: 50, chunkEndKey: 'article-050', chunkStartKey: 'article-001'},
-          {articleCount: 49, chunkEndKey: 'article-099', chunkStartKey: 'article-051'},
+          {articleCount: 50, chunkEndKey: 'article-060', chunkStartKey: 'article-001'},
+          {articleCount: 49, chunkEndKey: 'article-099', chunkStartKey: 'article-050'},
         ] as T[]
       }
 
@@ -1272,12 +1272,136 @@ test('judgment input content rebuild chunk presplits large ranges and completes 
   expect(childInserts).toHaveLength(2)
   expect(childInserts[0]).toContain("'chunk-judgment-input-content-oom'")
   expect(childInserts[0]).toContain("'article-001'")
-  expect(childInserts[0]).toContain("'article-050'")
-  expect(childInserts[1]).toContain("'article-051'")
+  expect(childInserts[0]).toContain("'article-060'")
+  expect(childInserts[1]).toContain("'article-050'")
   expect(childInserts[1]).toContain("'article-099'")
   expect(joined).toContain("status = 'completed'")
   expect(joined).toContain("oom_category = 'input_row_budget_split'")
   expect(joined).not.toContain("status = 'failed'")
+})
+
+test('article range presplit covers gaps between sparse scoped article buckets', async () => {
+  const statements: string[] = []
+  const gapChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    budgetJson: {maxInputRows: 250_000},
+    chunkEndKey: 'article-999',
+    chunkId: 'chunk-gap-presplit',
+    chunkStartKey: 'article-001',
+    diagnosticsJson: {source: 'test'},
+    estimatedInputRows: 100_000,
+    estimatedOutputBytes: 96_000_000,
+    estimatedOutputRows: 100_000,
+    inputWatermark: 9,
+    maxInputRows: 250_000,
+    maxOutputBytes: 128_000_000,
+    maxOutputRows: 250_000,
+    outputBaseGeneration: 7,
+    parentChunkId: null,
+    projectionComponent: 'display',
+    projectionIdentity: 'display:project-1',
+    requestId: 'request-1',
+    snapshotCount: 1,
+    splitDepth: 0,
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('NTILE(2)') && statement.includes('FROM mart.project_scope_article scope')) {
+        return [
+          {articleCount: 1, chunkEndKey: 'article-500', chunkStartKey: 'article-001'},
+          {articleCount: 1, chunkEndKey: 'article-999', chunkStartKey: 'article-100'},
+        ] as T[]
+      }
+
+      if (statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('RETURNING chunk_id')) {
+        return [{chunkId: 'chunk-gap-presplit'}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: gapChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+  const childInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain('LAG(scoped_end_key)')
+  expect(joined).toContain('LEAD(scoped_start_key)')
+  expect(childInserts).toHaveLength(2)
+  expect(childInserts[0]).toContain("'article-001'")
+  expect(childInserts[0]).toContain("'article-500'")
+  expect(childInserts[1]).toContain("'article-100'")
+  expect(childInserts[1]).toContain("'article-999'")
+})
+
+test('article range presplit aborts when parent chunk lease is lost', async () => {
+  const statements: string[] = []
+  const staleLeaseChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    budgetJson: {maxInputRows: 250_000},
+    chunkId: 'chunk-stale-lease-presplit',
+    diagnosticsJson: {source: 'test'},
+    estimatedInputRows: 100_000,
+    estimatedOutputBytes: 96_000_000,
+    estimatedOutputRows: 100_000,
+    inputWatermark: 9,
+    maxInputRows: 250_000,
+    maxOutputBytes: 128_000_000,
+    maxOutputRows: 250_000,
+    outputBaseGeneration: 7,
+    parentChunkId: null,
+    projectionComponent: 'display',
+    projectionIdentity: 'display:project-1',
+    requestId: 'request-1',
+    snapshotCount: 1,
+    splitDepth: 0,
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('NTILE(2)') && statement.includes('FROM mart.project_scope_article scope')) {
+        return [
+          {articleCount: 50, chunkEndKey: 'article-060', chunkStartKey: 'article-001'},
+          {articleCount: 49, chunkEndKey: 'article-099', chunkStartKey: 'article-050'},
+        ] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  await expect(
+    runReviewServingProjectorWorkerClaimedRebuildChunk({chunk: staleLeaseChunk, leaseOwner: 'worker-1'}, database),
+  ).rejects.toThrow('review serving rebuild chunk chunk-stale-lease-presplit is no longer claimed by worker-1')
+  const joined = statements.join('\n')
+  const childInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+
+  expect(joined).toContain('RETURNING chunk_id AS chunkId')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_display_serving')
+  expect(childInserts).toHaveLength(0)
 })
 
 test('selected import rebuild chunk does not presplit because rebuild output is not range-scoped', async () => {
