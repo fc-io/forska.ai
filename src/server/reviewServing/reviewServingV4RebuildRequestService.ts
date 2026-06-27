@@ -352,28 +352,6 @@ const getReviewServingV4BootstrapProjectionIdentity = (input: {
   return buildReviewDirtyProjectionIdentity({projectId: input.projectId, projectionComponent: input.component})
 }
 
-const getReviewServingV4BootstrapPlaceholderChunks = (input: {
-  components: readonly ReviewServingProjectionComponent[]
-  inputWatermark: number
-  projectId: string
-  sourceWatermarks: Record<string, number>
-}) => {
-  return getReviewServingV4BootstrapComponents(input.components).map((component) => {
-    return {
-      chunkEndKey: '',
-      chunkStartKey: '',
-      inputDigest: 'freshReviewServingSnapshot',
-      inputWatermark:
-        component === 'selectedImport' ? (input.sourceWatermarks.importRunArticle ?? 0) : input.inputWatermark,
-      outputBaseGeneration: 0,
-      projectId: input.projectId,
-      projectionComponent: component,
-      projectionIdentity: getReviewServingV4BootstrapProjectionIdentity({component, projectId: input.projectId}),
-      snapshotCount: 1,
-    }
-  })
-}
-
 const getReviewServingV4BootstrapArticleRanges = async (
   input: {chunkCount: number; projectId: string},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -1008,17 +986,6 @@ export const requestReviewServingV4RebuildEffect = (
           })
     const requestOverBudgetReason = getReviewServingV4RebuildOverBudgetReason(requestEstimate, defaultRequestBudget)
     const sourceWatermarks = getReviewServingV4RebuildSourceWatermarks(stats)
-    const bootstrapSourceWatermarks = Object.fromEntries(
-      Object.entries(sourceWatermarks).flatMap(([sourcePartition, sourceWatermark]) => {
-        return typeof sourceWatermark === 'object'
-          && sourceWatermark !== null
-          && 'count' in sourceWatermark
-          && typeof sourceWatermark.count === 'number'
-          ? [[sourcePartition, sourceWatermark.count]]
-          : []
-      }),
-    )
-
     return database.transaction(async (tx) => {
       const bootstrap =
         isFreshBootstrap && requestOverBudgetReason === null
@@ -1027,16 +994,12 @@ export const requestReviewServingV4RebuildEffect = (
               tx,
             )
           : null
-      const chunks =
-        bootstrap?.chunks
-        ?? (isFreshBootstrap
-          ? getReviewServingV4BootstrapPlaceholderChunks({
-              components,
-              inputWatermark: getReviewServingV4BootstrapInputWatermark(bootstrapSourceWatermarks),
-              projectId: input.projectId,
-              sourceWatermarks: bootstrapSourceWatermarks,
-            })
-          : undefined)
+
+      if (isFreshBootstrap && requestOverBudgetReason === null && bootstrap === null) {
+        return null
+      }
+
+      const chunks = bootstrap?.chunks
       const requestDatabase = {
         queryJson: tx.queryJson,
         run: tx.run,
@@ -1082,6 +1045,12 @@ export const requestReviewServingV4Rebuild = (input: RequestReviewServingV4Rebui
   return Effect.runPromise(requestReviewServingV4RebuildEffect(input))
 }
 
+const isReviewServingRebuildRequest = (
+  request: ReviewServingRebuildRequest | null,
+): request is ReviewServingRebuildRequest => {
+  return request !== null
+}
+
 export const requestReviewServingV4RebuildsEffect = (inputs: readonly RequestReviewServingV4RebuildInput[]) => {
   return Effect.forEach(
     inputs,
@@ -1095,5 +1064,7 @@ export const requestReviewServingV4RebuildsEffect = (inputs: readonly RequestRev
 export const requestReviewServingV4Rebuilds = (
   inputs: readonly RequestReviewServingV4RebuildInput[],
 ): Promise<ReviewServingRebuildRequest[]> => {
-  return Effect.runPromise(requestReviewServingV4RebuildsEffect(inputs))
+  return Effect.runPromise(requestReviewServingV4RebuildsEffect(inputs)).then((requests) => {
+    return requests.filter(isReviewServingRebuildRequest)
+  })
 }

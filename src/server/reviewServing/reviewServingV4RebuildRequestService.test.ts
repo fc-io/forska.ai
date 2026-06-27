@@ -214,7 +214,7 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     if (statement.includes('NTILE(')) {
       const chunkCount = Number(statement.match(/NTILE\((\d+)\)/u)?.[1] ?? 1)
 
-      return getFakeArticleRanges(chunkCount) as T[]
+      return (stats.scopedArticleCount === 0 ? [] : getFakeArticleRanges(chunkCount)) as T[]
     }
 
     if (statement.includes('FROM app.project_article')) {
@@ -381,6 +381,23 @@ test('V4 rebuild request service bootstraps explicit chunks when a project has n
   expect(joined).toContain("'search'")
   expect(joined).toContain('snapshot:')
   expect(joined).toContain('freshReviewServingSnapshot')
+})
+
+test('V4 rebuild request service skips fresh bootstrap admission when there are no scoped articles', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    ...baseStats,
+    scopedArticleCount: 0,
+    snapshotCount: 0,
+    snapshotUpdatedAt: null,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+
+  expect(request).toBeNull()
+  expect(statements.join('\n')).not.toContain('INSERT INTO app.review_rebuild_request')
+  expect(statements.join('\n')).not.toContain('INSERT INTO app.review_rebuild_chunk_manifest')
 })
 
 test('V4 rebuild request service keeps selected-import bootstrap chunks on import watermarks', async () => {

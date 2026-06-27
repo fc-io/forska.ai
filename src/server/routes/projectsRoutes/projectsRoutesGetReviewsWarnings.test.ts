@@ -1235,6 +1235,43 @@ test('reviews warnings queue V4 repair without legacy judgment fact fallback', a
   expect(await getPendingReviewRebuildChunkCount(projectId)).toBeGreaterThan(0)
 })
 
+test('reviews warnings do not queue V4 repair over queued legacy article refreshes', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-queued-article-refresh-blocks-v4-repair'
+  const articleId = `article-${projectId}`
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertDirtyArticleRefreshState(projectId, articleId, 2)
+  await runDatabase(`
+    INSERT INTO mart.project_scope_article (
+      project_id,
+      article_id,
+      in_curated_scope,
+      in_route_scope,
+      article_created_at,
+      article_updated_at
+    ) VALUES (
+      '${projectId}',
+      '${articleId}',
+      TRUE,
+      FALSE,
+      TIMESTAMPTZ '2026-04-02 12:00:00+00',
+      NULL
+    )
+  `)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
+  expect(body.data.indexing.queuedArticleRefreshCount).toBe(1)
+  expect(body.data.indexing.queuedRefreshCount).toBe(1)
+})
+
 test('reviews warnings report refreshing from ledger and worker progress state', async () => {
   if (!runDatabase || !setProgressSnapshotForTests) {
     throw new Error('Test dependencies not initialized')
