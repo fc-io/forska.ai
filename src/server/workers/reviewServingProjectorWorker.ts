@@ -82,7 +82,7 @@ type ReviewServingProjectorWorkerCleanupTarget = ReviewServingRetentionCleanupIn
 
 type ReviewServingProjectorWorkerChunkInput = ReviewServingRebuildChunkIdentity & {checksum?: string | null}
 
-type RebuildChunkSplitRangeRow = {articleCount: number; chunkEndKey: string | null; chunkStartKey: string | null}
+type RebuildChunkSplitRangeRow = {articleCount: number; chunkEndKey: string; chunkStartKey: string}
 
 type DeltaIntakePartitionRow = {
   endSourceHighWaterMark: number
@@ -449,19 +449,34 @@ const getArticleRangeRebuildChunkSplitRanges = async (
       FROM mart.project_scope_article scope
       WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
         AND ${getChunkArticleRangePredicate({alias: 'scope', chunk: input.chunk})}
+    ), bucket_range AS (
+      SELECT
+        split_bucket,
+        CAST(COUNT(*) AS INTEGER) AS article_count,
+        MIN(article_id) AS scoped_start_key,
+        MAX(article_id) AS scoped_end_key
+      FROM scoped_article
+      GROUP BY split_bucket
+      HAVING COUNT(*) > 0
+    ), bucket_range_with_neighbors AS (
+      SELECT
+        article_count,
+        scoped_start_key,
+        scoped_end_key,
+        LAG(scoped_end_key) OVER (ORDER BY split_bucket) AS previous_scoped_end_key,
+        LEAD(scoped_start_key) OVER (ORDER BY split_bucket) AS next_scoped_start_key
+      FROM bucket_range
     )
     SELECT
-      CAST(COUNT(*) AS INTEGER) AS articleCount,
-      MIN(article_id) AS chunkStartKey,
-      MAX(article_id) AS chunkEndKey
-    FROM scoped_article
-    GROUP BY split_bucket
-    HAVING COUNT(*) > 0
-    ORDER BY split_bucket
+      article_count AS articleCount,
+      COALESCE(previous_scoped_end_key, ${getSqlLiteral(input.chunk.chunkStartKey)}) AS chunkStartKey,
+      COALESCE(next_scoped_start_key, ${getSqlLiteral(input.chunk.chunkEndKey)}) AS chunkEndKey
+    FROM bucket_range_with_neighbors
+    ORDER BY scoped_start_key
   `)
 
   return rows.filter((row) => {
-    return row.chunkStartKey !== null && row.chunkEndKey !== null && row.articleCount > 0
+    return row.articleCount > 0
   })
 }
 
@@ -1324,7 +1339,7 @@ const splitClaimedArticleRangeRebuildChunk = async (
     `)
 
     if (acceptedParentRows.length !== 1) {
-      return false
+      throw new Error(`review serving rebuild chunk ${input.chunk.chunkId} is no longer claimed by ${input.leaseOwner}`)
     }
 
     await upsertReviewServingRebuildChunkManifests(
