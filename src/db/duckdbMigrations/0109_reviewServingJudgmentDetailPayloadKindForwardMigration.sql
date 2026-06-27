@@ -68,6 +68,7 @@ ON mart.review_article_judgment_detail_serving_v4(project_id, review_config_hash
 UPDATE app.review_rebuild_request AS request
 SET
   status = 'admitted',
+  admission_state = 'admitted',
   retry_after = NULL,
   failed_at = NULL,
   last_error = NULL,
