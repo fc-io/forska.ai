@@ -13,15 +13,17 @@ test('seeded Covidence project edit smoke renders edit controls without browser 
 
     await page.goto(`/projects/${projectId}/edit`)
 
+    const editForm = page.locator('form')
+
     await expect(page.getByRole('heading', {name: 'Edit Project'})).toBeVisible()
     await expect(page.getByTestId(routeErrorSurfaceTestId)).toHaveCount(0)
-    await expect(page.locator('#project-name')).toHaveValue('Playwright Covidence Project')
-    await expect(page.locator('#model')).toBeVisible()
-    await expect(page.getByText('Import Routes')).toBeVisible()
-    await expect(page.getByText('Playwright Covidence Project')).toBeVisible()
-    await expect(page.getByText('Use Article Title')).toBeVisible()
-    await expect(page.getByText('Your questions about the article')).toBeVisible()
-    await expect(page.getByPlaceholder('Prompt 1 heading (optional)...')).toHaveValue('Population Inclusion')
+    await expect(editForm.locator('#project-name')).toHaveValue('Playwright Covidence Project')
+    await expect(editForm.locator('#model')).toBeVisible()
+    await expect(editForm.getByText('Import Routes')).toBeVisible()
+    await expect(editForm.getByLabel('Project Name *')).toHaveValue('Playwright Covidence Project')
+    await expect(editForm.getByText('Use Article Title')).toBeVisible()
+    await expect(editForm.getByText('Your questions about the article')).toBeVisible()
+    await expect(editForm.getByPlaceholder('Prompt 1 heading (optional)...')).toHaveValue('Population Inclusion')
 
     browserFailures.assertNoFailures()
   } finally {
