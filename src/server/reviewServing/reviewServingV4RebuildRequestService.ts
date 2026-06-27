@@ -769,7 +769,10 @@ export const requestReviewServingV4RebuildEffect = (
   return Effect.tryPromise(async () => {
     const activeRequest =
       input.reason === 'missingReviewServingSnapshot'
-        ? await getActiveReviewServingRebuildRequestForProject({projectId: input.projectId}, database)
+        ? await getActiveReviewServingRebuildRequestForProject(
+            {projectId: input.projectId, reason: 'missingReviewServingSnapshot'},
+            database,
+          )
         : null
 
     if (activeRequest !== null) {

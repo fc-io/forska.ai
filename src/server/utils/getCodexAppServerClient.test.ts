@@ -715,6 +715,38 @@ test('runJsonTurn recycles the app-server after a failed turn', async () => {
   expect(getKillCount()).toBe(1)
 })
 
+test('runJsonTurn rejects new turns once recycle is pending', async () => {
+  const {client, getKillCount} = createMockConcurrentCodexClient({
+    expectedTurnCount: 1,
+    maxTurnsBeforeRecycle: 1,
+    notifications: [{inputText: 'first request', kind: 'complete', status: 'completed'}],
+    threadReadTextByInputText: {'first request': 'first response'},
+  })
+  const firstResult = await client.runJsonTurn({
+    model: 'gpt-5.4',
+    inputText: 'first request',
+    outputSchema: {type: 'object'},
+  })
+  const secondResult = await client
+    .runJsonTurn({model: 'gpt-5.4', inputText: 'second request', outputSchema: {type: 'object'}})
+    .then(
+      () => {
+        return null
+      },
+      (error: unknown) => {
+        return error
+      },
+    )
+
+  expect(firstResult.text).toBe('first response')
+  expect(secondResult).toBeInstanceOf(Error)
+  expect(secondResult instanceof Error ? secondResult.message : '').toBe(
+    'codex app-server recycled after 1 completed turns',
+  )
+  await waitForCodexRecycleTimer()
+  expect(getKillCount()).toBe(1)
+})
+
 test('runJsonTurn recycles the app-server after a turn timeout', async () => {
   const {client, getKillCount} = createMockConcurrentCodexClient({
     expectedTurnCount: 1,

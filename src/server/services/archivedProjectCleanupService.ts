@@ -48,6 +48,7 @@ const archivedProjectMartCleanupMutations: CleanupMutation[] = [
   'mart.review_article_serving',
   'mart.review_article_rollup',
   'mart.prompt_answer_fact',
+  'app.review_answer_dictionary',
   'mart.project_scope_article',
   'app.project_article_ordinal',
   'app.project_review_serving_generation',
