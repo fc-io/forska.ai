@@ -197,6 +197,8 @@ const formatIndexingState = (indexing: ReviewsWarningsData['indexing']) => {
   return [
     `progressState=${indexing.progressState}`,
     `status=${indexing.status}`,
+    `servingReadable=${indexing.serving.readable}`,
+    `servingUsable=${indexing.serving.usable}`,
     `blockedReason=${indexing.blockedReason ?? 'none'}`,
     `pendingRefreshCount=${indexing.pendingRefreshCount}`,
     `queuedRefreshCount=${indexing.queuedRefreshCount}`,
@@ -210,11 +212,13 @@ const formatIndexingState = (indexing: ReviewsWarningsData['indexing']) => {
   ].join(', ')
 }
 
-const isNonActionableStaleWarningState = (indexing: ReviewsWarningsData['indexing']) => {
+const isReadableStaleWarningState = (indexing: ReviewsWarningsData['indexing']) => {
   return (
     indexing.status === 'stale'
     && indexing.progressState === 'stalled'
     && indexing.blockedReason === null
+    && indexing.serving.readable
+    && indexing.serving.usable
     && indexing.pendingRefreshCount === 0
     && indexing.queuedRefreshCount === 0
     && indexing.inFlightRefreshCount === 0
@@ -225,7 +229,7 @@ const isNonActionableStaleWarningState = (indexing: ReviewsWarningsData['indexin
 const getBlockingWarningDetails = (indexing: ReviewsWarningsData['indexing']) => {
   return indexing.progressState === 'blocked' || indexing.status === 'blocked'
     ? `warning response returned blocked review indexing: ${formatIndexingState(indexing)}`
-    : isNonActionableStaleWarningState(indexing)
+    : isReadableStaleWarningState(indexing)
       ? null
       : indexing.progressState === 'stalled' || indexing.status === 'stale'
         ? `warning response returned stalled review indexing: ${formatIndexingState(indexing)}`
