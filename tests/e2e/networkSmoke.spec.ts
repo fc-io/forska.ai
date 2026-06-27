@@ -14,8 +14,11 @@ const runtimeLogDir = process.env.LOG_DIR ?? ''
 const shouldSkipMutatingRouteLoads = process.env.FORSKA_NETWORK_SMOKE_SKIP_MUTATING_ROUTE_LOADS === 'true'
 const largeRebuildFailureText = 'Large rebuild failed'
 const forbiddenRuntimeLogPatterns = [
+  {label: 'API role DuckDB ownership', pattern: /Current server role api cannot own DuckDB/},
+  {label: 'DuckDB fatal runtime restart', pattern: /\[duckdb\] restarting embedded runtime after fatal invalidation/},
   {label: 'large rebuild failure', pattern: /Large rebuild failed/},
   {label: 'articles reviews request failure', pattern: /Articles reviews request failed/},
+  {label: 'review bulk worker loop failure', pattern: /\[reviewBulkOperationWorker\] background loop failed/},
   {label: 'review serving snapshot unavailable', pattern: /Review serving snapshot is unavailable/},
   {label: 'DuckDB owner heartbeat failure', pattern: /\[duckdb-owner\] heartbeat failed/},
   {label: 'DuckDB owner heartbeat event', pattern: /duckdb-owner-connection-heartbeat/},
