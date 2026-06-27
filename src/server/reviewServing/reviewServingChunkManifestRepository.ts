@@ -267,11 +267,7 @@ const getRebuildChunkComponentPrerequisitePredicate = (tableAlias?: string) => {
               AND prerequisite.project_id IS NOT DISTINCT FROM ${source}project_id
               AND prerequisite.projection_component IN ${getComponentSqlList(prerequisites)}
               AND prerequisite.status <> 'completed'
-              AND NOT (
-                prerequisite.status IN ('failed', 'blocked_over_budget', 'quarantined')
-                AND prerequisite.updated_at < ${source}updated_at
-              )
-          )
+            )
         )`
     })
     .join('\n      OR ')

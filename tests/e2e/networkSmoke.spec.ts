@@ -396,6 +396,8 @@ const postWarningsEndpointProbe = async (projectId: string, attempt = 1): Promis
     await waitForWarningsEndpointQueuedProbeRetry()
     return postWarningsEndpointProbe(projectId, attempt + 1)
   }
+
+  throw new Error(`warnings endpoint remained queued after retry for ${projectId}: ${formatIndexingState(inspection.data.indexing)}`)
 }
 
 const getFirstExistingId = <T extends {id: string}>(values: T[]) => {
