@@ -6,6 +6,7 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
 import {
+  getReviewServingRebuildChunkId,
   type ReviewServingChunkManifestRepositoryDatabase,
   type ReviewServingChunkManifestRepositoryTransaction,
   type ReviewServingRebuildChunkBudgetFields,
@@ -579,6 +580,21 @@ export const getActiveReviewServingRebuildRequestForProject = async (
   return row === undefined ? null : getRequestFromRow(row)
 }
 
+const deleteObsoleteReviewServingRebuildChunks = async (
+  input: {chunks: readonly ReviewServingRebuildChunkManifestInput[]; requestId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const chunkIds = input.chunks.map((chunk) => {
+    return getReviewServingRebuildChunkId({...chunk, requestId: input.requestId})
+  })
+
+  await database.run(`
+    DELETE FROM app.review_rebuild_chunk_manifest
+    WHERE request_id = ${getSqlLiteral(input.requestId)}
+      AND chunk_id NOT IN (${getSqlStringList(chunkIds)})
+  `)
+}
+
 export const createReviewServingRebuildRequestEffect = (
   input: ReviewServingRebuildRequestInput,
   database: ReviewServingChunkManifestRepositoryDatabase = getReviewServingRebuildRequestDatabase(),
@@ -669,6 +685,10 @@ export const createReviewServingRebuildRequestEffect = (
           END,
           updated_at = ${nowSql}
       `)
+
+        if (input.chunks !== undefined) {
+          await deleteObsoleteReviewServingRebuildChunks({chunks, requestId}, tx)
+        }
 
         const chunkBudgetFields = {
           admissionState: chunkAdmissionState,
