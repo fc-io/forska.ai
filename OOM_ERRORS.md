@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-27 - V4 Judgment Input Content Rebuild Chunk
+
+- Error: `DuckDB Out of Memory Error: failed to allocate 32KiB (18.6 GiB/18.6 GiB used)`.
+- Context: `app.review_rebuild_chunk_manifest` V4 chunk `projection_component=judgmentInputContent` for project `d03fe24a-cfcf-41ed-b09f-7b554a393d80`, surfaced by current-DB network smoke warnings `failedCount`.
+- Cause: A judgment detail rebuild chunk could still execute too much physical payload work for a dense article range before the manifest could resume at a smaller unit.
+- Fix: Large claimed article-range rebuild chunks now split their article range through `mart.project_scope_article` into enough bounded child buckets before running dense payload work; DuckDB OOM in judgment input content still triggers the same split fallback. The worker inserts child rebuild chunk manifests and completes the parent as a container so downstream work waits for bounded children.
+- Verification: `bun test src/server/workers/reviewServingProjectorWorker.test.ts` and focused lint for touched files.
+
 ## 2026-06-26 - Judgment Job Serving Queue Cutover
 
 - Error: `Out of Memory Error: failed to pin block` risk from normal judgment-job unassessed count, preview, and refill reads falling back to broad legacy DuckDB paths.
