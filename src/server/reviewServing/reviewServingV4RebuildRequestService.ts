@@ -122,6 +122,10 @@ const selectedImportPostingFilterFanOut = 4
 const selectedImportPostingFanOut = listModeFanOut * selectedImportPostingFilterFanOut
 const syntheticHumanStatusPromptCount = 1
 const bootstrapOptionalComponents = ['search'] as const satisfies readonly ReviewServingProjectionComponent[]
+const fullProjectBootstrapComponents = [
+  'projectScope',
+  'selectedImport',
+] as const satisfies readonly ReviewServingProjectionComponent[]
 const articleScaledComponentFanOut = {
   display: listModeFanOut,
   humanStatus: 0,
@@ -165,6 +169,18 @@ const getPromptScaledComponentRows = (input: {
 
     return total + promptCount * promptScaledComponentFanOut[component]
   }, 0)
+}
+
+const getFullProjectBootstrapComponents = (components: readonly ReviewServingProjectionComponent[]) => {
+  return components.filter((component) => {
+    return fullProjectBootstrapComponents.includes(component as (typeof fullProjectBootstrapComponents)[number])
+  })
+}
+
+const getArticleRangeBootstrapComponents = (components: readonly ReviewServingProjectionComponent[]) => {
+  return components.filter((component) => {
+    return !fullProjectBootstrapComponents.includes(component as (typeof fullProjectBootstrapComponents)[number])
+  })
 }
 
 const getEstimatedPayloadRows = (input: {
@@ -385,8 +401,27 @@ const getReviewServingV4BootstrapChunks = (input: {
   snapshotId: string
   sourceWatermarks: Record<string, number>
 }): readonly ReviewServingRebuildChunkManifestInput[] => {
-  return input.articleRanges.flatMap((articleRange) => {
-    return input.components.map((component) => {
+  const fullRange = {
+    chunkEndKey: input.articleRanges[input.articleRanges.length - 1]?.chunkEndKey ?? '',
+    chunkStartKey: input.articleRanges[0]?.chunkStartKey ?? '',
+  }
+  const fullProjectChunks = getFullProjectBootstrapComponents(input.components).map((component) => {
+    return {
+      chunkEndKey: fullRange.chunkEndKey,
+      chunkStartKey: fullRange.chunkStartKey,
+      inputDigest: 'freshReviewServingSnapshot',
+      inputWatermark:
+        component === 'selectedImport' ? (input.sourceWatermarks.importRunArticle ?? 0) : input.inputWatermark,
+      outputBaseGeneration: 0,
+      projectId: input.projectId,
+      projectionComponent: component,
+      projectionIdentity: getReviewServingV4BootstrapProjectionIdentity({component, projectId: input.projectId}),
+      snapshotId: input.snapshotId,
+      snapshotCount: 1,
+    }
+  })
+  const articleRangeChunks = input.articleRanges.flatMap((articleRange) => {
+    return getArticleRangeBootstrapComponents(input.components).map((component) => {
       return {
         chunkEndKey: articleRange.chunkEndKey,
         chunkStartKey: articleRange.chunkStartKey,
@@ -402,6 +437,8 @@ const getReviewServingV4BootstrapChunks = (input: {
       }
     })
   })
+
+  return [...fullProjectChunks, ...articleRangeChunks]
 }
 
 const prepareReviewServingV4Bootstrap = async (
@@ -536,6 +573,32 @@ const getReviewServingV4RebuildEstimate = (
     estimatedSnapshotCount: snapshotCount,
     estimatedTempBytes: 0,
   }
+}
+
+const getCombinedBootstrapRebuildEstimate = (input: {
+  articleRangeComponents: readonly ReviewServingProjectionComponent[]
+  chunkCount: number
+  fullProjectComponents: readonly ReviewServingProjectionComponent[]
+  stats: ReviewServingV4RebuildStatsRow
+}) => {
+  const fullProjectEstimate = getReviewServingV4RebuildEstimate(input.stats, input.fullProjectComponents)
+  const articleRangeEstimate = getReviewServingV4RebuildEstimate(
+    getPerBootstrapChunkStats({chunkCount: input.chunkCount, stats: input.stats}),
+    input.articleRangeComponents,
+  )
+
+  return {
+    estimatedInputRows: (fullProjectEstimate.estimatedInputRows ?? 0) + (articleRangeEstimate.estimatedInputRows ?? 0),
+    estimatedOutputBytes:
+      (fullProjectEstimate.estimatedOutputBytes ?? 0) + (articleRangeEstimate.estimatedOutputBytes ?? 0),
+    estimatedOutputRows:
+      (fullProjectEstimate.estimatedOutputRows ?? 0) + (articleRangeEstimate.estimatedOutputRows ?? 0),
+    estimatedPayloadBytes:
+      (fullProjectEstimate.estimatedPayloadBytes ?? 0) + (articleRangeEstimate.estimatedPayloadBytes ?? 0),
+    estimatedPromptCount: getSafeCount(input.stats.promptCount),
+    estimatedSnapshotCount: getSafeCount(input.stats.snapshotCount),
+    estimatedTempBytes: (fullProjectEstimate.estimatedTempBytes ?? 0) + (articleRangeEstimate.estimatedTempBytes ?? 0),
+  } satisfies ReviewServingRebuildRequestEstimate
 }
 
 const getReviewServingV4RebuildSourceWatermarks = (stats: ReviewServingV4RebuildStatsRow) => {
@@ -829,6 +892,8 @@ export const requestReviewServingV4RebuildEffect = (
       : requestedComponents
     const estimateStats = isFreshBootstrap ? {...stats, snapshotCount: 1} : stats
     const totalEstimate = getReviewServingV4RebuildEstimate(estimateStats, components)
+    const articleRangeBootstrapComponents = getArticleRangeBootstrapComponents(components)
+    const fullProjectBootstrapComponents = getFullProjectBootstrapComponents(components)
     const bootstrapChunkCount =
       isFreshBootstrap && input.reason === 'missingReviewServingSnapshot'
         ? getReviewServingV4BootstrapChunkCount({
@@ -840,10 +905,12 @@ export const requestReviewServingV4RebuildEffect = (
     const requestEstimate =
       bootstrapChunkCount === 1
         ? totalEstimate
-        : getReviewServingV4RebuildEstimate(
-            getPerBootstrapChunkStats({chunkCount: bootstrapChunkCount, stats: estimateStats}),
-            components,
-          )
+        : getCombinedBootstrapRebuildEstimate({
+            articleRangeComponents: articleRangeBootstrapComponents,
+            chunkCount: bootstrapChunkCount,
+            fullProjectComponents: fullProjectBootstrapComponents,
+            stats: estimateStats,
+          })
 
     return database.transaction(async (tx) => {
       const bootstrap = isFreshBootstrap

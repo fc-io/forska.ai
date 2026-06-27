@@ -1401,7 +1401,7 @@ test('reviews warnings queue bounded V4 repair for stale idle legacy no-work sta
   expect(await getPendingReviewRebuildChunkCount(projectId)).toBeGreaterThan(0)
 })
 
-test('reviews warnings queue bounded V4 repair when missing serving snapshot was blocked over budget', async () => {
+test('reviews warnings report blocked V4 repair without retrying terminal missing snapshot work', async () => {
   const projectId = 'project-missing-serving-blocked-bootstrap-warning'
 
   await insertProjectFixture(projectId)
@@ -1424,9 +1424,10 @@ test('reviews warnings queue bounded V4 repair when missing serving snapshot was
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
-  expect(body.data.indexing.progressState).toBe('queued')
-  expect(body.data.indexing.status).toBe('refreshing')
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.status).toBe('failed')
+  expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
 })
 
 test('reviews warnings ignore stale terminal chunks after same request is re-admitted', async () => {
@@ -2210,6 +2211,23 @@ test('reviews warnings ignore failed legacy large rebuild state while queueing V
   expect(body.data.indexing.status).toBe('refreshing')
   expect(await getReviewRebuildRequestCount(projectId)).toBe(1)
   expect(await getPendingReviewRebuildChunkCount(projectId)).toBeGreaterThan(0)
+})
+
+test('reviews warnings respect queued legacy large rebuild before queueing V4 repair', async () => {
+  const projectId = 'project-large-rebuild-queued-missing-serving-warning'
+
+  await insertProjectFixture(projectId)
+  await insertLargeRebuildState(projectId, {rebuildPhase: 'prompt_answer_fact', refreshStatus: 'idle', refreshToken: 5})
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.largeRebuild?.refreshStatus).toBe('idle')
+  expect(body.data.indexing.pendingRefreshCount).toBeGreaterThan(0)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.status).toBe('refreshing')
+  expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
+  expect(await getPendingReviewRebuildChunkCount(projectId)).toBe(0)
 })
 
 test('reviews warnings keep active serving ready when legacy large rebuild has failed', async () => {

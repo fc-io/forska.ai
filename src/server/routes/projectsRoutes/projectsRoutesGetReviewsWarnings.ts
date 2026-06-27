@@ -833,6 +833,10 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       && isUsableReviewServingWarningSnapshot(warningSnapshot.diagnostics.manifest.status)
     const hasReadableReviewServingRows = warningSnapshot.status === 'accepted'
     const initialHasReviewServingStateThatCanProgress = getHasReviewServingStateThatCanProgress(servingDiagnostics)
+    const hasInitialReportableLargeRebuild =
+      initialProjectLargeRebuildState.refreshToken !== null
+      && initialProjectLargeRebuildState.refreshToken > 0
+      && initialProjectLargeRebuildState.refreshStatus !== 'failed'
     const hasInitialLegacyRefreshBlocker =
       initialProjectRefreshState.hasUnresolvedQuarantineBarrier
       || initialProjectRefreshState.refreshStatus === 'failed'
@@ -840,12 +844,13 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       || initialProjectRefreshState.dirtyMaterialization.failedCount > 0
       || initialProjectRefreshState.dirtyMaterialization.unreconciledCount > 0
       || getHasActiveLease(initialProjectRefreshState.leaseExpiresAt, currentNow)
+      || hasInitialReportableLargeRebuild
     const shouldRequestMissingSnapshotRepair =
       !hasReadableReviewServingRows
       && enabledPromptCount > 0
       && hasAnyArticlesInScope
-      && (servingDiagnostics.rebuildChunks.blockedOverBudgetCount > 0
-        || (!initialHasReviewServingStateThatCanProgress && !hasInitialLegacyRefreshBlocker))
+      && !initialHasReviewServingStateThatCanProgress
+      && !hasInitialLegacyRefreshBlocker
 
     if (shouldRequestMissingSnapshotRepair) {
       await requestReviewServingV4Rebuild({projectId, reason: 'missingReviewServingSnapshot'})
