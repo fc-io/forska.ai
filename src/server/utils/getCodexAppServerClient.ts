@@ -549,6 +549,10 @@ export const createCodexAppServerClient = ({
   }
 
   const startTrackedTurn = (): void => {
+    if (recycleWhenIdle) {
+      throw getRecycleError()
+    }
+
     activeTurnCount += 1
   }
 

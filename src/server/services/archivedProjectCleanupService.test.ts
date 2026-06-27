@@ -204,6 +204,15 @@ const getScript = (body: string) => {
       )
       VALUES ('archived-cleanup-project', 9, 'project_scope_article', 'running');
 
+      INSERT INTO app.review_answer_dictionary (
+        project_id,
+        prompt_id,
+        answer_id,
+        answer_value,
+        numeric_answer_value
+      )
+      VALUES ('archived-cleanup-project', 'archived-cleanup-prompt', 1, 'yes', NULL);
+
       INSERT INTO app.judgment_job_sqlite_outbox_import (
         job_id,
         outbox_seq,
@@ -331,16 +340,23 @@ test('bounded cleanup keeps tombstoned project identity until blockers are clear
       martJudgmentProjectId: string | null
       projectArticleRows: number
       projectRows: number
+      reviewAnswerDictionaryRows: number
       runtimeRows: number
     }
     runResult: {deletedRowCount: number; status: string}
-    snapshotAfterFirstBatch: {projectArticleRows: number; projectRows: number; runtimeRows: number}
+    snapshotAfterFirstBatch: {
+      projectArticleRows: number
+      projectRows: number
+      reviewAnswerDictionaryRows: number
+      runtimeRows: number
+    }
   }>(`
     const firstBatch = await cleanupNextArchivedProjectBatch({batchSize: 1})
     const [snapshotAfterFirstBatch] = await database.queryJson(\`
       SELECT
         (SELECT COUNT(*) FROM app.project WHERE id = 'archived-cleanup-project')::INTEGER AS projectRows,
         (SELECT COUNT(*) FROM app.project_article WHERE project_id = 'archived-cleanup-project')::INTEGER AS projectArticleRows,
+        (SELECT COUNT(*) FROM app.review_answer_dictionary WHERE project_id = 'archived-cleanup-project')::INTEGER AS reviewAnswerDictionaryRows,
         (
           (SELECT COUNT(*) FROM app.project_mart_refresh_state WHERE project_id = 'archived-cleanup-project')
           + (SELECT COUNT(*) FROM app.project_mart_dirty_materialization_state WHERE project_id = 'archived-cleanup-project')
@@ -359,6 +375,7 @@ test('bounded cleanup keeps tombstoned project identity until blockers are clear
           + (SELECT COUNT(*) FROM app.project_mart_dirty_refresh_article_quarantine WHERE project_id = 'archived-cleanup-project')
           + (SELECT COUNT(*) FROM app.project_mart_large_rebuild_state WHERE project_id = 'archived-cleanup-project')
         )::INTEGER AS runtimeRows,
+        (SELECT COUNT(*) FROM app.review_answer_dictionary WHERE project_id = 'archived-cleanup-project')::INTEGER AS reviewAnswerDictionaryRows,
         (SELECT project_id FROM app.judgment WHERE id = 'archived-cleanup-judgment') AS appJudgmentProjectId,
         (SELECT project_id FROM mart.judgment_fact WHERE judgment_id = 'archived-cleanup-judgment') AS martJudgmentProjectId
     \`)
@@ -371,15 +388,21 @@ test('bounded cleanup keeps tombstoned project identity until blockers are clear
     deletedRowCount: 1,
     phase: 'mart_cleanup',
     projectId: 'archived-cleanup-project',
-    tableName: 'mart.project_scope_article',
+    tableName: 'app.review_answer_dictionary',
   })
-  expect(result.snapshotAfterFirstBatch).toEqual({projectArticleRows: 1, projectRows: 1, runtimeRows: 4})
+  expect(result.snapshotAfterFirstBatch).toEqual({
+    projectArticleRows: 1,
+    projectRows: 1,
+    reviewAnswerDictionaryRows: 0,
+    runtimeRows: 4,
+  })
   expect(result.runResult.status).toBe('completed')
   expect(result.finalSnapshot).toEqual({
     appJudgmentProjectId: null,
     martJudgmentProjectId: null,
     projectArticleRows: 0,
     projectRows: 0,
+    reviewAnswerDictionaryRows: 0,
     runtimeRows: 0,
   })
 })

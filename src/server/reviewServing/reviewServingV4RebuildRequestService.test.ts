@@ -237,10 +237,15 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
 
     if (statement.includes('FROM app.review_rebuild_request')) {
       if (statement.includes("status IN ('admitted', 'running')")) {
-        const projectId = getSqlStrings(statement)[0] ?? ''
+        const strings = getSqlStrings(statement)
+        const projectId = strings[0] ?? ''
+        const reasonFilter = statement.includes('AND reason =') ? strings[1] : undefined
         const activeRequest = Array.from(requests.values()).find((request) => {
           return (
-            request.projectId === projectId && request.status === 'admitted' && request.admissionState === 'admitted'
+            request.projectId === projectId
+            && request.status === 'admitted'
+            && request.admissionState === 'admitted'
+            && (reasonFilter === undefined || request.reason === reasonFilter)
           )
         })
 
@@ -393,6 +398,27 @@ test('V4 missing snapshot rebuild requests reuse active admitted work', async ()
 
   expect(secondRequest.requestId).toBe(firstRequest.requestId)
   expect(rebuildRequestInsertCount).toBe(1)
+})
+
+test('V4 missing snapshot rebuild requests do not reuse unrelated active work', async () => {
+  const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
+
+  const unrelatedRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      database,
+    ),
+  )
+  const missingSnapshotRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const rebuildRequestInsertCount = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_request')
+  }).length
+
+  expect(missingSnapshotRequest.requestId).not.toBe(unrelatedRequest.requestId)
+  expect(missingSnapshotRequest.reason).toBe('missingReviewServingSnapshot')
+  expect(rebuildRequestInsertCount).toBe(2)
 })
 
 test('V4 rebuild request service does not seed candidate state for over-budget bootstraps', async () => {

@@ -259,32 +259,24 @@ const repairOrphanedDrainingJobs = async (jobIds: string[]): Promise<void> => {
     return
   }
 
-  await runJudgmentJobRepairAction({
-    action: 'repair',
-    claimedBy: getDefaultJudgmentServerJobId(),
-    jobId: currentJobId,
-  })
+  await runJudgmentJobRepairAction({action: 'repair', claimedBy: getDefaultJudgmentServerJobId(), jobId: currentJobId})
 
   return repairOrphanedDrainingJobs(jobIds.slice(1))
 }
 
-const getOrphanedDrainingJobIds = async (jobIds: string[]) => {
+const getOrphanedDrainingJobIds = async (jobIds: string[], orphanedJobIds: string[] = []): Promise<string[]> => {
+  const [currentJobId = '', ...remainingJobIds] = jobIds
+
+  if (!currentJobId) {
+    return orphanedJobIds
+  }
+
   const sqliteService = getJudgmentJobSqliteService()
-  const healthRows = await Promise.all(
-    jobIds.map(async (jobId) => {
-      const healthSnapshot = await sqliteService.getHealthSnapshot(jobId)
+  const healthSnapshot = await sqliteService.getHealthSnapshot(currentJobId)
+  const nextOrphanedJobIds =
+    healthSnapshot.orphanedJudgedRowCount > 0 ? [...orphanedJobIds, currentJobId] : orphanedJobIds
 
-      return {jobId, orphanedJudgedRowCount: healthSnapshot.orphanedJudgedRowCount}
-    }),
-  )
-
-  return healthRows
-    .filter((row) => {
-      return row.orphanedJudgedRowCount > 0
-    })
-    .map((row) => {
-      return row.jobId
-    })
+  return getOrphanedDrainingJobIds(remainingJobIds, nextOrphanedJobIds)
 }
 
 const repairUnavailableRequestAttemptDiagnostics = async ({
