@@ -20,6 +20,14 @@ Entry format:
 - Fix: Large claimed article-range rebuild chunks now split their article range through `mart.project_scope_article` into enough bounded child buckets before running dense payload work; DuckDB OOM in judgment input content still triggers the same split fallback. The worker inserts child rebuild chunk manifests and completes the parent as a container so downstream work waits for bounded children.
 - Verification: `bun test src/server/workers/reviewServingProjectorWorker.test.ts` and focused lint for touched files.
 
+## 2026-06-27 - V4 Re-Admitted Rebuild Queue
+
+- Error: Current-DB warning smoke stayed `queued` for project `8e26a3a8-2797-41da-864e-2c6cec7615c4` with `pendingRefreshCount=100`, `activeWorkCount=0`, and old `blocked_over_budget` prerequisite chunks.
+- Context: `app.review_rebuild_chunk_manifest` request-owned V4 repair chunks after a same-request re-admission created newer pending chunks.
+- Cause: Chunk claim prerequisites treated older terminal chunks from the same re-admitted request as active blockers, so newer admitted chunks could be queueable in diagnostics but not claimable in the worker.
+- Fix: Claim prerequisites now ignore older terminal prerequisite chunks when the candidate chunk is newer, allowing the re-admitted request to progress through the current bounded children.
+- Verification: `bun test src/server/reviewServing/reviewServingChunkManifestRepository.test.ts src/server/workers/reviewServingProjectorWorker.test.ts`; current-DB network smoke keeps failing failed/stalled/unqueueable warning states while allowing a queueable V4 backlog.
+
 ## 2026-06-26 - Judgment Job Serving Queue Cutover
 
 - Error: `Out of Memory Error: failed to pin block` risk from normal judgment-job unassessed count, preview, and refill reads falling back to broad legacy DuckDB paths.

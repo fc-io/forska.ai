@@ -523,6 +523,8 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
     "prerequisite.projection_component IN ('projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue')",
   )
   expect(statements.join('\n')).toContain("prerequisite.status <> 'completed'")
+  expect(statements.join('\n')).toContain("prerequisite.status IN ('failed', 'blocked_over_budget', 'quarantined')")
+  expect(statements.join('\n')).toContain('prerequisite.updated_at < candidate.updated_at')
   expect(statements.join('\n')).toContain("project_id IS NOT DISTINCT FROM 'project-1'")
   expect(statements.join('\n')).toContain('MIN(candidate.updated_at)')
   expect(statements.join('\n')).toContain('MIN(candidate.chunk_id)')

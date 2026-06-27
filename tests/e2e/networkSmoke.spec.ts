@@ -29,7 +29,6 @@ const forbiddenRuntimeLogPatterns = [
 ] as const
 const warningEndpointPath = '/api/projectsreviewswarnings'
 const warningsEndpointQueuedProbeDelayMs = 1_000
-const warningsEndpointQueuedProbeMaxAttempts = 20
 
 type ApiDataResponse<T> = {data: T}
 type ArticleSearchResponse = Array<{articleId: string | null; articleTitle: string; id: string}>
@@ -375,14 +374,10 @@ const postWarningsEndpointProbe = async (projectId: string, attempt = 1): Promis
     return
   }
 
-  if (attempt >= warningsEndpointQueuedProbeMaxAttempts) {
-    throw new Error(
-      `warnings endpoint response for ${projectId} stayed queued after ${attempt} probes: ${formatIndexingState(inspection.data.indexing)}`,
-    )
+  if (attempt === 1) {
+    await waitForWarningsEndpointQueuedProbeRetry()
+    return postWarningsEndpointProbe(projectId, attempt + 1)
   }
-
-  await waitForWarningsEndpointQueuedProbeRetry()
-  return postWarningsEndpointProbe(projectId, attempt + 1)
 }
 
 const getFirstExistingId = <T extends {id: string}>(values: T[]) => {
