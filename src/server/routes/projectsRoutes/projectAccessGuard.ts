@@ -26,7 +26,7 @@ const getProjectAccessFromDuckdbOwner = async (projectId: string): Promise<Proje
     return null
   })) as ProjectAccessResponse | null
 
-  if (response.status === 404 && body?.error === 'Project not found') {
+  if (body?.error === 'Project not found') {
     return null
   }
 

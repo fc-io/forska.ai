@@ -143,7 +143,7 @@ test('getProjectAccess maps owner-backed project not found to null', async () =>
   const ownerServer = globalThis.Bun.serve({
     port: 0,
     fetch: () => {
-      return Response.json({data: null, error: 'Project not found'}, {status: 404})
+      return Response.json({error: 'Project not found'}, {status: 500})
     },
   })
 

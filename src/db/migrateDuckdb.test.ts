@@ -155,7 +155,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
           INSERT INTO app.review_rebuild_request (request_id, status, retry_after, failed_at, last_error)
           VALUES (
             'request-a',
-            'failed',
+            'blocked_over_budget',
             TIMESTAMPTZ '2026-06-27T12:10:00Z',
             TIMESTAMPTZ '2026-06-27T12:00:00Z',
             'Binder Error: Referenced column "payload_kind" not found in FROM clause'
@@ -180,8 +180,8 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
             'chunk-a',
             'request-a',
             'judgmentInputContent',
-            'quarantined',
-            'admitted',
+            'blocked_over_budget',
+            'blocked_over_budget',
             3,
             TIMESTAMPTZ '2026-06-27T12:10:00Z',
             'binder',
