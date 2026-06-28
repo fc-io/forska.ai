@@ -54,7 +54,7 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
     return warningsQuery.data?.indexing.serving.readable === true
   })
   const canLoadArticles = createMemo(() => {
-    return isReviewServingReadable() || warningsQuery.isError
+    return isReviewServingReadable()
   })
   const showReviewIndexState = createMemo(() => {
     return warningsQuery.isSuccess && !isReviewServingReadable()
