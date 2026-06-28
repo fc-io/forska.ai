@@ -1298,6 +1298,7 @@ test('project transfer commit writer creates project rows and preserves safe pac
       sourceMetadata: unknown
     }>
     dirtyArticleRows: Array<{articleId: string; firstDirtyToken: number; lastDirtyToken: number; projectId: string}>
+    importRunDeltaRows: Array<{articleId: string | null; changeKind: string; importRouteId: string | null}>
     identifierCount: number
     importRouteCount: number
     martCounts: {projectScopeArticleCount: number; reviewServingCount: number}
@@ -1323,6 +1324,12 @@ test('project transfer commit writer creates project rows and preserves safe pac
       promptOrder: number | null
     }
     refreshRows: Array<{dirtyToken: number; projectId: string; reason: string | null}>
+    reviewChangeDeltaRows: Array<{
+      articleId: string | null
+      changeKind: string
+      projectId: string | null
+      sourceTable: string
+    }>
     targetProjectId: string
     warningCodes: string[]
   }>(`
@@ -1558,12 +1565,15 @@ test('project transfer commit writer creates project rows and preserves safe pac
     const refreshRows = await database.queryJson("SELECT project_id AS projectId, CAST(dirty_token AS INTEGER) AS dirtyToken, last_request_reason AS reason FROM app.project_mart_refresh_state ORDER BY project_id ASC")
     const dirtyArticleRows = await database.queryJson("SELECT project_id AS projectId, article_id AS articleId, CAST(first_dirty_token AS INTEGER) AS firstDirtyToken, CAST(last_dirty_token AS INTEGER) AS lastDirtyToken FROM app.project_mart_refresh_article_state ORDER BY project_id ASC, article_id ASC")
     const materializationRows = await database.queryJson("SELECT project_id AS projectId, CAST(target_dirty_token AS INTEGER) AS targetDirtyToken FROM app.project_mart_dirty_materialization_state ORDER BY project_id ASC, target_dirty_token ASC")
+    const reviewChangeDeltaRows = await database.queryJson("SELECT change_kind AS changeKind, source_table AS sourceTable, project_id AS projectId, article_id AS articleId FROM app.review_change_delta ORDER BY change_kind ASC, source_table ASC, project_id ASC NULLS LAST, article_id ASC NULLS LAST")
+    const importRunDeltaRows = await database.queryJson("SELECT change_kind AS changeKind, import_route_id AS importRouteId, article_id AS articleId FROM app.import_run_article_delta ORDER BY change_kind ASC, import_route_id ASC NULLS LAST, article_id ASC NULLS LAST")
     const [martCounts] = await database.queryJson("SELECT (SELECT COUNT(*)::INTEGER FROM mart.project_scope_article) AS projectScopeArticleCount, (SELECT COUNT(*)::INTEGER FROM mart.review_article_serving) AS reviewServingCount")
 
     console.log(JSON.stringify({
       articleImportRouteCount: articleImportRouteCount.count,
       articleRows: articleRows.map((row) => ({...row, sourceMetadata: row.sourceMetadata === null ? null : JSON.parse(row.sourceMetadata)})),
       dirtyArticleRows,
+      importRunDeltaRows,
       identifierCount: identifierCount.count,
       importRouteCount: importRouteCount.count,
       martCounts,
@@ -1573,6 +1583,7 @@ test('project transfer commit writer creates project rows and preserves safe pac
       projectRow,
       promptRow,
       refreshRows,
+      reviewChangeDeltaRows,
       targetProjectId: writeResult.projectId,
       warningCodes: writeResult.importWarnings.map((warning) => warning.code),
     }))
@@ -1619,58 +1630,46 @@ test('project transfer commit writer creates project rows and preserves safe pac
   expect(result.articleImportRouteCount).toBe(1)
   expect(result.importRouteCount).toBe(1)
   expect(result.identifierCount).toBe(1)
-  const reusedRefreshRow = result.refreshRows.find((row) => {
-    return row.projectId === 'reuse-active-project'
-  })
-  const outsideDateRefreshRow = result.refreshRows.find((row) => {
-    return row.projectId === 'reuse-outside-date-project'
-  })
-  const importedRefreshRow = result.refreshRows.find((row) => {
-    return row.projectId === result.targetProjectId
-  })
-
-  expect(result.refreshRows).toHaveLength(3)
-  expect(reusedRefreshRow).toEqual({
-    dirtyToken: 1,
-    projectId: 'reuse-active-project',
-    reason: 'projectTransferCommit.reusedArticleUpdate',
-  })
-  expect(outsideDateRefreshRow).toEqual({
-    dirtyToken: 1,
-    projectId: 'reuse-outside-date-project',
-    reason: 'projectTransferCommit.reusedArticleUpdate',
-  })
-  expect(importedRefreshRow).toEqual({
-    dirtyToken: 1,
-    projectId: result.targetProjectId,
-    reason: 'projectTransferCommit.import',
-  })
-  expect(result.dirtyArticleRows).toHaveLength(4)
-  expect(result.dirtyArticleRows).toContainEqual({
-    articleId: 'reuse-article',
-    firstDirtyToken: 1,
-    lastDirtyToken: 1,
-    projectId: 'reuse-active-project',
-  })
-  expect(result.dirtyArticleRows).toContainEqual({
-    articleId: 'reuse-article',
-    firstDirtyToken: 1,
-    lastDirtyToken: 1,
-    projectId: 'reuse-outside-date-project',
-  })
-  expect(result.dirtyArticleRows).toContainEqual({
-    articleId: newArticleRow?.id ?? '',
-    firstDirtyToken: 1,
-    lastDirtyToken: 1,
-    projectId: result.targetProjectId,
-  })
-  expect(result.dirtyArticleRows).toContainEqual({
-    articleId: 'reuse-article',
-    firstDirtyToken: 1,
-    lastDirtyToken: 1,
-    projectId: result.targetProjectId,
-  })
+  expect(result.refreshRows).toEqual([])
+  expect(result.dirtyArticleRows).toEqual([])
   expect(result.materializationRows).toEqual([])
+  expect(
+    result.reviewChangeDeltaRows.some((row) => {
+      return (
+        row.changeKind === 'project.reviewConfig.updated'
+        && row.projectId === result.targetProjectId
+        && row.sourceTable === 'app.project'
+      )
+    }),
+  ).toBe(true)
+  expect(
+    result.reviewChangeDeltaRows.some((row) => {
+      return (
+        row.articleId === (newArticleRow?.id ?? '')
+        && row.changeKind === 'projectScope.article.added'
+        && row.projectId === result.targetProjectId
+        && row.sourceTable === 'app.project_article'
+      )
+    }),
+  ).toBe(true)
+  expect(
+    result.reviewChangeDeltaRows.some((row) => {
+      return (
+        row.articleId === 'reuse-article'
+        && row.changeKind === 'article.display.updated'
+        && row.sourceTable === 'app.article'
+      )
+    }),
+  ).toBe(true)
+  expect(
+    result.importRunDeltaRows.some((row) => {
+      return (
+        row.articleId === (newArticleRow?.id ?? '')
+        && row.changeKind === 'importRoute.article.added'
+        && row.importRouteId === 'target-route'
+      )
+    }),
+  ).toBe(true)
   expect(result.martCounts).toEqual({projectScopeArticleCount: 0, reviewServingCount: 0})
   expect(result.warningCodes).toContain('targetArticleImportRouteOmitted')
 })
