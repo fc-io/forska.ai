@@ -24,11 +24,19 @@ type InitResponse = {
   judgmentsHuman: Array<{id: string; promptId: string}>
 }
 
+type HumanAssessmentArticleRow = {
+  article_id?: string
+  article_summary?: string | null
+  article_title?: string | null
+  articleId?: string
+  articleSummary?: string | null
+  articleTitle?: string | null
+}
 type HumanAssessmentQueueRow = {article_id?: string; articleId?: string}
 
 const summaryModeBlockedMessage = 'Summary-mode projects do not support prompt-based human assessment'
 
-const getNextHumanAssessmentArticleIdFromServing = async (projectId: string) => {
+const getNextHumanAssessmentArticleFromServing = async (projectId: string) => {
   const database = getAppDatabaseService() as ReviewServingManifestRepositoryDatabase & ReviewServingReaderDatabase
   const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
   const manifest =
@@ -39,7 +47,7 @@ const getNextHumanAssessmentArticleIdFromServing = async (projectId: string) => 
     return null
   }
 
-  const result = await readReviewServingRows<HumanAssessmentQueueRow>(
+  const queueResult = await readReviewServingRows<HumanAssessmentQueueRow>(
     {
       allowStale: false,
       contractKey: 'review.queue.unassessed',
@@ -57,40 +65,50 @@ const getNextHumanAssessmentArticleIdFromServing = async (projectId: string) => 
     {database, diagnosticsDatabase: database, manifestDatabase: database},
   )
 
-  if (result.status === 'rejected') {
+  if (queueResult.status === 'rejected') {
     return null
   }
 
-  const row = result.rows[0]
+  const row = queueResult.rows[0]
+  const articleId = row?.article_id ?? row?.articleId ?? null
 
-  return row?.article_id ?? row?.articleId ?? null
-}
+  if (!articleId) {
+    return null
+  }
 
-const getNextHumanAssessmentArticleIdFromScope = async (projectId: string, articleId?: string) => {
-  const [row] = await getAppDatabaseService().queryJson<{articleId: string}>(`
-    SELECT scope_article.article_id AS articleId
-    FROM mart.project_scope_article scope_article
-    WHERE scope_article.project_id = '${escapeSqlString(projectId)}'
-      ${articleId ? `AND scope_article.article_id = '${escapeSqlString(articleId)}'` : ''}
-      AND EXISTS (
-        SELECT 1
-        FROM app.project project
-        WHERE project.id = scope_article.project_id
-          AND (project.date_from IS NULL OR scope_article.article_created_at >= project.date_from)
-          AND (project.date_to IS NULL OR scope_article.article_created_at <= project.date_to)
-      )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM app.judgment_human judgment
-        WHERE judgment.project_id = scope_article.project_id
-          AND judgment.article_id = scope_article.article_id
-          AND judgment.is_answered = TRUE
-      )
-    ORDER BY scope_article.article_created_at ASC NULLS LAST, scope_article.article_id ASC
-    LIMIT 1
-  `)
+  const articleResult = await readReviewServingRows<HumanAssessmentArticleRow>(
+    {
+      allowStale: false,
+      articleIds: [articleId],
+      contractKey: 'review.unassessed.rowsByArticleSet',
+      filters: {articleId, queueKind: 'human-unreviewed'},
+      limit: 1,
+      listMode: 'unassessed',
+      projectId,
+      queueKind: 'human-unreviewed',
+      reviewConfigHash: manifest.reviewConfigHash,
+      searchMode: 'none',
+      searchState: null,
+      searchTokenPrefix: null,
+      snapshotId: manifest.snapshotId,
+    },
+    {database, diagnosticsDatabase: database, manifestDatabase: database},
+  )
 
-  return row?.articleId ?? null
+  if (articleResult.status === 'rejected') {
+    return null
+  }
+
+  const article = articleResult.rows[0]
+  const servingArticleId = article?.article_id ?? article?.articleId ?? null
+
+  return servingArticleId
+    ? {
+        articleSummary: article?.article_summary ?? article?.articleSummary ?? null,
+        articleTitle: article?.article_title ?? article?.articleTitle ?? '',
+        id: servingArticleId,
+      }
+    : null
 }
 
 export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {projectId: string}; set: Context['set']}) => {
@@ -148,32 +166,11 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
   }
 
   if (!targetArticleId) {
-    const servingCandidate = await getNextHumanAssessmentArticleIdFromServing(body.projectId)
-    const scopedServingCandidate = servingCandidate
-      ? await getNextHumanAssessmentArticleIdFromScope(body.projectId, servingCandidate)
-      : null
-    const candidateArticleId =
-      scopedServingCandidate ?? (await getNextHumanAssessmentArticleIdFromScope(body.projectId))
-
-    if (!candidateArticleId) {
-      set.status = 404
-      return {data: null, error: 'No articles left to judge'}
-    }
-
-    const [servingArticle] = await getAppDatabaseService().queryJson<{
-      id: string
-      articleTitle: string
-      articleSummary: string | null
-    }>(`
-      SELECT id, article_title AS articleTitle, article_summary AS articleSummary
-      FROM app.article
-      WHERE id = '${escapeSqlString(candidateArticleId)}'
-      LIMIT 1
-    `)
+    const servingArticle = await getNextHumanAssessmentArticleFromServing(body.projectId)
 
     if (!servingArticle) {
       set.status = 404
-      return {data: null, error: 'Queued article not found'}
+      return {data: null, error: 'No articles left to judge'}
     }
 
     const articleId = servingArticle.id

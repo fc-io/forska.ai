@@ -33,6 +33,7 @@ export const humanAssessmentRoutesPostSubmit = async ({
     FROM app.judgment_human
     WHERE project_id = '${escapeSqlString(body.projectId)}'
       AND is_answered = FALSE
+    LIMIT 2
   `)
 
   if (pendingArticleRows.length === 0) {
@@ -76,6 +77,7 @@ export const humanAssessmentRoutesPostSubmit = async ({
     INNER JOIN app.prompt p ON jh.prompt_id = p.id
     INNER JOIN app.project_prompt pp ON pp.prompt_id = p.id AND pp.project_id = '${escapeSqlString(body.projectId)}'
     WHERE jh.project_id = '${escapeSqlString(body.projectId)}'
+      AND jh.article_id = '${escapeSqlString(currentArticleId)}'
       AND jh.is_answered = FALSE
   `)
 

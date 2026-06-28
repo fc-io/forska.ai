@@ -28,7 +28,10 @@ const runRef = {current: async (_statement: string): Promise<void> => {}}
 
 const readReviewServingRowsRef = {
   current: async (_request: unknown): Promise<unknown> => {
-    return {rows: [{article_id: 'article-1'}], status: 'ready'}
+    return {
+      rows: [{article_id: 'article-1', article_summary: 'Summary 1', article_title: 'Article 1'}],
+      status: 'ready',
+    }
   },
 }
 
@@ -127,7 +130,10 @@ const loadHandler = async (): Promise<typeof import('./humanAssessmentRoutesPost
 
 afterEach(() => {
   readReviewServingRowsRef.current = async () => {
-    return {rows: [{article_id: 'article-1'}], status: 'ready'}
+    return {
+      rows: [{article_id: 'article-1', article_summary: 'Summary 1', article_title: 'Article 1'}],
+      status: 'ready',
+    }
   }
   activeManifestRef.current = async () => {
     return {reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'}
@@ -156,20 +162,21 @@ test('human assessment init inserts project id before the answered flag', async 
         ? [{id: 'prompt-1', originalText: 'Prompt 1', promptHeading: 'Heading 1', order: 0, type: 'string'}]
         : statement.includes('ORDER BY created_at DESC')
           ? []
-          : statement.includes('FROM app.article')
-            ? [{articleSummary: 'Summary 1', articleTitle: 'Article 1', id: 'article-1'}]
-            : statement.includes('FROM mart.project_scope_article')
-              ? [{articleId: 'article-1'}]
-              : statement.includes('INSERT INTO app.judgment_human')
-                ? [{id: 'judgment-human-1', promptId: 'prompt-1'}]
-                : []
+          : statement.includes('INSERT INTO app.judgment_human')
+            ? [{id: 'judgment-human-1', promptId: 'prompt-1'}]
+            : []
   }
   runRef.current = async (statement) => {
     statements.push(statement)
   }
   readReviewServingRowsRef.current = async (request) => {
     readerRequests.push(request)
-    return {rows: [{article_id: 'article-1'}], status: 'ready'}
+    return JSON.stringify(request).includes('review.queue.unassessed')
+      ? {rows: [{article_id: 'article-1'}], status: 'accepted'}
+      : {
+          rows: [{article_id: 'article-1', article_summary: 'Summary 1', article_title: 'Article 1'}],
+          status: 'accepted',
+        }
   }
   transactionRef.current = async (operation) => {
     return operation({queryJson: queryJsonRef.current, run: runRef.current})
@@ -186,6 +193,8 @@ test('human assessment init inserts project id before the answered flag', async 
   expect(insertStatement).toContain('(id, article_id, prompt_id, project_id, is_answered, answer, comment)')
   expect(insertStatement).toMatch(/\('[^']+', 'article-1', 'prompt-1', 'project-1', FALSE, NULL, NULL\)/)
   expect(statements.join('\n')).not.toContain('ORDER BY RANDOM()')
+  expect(statements.join('\n')).not.toContain('FROM mart.project_scope_article')
+  expect(statements.join('\n')).not.toContain('FROM app.article')
   expect(readerRequests).toEqual([
     expect.objectContaining({
       contractKey: 'review.queue.unassessed',
@@ -194,6 +203,11 @@ test('human assessment init inserts project id before the answered flag', async 
       queueKind: 'human-unreviewed',
       searchMode: 'none',
       snapshotId: 'snapshot-1',
+    }),
+    expect.objectContaining({
+      articleIds: ['article-1'],
+      contractKey: 'review.unassessed.rowsByArticleSet',
+      filters: {articleId: 'article-1', queueKind: 'human-unreviewed'},
     }),
   ])
   expect(response).toEqual({
@@ -248,7 +262,7 @@ test('human assessment init rejects summary-mode projects before creating pendin
   ).toBe(false)
 })
 
-test('human assessment init falls back to scoped articles when serving human queue is empty', async () => {
+test('human assessment init rejects instead of scanning scoped articles when serving human queue is empty', async () => {
   const statements: string[] = []
   queryJsonRef.current = async (statement) => {
     statements.push(statement)
@@ -259,13 +273,9 @@ test('human assessment init falls back to scoped articles when serving human que
         ? [{id: 'prompt-1', originalText: 'Prompt 1', promptHeading: 'Heading 1', order: 0, type: 'string'}]
         : statement.includes('ORDER BY created_at DESC')
           ? []
-          : statement.includes('FROM mart.project_scope_article')
-            ? [{articleId: 'article-2'}]
-            : statement.includes('FROM app.article')
-              ? [{articleSummary: 'Summary 2', articleTitle: 'Article 2', id: 'article-2'}]
-              : statement.includes('INSERT INTO app.judgment_human')
-                ? [{id: 'judgment-human-2', promptId: 'prompt-1'}]
-                : []
+          : statement.includes('INSERT INTO app.judgment_human')
+            ? [{id: 'judgment-human-2', promptId: 'prompt-1'}]
+            : []
   }
   readReviewServingRowsRef.current = async () => {
     return {rows: [], status: 'accepted'}
@@ -275,12 +285,13 @@ test('human assessment init falls back to scoped articles when serving human que
   const set: {status: number} = {status: 200}
   const response = await humanAssessmentRoutesPostInit({body: {projectId: 'project-1'}, set: set as never})
 
-  expect(set.status).toBe(200)
-  expect(response.data?.article.id).toBe('article-2')
-  expect(statements.join('\n')).toContain('FROM mart.project_scope_article')
+  expect(set.status).toBe(404)
+  expect(response).toEqual({data: null, error: 'No articles left to judge'})
+  expect(statements.join('\n')).not.toContain('FROM mart.project_scope_article')
+  expect(statements.join('\n')).not.toContain('FROM app.article')
 })
 
-test('human assessment init falls back to scoped articles when serving snapshot is unavailable', async () => {
+test('human assessment init rejects instead of scanning scoped articles when serving snapshot is unavailable', async () => {
   const statements: string[] = []
   activeManifestRef.current = async () => {
     return null
@@ -294,25 +305,22 @@ test('human assessment init falls back to scoped articles when serving snapshot 
         ? [{id: 'prompt-1', originalText: 'Prompt 1', promptHeading: 'Heading 1', order: 0, type: 'string'}]
         : statement.includes('ORDER BY created_at DESC')
           ? []
-          : statement.includes('FROM mart.project_scope_article')
-            ? [{articleId: 'article-2'}]
-            : statement.includes('FROM app.article')
-              ? [{articleSummary: 'Summary 2', articleTitle: 'Article 2', id: 'article-2'}]
-              : statement.includes('INSERT INTO app.judgment_human')
-                ? [{id: 'judgment-human-2', promptId: 'prompt-1'}]
-                : []
+          : statement.includes('INSERT INTO app.judgment_human')
+            ? [{id: 'judgment-human-2', promptId: 'prompt-1'}]
+            : []
   }
 
   const {humanAssessmentRoutesPostInit} = await loadHandler()
   const set: {status: number} = {status: 200}
   const response = await humanAssessmentRoutesPostInit({body: {projectId: 'project-1'}, set: set as never})
 
-  expect(set.status).toBe(200)
-  expect(response.data?.article.id).toBe('article-2')
-  expect(statements.join('\n')).toContain('FROM mart.project_scope_article')
+  expect(set.status).toBe(404)
+  expect(response).toEqual({data: null, error: 'No articles left to judge'})
+  expect(statements.join('\n')).not.toContain('FROM mart.project_scope_article')
+  expect(statements.join('\n')).not.toContain('FROM app.article')
 })
 
-test('human assessment init checks dated scope without sending date filters to serving queue', async () => {
+test('human assessment init reads serving article set without source date-scope validation', async () => {
   const readerRequests: unknown[] = []
   const statements: string[] = []
   queryJsonRef.current = async (statement) => {
@@ -324,17 +332,18 @@ test('human assessment init checks dated scope without sending date filters to s
         ? [{id: 'prompt-1', originalText: 'Prompt 1', promptHeading: 'Heading 1', order: 0, type: 'string'}]
         : statement.includes('ORDER BY created_at DESC')
           ? []
-          : statement.includes("AND scope_article.article_id = 'article-1'")
-            ? [{articleId: 'article-1'}]
-            : statement.includes('FROM app.article')
-              ? [{articleSummary: 'Summary 1', articleTitle: 'Article 1', id: 'article-1'}]
-              : statement.includes('INSERT INTO app.judgment_human')
-                ? [{id: 'judgment-human-1', promptId: 'prompt-1'}]
-                : []
+          : statement.includes('INSERT INTO app.judgment_human')
+            ? [{id: 'judgment-human-1', promptId: 'prompt-1'}]
+            : []
   }
   readReviewServingRowsRef.current = async (request) => {
     readerRequests.push(request)
-    return {rows: [{article_id: 'article-1'}], status: 'ready'}
+    return JSON.stringify(request).includes('review.queue.unassessed')
+      ? {rows: [{article_id: 'article-1'}], status: 'accepted'}
+      : {
+          rows: [{article_id: 'article-1', article_summary: 'Summary 1', article_title: 'Article 1'}],
+          status: 'accepted',
+        }
   }
 
   const {humanAssessmentRoutesPostInit} = await loadHandler()
@@ -343,8 +352,13 @@ test('human assessment init checks dated scope without sending date filters to s
 
   expect(set.status).toBe(200)
   expect(response.data?.article.id).toBe('article-1')
-  expect(readerRequests).toEqual([expect.objectContaining({filters: {queueKind: 'human-unreviewed'}})])
-  expect(statements.join('\n')).toContain("AND scope_article.article_id = 'article-1'")
-  expect(statements.join('\n')).toContain('scope_article.article_created_at >= project.date_from')
-  expect(statements.join('\n')).toContain('scope_article.article_created_at <= project.date_to')
+  expect(readerRequests).toEqual([
+    expect.objectContaining({filters: {queueKind: 'human-unreviewed'}}),
+    expect.objectContaining({
+      articleIds: ['article-1'],
+      filters: {articleId: 'article-1', queueKind: 'human-unreviewed'},
+    }),
+  ])
+  expect(statements.join('\n')).not.toContain('FROM mart.project_scope_article')
+  expect(statements.join('\n')).not.toContain('scope_article.article_created_at')
 })

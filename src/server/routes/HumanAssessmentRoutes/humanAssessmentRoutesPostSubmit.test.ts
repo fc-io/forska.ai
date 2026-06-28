@@ -174,6 +174,16 @@ test('human assessment submit marks the project dirty in the same transaction fo
       return statement.includes('app.review_serving_snapshot_manifest') || statement.includes('mart.review_')
     }),
   ).toBe(false)
+  expect(
+    statements.some((statement) => {
+      return statement.includes('SELECT DISTINCT article_id AS articleId') && statement.includes('LIMIT 2')
+    }),
+  ).toBe(true)
+  expect(
+    statements.some((statement) => {
+      return statement.includes('FROM app.judgment_human jh') && statement.includes("AND jh.article_id = 'article-1'")
+    }),
+  ).toBe(true)
 })
 
 test('human assessment submit rejects summary-mode projects before prompt validation', async () => {
