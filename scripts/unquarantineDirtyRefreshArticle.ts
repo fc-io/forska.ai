@@ -3,6 +3,7 @@ import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
+import {legacyDirtyRefreshAckValue, requireLegacyAdminAck} from './legacyAdminAck.ts'
 
 const workloadContext = getMaintenanceDuckdbWorkloadContext('unquarantineDirtyRefreshArticle')
 
@@ -39,6 +40,10 @@ const getImpactedProjects = async (articleId: string) => {
 }
 
 export const unquarantineDirtyRefreshArticle = async () => {
+  if (!requireLegacyAdminAck({command: 'unquarantineDirtyRefreshArticle', expectedAck: legacyDirtyRefreshAckValue})) {
+    return
+  }
+
   const articleId = requireArgValue(['--articleId', '--article-id'], '--article-id=<uuid>')
 
   await withDuckdbMaintenanceAccess('unquarantine dirty refresh article', async () => {

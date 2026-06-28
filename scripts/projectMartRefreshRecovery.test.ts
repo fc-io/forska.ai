@@ -328,10 +328,10 @@ test('recoverProjectMartRefreshClaims lists and recovers stale claims only when 
   expect(listed.staleClaims).toHaveLength(1)
   expect(listed.staleClaims[0]).toMatchObject({projectId: 'project-recover'})
 
-  const recoverScript = globalThis.Bun.spawnSync(['bun', recoverScriptPath, '--recover', '--yes'], {
-    cwd: projectRoot,
-    env: {...defaultEnv, DUCKDB_PATH: duckdbPath},
-  })
+  const recoverScript = globalThis.Bun.spawnSync(
+    ['bun', recoverScriptPath, '--recover', '--yes', '--legacy-admin-ack=legacy-dirty-refresh'],
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
+  )
 
   if (recoverScript.exitCode !== 0) {
     throw new Error(recoverScript.stderr.toString() || recoverScript.stdout.toString() || 'recover script failed')

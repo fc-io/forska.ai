@@ -355,10 +355,10 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
     `,
   )
 
-  const runScript = globalThis.Bun.spawnSync(['bun', 'scripts/recoverDirtyRefreshClaims.ts', '--recover', '--yes'], {
-    cwd: projectRoot,
-    env: {...defaultEnv, DUCKDB_PATH: duckdbPath},
-  })
+  const runScript = globalThis.Bun.spawnSync(
+    ['bun', 'scripts/recoverDirtyRefreshClaims.ts', '--recover', '--yes', '--legacy-admin-ack=legacy-dirty-refresh'],
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
+  )
 
   if (runScript.exitCode !== 0) {
     throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'recover apply failed')
@@ -453,4 +453,46 @@ test('recoverDirtyRefreshClaims recovers stale dirty-refresh claims only with ex
   })
   expect(largeRebuildState).toMatchObject({leaseExpiresAt: null, refreshStatus: 'idle', workerId: null})
   expect(largeRebuildState?.supersededAt).not.toBeNull()
+})
+
+test('recoverDirtyRefreshClaims blocks mutation without legacy admin acknowledgement', () => {
+  const duckdbPath = join(projectRoot, '.tmp', `recover-dirty-refresh-claims-ack-${Date.now()}.duckdb`)
+  removeFileIfExists(dirname(duckdbPath))
+  runSeed(
+    duckdbPath,
+    `
+      INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+      VALUES ('recover-ack-project', 'Recover Ack Project', 'recover-dirty-model', TRUE, TRUE, FALSE, FALSE);
+
+      INSERT INTO app.project_mart_refresh_state (
+        project_id,
+        dirty_token,
+        active_dirty_token,
+        last_completed_dirty_token,
+        refresh_status,
+        worker_id,
+        lease_expires_at
+      ) VALUES (
+        'recover-ack-project',
+        1,
+        1,
+        0,
+        'running',
+        'stale-refresh-worker',
+        TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
+      );
+    `,
+  )
+
+  const runScript = globalThis.Bun.spawnSync(['bun', 'scripts/recoverDirtyRefreshClaims.ts', '--recover', '--yes'], {
+    cwd: projectRoot,
+    env: {...defaultEnv, DUCKDB_PATH: duckdbPath},
+  })
+
+  expect(runScript.exitCode).toBe(1)
+  expect(JSON.parse(getLastJsonLine(runScript.stderr.toString()))).toEqual({
+    command: 'recoverDirtyRefreshClaims',
+    requiredAck: 'legacy-dirty-refresh',
+    status: 'blocked_legacy_admin_ack_required',
+  })
 })

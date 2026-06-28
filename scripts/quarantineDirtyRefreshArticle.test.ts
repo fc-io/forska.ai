@@ -103,11 +103,7 @@ test('quarantine dirty-refresh article reports impacted projects and preserves t
       status: string
     }
     completion: {isBlockedByQuarantine: boolean; isClaimComplete: boolean}
-    parkedState: {
-      activeDirtyToken: number
-      lastCompletedDirtyToken: number
-      refreshStatus: string
-    }
+    parkedState: {activeDirtyToken: number; lastCompletedDirtyToken: number; refreshStatus: string}
     quarantineRows: Array<{articleId: string; dirtyToken: number; projectId: string}>
   }>(`
     const service = getProjectMartDirtyRefreshStateService()
@@ -128,6 +124,7 @@ test('quarantine dirty-refresh article reports impacted projects and preserves t
       '--article-id=cli-quarantine-article',
       '--error=cli native crash',
       '--detected-by=cli-test',
+      '--legacy-admin-ack=legacy-dirty-refresh',
     ], {
       cwd: process.cwd(),
       env: {...process.env, DUCKDB_PATH: process.env.DUCKDB_PATH, SERVER_DUCKDB_OWNER_URL: '', SERVER_ROLE: 'maintenance-worker'},
@@ -200,5 +197,19 @@ test('quarantine dirty-refresh article reports impacted projects and preserves t
     activeDirtyToken: 1,
     lastCompletedDirtyToken: 0,
     refreshStatus: 'blocked_by_quarantine',
+  })
+})
+
+test('quarantine dirty-refresh article blocks without legacy admin acknowledgement', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    ['bun', 'scripts/quarantineDirtyRefreshArticle.ts', '--article-id=unused-article'],
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: join(projectRoot, '.tmp', 'unused-quarantine-ack.duckdb')}},
+  )
+
+  expect(runScript.exitCode).toBe(1)
+  expect(JSON.parse(getLastJsonLine(runScript.stderr.toString()))).toEqual({
+    command: 'quarantineDirtyRefreshArticle',
+    requiredAck: 'legacy-dirty-refresh',
+    status: 'blocked_legacy_admin_ack_required',
   })
 })

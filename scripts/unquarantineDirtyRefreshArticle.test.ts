@@ -101,11 +101,7 @@ test('unquarantine dirty-refresh article explicitly releases parked state for re
     cliOutput: {articleId: string; impactedProjectIds: string[]; status: string}
     completionAfterRetry: {completedState: {lastCompletedDirtyToken: number} | null; isClaimComplete: boolean}
     quarantineRows: Array<{resolvedAt: string | null}>
-    stateBeforeUnquarantine: {
-      activeDirtyToken: number
-      lastCompletedDirtyToken: number
-      refreshStatus: string
-    }
+    stateBeforeUnquarantine: {activeDirtyToken: number; lastCompletedDirtyToken: number; refreshStatus: string}
   }>(`
     const service = getProjectMartDirtyRefreshStateService()
 
@@ -158,6 +154,7 @@ test('unquarantine dirty-refresh article explicitly releases parked state for re
       'bun',
       'scripts/unquarantineDirtyRefreshArticle.ts',
       '--article-id=cli-unquarantine-article',
+      '--legacy-admin-ack=legacy-dirty-refresh',
     ], {
       cwd: process.cwd(),
       env: {...process.env, DUCKDB_PATH: process.env.DUCKDB_PATH, SERVER_DUCKDB_OWNER_URL: '', SERVER_ROLE: 'maintenance-worker'},
@@ -237,4 +234,18 @@ test('unquarantine dirty-refresh article explicitly releases parked state for re
   expect(result.completionAfterRetry.completedState?.lastCompletedDirtyToken).toBe(1)
   expect(result.quarantineRows).toHaveLength(1)
   expect(result.quarantineRows[0]?.resolvedAt).not.toBeNull()
+})
+
+test('unquarantine dirty-refresh article blocks without legacy admin acknowledgement', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    ['bun', 'scripts/unquarantineDirtyRefreshArticle.ts', '--article-id=unused-article'],
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: join(projectRoot, '.tmp', 'unused-unquarantine-ack.duckdb')}},
+  )
+
+  expect(runScript.exitCode).toBe(1)
+  expect(JSON.parse(getLastJsonLine(runScript.stderr.toString()))).toEqual({
+    command: 'unquarantineDirtyRefreshArticle',
+    requiredAck: 'legacy-dirty-refresh',
+    status: 'blocked_legacy_admin_ack_required',
+  })
 })
