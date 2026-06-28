@@ -31,7 +31,6 @@ import {
   immutablePromptIdentityReviewServingFields,
 } from '../services/immutablePromptService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../services/projectMartDirtyRefreshStateService.ts'
-import {getProjectMartLargeRebuildStateService} from '../services/projectMartLargeRebuildStateService.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {assertProjectIsActive, getProjectAccess} from './projectsRoutes/projectAccessGuard.ts'
@@ -2251,7 +2250,10 @@ export const projectsRoutes = new Elysia()
           WHERE project_id = '${escapeSqlString(params.id)}'
         `)
         await getProjectMartDirtyRefreshStateService().clearProjectRefreshState({projectId: params.id, runner: tx})
-        await getProjectMartLargeRebuildStateService().clearLargeRebuildState({projectId: params.id, runner: tx})
+        await tx.run(`
+          DELETE FROM app.project_mart_large_rebuild_state
+          WHERE project_id = '${escapeSqlString(params.id)}'
+        `)
       }
 
       return updatedProject
