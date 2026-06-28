@@ -3,7 +3,6 @@ import {expect, test} from 'bun:test'
 type CovidenceCreateSuccessResult = {
   deleteCalls: string[]
   getDataSourceCallCount: number
-  martQueueCalls?: Array<{importRouteIds: string[]; reason: string}>
   projectCalls?: Array<{importRoute: string; mode: string; promptId: string | null; title: string}>
   promptCalls?: Array<{
     promptDefinition: {
@@ -77,7 +76,6 @@ test('Covidence datasource create stores package files and persists cursor confi
         const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartMaintenanceService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {
           deleteCalls: [],
@@ -94,23 +92,19 @@ test('Covidence datasource create stores package files and persists cursor confi
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
+            articleImportStoreWorkloadContext: {
+              allowsTempSpill: true,
+              fallbackIntent: 'reject',
+              routeOrJobKey: 'import.storeArticles',
+              timeoutMs: 120000,
+              workloadClass: 'background.importStore',
+            },
             markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }
         })
 
-        void mock.module(duckdbMartRefreshServiceModulePath, () => {
-          return {
-            getDuckdbMartMaintenanceService: () => {
-              return {
-                markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
-                  state.martQueueCalls.push({importRouteIds, reason})
-                },
-              }
-            },
-          }
-        })
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
@@ -284,7 +278,6 @@ test('Covidence datasource create stores package files and persists cursor confi
   expect(parsed.scopeCalls?.[0]?.importRoute).toContain('covidence:')
   expect(parsed.scopeCalls?.[0]?.mode).toBe('title_abstract')
   expect(parsed.scopeCalls?.[0]?.projectId).toBe('project-created')
-  expect(parsed.martQueueCalls).toEqual([])
   expect(parsed.queueCalls).toEqual([])
   expect(parsed.getDataSourceCallCount).toBe(1)
   expect(parsed.result.success).toBe(true)
@@ -312,7 +305,6 @@ test('Covidence datasource create deletes stored files when the transaction fail
         const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartMaintenanceService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {
           deleteCalls: [],
@@ -323,19 +315,17 @@ test('Covidence datasource create deletes stored files when the transaction fail
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
+            articleImportStoreWorkloadContext: {
+              allowsTempSpill: true,
+              fallbackIntent: 'reject',
+              routeOrJobKey: 'import.storeArticles',
+              timeoutMs: 120000,
+              workloadClass: 'background.importStore',
+            },
             markImportedArticleProjectsDirty: async () => {},
           }
         })
 
-        void mock.module(duckdbMartRefreshServiceModulePath, () => {
-          return {
-            getDuckdbMartMaintenanceService: () => {
-              return {
-                markProjectRefreshesDirtyByImportRouteIds: async () => {},
-              }
-            },
-          }
-        })
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
@@ -465,7 +455,6 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
         const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartMaintenanceService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {
           deleteCalls: [],
@@ -484,23 +473,19 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
+            articleImportStoreWorkloadContext: {
+              allowsTempSpill: true,
+              fallbackIntent: 'reject',
+              routeOrJobKey: 'import.storeArticles',
+              timeoutMs: 120000,
+              workloadClass: 'background.importStore',
+            },
             markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }
         })
 
-        void mock.module(duckdbMartRefreshServiceModulePath, () => {
-          return {
-            getDuckdbMartMaintenanceService: () => {
-              return {
-                markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
-                  state.martQueueCalls.push({importRouteIds, reason})
-                },
-              }
-            },
-          }
-        })
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
@@ -772,7 +757,6 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
   expect(parsed.scopeCalls?.[0]?.importRoute).toContain('covidence:')
   expect(parsed.scopeCalls?.[0]?.mode).toBe('title_abstract')
   expect(parsed.scopeCalls?.[0]?.projectId).toBe('project-created')
-  expect(parsed.martQueueCalls).toEqual([])
   expect(parsed.queueCalls).toEqual([])
   expect(parsed.result.data.covidenceProject).toMatchObject({
     created: true,
@@ -831,7 +815,6 @@ test('Covidence datasource create also creates or reuses a full-text project wit
         const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartMaintenanceService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {
           deleteCalls: [],
@@ -850,23 +833,19 @@ test('Covidence datasource create also creates or reuses a full-text project wit
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
+            articleImportStoreWorkloadContext: {
+              allowsTempSpill: true,
+              fallbackIntent: 'reject',
+              routeOrJobKey: 'import.storeArticles',
+              timeoutMs: 120000,
+              workloadClass: 'background.importStore',
+            },
             markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }
         })
 
-        void mock.module(duckdbMartRefreshServiceModulePath, () => {
-          return {
-            getDuckdbMartMaintenanceService: () => {
-              return {
-                markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
-                  state.martQueueCalls.push({importRouteIds, reason})
-                },
-              }
-            },
-          }
-        })
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
@@ -1225,7 +1204,6 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
         const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartMaintenanceService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {
           deleteCalls: [],
@@ -1244,23 +1222,19 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
+            articleImportStoreWorkloadContext: {
+              allowsTempSpill: true,
+              fallbackIntent: 'reject',
+              routeOrJobKey: 'import.storeArticles',
+              timeoutMs: 120000,
+              workloadClass: 'background.importStore',
+            },
             markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }
         })
 
-        void mock.module(duckdbMartRefreshServiceModulePath, () => {
-          return {
-            getDuckdbMartMaintenanceService: () => {
-              return {
-                markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
-                  state.martQueueCalls.push({importRouteIds, reason})
-                },
-              }
-            },
-          }
-        })
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
@@ -1448,6 +1422,13 @@ test('Covidence datasource create normalizes eligibility fields before building 
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
+            articleImportStoreWorkloadContext: {
+              allowsTempSpill: true,
+              fallbackIntent: 'reject',
+              routeOrJobKey: 'import.storeArticles',
+              timeoutMs: 120000,
+              workloadClass: 'background.importStore',
+            },
             markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
@@ -1678,6 +1659,13 @@ test('Covidence datasource create supports single-prompt grouping for eligibilit
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
+            articleImportStoreWorkloadContext: {
+              allowsTempSpill: true,
+              fallbackIntent: 'reject',
+              routeOrJobKey: 'import.storeArticles',
+              timeoutMs: 120000,
+              workloadClass: 'background.importStore',
+            },
             markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
