@@ -81,11 +81,6 @@ import {
   type JudgmentProviderTelemetryBucketedHistory,
   queryJudgmentProviderTelemetryBucketedHistory,
 } from '../services/judgmentProviderTelemetryHistoryService.ts'
-import {
-  getProjectMartLargeRebuildRowsPerMs,
-  getProjectMartLargeRebuildScopeProgress,
-  isArticleScopedLargeRebuildPhase,
-} from '../services/projectMartLargeRebuildProgressService.ts'
 import {getTokenUseQueryService, TokenUseIdempotencyConflictError} from '../services/tokenUseQueryService.ts'
 import {
   getDuckdbOwnerConnectionProxyHeaders,
@@ -167,22 +162,6 @@ type ProjectMartFreshnessState = {
   unreconciledMaterializationCount: number
 }
 type ProjectMartFreshnessStatus = 'fresh' | 'pending' | 'stale'
-type JudgmentJobStorageProjection = {
-  activeLargeRebuildProjectCount: number
-  currentPhase: string | null
-  estimatedCurrentPhaseRemainingMs: number | null
-  estimatedStorageDrainRemainingMs: number | null
-  projectedStorageDrainAt: string | null
-  remainingCurrentPhaseArticleCount: number | null
-  rowsPerMinute: number | null
-  scopeArticleCount: number | null
-}
-type JudgmentJobStorageProjectionRebuildRow = {
-  cursorArticleCreatedAt: string | null
-  cursorArticleId: string | null
-  rebuildPhase: string | null
-  refreshToken: number | null
-}
 type FailedRequestDetailRecord = Record<string, unknown>
 type FailedRequestSummary = {
   anthropicRefusalArticles: number
@@ -1311,108 +1290,6 @@ export const getProjectMartFreshnessState = async (
     status,
     unresolvedQuarantineBarrierCount,
     unreconciledMaterializationCount,
-  }
-}
-
-const getEstimatedRemainingArticlePassCount = ({
-  currentPhase,
-  remainingCurrentPhaseArticleCount,
-  scopeArticleCount,
-}: {
-  currentPhase: string | null
-  remainingCurrentPhaseArticleCount: number | null
-  scopeArticleCount: number
-}) => {
-  if (currentPhase === 'project_scope_article') {
-    return (remainingCurrentPhaseArticleCount ?? scopeArticleCount) + scopeArticleCount * 5
-  }
-
-  if (currentPhase === 'judgment_fact') {
-    return (remainingCurrentPhaseArticleCount ?? scopeArticleCount) + scopeArticleCount * 4
-  }
-
-  if (currentPhase === 'prompt_answer_fact') {
-    return (remainingCurrentPhaseArticleCount ?? scopeArticleCount) + scopeArticleCount * 3
-  }
-
-  if (currentPhase === 'review_answer_dictionary') {
-    return (remainingCurrentPhaseArticleCount ?? scopeArticleCount) + scopeArticleCount * 3
-  }
-
-  if (currentPhase === 'review_article_filter_member') {
-    return (remainingCurrentPhaseArticleCount ?? scopeArticleCount) + scopeArticleCount * 2
-  }
-
-  if (currentPhase === 'review_article_rollup') {
-    return (remainingCurrentPhaseArticleCount ?? scopeArticleCount) + scopeArticleCount
-  }
-
-  if (currentPhase === 'review_article_serving') {
-    return remainingCurrentPhaseArticleCount ?? scopeArticleCount
-  }
-
-  return null
-}
-
-const getJudgmentJobStorageProjection = async (
-  projectId: string,
-  db: JudgmentJobSqliteHealthProjectionReader = getAppDatabaseService(),
-): Promise<JudgmentJobStorageProjection | null> => {
-  const [rebuildRow] = await db.queryJson<JudgmentJobStorageProjectionRebuildRow>(`
-    SELECT
-      cursor_article_created_at AS cursorArticleCreatedAt,
-      cursor_article_id AS cursorArticleId,
-      rebuild_phase AS rebuildPhase,
-      CAST(refresh_token AS INTEGER) AS refreshToken
-    FROM app.project_mart_large_rebuild_state
-    WHERE project_id = ${getSqlLiteral(projectId)}
-    LIMIT 1
-  `)
-
-  if (!rebuildRow || (rebuildRow.refreshToken ?? 0) <= 0) {
-    return null
-  }
-
-  const [activeCountRows, scopeCountRows] = await Promise.all([
-    db.queryJson<{activeLargeRebuildProjectCount: number}>(`
-      SELECT CAST(COUNT(*) AS INTEGER) AS activeLargeRebuildProjectCount
-      FROM app.project_mart_large_rebuild_state
-      WHERE refresh_token > 0
-    `),
-    getProjectMartLargeRebuildScopeProgress({db, projectId, state: rebuildRow}),
-  ])
-
-  const scopeArticleCount = scopeCountRows.scopeArticleCount
-  const remainingCurrentPhaseArticleCount = isArticleScopedLargeRebuildPhase(rebuildRow.rebuildPhase)
-    ? scopeCountRows.remainingCurrentPhaseArticleCount
-    : null
-  const rowsPerMs = getProjectMartLargeRebuildRowsPerMs({projectId, rebuildPhase: rebuildRow.rebuildPhase})
-  const estimatedCurrentPhaseRemainingMs =
-    rowsPerMs !== null && remainingCurrentPhaseArticleCount !== null
-      ? Math.round(remainingCurrentPhaseArticleCount / rowsPerMs)
-      : null
-  const estimatedRemainingArticlePassCount = getEstimatedRemainingArticlePassCount({
-    currentPhase: rebuildRow.rebuildPhase,
-    remainingCurrentPhaseArticleCount,
-    scopeArticleCount,
-  })
-  const estimatedStorageDrainRemainingMs =
-    rowsPerMs !== null && estimatedRemainingArticlePassCount !== null
-      ? Math.round(estimatedRemainingArticlePassCount / rowsPerMs)
-      : null
-
-  return {
-    activeLargeRebuildProjectCount: activeCountRows[0]?.activeLargeRebuildProjectCount ?? 0,
-    currentPhase: rebuildRow.rebuildPhase,
-    estimatedCurrentPhaseRemainingMs,
-    estimatedStorageDrainRemainingMs,
-    projectedStorageDrainAt:
-      estimatedStorageDrainRemainingMs === null
-        ? null
-        : new Date(Date.now() + estimatedStorageDrainRemainingMs).toISOString(),
-    remainingCurrentPhaseArticleCount,
-    rowsPerMinute: rowsPerMs === null ? null : Math.round(rowsPerMs * 60 * 1000),
-    scopeArticleCount,
   }
 }
 
@@ -2951,7 +2828,6 @@ export const judgmentsJobsRoutes = new Elysia()
           const leaseMetadataPromise = shouldCurrentServerRunJudgingLoops()
             ? sqliteService.getJudgmentJobLeaseMetadata(job.id)
             : Promise.resolve(null)
-          const storageProjectionPromise = getJudgmentJobStorageProjection(job.projectId, db)
           const failedRequestSummaryPromise = providerConnectionPromise.then((providerConnection) => {
             return getFailedRequestSummaryFromDatabase({
               db,
@@ -2964,7 +2840,6 @@ export const judgmentsJobsRoutes = new Elysia()
           const [
             sqliteHealth,
             leaseMetadata,
-            storageProjection,
             totalTokenUsage,
             failedRequestSummary,
             judgingRuntime,
@@ -2972,7 +2847,6 @@ export const judgmentsJobsRoutes = new Elysia()
           ] = await Promise.all([
             sqliteHealthPromise,
             leaseMetadataPromise,
-            storageProjectionPromise,
             db.queryJson<{
               totalTokens: number | null
               totalPromptTokens: number | null
@@ -3029,11 +2903,7 @@ export const judgmentsJobsRoutes = new Elysia()
             workerActivePrompts: dispatchStats.jobActivePrompts,
             workerQueuedPrompts: dispatchStats.jobQueuedPrompts,
           }
-          const storageHealth = {
-            ...sqliteHealth,
-            ...(storageProjection ? {projection: storageProjection} : {}),
-            ...(recentTransfer ? {recentTransfer} : {}),
-          }
+          const storageHealth = {...sqliteHealth, ...(recentTransfer ? {recentTransfer} : {})}
 
           return {
             ...job,

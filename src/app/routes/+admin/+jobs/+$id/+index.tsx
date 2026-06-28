@@ -240,16 +240,6 @@ type JobData = {
       netRowsPerMinute?: number
       windowMinutes?: number
     }
-    projection?: {
-      activeLargeRebuildProjectCount?: number
-      currentPhase?: string | null
-      estimatedCurrentPhaseRemainingMs?: number | null
-      estimatedStorageDrainRemainingMs?: number | null
-      projectedStorageDrainAt?: string | null
-      remainingCurrentPhaseArticleCount?: number | null
-      rowsPerMinute?: number | null
-      scopeArticleCount?: number | null
-    }
     promptCounts?: Partial<JudgmentJobPromptStats>
     retainedRowCount?: number
     sqliteFileBytes?: number | null
@@ -1184,23 +1174,6 @@ const AdminJudgmentJobDetail = () => {
                         tone="amber"
                       >
                         {formatDuration(storageHealth()?.oldestUnexportedAgeMs)}
-                      </DenseMetric>
-                      <DenseMetric
-                        description={`ETA ${formatDateTime(
-                          storageHealth()?.projection?.projectedStorageDrainAt,
-                        )}; phase ${
-                          storageHealth()?.projection?.currentPhase
-                            ? formatStatus(storageHealth()?.projection?.currentPhase ?? null)
-                            : 'N/A'
-                        }; current phase ETA ${formatDuration(
-                          storageHealth()?.projection?.estimatedCurrentPhaseRemainingMs,
-                        )}; throughput ${formatRowsPerMinute(
-                          storageHealth()?.projection?.rowsPerMinute,
-                        )}; active rebuilds ${storageHealth()?.projection?.activeLargeRebuildProjectCount ?? 'N/A'}`}
-                        label="Projected Drain"
-                        tone="indigo"
-                      >
-                        {formatDuration(storageHealth()?.projection?.estimatedStorageDrainRemainingMs)}
                       </DenseMetric>
                     </div>
 
