@@ -10,6 +10,7 @@ import {
   getProjectTransferTargetStateDirtyTokenService,
   projectTransferProviderDependencyDirtyTokenSurfaces,
 } from '../services/projectTransfer/projectTransferTargetStateDirtyTokenService.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   type DatabaseQueryRunner,
   type DatabaseRunner,
@@ -27,6 +28,40 @@ import {
 } from './providerModelMetadata.ts'
 import {type ProviderConnectionRecord, type ProviderListedModel, type ProviderModelRecord} from './providerTypes.ts'
 
+const getProviderModelWorkloadContext = (params: {
+  maxResultRows?: number
+  routeOrJobKey: string
+}): DuckdbWorkloadContext => {
+  return {
+    fallbackIntent: 'reject',
+    maxResultRows: params.maxResultRows,
+    routeOrJobKey: params.routeOrJobKey,
+    workloadClass: 'owner.providerRepository',
+  }
+}
+
+const providerModelListSelectableWorkloadContext = getProviderModelWorkloadContext({
+  routeOrJobKey: 'providers.models.listSelectable',
+})
+const providerModelCreateWorkloadContext = getProviderModelWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.models.create',
+})
+const providerModelUpdateGetWorkloadContext = getProviderModelWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.models.update.get',
+})
+const providerModelUpdateWorkloadContext = getProviderModelWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.models.update',
+})
+const providerModelUpsertDiscoveredWorkloadContext = getProviderModelWorkloadContext({
+  routeOrJobKey: 'providers.models.upsertDiscovered',
+})
+const providerModelGetByIdsWorkloadContext = getProviderModelWorkloadContext({
+  routeOrJobKey: 'providers.models.getByIds',
+})
+
 const advanceProviderModelProjectTransferDirtyTokens = async ({
   databaseRunner,
   reason,
@@ -43,7 +78,8 @@ const advanceProviderModelProjectTransferDirtyTokens = async ({
 
 const getProviderModelRows = async ({enabledOnly}: {enabledOnly: boolean}): Promise<ProviderModelRecord[]> => {
   const enabledClause = enabledOnly ? `WHERE COALESCE(pc.enabled, TRUE) = TRUE` : ''
-  const rows = await getAppDatabaseService().queryJson<ProviderModelRow>(`
+  const rows = await getAppDatabaseService().queryJson<ProviderModelRow>(
+    `
     SELECT
       m.id,
       m.provider_connection_id AS providerConnectionId,
@@ -66,7 +102,9 @@ const getProviderModelRows = async ({enabledOnly}: {enabledOnly: boolean}): Prom
     INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     ${enabledClause}
     ORDER BY COALESCE(pc.label, m.name) ASC, m.created_at ASC, m.name ASC
-  `)
+  `,
+    providerModelListSelectableWorkloadContext,
+  )
 
   return rows.map(getProviderModelRecordFromRow).filter((model) => {
     return enabledOnly ? model.enabled : true
@@ -99,8 +137,10 @@ const getExistingProviderModelId = async ({
 const getProviderModelRowByIdWithRunner = async (
   databaseRunner: DatabaseQueryRunner,
   id: string,
+  workloadContext?: DuckdbWorkloadContext,
 ): Promise<ProviderModelRow | null> => {
-  const [row] = await databaseRunner.queryJson<ProviderModelRow>(`
+  const [row] = await databaseRunner.queryJson<ProviderModelRow>(
+    `
     SELECT
       m.id,
       m.provider_connection_id AS providerConnectionId,
@@ -123,13 +163,15 @@ const getProviderModelRowByIdWithRunner = async (
     INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE m.id = ${getSqlLiteral(id)}
     LIMIT 1
-  `)
+  `,
+    workloadContext,
+  )
 
   return row ?? null
 }
 
 const getProviderModelRowById = async (id: string): Promise<ProviderModelRow | null> => {
-  return getProviderModelRowByIdWithRunner(getAppDatabaseService(), id)
+  return getProviderModelRowByIdWithRunner(getAppDatabaseService(), id, providerModelUpdateGetWorkloadContext)
 }
 
 const getProviderModelRowByNaturalKey = async ({
@@ -477,7 +519,7 @@ export const createProviderModel = async ({
     }
 
     return row
-  })) as ProviderModelRow | null
+  }, providerModelCreateWorkloadContext)) as ProviderModelRow | null
 
   if (!createdRow) {
     throw new Error('Failed to create provider model')
@@ -552,7 +594,7 @@ export const updateProviderModel = async (
     await advanceProviderModelProjectTransferDirtyTokens({databaseRunner, reason: 'providerModel.update'})
 
     return getProviderModelRowByIdWithRunner(databaseRunner, id)
-  })) as ProviderModelRow | null
+  }, providerModelUpdateWorkloadContext)) as ProviderModelRow | null
 
   if (!refreshedRow) {
     throw new Error('Provider model not found')
@@ -581,7 +623,7 @@ export const upsertDiscoveredModels = async ({
     }
 
     return savedModels
-  })) as ProviderModelRecord[]
+  }, providerModelUpsertDiscoveredWorkloadContext)) as ProviderModelRecord[]
 }
 
 export const getProviderModels = async (modelIds: string[]): Promise<Map<string, ProviderModelRecord>> => {
@@ -589,7 +631,8 @@ export const getProviderModels = async (modelIds: string[]): Promise<Map<string,
     return new Map()
   }
 
-  const rows = await getAppDatabaseService().queryJson<ProviderModelRow>(`
+  const rows = await getAppDatabaseService().queryJson<ProviderModelRow>(
+    `
     SELECT
       m.id,
       m.provider_connection_id AS providerConnectionId,
@@ -611,7 +654,9 @@ export const getProviderModels = async (modelIds: string[]): Promise<Map<string,
     FROM app.model m
     INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE m.id IN (${getQuotedStringList(modelIds).join(', ')})
-  `)
+  `,
+    providerModelGetByIdsWorkloadContext,
+  )
 
   return new Map(
     rows.map((row) => {

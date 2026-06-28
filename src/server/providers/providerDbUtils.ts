@@ -1,6 +1,7 @@
 import {type ModelSource} from '../../db/schemaTypes.ts'
 import {getDateValue, getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {normalizeProviderKind} from '../services/providerCatalog.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getProviderConnectionAuthMode, getResolvedProviderBaseURL} from './providerConnectionHelpers.ts'
 import {
   type ProviderConnectionConfig,
@@ -12,8 +13,8 @@ import {
 import {getDefaultWorkerUrlMode, getWorkerUrlMode, normalizeWorkerUrls} from './providerWorkerUtils.ts'
 
 export type DatabaseRunner = {
-  queryJson: <T>(statement: string) => Promise<T[]>
-  run: (statement: string) => Promise<void>
+  queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+  run: (statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<void>
 }
 export type DatabaseQueryRunner = Pick<DatabaseRunner, 'queryJson'>
 

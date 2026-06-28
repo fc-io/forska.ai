@@ -3,6 +3,7 @@ import {createHash} from 'node:crypto'
 import {duckdbOwnerPrivateApiPrefix} from '../../routes/apiRouteClassification.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import type {DuckdbWorkloadContext} from '../../utils/duckdbService.ts'
 import {
   canCurrentServerOwnDuckdb,
   ensureCurrentDuckdbOwnerLease,
@@ -202,6 +203,47 @@ export const providerAdmissionLeaseHeartbeatIntervalMs = 15_000
 export const providerAdmissionLeaseOwnerApiPath = '/api/provideradmissionleases'
 export const providerAdmissionLeaseOwnerApiAliasPath = '/api/provider-admission-leases'
 const providerAdmissionLeaseOwnerRequestTimeoutMs = 30_000
+
+const getProviderAdmissionLeaseWorkloadContext = (params: {
+  maxResultRows?: number
+  routeOrJobKey: string
+}): DuckdbWorkloadContext => {
+  return {
+    fallbackIntent: 'reject',
+    maxResultRows: params.maxResultRows,
+    routeOrJobKey: params.routeOrJobKey,
+    workloadClass: 'background.providerAdmissionLease',
+  }
+}
+
+const providerAdmissionLeaseTelemetryRequestWorkloadContext = getProviderAdmissionLeaseWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.admissionLease.telemetry.request',
+})
+const providerAdmissionLeaseTelemetryProbeWorkloadContext = getProviderAdmissionLeaseWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.admissionLease.telemetry.probe',
+})
+const providerAdmissionLeaseProviderKeysWorkloadContext = getProviderAdmissionLeaseWorkloadContext({
+  routeOrJobKey: 'providers.admissionLease.providerKeys',
+})
+const providerAdmissionLeaseReconcileWorkloadContext = getProviderAdmissionLeaseWorkloadContext({
+  routeOrJobKey: 'providers.admissionLease.reconcile',
+})
+const providerAdmissionLeaseAcquireWorkloadContext = getProviderAdmissionLeaseWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.admissionLease.acquire',
+})
+const providerAdmissionLeaseHeartbeatWorkloadContext = getProviderAdmissionLeaseWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.admissionLease.heartbeat',
+})
+const providerAdmissionLeaseReleaseWorkloadContext = getProviderAdmissionLeaseWorkloadContext({
+  routeOrJobKey: 'providers.admissionLease.release',
+})
+const providerAdmissionLeaseExpireWorkloadContext = getProviderAdmissionLeaseWorkloadContext({
+  routeOrJobKey: 'providers.admissionLease.expire',
+})
 
 const defaultProviderAdmissionLeaseClock: ProviderAdmissionLeaseClock = {
   now: () => {
@@ -880,20 +922,26 @@ export const getProviderAdmissionLeaseTelemetry = async ({
 
   const now = getDateFromMs(getNormalizedTimestampMs(nowMs))
   const [requestRow, probeRow] = await Promise.all([
-    getAppDatabaseService().queryJson<{leaseCount: number | string | bigint}>(`
+    getAppDatabaseService().queryJson<{leaseCount: number | string | bigint}>(
+      `
       SELECT COUNT(*) AS leaseCount
       FROM app.provider_admission_lease
       WHERE provider_key = ${getSqlLiteral(providerKey)}
         AND lease_kind = 'request'
         AND expires_at > ${getSqlLiteral(now)}
-    `),
-    getAppDatabaseService().queryJson<{leaseCount: number | string | bigint}>(`
+    `,
+      providerAdmissionLeaseTelemetryRequestWorkloadContext,
+    ),
+    getAppDatabaseService().queryJson<{leaseCount: number | string | bigint}>(
+      `
       SELECT COUNT(*) AS leaseCount
       FROM app.provider_admission_lease
       WHERE provider_key = ${getSqlLiteral(providerKey)}
         AND lease_kind = 'probe'
         AND expires_at > ${getSqlLiteral(now)}
-    `),
+    `,
+      providerAdmissionLeaseTelemetryProbeWorkloadContext,
+    ),
   ])
   const providerLeasedLiveRequests = getCountValue(requestRow[0]?.leaseCount)
   const providerLeasedProbeCalls = getCountValue(probeRow[0]?.leaseCount)
@@ -970,11 +1018,14 @@ const deleteExpiredProviderAdmissionLeaseIdentity = async ({
 
 const getProviderAdmissionLeaseProviderKeys = async (): Promise<string[]> => {
   return (
-    await getAppDatabaseService().queryJson<{providerKey: string}>(`
+    await getAppDatabaseService().queryJson<{providerKey: string}>(
+      `
       SELECT DISTINCT provider_key AS providerKey
       FROM app.provider_admission_lease
       ORDER BY provider_key ASC
-    `)
+    `,
+      providerAdmissionLeaseProviderKeysWorkloadContext,
+    )
   ).map((row) => {
     return row.providerKey
   })
@@ -1175,7 +1226,7 @@ const reconcileProviderAdmissionLeasesForProvider = async ({
         suspectFreshHolderLeaseCount,
         suspectFreshProofLeaseCount,
       }
-    })
+    }, providerAdmissionLeaseReconcileWorkloadContext) as Promise<ProviderAdmissionLeaseReconciliationResult>
   })
 }
 
@@ -1523,7 +1574,7 @@ export const acquireProviderAdmissionLeaseOnCurrentOwner = async (
         providerLimitVersion: currentSnapshot.providerLimitVersion,
         staleProviderLimitSnapshot: false,
       }
-    })
+    }, providerAdmissionLeaseAcquireWorkloadContext) as Promise<ProviderAdmissionLeaseAcquireResult>
   })
 }
 
@@ -1577,7 +1628,7 @@ export const heartbeatProviderAdmissionLeaseOnCurrentOwner = async (
       const reason = existingLease !== null && existingLease.providerKey === input.providerKey ? 'notHolder' : 'missing'
 
       return {heartbeat: false, reason}
-    })
+    }, providerAdmissionLeaseHeartbeatWorkloadContext) as Promise<ProviderAdmissionLeaseHeartbeatResult>
   })
 }
 
@@ -1618,7 +1669,7 @@ export const releaseProviderAdmissionLeaseWithResultOnCurrentOwner = async (
       const reason = existingLease !== null && existingLease.providerKey === input.providerKey ? 'notHolder' : 'missing'
 
       return {released: false, reason}
-    })
+    }, providerAdmissionLeaseReleaseWorkloadContext) as Promise<ProviderAdmissionLeaseReleaseResult>
   })
 }
 
@@ -1662,7 +1713,7 @@ export const expireProviderAdmissionLeasesOnCurrentOwner = async (
       })
 
       return {expiredLeaseCount}
-    })
+    }, providerAdmissionLeaseExpireWorkloadContext) as Promise<ProviderAdmissionLeaseExpiryResult>
   })
 }
 

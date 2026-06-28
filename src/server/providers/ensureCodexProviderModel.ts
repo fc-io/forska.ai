@@ -1,6 +1,7 @@
 import {getProviderModelThinkingOption} from '../../utils/providerModelOptions.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   createProviderConnection,
   getFirstEnabledProviderConnection,
@@ -17,6 +18,13 @@ const getTrimmedValue = (value: string | null | undefined) => {
 
 const getCodexDisplayName = (value: string) => {
   return value.trim() === '' ? 'Codex model' : value.trim()
+}
+
+const codexProviderEnsureModelWorkloadContext: DuckdbWorkloadContext = {
+  fallbackIntent: 'reject',
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.codex.ensureModel',
+  workloadClass: 'background.providerRepository',
 }
 
 const getCodexConnectionForEnsure = async () => {
@@ -69,14 +77,17 @@ export const ensureCodexProviderModel = async ({
   const displayName = getCodexDisplayName(name)
   const connection = await getCodexConnectionForEnsure()
   const thinking = normalizedVersion ? getProviderModelThinkingOption(normalizedVersion) : null
-  const [existing] = await getAppDatabaseService().queryJson<{id: string}>(`
+  const [existing] = await getAppDatabaseService().queryJson<{id: string}>(
+    `
     SELECT id
     FROM app.model
     WHERE provider_connection_id = ${getSqlLiteral(connection.id)}
       AND remote_model_id = ${getSqlLiteral(normalizedModelName)}
       AND ${normalizedVersion ? `variant = ${getSqlLiteral(normalizedVersion)}` : 'variant IS NULL'}
     LIMIT 1
-  `)
+  `,
+    codexProviderEnsureModelWorkloadContext,
+  )
 
   if (existing) {
     const model = await updateProviderModel({
