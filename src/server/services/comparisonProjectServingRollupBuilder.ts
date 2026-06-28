@@ -10,6 +10,7 @@ import {
   ensureComparisonProjectServingGenerationConfig,
   getComparisonProjectServingGenerationSql,
 } from './comparisonProjectServingGenerationConfig.ts'
+import {getComparisonProjectServingWorkloadContext} from './comparisonProjectServingWorkloadContext.ts'
 import {
   getScopedArticleCombinedMetadataExpression,
   getScopedArticleExternalIdExpression,
@@ -72,11 +73,21 @@ const articleLanguageMetadataPaths = [
   '$.crossref.language',
   '$.pubmed.language',
 ] as const
+const comparisonProjectServingRollupBuilderWorkloadContext = getComparisonProjectServingWorkloadContext({
+  routeOrJobKey: 'comparisonServing.rollupBuilder',
+})
 
 const getDefaultComparisonProjectServingRollupBuilderDependencies = (): ComparisonProjectServingRollupBuilderRunner => {
   const database = getAppDatabaseService()
 
-  return {queryJson: database.queryJsonBackground, run: database.runBackground}
+  return {
+    queryJson: (statement) => {
+      return database.queryJsonBackground(statement, comparisonProjectServingRollupBuilderWorkloadContext)
+    },
+    run: (statement) => {
+      return database.runBackground(statement, comparisonProjectServingRollupBuilderWorkloadContext)
+    },
+  }
 }
 
 const getNormalizedLanguageSql = (languageExpression: string) => {

@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
+import {getComparisonProjectServingWorkloadContext} from './comparisonProjectServingWorkloadContext.ts'
 
 type ComparisonProjectServingGenerationRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -27,6 +28,9 @@ type ComparisonProjectServingGenerationCleanupResult = {
 }
 
 const comparisonProjectServingGenerationTable = 'app.comparison_project_serving_generation'
+const comparisonProjectServingGenerationWorkloadContext = getComparisonProjectServingWorkloadContext({
+  routeOrJobKey: 'comparisonServing.generation',
+})
 const comparisonProjectServingGenerationCleanupTableNames: ComparisonProjectServingGenerationMartCleanupTableName[] = [
   'mart.comparison_cell_serving',
   'mart.comparison_filter_member',
@@ -38,7 +42,14 @@ const comparisonProjectServingGenerationCleanupTableNames: ComparisonProjectServ
 const getDefaultComparisonProjectServingGenerationDependencies = (): ComparisonProjectServingGenerationDependencies => {
   const database = getAppDatabaseService()
 
-  return {queryJson: database.queryJsonBackground, transaction: database.transaction}
+  return {
+    queryJson: (statement) => {
+      return database.queryJsonBackground(statement, comparisonProjectServingGenerationWorkloadContext)
+    },
+    transaction: (operation) => {
+      return database.transaction(operation, comparisonProjectServingGenerationWorkloadContext)
+    },
+  }
 }
 
 const getComparisonProjectServingGenerationNumber = (value: unknown) => {
