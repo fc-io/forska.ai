@@ -12,6 +12,11 @@ import {ReviewJudgments} from '../../../../../../components/main/projects/review
 import {ReviewsCovidenceBadges} from '../../../../../../components/main/reviews/reviewsCovidenceBadges.tsx'
 import {apiClient} from '../../../../../../services/apiClient.ts'
 import {getArticleDocumentTitle} from '../../../../../utils/getArticleDocumentTitle'
+import {
+  getAvailableReviewDetail,
+  isUnavailableReviewDetail,
+  ReviewDetailUnavailableState,
+} from './reviewDetailReadiness'
 
 const getCovidenceStageLabels = (stageMembership: Record<string, boolean>) => {
   return [
@@ -48,7 +53,7 @@ export const ReviewDetail = () => {
   })
 
   const selectedJudgment = createMemo(() => {
-    const data = articleQuery.data
+    const data = getAvailableReviewDetail(articleQuery.data)
     const selectedId = articleViewToShow()
     if (!data || !selectedId) return undefined
 
@@ -62,12 +67,20 @@ export const ReviewDetail = () => {
         })
   })
 
+  const availableDetail = createMemo(() => {
+    return getAvailableReviewDetail(articleQuery.data)
+  })
+
+  const unavailableDetail = createMemo(() => {
+    return isUnavailableReviewDetail(articleQuery.data) ? articleQuery.data : null
+  })
+
   createEffect(() => {
-    document.title = getArticleDocumentTitle(articleQuery.data?.article?.articleTitle)
+    document.title = getArticleDocumentTitle(availableDetail()?.article?.articleTitle)
   })
 
   const hasFullText = () => {
-    const article = articleQuery.data?.article
+    const article = availableDetail()?.article
     const fullText = article?.fullText?.trim()
     const fullTextHtml = article?.fullTextHtml?.trim()
     return Boolean(fullText || fullTextHtml)
@@ -95,7 +108,13 @@ export const ReviewDetail = () => {
             </div>
           </Show>
 
-          <Show when={articleQuery.data}>
+          <Show when={unavailableDetail()}>
+            {(data) => {
+              return <ReviewDetailUnavailableState data={data()} />
+            }}
+          </Show>
+
+          <Show when={availableDetail()}>
             {(data) => {
               return (
                 <div class="flex gap-6">
