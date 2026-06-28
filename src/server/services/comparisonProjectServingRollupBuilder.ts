@@ -42,6 +42,7 @@ type ComparisonProjectArticleRollupBatch = {articleIds: string[]; hasMore: boole
 type ComparisonProjectScopeCteParams = {useArticleBatch?: boolean}
 
 const comparisonArticleServingTable = 'mart.comparison_article_serving'
+const comparisonArticleIdentifierServingTable = 'mart.comparison_article_identifier_serving'
 const comparisonCellServingTable = 'mart.comparison_cell_serving'
 const comparisonFilterStatsTable = 'mart.comparison_filter_stats'
 const comparisonScopedImportAlias = 'selected_import'
@@ -400,6 +401,11 @@ const getComparisonProjectArticleServingInsertSql = ({
       article_title,
       article_summary,
       article_external_id,
+      doi,
+      pubmed_id,
+      arxiv_id,
+      biorxiv_id,
+      medrxiv_id,
       journal_title,
       url,
       full_text_pdf,
@@ -670,6 +676,11 @@ const getComparisonProjectArticleServingInsertSql = ({
         COALESCE(article.article_title, '') AS article_title,
         article.article_summary,
         ${articleExternalIdExpression} AS article_external_id,
+        article.doi,
+        article.pubmed_id,
+        article.arxiv_id,
+        article.biorxiv_id,
+        article.medrxiv_id,
         article.url,
         article.full_text_pdf,
         article.full_text_fetched_at,
@@ -689,6 +700,11 @@ const getComparisonProjectArticleServingInsertSql = ({
       serving_article.article_title,
       serving_article.article_summary,
       serving_article.article_external_id,
+      serving_article.doi,
+      serving_article.pubmed_id,
+      serving_article.arxiv_id,
+      serving_article.biorxiv_id,
+      serving_article.medrxiv_id,
       json_extract_string(serving_article.source_metadata, '$.journalTitle') AS journal_title,
       serving_article.url,
       serving_article.full_text_pdf,
@@ -757,6 +773,40 @@ const getComparisonProjectArticleServingInsertSql = ({
       serving_article.has_any_disagreement AS has_conflict,
       current_timestamp AS serving_updated_at
     FROM serving_article
+  `
+}
+
+const getComparisonProjectArticleIdentifierServingInsertSql = ({
+  articleIds,
+  comparisonProjectId,
+  generation,
+}: ComparisonProjectArticleRollupBuilderParams & {articleIds: string[]}) => {
+  return `
+    INSERT INTO ${comparisonArticleIdentifierServingTable} (
+      comparison_project_id,
+      generation,
+      article_id,
+      source_identifier_id,
+      kind,
+      normalized_value,
+      source,
+      is_primary,
+      serving_updated_at
+    )
+    WITH ${getComparisonProjectArticleBatchCteSql(articleIds)}
+    SELECT
+      ${getSqlLiteral(comparisonProjectId)} AS comparison_project_id,
+      ${getComparisonProjectServingGenerationSql(generation)} AS generation,
+      identifier.article_id,
+      identifier.id AS source_identifier_id,
+      identifier.kind,
+      identifier.normalized_value,
+      identifier.source,
+      identifier.is_primary,
+      current_timestamp AS serving_updated_at
+    FROM app.article_identifier identifier
+    INNER JOIN article_batch ON article_batch.article_id = identifier.article_id
+    ORDER BY identifier.article_id ASC, identifier.is_primary DESC, identifier.kind ASC, identifier.normalized_value ASC, identifier.id ASC
   `
 }
 
@@ -958,6 +1008,9 @@ const insertComparisonProjectArticleRollupBatches = async (
   }
 
   await dependencies.run(getComparisonProjectArticleServingInsertSql({...params, articleIds: batch.articleIds}))
+  await dependencies.run(
+    getComparisonProjectArticleIdentifierServingInsertSql({...params, articleIds: batch.articleIds}),
+  )
   await params.onBatchProgress?.()
 
   return batch.hasMore ? insertComparisonProjectArticleRollupBatches(params, dependencies, nextCursor) : undefined
@@ -1028,6 +1081,7 @@ const insertComparisonProjectServingRollups = async (
 }
 
 const comparisonProjectServingRollupBuilder = {
+  getComparisonProjectArticleIdentifierServingInsertSql,
   getComparisonProjectArticleServingInsertSql,
   getComparisonProjectFilterStatsInsertSql,
   insertComparisonProjectArticleRollups,
@@ -1040,6 +1094,10 @@ export const getComparisonProjectServingRollupBuilder = () => {
   return comparisonProjectServingRollupBuilder
 }
 
-export {getComparisonProjectArticleServingInsertSql, getComparisonProjectFilterStatsInsertSql}
+export {
+  getComparisonProjectArticleIdentifierServingInsertSql,
+  getComparisonProjectArticleServingInsertSql,
+  getComparisonProjectFilterStatsInsertSql,
+}
 
 export type {ComparisonProjectServingRollupBuilderParams}

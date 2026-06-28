@@ -3245,11 +3245,13 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
   }
 
   const optionByValue = getComparisonProjectConflictResolutionOptionByValue(scope)
+  const comparisonProjectLiteral = getSqlLiteral(scope.id)
+  const activeGenerationLiteral = getSqlLiteral(scope.activeGeneration)
   const rows = await appDatabaseService.queryJson<ComparisonProjectConflictResolutionExportQueryRow>(`
     SELECT
       cr.id AS sourceResolutionId,
       cr.article_id AS sourceArticleRowId,
-      a.article_id AS externalArticleId,
+      a.article_external_id AS externalArticleId,
       a.article_title AS title,
       a.doi AS doi,
       a.pubmed_id AS pubmedId,
@@ -3257,7 +3259,7 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
       a.biorxiv_id AS biorxivId,
       a.medrxiv_id AS medrxivId,
       a.url AS url,
-      ai.id AS sourceIdentifierId,
+      ai.source_identifier_id AS sourceIdentifierId,
       ai.kind AS identifierKind,
       ai.normalized_value AS identifierNormalizedValue,
       ai.source AS identifierSource,
@@ -3265,9 +3267,15 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
       cr.prompt_id AS promptId,
       cr.answer_value AS answerValue
     FROM ${comparisonProjectConflictResolutionTable} cr
-    INNER JOIN ${articleTable} a ON a.id = cr.article_id
-    LEFT JOIN ${articleIdentifierTable} ai ON ai.article_id = a.id
-    WHERE cr.comparison_project_id = ${getSqlLiteral(scope.id)}
+    INNER JOIN mart.comparison_article_serving a
+      ON a.comparison_project_id = ${comparisonProjectLiteral}
+     AND a.generation = ${activeGenerationLiteral}
+     AND a.article_id = cr.article_id
+    LEFT JOIN mart.comparison_article_identifier_serving ai
+      ON ai.comparison_project_id = a.comparison_project_id
+     AND ai.generation = a.generation
+     AND ai.article_id = a.article_id
+    WHERE cr.comparison_project_id = ${comparisonProjectLiteral}
     ORDER BY
       cr.created_at ASC,
       cr.id ASC,
