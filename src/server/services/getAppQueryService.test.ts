@@ -1,11 +1,62 @@
 import {expect, test} from 'bun:test'
 import {existsSync, readFileSync, unlinkSync} from 'fs'
 
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
+import {createAppQueryService} from './appQueryServiceCore.ts'
+
 const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {
     unlinkSync(filePath)
   }
 }
+
+test('createAppQueryService forwards explicit owner workload contexts', async () => {
+  const calls: Array<{statement: string; workloadContext: DuckdbWorkloadContext | undefined}> = []
+  const service = createAppQueryService({
+    queryJson: async <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => {
+      calls.push({statement, workloadContext})
+      return [] as T[]
+    },
+  })
+
+  await service.getProjectPromptRows('project-a')
+  await service.getProjectReviewConfig('project-a')
+  await service.getReviewHydrationRows(['article-a'], {projectId: 'project-a'})
+  await service.getFullArticlesByIds(['article-a'], {includeFullText: false, projectId: 'project-a'})
+
+  expect(
+    calls.map((call) => {
+      return call.workloadContext?.routeOrJobKey
+    }),
+  ).toEqual([
+    'appQuery.projectPromptRows',
+    'appQuery.columns.project',
+    'appQuery.projectReviewConfig.project',
+    'appQuery.projectReviewConfig.routes',
+    'appQuery.reviewHydrationRows.scoped',
+    'appQuery.columns.article',
+    'appQuery.fullArticlesByIds.scoped',
+  ])
+  expect(
+    calls.every((call) => {
+      return call.workloadContext?.workloadClass === 'owner.sourceAppQuery'
+    }),
+  ).toBe(true)
+  expect(
+    calls.every((call) => {
+      return call.workloadContext?.fallbackIntent === 'reject'
+    }),
+  ).toBe(true)
+  expect(
+    calls
+      .filter((call) => {
+        return !call.workloadContext?.routeOrJobKey.startsWith('appQuery.columns.')
+      })
+      .every((call) => {
+        return call.workloadContext?.projectId === 'project-a'
+      }),
+  ).toBe(true)
+})
 
 test('getAppQueryService reads native DuckDB app tables', async () => {
   const duckdbPath = `/tmp/f1-app-query-service-${Date.now()}.duckdb`
