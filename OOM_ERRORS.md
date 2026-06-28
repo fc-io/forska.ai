@@ -111,10 +111,10 @@ Entry format:
 ## 2026-06-23 - Phase 5B Operator Request Cutover
 
 - Error: Normal operator scripts named around large rebuild and `judgment_fact` repair still requested legacy `project_mart_large_rebuild_state` work.
-- Context: `scripts/requestProjectLargeRebuild.ts`, `scripts/requestReviewServingLargeRebuild.ts`, and `scripts/requestJudgmentFactRepair.ts`.
+- Context: `scripts/requestProjectLargeRebuild.ts`, `scripts/requestReviewServingAllProjectsRebuild.ts`, and `scripts/requestJudgmentFactRepair.ts`.
 - Cause: The scripts called `getDuckdbMartMaintenanceService().requestProjectLargeRebuild*`, preserving the old seven-phase mart rebuild chain as a normal recovery path.
 - Fix: Rewired the scripts through `reviewServingV4RebuildRequestService.ts` so they create admitted `app.review_rebuild_request` rows and request-owned chunk manifests; `requestJudgmentFactRepair` now requires explicit project selection and no longer scans `mart.judgment_fact` by default.
-- Verification: `bun test scripts/requestReviewServingLargeRebuild.test.ts scripts/requestProjectLargeRebuild.test.ts scripts/requestJudgmentFactRepair.test.ts`; focused ESLint on the touched scripts, tests, and V4 request service.
+- Verification: `bun test scripts/requestReviewServingAllProjectsRebuild.test.ts scripts/requestProjectLargeRebuild.test.ts scripts/requestJudgmentFactRepair.test.ts`; focused ESLint on the touched scripts, tests, and V4 request service.
 
 ## 2026-06-23 - Phase 5B Startup And Legacy Worker Cutover
 

@@ -16,7 +16,7 @@ bun run lint:fix
 bun test
 bun test path/to/file.test.ts
 bun run db:mig
-bun run db:duck:request-review-serving-large-rebuild
+bun run db:duck:request-review-serving-all-projects-rebuild
 ```
 
 ## Plans And Reports
@@ -307,8 +307,8 @@ const judgmentConfigCondition = or(...judgmentConfigParts)
 - Use `bun test`.
 - Use `mock.module()` when mocking modules.
 
-
 <!-- headroom:rtk-instructions -->
+
 # RTK (Rust Token Killer) - Token-Optimized Commands
 
 When `rtk` is available on PATH, prefix shell commands with `rtk`. This reduces
@@ -316,6 +316,7 @@ context usage by 60-90% with zero behavior change. If `rtk` is unavailable,
 run the underlying command directly instead of failing the task.
 
 ## Key Commands
+
 ```bash
 # Git (59-80% savings)
 rtk git status          rtk git diff            rtk git log
@@ -346,6 +347,7 @@ rtk pip list            rtk pnpm install        rtk npm run <script>
 ```
 
 ## Rules
+
 - In command chains, prefix each segment: `rtk git add . && rtk git commit -m "msg"`
 - For debugging, use raw command without rtk prefix
 - `rtk proxy <cmd>` runs command without filtering but tracks usage
