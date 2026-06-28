@@ -1,54 +1,239 @@
+import {Buffer} from 'node:buffer'
+
 import {Elysia, t} from 'elysia'
 
 import {appendProjectScopeArticleReviewServingDelta} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {escapeSqlString} from '../services/appQueryHelpers.ts'
+import {escapeSqlString, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
 import {getProjectMartDirtyRefreshStateService} from '../services/projectMartDirtyRefreshStateService.ts'
+
+type ProjectArticleMembershipCursor = {articleCreatedAt: string | null; articleId: string}
+
+type ProjectArticleMembershipScopeRow = {articleCreatedAt: string | null; id: string}
+
+type ProjectArticleMembershipArticleRow = {articleTitle: string; id: string}
+
+type ProjectArticleMembershipImportRow = {
+  articleId: string
+  importedFromProjectId: string | null
+  importedFromProjectName: string | null
+}
+
+const maxProjectArticleMembershipLimit = 100
+
+const decodeProjectArticleMembershipCursor = (cursor: string | null | undefined) => {
+  if (!cursor) {
+    return {cursor: null, valid: true}
+  }
+
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(cursor, 'base64url').toString('utf8'),
+    ) as Partial<ProjectArticleMembershipCursor>
+    const articleCreatedAt = typeof parsed.articleCreatedAt === 'string' ? parsed.articleCreatedAt : null
+    const parsedDate = articleCreatedAt ? new Date(articleCreatedAt) : null
+    const validDate = !parsedDate || Number.isFinite(parsedDate.getTime())
+    const decodedCursor =
+      typeof parsed.articleId === 'string' && parsed.articleId.length > 0 && validDate
+        ? {articleCreatedAt, articleId: parsed.articleId}
+        : null
+
+    return {cursor: decodedCursor, valid: decodedCursor !== null}
+  } catch {
+    return {cursor: null, valid: false}
+  }
+}
+
+const encodeProjectArticleMembershipCursor = (row: ProjectArticleMembershipScopeRow) => {
+  return Buffer.from(JSON.stringify({articleCreatedAt: row.articleCreatedAt, articleId: row.id}), 'utf8').toString(
+    'base64url',
+  )
+}
+
+const getProjectArticleMembershipCursorClause = (cursor: ProjectArticleMembershipCursor | null) => {
+  if (!cursor) {
+    return ''
+  }
+
+  if (!cursor.articleCreatedAt) {
+    return `
+      AND scope.article_created_at IS NULL
+      AND scope.article_id < ${getSqlLiteral(cursor.articleId)}
+    `
+  }
+
+  return `
+    AND (
+      scope.article_created_at < ${getSqlLiteral(new Date(cursor.articleCreatedAt))}
+      OR scope.article_created_at IS NULL
+      OR (
+        scope.article_created_at = ${getSqlLiteral(new Date(cursor.articleCreatedAt))}
+        AND scope.article_id < ${getSqlLiteral(cursor.articleId)}
+      )
+    )
+  `
+}
+
+const getProjectArticleMembershipLimit = (limit: string | undefined) => {
+  const parsed = Number.parseInt(limit ?? '10', 10)
+  const normalized = Number.isFinite(parsed) && parsed > 0 ? parsed : 10
+
+  return Math.min(normalized, maxProjectArticleMembershipLimit)
+}
+
+const getProjectArticleMembershipRows = async (params: {
+  cursor: ProjectArticleMembershipCursor | null
+  limit: number
+  projectId: string
+}) => {
+  const rows = await getAppDatabaseService().queryJson<ProjectArticleMembershipScopeRow>(`
+    SELECT
+      scope.article_id AS id,
+      CAST(scope.article_created_at AS VARCHAR) AS articleCreatedAt
+    FROM mart.project_scope_article scope
+    WHERE scope.project_id = ${getSqlLiteral(params.projectId)}
+      ${getProjectArticleMembershipCursorClause(params.cursor)}
+    ORDER BY scope.article_created_at DESC NULLS LAST, scope.article_id DESC
+    LIMIT ${params.limit + 1}
+  `)
+
+  return rows
+}
+
+const getProjectArticleMembershipArticleRows = async (articleIds: string[]) => {
+  if (articleIds.length === 0) {
+    return []
+  }
+
+  return getAppDatabaseService().queryJson<ProjectArticleMembershipArticleRow>(`
+    SELECT
+      id,
+      article_title AS articleTitle
+    FROM app.article
+    WHERE id IN (${articleIds.map(getSqlLiteral).join(', ')})
+  `)
+}
+
+const getProjectArticleMembershipImportRows = async (projectId: string, articleIds: string[]) => {
+  if (articleIds.length === 0) {
+    return []
+  }
+
+  const projectArticleRows = await getAppDatabaseService().queryJson<{
+    articleId: string
+    importedFromProjectId: string | null
+  }>(`
+    SELECT
+      article_id AS articleId,
+      imported_from_project_id AS importedFromProjectId
+    FROM app.project_article
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND article_id IN (${articleIds.map(getSqlLiteral).join(', ')})
+  `)
+  const importedProjectIds = [
+    ...new Set(
+      projectArticleRows.flatMap((row) => {
+        return row.importedFromProjectId ? [row.importedFromProjectId] : []
+      }),
+    ),
+  ]
+  const projectRows =
+    importedProjectIds.length === 0
+      ? []
+      : await getAppDatabaseService().queryJson<{id: string; name: string}>(`
+          SELECT id, name
+          FROM app.project
+          WHERE id IN (${importedProjectIds.map(getSqlLiteral).join(', ')})
+        `)
+  const projectNameById = new Map(
+    projectRows.map((row) => {
+      return [row.id, row.name]
+    }),
+  )
+
+  return projectArticleRows.map<ProjectArticleMembershipImportRow>((row) => {
+    return {
+      articleId: row.articleId,
+      importedFromProjectId: row.importedFromProjectId,
+      importedFromProjectName: row.importedFromProjectId
+        ? (projectNameById.get(row.importedFromProjectId) ?? null)
+        : null,
+    }
+  })
+}
 
 export const projectArticlesRoutes = new Elysia()
   .get(
     '/api/projects/:id/articles',
-    async ({params, query}) => {
+    async ({params, query, set}) => {
       const {id: projectId} = params
-      const page = parseInt(query.page || '1', 10)
-      const limit = parseInt(query.limit || '10', 10)
-      const offset = (page - 1) * limit
+      const page = Number.parseInt(query.page || '1', 10)
+      const limit = getProjectArticleMembershipLimit(query.limit)
+      const decodedCursor = decodeProjectArticleMembershipCursor(query.cursor)
 
-      const [[countRow], rows] = await Promise.all([
-        getAppDatabaseService().queryJson<{count: number}>(`
-          SELECT COUNT(*) AS count
-          FROM app.project_article
-          WHERE project_id = '${escapeSqlString(projectId)}'
-        `),
-        getAppDatabaseService().queryJson<{
-          id: string
-          articleTitle: string
-          importedFromProjectId: string | null
-          importedFromProjectName: string | null
-        }>(`
-          SELECT
-            a.id AS id,
-            a.article_title AS articleTitle,
-            pa.imported_from_project_id AS importedFromProjectId,
-            p.name AS importedFromProjectName
-          FROM app.project_article pa
-          INNER JOIN app.article a ON pa.article_id = a.id
-          LEFT JOIN app.project p ON pa.imported_from_project_id = p.id
-          WHERE pa.project_id = '${escapeSqlString(projectId)}'
-          ORDER BY a.created_at DESC, a.id DESC
-          LIMIT ${limit}
-          OFFSET ${offset}
-        `),
+      if (!decodedCursor.valid) {
+        set.status = 400
+
+        return {error: 'Invalid project article membership cursor.'}
+      }
+
+      const cursor = decodedCursor.cursor
+
+      if (page > 1 && !cursor) {
+        set.status = 400
+
+        return {error: 'Use cursor pagination for project article membership after the first page.'}
+      }
+
+      const scopeRows = await getProjectArticleMembershipRows({cursor, limit, projectId})
+      const pageRows = scopeRows.slice(0, limit)
+      const articleIds = pageRows.map((row) => {
+        return row.id
+      })
+      const [articleRows, importedRows] = await Promise.all([
+        getProjectArticleMembershipArticleRows(articleIds),
+        getProjectArticleMembershipImportRows(projectId, articleIds),
       ])
+      const articleById = new Map(
+        articleRows.map((row) => {
+          return [row.id, row]
+        }),
+      )
+      const importByArticleId = new Map(
+        importedRows.map((row) => {
+          return [row.articleId, row]
+        }),
+      )
+      const rows = pageRows.map((row) => {
+        const article = articleById.get(row.id)
+        const imported = importByArticleId.get(row.id)
 
-      const totalCount = countRow?.count ?? 0
+        return {
+          id: row.id,
+          articleTitle: article?.articleTitle ?? row.id,
+          importedFromProjectId: imported?.importedFromProjectId ?? null,
+          importedFromProjectName: imported?.importedFromProjectName ?? null,
+        }
+      })
+      const lastPageRow = pageRows[pageRows.length - 1]
+      const nextCursor =
+        scopeRows.length > limit && lastPageRow ? encodeProjectArticleMembershipCursor(lastPageRow) : null
 
-      return {articles: rows, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}
+      return {
+        articles: rows,
+        cursor: query.cursor ?? null,
+        hasMore: nextCursor !== null,
+        limit,
+        nextCursor,
+        page,
+        totalCount: null,
+        totalPages: null,
+      }
     },
     {
       params: t.Object({id: t.String()}),
-      query: t.Object({page: t.Optional(t.String()), limit: t.Optional(t.String())}),
+      query: t.Object({cursor: t.Optional(t.String()), page: t.Optional(t.String()), limit: t.Optional(t.String())}),
     },
   )
   .post(
