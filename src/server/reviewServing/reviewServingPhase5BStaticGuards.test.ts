@@ -95,6 +95,7 @@ test('Phase 5B legacy worker scripts require explicit admin acknowledgements or 
     'scripts/runProjectMartRefreshWorkerOnce.ts',
     'scripts/runProjectMartRefreshWorkerOnceIsolated.ts',
   ]
+  const dirtyRecoveryScript = 'scripts/requestReviewServingForDirtyRefreshClaim.ts'
   const largeRebuildScripts = ['scripts/runLargeRebuildWorkerOnce.ts', 'scripts/runLargeRebuildWorkerCycles.ts']
   const existingLargeRebuildScripts = largeRebuildScripts.filter((path) => {
     return existsSync(join(projectRoot, path))
@@ -114,6 +115,9 @@ test('Phase 5B legacy worker scripts require explicit admin acknowledgements or 
   ).flat()
 
   expect(dirtyWorkerMissingAck).toEqual([])
+  expect(existingDirtyWorkerScripts).toEqual([])
+  expect(await readText(dirtyRecoveryScript)).toContain('requestReviewServingV4Rebuild')
+  expect(await readText(dirtyRecoveryScript)).toContain('requireLegacyAdminAck')
   expect(existingLargeRebuildScripts).toEqual([])
 })
 
