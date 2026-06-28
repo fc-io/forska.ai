@@ -1,10 +1,12 @@
 import {requestReviewServingV4Rebuild} from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 
 type CliOptions = {projectId: string | null; reason: string}
 
 const defaultReason = 'requestProjectLargeRebuild'
+const workloadContext = getMaintenanceDuckdbWorkloadContext('requestProjectLargeRebuild')
 
 const getArgValue = (names: string[]) => {
   const matchedArgument = process.argv.slice(2).find((argument) => {
@@ -33,13 +35,16 @@ const requestProjectLargeRebuildCli = async () => {
   }
 
   await withDuckdbMaintenanceAccess('request project large rebuild', async () => {
-    const [project] = await getAppDatabaseService().queryJson<{id: string}>(`
+    const [project] = await getAppDatabaseService().queryJson<{id: string}>(
+      `
       SELECT id
       FROM app.project
       WHERE id = '${options.projectId.replaceAll("'", "''")}'
         AND archived = FALSE
       LIMIT 1
-    `)
+    `,
+      workloadContext,
+    )
 
     if (!project) {
       console.log(

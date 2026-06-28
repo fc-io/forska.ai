@@ -1,6 +1,7 @@
 import {requestReviewServingV4Rebuild} from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 
 type RequestReviewServingLargeRebuildOptions = {includeArchived: boolean; projectId: string | null}
 type RequestReviewServingLargeRebuildFailure = {error: string; projectId: string}
@@ -8,6 +9,7 @@ type RequestReviewServingLargeRebuildResult = {
   failedProjects: RequestReviewServingLargeRebuildFailure[]
   requestIds: string[]
 }
+const workloadContext = getMaintenanceDuckdbWorkloadContext('requestReviewServingLargeRebuild')
 
 const getRequestOptions = (): RequestReviewServingLargeRebuildOptions => {
   const projectIdArg = process.argv.slice(2).find((argument) => {
@@ -30,12 +32,15 @@ const getProjectIds = async (options: RequestReviewServingLargeRebuildOptions) =
     : options.includeArchived
       ? ''
       : 'WHERE archived = FALSE'
-  const rows = await getAppDatabaseService().queryJson<{id: string}>(`
+  const rows = await getAppDatabaseService().queryJson<{id: string}>(
+    `
     SELECT id
     FROM app.project
     ${whereClause}
     ORDER BY id ASC
-  `)
+  `,
+    workloadContext,
+  )
 
   return rows.map((row) => {
     return row.id

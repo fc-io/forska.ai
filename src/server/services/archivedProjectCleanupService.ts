@@ -1,3 +1,4 @@
+import {getMaintenanceDuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {
@@ -41,6 +42,7 @@ export type ArchivedProjectCleanupRunResult = {
 const defaultCleanupBatchSize = 1000
 const defaultMaxCleanupBatches = 100
 const terminalJudgmentJobStatuses = ['completed', 'failed', 'project_removed']
+const archivedProjectCleanupWorkloadContext = getMaintenanceDuckdbWorkloadContext('archivedProjectCleanup')
 
 const archivedProjectMartCleanupMutations: CleanupMutation[] = [
   'mart.review_article_serving_detail',
@@ -285,7 +287,8 @@ const getTableExistsTx = async (tx: AppRunner, tableName: string) => {
 
 const getDeletePendingProject = async (projectId?: string) => {
   const whereProject = projectId === undefined ? '' : `AND tombstone.project_id = ${getSqlLiteral(projectId)}`
-  const [project] = await getAppDatabaseService().queryJson<{id: string}>(`
+  const [project] = await getAppDatabaseService().queryJson<{id: string}>(
+    `
     SELECT tombstone.project_id AS id
     FROM app.archived_project_delete_tombstone tombstone
     INNER JOIN app.project project ON project.id = tombstone.project_id
@@ -294,17 +297,22 @@ const getDeletePendingProject = async (projectId?: string) => {
       ${whereProject}
     ORDER BY tombstone.requested_at ASC, tombstone.project_id ASC
     LIMIT 1
-  `)
+  `,
+    archivedProjectCleanupWorkloadContext,
+  )
 
   return project?.id ?? null
 }
 
 const getProjectRowsByIds = async (projectIds: string[]) => {
-  return getAppDatabaseService().queryJson<ProjectArchivedStateRow>(`
+  return getAppDatabaseService().queryJson<ProjectArchivedStateRow>(
+    `
     SELECT id, archived, delete_pending_at AS deletePendingAt
     FROM app.project
     WHERE id IN (${getProjectIdsSql(projectIds)})
-  `)
+  `,
+    archivedProjectCleanupWorkloadContext,
+  )
 }
 
 const getActiveProjectIds = (rows: ProjectArchivedStateRow[]) => {
@@ -371,7 +379,7 @@ export const requestArchivedProjectDeletePending = async (
         )
     `)
     await markJudgmentJobsProjectRemovedTx(tx, projectIdsSql)
-  })
+  }, archivedProjectCleanupWorkloadContext)
 
   return {projectIds: uniqueProjectIds}
 }
@@ -417,7 +425,7 @@ const mutateRowsBatchTx = async (tx: AppRunner, mutation: CleanupMutation, proje
 const mutateRowsBatch = async (mutation: CleanupMutation, projectId: string, batchSize: number): Promise<number> => {
   return getAppDatabaseService().transaction(async (tx) => {
     return mutateRowsBatchTx(tx, mutation, projectId, batchSize)
-  }) as Promise<number>
+  }, archivedProjectCleanupWorkloadContext) as Promise<number>
 }
 
 const runTxStatements = async (tx: AppRunner, statements: string[]) => {
@@ -429,7 +437,9 @@ const runTxStatements = async (tx: AppRunner, statements: string[]) => {
 }
 
 const runAppStatements = async (statements: string[]) => {
-  return statements.length === 0 ? undefined : getAppDatabaseService().run(statements.join(';\n'))
+  return statements.length === 0
+    ? undefined
+    : getAppDatabaseService().run(statements.join(';\n'), archivedProjectCleanupWorkloadContext)
 }
 
 const runFirstMutationBatch = async (
@@ -453,7 +463,7 @@ const runFirstMutationBatch = async (
 const cleanupTombstonedRuntimeReferences = async (projectId: string, batchSize: number) => {
   await getAppDatabaseService().transaction(async (tx) => {
     await markJudgmentJobsProjectRemovedTx(tx, getSqlLiteral(projectId))
-  })
+  }, archivedProjectCleanupWorkloadContext)
 
   return runFirstMutationBatch(
     [...archivedProjectRuntimeCleanupMutations, ...archivedProjectJobCleanupMutations],
@@ -472,13 +482,16 @@ const cleanupComparisonProjectSummarySourceReferences = async (
   projectId: string,
   batchSize: number,
 ): Promise<ArchivedProjectCleanupBatchResult | null> => {
-  const comparisonProjects = await getAppDatabaseService().queryJson<{id: string}>(`
+  const comparisonProjects = await getAppDatabaseService().queryJson<{id: string}>(
+    `
     SELECT id
     FROM app.comparison_project
     WHERE summary_source_project_id = ${getSqlLiteral(projectId)}
     ORDER BY id ASC
     LIMIT ${batchSize}
-  `)
+  `,
+    archivedProjectCleanupWorkloadContext,
+  )
 
   if (comparisonProjects.length === 0) {
     return null
@@ -534,7 +547,7 @@ const cleanupComparisonProjectSummarySourceReferences = async (
         projectId,
         tableName: 'app.comparison_project',
       }
-    })) as ArchivedProjectCleanupBatchResult | null
+    }, archivedProjectCleanupWorkloadContext)) as ArchivedProjectCleanupBatchResult | null
   } catch (error) {
     await runAppStatements(restoreStatements)
     throw error
@@ -614,7 +627,7 @@ const finalDeleteProject = async (projectId: string): Promise<ArchivedProjectCle
     `)
 
     return {deletedRowCount: 1, phase: 'final_delete', projectId, tableName: 'app.project'}
-  }) as Promise<ArchivedProjectCleanupBatchResult | null>
+  }, archivedProjectCleanupWorkloadContext) as Promise<ArchivedProjectCleanupBatchResult | null>
 }
 
 const recordTombstoneCleanupResult = async (result: ArchivedProjectCleanupBatchResult) => {
@@ -622,7 +635,8 @@ const recordTombstoneCleanupResult = async (result: ArchivedProjectCleanupBatchR
     return
   }
 
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     UPDATE app.archived_project_delete_tombstone
     SET last_cleanup_at = current_timestamp,
         last_cleanup_phase = ${getSqlLiteral(result.phase)},
@@ -630,7 +644,9 @@ const recordTombstoneCleanupResult = async (result: ArchivedProjectCleanupBatchR
         last_deleted_row_count = ${getSqlLiteral(result.deletedRowCount)},
         updated_at = current_timestamp
     WHERE project_id = ${getSqlLiteral(result.projectId)}
-  `)
+  `,
+    archivedProjectCleanupWorkloadContext,
+  )
 }
 
 export const cleanupNextArchivedProjectBatch = async (
@@ -645,7 +661,7 @@ export const cleanupNextArchivedProjectBatch = async (
 
   await getAppDatabaseService().transaction(async (tx) => {
     await assertArchivedProjectCleanupProjectForeignKeysTx(tx)
-  })
+  }, archivedProjectCleanupWorkloadContext)
 
   const martResult = await runFirstMutationBatch(archivedProjectMartCleanupMutations, projectId, batchSize)
   const runtimeResult = martResult ?? (await cleanupTombstonedRuntimeReferences(projectId, batchSize))
