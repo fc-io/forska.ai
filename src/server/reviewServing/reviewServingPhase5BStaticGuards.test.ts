@@ -11,11 +11,20 @@ const readText = async (path: string) => {
 
 test('Phase 5B startup stays cut over to V4 projector work', async () => {
   const source = await readText('src/server/utils/startBackgroundWork.ts')
+  const retiredHeartbeatFiles = [
+    'src/server/utils/projectMartRefreshWorkerHeartbeat.ts',
+    'src/server/utils/projectMartLargeRebuildHeartbeat.ts',
+  ]
 
   expect(source).toContain('startReviewServingProjectorWorkerHeartbeat')
   expect(source).not.toContain('startProjectMartRefreshWorkerHeartbeat')
   expect(source).not.toContain('startProjectMartLargeRebuildHeartbeat')
   expect(source).not.toContain('shouldCurrentRuntimeRunMartRefreshDrain')
+  expect(
+    retiredHeartbeatFiles.filter((path) => {
+      return existsSync(join(projectRoot, path))
+    }),
+  ).toEqual([])
 })
 
 test('Phase 5B warning and recovery reads stay side-effect free for legacy rebuild paths', async () => {
