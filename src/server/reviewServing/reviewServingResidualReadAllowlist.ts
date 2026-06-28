@@ -154,90 +154,10 @@ export const reviewServingResidualReadAllowlist = [
         workloadClass: 'foreground-diagnostic',
       }),
       sourceRead({
-        cap: 'single refresh-state row plus token-bounded legacy state summaries for one projectId',
-        marker: 'FROM app.project_mart_refresh_state',
-        migrationTarget:
-          'legacy mart refresh diagnostics should move behind a separate legacy diagnostics contract or be removed after V4 cutover',
-        purpose: 'report legacy mart refresh and dirty-materialization blockers separately from V4 readiness',
-        workloadClass: 'foreground-diagnostic',
-      }),
-      sourceRead({
-        cap: 'dirty-token-bounded materialization summary joined to one project refresh-state row',
-        marker: 'FROM app.project_mart_dirty_materialization_state materialization',
-        migrationTarget:
-          'legacy dirty-materializer diagnostics should move behind a separate legacy diagnostics contract or be removed after V4 cutover',
-        purpose: 'report legacy dirty-materializer blockers separately from V4 readiness',
-        workloadClass: 'foreground-diagnostic',
-      }),
-      sourceRead({
-        cap: 'dirty-token-bounded unresolved quarantine count joined to one project refresh-state row',
-        marker: 'FROM app.project_mart_dirty_refresh_article_quarantine quarantine',
-        migrationTarget:
-          'legacy dirty-refresh quarantine diagnostics should move behind a separate legacy diagnostics contract or be removed after V4 cutover',
-        purpose: 'report legacy quarantine blockers separately from V4 readiness',
-        workloadClass: 'foreground-diagnostic',
-      }),
-      sourceRead({
-        cap: 'single large-rebuild state row for one projectId',
-        marker: 'FROM app.project_mart_large_rebuild_state',
-        migrationTarget:
-          'legacy large-rebuild diagnostics should move behind a separate legacy diagnostics contract or be removed after V4 cutover',
-        purpose: 'report legacy large-rebuild state separately from V4 manifest readiness',
-        workloadClass: 'foreground-diagnostic',
-      }),
-      sourceRead({
         cap: 'project-scoped V4 diagnostic summary repository call',
         marker: 'getReviewServingDiagnostics({projectId',
         migrationTarget: 'keep as V4 diagnostics source and stop mixing with legacy mart state in route code',
         purpose: 'read V4 serving diagnostics and manifest readiness for the warning payload',
-        workloadClass: 'foreground-diagnostic',
-      }),
-      sourceRead({
-        cap: 'project-scoped pending article refresh summary excluding resolved quarantine rows',
-        marker: 'FROM app.project_mart_refresh_article_state article_state',
-        migrationTarget:
-          'legacy article-refresh diagnostics should move behind a separate legacy diagnostics contract or be removed after V4 cutover',
-        purpose: 'report legacy queued article-refresh work separately from V4 readiness',
-        workloadClass: 'foreground-diagnostic',
-      }),
-      sourceRead({
-        cap: 'service-level project-scoped quarantined article list',
-        marker: 'getProjectMartDirtyRefreshStateService().getQuarantinedArticlesForProject({projectId})',
-        migrationTarget:
-          'legacy quarantined-article diagnostics should move behind a separate legacy diagnostics contract or be removed after V4 cutover',
-        purpose: 'report legacy quarantined articles separately from V4 readiness',
-        workloadClass: 'foreground-diagnostic',
-      }),
-      sourceRead({
-        cap: 'large-rebuild progress for one project and one current state row',
-        marker: 'getProjectMartLargeRebuildScopeProgress({projectId, state})',
-        migrationTarget:
-          'legacy large-rebuild progress should move behind a separate legacy diagnostics contract or be removed after V4 cutover',
-        purpose: 'report legacy large-rebuild progress separately from V4 readiness',
-        workloadClass: 'foreground-diagnostic',
-      }),
-      sourceRead({
-        cap: 'owner registry snapshot summarized in memory',
-        marker: 'getDuckdbOwnerConnectionsOverview()).registry',
-        migrationTarget:
-          'owner/maintenance availability should stay in separate runtime diagnostics outside product readiness',
-        purpose: 'report whether maintenance-capable owner consumers are available',
-        workloadClass: 'foreground-diagnostic',
-      }),
-      sourceRead({
-        cap: 'fresh maintenance leases for one project at the current request timestamp',
-        marker: 'getMaintenanceWorkLeaseService().getFreshProjectMaintenanceWorkLeases(projectId, currentNow)',
-        migrationTarget:
-          'maintenance lease state should stay in separate runtime diagnostics outside product readiness',
-        purpose: 'report in-flight maintenance work separately from V4 readiness',
-        workloadClass: 'foreground-diagnostic',
-      }),
-      sourceRead({
-        cap: 'maintenance recovery context for one project at the current request timestamp',
-        marker: 'getMaintenanceWorkLeaseService().getProjectMaintenanceRecoveryContext(projectId, currentNow)',
-        migrationTarget:
-          'maintenance recovery state should stay in separate runtime diagnostics outside product readiness',
-        purpose: 'report maintenance retry/recovery state separately from V4 readiness',
         workloadClass: 'foreground-diagnostic',
       }),
     ],

@@ -30,6 +30,28 @@ test('Phase 5B warning and recovery reads stay side-effect free for legacy rebui
   expect(recoverySource).not.toContain('runLargeRebuildWorkerOnce.ts')
 })
 
+test('review warnings product route stays separated from legacy mart diagnostics', async () => {
+  const warningsSource = await readText('src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts')
+  const forbiddenMarkers = [
+    'getDuckdbMartMaintenanceService',
+    'getProjectMartDirtyRefreshStateService',
+    'getProjectMartLargeRebuildScopeProgress',
+    'getProjectMartLargeRebuildRuntimeMetrics',
+    'getDuckdbOwnerConnectionsOverview',
+    'getMaintenanceWorkLeaseService',
+    'app.project_mart_refresh_state',
+    'app.project_mart_dirty_materialization_state',
+    'app.project_mart_refresh_article_state',
+    'app.project_mart_large_rebuild_state',
+  ]
+
+  const presentMarkers = forbiddenMarkers.filter((marker) => {
+    return warningsSource.includes(marker)
+  })
+
+  expect(presentMarkers).toEqual([])
+})
+
 test('Phase 5B legacy worker scripts require explicit admin acknowledgements', async () => {
   const dirtyWorkerScripts = [
     'scripts/runProjectMartRefreshWorker.ts',
