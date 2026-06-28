@@ -3,6 +3,7 @@ import {getAppDatabaseService} from '../src/server/services/appDatabaseService.t
 import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
+import {legacyDirtyRefreshAckValue, requireLegacyAdminAck} from './legacyAdminAck.ts'
 
 type CliOptions = {recover: boolean; yes: boolean}
 
@@ -472,6 +473,10 @@ export const recoverDirtyRefreshClaimState = async () => {
           unresolvedQuarantineBarriers,
         }),
       )
+      return
+    }
+
+    if (!requireLegacyAdminAck({command: 'recoverDirtyRefreshClaims', expectedAck: legacyDirtyRefreshAckValue})) {
       return
     }
 

@@ -40,19 +40,20 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     ],
     path: 'scripts/duckdbCheckpoint.ts',
   },
-  'db:duck:inspect-dirty-refresh-risk': {
+  'db:duck:legacy-inspect-dirty-refresh-risk': {
     commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
     description: 'legacy diagnostic maintenance read',
     mustContain: ['withDuckdbMaintenanceAccess', "getMaintenanceDuckdbWorkloadContext('inspectDirtyRefreshRisk')"],
     path: 'scripts/inspectDirtyRefreshRisk.ts',
   },
   'db:duck:mig': {commandIncludes: ['bun run db:mig'], description: 'migration alias'},
-  'db:duck:quarantine-dirty-refresh-article': {
+  'db:duck:legacy-quarantine-dirty-refresh-article': {
     commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
     description: 'legacy quarantine maintenance writer',
     mustContain: [
       'withDuckdbMaintenanceAccess',
       "getMaintenanceDuckdbWorkloadContext('quarantineDirtyRefreshArticle')",
+      'requireLegacyAdminAck',
     ],
     path: 'scripts/quarantineDirtyRefreshArticle.ts',
   },
@@ -62,13 +63,14 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     mustContain: ['withDuckdbMaintenanceAccess', "getMaintenanceDuckdbWorkloadContext('rebuild2Cutover')"],
     path: 'scripts/rebuild2Cutover.ts',
   },
-  'db:duck:recover-dirty-refresh-claims': {
+  'db:duck:legacy-recover-dirty-refresh-claims': {
     commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
     description: 'legacy claim recovery that enqueues V4 rebuilds',
     mustContain: [
       'withDuckdbMaintenanceAccess',
       "getMaintenanceDuckdbWorkloadContext('recoverDirtyRefreshClaims')",
       'requestReviewServingV4Rebuild',
+      'requireLegacyAdminAck',
     ],
     path: 'scripts/recoverDirtyRefreshClaims.ts',
   },
@@ -108,12 +110,13 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     mustContain: ['withDuckdbMaintenanceAccess', 'runArchivedProjectBoundedCleanup'],
     path: 'scripts/runArchivedProjectBoundedCleanup.ts',
   },
-  'db:duck:unquarantine-dirty-refresh-article': {
+  'db:duck:legacy-unquarantine-dirty-refresh-article': {
     commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
     description: 'legacy quarantine maintenance writer',
     mustContain: [
       'withDuckdbMaintenanceAccess',
       "getMaintenanceDuckdbWorkloadContext('unquarantineDirtyRefreshArticle')",
+      'requireLegacyAdminAck',
     ],
     path: 'scripts/unquarantineDirtyRefreshArticle.ts',
   },
@@ -188,4 +191,8 @@ test('package no longer exposes legacy mart refresh or large-rebuild worker scri
   expect(commandSurface).not.toContain('runProjectMartLargeRebuild')
   expect(commandSurface).not.toContain('project-mart-large-rebuild')
   expect(commandSurface).not.toContain('request-review-serving-large-rebuild')
+  expect(packageJson.scripts['db:duck:inspect-dirty-refresh-risk']).toBeUndefined()
+  expect(packageJson.scripts['db:duck:quarantine-dirty-refresh-article']).toBeUndefined()
+  expect(packageJson.scripts['db:duck:unquarantine-dirty-refresh-article']).toBeUndefined()
+  expect(packageJson.scripts['db:duck:recover-dirty-refresh-claims']).toBeUndefined()
 })

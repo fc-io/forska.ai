@@ -3,6 +3,7 @@ import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
+import {legacyDirtyRefreshAckValue, requireLegacyAdminAck} from './legacyAdminAck.ts'
 
 const workloadContext = getMaintenanceDuckdbWorkloadContext('quarantineDirtyRefreshArticle')
 
@@ -27,6 +28,10 @@ const requireArgValue = (names: string[], description: string) => {
 }
 
 export const quarantineDirtyRefreshArticle = async () => {
+  if (!requireLegacyAdminAck({command: 'quarantineDirtyRefreshArticle', expectedAck: legacyDirtyRefreshAckValue})) {
+    return
+  }
+
   const articleId = requireArgValue(['--articleId', '--article-id'], '--article-id=<uuid>')
   const error =
     getArgValue(['--error'])

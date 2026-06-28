@@ -23,6 +23,10 @@ test('package exposes final rebuild2 command surface and removes obsolete mart r
         || `${name} ${command}`.includes('quarantine-refresh-article')
         || `${name} ${command}`.includes('inspect-project-refresh-risk')
         || `${name} ${command}`.includes('recover-project-refresh-claims')
+        || `${name} ${command}`.includes('db:duck:inspect-dirty-refresh-risk')
+        || `${name} ${command}`.includes('db:duck:quarantine-dirty-refresh-article')
+        || `${name} ${command}`.includes('db:duck:unquarantine-dirty-refresh-article')
+        || `${name} ${command}`.includes('db:duck:recover-dirty-refresh-claims')
         || `${name} ${command}`.includes('repair-project-refresh-ledger')
         || `${name} ${command}`.includes('repair-judgment-fact')
         || `${name} ${command}`.includes('purge-archived-marts')
@@ -56,16 +60,16 @@ test('package exposes final rebuild2 command surface and removes obsolete mart r
   expect(packageJson.scripts['db:duck:run-large-rebuild-worker-cycles']).toBeUndefined()
   expect(packageJson.scripts['db:duck:legacy-admin-run-large-rebuild-worker-once']).toBeUndefined()
   expect(packageJson.scripts['db:duck:legacy-admin-run-large-rebuild-worker-cycles']).toBeUndefined()
-  expect(packageJson.scripts['db:duck:quarantine-dirty-refresh-article']).toBe(
+  expect(packageJson.scripts['db:duck:legacy-quarantine-dirty-refresh-article']).toBe(
     'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/quarantineDirtyRefreshArticle.ts',
   )
-  expect(packageJson.scripts['db:duck:unquarantine-dirty-refresh-article']).toBe(
+  expect(packageJson.scripts['db:duck:legacy-unquarantine-dirty-refresh-article']).toBe(
     'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/unquarantineDirtyRefreshArticle.ts',
   )
-  expect(packageJson.scripts['db:duck:inspect-dirty-refresh-risk']).toBe(
+  expect(packageJson.scripts['db:duck:legacy-inspect-dirty-refresh-risk']).toBe(
     'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/inspectDirtyRefreshRisk.ts',
   )
-  expect(packageJson.scripts['db:duck:recover-dirty-refresh-claims']).toBe(
+  expect(packageJson.scripts['db:duck:legacy-recover-dirty-refresh-claims']).toBe(
     'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/recoverDirtyRefreshClaims.ts',
   )
   expect(packageJson.scripts['db:duck:request-judgment-fact-repair']).toBe(
