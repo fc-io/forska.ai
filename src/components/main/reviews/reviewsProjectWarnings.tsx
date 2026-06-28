@@ -4,7 +4,7 @@ import {createMemo, Show} from 'solid-js'
 
 import {getReviewIndexingStateCopy} from './getReviewIndexingInProgressTitle.ts'
 import {ReviewsIndexingProgress} from './reviewsIndexingProgress.tsx'
-import {createReviewsWarningsQueryOptions, type ReviewsWarningsData} from './reviewsWarningsQuery.ts'
+import {createReviewsWarningsQueryOptions} from './reviewsWarningsQuery.ts'
 
 const formatQueuedAt = (value: string | null) => {
   const parsed = value ? new Date(value) : null
@@ -38,46 +38,6 @@ const getPendingRefreshMetaLabel = (params: {
   })
 
   return segments.join(' and ')
-}
-
-const getLargeRebuildDetailLabel = (data: ReviewsWarningsData) => {
-  const phaseLabel = data?.indexing.largeRebuild?.rebuildPhase
-  const cursorArticleId = data?.indexing.largeRebuild?.cursorArticleId
-
-  return phaseLabel === undefined || phaseLabel === null
-    ? null
-    : data?.indexing.status === 'failed'
-      ? `Large rebuild failed: ${phaseLabel}`
-      : data?.indexing.progressState === 'blocked'
-        ? data.indexing.blockedReason === 'paused_by_policy'
-          ? `Large rebuild cooling down: ${phaseLabel}`
-          : `Large rebuild blocked: ${phaseLabel}`
-        : data?.indexing.progressState === 'stalled'
-          ? `Large rebuild stalled: ${phaseLabel}`
-          : data?.indexing.progressState === 'queued' || data?.indexing.largeRebuild?.refreshStatus === 'idle'
-            ? `Current rebuild phase queued: ${phaseLabel}`
-            : data?.indexing.progressState !== 'processing'
-              ? null
-              : cursorArticleId
-                ? `Current rebuild phase resuming from article ${cursorArticleId}`
-                : `Current rebuild phase in progress: ${phaseLabel}`
-}
-
-const getFreshnessBarrierMetaLabel = (data: ReviewsWarningsData) => {
-  const materializationCount = data.indexing.dirtyMaterialization?.incompleteCount ?? 0
-  const quarantineCount = data.indexing.freshness?.unresolvedQuarantineBarrierCount ?? 0
-  const parts = [
-    materializationCount > 0
-      ? `${materializationCount.toLocaleString()} dirty materialization ${materializationCount === 1 ? 'snapshot' : 'snapshots'} pending`
-      : null,
-    quarantineCount > 0
-      ? `${quarantineCount.toLocaleString()} quarantined article ${quarantineCount === 1 ? 'barrier' : 'barriers'}`
-      : null,
-  ].filter((value): value is string => {
-    return value !== null
-  })
-
-  return parts.length === 0 ? null : parts.join(' and ')
 }
 
 export const ReviewsProjectWarnings = (props: {projectId: string}) => {
@@ -140,13 +100,9 @@ export const ReviewsProjectWarnings = (props: {projectId: string}) => {
     const data = warningsData()
     if (!data) return null
 
-    const largeRebuildLabel = getLargeRebuildDetailLabel(data)
-    const freshnessBarrierLabel = getFreshnessBarrierMetaLabel(data)
     const queuedAtLabel = formatQueuedAt(data.indexing.oldestQueuedAt)
     const pendingLabel = data.indexing.pendingRefreshCount === 0 ? null : getPendingRefreshMetaLabel(data.indexing)
     const parts = [
-      largeRebuildLabel,
-      freshnessBarrierLabel,
       pendingLabel ? (queuedAtLabel ? `${pendingLabel} since ${queuedAtLabel}` : pendingLabel) : null,
     ].filter((value): value is string => {
       return value !== null

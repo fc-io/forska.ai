@@ -59,6 +59,7 @@ const getIndexing = (overrides: Partial<ReviewsWarningsData['indexing']>): Revie
     recoveryMode: 'none',
     requiredConsumerRole: 'maintenance-worker',
     retryAfterAt: null,
+    serving: {readable: true, usable: true},
     status: 'refreshing',
     ...overrides,
   }
@@ -117,7 +118,7 @@ test('review indexing blocked copy distinguishes worker wait from memory cooldow
   expect(getReviewIndexingBlockedBody('paused_by_policy')).toContain('cooling down after memory pressure')
 })
 
-test('large rebuild copy explains phase counters reset', () => {
+test('legacy large rebuild fields do not change product warning copy', () => {
   const copy = getReviewIndexingStateCopy({
     indexing: getIndexing({
       largeRebuild: {
@@ -138,8 +139,8 @@ test('large rebuild copy explains phase counters reset', () => {
     surface: 'banner',
   })
 
-  expect(copy.title).toBe('Large rebuild phase queued: prompt_answer_fact')
-  expect(copy.description).toContain('article counter resets when the phase changes')
+  expect(copy.title).toBe('Review indexing queued for project project-1')
+  expect(copy.description).not.toContain('Large rebuild')
 })
 
 test('cleanup copy keeps ready review pages usable', () => {

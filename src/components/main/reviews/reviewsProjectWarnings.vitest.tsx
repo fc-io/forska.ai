@@ -79,6 +79,7 @@ const getWarningsData = (indexing: Partial<ReviewsWarningsData['indexing']>): Re
       recoveryMode: 'none',
       requiredConsumerRole: 'maintenance-worker',
       retryAfterAt: null,
+      serving: {readable: true, usable: true},
       status: 'refreshing',
       ...indexing,
     },
@@ -184,7 +185,7 @@ test('renders memory-pressure cooldown without active progress copy', async () =
   }
 })
 
-test('renders staged large rebuild progress separately from dirty article ACKs', async () => {
+test('does not render legacy staged large rebuild progress in product warnings', async () => {
   const {container, dispose} = await renderWarnings(
     getWarningsData({
       largeRebuild: {
@@ -206,11 +207,10 @@ test('renders staged large rebuild progress separately from dirty article ACKs',
   )
 
   try {
-    expect(container.textContent).toContain('Current phase articles: remaining 12 of 148 in this phase, 600/min')
-    expect(container.textContent).toContain('Dirty article ACKs: 148 waiting until the staged rebuild finalizes')
-    expect(container.textContent).toContain('Large rebuild: current phase 7 of 7 (review_article_serving)')
-    expect(container.textContent).toContain('Article counts are per phase and reset when the rebuild advances')
-    expect(container.textContent).not.toContain('Article refreshes: processing 0, queued 148, 0/min')
+    expect(container.textContent).not.toContain('Current phase articles')
+    expect(container.textContent).not.toContain('Dirty article ACKs')
+    expect(container.textContent).not.toContain('Large rebuild')
+    expect(container.textContent).toContain('Article refreshes: processing 0, queued 148, 0/min')
   } finally {
     dispose()
   }
@@ -282,11 +282,11 @@ test('renders user-facing counts and progress timestamps for review indexing wor
   try {
     expect(container.textContent).toContain('Project refreshes: processing 1, queued 0')
     expect(container.textContent).toContain('last progress')
-    expect(container.textContent).toContain('Dirty materialization: 2 project-wide dirty snapshots pending')
-    expect(container.textContent).toContain('Quarantine: 1 quarantined article barrier blocking freshness')
-    expect(container.textContent).toContain('last updated')
+    expect(container.textContent).not.toContain('Dirty materialization')
+    expect(container.textContent).not.toContain('Quarantine')
+    expect(container.textContent).not.toContain('last updated')
     expect(container.textContent).toContain('Cleanup: 1 old-generation cleanup job running')
-    expect(container.textContent).toContain('Large rebuild: current phase 6 of 7 (review_article_rollup)')
+    expect(container.textContent).not.toContain('Large rebuild')
   } finally {
     dispose()
   }
