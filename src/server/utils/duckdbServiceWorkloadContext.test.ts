@@ -228,6 +228,123 @@ test('api-role foreground DuckDB work can require workload context before connec
   }
 })
 
+test('app database foreground wrappers inherit API-role missing-context rejection', async () => {
+  const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
+  const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).pathname
+  const previousEnforceWorkloadContext = process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT
+  const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
+  const previousDuckdbPath = process.env.DUCKDB_PATH
+  const previousServerRole = process.env.SERVER_ROLE
+  let createCount = 0
+
+  void mock.module(serverRuntimeRoleModulePath, () => {
+    return {
+      canCurrentServerOwnDuckdb: () => {
+        return false
+      },
+      ensureCurrentDuckdbOwnerLease: async () => {},
+      getCurrentServerDuckdbOwnerUrl: async () => {
+        return null
+      },
+      getCurrentServerRole: () => {
+        return 'api'
+      },
+      getKnownDuckdbOwnerUrl: () => {
+        return null
+      },
+      isCurrentServerDuckdbOwnerProxyDisabled: () => {
+        return false
+      },
+      registerDuckdbOwnerDemotionHandler: () => {},
+      releaseCurrentDuckdbOwnerLease: async () => {},
+      shouldCurrentServerProxyApiToDuckdbOwner: () => {
+        return true
+      },
+      shouldCurrentServerProxyApiToOwner: () => {
+        return true
+      },
+    }
+  })
+
+  void mock.module('@duckdb/node-api', () => {
+    class MockConnection {
+      async run() {}
+
+      async runAndReadAll() {
+        return {
+          getRowObjectsJson() {
+            return [{value: 'a'}]
+          },
+        }
+      }
+
+      interrupt() {}
+
+      closeSync() {}
+    }
+
+    class MockInstance {
+      static async create() {
+        createCount += 1
+        return new MockInstance()
+      }
+
+      async connect() {
+        return new MockConnection()
+      }
+
+      closeSync() {}
+    }
+
+    return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+  })
+
+  process.env.DUCKDB_MEMORY_LIMIT = '20GB'
+  process.env.DUCKDB_PATH = ':memory:'
+  process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT = 'true'
+  process.env.SERVER_ROLE = 'api'
+
+  try {
+    const {getAppDatabaseService} = (await import(
+      `${appDatabaseServiceModulePath}?workload-wrapper-api-guard=${Date.now()}`
+    )) as typeof import('../services/appDatabaseService.ts')
+    const appDatabase = getAppDatabaseService()
+    const captureError = async (operation: () => Promise<unknown>) => {
+      return operation().then(
+        () => {
+          return null
+        },
+        (caughtError: unknown) => {
+          return caughtError instanceof Error ? caughtError : new Error(String(caughtError))
+        },
+      )
+    }
+
+    const queryError = await captureError(() => {
+      return appDatabase.queryJson('SELECT value FROM sample')
+    })
+    const runError = await captureError(() => {
+      return appDatabase.run('SELECT value FROM sample')
+    })
+    const transactionError = await captureError(() => {
+      return appDatabase.transaction(async (tx) => {
+        return tx.queryJson('SELECT value FROM sample')
+      })
+    })
+
+    expect(queryError?.message).toContain('DuckDB mainQuery requires DuckdbWorkloadContext')
+    expect(runError?.message).toContain('DuckDB mainStatement requires DuckdbWorkloadContext')
+    expect(transactionError?.message).toContain('DuckDB transaction requires DuckdbWorkloadContext')
+    expect(createCount).toBe(0)
+  } finally {
+    restoreEnvValue('DUCKDB_MEMORY_LIMIT', previousDuckdbMemoryLimit)
+    restoreEnvValue('DUCKDB_PATH', previousDuckdbPath)
+    restoreEnvValue('FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT', previousEnforceWorkloadContext)
+    restoreEnvValue('SERVER_ROLE', previousServerRole)
+    mock.restore()
+  }
+})
+
 test('owner and background DuckDB scopes remain allowed without foreground workload enforcement', async () => {
   const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).pathname
   const previousEnforceWorkloadContext = process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT
@@ -304,9 +421,13 @@ test('owner and background DuckDB scopes remain allowed without foreground workl
   try {
     const duckdbService = await getImportedDuckdbService('workload-context-owner-guard')
 
-    await expect(duckdbService.runDuckdbJsonQuery('SELECT value FROM sample')).resolves.toEqual([{value: 'a'}])
-    await expect(duckdbService.runDuckdbBackgroundJsonQuery('SELECT value FROM sample')).resolves.toEqual([{value: 'a'}])
-    await expect(duckdbService.runDuckdbMaintenance('checkpoint')).resolves.toBeUndefined()
+    const foregroundRows = await duckdbService.runDuckdbJsonQuery('SELECT value FROM sample')
+    const backgroundRows = await duckdbService.runDuckdbBackgroundJsonQuery('SELECT value FROM sample')
+    const maintenanceResult = await duckdbService.runDuckdbMaintenance('checkpoint')
+
+    expect(foregroundRows).toEqual([{value: 'a'}])
+    expect(backgroundRows).toEqual([{value: 'a'}])
+    expect(maintenanceResult).toBeUndefined()
     await duckdbService.closeDuckdbService()
   } finally {
     restoreEnvValue('DUCKDB_MEMORY_LIMIT', previousDuckdbMemoryLimit)
