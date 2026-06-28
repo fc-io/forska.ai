@@ -3240,6 +3240,10 @@ const getComparisonProjectConflictResolutionExportSourceRow = (
 const getComparisonProjectConflictResolutionExportSourceRows = async (
   scope: ComparisonProjectScope,
 ): Promise<ComparisonProjectConflictResolutionTransferSourceRow[]> => {
+  if (scope.activeGeneration === null) {
+    return []
+  }
+
   const optionByValue = getComparisonProjectConflictResolutionOptionByValue(scope)
   const rows = await appDatabaseService.queryJson<ComparisonProjectConflictResolutionExportQueryRow>(`
     SELECT
