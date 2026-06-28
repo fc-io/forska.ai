@@ -10,14 +10,12 @@ import {
   type JudgmentJobSqliteHealthProjectionReader,
 } from '../services/judgmentJobSqliteHealthProjectionService.ts'
 import {getProjectMartDirtyMaterializationService} from '../services/projectMartDirtyMaterializationService.ts'
-import {runProjectMartLargeRebuildCycles} from '../services/projectMartLargeRebuildCyclesService.ts'
 import {
   getProjectMartLargeRebuildPhaseIndex,
   getProjectMartLargeRebuildScopeProgress,
   isArticleScopedLargeRebuildPhase,
   largeRebuildPhaseOrder,
 } from '../services/projectMartLargeRebuildProgressService.ts'
-import {getProjectMartLargeRebuildStateService} from '../services/projectMartLargeRebuildStateService.ts'
 import {type DuckdbOwnerConnectionRecord, getDuckdbOwnerConnectionsOverview} from '../utils/duckdbOwnerConnections.ts'
 import {getDuckdbBackgroundRuntimeDiagnostics} from '../utils/duckdbService.ts'
 import {getOwnerlessRouteBackendSelections} from '../utils/ownerlessReadableBackends.ts'
@@ -49,7 +47,6 @@ import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
 const appDatabaseService = getAppDatabaseService()
 const appQueryService = getAppQueryService()
 const projectMartDirtyMaterializationService = getProjectMartDirtyMaterializationService()
-const projectMartLargeRebuildStateService = getProjectMartLargeRebuildStateService()
 export const workerRuntimeDiagnosticsPath = '/api/admin/worker-runtime-diagnostics'
 
 type JudgmentJobReadPathMode = 'local-sqlite' | 'owner-duckdb-projection' | 'ownerless-read-only-projection'
@@ -335,6 +332,24 @@ type ProjectMartLargeRebuildOperatorStatus = {
     refreshStatus: string
     workerId: string | null
   } | null
+}
+
+type RetiredProjectMartLargeRebuildMutationResponse = {
+  message: string
+  projectId: string
+  retired: true
+  status: 'retired'
+}
+
+const getRetiredProjectMartLargeRebuildMutationResponse = (
+  projectId: string,
+): RetiredProjectMartLargeRebuildMutationResponse => {
+  return {
+    message: 'Legacy project mart large rebuild mutations are retired; use V4 review-serving rebuild requests.',
+    projectId,
+    retired: true,
+    status: 'retired',
+  }
 }
 
 const getLargeRebuildPhaseIndex = (phase: string | null) => {
@@ -952,15 +967,7 @@ export const adminInvestigateRoutes = new Elysia()
   .post(
     '/api/admin/project-mart-large-rebuild-run',
     async ({body}) => {
-      return runProjectMartLargeRebuildCycles({
-        batchSize: body.batchSize ?? 1,
-        maxCycles: body.maxCycles,
-        maxNoProgressBackoffs: body.maxNoProgressBackoffs,
-        maxWakeMs: body.maxWakeMs,
-        projectId: body.projectId,
-        until: body.until ?? 'max-cycles',
-        workerId: body.workerId ?? `admin-project-mart-large-rebuild:${process.pid}`,
-      })
+      return getRetiredProjectMartLargeRebuildMutationResponse(body.projectId)
     },
     {
       body: t.Object({
@@ -985,24 +992,21 @@ export const adminInvestigateRoutes = new Elysia()
   .post(
     '/api/admin/project-mart-large-rebuild-pause',
     async ({body}) => {
-      return projectMartLargeRebuildStateService.pauseLargeRebuild({projectId: body.projectId, reason: body.reason})
+      return getRetiredProjectMartLargeRebuildMutationResponse(body.projectId)
     },
     {body: t.Object({projectId: t.String(), reason: t.Optional(t.String())})},
   )
   .post(
     '/api/admin/project-mart-large-rebuild-resume',
     async ({body}) => {
-      return projectMartLargeRebuildStateService.resumeLargeRebuild({projectId: body.projectId})
+      return getRetiredProjectMartLargeRebuildMutationResponse(body.projectId)
     },
     {body: t.Object({projectId: t.String()})},
   )
   .post(
     '/api/admin/project-mart-large-rebuild-note',
     async ({body}) => {
-      return projectMartLargeRebuildStateService.setLargeRebuildOperatorNote({
-        note: body.note,
-        projectId: body.projectId,
-      })
+      return getRetiredProjectMartLargeRebuildMutationResponse(body.projectId)
     },
     {body: t.Object({note: t.Union([t.String(), t.Null()]), projectId: t.String()})},
   )
