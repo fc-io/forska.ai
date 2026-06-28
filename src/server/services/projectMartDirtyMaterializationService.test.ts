@@ -450,6 +450,18 @@ test('project-wide dirty materialization inserts scoped article state in databas
       runner: database,
       now: new Date('2026-04-04T10:00:00.000Z'),
     })
+    const sourceSnapshot = await materializationService.getProjectScopeDirtyMaterializationSnapshot({
+      projectId: 'dirty-materialization-project',
+      runner: database,
+    })
+    await materializationService.queueDirtyMaterialization({
+      ...sourceSnapshot,
+      projectId: 'dirty-materialization-project',
+      runner: database,
+      sourceKind: 'project_scope_article',
+      targetDirtyToken: dirtyState.dirtyToken,
+      now: new Date('2026-04-04T10:00:00.000Z'),
+    })
     const [claim] = await materializationService.claimDirtyMaterializations({
       sourceKind: 'project_scope_article',
       workerId: 'dirty-materialization-worker',
@@ -605,9 +617,19 @@ test('dirty project claims stay behind earlier incomplete materialization tokens
       )
     \`)
 
-    await refreshStateService.markProjectsDirtyAtomically({
+    const [dirtyState] = await refreshStateService.markProjectsDirtyAtomically({
       projects: [{projectId: 'dirty-materialization-project'}],
       reason: 'project-wide-materialization-barrier-test',
+      now: new Date('2026-04-04T12:00:00.000Z'),
+    })
+    const sourceSnapshot = await materializationService.getProjectScopeDirtyMaterializationSnapshot({
+      projectId: 'dirty-materialization-project',
+    })
+    await materializationService.queueDirtyMaterialization({
+      ...sourceSnapshot,
+      projectId: 'dirty-materialization-project',
+      sourceKind: 'project_scope_article',
+      targetDirtyToken: dirtyState.dirtyToken,
       now: new Date('2026-04-04T12:00:00.000Z'),
     })
     await refreshStateService.markProjectsDirtyAtomically({
@@ -704,6 +726,16 @@ test('project-wide dirty materialization requeues with a fresh snapshot when the
     const [dirtyState] = await refreshStateService.markProjectsDirtyAtomically({
       projects: [{projectId: 'dirty-materialization-project'}],
       reason: 'project-wide-materialization-fingerprint-test',
+      now: new Date('2026-04-04T11:00:00.000Z'),
+    })
+    const sourceSnapshot = await materializationService.getProjectScopeDirtyMaterializationSnapshot({
+      projectId: 'dirty-materialization-project',
+    })
+    await materializationService.queueDirtyMaterialization({
+      ...sourceSnapshot,
+      projectId: 'dirty-materialization-project',
+      sourceKind: 'project_scope_article',
+      targetDirtyToken: dirtyState.dirtyToken,
       now: new Date('2026-04-04T11:00:00.000Z'),
     })
     const [claim] = await materializationService.claimDirtyMaterializations({

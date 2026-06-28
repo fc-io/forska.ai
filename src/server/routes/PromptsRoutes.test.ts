@@ -378,18 +378,20 @@ test('merging a prompt deletes colliding human judgment rows before rewriting pr
     WHERE project_id = '${projectId}'
     LIMIT 1
   `)
-  const [materializationState] = await queryDatabase<{
-    expectedRowCount: number
-    materializationStatus: string
-    projectId: string
-    targetDirtyToken: number
-  }>(`
+  const [materializationState] = await queryDatabase<{projectId: string; targetDirtyToken: number}>(`
     SELECT
       project_id AS projectId,
-      CAST(target_dirty_token AS INTEGER) AS targetDirtyToken,
-      materialization_status AS materializationStatus,
-      CAST(source_scope_expected_row_count AS INTEGER) AS expectedRowCount
+      CAST(target_dirty_token AS INTEGER) AS targetDirtyToken
     FROM app.project_mart_dirty_materialization_state
+    WHERE project_id = '${projectId}'
+    LIMIT 1
+  `)
+  const [articleState] = await queryDatabase<{articleId: string; lastDirtyToken: number; projectId: string}>(`
+    SELECT
+      project_id AS projectId,
+      article_id AS articleId,
+      CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
+    FROM app.project_mart_refresh_article_state
     WHERE project_id = '${projectId}'
     LIMIT 1
   `)
@@ -399,12 +401,8 @@ test('merging a prompt deletes colliding human judgment rows before rewriting pr
   expect(body.error).toBeUndefined()
   expect(remainingHumanJudgments).toEqual([{id: `${keepPromptId}-judgment-human`, promptId: keepPromptId}])
   expect(refreshState).toEqual({dirtyToken: 1, projectId})
-  expect(materializationState).toEqual({
-    expectedRowCount: 1,
-    materializationStatus: 'pending',
-    projectId,
-    targetDirtyToken: 1,
-  })
+  expect(materializationState).toBeUndefined()
+  expect(articleState).toEqual({articleId, lastDirtyToken: 1, projectId})
 })
 
 test('deleting invalid judgments records bounded article dirtiness for affected projects', async () => {

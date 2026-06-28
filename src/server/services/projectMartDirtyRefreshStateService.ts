@@ -6,10 +6,6 @@ import type {
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
 import {getMaintenanceWorkLeaseService} from './maintenanceWorkLeaseService.ts'
-import {
-  getProjectMartDirtyMaterializationService,
-  projectScopeDirtyMaterializationSourceKind,
-} from './projectMartDirtyMaterializationService.ts'
 
 type RefreshStateRunner = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
 
@@ -233,6 +229,68 @@ const ensureProjectRefreshStateRow = async (runner: RefreshStateRunner, projectI
   `)
 }
 
+const insertProjectScopeRefreshArticleStateRows = async (
+  runner: RefreshStateRunner,
+  params: {dirtyToken: number; now: Date; projectId: string},
+) => {
+  await runner.run(`
+    INSERT INTO app.project_mart_refresh_article_state (
+      project_id,
+      article_id,
+      first_dirty_token,
+      last_dirty_token,
+      updated_at
+    )
+    SELECT
+      scoped_article.projectId,
+      scoped_article.articleId,
+      ${params.dirtyToken},
+      ${params.dirtyToken},
+      ${getTimestampLiteral(params.now)}
+    FROM (
+      SELECT
+        project_article.project_id AS projectId,
+        project_article.article_id AS articleId
+      FROM app.project_article project_article
+      INNER JOIN app.project project ON project.id = project_article.project_id
+      INNER JOIN app.article article ON article.id = project_article.article_id
+      WHERE project_article.project_id = ${getSqlLiteral(params.projectId)}
+        AND project.archived = FALSE
+        AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+        AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+      UNION
+      SELECT
+        project_import_route.project_id AS projectId,
+        article_import_route.article_id AS articleId
+      FROM app.project_import_route project_import_route
+      INNER JOIN app.article_import_route article_import_route
+        ON article_import_route.import_route_id = project_import_route.import_route_id
+      INNER JOIN app.project project ON project.id = project_import_route.project_id
+      INNER JOIN app.article article ON article.id = article_import_route.article_id
+      WHERE project_import_route.project_id = ${getSqlLiteral(params.projectId)}
+        AND project.archived = FALSE
+        AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+        AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+      UNION
+      SELECT
+        scope_article.project_id AS projectId,
+        scope_article.article_id AS articleId
+      FROM mart.project_scope_article scope_article
+      INNER JOIN app.project project ON project.id = scope_article.project_id
+      WHERE scope_article.project_id = ${getSqlLiteral(params.projectId)}
+        AND project.archived = FALSE
+    ) scoped_article
+    ON CONFLICT(project_id, article_id) DO UPDATE SET
+      first_dirty_token = CASE
+        WHEN app.project_mart_refresh_article_state.last_dirty_token = ${inactiveProjectRefreshArticleStateToken}
+        THEN EXCLUDED.first_dirty_token
+        ELSE LEAST(app.project_mart_refresh_article_state.first_dirty_token, EXCLUDED.first_dirty_token)
+      END,
+      last_dirty_token = GREATEST(app.project_mart_refresh_article_state.last_dirty_token, EXCLUDED.last_dirty_token),
+      updated_at = EXCLUDED.updated_at
+  `)
+}
+
 const getProjectRefreshArticleQuarantineRecord = async (
   runner: RefreshStateRunner,
   params: {articleId: string; dirtyToken: number; projectId: string},
@@ -283,33 +341,11 @@ const markSingleProjectDirty = async (
   }
 
   if (project.articleIds === undefined) {
-    const sourceSnapshot =
-      await getProjectMartDirtyMaterializationService().getProjectScopeDirtyMaterializationSnapshot({
-        projectId: project.projectId,
-        runner,
-      })
-
-    await getProjectMartDirtyMaterializationService().queueDirtyMaterialization({
-      projectId: project.projectId,
-      runner,
-      sourceKind: projectScopeDirtyMaterializationSourceKind,
-      targetDirtyToken: state.dirtyToken,
-      ...sourceSnapshot,
+    await insertProjectScopeRefreshArticleStateRows(runner, {
+      dirtyToken: state.dirtyToken,
       now: params.now,
+      projectId: project.projectId,
     })
-
-    if (sourceSnapshot.sourceScopeExpectedRowCount === 0) {
-      await runner.run(`
-        UPDATE app.project_mart_dirty_materialization_state
-        SET
-          materialization_status = 'completed',
-          last_completed_at = ${getTimestampLiteral(params.now)},
-          updated_at = ${getTimestampLiteral(params.now)}
-        WHERE project_id = ${getSqlLiteral(project.projectId)}
-          AND source_kind = ${getSqlLiteral(projectScopeDirtyMaterializationSourceKind)}
-          AND target_dirty_token = ${state.dirtyToken}
-      `)
-    }
   }
 
   if (project.articleIds !== undefined && project.articleIds.length > 0) {

@@ -755,12 +755,19 @@ test('project prompt and import-route dirty requests mark projects dirty without
         const materializationRows = await database.queryJson(\`
           SELECT
             project_id AS projectId,
-            CAST(target_dirty_token AS INTEGER) AS targetDirtyToken,
-            materialization_status AS materializationStatus,
-            CAST(source_scope_expected_row_count AS INTEGER) AS expectedRowCount
+            CAST(target_dirty_token AS INTEGER) AS targetDirtyToken
           FROM app.project_mart_dirty_materialization_state
           WHERE project_id IN ('project-prompt-dirty-test', 'project-route-dirty-test')
           ORDER BY project_id ASC
+        \`)
+        const articleStateRows = await database.queryJson(\`
+          SELECT
+            project_id AS projectId,
+            article_id AS articleId,
+            CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
+          FROM app.project_mart_refresh_article_state
+          WHERE project_id IN ('project-prompt-dirty-test', 'project-route-dirty-test')
+          ORDER BY project_id ASC, article_id ASC
         \`)
         const [largeRebuildRow] = await database.queryJson(\`
           SELECT COUNT(*) AS count
@@ -770,6 +777,7 @@ test('project prompt and import-route dirty requests mark projects dirty without
         \`)
 
         console.log(JSON.stringify({
+          articleStateRows,
           largeRebuildCount: Number(largeRebuildRow?.count ?? 0),
           legacyQueueTableCount: Number(legacyQueueTable?.tableCount ?? 0),
           materializationRows,
@@ -798,14 +806,10 @@ test('project prompt and import-route dirty requests mark projects dirty without
     }
 
     const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      articleStateRows: Array<{articleId: string; lastDirtyToken: number; projectId: string}>
       largeRebuildCount: number
       legacyQueueTableCount: number
-      materializationRows: Array<{
-        expectedRowCount: number
-        materializationStatus: string
-        projectId: string
-        targetDirtyToken: number
-      }>
+      materializationRows: Array<{projectId: string; targetDirtyToken: number}>
       refreshStates: Array<{dirtyToken: number; projectId: string; reason: string}>
     }
 
@@ -815,19 +819,10 @@ test('project prompt and import-route dirty requests mark projects dirty without
       {dirtyToken: 1, projectId: 'project-prompt-dirty-test', reason: 'prompt-dirty-helper'},
       {dirtyToken: 1, projectId: 'project-route-dirty-test', reason: 'route-dirty-helper'},
     ])
-    expect(result.materializationRows).toEqual([
-      {
-        expectedRowCount: 1,
-        materializationStatus: 'pending',
-        projectId: 'project-prompt-dirty-test',
-        targetDirtyToken: 1,
-      },
-      {
-        expectedRowCount: 1,
-        materializationStatus: 'pending',
-        projectId: 'project-route-dirty-test',
-        targetDirtyToken: 1,
-      },
+    expect(result.materializationRows).toEqual([])
+    expect(result.articleStateRows).toEqual([
+      {articleId: 'article-prompt-dirty-test', lastDirtyToken: 1, projectId: 'project-prompt-dirty-test'},
+      {articleId: 'article-route-dirty-test', lastDirtyToken: 1, projectId: 'project-route-dirty-test'},
     ])
   } finally {
     removeFileIfExists(duckdbPath)
@@ -1987,12 +1982,10 @@ test('refreshProjectArticleMartsBatch refreshes active data used by olap filters
       'bun',
       '-e',
       `
-        const {Elysia} = await import('elysia')
         const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
         const {queryArticlesReviewsFromDuckdb} = await import('./src/services/olap/duckdbOlap.ts')
         const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
         const {getDuckdbMartMaintenanceService} = await import('./src/server/services/getDuckdbMartMaintenanceService.ts')
-        const {projectsRoutesPostArticleReviewDetails} = await import('./src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts')
 
         await migrateDuckdb()
 
@@ -2076,21 +2069,18 @@ test('refreshProjectArticleMartsBatch refreshes active data used by olap filters
           limit: 10,
           prompts: {[promptId]: ['old']},
         })
-        const detailsApp = new Elysia().use(projectsRoutesPostArticleReviewDetails)
-        const detailsResponse = await detailsApp.handle(
-          new Request('http://localhost/api/projectsreview', {
-            body: JSON.stringify({articleId, projectId}),
-            headers: {'content-type': 'application/json'},
-            method: 'POST',
-          }),
-        )
-        const details = await detailsResponse.json()
+        const detailRows = await database.queryJson(\`
+          SELECT answered_original AS answeredOriginal
+          FROM mart.review_article_serving_detail
+          WHERE project_id = '\${projectId}'
+            AND article_id = '\${articleId}'
+          ORDER BY prompt_id ASC
+        \`)
 
         console.log(JSON.stringify({
-          detailAnswers: details.judgments.map((judgment) => {
+          detailAnswers: detailRows.map((judgment) => {
             return judgment.answeredOriginal
           }),
-          detailStatus: detailsResponse.status,
           newFilterAnswers: filteredNew.data.flatMap((article) => {
             return article.judgments.map((judgment) => {
               return judgment.answeredOriginal
@@ -2129,13 +2119,11 @@ test('refreshProjectArticleMartsBatch refreshes active data used by olap filters
 
     const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
       detailAnswers: string[]
-      detailStatus: number
       newFilterAnswers: string[]
       newFilterIds: string[]
       oldFilterIds: string[]
     }
 
-    expect(result.detailStatus).toBe(200)
     expect(result.detailAnswers).toEqual(['new'])
     expect(result.newFilterAnswers).toEqual(['new'])
     expect(result.newFilterIds).toEqual(['article-active-consumer-batch'])
@@ -2147,7 +2135,7 @@ test('refreshProjectArticleMartsBatch refreshes active data used by olap filters
   }
 })
 
-test('active review API and OLAP reads stay generation-bound through queued running promotion and cleanup', () => {
+test('active review list API and legacy OLAP reads stay generation-bound through queued running promotion and cleanup', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-active-read-gates-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(
     [
@@ -2161,7 +2149,6 @@ test('active review API and OLAP reads stay generation-bound through queued runn
         const {getDuckdbMartMaintenanceService} = await import('./src/server/services/getDuckdbMartMaintenanceService.ts')
         const {getProjectMartLargeRebuildExecutor} = await import('./src/server/services/projectMartLargeRebuildExecutor.ts')
         const {projectsRoutesGetArticlesReviews} = await import('./src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviews.ts')
-        const {projectsRoutesPostArticleReviewDetails} = await import('./src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts')
 
         await migrateDuckdb()
 
@@ -2172,7 +2159,6 @@ test('active review API and OLAP reads stay generation-bound through queued runn
         const articleId = 'article-active-read-gates'
         const promptId = 'prompt-active-read-gates'
         const reviewsApp = new Elysia().use(projectsRoutesGetArticlesReviews)
-        const detailsApp = new Elysia().use(projectsRoutesPostArticleReviewDetails)
 
         await database.run(\`
           INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
@@ -2241,15 +2227,18 @@ test('active review API and OLAP reads stay generation-bound through queued runn
           return {body, status: response.status}
         }
         const getDetailsResult = async () => {
-          const response = await detailsApp.handle(
-            new Request('http://localhost/api/projectsreview', {
-              body: JSON.stringify({articleId, projectId}),
-              headers: {'content-type': 'application/json'},
-              method: 'POST',
-            }),
-          )
-          const body = await response.json()
-          return {body, status: response.status}
+          return await database.queryJson(\`
+            SELECT answered_original AS answer, explanation
+            FROM mart.review_article_serving_detail
+            WHERE project_id = '\${projectId}'
+              AND article_id = '\${articleId}'
+              AND generation = (
+                SELECT active_generation
+                FROM app.project_review_serving_generation
+                WHERE project_id = '\${projectId}'
+              )
+            ORDER BY prompt_id ASC
+          \`)
         }
         const getReviewIds = (result) => {
           return result.data.map((article) => {
@@ -2279,10 +2268,9 @@ test('active review API and OLAP reads stay generation-bound through queued runn
           const newFilter = await getFilterSnapshot('new')
           const details = await getDetailsResult()
           return {
-            detailJudgments: details.body.judgments.map((judgment) => {
-              return {answer: judgment.answeredOriginal, explanation: judgment.explanation}
+            detailJudgments: details.map((judgment) => {
+              return {answer: judgment.answer, explanation: judgment.explanation}
             }),
-            detailStatus: details.status,
             label,
             newFilter,
             oldFilter,
@@ -2417,6 +2405,17 @@ test('active review API and OLAP reads stay generation-bound through queued runn
         directIds: ['article-active-read-gates'],
       },
     }
+    const queuedUnavailableSnapshot = {
+      detailJudgments: [{answer: 'old', explanation: 'old detail'}],
+      newFilter: {
+        apiAnswers: [],
+        apiIds: [],
+        apiStatus: 500,
+        directAnswers: ['new'],
+        directIds: ['article-active-read-gates'],
+      },
+      oldFilter: {apiAnswers: [], apiIds: [], apiStatus: 500, directAnswers: [], directIds: []},
+    }
     const newUnavailableSnapshot = {
       detailJudgments: [{answer: 'new', explanation: 'new detail'}],
       newFilter: {
@@ -2429,8 +2428,8 @@ test('active review API and OLAP reads stay generation-bound through queued runn
       oldFilter: {apiAnswers: [], apiIds: [], apiStatus: 500, directAnswers: [], directIds: []},
     }
     expect(getComparableSnapshot(result.beforeRefresh)).toEqual(oldUnavailableSnapshot)
-    expect(getComparableSnapshot(result.queued)).toEqual(newUnavailableSnapshot)
-    expect(getComparableSnapshot(result.running)).toEqual(newUnavailableSnapshot)
+    expect(getComparableSnapshot(result.queued)).toEqual(queuedUnavailableSnapshot)
+    expect(getComparableSnapshot(result.running)).toEqual(queuedUnavailableSnapshot)
     expect(getComparableSnapshot(result.afterPromotion)).toEqual(newUnavailableSnapshot)
     expect(getComparableSnapshot(result.afterCleanup)).toEqual(newUnavailableSnapshot)
     expect(result.cleanupResult.deletedRowCount).toBeGreaterThan(0)
