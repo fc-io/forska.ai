@@ -1,4 +1,3 @@
-export const legacyLargeRebuildAckValue = 'legacy-large-rebuild'
 export const legacyDirtyRefreshAckValue = 'legacy-dirty-refresh'
 
 const getArgValue = (name: string) => {

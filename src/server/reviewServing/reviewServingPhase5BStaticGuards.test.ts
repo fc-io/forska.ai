@@ -1,3 +1,4 @@
+import {existsSync} from 'node:fs'
 import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
@@ -52,13 +53,16 @@ test('review warnings product route stays separated from legacy mart diagnostics
   expect(presentMarkers).toEqual([])
 })
 
-test('Phase 5B legacy worker scripts require explicit admin acknowledgements', async () => {
+test('Phase 5B legacy worker scripts require explicit admin acknowledgements or deletion', async () => {
   const dirtyWorkerScripts = [
     'scripts/runProjectMartRefreshWorker.ts',
     'scripts/runProjectMartRefreshWorkerOnce.ts',
     'scripts/runProjectMartRefreshWorkerOnceIsolated.ts',
   ]
   const largeRebuildScripts = ['scripts/runLargeRebuildWorkerOnce.ts', 'scripts/runLargeRebuildWorkerCycles.ts']
+  const existingLargeRebuildScripts = largeRebuildScripts.filter((path) => {
+    return existsSync(join(projectRoot, path))
+  })
 
   const dirtyWorkerMissingAck = (
     await Promise.all(
@@ -69,18 +73,9 @@ test('Phase 5B legacy worker scripts require explicit admin acknowledgements', a
       }),
     )
   ).flat()
-  const largeRebuildMissingAck = (
-    await Promise.all(
-      largeRebuildScripts.map(async (path) => {
-        const source = await readText(path)
-
-        return source.includes('requireLegacyAdminAck') && source.includes('legacyLargeRebuildAckValue') ? [] : [path]
-      }),
-    )
-  ).flat()
 
   expect(dirtyWorkerMissingAck).toEqual([])
-  expect(largeRebuildMissingAck).toEqual([])
+  expect(existingLargeRebuildScripts).toEqual([])
 })
 
 test('Phase 5B package commands do not expose normal legacy rebuild workers', async () => {
@@ -90,15 +85,16 @@ test('Phase 5B package commands do not expose normal legacy rebuild workers', as
 
   expect(packageJson.scripts['db:duck:run-large-rebuild-worker-once']).toBeUndefined()
   expect(packageJson.scripts['db:duck:run-large-rebuild-worker-cycles']).toBeUndefined()
+  expect(packageJson.scripts['db:duck:legacy-admin-run-large-rebuild-worker-once']).toBeUndefined()
+  expect(packageJson.scripts['db:duck:legacy-admin-run-large-rebuild-worker-cycles']).toBeUndefined()
   expect(
     Object.values(packageJson.scripts).some((command) => {
       return command.includes('runProjectMartRefreshWorker')
     }),
   ).toBe(false)
-  expect(packageJson.scripts['db:duck:legacy-admin-run-large-rebuild-worker-once']).toContain(
-    '--legacy-admin-ack=legacy-large-rebuild',
-  )
-  expect(packageJson.scripts['db:duck:legacy-admin-run-large-rebuild-worker-cycles']).toContain(
-    '--legacy-admin-ack=legacy-large-rebuild',
-  )
+  expect(
+    Object.values(packageJson.scripts).some((command) => {
+      return command.includes('runLargeRebuildWorker')
+    }),
+  ).toBe(false)
 })

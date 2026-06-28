@@ -1,12 +1,11 @@
 import {hostname} from 'node:os'
 
+import {requestReviewServingV4Rebuild} from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getDuckdbMartMaintenanceService} from '../src/server/services/getDuckdbMartMaintenanceService.ts'
 import {getMaintenanceWorkLeaseService} from '../src/server/services/maintenanceWorkLeaseService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
-import {runProjectMartLargeRebuildCycle} from '../src/server/services/projectMartLargeRebuildRunner.ts'
-import {getProjectMartLargeRebuildStateService} from '../src/server/services/projectMartLargeRebuildStateService.ts'
-import {legacyDirtyRefreshAckValue, legacyLargeRebuildAckValue, requireLegacyAdminAck} from './legacyAdminAck.ts'
+import {legacyDirtyRefreshAckValue, requireLegacyAdminAck} from './legacyAdminAck.ts'
 
 type CliOptions = {
   heartbeatMs: number | undefined
@@ -176,7 +175,6 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
   }
 
   const options = getCliOptions()
-  const largeRebuildStateService = getProjectMartLargeRebuildStateService()
   const stateService = getProjectMartDirtyRefreshStateService()
   const refreshService = getDuckdbMartMaintenanceService()
 
@@ -188,23 +186,7 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
     })
 
     if (!claim) {
-      if (
-        !requireLegacyAdminAck({
-          command: 'runProjectMartRefreshWorkerOnceIsolated:largeRebuildFallback',
-          expectedAck: legacyLargeRebuildAckValue,
-        })
-      ) {
-        return
-      }
-
-      const largeRebuildResult = await runProjectMartLargeRebuildCycle({
-        heartbeatMs: options.heartbeatMs,
-        leaseMs: options.leaseMs,
-        workerId: options.workerId,
-      })
-
-      console.log(JSON.stringify(largeRebuildResult))
-      process.exitCode = largeRebuildResult.status === 'failed' ? 1 : 0
+      console.log(JSON.stringify({projectId: null, status: 'idle', workerId: options.workerId}))
       return
     }
 
@@ -229,18 +211,21 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
       }
 
       if (executionMode === 'full') {
-        await largeRebuildStateService.requestLargeRebuild({
-          now: new Date(),
+        const request = await requestReviewServingV4Rebuild({
           projectId: claim.projectId,
-          rebuildPhase: 'project_scope_article',
-          refreshToken: claim.claimedToken,
+          reason: 'runProjectMartRefreshWorkerOnceIsolated.fullRefresh',
         })
-        await stateService.releaseProjectRefreshClaim({projectId: claim.projectId, workerId: options.workerId})
+        await stateService.completeProjectRefresh({
+          completedToken: claim.claimedToken,
+          projectId: claim.projectId,
+          workerId: options.workerId,
+        })
         console.log(
           JSON.stringify({
             claimedToken: claim.claimedToken,
             projectId: claim.projectId,
-            status: 'completed',
+            requestId: request.requestId,
+            status: 'v4_rebuild_requested',
             workerId: options.workerId,
           }),
         )
