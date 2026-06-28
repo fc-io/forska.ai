@@ -1607,7 +1607,11 @@ const recordDuckdbWorkloadRuntimeMetric = (metric: DuckdbWorkloadRuntimeMetric) 
 }
 
 const shouldEnforceForegroundDuckdbWorkloadContext = () => {
-  return String(process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT ?? '').trim().toLowerCase() === 'true'
+  const configuredValue = String(process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT ?? '')
+    .trim()
+    .toLowerCase()
+
+  return !['0', 'false', 'no', 'off'].includes(configuredValue)
 }
 
 const assertDuckdbWorkloadContextIsAllowed = (operation: DuckdbWorkloadOperation, context?: DuckdbWorkloadContext) => {

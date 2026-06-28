@@ -131,7 +131,7 @@ test('duckdb workload context rejects over-budget query results and records metr
   }
 })
 
-test('api-role foreground DuckDB work can require workload context before connection acquisition', async () => {
+test('api-role foreground DuckDB work requires workload context before connection acquisition by default', async () => {
   const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).pathname
   const previousEnforceWorkloadContext = process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT
   const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
@@ -203,7 +203,7 @@ test('api-role foreground DuckDB work can require workload context before connec
 
   process.env.DUCKDB_MEMORY_LIMIT = '20GB'
   process.env.DUCKDB_PATH = ':memory:'
-  process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT = 'true'
+  delete process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT
   process.env.SERVER_ROLE = 'api'
 
   try {
@@ -219,6 +219,97 @@ test('api-role foreground DuckDB work can require workload context before connec
 
     expect(error?.message).toContain('requires DuckdbWorkloadContext before connection acquisition')
     expect(createCount).toBe(0)
+  } finally {
+    restoreEnvValue('DUCKDB_MEMORY_LIMIT', previousDuckdbMemoryLimit)
+    restoreEnvValue('DUCKDB_PATH', previousDuckdbPath)
+    restoreEnvValue('FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT', previousEnforceWorkloadContext)
+    restoreEnvValue('SERVER_ROLE', previousServerRole)
+    mock.restore()
+  }
+})
+
+test('api-role foreground DuckDB workload-context guard has an explicit rollout opt-out', async () => {
+  const serverRuntimeRoleModulePath = new URL('./serverRuntimeRole.ts', import.meta.url).pathname
+  const previousEnforceWorkloadContext = process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT
+  const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
+  const previousDuckdbPath = process.env.DUCKDB_PATH
+  const previousServerRole = process.env.SERVER_ROLE
+  let createCount = 0
+
+  void mock.module(serverRuntimeRoleModulePath, () => {
+    return {
+      canCurrentServerOwnDuckdb: () => {
+        return false
+      },
+      ensureCurrentDuckdbOwnerLease: async () => {},
+      getCurrentServerDuckdbOwnerUrl: async () => {
+        return null
+      },
+      getCurrentServerRole: () => {
+        return 'api'
+      },
+      getKnownDuckdbOwnerUrl: () => {
+        return null
+      },
+      isCurrentServerDuckdbOwnerProxyDisabled: () => {
+        return false
+      },
+      registerDuckdbOwnerDemotionHandler: () => {},
+      releaseCurrentDuckdbOwnerLease: async () => {},
+      shouldCurrentServerProxyApiToDuckdbOwner: () => {
+        return true
+      },
+      shouldCurrentServerProxyApiToOwner: () => {
+        return true
+      },
+    }
+  })
+
+  void mock.module('@duckdb/node-api', () => {
+    class MockConnection {
+      async run() {}
+
+      async runAndReadAll() {
+        return {
+          getRowObjectsJson() {
+            return [{value: 'a'}]
+          },
+        }
+      }
+
+      interrupt() {}
+
+      closeSync() {}
+    }
+
+    class MockInstance {
+      static async create() {
+        createCount += 1
+        return new MockInstance()
+      }
+
+      async connect() {
+        return new MockConnection()
+      }
+
+      closeSync() {}
+    }
+
+    return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+  })
+
+  process.env.DUCKDB_MEMORY_LIMIT = '20GB'
+  process.env.DUCKDB_PATH = ':memory:'
+  process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT = 'false'
+  process.env.SERVER_ROLE = 'api'
+
+  try {
+    const duckdbService = await getImportedDuckdbService('workload-context-api-guard-opt-out')
+    const rows = await duckdbService.runDuckdbJsonQuery('SELECT value FROM sample')
+
+    expect(rows).toEqual([{value: 'a'}])
+    expect(createCount).toBe(1)
+    await duckdbService.closeDuckdbService()
   } finally {
     restoreEnvValue('DUCKDB_MEMORY_LIMIT', previousDuckdbMemoryLimit)
     restoreEnvValue('DUCKDB_PATH', previousDuckdbPath)
@@ -301,7 +392,7 @@ test('app database foreground wrappers inherit API-role missing-context rejectio
 
   process.env.DUCKDB_MEMORY_LIMIT = '20GB'
   process.env.DUCKDB_PATH = ':memory:'
-  process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT = 'true'
+  delete process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT
   process.env.SERVER_ROLE = 'api'
 
   try {
