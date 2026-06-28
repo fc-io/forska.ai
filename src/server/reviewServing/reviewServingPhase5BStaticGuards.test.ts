@@ -101,3 +101,16 @@ test('Phase 5B package commands do not expose normal legacy rebuild workers', as
     }),
   ).toBe(false)
 })
+
+test('admin legacy mart mutation routes stay retired or removed', async () => {
+  const adminSource = await readText('src/server/routes/AdminInvestigateRoutes.ts')
+  const routeInventorySource = await readText('src/server/routes/routeSurfaceInventory.ts')
+  const navigationSource = await readText('src/components/Navigation.tsx')
+
+  expect(adminSource).not.toContain('getProjectMartDirtyMaterializationService')
+  expect(adminSource).not.toContain('requeueDirtyMaterialization')
+  expect(adminSource).toContain('getRetiredProjectMartLargeRebuildMutationResponse')
+  expect(adminSource).toContain('getRetiredProjectMartDirtyMaterializationMutationResponse')
+  expect(routeInventorySource).toContain('retired legacy rebuild/materialization controls')
+  expect(navigationSource).not.toContain('/admin/project-mart-large-rebuild')
+})

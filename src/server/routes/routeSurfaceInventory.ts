@@ -256,7 +256,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
   ),
   ...ownerDependentMaintenance(
     'AdminInvestigateRoutes.ts',
-    'Admin diagnostics, retired rebuild controls, and prompt/judgment cleanup.',
+    'Admin diagnostics, retired legacy rebuild/materialization controls, and prompt/judgment cleanup.',
     [
       ['GET', '/api/admin/duckdb-append-metrics'],
       ['GET', '/api/admin/project-mart-large-rebuild-status'],
