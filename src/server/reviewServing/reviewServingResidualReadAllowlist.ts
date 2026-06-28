@@ -1,53 +1,455 @@
+type ResidualReadWorkloadClass = 'foreground-detail' | 'foreground-diagnostic' | 'foreground-metadata'
+
+type ResidualReadClassification = {
+  cap: string
+  marker: string
+  migrationTarget: string
+  purpose: string
+  workloadClass: ResidualReadWorkloadClass
+}
+
+const sourceRead = (classification: ResidualReadClassification) => {
+  return classification
+}
+
+export const appQueryServiceResidualReadClassifications = [
+  {
+    method: 'getReviewHydrationRows',
+    serviceFile: 'src/server/services/appQueryServiceCore.ts',
+    sourceReads: [
+      sourceRead({
+        cap: 'explicit articleIds only; zero rows for empty input; project scope joins limited to requested articleIds',
+        marker: 'const getReviewHydrationRows = (database: AppQueryDatabaseService)',
+        migrationTarget: 'review detail article hydration should move to keyed V4 display/detail payload contracts',
+        purpose: 'hydrate a requested review-detail article with canonical and selected-import metadata',
+        workloadClass: 'foreground-detail',
+      }),
+    ],
+  },
+  {
+    method: 'getFullArticlesByIds',
+    serviceFile: 'src/server/services/appQueryServiceCore.ts',
+    sourceReads: [
+      sourceRead({
+        cap: 'explicit articleIds only; zero rows for empty input; optional full text controlled by caller',
+        marker: 'const getFullArticlesByIds = (database: AppQueryDatabaseService)',
+        migrationTarget:
+          'prompt preview and detail hydration should consume keyed V4 article display/fulltext payloads',
+        purpose: 'hydrate explicitly requested article records for detail, prompt preview, and article detail routes',
+        workloadClass: 'foreground-detail',
+      }),
+    ],
+  },
+  {
+    method: 'getProjectReviewConfig',
+    serviceFile: 'src/server/services/appQueryServiceCore.ts',
+    sourceReads: [
+      sourceRead({
+        cap: 'single project row plus project import-route rows for one projectId',
+        marker: 'const getProjectReviewConfig = (database: AppQueryDatabaseService)',
+        migrationTarget: 'project review configuration should be read from V4 review config identity/detail contracts',
+        purpose: 'read project review settings needed to interpret serving rows and create bounded jobs',
+        workloadClass: 'foreground-metadata',
+      }),
+    ],
+  },
+  {
+    method: 'getProjectPromptRows',
+    serviceFile: 'src/server/services/appQueryServiceCore.ts',
+    sourceReads: [
+      sourceRead({
+        cap: 'enabled prompt rows for one projectId ordered by prompt order',
+        marker: 'const getProjectPromptRows = (database: AppQueryDatabaseService)',
+        migrationTarget: 'project prompts should be carried in V4 prompt/config payload contracts',
+        purpose: 'read enabled prompt metadata for review filters and detail placeholders',
+        workloadClass: 'foreground-metadata',
+      }),
+    ],
+  },
+] as const
+
 export const reviewServingResidualReadAllowlist = [
   {
     classification: 'boundedProjectPromptMetadata',
-    allowedMarkers: ['getProjectPromptRows(query.projectId)'],
+    sourceReads: [
+      sourceRead({
+        cap: 'enabled prompt rows for one projectId via appQueryServiceCore.getProjectPromptRows',
+        marker: 'getProjectPromptRows(query.projectId)',
+        migrationTarget: 'V4 filter option contracts should include prompt display metadata needed by the filter UI',
+        purpose: 'attach enabled project prompt labels to V4 filter results',
+        workloadClass: 'foreground-metadata',
+      }),
+    ],
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
   },
   {
     classification: 'boundedProjectPromptAndConfigMetadata',
-    allowedMarkers: ['getProjectReviewConfig(query.projectId)', 'getProjectPromptRows(query.projectId)'],
+    sourceReads: [
+      sourceRead({
+        cap: 'single project config row plus route IDs for one projectId via appQueryServiceCore.getProjectReviewConfig',
+        marker: 'getProjectReviewConfig(query.projectId)',
+        migrationTarget: 'V4 human filter contracts should expose the review config identity they require',
+        purpose: 'read project review settings needed to interpret human-review filter results',
+        workloadClass: 'foreground-metadata',
+      }),
+      sourceRead({
+        cap: 'enabled prompt rows for one projectId via appQueryServiceCore.getProjectPromptRows',
+        marker: 'getProjectPromptRows(query.projectId)',
+        migrationTarget: 'V4 human filter contracts should include prompt display metadata needed by the filter UI',
+        purpose: 'attach enabled project prompt labels to V4 human filter results',
+        workloadClass: 'foreground-metadata',
+      }),
+    ],
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts',
   },
   {
     classification: 'boundedReviewHealthDiagnostics',
-    allowedMarkers: ['FROM app.project_prompt', 'FROM app.project_article', 'FROM app.project_import_route'],
+    sourceReads: [
+      sourceRead({
+        cap: 'COUNT enabled prompts for one projectId',
+        marker: 'FROM app.project_prompt',
+        migrationTarget: 'V4 readiness diagnostics should expose enabled prompt count for the active config hash',
+        purpose: 'diagnose whether review indexing is needed for a project',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'existence probe with LIMIT 1 for one projectId',
+        marker: 'FROM app.project_article',
+        migrationTarget: 'V4 readiness diagnostics should expose project-scope article presence',
+        purpose: 'diagnose whether curated articles exist before checking route scope',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'route-scope existence probe with LIMIT 1 for one projectId',
+        marker: 'FROM app.project_import_route',
+        migrationTarget: 'V4 readiness diagnostics should expose route-scope article presence',
+        purpose: 'diagnose whether import-route scoped articles exist when curated scope is empty',
+        workloadClass: 'foreground-diagnostic',
+      }),
+    ],
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsHealth.ts',
   },
   {
     classification: 'boundedReviewWarningDiagnostics',
-    allowedMarkers: [
-      'FROM app.project_prompt',
-      'FROM app.project_article',
-      'FROM app.project_mart_refresh_state',
-      'FROM app.project_mart_large_rebuild_state',
-      'getReviewServingDiagnostics({projectId',
+    sourceReads: [
+      sourceRead({
+        cap: 'COUNT enabled non-archived prompts for one projectId',
+        marker: 'FROM app.project_prompt project_prompt',
+        migrationTarget: 'V4 warning diagnostics should expose enabled prompt count for the active config hash',
+        purpose: 'diagnose whether review indexing is needed for warning status',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'existence probe with LIMIT 1 over one project scope',
+        marker: 'FROM app.project_article pa',
+        migrationTarget: 'V4 warning diagnostics should expose article-scope presence without source-table probing',
+        purpose: 'diagnose whether a project has any articles in review scope',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'route-scope half of a LIMIT 1 article-scope existence probe for one projectId',
+        marker: 'FROM app.project_import_route pir',
+        migrationTarget: 'V4 warning diagnostics should expose route-scope article presence',
+        purpose: 'diagnose whether import-route scoped articles exist for warning status',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'single refresh-state row plus token-bounded legacy state summaries for one projectId',
+        marker: 'FROM app.project_mart_refresh_state',
+        migrationTarget:
+          'legacy mart refresh diagnostics should move behind a separate legacy diagnostics contract or be removed after V4 cutover',
+        purpose: 'report legacy mart refresh and dirty-materialization blockers separately from V4 readiness',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'dirty-token-bounded materialization summary joined to one project refresh-state row',
+        marker: 'FROM app.project_mart_dirty_materialization_state materialization',
+        migrationTarget:
+          'legacy dirty-materializer diagnostics should move behind a separate legacy diagnostics contract or be removed after V4 cutover',
+        purpose: 'report legacy dirty-materializer blockers separately from V4 readiness',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'dirty-token-bounded unresolved quarantine count joined to one project refresh-state row',
+        marker: 'FROM app.project_mart_dirty_refresh_article_quarantine quarantine',
+        migrationTarget:
+          'legacy dirty-refresh quarantine diagnostics should move behind a separate legacy diagnostics contract or be removed after V4 cutover',
+        purpose: 'report legacy quarantine blockers separately from V4 readiness',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'single large-rebuild state row for one projectId',
+        marker: 'FROM app.project_mart_large_rebuild_state',
+        migrationTarget:
+          'legacy large-rebuild diagnostics should move behind a separate legacy diagnostics contract or be removed after V4 cutover',
+        purpose: 'report legacy large-rebuild state separately from V4 manifest readiness',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'project-scoped V4 diagnostic summary repository call',
+        marker: 'getReviewServingDiagnostics({projectId',
+        migrationTarget: 'keep as V4 diagnostics source and stop mixing with legacy mart state in route code',
+        purpose: 'read V4 serving diagnostics and manifest readiness for the warning payload',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'project-scoped pending article refresh summary excluding resolved quarantine rows',
+        marker: 'FROM app.project_mart_refresh_article_state article_state',
+        migrationTarget:
+          'legacy article-refresh diagnostics should move behind a separate legacy diagnostics contract or be removed after V4 cutover',
+        purpose: 'report legacy queued article-refresh work separately from V4 readiness',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'service-level project-scoped quarantined article list',
+        marker: 'getProjectMartDirtyRefreshStateService().getQuarantinedArticlesForProject({projectId})',
+        migrationTarget:
+          'legacy quarantined-article diagnostics should move behind a separate legacy diagnostics contract or be removed after V4 cutover',
+        purpose: 'report legacy quarantined articles separately from V4 readiness',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'large-rebuild progress for one project and one current state row',
+        marker: 'getProjectMartLargeRebuildScopeProgress({projectId, state})',
+        migrationTarget:
+          'legacy large-rebuild progress should move behind a separate legacy diagnostics contract or be removed after V4 cutover',
+        purpose: 'report legacy large-rebuild progress separately from V4 readiness',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'owner registry snapshot summarized in memory',
+        marker: 'getDuckdbOwnerConnectionsOverview()).registry',
+        migrationTarget:
+          'owner/maintenance availability should stay in separate runtime diagnostics outside product readiness',
+        purpose: 'report whether maintenance-capable owner consumers are available',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'fresh maintenance leases for one project at the current request timestamp',
+        marker: 'getMaintenanceWorkLeaseService().getFreshProjectMaintenanceWorkLeases(projectId, currentNow)',
+        migrationTarget:
+          'maintenance lease state should stay in separate runtime diagnostics outside product readiness',
+        purpose: 'report in-flight maintenance work separately from V4 readiness',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'maintenance recovery context for one project at the current request timestamp',
+        marker: 'getMaintenanceWorkLeaseService().getProjectMaintenanceRecoveryContext(projectId, currentNow)',
+        migrationTarget:
+          'maintenance recovery state should stay in separate runtime diagnostics outside product readiness',
+        purpose: 'report maintenance retry/recovery state separately from V4 readiness',
+        workloadClass: 'foreground-diagnostic',
+      }),
     ],
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts',
   },
   {
     classification: 'boundedReviewDetailMetadata',
-    allowedMarkers: [
-      'FROM app.prompt',
-      'FROM app.model',
-      'getFullArticlesByIds([articleId]',
-      'FROM app.judgment j',
-      'FROM app.judgment_assessment',
+    sourceReads: [
+      sourceRead({
+        cap: 'prompt IDs returned by the keyed serving detail read for one article/project',
+        marker: 'FROM app.prompt',
+        migrationTarget: 'review.detail.judgments should include prompt display payloads',
+        purpose: 'hydrate prompt text for keyed V4 judgment detail rows',
+        workloadClass: 'foreground-detail',
+      }),
+      sourceRead({
+        cap: 'model IDs returned by the keyed serving detail read for one article/project',
+        marker: 'FROM app.model',
+        migrationTarget: 'review.detail.judgments should include model display payloads',
+        purpose: 'hydrate model display metadata for keyed V4 judgment detail rows',
+        workloadClass: 'foreground-detail',
+      }),
+      sourceRead({
+        cap: 'single explicit articleId via appQueryServiceCore.getFullArticlesByIds',
+        marker: 'getFullArticlesByIds([articleId]',
+        migrationTarget: 'review detail should hydrate article display data from keyed V4 article detail payloads',
+        purpose: 'hydrate the requested review-detail article',
+        workloadClass: 'foreground-detail',
+      }),
+      sourceRead({
+        cap: 'one articleId and one projectId, scoped by visible project judgment rules',
+        marker: 'FROM app.judgment j',
+        migrationTarget:
+          'remaining judgment fallback should move to review.detail.judgments or a keyed legacy-detail diagnostics contract',
+        purpose: 'fill detail rows not yet represented by keyed V4 judgment detail payloads',
+        workloadClass: 'foreground-detail',
+      }),
+      sourceRead({
+        cap: 'single articleId and projectId route-scope membership CTE',
+        marker: 'FROM app.project_import_route pir',
+        migrationTarget: 'visible judgment scope should be resolved from keyed V4/detail contracts',
+        purpose: 'bound fallback judgment rows to the requested project route scope',
+        workloadClass: 'foreground-detail',
+      }),
+      sourceRead({
+        cap: 'single articleId and projectId curated-scope membership CTE',
+        marker: 'FROM app.project_article pa',
+        migrationTarget: 'visible judgment scope should be resolved from keyed V4/detail contracts',
+        purpose: 'bound fallback judgment rows to the requested curated project scope',
+        workloadClass: 'foreground-detail',
+      }),
+      sourceRead({
+        cap: 'judgment IDs present in the assembled single-article detail payload',
+        marker: 'FROM app.judgment_assessment',
+        migrationTarget:
+          'judgment assessments should move to keyed review detail payloads or a keyed assessment overlay contract',
+        purpose: 'hydrate human assessment annotations for displayed detail judgments',
+        workloadClass: 'foreground-detail',
+      }),
+      sourceRead({
+        cap: 'single refresh-state row plus token-bounded legacy state summaries for one projectId',
+        marker: 'FROM app.project_mart_refresh_state',
+        migrationTarget:
+          'legacy mart freshness should move behind a separate diagnostics contract or be removed from detail payloads',
+        purpose: 'surface legacy mart freshness in review detail while V4 detail migration is incomplete',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'dirty-token-bounded materialization summary joined to one project refresh-state row',
+        marker: 'FROM app.project_mart_dirty_materialization_state materialization',
+        migrationTarget:
+          'legacy dirty-materializer freshness should move behind a separate diagnostics contract or be removed from detail payloads',
+        purpose: 'surface legacy dirty-materializer freshness in review detail while V4 detail migration is incomplete',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'dirty-token-bounded unresolved quarantine count joined to one project refresh-state row',
+        marker: 'FROM app.project_mart_dirty_refresh_article_quarantine quarantine',
+        migrationTarget:
+          'legacy quarantine freshness should move behind a separate diagnostics contract or be removed from detail payloads',
+        purpose: 'surface legacy quarantine freshness in review detail while V4 detail migration is incomplete',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'project import routes for one projectId',
+        marker: 'FROM app.project_import_route',
+        migrationTarget: 'Covidence related-record lookup should use selected-import V4/detail payloads',
+        purpose: 'limit related source-record lookup to import routes attached to the requested project',
+        workloadClass: 'foreground-detail',
+      }),
+      sourceRead({
+        cap: 'selected import route and source record key for one article/project',
+        marker: 'FROM app.article_import_route_source_record source_record',
+        migrationTarget: 'Covidence related-record detail should move to selected-import V4/detail payloads',
+        purpose: 'hydrate Covidence related records for the requested review-detail article',
+        workloadClass: 'foreground-detail',
+      }),
+      sourceRead({
+        cap: 'legacy related-record lookup constrained by one importRoute and one Covidence study key',
+        marker: 'FROM app.article article',
+        migrationTarget: 'legacy Covidence related-record fallback should move to selected-import V4/detail payloads',
+        purpose: 'hydrate legacy Covidence related records when selected source records are absent',
+        workloadClass: 'foreground-detail',
+      }),
+      sourceRead({
+        cap: 'project prompt rows for one projectId',
+        marker: 'FROM app.project_prompt pp',
+        migrationTarget: 'review detail should read prompt ordering and placeholder metadata from V4 prompt payloads',
+        purpose: 'hydrate prompt order, enablement, and placeholder metadata for the requested detail page',
+        workloadClass: 'foreground-detail',
+      }),
+      sourceRead({
+        cap: 'single project config row plus route IDs via appQueryServiceCore.getProjectReviewConfig',
+        marker: 'getAppQueryService().getProjectReviewConfig(projectId)',
+        migrationTarget: 'review detail should read project review config from V4 config/detail payloads',
+        purpose: 'interpret detail judgment and summary state for the requested project',
+        workloadClass: 'foreground-metadata',
+      }),
+      sourceRead({
+        cap: 'snapshot project IDs referenced by the single-article detail payload',
+        marker: 'FROM app.project',
+        migrationTarget: 'snapshot project names should move to keyed detail payloads',
+        purpose: 'hydrate project display names for snapshot judgments in review detail',
+        workloadClass: 'foreground-metadata',
+      }),
     ],
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts',
   },
   {
     classification: 'boundedPromptPreviewMetadataAndSampleArticle',
-    allowedMarkers: [
-      'FROM app.project_article project_article',
-      'FROM app.project',
-      'FROM app.project_prompt pp',
-      'FROM app.model m',
-      'getFullArticlesByIds([firstArticleId]',
+    sourceReads: [
+      sourceRead({
+        cap: 'first scoped article only; ORDER BY with LIMIT 1 for one projectId',
+        marker: 'FROM mart.project_scope_article scope',
+        migrationTarget:
+          'review.prompt.preview should be the only sample-article source after the unsafe fallback is removed',
+        purpose: 'diagnostic fallback to choose one sample article when V4 prompt-preview serving rows are unavailable',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'first curated article only; ORDER BY with LIMIT 1 for one projectId',
+        marker: 'FROM app.project_article project_article',
+        migrationTarget: 'remove after review.prompt.preview serving contract is mandatory',
+        purpose: 'last-resort diagnostic fallback to choose one sample article for prompt preview',
+        workloadClass: 'foreground-diagnostic',
+      }),
+      sourceRead({
+        cap: 'single project row for one projectId',
+        marker: 'FROM app.project',
+        migrationTarget: 'prompt preview should read project content settings from V4 review config payloads',
+        purpose: 'read project model and content settings needed to render the preview prompt',
+        workloadClass: 'foreground-metadata',
+      }),
+      sourceRead({
+        cap: 'single enabled prompt row for one projectId and promptId',
+        marker: 'FROM app.project_prompt pp',
+        migrationTarget: 'prompt preview should read prompt text from V4 prompt/config payloads',
+        purpose: 'read the selected enabled prompt text for preview rendering',
+        workloadClass: 'foreground-metadata',
+      }),
+      sourceRead({
+        cap: 'single model row for the project modelId',
+        marker: 'FROM app.model m',
+        migrationTarget: 'prompt preview should read model display/provider metadata from V4 config payloads',
+        purpose: 'read model provider metadata needed for token budgeting and prompt formatting',
+        workloadClass: 'foreground-metadata',
+      }),
+      sourceRead({
+        cap: 'single explicit articleId via appQueryServiceCore.getFullArticlesByIds',
+        marker: 'getFullArticlesByIds([firstArticleId]',
+        migrationTarget: 'prompt preview should hydrate article content from keyed V4 article preview payloads',
+        purpose: 'hydrate the one selected sample article for prompt preview rendering',
+        workloadClass: 'foreground-detail',
+      }),
     ],
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetPromptPreview.ts',
   },
+  {
+    classification: 'boundedArticleDetailHydration',
+    sourceReads: [
+      sourceRead({
+        cap: 'single explicit articleId via appQueryServiceCore.getFullArticlesByIds',
+        marker: 'getFullArticlesByIds([id])',
+        migrationTarget:
+          'article detail should use keyed V4 article/detail payloads or remain outside review foreground flow',
+        purpose: 'hydrate the requested article detail record',
+        workloadClass: 'foreground-detail',
+      }),
+      sourceRead({
+        cap: 'one articleId, ordered judgment history for that article only',
+        marker: 'FROM app.judgment j',
+        migrationTarget: 'article judgment history should move to keyed detail/history contracts',
+        purpose: 'hydrate judgment history for a single article detail page',
+        workloadClass: 'foreground-detail',
+      }),
+      sourceRead({
+        cap: 'snapshot project IDs referenced by the single-article judgment payload',
+        marker: 'FROM app.project',
+        migrationTarget: 'snapshot project display names should move to detail/history payloads',
+        purpose: 'hydrate project display names for snapshot judgments in article detail',
+        workloadClass: 'foreground-metadata',
+      }),
+    ],
+    routeFile: 'src/server/routes/ArticlesRoutes.ts',
+  },
 ] as const
+
+export const getReviewServingResidualReadMarkers = (entry: (typeof reviewServingResidualReadAllowlist)[number]) => {
+  return entry.sourceReads.map((read) => {
+    return read.marker
+  })
+}
 
 export const reviewServingResidualReadAuditedRouteFiles = reviewServingResidualReadAllowlist.map((entry) => {
   return entry.routeFile

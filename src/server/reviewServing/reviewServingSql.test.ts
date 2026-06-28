@@ -5,7 +5,10 @@ import {expect, test} from 'bun:test'
 
 import {reviewServingAdjacentRouteClassifications} from './reviewServingAdjacentRouteSurfaces.ts'
 import {getReviewServingReadContract} from './reviewServingReadContracts.ts'
-import {reviewServingResidualReadAllowlist} from './reviewServingResidualReadAllowlist.ts'
+import {
+  getReviewServingResidualReadMarkers,
+  reviewServingResidualReadAllowlist,
+} from './reviewServingResidualReadAllowlist.ts'
 import {
   assertReviewServingSqlShape,
   buildReviewServingRowsSql,
@@ -1037,7 +1040,7 @@ test('reviewServing SQL guard exclusions are classified maintenance or admission
 test('mounted review residual reads are explicitly allowlisted', () => {
   const violations = reviewServingResidualReadAllowlist.flatMap((entry) => {
     const fileText = readFileSync(join(workspaceRoot, entry.routeFile), 'utf8')
-    const missingMarkers = entry.allowedMarkers.filter((marker) => {
+    const missingMarkers = getReviewServingResidualReadMarkers(entry).filter((marker) => {
       return !fileText.includes(marker)
     })
 
