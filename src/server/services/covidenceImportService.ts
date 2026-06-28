@@ -22,7 +22,6 @@ import {
 } from './articleImportStoreService.ts'
 import {getComparisonProjectServingInvalidationService} from './comparisonProjectServingInvalidationService.ts'
 import {getOrCreateImmutablePromptTx, immutablePromptIdentityReviewServingFields} from './immutablePromptService.ts'
-import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
@@ -2249,15 +2248,9 @@ const syncCovidenceSeededProjectArticles = async (params: {
   })
   const currentArticleIdSet = new Set(currentArticleIds)
   const nextArticleIds = Array.from(new Set(params.articleIds))
-  const nextArticleIdSet = new Set(nextArticleIds)
   const addedArticleIds = nextArticleIds.filter((articleId) => {
     return !currentArticleIdSet.has(articleId)
   })
-  const scopeChanged =
-    currentArticleIds.length !== nextArticleIds.length
-    || currentArticleIds.some((articleId) => {
-      return !nextArticleIdSet.has(articleId)
-    })
 
   await deleteRemovedCovidenceSeededProjectArticles({
     articleIds: nextArticleIds,
@@ -2265,44 +2258,11 @@ const syncCovidenceSeededProjectArticles = async (params: {
     queryRunner,
   })
 
-  return nextArticleIds.length === 0
-    ? scopeChanged
-      ? getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-          projects: [{articleIds: currentArticleIds, projectId: params.projectId}],
-          reason: 'syncCovidenceProjectScopeFromConfig',
-          runner: queryRunner,
-        })
-      : undefined
-    : await insertCovidenceSeededProjectArticles({
-        articleIds: addedArticleIds,
-        projectId: params.projectId,
-        queryRunner,
-      }).then(() => {
-        return scopeChanged
-          ? getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-              projects: [
-                {
-                  articleIds: Array.from(new Set([...currentArticleIds, ...nextArticleIds])),
-                  projectId: params.projectId,
-                },
-              ],
-              reason: 'syncCovidenceProjectScopeFromConfig',
-              runner: queryRunner,
-            })
-          : undefined
-      })
-}
+  if (nextArticleIds.length === 0) {
+    return
+  }
 
-const markCovidenceSeededHumanJudgmentsDirty = async (params: {
-  articleIds: string[]
-  projectId: string
-  tx?: CovidenceProjectTx
-}) => {
-  await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-    projects: [{articleIds: params.articleIds, projectId: params.projectId}],
-    reason: 'seedCovidenceHumanJudgmentsFromConfig',
-    runner: params.tx,
-  })
+  await insertCovidenceSeededProjectArticles({articleIds: addedArticleIds, projectId: params.projectId, queryRunner})
 }
 
 const markCovidenceComparisonServingStaleForSummaryHumanJudgments = async (params: {
@@ -2820,7 +2780,6 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
       Promise.resolve(),
     )
 
-    await markCovidenceSeededHumanJudgmentsDirty({articleIds, projectId: project.id, tx: params.tx})
     await markCovidenceComparisonServingStaleForSummaryHumanJudgments({
       articleIds,
       projectId: project.id,
@@ -2900,7 +2859,6 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
     Promise.resolve(),
   )
 
-  await markCovidenceSeededHumanJudgmentsDirty({articleIds, projectId: project.id, tx: params.tx})
   await markCovidenceComparisonServingStaleForPromptHumanJudgments({articleIds, promptIds, runner: queryRunner})
 }
 

@@ -6,7 +6,6 @@ import {appendProjectScopeArticleReviewServingDelta} from '../reviewServing/proj
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
-import {getProjectMartDirtyRefreshStateService} from '../services/projectMartDirtyRefreshStateService.ts'
 
 type ProjectArticleMembershipCursor = {articleCreatedAt: string | null; articleId: string}
 
@@ -250,12 +249,6 @@ export const projectArticlesRoutes = new Elysia()
           sourceOperation: 'delete',
         })
       }
-
-      await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-        projects: [{articleIds: [articleId], projectId}],
-        reason: 'ProjectArticlesRoutes.delete',
-        runner: tx,
-      })
     })
 
     return {success: true}

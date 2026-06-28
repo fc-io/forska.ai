@@ -6,7 +6,6 @@ import {
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList} from './appQueryHelpers.ts'
 import {immutablePromptIdentityReviewServingFields} from './immutablePromptService.ts'
-import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
 
 const chunk = <T>(arr: T[], size: number): T[][] => {
   const out: T[][] = []
@@ -243,14 +242,6 @@ export const insertArticlesIntoProject = async (
         sourceMutationKey: `insertArticlesIntoProject.reviewConfig|${projectId}|${sourceUpdatedAt.toISOString()}`,
         sourceOperation: 'update',
         sourceUpdatedAt,
-      })
-    }
-
-    if (insertedProjectArticleRows.length > 0 || linkedPrompts > 0) {
-      await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-        projects: [{articleIds: validIds, projectId}],
-        reason: 'insertArticlesIntoProject',
-        runner: tx,
       })
     }
   })

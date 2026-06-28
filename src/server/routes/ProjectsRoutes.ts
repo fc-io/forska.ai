@@ -30,7 +30,6 @@ import {
   getOrCreateImmutablePromptTx,
   immutablePromptIdentityReviewServingFields,
 } from '../services/immutablePromptService.ts'
-import {getProjectMartDirtyRefreshStateService} from '../services/projectMartDirtyRefreshStateService.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {assertProjectIsActive, getProjectAccess} from './projectsRoutes/projectAccessGuard.ts'
@@ -1631,16 +1630,6 @@ export const projectsRoutes = new Elysia()
           sourceUpdatedAt: getReviewServingSourceTimestamp(createdProject.updatedAt),
         })
 
-        const dirtyProjects = await getProjectMartDirtyRefreshStateService().getDirtyProjectsForProjectIds(tx, [
-          createdProject.id,
-        ])
-
-        await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-          projects: dirtyProjects,
-          reason: 'ProjectsRoutes.post',
-          runner: tx,
-        })
-
         return getProjectValue(createdProject)
       })) as ReturnType<typeof getProjectValue>
 
@@ -2176,16 +2165,6 @@ export const projectsRoutes = new Elysia()
           ORDER BY pp.prompt_order ASC NULLS LAST
         `)
 
-          const dirtyProjects = await getProjectMartDirtyRefreshStateService().getDirtyProjectsForProjectIds(tx, [
-            params.id,
-          ])
-
-          await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-            projects: dirtyProjects,
-            reason: 'ProjectsRoutes.edit',
-            runner: tx,
-          })
-
           return promptCleanupSummary
             ? {project: getProjectValue(updatedProject), promptCleanupSummary, prompts: updatedPrompts}
             : {project: getProjectValue(updatedProject), prompts: updatedPrompts}
@@ -2235,6 +2214,13 @@ export const projectsRoutes = new Elysia()
       })
 
       if (updatedProject) {
+        await appendProjectReviewConfigDeltaIfNeeded(tx, {
+          changedReviewConfigFields: ['archived'],
+          projectId: params.id,
+          sourceMutationKey: `projectArchive|${params.id}|${getReviewServingSourceTimestamp(updatedProject.updatedAt)}`,
+          sourceOperation: 'update',
+          sourceUpdatedAt: getReviewServingSourceTimestamp(updatedProject.updatedAt),
+        })
         await tx.run(`
           UPDATE app.judgment_job
           SET status = CASE
@@ -2247,11 +2233,6 @@ export const projectsRoutes = new Elysia()
               END,
               pause_requested_at = current_timestamp,
               updated_at = current_timestamp
-          WHERE project_id = '${escapeSqlString(params.id)}'
-        `)
-        await getProjectMartDirtyRefreshStateService().clearProjectRefreshState({projectId: params.id, runner: tx})
-        await tx.run(`
-          DELETE FROM app.project_mart_large_rebuild_state
           WHERE project_id = '${escapeSqlString(params.id)}'
         `)
       }
@@ -2273,13 +2254,12 @@ export const projectsRoutes = new Elysia()
       })
 
       if (updatedProject) {
-        const refreshStateService = getProjectMartDirtyRefreshStateService()
-        const dirtyProjects = await refreshStateService.getDirtyProjectsForProjectScopeArticleIds(tx, [params.id])
-
-        await refreshStateService.markProjectsDirtyAtomically({
-          projects: dirtyProjects.length === 0 ? [{projectId: params.id}] : dirtyProjects,
-          reason: 'ProjectsRoutes.unarchive',
-          runner: tx,
+        await appendProjectReviewConfigDeltaIfNeeded(tx, {
+          changedReviewConfigFields: ['archived'],
+          projectId: params.id,
+          sourceMutationKey: `projectUnarchive|${params.id}|${getReviewServingSourceTimestamp(updatedProject.updatedAt)}`,
+          sourceOperation: 'update',
+          sourceUpdatedAt: getReviewServingSourceTimestamp(updatedProject.updatedAt),
         })
       }
 
@@ -2601,32 +2581,6 @@ export const projectsRoutes = new Elysia()
         projectId: clonedProject.id,
         sourceMutationKey: `projectClone|${params.id}|${clonedProject.id}`,
         sourceOperation: 'insert',
-      })
-
-      const clonedDirtyArticleRows = await tx.queryJson<{articleId: string}>(`
-        SELECT article_id AS articleId
-        FROM app.project_article
-        WHERE project_id = '${escapeSqlString(clonedProject.id)}'
-        UNION
-        SELECT article_import_route.article_id AS articleId
-        FROM app.project_import_route project_import_route
-        INNER JOIN app.article_import_route article_import_route
-          ON article_import_route.import_route_id = project_import_route.import_route_id
-        WHERE project_import_route.project_id = '${escapeSqlString(clonedProject.id)}'
-        ORDER BY articleId ASC
-      `)
-
-      await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-        projects: [
-          {
-            articleIds: clonedDirtyArticleRows.map((row) => {
-              return row.articleId
-            }),
-            projectId: clonedProject.id,
-          },
-        ],
-        reason: 'ProjectsRoutes.clone',
-        runner: tx,
       })
 
       return getProjectValue(clonedProject)

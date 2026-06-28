@@ -372,11 +372,10 @@ test('merging a prompt deletes colliding human judgment rows before rewriting pr
       AND article_id = '${articleId}'
     ORDER BY id
   `)
-  const [refreshState] = await queryDatabase<{dirtyToken: number; projectId: string}>(`
-    SELECT project_id AS projectId, CAST(dirty_token AS INTEGER) AS dirtyToken
+  const [dirtyStateCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*)::INTEGER AS count
     FROM app.project_mart_refresh_state
     WHERE project_id = '${projectId}'
-    LIMIT 1
   `)
   const [materializationState] = await queryDatabase<{projectId: string; targetDirtyToken: number}>(`
     SELECT
@@ -386,26 +385,22 @@ test('merging a prompt deletes colliding human judgment rows before rewriting pr
     WHERE project_id = '${projectId}'
     LIMIT 1
   `)
-  const [articleState] = await queryDatabase<{articleId: string; lastDirtyToken: number; projectId: string}>(`
-    SELECT
-      project_id AS projectId,
-      article_id AS articleId,
-      CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
+  const [articleStateCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*)::INTEGER AS count
     FROM app.project_mart_refresh_article_state
     WHERE project_id = '${projectId}'
-    LIMIT 1
   `)
 
   expect(response.status).toBe(200)
   expect(body).toEqual({success: true})
   expect(body.error).toBeUndefined()
   expect(remainingHumanJudgments).toEqual([{id: `${keepPromptId}-judgment-human`, promptId: keepPromptId}])
-  expect(refreshState).toEqual({dirtyToken: 1, projectId})
+  expect(Number(dirtyStateCount?.count ?? 0)).toBe(0)
   expect(materializationState).toBeUndefined()
-  expect(articleState).toEqual({articleId, lastDirtyToken: 1, projectId})
+  expect(Number(articleStateCount?.count ?? 0)).toBe(0)
 })
 
-test('deleting invalid judgments records bounded article dirtiness for affected projects', async () => {
+test('deleting invalid judgments records a V4 deleted-judgment delta', async () => {
   if (!app || !queryDatabase) {
     throw new Error('Test app not initialized')
   }
@@ -427,6 +422,7 @@ test('deleting invalid judgments records bounded article dirtiness for affected 
       id,
       article_id,
       prompt_id,
+      project_id,
       model_id,
       use_title,
       use_abstract,
@@ -439,6 +435,7 @@ test('deleting invalid judgments records bounded article dirtiness for affected 
       '${judgmentId}',
       '${articleId}',
       '${promptId}',
+      '${projectId}',
       '${modelId}',
       TRUE,
       TRUE,
@@ -464,32 +461,26 @@ test('deleting invalid judgments records bounded article dirtiness for affected 
     WHERE id = '${judgmentId}'
     LIMIT 1
   `)
-  const [refreshState] = await queryDatabase<{dirtyToken: number; projectId: string}>(`
-    SELECT project_id AS projectId, CAST(dirty_token AS INTEGER) AS dirtyToken
-    FROM app.project_mart_refresh_state
-    WHERE project_id = '${projectId}'
-    LIMIT 1
-  `)
-  const [refreshArticleState] = await queryDatabase<{
-    articleId: string
-    firstDirtyToken: number
-    lastDirtyToken: number
-    projectId: string
-  }>(`
+  const [deletedDelta] = await queryDatabase<{articleId: string; changeKind: string; projectId: string}>(`
     SELECT
-      project_id AS projectId,
       article_id AS articleId,
-      CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
-      CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
-    FROM app.project_mart_refresh_article_state
+      change_kind AS changeKind,
+      project_id AS projectId
+    FROM app.review_change_delta
     WHERE project_id = '${projectId}'
       AND article_id = '${articleId}'
+      AND change_kind = 'judgment.llm.deleted'
     LIMIT 1
+  `)
+  const [dirtyArticleCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*)::INTEGER AS count
+    FROM app.project_mart_refresh_article_state
+    WHERE project_id = '${projectId}'
   `)
 
   expect(response.status).toBe(200)
   expect(body).toEqual({data: {deletedCount: 1}, success: true})
   expect(deletedJudgment?.deletedAt).toBeTruthy()
-  expect(refreshState).toEqual({dirtyToken: 1, projectId})
-  expect(refreshArticleState).toEqual({articleId, firstDirtyToken: 1, lastDirtyToken: 1, projectId})
+  expect(deletedDelta).toEqual({articleId, changeKind: 'judgment.llm.deleted', projectId})
+  expect(Number(dirtyArticleCount?.count ?? 0)).toBe(0)
 })

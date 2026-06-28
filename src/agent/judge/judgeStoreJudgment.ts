@@ -6,7 +6,6 @@ import {
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../server/services/appQueryHelpers.ts'
 import {getComparisonProjectServingInvalidationService} from '../../server/services/comparisonProjectServingInvalidationService.ts'
-import {getProjectMartDirtyRefreshStateService} from '../../server/services/projectMartDirtyRefreshStateService.ts'
 import {getShortIdForPrompt, type ShortIdMapping} from './judgeGetPrompt.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 
@@ -337,11 +336,6 @@ export const judgeStoreJudgment = async (
         }, Promise.resolve())
 
         await appendLlmJudgmentReviewServingDeltas(runner, llmJudgmentDeltas)
-        await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({
-          articleIds: [articleId],
-          reason: 'judgeStoreJudgment',
-          runner,
-        })
         await getComparisonProjectServingInvalidationService().markComparisonProjectsServingStaleForLlmJudgments(
           promptIds.map((promptId) => {
             return {

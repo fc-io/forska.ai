@@ -200,26 +200,15 @@ test('subproject route reuses selected prompt ids from source projects', async (
   const subprojectPrompt = rows.find((row) => {
     return row.projectId === subprojectId
   })
-  const [refreshState] = await queryDatabase<{dirtyToken: number; projectId: string}>(`
-    SELECT project_id AS projectId, CAST(dirty_token AS INTEGER) AS dirtyToken
-    FROM app.project_mart_refresh_state
-    WHERE project_id = '${subprojectId}'
-    LIMIT 1
-  `)
-  const [refreshArticleState] = await queryDatabase<{
-    articleId: string
-    firstDirtyToken: number
-    lastDirtyToken: number
-    projectId: string
-  }>(`
+  const [scopeDelta] = await queryDatabase<{articleId: string; changeKind: string; projectId: string}>(`
     SELECT
-      project_id AS projectId,
       article_id AS articleId,
-      CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
-      CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
-    FROM app.project_mart_refresh_article_state
+      change_kind AS changeKind,
+      project_id AS projectId,
+    FROM app.review_change_delta
     WHERE project_id = '${subprojectId}'
       AND article_id = '${sourceArticleId}'
+      AND change_kind = 'projectScope.article.added'
     LIMIT 1
   `)
 
@@ -228,11 +217,9 @@ test('subproject route reuses selected prompt ids from source projects', async (
   expect(subprojectPrompt?.originalText).toBe(sourcePrompt?.originalText)
   expect(subprojectPrompt?.contentHash).toBe(sourcePrompt?.contentHash)
   expect(subprojectPrompt?.originProjectId).toBe(null)
-  expect(refreshState).toEqual({dirtyToken: 1, projectId: subprojectId})
-  expect(refreshArticleState).toEqual({
+  expect(scopeDelta).toEqual({
     articleId: sourceArticleId,
-    firstDirtyToken: 1,
-    lastDirtyToken: 1,
+    changeKind: 'projectScope.article.added',
     projectId: subprojectId,
   })
 
