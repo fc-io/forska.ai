@@ -555,20 +555,14 @@ test('markArticleProjectsDirtyAtomically resolves active affected projects befor
   ])
 })
 
-test('getDirtyProjectsForProjectIds queues project-wide materialization for current and previously materialized scope articles', () => {
+test('getDirtyProjectsForProjectIds writes project-wide scoped article dirty state directly', () => {
   const result = runRefreshStateScript<{
     dirtyProjects: Array<{articleIds?: string[]; projectId: string}>
     dirtyRows: ProjectMartRefreshArticleStateRecord[]
-    materializationRows: Array<{
-      insertedRowCount: number
-      materializationStatus: string
-      sourceScopeExpectedRowCount: number
-    }>
+    materializationRows: Array<{targetDirtyToken: number}>
   }>(`
-    const {getProjectMartDirtyMaterializationService} = await import('./src/server/services/projectMartDirtyMaterializationService.ts')
     const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
 
-    const materializationService = getProjectMartDirtyMaterializationService()
     const service = getProjectMartDirtyRefreshStateService()
 
     await database.run(\`
@@ -598,23 +592,6 @@ test('getDirtyProjectsForProjectIds queues project-wide materialization for curr
       projects: dirtyProjects,
       reason: 'refresh-state-test.scope-delta',
     })
-    const [claim] = await materializationService.claimDirtyMaterializations({
-      sourceKind: 'project_scope_article',
-      workerId: 'refresh-state-materialization-worker',
-      limit: 1,
-      leaseMs: 5000,
-      now: new Date('2026-04-02T10:05:00.000Z'),
-    })
-    await materializationService.materializeProjectScopeDirtyBatch({
-      ...claim,
-      batchSize: 10,
-      now: new Date('2026-04-02T10:05:01.000Z'),
-    })
-    await materializationService.materializeProjectScopeDirtyBatch({
-      ...claim,
-      batchSize: 10,
-      now: new Date('2026-04-02T10:05:02.000Z'),
-    })
     const dirtyRows = await database.queryJson(\`
       SELECT
         project_id AS projectId,
@@ -630,9 +607,7 @@ test('getDirtyProjectsForProjectIds queues project-wide materialization for curr
     \`)
     const materializationRows = await database.queryJson(\`
       SELECT
-        CAST(inserted_row_count AS INTEGER) AS insertedRowCount,
-        materialization_status AS materializationStatus,
-        CAST(source_scope_expected_row_count AS INTEGER) AS sourceScopeExpectedRowCount
+        CAST(target_dirty_token AS INTEGER) AS targetDirtyToken
       FROM app.project_mart_dirty_materialization_state
       WHERE project_id = 'refresh-project-1'
       ORDER BY target_dirty_token ASC
@@ -643,9 +618,7 @@ test('getDirtyProjectsForProjectIds queues project-wide materialization for curr
   `)
 
   expect(result.dirtyProjects).toEqual([{projectId: 'refresh-project-1'}])
-  expect(result.materializationRows).toEqual([
-    {insertedRowCount: 2, materializationStatus: 'completed', sourceScopeExpectedRowCount: 2},
-  ])
+  expect(result.materializationRows).toEqual([])
   expect(
     result.dirtyRows.map((row) => {
       return {articleId: row.articleId, firstDirtyToken: row.firstDirtyToken, lastDirtyToken: row.lastDirtyToken}
@@ -853,7 +826,7 @@ test('completeProjectRefresh trims resolved article state and failProjectRefresh
   expect(result.failedState?.lastFailedAt).toBeTruthy()
 })
 
-test('dirty completion advances only through contiguous materialization barriers', () => {
+test('dirty completion advances only after direct project-wide scoped article rows complete', () => {
   const result = runRefreshStateScript<{
     completionAfterBarrier: {completedState: ProjectMartDirtyRefreshStateRecord | null; isClaimComplete: boolean}
     completionBeforeBarrier: {completedState: ProjectMartDirtyRefreshStateRecord | null; isClaimComplete: boolean}
@@ -884,13 +857,6 @@ test('dirty completion advances only through contiguous materialization barriers
       reason: 'project-wide-barrier',
       now: new Date('2026-04-02T12:11:00.000Z'),
     })
-    await database.run(\`
-      UPDATE app.project_mart_dirty_materialization_state
-      SET materialization_status = 'failed'
-      WHERE project_id = 'refresh-project-1'
-        AND source_kind = 'project_scope_article'
-        AND target_dirty_token = 1
-    \`)
     await service.markProjectsDirtyAtomically({
       projects: [{projectId: 'refresh-project-1', articleIds: ['refresh-article-1']}],
       reason: 'article-after-barrier',
@@ -923,15 +889,8 @@ test('dirty completion advances only through contiguous materialization barriers
       WHERE project_id = 'refresh-project-1'
       LIMIT 1
     \`)
-    await database.run(\`
-      UPDATE app.project_mart_dirty_materialization_state
-      SET materialization_status = 'completed'
-      WHERE project_id = 'refresh-project-1'
-        AND source_kind = 'project_scope_article'
-        AND target_dirty_token = 1
-    \`)
     const completionAfterBarrier = await service.completeDirtyArticleBatchForClaim({
-      articleIds: [],
+      articleIds: ['refresh-article-2'],
       claimedToken: 2,
       projectId: 'refresh-project-1',
       workerId: 'worker-1',

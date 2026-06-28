@@ -1301,12 +1301,7 @@ test('project transfer commit writer creates project rows and preserves safe pac
     identifierCount: number
     importRouteCount: number
     martCounts: {projectScopeArticleCount: number; reviewServingCount: number}
-    materializationRows: Array<{
-      expectedRowCount: number
-      materializationStatus: string
-      projectId: string
-      targetDirtyToken: number
-    }>
+    materializationRows: Array<{projectId: string; targetDirtyToken: number}>
     projectArticleCount: number
     projectImportRouteCount: number
     projectRow: {
@@ -1562,7 +1557,7 @@ test('project transfer commit writer creates project rows and preserves safe pac
     const [identifierCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.article_identifier")
     const refreshRows = await database.queryJson("SELECT project_id AS projectId, CAST(dirty_token AS INTEGER) AS dirtyToken, last_request_reason AS reason FROM app.project_mart_refresh_state ORDER BY project_id ASC")
     const dirtyArticleRows = await database.queryJson("SELECT project_id AS projectId, article_id AS articleId, CAST(first_dirty_token AS INTEGER) AS firstDirtyToken, CAST(last_dirty_token AS INTEGER) AS lastDirtyToken FROM app.project_mart_refresh_article_state ORDER BY project_id ASC, article_id ASC")
-    const materializationRows = await database.queryJson("SELECT project_id AS projectId, CAST(target_dirty_token AS INTEGER) AS targetDirtyToken, materialization_status AS materializationStatus, CAST(source_scope_expected_row_count AS INTEGER) AS expectedRowCount FROM app.project_mart_dirty_materialization_state ORDER BY project_id ASC, target_dirty_token ASC")
+    const materializationRows = await database.queryJson("SELECT project_id AS projectId, CAST(target_dirty_token AS INTEGER) AS targetDirtyToken FROM app.project_mart_dirty_materialization_state ORDER BY project_id ASC, target_dirty_token ASC")
     const [martCounts] = await database.queryJson("SELECT (SELECT COUNT(*)::INTEGER FROM mart.project_scope_article) AS projectScopeArticleCount, (SELECT COUNT(*)::INTEGER FROM mart.review_article_serving) AS reviewServingCount")
 
     console.log(JSON.stringify({
@@ -1650,13 +1645,32 @@ test('project transfer commit writer creates project rows and preserves safe pac
     projectId: result.targetProjectId,
     reason: 'projectTransferCommit.import',
   })
-  expect(result.dirtyArticleRows).toEqual([
-    {articleId: 'reuse-article', firstDirtyToken: 1, lastDirtyToken: 1, projectId: 'reuse-active-project'},
-    {articleId: 'reuse-article', firstDirtyToken: 1, lastDirtyToken: 1, projectId: 'reuse-outside-date-project'},
-  ])
-  expect(result.materializationRows).toEqual([
-    {expectedRowCount: 2, materializationStatus: 'pending', projectId: result.targetProjectId, targetDirtyToken: 1},
-  ])
+  expect(result.dirtyArticleRows).toHaveLength(4)
+  expect(result.dirtyArticleRows).toContainEqual({
+    articleId: 'reuse-article',
+    firstDirtyToken: 1,
+    lastDirtyToken: 1,
+    projectId: 'reuse-active-project',
+  })
+  expect(result.dirtyArticleRows).toContainEqual({
+    articleId: 'reuse-article',
+    firstDirtyToken: 1,
+    lastDirtyToken: 1,
+    projectId: 'reuse-outside-date-project',
+  })
+  expect(result.dirtyArticleRows).toContainEqual({
+    articleId: newArticleRow?.id ?? '',
+    firstDirtyToken: 1,
+    lastDirtyToken: 1,
+    projectId: result.targetProjectId,
+  })
+  expect(result.dirtyArticleRows).toContainEqual({
+    articleId: 'reuse-article',
+    firstDirtyToken: 1,
+    lastDirtyToken: 1,
+    projectId: result.targetProjectId,
+  })
+  expect(result.materializationRows).toEqual([])
   expect(result.martCounts).toEqual({projectScopeArticleCount: 0, reviewServingCount: 0})
   expect(result.warningCodes).toContain('targetArticleImportRouteOmitted')
 })

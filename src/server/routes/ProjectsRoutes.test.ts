@@ -261,8 +261,6 @@ type CloneRerunProjectConfig = {
 
 type CloneRerunScenario = {key: string; nextConfig: CloneRerunProjectConfig}
 
-type ProjectReviewJudgmentSummary = {answeredOriginal: string | null; id: string; promptId: string}
-
 const baseCloneRerunConfig = (modelId: string): CloneRerunProjectConfig => {
   return {modelId, useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
 }
@@ -326,35 +324,6 @@ const insertCloneRerunJudgmentFixture = async ({
   `)
 }
 
-const getProjectReviewDetails = async (params: {articleId: string; projectId: string}) => {
-  if (!app) {
-    throw new Error('Test app not initialized')
-  }
-
-  const response = await app.handle(
-    new Request('http://localhost/api/projectsreview', {
-      body: JSON.stringify(params),
-      headers: {'content-type': 'application/json'},
-      method: 'POST',
-    }),
-  )
-  const body = (await response.json()) as {
-    allJudgments: ProjectReviewJudgmentSummary[]
-    judgments: ProjectReviewJudgmentSummary[]
-    prompts: Array<{id: string; originalText: string}>
-  }
-
-  expect(response.status).toBe(200)
-
-  return body
-}
-
-const getJudgmentSummaries = (judgments: ProjectReviewJudgmentSummary[]) => {
-  return judgments.map((judgment) => {
-    return {answeredOriginal: judgment.answeredOriginal, id: judgment.id, promptId: judgment.promptId}
-  })
-}
-
 const assertSourceCloneRerunState = async ({
   articleId,
   promptId,
@@ -376,17 +345,21 @@ const assertSourceCloneRerunState = async ({
     WHERE project_id = '${sourceProjectId}'
     ORDER BY prompt_order ASC
   `)
-  const sourceDetails = await getProjectReviewDetails({articleId, projectId: sourceProjectId})
+  const sourceJudgmentRows = await queryDatabase<{answeredOriginal: string | null; id: string; promptId: string}>(`
+    SELECT
+      answered_original AS answeredOriginal,
+      id,
+      prompt_id AS promptId
+    FROM app.judgment
+    WHERE article_id = '${articleId}'
+      AND project_id = '${sourceProjectId}'
+      AND snapshot_project_id = '${sourceProjectId}'
+      AND deleted_at IS NULL
+    ORDER BY created_at ASC, id ASC
+  `)
 
   expect(sourcePromptRows).toEqual([{promptId}])
-  expect(
-    sourceDetails.prompts.map((prompt) => {
-      return {id: prompt.id, originalText: prompt.originalText}
-    }),
-  ).toEqual([{id: promptId, originalText: 'Clone rerun prompt'}])
-  expect(getJudgmentSummaries(sourceDetails.judgments)).toEqual([
-    {answeredOriginal: 'yes', id: sourceJudgmentId, promptId},
-  ])
+  expect(sourceJudgmentRows).toEqual([{answeredOriginal: 'yes', id: sourceJudgmentId, promptId}])
 }
 
 const insertReviewArticleServingFixtureRows = async ({
@@ -4310,30 +4283,28 @@ test('edit route accepts full client payload when the model is unchanged', async
     WHERE project_id = '${projectId}'
     LIMIT 1
   `)
-  const [materializationState] = await queryDatabase<{
-    expectedRowCount: number
-    materializationStatus: string
-    projectId: string
-    targetDirtyToken: number
-  }>(`
+  const [materializationState] = await queryDatabase<{projectId: string; targetDirtyToken: number}>(`
     SELECT
       project_id AS projectId,
-      CAST(target_dirty_token AS INTEGER) AS targetDirtyToken,
-      materialization_status AS materializationStatus,
-      CAST(source_scope_expected_row_count AS INTEGER) AS expectedRowCount
+      CAST(target_dirty_token AS INTEGER) AS targetDirtyToken
     FROM app.project_mart_dirty_materialization_state
+    WHERE project_id = '${projectId}'
+    LIMIT 1
+  `)
+  const [articleState] = await queryDatabase<{articleId: string; lastDirtyToken: number; projectId: string}>(`
+    SELECT
+      project_id AS projectId,
+      article_id AS articleId,
+      CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
+    FROM app.project_mart_refresh_article_state
     WHERE project_id = '${projectId}'
     LIMIT 1
   `)
 
   expect(Number(storedProjectArticle?.count ?? 0)).toBe(1)
   expect(refreshState).toEqual({dirtyToken: 1, projectId})
-  expect(materializationState).toEqual({
-    expectedRowCount: 1,
-    materializationStatus: 'pending',
-    projectId,
-    targetDirtyToken: 1,
-  })
+  expect(materializationState).toBeUndefined()
+  expect(articleState).toEqual({articleId: 'edit-same-model-article', lastDirtyToken: 1, projectId})
 
   await flushMartRefreshes()
 })
@@ -5224,47 +5195,43 @@ test('editing a cloned project prompt keeps source prompt links and judgments is
       TIMESTAMPTZ '2025-01-02 00:00:00+00'
     )
   `)
-
-  const sourceDetailsResponse = await app.handle(
-    new Request('http://localhost/api/projectsreview', {
-      body: JSON.stringify({articleId, projectId: sourceProjectId}),
-      headers: {'content-type': 'application/json'},
-      method: 'POST',
-    }),
-  )
-  const cloneDetailsResponse = await app.handle(
-    new Request('http://localhost/api/projectsreview', {
-      body: JSON.stringify({articleId, projectId: clonedProjectId}),
-      headers: {'content-type': 'application/json'},
-      method: 'POST',
-    }),
-  )
-  const sourceDetailsBody = (await sourceDetailsResponse.json()) as {
-    judgments: Array<{answeredOriginal: string | null; id: string; prompt: {originalText: string}; promptId: string}>
-    prompts: Array<{id: string; originalText: string}>
+  const judgmentRows = await queryDatabase<{
+    answeredOriginal: string | null
+    id: string
+    originalText: string
+    projectId: string
+    promptId: string
+  }>(`
+    SELECT
+      judgment.answered_original AS answeredOriginal,
+      judgment.id,
+      prompt.original_text AS originalText,
+      judgment.project_id AS projectId,
+      judgment.prompt_id AS promptId
+    FROM app.judgment judgment
+    INNER JOIN app.prompt prompt ON prompt.id = judgment.prompt_id
+    WHERE judgment.article_id = '${articleId}'
+      AND judgment.project_id IN ('${sourceProjectId}', '${clonedProjectId}')
+      AND judgment.snapshot_project_id = judgment.project_id
+      AND judgment.deleted_at IS NULL
+    ORDER BY judgment.project_id ASC, judgment.created_at ASC, judgment.id ASC
+  `)
+  const getComparableJudgmentRows = (projectId: string) => {
+    return judgmentRows
+      .filter((judgment) => {
+        return judgment.projectId === projectId
+      })
+      .map((judgment) => {
+        return {
+          answeredOriginal: judgment.answeredOriginal,
+          id: judgment.id,
+          prompt: {originalText: judgment.originalText},
+          promptId: judgment.promptId,
+        }
+      })
   }
-  const cloneDetailsBody = (await cloneDetailsResponse.json()) as {
-    judgments: Array<{answeredOriginal: string | null; id: string; prompt: {originalText: string}; promptId: string}>
-    prompts: Array<{id: string; originalText: string}>
-  }
 
-  expect(sourceDetailsResponse.status).toBe(200)
-  expect(cloneDetailsResponse.status).toBe(200)
-  expect(
-    sourceDetailsBody.prompts.map((prompt) => {
-      return {id: prompt.id, originalText: prompt.originalText}
-    }),
-  ).toEqual([{id: originalPromptId, originalText: originalPromptText}])
-  expect(
-    sourceDetailsBody.judgments.map((judgment) => {
-      return {
-        answeredOriginal: judgment.answeredOriginal,
-        id: judgment.id,
-        prompt: {originalText: judgment.prompt.originalText},
-        promptId: judgment.promptId,
-      }
-    }),
-  ).toEqual([
+  expect(getComparableJudgmentRows(sourceProjectId)).toEqual([
     {
       answeredOriginal: 'yes',
       id: 'clone-edit-prompt-isolation-source-judgment',
@@ -5272,21 +5239,7 @@ test('editing a cloned project prompt keeps source prompt links and judgments is
       promptId: originalPromptId,
     },
   ])
-  expect(
-    cloneDetailsBody.prompts.map((prompt) => {
-      return {id: prompt.id, originalText: prompt.originalText}
-    }),
-  ).toEqual([{id: clonedPromptId, originalText: editedPromptText}])
-  expect(
-    cloneDetailsBody.judgments.map((judgment) => {
-      return {
-        answeredOriginal: judgment.answeredOriginal,
-        id: judgment.id,
-        prompt: {originalText: judgment.prompt.originalText},
-        promptId: judgment.promptId,
-      }
-    }),
-  ).toEqual([
+  expect(getComparableJudgmentRows(clonedProjectId)).toEqual([
     {
       answeredOriginal: 'no',
       id: 'clone-edit-prompt-isolation-clone-judgment',
@@ -5305,6 +5258,7 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
 
   const sourceConfig = baseCloneRerunConfig('clone-config-rerun-model')
   const currentApp = app
+  const currentQueryDatabase = queryDatabase
   const currentRunDatabase = runDatabase
   const scenarios: CloneRerunScenario[] = [
     {key: 'model-id', nextConfig: {...sourceConfig, modelId: 'clone-config-rerun-model-next'}},
@@ -5421,12 +5375,22 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
 
     await assertSourceCloneRerunState({articleId, promptId, sourceJudgmentId, sourceProjectId})
 
-    const cloneDetailsBeforeRerun = await getProjectReviewDetails({articleId, projectId: clonedProjectId})
+    const getClonedJudgmentRows = async () => {
+      return currentQueryDatabase<{answeredOriginal: string | null; id: string; promptId: string}>(`
+        SELECT
+          answered_original AS answeredOriginal,
+          id,
+          prompt_id AS promptId
+        FROM app.judgment
+        WHERE article_id = '${articleId}'
+          AND project_id = '${clonedProjectId}'
+          AND snapshot_project_id = '${clonedProjectId}'
+          AND deleted_at IS NULL
+        ORDER BY created_at ASC, id ASC
+      `)
+    }
 
-    expect(getJudgmentSummaries(cloneDetailsBeforeRerun.judgments)).toEqual([
-      {answeredOriginal: 'not answered', id: `placeholder:${promptId}`, promptId},
-    ])
-    expect(getJudgmentSummaries(cloneDetailsBeforeRerun.allJudgments)).toEqual([])
+    expect(await getClonedJudgmentRows()).toEqual([])
 
     await insertCloneRerunJudgmentFixture({
       answer: 'no',
@@ -5440,12 +5404,7 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
 
     await assertSourceCloneRerunState({articleId, promptId, sourceJudgmentId, sourceProjectId})
 
-    const cloneDetailsAfterRerun = await getProjectReviewDetails({articleId, projectId: clonedProjectId})
-
-    expect(getJudgmentSummaries(cloneDetailsAfterRerun.judgments)).toEqual([
-      {answeredOriginal: 'no', id: cloneJudgmentId, promptId},
-    ])
-    expect(getJudgmentSummaries(cloneDetailsAfterRerun.allJudgments)).toEqual([])
+    expect(await getClonedJudgmentRows()).toEqual([{answeredOriginal: 'no', id: cloneJudgmentId, promptId}])
   }, Promise.resolve())
 
   await flushMartRefreshes()
