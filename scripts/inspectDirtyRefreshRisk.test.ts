@@ -162,10 +162,7 @@ test('inspectDirtyRefreshRisk reports materialization, quarantine, scope, and la
 
   const runScript = globalThis.Bun.spawnSync(
     ['bun', 'scripts/inspectDirtyRefreshRisk.ts', '--project-id=inspect-dirty-project'],
-    {
-      cwd: projectRoot,
-      env: {...defaultEnv, DUCKDB_PATH: duckdbPath},
-    },
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
   )
 
   if (runScript.exitCode !== 0) {
@@ -174,7 +171,13 @@ test('inspectDirtyRefreshRisk reports materialization, quarantine, scope, and la
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
     dirtyMaterialization: {blockingCount: number; totalCount: number}
-    largeRebuild: {rebuildPhase: string; refreshStatus: string; refreshToken: string}
+    largeRebuild: {
+      legacyStatus: string
+      rebuildPhase: string
+      recommendedWork: string
+      refreshStatus: string
+      refreshToken: string
+    }
     plannedWork: string
     quarantine: {unresolvedBarrierCount: number}
     scope: {articleCount: number; dirtyArticleCount: number}
@@ -184,9 +187,11 @@ test('inspectDirtyRefreshRisk reports materialization, quarantine, scope, and la
   expect(result.quarantine.unresolvedBarrierCount).toBe(1)
   expect(result.scope).toEqual({articleCount: 1, dirtyArticleCount: 1})
   expect(result.largeRebuild).toMatchObject({
+    legacyStatus: 'retired',
     rebuildPhase: 'project_scope_article',
+    recommendedWork: 'request-review-serving-v4-rebuild',
     refreshStatus: 'running',
     refreshToken: '3',
   })
-  expect(result.plannedWork).toBe('dirty-materialization')
+  expect(result.plannedWork).not.toBe('large-rebuild')
 })

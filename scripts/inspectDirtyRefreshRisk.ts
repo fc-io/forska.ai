@@ -45,6 +45,11 @@ type LargeRebuildStateRow = {
   workerId: string | null
 }
 
+type LegacyLargeRebuildDiagnostic = LargeRebuildStateRow & {
+  legacyStatus: 'retired'
+  recommendedWork: 'request-review-serving-v4-rebuild'
+}
+
 type CountRow = {count: number | string}
 
 const defaultDirtyRefreshIncrementalArticleThreshold = 3
@@ -236,6 +241,10 @@ const getHasBlockingLargeRebuild = (dirtyToken: number, row: LargeRebuildStateRo
   return row !== null && toNumber(row.refreshToken) >= dirtyToken && row.supersededAt === null
 }
 
+const getLegacyLargeRebuildDiagnostic = (row: LargeRebuildStateRow | null): LegacyLargeRebuildDiagnostic | null => {
+  return row === null ? null : {...row, legacyStatus: 'retired', recommendedWork: 'request-review-serving-v4-rebuild'}
+}
+
 const getPlannedWork = ({
   blockingMaterializationCount,
   dirtyArticleCount,
@@ -250,7 +259,7 @@ const getPlannedWork = ({
   return blockingMaterializationCount > 0
     ? 'dirty-materialization'
     : getHasBlockingLargeRebuild(dirtyToken, largeRebuildState)
-      ? 'large-rebuild'
+      ? 'v4-rebuild-request'
       : dirtyArticleCount > 0
         ? 'dirty-refresh'
         : 'idle'
@@ -281,7 +290,7 @@ const getRiskSnapshot = async ({incrementalArticleThreshold, projectId}: CliOpti
     },
     dirtyToken,
     hasTrackedJudgmentJobs,
-    largeRebuild: largeRebuildState,
+    largeRebuild: getLegacyLargeRebuildDiagnostic(largeRebuildState),
     lastCompletedDirtyToken: toNumber(refreshState?.lastCompletedDirtyToken),
     leaseExpiresAt: refreshState?.leaseExpiresAt ?? null,
     plannedRefreshMode,
