@@ -1,6 +1,6 @@
 ---
 name: forskai-duckdb
-description: Use ONLY when touching DuckDB, duckdbMigrations, schema work, db:* commands, marts, queues, cron jobs, judgment queries, OOM errors, or database runtime safety.
+description: Use ONLY when touching DuckDB, duckdbMigrations, schema work, db:* commands, marts, queues, caches, internal intermediate state, cron jobs, maintenance tasks, judgment queries, OOM errors, or database runtime safety.
 ---
 
 # Forska DuckDB
@@ -26,6 +26,8 @@ description: Use ONLY when touching DuckDB, duckdbMigrations, schema work, db:* 
 - Scope background work by active rows, project, dirty token, cursor, batch limit, or an explicit time window.
 - Persist relational keys and prefer compact lookup or projection tables for maintenance state.
 - Raising `DUCKDB_MEMORY_LIMIT` is an emergency mitigation, not the root fix.
+- For internal intermediate state, queues, caches, and marts, do not add backward-compatibility shims unless explicitly required.
+- Prefer a clear cutover that deletes or rebuilds obsolete intermediate state over preserving legacy rows or parallel paths.
 
 ## OOM Errors
 

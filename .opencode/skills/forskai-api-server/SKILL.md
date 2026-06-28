@@ -1,6 +1,6 @@
 ---
 name: forskai-api-server
-description: Use ONLY when touching server routes, Elysia, Eden/RPC, API paths, request bodies, t.File upload routes, ArkType validation, errors, environment variables, or server runtime wiring.
+description: Use ONLY when touching server routes, Elysia, Eden/RPC, API paths, request bodies, t.File upload routes, ArkType validation, errors, environment variables, server runtime wiring, runtime paths, imports, or local file storage.
 ---
 
 # Forska API And Server
