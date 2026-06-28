@@ -25,6 +25,7 @@ import {
   type ReviewServingImportRunArticleChangeKind,
   type ReviewServingSourceOperation,
 } from '../reviewServing/reviewServingDeltaLedger.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getJsonValue, getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {
@@ -192,6 +193,14 @@ type ArticleImportRefreshState = {
 }
 
 const articleImportBatchSize = 500
+
+export const articleImportStoreWorkloadContext: DuckdbWorkloadContext = {
+  allowsTempSpill: true,
+  fallbackIntent: 'reject',
+  routeOrJobKey: 'import.storeArticles',
+  timeoutMs: 120_000,
+  workloadClass: 'background.importStore',
+}
 
 const getValueChunks = <TValue>(values: TValue[], chunkSize = articleImportBatchSize): TValue[][] => {
   return values.length === 0
@@ -2118,7 +2127,7 @@ export const syncImportedArticlesWithTx = async (params: {
 export const storeImportedArticles = async (rows: ArticleImportStoreRow[]) => {
   await getAppDatabaseService().transaction(async (tx) => {
     return await storeImportedArticlesInTx(tx, rows)
-  })
+  }, articleImportStoreWorkloadContext)
 }
 
 export type {ArticleImportStoreRow}

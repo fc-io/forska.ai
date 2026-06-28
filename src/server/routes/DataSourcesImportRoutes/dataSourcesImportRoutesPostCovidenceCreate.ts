@@ -3,6 +3,7 @@ import {randomUUID} from 'node:crypto'
 import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
+import {articleImportStoreWorkloadContext} from '../../services/articleImportStoreService.ts'
 import {
   buildCovidencePackageConfig,
   buildCovidencePromptDefinition,
@@ -212,7 +213,7 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
       const {packageRows: _packageRows, ...responseImportResult} = importResult
 
       return {...responseImportResult, covidenceProject, covidencePrompts}
-    })
+    }, articleImportStoreWorkloadContext)
     .catch(async (error) => {
       deleteCovidencePackageFiles(dataSourceId)
       throw error
