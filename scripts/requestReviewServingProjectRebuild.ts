@@ -5,8 +5,8 @@ import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbSer
 
 type CliOptions = {projectId: string | null; reason: string}
 
-const defaultReason = 'requestProjectLargeRebuild'
-const workloadContext = getMaintenanceDuckdbWorkloadContext('requestProjectLargeRebuild')
+const defaultReason = 'requestReviewServingProjectRebuild'
+const workloadContext = getMaintenanceDuckdbWorkloadContext('requestReviewServingProjectRebuild')
 
 const getArgValue = (names: string[]) => {
   const matchedArgument = process.argv.slice(2).find((argument) => {
@@ -25,7 +25,7 @@ const getCliOptions = (): CliOptions => {
   }
 }
 
-const requestProjectLargeRebuildCli = async () => {
+const requestReviewServingProjectRebuildCli = async () => {
   const options = getCliOptions()
 
   if (!options.projectId) {
@@ -34,7 +34,7 @@ const requestProjectLargeRebuildCli = async () => {
     return
   }
 
-  await withDuckdbMaintenanceAccess('request project large rebuild', async () => {
+  await withDuckdbMaintenanceAccess('request review-serving project rebuild', async () => {
     const [project] = await getAppDatabaseService().queryJson<{id: string}>(
       `
       SELECT id
@@ -72,4 +72,4 @@ const requestProjectLargeRebuildCli = async () => {
   })
 }
 
-await requestProjectLargeRebuildCli()
+await requestReviewServingProjectRebuildCli()

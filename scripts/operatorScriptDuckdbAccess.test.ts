@@ -82,15 +82,15 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     ],
     path: 'scripts/requestJudgmentFactRepair.ts',
   },
-  'db:duck:request-project-large-rebuild': {
+  'db:duck:request-review-serving-project-rebuild': {
     commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
     description: 'V4 project rebuild request',
     mustContain: [
       'withDuckdbMaintenanceAccess',
-      "getMaintenanceDuckdbWorkloadContext('requestProjectLargeRebuild')",
+      "getMaintenanceDuckdbWorkloadContext('requestReviewServingProjectRebuild')",
       'requestReviewServingV4Rebuild',
     ],
-    path: 'scripts/requestProjectLargeRebuild.ts',
+    path: 'scripts/requestReviewServingProjectRebuild.ts',
   },
   'db:duck:request-review-serving-large-rebuild': {
     commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
