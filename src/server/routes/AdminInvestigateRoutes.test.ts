@@ -1020,11 +1020,7 @@ test('admin project mart large rebuild run route is retired for the selected pro
       status: string
     }
 
-    expect(responseBody).toMatchObject({
-      projectId: 'project-admin-large-rebuild-run',
-      retired: true,
-      status: 'retired',
-    })
+    expect(responseBody).toMatchObject({projectId: 'project-admin-large-rebuild-run', retired: true, status: 'retired'})
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
@@ -1203,4 +1199,36 @@ test('admin project mart large rebuild note route is retired', () => {
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
+})
+
+test('admin project mart dirty-materialization requeue route is retired', async () => {
+  const {Elysia} = await import('elysia')
+  const {adminInvestigateRoutes} = await import('./AdminInvestigateRoutes.ts')
+  const app = new Elysia().use(adminInvestigateRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/admin/project-mart-dirty-materialization-requeue', {
+      body: JSON.stringify({
+        projectId: 'project-admin-dirty-materialization-requeue',
+        sourceKind: 'project_scope',
+        targetDirtyToken: 42,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const responseBody = (await response.json()) as {
+    projectId: string
+    retired: boolean
+    sourceKind: string
+    status: string
+    targetDirtyToken: number
+  }
+
+  expect(responseBody).toMatchObject({
+    projectId: 'project-admin-dirty-materialization-requeue',
+    retired: true,
+    sourceKind: 'project_scope',
+    status: 'retired',
+    targetDirtyToken: 42,
+  })
 })

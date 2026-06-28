@@ -9,7 +9,6 @@ import {
   getJudgmentJobSqliteHealthProjectionService,
   type JudgmentJobSqliteHealthProjectionReader,
 } from '../services/judgmentJobSqliteHealthProjectionService.ts'
-import {getProjectMartDirtyMaterializationService} from '../services/projectMartDirtyMaterializationService.ts'
 import {
   getProjectMartLargeRebuildPhaseIndex,
   getProjectMartLargeRebuildScopeProgress,
@@ -46,7 +45,6 @@ import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
 
 const appDatabaseService = getAppDatabaseService()
 const appQueryService = getAppQueryService()
-const projectMartDirtyMaterializationService = getProjectMartDirtyMaterializationService()
 export const workerRuntimeDiagnosticsPath = '/api/admin/worker-runtime-diagnostics'
 
 type JudgmentJobReadPathMode = 'local-sqlite' | 'owner-duckdb-projection' | 'ownerless-read-only-projection'
@@ -341,6 +339,11 @@ type RetiredProjectMartLargeRebuildMutationResponse = {
   status: 'retired'
 }
 
+type RetiredProjectMartDirtyMaterializationMutationResponse = RetiredProjectMartLargeRebuildMutationResponse & {
+  sourceKind: string
+  targetDirtyToken: number
+}
+
 const getRetiredProjectMartLargeRebuildMutationResponse = (
   projectId: string,
 ): RetiredProjectMartLargeRebuildMutationResponse => {
@@ -349,6 +352,21 @@ const getRetiredProjectMartLargeRebuildMutationResponse = (
     projectId,
     retired: true,
     status: 'retired',
+  }
+}
+
+const getRetiredProjectMartDirtyMaterializationMutationResponse = (params: {
+  projectId: string
+  sourceKind: string
+  targetDirtyToken: number
+}): RetiredProjectMartDirtyMaterializationMutationResponse => {
+  return {
+    message: 'Legacy project mart dirty-materialization mutations are retired; enqueue V4 review-serving rebuild work.',
+    projectId: params.projectId,
+    retired: true,
+    sourceKind: params.sourceKind,
+    status: 'retired',
+    targetDirtyToken: params.targetDirtyToken,
   }
 }
 
@@ -1013,7 +1031,7 @@ export const adminInvestigateRoutes = new Elysia()
   .post(
     '/api/admin/project-mart-dirty-materialization-requeue',
     async ({body}) => {
-      return projectMartDirtyMaterializationService.requeueDirtyMaterialization({
+      return getRetiredProjectMartDirtyMaterializationMutationResponse({
         projectId: body.projectId,
         sourceKind: body.sourceKind,
         targetDirtyToken: body.targetDirtyToken,
