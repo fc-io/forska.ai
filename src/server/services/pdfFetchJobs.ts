@@ -54,6 +54,11 @@ type DurablePdfFetchJobRow = {
 }
 
 const DEFAULT_CONCURRENCY = 5
+const pdfFetchWorkloadContext = {
+  fallbackIntent: 'reject' as const,
+  routeOrJobKey: 'review.pdf.selection',
+  workloadClass: 'background.review.pdfFetch',
+}
 
 const normalizeArticleIds = (articleIds: string[]): string[] => {
   const trimmed = articleIds
@@ -140,7 +145,7 @@ const fetchAndStoreForRow = async (row: PdfFetchRow) => {
       sourceOperation: 'update',
       sourceUpdatedAt: updatedAt,
     })
-  })
+  }, pdfFetchWorkloadContext)
   return result
 }
 
@@ -165,12 +170,15 @@ const fetchAndStorePdfForRowSafe = async (row: PdfFetchRow): Promise<PdfFetchBat
         }
         return `${columnNameMap[key] ?? key} = ${getSqlLiteral(value)}`
       })
-      await getAppDatabaseService().run(`
+      await getAppDatabaseService().runBackground(
+        `
         UPDATE app.article
         SET ${updateParts.join(', ')},
             updated_at = ${getTimestampLiteral(new Date())}
         WHERE id = '${escapeSqlString(row.id)}'
-      `)
+      `,
+        pdfFetchWorkloadContext,
+      )
       return {...emptyPdfFetchBatchStats(), attempted: 1, failed: 1}
     })
 }
@@ -215,14 +223,15 @@ export const processPdfFetchArticleIds = async (args: {
     return emptyPdfFetchBatchStats()
   }
 
-  const rows = await getAppDatabaseService().queryJson<{
+  const rows = await getAppDatabaseService().queryJsonBackground<{
     id: string
     arxivId: string | null
     doi: string | null
     sourceMetadata: unknown
     fullTextPDF: string | null
     fullTextSource: string | null
-  }>(`
+  }>(
+    `
     SELECT
       id,
       arxiv_id AS arxivId,
@@ -232,7 +241,9 @@ export const processPdfFetchArticleIds = async (args: {
       full_text_source AS fullTextSource
     FROM app.article
     WHERE id IN (${getQuotedStringList(ids).join(', ')})
-  `)
+  `,
+    {...pdfFetchWorkloadContext, maxResultRows: ids.length},
+  )
   const normalizedRows = rows.map((row) => {
     return {...row, sourceMetadata: getArticleSourceMetadataValue(row.sourceMetadata)}
   })

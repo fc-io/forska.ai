@@ -12,3 +12,15 @@ test('PDF fetch jobs do not expose process-local job state', () => {
   expect(source).not.toContain('getPdfFetchJob =')
   expect(source).toContain('getPdfFetchJobFromDatabase')
 })
+
+test('PDF fetch batch processing uses background workload context and appends deltas', () => {
+  const source = readFileSync(sourcePath, 'utf8')
+
+  expect(source).toContain("routeOrJobKey: 'review.pdf.selection'")
+  expect(source).toContain("workloadClass: 'background.review.pdfFetch'")
+  expect(source).toContain('queryJsonBackground')
+  expect(source).toContain('runBackground')
+  expect(source).toContain('maxResultRows: ids.length')
+  expect(source).toContain('appendArticleReviewServingDeltas(tx')
+  expect(source).toContain("changedFields: result?.fullTextPDF ? ['fullText', 'fullTextHtml', 'fullTextPDF'] : []")
+})

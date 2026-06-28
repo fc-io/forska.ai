@@ -25,11 +25,18 @@ const DOCLING_CONVERSION_TIMEOUT_MS = 600_000 // 10 minutes
 const MAX_CONVERSION_ATTEMPTS = 3
 const DEFAULT_BATCH_SIZE = 5
 const DEFAULT_CONCURRENCY = 1
+const MAX_RUNNING_JOB_PROJECTS_PER_SCAN = 100
+const MAX_PROJECT_IMPORT_ROUTES_PER_SCAN = 100
 // Maximum number of concurrent batch runs allowed
 const MAX_CONCURRENT_BATCHES = 3
 const fullTextConversionLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const fullTextConversionWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 const fullTextConversionComponent = 'fullTextConversionJobs'
+const fullTextConversionWorkloadContext = {
+  fallbackIntent: 'reject' as const,
+  routeOrJobKey: 'fullText.conversion.cron',
+  workloadClass: 'background.fullText.conversion',
+}
 
 const normalizePositiveInt = (value: number | null | undefined, fallback: number): number => {
   const raw = value == null ? fallback : value
@@ -70,13 +77,14 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
 
   // Step 1: Get running jobs with their projects
   const runningJobsQueryStartedAt = Date.now()
-  const runningJobsWithProjects = await getAppDatabaseService().queryJson<{
+  const runningJobsWithProjects = await getAppDatabaseService().queryJsonBackground<{
     jobId: string
     projectId: string
     useFulltext: boolean
     dateFrom: unknown
     dateTo: unknown
-  }>(`
+  }>(
+    `
     SELECT
       jj.id AS jobId,
       p.id AS projectId,
@@ -87,7 +95,10 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
     INNER JOIN app.project p ON jj.project_id = p.id
     WHERE jj.status = 'running'
     ORDER BY p.use_fulltext DESC
-  `)
+    LIMIT ${MAX_RUNNING_JOB_PROJECTS_PER_SCAN}
+  `,
+    {...fullTextConversionWorkloadContext, maxResultRows: MAX_RUNNING_JOB_PROJECTS_PER_SCAN},
+  )
 
   fullTextConversionLogger.log('fullTextConversion:runningJobsQueried', '[fullTextConversion] Running jobs queried', {
     component: fullTextConversionComponent,
@@ -122,11 +133,16 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
 
     // Try importRoute path first
     const projectRoutesQueryStartedAt = Date.now()
-    const projectRoutes = await getAppDatabaseService().queryJson<{importRouteId: string}>(`
+    const projectRoutes = await getAppDatabaseService().queryJsonBackground<{importRouteId: string}>(
+      `
       SELECT import_route_id AS importRouteId
       FROM app.project_import_route
       WHERE project_id = '${escapeSqlString(projectId)}'
-    `)
+      ORDER BY import_route_id ASC
+      LIMIT ${MAX_PROJECT_IMPORT_ROUTES_PER_SCAN}
+    `,
+      {...fullTextConversionWorkloadContext, maxResultRows: MAX_PROJECT_IMPORT_ROUTES_PER_SCAN, projectId},
+    )
     fullTextConversionLogger.log(
       'fullTextConversion:projectRoutesQueried',
       '[fullTextConversion] Project import routes queried',
@@ -143,7 +159,8 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
         return r.importRouteId
       })
       const articlesViaRouteQueryStartedAt = Date.now()
-      const articlesViaRoute = await getAppDatabaseService().queryJson<ArticleForConversion>(`
+      const articlesViaRoute = await getAppDatabaseService().queryJsonBackground<ArticleForConversion>(
+        `
         SELECT
           a.id AS id,
           a.full_text_pdf AS fullTextPDF,
@@ -154,7 +171,9 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
           AND ${[...baseConditions, ...dateConditions].join(' AND ')}
         ORDER BY a.article_created_at DESC NULLS LAST
         LIMIT ${remaining}
-      `)
+      `,
+        {...fullTextConversionWorkloadContext, maxResultRows: remaining, projectId},
+      )
       fullTextConversionLogger.log(
         'fullTextConversion:articlesViaImportRouteQueried',
         '[fullTextConversion] Articles via import route queried',
@@ -178,7 +197,8 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
 
     // Try project_articles path
     const articlesViaProjectQueryStartedAt = Date.now()
-    const articlesViaDirect = await getAppDatabaseService().queryJson<ArticleForConversion>(`
+    const articlesViaDirect = await getAppDatabaseService().queryJsonBackground<ArticleForConversion>(
+      `
       SELECT
         a.id AS id,
         a.full_text_pdf AS fullTextPDF,
@@ -189,7 +209,9 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
         AND ${[...baseConditions, ...dateConditions].join(' AND ')}
       ORDER BY a.article_created_at DESC NULLS LAST
       LIMIT ${remaining}
-    `)
+    `,
+      {...fullTextConversionWorkloadContext, maxResultRows: remaining, projectId},
+    )
     fullTextConversionLogger.log(
       'fullTextConversion:articlesViaProjectQueried',
       '[fullTextConversion] Articles via project queried',
@@ -213,7 +235,9 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
   if (collectedArticles.length < batchSize) {
     const remaining = batchSize - collectedArticles.length
     const fallbackQueryStartedAt = Date.now()
-    const fallbackArticles = await getAppDatabaseService().queryJson<ArticleForConversion>(`
+    const fallbackLimit = remaining + seenIds.size
+    const fallbackArticles = await getAppDatabaseService().queryJsonBackground<ArticleForConversion>(
+      `
       SELECT
         id,
         full_text_pdf AS fullTextPDF,
@@ -221,8 +245,10 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
       FROM app.article a
       WHERE ${baseConditions.join(' AND ')}
       ORDER BY a.created_at DESC
-      LIMIT ${remaining + seenIds.size}
-    `)
+      LIMIT ${fallbackLimit}
+    `,
+      {...fullTextConversionWorkloadContext, maxResultRows: fallbackLimit},
+    )
     fullTextConversionLogger.log(
       'fullTextConversion:fallbackArticlesQueried',
       '[fullTextConversion] Fallback articles queried',
@@ -351,7 +377,7 @@ const convertArticle = async ({
         sourceOperation: 'update',
         sourceUpdatedAt,
       })
-    })
+    }, fullTextConversionWorkloadContext)
 
     fullTextConversionLogger.log(
       'fullTextConversion:articleConversionSucceeded',
@@ -379,7 +405,8 @@ const convertArticle = async ({
     const attempts = (article.fullTextConversionAttempts ?? 0) + 1
     const isFinalFailure = isPerm || attempts >= MAX_CONVERSION_ATTEMPTS
 
-    await getAppDatabaseService().run(`
+    await getAppDatabaseService().runBackground(
+      `
       UPDATE app.article
       SET full_text_conversion_status = ${isFinalFailure ? `'failed'` : 'NULL'},
           full_text_conversion_error = ${getSqlLiteral(errorMessage)},
@@ -393,7 +420,9 @@ const convertArticle = async ({
           full_text_conversion_attempts = ${attempts},
           updated_at = current_timestamp
       WHERE id = '${escapeSqlString(article.id)}'
-    `)
+    `,
+      fullTextConversionWorkloadContext,
+    )
 
     fullTextConversionWarningLogger.warn(
       `fullTextConversion:articleConversion:${isFinalFailure ? 'failed' : 'retry'}`,
