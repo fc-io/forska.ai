@@ -166,24 +166,10 @@ export const reviewServingResidualReadAllowlist = [
     classification: 'boundedReviewDetailMetadata',
     sourceReads: [
       sourceRead({
-        cap: 'project prompt rows for one projectId',
-        marker: 'FROM app.project_prompt pp',
-        migrationTarget: 'review detail should read prompt ordering and placeholder metadata from V4 prompt payloads',
-        purpose: 'hydrate prompt order, enablement, and placeholder metadata for the requested detail page',
-        workloadClass: 'foreground-detail',
-      }),
-      sourceRead({
         cap: 'single project config row plus route IDs via appQueryServiceCore.getProjectReviewConfig',
         marker: 'getAppQueryService().getProjectReviewConfig(projectId)',
         migrationTarget: 'review detail should read project review config from V4 config/detail payloads',
-        purpose: 'interpret detail judgment and summary state for the requested project',
-        workloadClass: 'foreground-metadata',
-      }),
-      sourceRead({
-        cap: 'snapshot project IDs referenced by the single-article detail payload',
-        marker: 'FROM app.project',
-        migrationTarget: 'snapshot project names should move to keyed detail payloads',
-        purpose: 'hydrate project display names for snapshot judgments in review detail',
+        purpose: 'interpret content flags and human summary mode for the requested project',
         workloadClass: 'foreground-metadata',
       }),
     ],

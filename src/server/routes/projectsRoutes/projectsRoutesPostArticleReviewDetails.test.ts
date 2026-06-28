@@ -125,10 +125,6 @@ beforeEach(() => {
     }
   }
   queryJsonRef.current = async (statement) => {
-    if (statement.includes('FROM app.project_prompt pp')) {
-      return [getPromptRow('prompt-1', 0)]
-    }
-
     throw new Error(`legacy detail query should not run: ${statement}`)
   }
   reviewServingRowsRef.current = async () => {
@@ -195,6 +191,8 @@ const getServingJudgmentRow = () => {
       explanation: 'because',
       id: 'judgment-1',
       isAnswered: true,
+      model: {id: 'model-1', name: 'Model One', provider: 'openai', thinking: 'high', version: 'v1'},
+      prompt: getPromptRow('prompt-1', 0),
       quotes: [],
       updatedAt: '2024-01-04T00:00:00.000Z',
     },
@@ -240,7 +238,15 @@ test('project review details hydrates article, judgments, and assessments from V
   const response = await postReviewDetailsRequest()
   const body = (await response.json()) as {
     article: {articleSummary: string; articleTitle: string; fullText: string; id: string}
-    judgments: Array<{assessments: Array<{id: string}>; id: string; prompt: {originalText: string}}>
+    judgments: Array<{
+      assessments: Array<{id: string}>
+      id: string
+      modelName: string | null
+      modelProvider: string | null
+      modelThinking: string | null
+      modelVersion: string | null
+      prompt: {originalText: string}
+    }>
     martFreshness: null
     status?: string
   }
@@ -255,6 +261,10 @@ test('project review details hydrates article, judgments, and assessments from V
   })
   expect(body.judgments[0]?.id).toBe('judgment-1')
   expect(body.judgments[0]?.prompt.originalText).toBe('Prompt 1')
+  expect(body.judgments[0]?.modelName).toBe('Model One')
+  expect(body.judgments[0]?.modelProvider).toBe('openai')
+  expect(body.judgments[0]?.modelThinking).toBe('high')
+  expect(body.judgments[0]?.modelVersion).toBe('v1')
   expect(body.judgments[0]?.assessments[0]?.id).toBe('assessment-1')
   expect(body.martFreshness).toBeNull()
   expect(

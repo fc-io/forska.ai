@@ -91,8 +91,12 @@ test('judgment payload projection separates llm and human payload kinds across o
         humanJudgmentUpdatedAt: '2026-01-03T00:00:00.000Z',
         isAnswered: true,
         payloadReferenceKind: 'human_prompt',
+        promptCriteriaDisposition: 'include',
+        promptHeading: 'Prompt heading',
         promptId: 'prompt-1',
         promptOrder: 1,
+        promptOriginalText: 'Prompt text',
+        promptType: 'string',
       },
       {
         answer: 'maybe',
@@ -103,8 +107,12 @@ test('judgment payload projection separates llm and human payload kinds across o
         humanJudgmentUpdatedAt: '2026-01-04T00:00:00.000Z',
         isAnswered: true,
         payloadReferenceKind: 'human_summary',
+        promptCriteriaDisposition: null,
+        promptHeading: null,
         promptId: 'summary',
         promptOrder: -1,
+        promptOriginalText: 'Overall human screening decision',
+        promptType: 'summary',
       },
     ],
     llmRows: [
@@ -125,9 +133,18 @@ test('judgment payload projection separates llm and human payload kinds across o
         judgmentId: 'judgment-1',
         judgmentUpdatedAt: '2026-01-02T00:00:00.000Z',
         modelId: 'model-1',
+        modelDisplayName: 'Model One',
+        modelMetadataJson: {options: {thinking: 'high'}},
+        modelProvider: 'openai',
+        modelThinking: 'high',
+        modelVersion: 'v1',
         placeholderKind: null,
+        promptCriteriaDisposition: 'include',
+        promptHeading: 'Prompt heading',
         promptId: 'prompt-1',
         promptOrder: 1,
+        promptOriginalText: 'Prompt text',
+        promptType: 'string',
         quotes: ['quote one'],
         snapshotProjectId: 'project-1',
         snapshotProjectModelName: 'model name',
@@ -149,9 +166,18 @@ test('judgment payload projection separates llm and human payload kinds across o
         judgmentId: null,
         judgmentUpdatedAt: null,
         modelId: null,
+        modelDisplayName: 'Model One',
+        modelMetadataJson: null,
+        modelProvider: 'openai',
+        modelThinking: null,
+        modelVersion: null,
         placeholderKind: 'llm.unanswered',
+        promptCriteriaDisposition: 'exclude',
+        promptHeading: 'Prompt two heading',
         promptId: 'prompt-2',
         promptOrder: 2,
+        promptOriginalText: 'Prompt two text',
+        promptType: 'string',
         quotes: null,
         snapshotProjectId: null,
         snapshotProjectModelName: null,
@@ -176,6 +202,11 @@ test('judgment payload projection separates llm and human payload kinds across o
   expect(joined).toContain('quote one')
   expect(joined).toContain('assessment-1')
   expect(joined).toContain('payloadReference')
+  expect(joined).toContain('Prompt text')
+  expect(joined).toContain('Prompt heading')
+  expect(joined).toContain('Model One')
+  expect(joined).toContain('openai')
+  expect(joined).toContain('high')
   expect(joined).toContain('human_summary')
   expect(joined).toContain('2026-01-02T00:00:00.000Z')
   expect(joined).toContain('2026-01-04T00:00:00.000Z')
@@ -229,6 +260,9 @@ test('judgment payload projection replaces only dirty article detail rows', asyn
   expect(llmSelect).toContain("VALUES ('article-1')")
   expect(llmSelect).toContain('COALESCE(prompt.archived, FALSE) = FALSE')
   expect(llmSelect).toContain('ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC')
+  expect(llmSelect).toContain('prompt.original_text AS prompt_original_text')
+  expect(llmSelect).toContain('provider_connection.provider_kind AS modelProvider')
+  expect(llmSelect).toContain("json_extract_string(model.metadata_json, '$.options.thinking') AS modelThinking")
   expect(llmSelect).toContain('INNER JOIN article_id_filter dirty ON dirty.article_id = scope.article_id')
   expect(llmDeleteStatement).toContain("article_id IN ('article-1')")
   expect(llmDeleteStatement).toContain("list_mode_key IS NOT DISTINCT FROM 'llm'")
