@@ -87,6 +87,59 @@ const seedProjectArticleFixture = async (prefix: string) => {
   return {articleId, projectId}
 }
 
+const seedProjectArticleMembershipFixture = async (prefix: string) => {
+  if (!database) {
+    throw new Error('Database not initialized')
+  }
+
+  const connectionId = `${prefix}-connection`
+  const modelId = `${prefix}-model`
+  const projectId = `${prefix}-project`
+  const importedFromProjectId = `${prefix}-imported-from-project`
+  const articleRows = [
+    {createdAt: '2026-01-03T00:00:00.000Z', id: `${prefix}-article-3`, title: `${prefix} Article 3`},
+    {createdAt: '2026-01-02T00:00:00.000Z', id: `${prefix}-article-2`, title: `${prefix} Article 2`},
+    {createdAt: '2026-01-01T00:00:00.000Z', id: `${prefix}-article-1`, title: `${prefix} Article 1`},
+  ]
+  const importedArticle = articleRows[0]
+
+  if (!importedArticle) {
+    throw new Error('Membership fixture article not initialized')
+  }
+
+  await database.run(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none');
+
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', '${modelId}', '${modelId}', '${modelId}', 'manual', TRUE);
+
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES
+      ('${projectId}', '${projectId}', '${modelId}', TRUE, TRUE, FALSE, FALSE),
+      ('${importedFromProjectId}', '${prefix} Imported Project', '${modelId}', TRUE, TRUE, FALSE, FALSE);
+
+    INSERT INTO app.article (id, article_title, article_created_at)
+    VALUES ${articleRows
+      .map((article) => {
+        return `('${article.id}', '${article.title}', TIMESTAMPTZ '${article.createdAt}')`
+      })
+      .join(', ')};
+
+    INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
+    VALUES ('${prefix}-project-article-3', '${projectId}', '${importedArticle.id}', '${importedFromProjectId}');
+
+    INSERT INTO mart.project_scope_article (project_id, article_id, in_curated_scope, in_route_scope, article_created_at)
+    VALUES ${articleRows
+      .map((article) => {
+        return `('${projectId}', '${article.id}', TRUE, FALSE, TIMESTAMPTZ '${article.createdAt}')`
+      })
+      .join(', ')};
+  `)
+
+  return {articleRows, importedFromProjectId, projectId}
+}
+
 const getProjectArticleCount = async (fixture: {articleId: string; projectId: string}) => {
   if (!database) {
     throw new Error('Database not initialized')
@@ -180,4 +233,89 @@ test('project article delete rolls back when dirty marking fails', async () => {
       reason: 'ProjectArticlesRoutes.delete',
     },
   ])
+})
+
+test('project article membership listing uses cursor pagination over project-scope state', async () => {
+  if (!app) {
+    throw new Error('Test app not initialized')
+  }
+
+  const fixture = await seedProjectArticleMembershipFixture('project-article-membership-cursor')
+  const [newestArticle, middleArticle, oldestArticle] = fixture.articleRows
+
+  if (!newestArticle || !middleArticle || !oldestArticle) {
+    throw new Error('Membership fixture articles not initialized')
+  }
+
+  const firstResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${fixture.projectId}/articles?page=1&limit=2`),
+  )
+  const firstBody = (await firstResponse.json()) as {
+    articles: Array<{
+      articleTitle: string
+      id: string
+      importedFromProjectId: string | null
+      importedFromProjectName: string | null
+    }>
+    hasMore: boolean
+    nextCursor: string | null
+    totalCount: number | null
+    totalPages: number | null
+  }
+
+  expect(firstResponse.status).toBe(200)
+  expect(firstBody.articles).toEqual([
+    {
+      articleTitle: newestArticle.title,
+      id: newestArticle.id,
+      importedFromProjectId: fixture.importedFromProjectId,
+      importedFromProjectName: 'project-article-membership-cursor Imported Project',
+    },
+    {
+      articleTitle: middleArticle.title,
+      id: middleArticle.id,
+      importedFromProjectId: null,
+      importedFromProjectName: null,
+    },
+  ])
+  expect(firstBody.hasMore).toBe(true)
+  expect(typeof firstBody.nextCursor).toBe('string')
+  expect(firstBody.totalCount).toBeNull()
+  expect(firstBody.totalPages).toBeNull()
+
+  const secondResponse = await app.handle(
+    new Request(
+      `http://localhost/api/projects/${fixture.projectId}/articles?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? '')}`,
+    ),
+  )
+  const secondBody = (await secondResponse.json()) as {
+    articles: Array<{id: string}>
+    hasMore: boolean
+    nextCursor: string | null
+  }
+
+  expect(secondResponse.status).toBe(200)
+  expect(
+    secondBody.articles.map((article) => {
+      return article.id
+    }),
+  ).toEqual([oldestArticle.id])
+  expect(secondBody.hasMore).toBe(false)
+  expect(secondBody.nextCursor).toBeNull()
+})
+
+test('project article membership listing rejects unbounded legacy deep pages', async () => {
+  if (!app) {
+    throw new Error('Test app not initialized')
+  }
+
+  const fixture = await seedProjectArticleMembershipFixture('project-article-membership-deep-page')
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${fixture.projectId}/articles?page=2&limit=2`),
+  )
+
+  expect(response.status).toBe(400)
+  expect(await response.json()).toEqual({
+    error: 'Use cursor pagination for project article membership after the first page.',
+  })
 })
