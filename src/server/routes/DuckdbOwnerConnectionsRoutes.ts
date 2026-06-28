@@ -1,6 +1,5 @@
 import {Elysia, t} from 'elysia'
 
-import {getDuckdbMartMaintenanceService} from '../services/getDuckdbMartMaintenanceService.ts'
 import {
   assertDuckdbOwnerConnectionHeartbeatCompatible,
   getDuckdbOwnerConnectionsOverview,
@@ -99,12 +98,7 @@ export const duckdbOwnerConnectionsRoutes = new Elysia()
     }
   })
   .get('/api/duckdb_owner_connections', async () => {
-    return {
-      data: {
-        ...(await getDuckdbOwnerConnectionsOverview()),
-        martRefresh: {throughput: getDuckdbMartMaintenanceService().getThroughputSnapshot()},
-      },
-    }
+    return {data: {...(await getDuckdbOwnerConnectionsOverview())}}
   })
   .post(
     '/api/duckdb_owner_connections/heartbeat',
