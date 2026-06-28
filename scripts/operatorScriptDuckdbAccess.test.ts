@@ -92,15 +92,15 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     ],
     path: 'scripts/requestReviewServingProjectRebuild.ts',
   },
-  'db:duck:request-review-serving-large-rebuild': {
+  'db:duck:request-review-serving-all-projects-rebuild': {
     commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
     description: 'V4 rebuild request',
     mustContain: [
       'withDuckdbMaintenanceAccess',
-      "getMaintenanceDuckdbWorkloadContext('requestReviewServingLargeRebuild')",
+      "getMaintenanceDuckdbWorkloadContext('requestReviewServingAllProjectsRebuild')",
       'requestReviewServingV4Rebuild',
     ],
-    path: 'scripts/requestReviewServingLargeRebuild.ts',
+    path: 'scripts/requestReviewServingAllProjectsRebuild.ts',
   },
   'db:duck:run-archived-project-bounded-cleanup': {
     commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
@@ -187,4 +187,5 @@ test('package no longer exposes legacy mart refresh or large-rebuild worker scri
   expect(commandSurface).not.toContain('runProjectMartRefreshWorker')
   expect(commandSurface).not.toContain('runProjectMartLargeRebuild')
   expect(commandSurface).not.toContain('project-mart-large-rebuild')
+  expect(commandSurface).not.toContain('request-review-serving-large-rebuild')
 })

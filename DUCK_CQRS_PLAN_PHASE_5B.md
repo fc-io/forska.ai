@@ -18,32 +18,32 @@ Phase 5B does not claim that every legacy mart refresh/rebuild implementation is
 
 ## Completed Workstreams
 
-| Status | Theme | Evidence |
-|---|---|---|
-| [x] | V4 rebuild request API foundation | Added durable `app.review_rebuild_request`, request-owned chunk fields, request admission, retry/over-budget metadata, claim gating, repository tests, and shared V4 request service. |
-| [x] | Operator request script cutover | Rewired `requestProjectLargeRebuild`, `requestReviewServingLargeRebuild`, and `requestJudgmentFactRepair` to create V4 rebuild requests rather than legacy `project_mart_large_rebuild_state` rows. |
-| [x] | Startup and heartbeat cutover | Removed normal maintenance startup calls for legacy refresh and large-rebuild heartbeats; startup now starts the V4 projector heartbeat. |
-| [x] | Package-script cutover | Normal large-rebuild worker package scripts were renamed to explicit `legacy-admin-*` commands with `--legacy-admin-ack=legacy-large-rebuild`. |
-| [x] | Recovery command first cutover | `recoverDirtyRefreshClaims --recover` now creates V4 rebuild requests rather than shelling into legacy refresh or large-rebuild worker scripts. |
-| [x] | Warning side-effect removal | Review-warning reads no longer scan `mart.judgment_fact`, enqueue missing visible judgment fact repair, or bootstrap legacy large rebuilds. |
-| [x] | Focused static guards | Added `reviewServingPhase5BStaticGuards.test.ts` for startup, warning side effects, recovery, package commands, and legacy-admin acknowledgement coverage. |
+| Status | Theme                             | Evidence                                                                                                                                                                                                  |
+| ------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [x]    | V4 rebuild request API foundation | Added durable `app.review_rebuild_request`, request-owned chunk fields, request admission, retry/over-budget metadata, claim gating, repository tests, and shared V4 request service.                     |
+| [x]    | Operator request script cutover   | Rewired `requestProjectLargeRebuild`, `requestReviewServingAllProjectsRebuild`, and `requestJudgmentFactRepair` to create V4 rebuild requests rather than legacy `project_mart_large_rebuild_state` rows. |
+| [x]    | Startup and heartbeat cutover     | Removed normal maintenance startup calls for legacy refresh and large-rebuild heartbeats; startup now starts the V4 projector heartbeat.                                                                  |
+| [x]    | Package-script cutover            | Normal large-rebuild worker package scripts were renamed to explicit `legacy-admin-*` commands with `--legacy-admin-ack=legacy-large-rebuild`.                                                            |
+| [x]    | Recovery command first cutover    | `recoverDirtyRefreshClaims --recover` now creates V4 rebuild requests rather than shelling into legacy refresh or large-rebuild worker scripts.                                                           |
+| [x]    | Warning side-effect removal       | Review-warning reads no longer scan `mart.judgment_fact`, enqueue missing visible judgment fact repair, or bootstrap legacy large rebuilds.                                                               |
+| [x]    | Focused static guards             | Added `reviewServingPhase5BStaticGuards.test.ts` for startup, warning side effects, recovery, package commands, and legacy-admin acknowledgement coverage.                                                |
 
 ## Phase 5C Handoff
 
 Phase 5C owns the unfinished items that were originally listed in Phase 5B but were not implemented in Parts 1-5.
 
-| Moved Item | Phase 5C Direction |
-|---|---|
-| Legacy path audit and classification | Inventory every remaining caller and classify as `retire`, `rewire-to-v4`, or `admin-debug-only` with guard evidence. |
+| Moved Item                                   | Phase 5C Direction                                                                                                                                                              |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Legacy path audit and classification         | Inventory every remaining caller and classify as `retire`, `rewire-to-v4`, or `admin-debug-only` with guard evidence.                                                           |
 | Legacy large rebuild executor/runner cutover | Retire or block normal execution of `projectMartLargeRebuild*`, `temp_project_judgment_fact_article`, `getProjectJudgmentFactBatchInsertSql`, and the seven legacy phase chain. |
-| Dirty refresh cutover | Route producer-level dirty refresh through V4 dirty work, component acknowledgements, projector wakeups, and manifest completion. |
-| Admin controls | Remove, block, or V4-rewire legacy admin run/pause/resume controls; keep legacy status read-only, capped, and admin/debug-only. |
-| Progress and warning UI | Replace normal UI legacy phase/counter copy with V4 snapshot, chunk, projector, stale/indexing/unavailable, and last-known-good diagnostics. |
-| Health/admin side effects | Make health/admin status reads side-effect free and move remediation into explicit V4 actions. |
-| Legacy state cleanup | Freeze, migrate, delete, or explicitly retain old refresh, large-rebuild, and V3 mart state so normal claim paths cannot resume it. |
-| Broader guards | Add SQL-shape, producer inventory, admin-control, dirty-refresh, and runtime guards beyond the focused Phase 5B static test. |
-| Adversarial OOM closure | Add checkpoint, append/import, V4 chunk, cross-project, retry-thrash, offline-repair, and telemetry gates before Phase 6 physical evidence. |
-| Phase 6 handoff | Update release evidence so the physical run starts with Phase 5C complete, legacy normal rebuild disabled, and V4 projector/chunk paths enabled. |
+| Dirty refresh cutover                        | Route producer-level dirty refresh through V4 dirty work, component acknowledgements, projector wakeups, and manifest completion.                                               |
+| Admin controls                               | Remove, block, or V4-rewire legacy admin run/pause/resume controls; keep legacy status read-only, capped, and admin/debug-only.                                                 |
+| Progress and warning UI                      | Replace normal UI legacy phase/counter copy with V4 snapshot, chunk, projector, stale/indexing/unavailable, and last-known-good diagnostics.                                    |
+| Health/admin side effects                    | Make health/admin status reads side-effect free and move remediation into explicit V4 actions.                                                                                  |
+| Legacy state cleanup                         | Freeze, migrate, delete, or explicitly retain old refresh, large-rebuild, and V3 mart state so normal claim paths cannot resume it.                                             |
+| Broader guards                               | Add SQL-shape, producer inventory, admin-control, dirty-refresh, and runtime guards beyond the focused Phase 5B static test.                                                    |
+| Adversarial OOM closure                      | Add checkpoint, append/import, V4 chunk, cross-project, retry-thrash, offline-repair, and telemetry gates before Phase 6 physical evidence.                                     |
+| Phase 6 handoff                              | Update release evidence so the physical run starts with Phase 5C complete, legacy normal rebuild disabled, and V4 projector/chunk paths enabled.                                |
 
 ## Implementation Progress - 2026-06-23
 
@@ -60,9 +60,9 @@ Phase 5C owns the unfinished items that were originally listed in Phase 5B but w
 
 - Status: completed and committed as the second implementation slice.
 - Added `reviewServingV4RebuildRequestService.ts` with default full rebuild and judgment-repair component sets plus conservative request/chunk budgets.
-- Rewired `scripts/requestProjectLargeRebuild.ts` and `scripts/requestReviewServingLargeRebuild.ts` to create V4 rebuild requests instead of writing `app.project_mart_large_rebuild_state`.
+- Rewired `scripts/requestProjectLargeRebuild.ts` and `scripts/requestReviewServingAllProjectsRebuild.ts` to create V4 rebuild requests instead of writing `app.project_mart_large_rebuild_state`.
 - Rewired `scripts/requestJudgmentFactRepair.ts` so normal repair requires explicit project selection and enqueues judgment-related V4 components instead of scanning or repairing `mart.judgment_fact`.
-- Verification: `bun test scripts/requestReviewServingLargeRebuild.test.ts scripts/requestProjectLargeRebuild.test.ts scripts/requestJudgmentFactRepair.test.ts` plus focused ESLint on touched files.
+- Verification: `bun test scripts/requestReviewServingAllProjectsRebuild.test.ts scripts/requestProjectLargeRebuild.test.ts scripts/requestJudgmentFactRepair.test.ts` plus focused ESLint on touched files.
 
 ### Part 3 - Startup And Package Script Cutover
 
@@ -104,7 +104,7 @@ Use `effect` for new non-trivial async and server orchestration in V4 rebuild re
 - [x] Legacy dirty-refresh and large-rebuild worker scripts require explicit legacy-admin acknowledgement for direct execution.
 - [x] Focused static guard coverage exists for startup, warning side effects, recovery, package commands, and legacy-admin acknowledgements.
 - [x] `bun test src/server/reviewServing/reviewServingSchema.test.ts src/server/reviewServing/reviewServingChunkManifestRepository.test.ts src/server/reviewServing/reviewServingRebuildRequestRepository.test.ts`
-- [x] `bun test scripts/requestReviewServingLargeRebuild.test.ts scripts/requestProjectLargeRebuild.test.ts scripts/requestJudgmentFactRepair.test.ts`
+- [x] `bun test scripts/requestReviewServingAllProjectsRebuild.test.ts scripts/requestProjectLargeRebuild.test.ts scripts/requestJudgmentFactRepair.test.ts`
 - [x] `bun test src/server/utils/startBackgroundWork.test.ts scripts/rebuild2PackageCommands.test.ts scripts/runLargeRebuildWorkerOnce.test.ts scripts/runLargeRebuildWorkerCycles.test.ts`
 - [x] `bun test scripts/projectMartRefreshRecovery.test.ts src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts`
 - [x] `bun test src/server/reviewServing/reviewServingPhase5BStaticGuards.test.ts scripts/projectMartRefreshRecovery.test.ts`

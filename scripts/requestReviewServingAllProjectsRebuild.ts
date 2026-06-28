@@ -3,15 +3,15 @@ import {getAppDatabaseService} from '../src/server/services/appDatabaseService.t
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 
-type RequestReviewServingLargeRebuildOptions = {includeArchived: boolean; projectId: string | null}
-type RequestReviewServingLargeRebuildFailure = {error: string; projectId: string}
-type RequestReviewServingLargeRebuildResult = {
-  failedProjects: RequestReviewServingLargeRebuildFailure[]
+type RequestReviewServingAllProjectsRebuildOptions = {includeArchived: boolean; projectId: string | null}
+type RequestReviewServingAllProjectsRebuildFailure = {error: string; projectId: string}
+type RequestReviewServingAllProjectsRebuildResult = {
+  failedProjects: RequestReviewServingAllProjectsRebuildFailure[]
   requestIds: string[]
 }
-const workloadContext = getMaintenanceDuckdbWorkloadContext('requestReviewServingLargeRebuild')
+const workloadContext = getMaintenanceDuckdbWorkloadContext('requestReviewServingAllProjectsRebuild')
 
-const getRequestOptions = (): RequestReviewServingLargeRebuildOptions => {
+const getRequestOptions = (): RequestReviewServingAllProjectsRebuildOptions => {
   const projectIdArg = process.argv.slice(2).find((argument) => {
     return argument.startsWith('--project-id=')
   })
@@ -26,7 +26,7 @@ const quoteSqlString = (value: string) => {
   return `'${value.replaceAll("'", "''")}'`
 }
 
-const getProjectIds = async (options: RequestReviewServingLargeRebuildOptions) => {
+const getProjectIds = async (options: RequestReviewServingAllProjectsRebuildOptions) => {
   const whereClause = options.projectId
     ? `WHERE id = ${quoteSqlString(options.projectId)}${options.includeArchived ? '' : ' AND archived = FALSE'}`
     : options.includeArchived
@@ -55,7 +55,7 @@ const getFailureMessage = (error: unknown) => {
   return rebuildChunkMessage ?? message
 }
 
-const getRequestStatus = (result: RequestReviewServingLargeRebuildResult) => {
+const getRequestStatus = (result: RequestReviewServingAllProjectsRebuildResult) => {
   return result.failedProjects.length === 0
     ? 'requested'
     : result.requestIds.length === 0
@@ -66,25 +66,27 @@ const getRequestStatus = (result: RequestReviewServingLargeRebuildResult) => {
 const requestReviewServingProjectRebuilds = async (
   projectIds: string[],
   index = 0,
-): Promise<RequestReviewServingLargeRebuildResult> => {
+): Promise<RequestReviewServingAllProjectsRebuildResult> => {
   const currentProjectId = projectIds[index]
 
   if (!currentProjectId) {
     return {failedProjects: [], requestIds: []}
   }
 
-  console.log(`[requestReviewServingLargeRebuild] requesting ${index + 1}/${projectIds.length} ${currentProjectId}`)
+  console.log(
+    `[requestReviewServingAllProjectsRebuild] requesting ${index + 1}/${projectIds.length} ${currentProjectId}`,
+  )
   try {
     const request = await requestReviewServingV4Rebuild({
       projectId: currentProjectId,
-      reason: 'requestReviewServingLargeRebuild',
+      reason: 'requestReviewServingAllProjectsRebuild',
     })
     const remaining = await requestReviewServingProjectRebuilds(projectIds, index + 1)
 
     return {failedProjects: remaining.failedProjects, requestIds: [request.requestId, ...remaining.requestIds]}
   } catch (error) {
     const failure = {error: getFailureMessage(error), projectId: currentProjectId}
-    console.error(`[requestReviewServingLargeRebuild] failed ${currentProjectId}: ${failure.error}`)
+    console.error(`[requestReviewServingAllProjectsRebuild] failed ${currentProjectId}: ${failure.error}`)
     const remaining = await requestReviewServingProjectRebuilds(projectIds, index + 1)
 
     return {failedProjects: [failure, ...remaining.failedProjects], requestIds: remaining.requestIds}
@@ -94,11 +96,11 @@ const requestReviewServingProjectRebuilds = async (
 const main = async () => {
   const options = getRequestOptions()
 
-  await withDuckdbMaintenanceAccess('request review serving large rebuild', async () => {
+  await withDuckdbMaintenanceAccess('request review serving all projects rebuild', async () => {
     const projectIds = await getProjectIds(options)
 
     if (projectIds.length === 0) {
-      console.log('[requestReviewServingLargeRebuild] no matching projects')
+      console.log('[requestReviewServingAllProjectsRebuild] no matching projects')
       console.log(JSON.stringify({projectCount: 0, requestedCount: 0, status: 'not_found'}))
       return
     }

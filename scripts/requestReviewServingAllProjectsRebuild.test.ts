@@ -22,24 +22,24 @@ const runQuery = (duckdbPath: string, sql: string): unknown => {
   return JSON.parse(getLastJsonLine(result.stdout.toString())) as unknown
 }
 
-test('requestReviewServingLargeRebuild CLI requests active project large rebuilds', () => {
-  const duckdbPath = join(projectRoot, '.tmp', 'request-review-serving-large-rebuild.duckdb')
+test('requestReviewServingAllProjectsRebuild CLI requests active project rebuilds', () => {
+  const duckdbPath = join(projectRoot, '.tmp', 'request-review-serving-all-projects-rebuild.duckdb')
   seedLargeRebuildCommandProjectDatabase({
     duckdbPath,
     projects: [
-      {projectId: 'project-request-review-serving-large-rebuild'},
-      {archived: true, projectId: 'project-request-review-serving-large-rebuild-archived'},
+      {projectId: 'project-request-review-serving-all-projects-rebuild'},
+      {archived: true, projectId: 'project-request-review-serving-all-projects-rebuild-archived'},
     ],
   })
 
-  const result = globalThis.Bun.spawnSync(['bun', 'scripts/requestReviewServingLargeRebuild.ts'], {
+  const result = globalThis.Bun.spawnSync(['bun', 'scripts/requestReviewServingAllProjectsRebuild.ts'], {
     cwd: projectRoot,
     env: {...defaultLargeRebuildCommandTestEnv, DUCKDB_PATH: duckdbPath},
   })
 
   if (result.exitCode !== 0) {
     throw new Error(
-      result.stderr.toString() || result.stdout.toString() || 'request review serving large rebuild failed',
+      result.stderr.toString() || result.stdout.toString() || 'request review serving all projects rebuild failed',
     )
   }
 
@@ -71,16 +71,16 @@ test('requestReviewServingLargeRebuild CLI requests active project large rebuild
   expect(requestRows).toEqual([
     {
       admissionState: 'admitted',
-      projectId: 'project-request-review-serving-large-rebuild',
-      reason: 'requestReviewServingLargeRebuild',
+      projectId: 'project-request-review-serving-all-projects-rebuild',
+      reason: 'requestReviewServingAllProjectsRebuild',
       status: 'admitted',
     },
   ])
   expect(legacyRow).toEqual({count: 0})
 })
 
-test('requestReviewServingLargeRebuild CLI continues after an empty active project', () => {
-  const duckdbPath = join(projectRoot, '.tmp', 'request-review-serving-large-rebuild-empty-project.duckdb')
+test('requestReviewServingAllProjectsRebuild CLI continues after an empty active project', () => {
+  const duckdbPath = join(projectRoot, '.tmp', 'request-review-serving-all-projects-rebuild-empty-project.duckdb')
   seedLargeRebuildCommandProjectDatabase({
     duckdbPath,
     projects: [
@@ -89,14 +89,14 @@ test('requestReviewServingLargeRebuild CLI continues after an empty active proje
     ],
   })
 
-  const result = globalThis.Bun.spawnSync(['bun', 'scripts/requestReviewServingLargeRebuild.ts'], {
+  const result = globalThis.Bun.spawnSync(['bun', 'scripts/requestReviewServingAllProjectsRebuild.ts'], {
     cwd: projectRoot,
     env: {...defaultLargeRebuildCommandTestEnv, DUCKDB_PATH: duckdbPath},
   })
 
   if (result.exitCode !== 0) {
     throw new Error(
-      result.stderr.toString() || result.stdout.toString() || 'request review serving large rebuild failed',
+      result.stderr.toString() || result.stdout.toString() || 'request review serving all projects rebuild failed',
     )
   }
 
@@ -125,7 +125,7 @@ test('requestReviewServingLargeRebuild CLI continues after an empty active proje
     {
       admissionState: 'admitted',
       projectId: 'project-valid-review-serving-large-rebuild',
-      reason: 'requestReviewServingLargeRebuild',
+      reason: 'requestReviewServingAllProjectsRebuild',
       status: 'admitted',
     },
   ])
