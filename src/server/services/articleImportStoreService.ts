@@ -39,7 +39,6 @@ import {
   type CanonicalArticleMatchOutcome,
   matchCanonicalArticlesWithTx,
 } from './articleCanonicalMatcher.ts'
-import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
 
 export type ArticleImportStoreTx = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -2102,34 +2101,6 @@ const syncImportedArticlesInTx = async (params: {
   }
 }
 
-export const markImportedArticleProjectsDirty = async (importRouteIds: string[]) => {
-  if (importRouteIds.length === 0) {
-    return
-  }
-
-  await getAppDatabaseService().transaction(async (tx) => {
-    const projectRows = await tx.queryJson<{projectId: string}>(`
-      SELECT DISTINCT project_import_route.project_id AS projectId
-      FROM app.project_import_route project_import_route
-      INNER JOIN app.project project ON project.id = project_import_route.project_id
-      WHERE project_import_route.import_route_id IN (${getQuotedStringList(importRouteIds).join(', ')})
-        AND project.archived = FALSE
-      ORDER BY projectId ASC
-    `)
-    const projectIds = projectRows.map((row) => {
-      return row.projectId
-    })
-    const refreshStateService = getProjectMartDirtyRefreshStateService()
-    const dirtyProjects = await refreshStateService.getDirtyProjectsForProjectIds(tx, projectIds)
-
-    await refreshStateService.markProjectsDirtyAtomically({
-      projects: dirtyProjects,
-      reason: 'articleImportStoreService',
-      runner: tx,
-    })
-  })
-}
-
 export const storeImportedArticlesWithTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
   const state = await storeImportedArticlesInTx(tx, rows)
 
@@ -2145,11 +2116,9 @@ export const syncImportedArticlesWithTx = async (params: {
 }
 
 export const storeImportedArticles = async (rows: ArticleImportStoreRow[]) => {
-  const importRefreshState = (await getAppDatabaseService().transaction(async (tx) => {
+  await getAppDatabaseService().transaction(async (tx) => {
     return await storeImportedArticlesInTx(tx, rows)
-  })) as {importRouteIds: string[]}
-
-  await markImportedArticleProjectsDirty(importRefreshState.importRouteIds)
+  })
 }
 
 export type {ArticleImportStoreRow}
