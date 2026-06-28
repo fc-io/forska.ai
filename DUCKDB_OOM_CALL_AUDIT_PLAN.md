@@ -217,27 +217,73 @@ file discovery.
 ## First Implementation PRs
 
 - [ ] **PR 1: docs and route gate**
-  - Update `DUCK_OOM_FIX_PLAN.md` to reference this checklist.
-  - Add/extend route inventory exhaustiveness tests.
-  - Add proxy-order integration tests for API role.
-  - Add owner-unavailable tests for representative project routes.
+  - [x] Update `DUCK_OOM_FIX_PLAN.md` to reference this checklist.
+  - [x] Add/extend route inventory exhaustiveness tests.
+  - [ ] Add proxy-order integration tests for API role.
+  - [x] Add owner-unavailable tests for representative project routes.
+
+  Evidence note: current route inventory/proxy guard work is partly complete.
+  `DUCK_OOM_FIX_PLAN.md` points to this audit file; `routeSurfaceInventory.test.ts`
+  proves mounted route inventory and classifier coverage; `publicRouteSurfaceGate.test.ts`
+  covers public route gating; `ApiProxyRoutes.test.ts` and
+  `ApiProxyRoutes.retry.test.ts` prove fail-closed owner-routed source access for
+  `/api/users` and project-transfer upload when no owner is available. Planned:
+  explicit API-role proxy-order integration proof; current evidence is only the
+  `serverMain.ts` registration order.
+
 - [ ] **PR 2: static and runtime guardrails**
-  - Add static guard for route-facing DuckDB imports.
-  - Add static guard for `duckdbOlap` quarantine.
-  - Add low-level missing-workload-context rejection for normal foreground work,
-    initially behind a test/runtime switch if needed.
+  - [ ] Add static guard for route-facing DuckDB imports.
+  - [x] Add static guard for `duckdbOlap` quarantine.
+  - [ ] Add low-level missing-workload-context rejection for normal foreground work,
+        initially behind a test/runtime switch if needed.
+
+  Evidence note: current guardrail work is partial. Quarantined legacy/static V4
+  product-read checks exist in `reviewServingSql.test.ts` and
+  `reviewServingReadContracts.test.ts`, including `duckdbOlap`, raw fallback SQL,
+  `selected_scoped_article_import`, and mounted migrated route import guards;
+  `getAppQueryService.test.ts` covers a small audited read-only module set. Planned:
+  broad route-facing DuckDB import guard, broad normal foreground SQL guard, and
+  low-level runtime guard. `duckdbService.ts` still executes `work()` when the
+  workload context is `undefined`.
+
 - [ ] **PR 3: residual read allowlist**
-  - Create or update `reviewServingResidualReadAllowlist.ts`.
-  - Register every non-V4 review health/warning/detail/prompt-preview read with
-    purpose, cap, workload class, and migration target.
+  - [x] Create or update `reviewServingResidualReadAllowlist.ts`.
+  - [ ] Register every non-V4 review health/warning/detail/prompt-preview read with
+        purpose, cap, workload class, and migration target.
+
+  Evidence note: current residual allowlist work exists but is incomplete.
+  `reviewServingResidualReadAllowlist.ts` lists audited review residual route files
+  and marker classifications, and `reviewServingResidualReadAllowlist.test.ts`
+  checks marker presence. Planned: complete residual allowlist fields for purpose,
+  cap, workload class, and migration target for every non-V4 health/warning/detail
+  and prompt-preview source read.
+
 - [ ] **PR 4+: route-by-route V4 migration**
-  - Move one product surface at a time to V4 services/jobs.
-  - Delete or hard-disable the matching raw fallback in the same PR.
-  - Add SQL-shape tests and route parity tests for each migrated surface.
+  - [x] Move one product surface at a time to V4 services/jobs.
+  - [x] Delete or hard-disable the matching raw fallback in the same PR.
+  - [x] Add SQL-shape tests and route parity tests for each migrated surface.
+
+  Evidence note: current V4 product read and durable job migration is real but not
+  complete. Migrated LLM, human, both, unassessed, filter/facet, add-to-project,
+  PDF, and judgment-job paths use V4 services/jobs with raw fallback imports
+  removed or guarded; route-service tests and `reviewServingSql.test.ts` cover SQL
+  shape, while `reviewServingRouteParityRunner.test.ts` covers parity-gate behavior.
+  Planned: finish unchecked product routes above, including detail/hydration,
+  prompt preview, health/warnings, project membership, export download, comparison,
+  human assessment, telemetry, and any remaining owner-routed source access.
+
 - [ ] **Final evidence PR**
-  - Current-DB smoke proves API role proxies/fails closed and owner serves V4.
-  - Synthetic and physical release evidence prove no foreground raw fallback,
-    no temp spill, and bounded rows/result bytes.
+  - [ ] Current-DB smoke proves API role proxies/fails closed and owner serves V4.
+  - [ ] Synthetic and physical release evidence prove no foreground raw fallback,
+        no temp spill, and bounded rows/result bytes.
+
+  Evidence note: current smoke evidence is planned/partial. `package.json` defines
+  `test:network-smoke:current-db` and `test:dev-server:current-db`;
+  `tests/e2e/networkSmoke.spec.ts` and `scripts/runWithRuntimeProfile.test.ts`
+  check forbidden runtime patterns for API-role DuckDB ownership, owner heartbeat
+  errors, fatal DuckDB restarts, and worker-loop failures. Planned: final current-DB
+  owner-routed/V4 smoke proof plus synthetic and physical release evidence for no
+  foreground raw fallback, zero temp spill, and bounded rows/result bytes.
 
 ## Audit Commands
 
