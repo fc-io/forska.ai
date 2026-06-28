@@ -323,3 +323,60 @@ test('only the projector writer boundary writes V4 mart rows and promotes active
 
   expect(offenders).toEqual([])
 })
+
+test('legacy mart maintenance paths do not write V4 review-serving snapshots', () => {
+  const legacyMartMaintenanceFiles = getTypeScriptFiles(join(workspaceRoot, 'src/server'))
+    .map((filePath) => {
+      return relative(workspaceRoot, filePath)
+    })
+    .filter((repoPath) => {
+      return (
+        repoPath === 'src/server/services/getDuckdbMartMaintenanceService.ts'
+        || repoPath === 'src/server/workers/projectMartRefreshWorker.ts'
+        || repoPath.startsWith('src/server/services/projectMartDirty')
+        || repoPath.startsWith('src/server/services/projectMartLargeRebuild')
+      )
+    })
+    .filter((repoPath) => {
+      return !repoPath.endsWith('.test.ts')
+    })
+  const forbiddenMarkers = [
+    'INSERT INTO app.review_projection_identity_manifest',
+    'UPDATE app.review_projection_identity_manifest',
+    'DELETE FROM app.review_projection_identity_manifest',
+    'INSERT INTO app.review_selected_import_snapshot',
+    'UPDATE app.review_selected_import_snapshot',
+    'DELETE FROM app.review_selected_import_snapshot',
+    'INSERT INTO app.review_serving_snapshot_manifest',
+    'UPDATE app.review_serving_snapshot_manifest',
+    'DELETE FROM app.review_serving_snapshot_manifest',
+    'INSERT INTO mart.review_.*_v4',
+    'UPDATE mart.review_.*_v4',
+    'DELETE FROM mart.review_.*_v4',
+    'promoteReviewServingProjectorSnapshot',
+  ]
+  const offenders = legacyMartMaintenanceFiles.flatMap((repoPath) => {
+    const source = readFileSync(join(workspaceRoot, repoPath), 'utf8')
+
+    return forbiddenMarkers
+      .filter((marker) => {
+        return new RegExp(marker, 'u').test(source)
+      })
+      .map((marker) => {
+        return `${repoPath}: ${marker}`
+      })
+  })
+
+  expect(legacyMartMaintenanceFiles.sort()).toEqual([
+    'src/server/services/getDuckdbMartMaintenanceService.ts',
+    'src/server/services/projectMartDirtyMaterializationService.ts',
+    'src/server/services/projectMartDirtyRefreshStateService.ts',
+    'src/server/services/projectMartLargeRebuildCyclesService.ts',
+    'src/server/services/projectMartLargeRebuildExecutor.ts',
+    'src/server/services/projectMartLargeRebuildProgressService.ts',
+    'src/server/services/projectMartLargeRebuildRunner.ts',
+    'src/server/services/projectMartLargeRebuildStateService.ts',
+    'src/server/workers/projectMartRefreshWorker.ts',
+  ])
+  expect(offenders).toEqual([])
+})
