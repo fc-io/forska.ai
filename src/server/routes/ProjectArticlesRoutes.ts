@@ -14,12 +14,6 @@ type ProjectArticleMembershipScopeRow = {articleCreatedAt: string | null; id: st
 
 type ProjectArticleMembershipArticleRow = {articleTitle: string; id: string}
 
-type ProjectArticleMembershipImportRow = {
-  articleId: string
-  importedFromProjectId: string | null
-  importedFromProjectName: string | null
-}
-
 const maxProjectArticleMembershipLimit = 100
 
 const decodeProjectArticleMembershipCursor = (cursor: string | null | undefined) => {
@@ -101,66 +95,37 @@ const getProjectArticleMembershipRows = async (params: {
   return rows
 }
 
-const getProjectArticleMembershipArticleRows = async (articleIds: string[]) => {
+const getProjectArticleMembershipArticleRows = async (projectId: string, articleIds: string[]) => {
   if (articleIds.length === 0) {
     return []
   }
 
   return getAppDatabaseService().queryJson<ProjectArticleMembershipArticleRow>(`
+    WITH latest_snapshot AS (
+      SELECT snapshot_id AS snapshotId
+      FROM app.review_serving_snapshot_manifest
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND snapshot_status IN ('active', 'retired')
+      ORDER BY updated_at DESC, snapshot_id DESC
+      LIMIT 1
+    )
     SELECT
-      id,
-      article_title AS articleTitle
-    FROM app.article
-    WHERE id IN (${articleIds.map(getSqlLiteral).join(', ')})
+      serving.article_id AS id,
+      serving.article_title AS articleTitle
+    FROM mart.review_article_serving_v4 serving
+    INNER JOIN latest_snapshot latest
+      ON latest.snapshotId = serving.snapshot_id
+    WHERE serving.project_id = ${getSqlLiteral(projectId)}
+      AND serving.article_id IN (${articleIds.map(getSqlLiteral).join(', ')})
+    ORDER BY serving.article_id ASC,
+      CASE serving.list_mode_key
+        WHEN 'both' THEN 0
+        WHEN 'llm' THEN 1
+        WHEN 'human' THEN 2
+        WHEN 'unassessed' THEN 3
+        ELSE 4
+      END ASC
   `)
-}
-
-const getProjectArticleMembershipImportRows = async (projectId: string, articleIds: string[]) => {
-  if (articleIds.length === 0) {
-    return []
-  }
-
-  const projectArticleRows = await getAppDatabaseService().queryJson<{
-    articleId: string
-    importedFromProjectId: string | null
-  }>(`
-    SELECT
-      article_id AS articleId,
-      imported_from_project_id AS importedFromProjectId
-    FROM app.project_article
-    WHERE project_id = ${getSqlLiteral(projectId)}
-      AND article_id IN (${articleIds.map(getSqlLiteral).join(', ')})
-  `)
-  const importedProjectIds = [
-    ...new Set(
-      projectArticleRows.flatMap((row) => {
-        return row.importedFromProjectId ? [row.importedFromProjectId] : []
-      }),
-    ),
-  ]
-  const projectRows =
-    importedProjectIds.length === 0
-      ? []
-      : await getAppDatabaseService().queryJson<{id: string; name: string}>(`
-          SELECT id, name
-          FROM app.project
-          WHERE id IN (${importedProjectIds.map(getSqlLiteral).join(', ')})
-        `)
-  const projectNameById = new Map(
-    projectRows.map((row) => {
-      return [row.id, row.name]
-    }),
-  )
-
-  return projectArticleRows.map<ProjectArticleMembershipImportRow>((row) => {
-    return {
-      articleId: row.articleId,
-      importedFromProjectId: row.importedFromProjectId,
-      importedFromProjectName: row.importedFromProjectId
-        ? (projectNameById.get(row.importedFromProjectId) ?? null)
-        : null,
-    }
-  })
 }
 
 export const projectArticlesRoutes = new Elysia()
@@ -191,29 +156,18 @@ export const projectArticlesRoutes = new Elysia()
       const articleIds = pageRows.map((row) => {
         return row.id
       })
-      const [articleRows, importedRows] = await Promise.all([
-        getProjectArticleMembershipArticleRows(articleIds),
-        getProjectArticleMembershipImportRows(projectId, articleIds),
-      ])
-      const articleById = new Map(
-        articleRows.map((row) => {
-          return [row.id, row]
-        }),
-      )
-      const importByArticleId = new Map(
-        importedRows.map((row) => {
-          return [row.articleId, row]
-        }),
-      )
+      const articleRows = await getProjectArticleMembershipArticleRows(projectId, articleIds)
+      const articleById = articleRows.reduce((map, row) => {
+        return map.has(row.id) ? map : map.set(row.id, row)
+      }, new Map<string, ProjectArticleMembershipArticleRow>())
       const rows = pageRows.map((row) => {
         const article = articleById.get(row.id)
-        const imported = importByArticleId.get(row.id)
 
         return {
           id: row.id,
           articleTitle: article?.articleTitle ?? row.id,
-          importedFromProjectId: imported?.importedFromProjectId ?? null,
-          importedFromProjectName: imported?.importedFromProjectName ?? null,
+          importedFromProjectId: null,
+          importedFromProjectName: null,
         }
       })
       const lastPageRow = pageRows[pageRows.length - 1]
