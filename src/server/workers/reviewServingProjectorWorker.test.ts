@@ -101,6 +101,7 @@ const createWorkerHarness = (input?: {
   const claimInputs: unknown[] = []
   const cleanupInputs: unknown[] = []
   const failedChunks: unknown[] = []
+  const getNextChunkInputs: unknown[] = []
   const heartbeatInputs: unknown[] = []
   const runChunkInputs: ReviewServingRebuildChunkManifest[] = []
   const wakeStatus = input?.wakeStatus ?? 'blocked'
@@ -130,7 +131,9 @@ const createWorkerHarness = (input?: {
 
         return {...chunkManifest, status: 'failed' as const}
       },
-      getNextChunk: async () => {
+      getNextChunk: async (getNextInput) => {
+        getNextChunkInputs.push(getNextInput)
+
         return chunkInput
       },
       heartbeatChunk: async (heartbeatInput) => {
@@ -166,6 +169,7 @@ const createWorkerHarness = (input?: {
     database,
     dependencies,
     failedChunks,
+    getNextChunkInputs,
     heartbeatInputs,
     runChunkInputs,
     runStatements,
@@ -185,6 +189,7 @@ test('worker calls projector orchestration with bounded wake budgets and reviewP
       maxRowsPerWake: 5,
       maxWakeMs: 250,
       now: new Date('2026-06-16T10:00:00.000Z'),
+      rebuildProjectId: 'project-1',
       workerId: 'worker-1',
     },
     harness.dependencies,
@@ -192,6 +197,7 @@ test('worker calls projector orchestration with bounded wake budgets and reviewP
 
   expect(result.status).toBe('completed')
   expect(harness.wakeInputs[0]).toMatchObject({batchSize: 3, maxRetries: 2, maxRowsPerWake: 5, maxWakeMs: 250})
+  expect(harness.getNextChunkInputs[0]).toMatchObject({projectId: 'project-1'})
   expect(harness.claimInputs[0]).toMatchObject({leaseOwner: 'worker-1', now: new Date('2026-06-16T10:00:00.000Z')})
   expect(harness.workloadContexts).toContainEqual(getReviewServingProjectorWorkerWorkloadContext('worker-1'))
 })
@@ -1392,9 +1398,19 @@ test('article range presplit aborts when parent chunk lease is lost', async () =
     },
   }
 
-  await expect(
-    runReviewServingProjectorWorkerClaimedRebuildChunk({chunk: staleLeaseChunk, leaseOwner: 'worker-1'}, database),
-  ).rejects.toThrow('review serving rebuild chunk chunk-stale-lease-presplit is no longer claimed by worker-1')
+  await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: staleLeaseChunk, leaseOwner: 'worker-1'},
+    database,
+  ).then(
+    () => {
+      throw new Error('expected stale lease rebuild chunk to reject')
+    },
+    (error) => {
+      expect(String(error)).toContain(
+        'review serving rebuild chunk chunk-stale-lease-presplit is no longer claimed by worker-1',
+      )
+    },
+  )
   const joined = statements.join('\n')
   const childInserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
@@ -1448,9 +1464,17 @@ test('selected import rebuild chunk does not presplit because rebuild output is 
     },
   }
 
-  await expect(
-    runReviewServingProjectorWorkerClaimedRebuildChunk({chunk: selectedImportChunk, leaseOwner: 'worker-1'}, database),
-  ).rejects.toThrow('cannot run selectedImport rebuild chunk without an identity manifest')
+  await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: selectedImportChunk, leaseOwner: 'worker-1'},
+    database,
+  ).then(
+    () => {
+      throw new Error('expected selectedImport rebuild chunk to reject')
+    },
+    (error) => {
+      expect(String(error)).toContain('cannot run selectedImport rebuild chunk without an identity manifest')
+    },
+  )
   const joined = statements.join('\n')
   const childInserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
@@ -1503,9 +1527,17 @@ test('project scope rebuild chunk does not presplit because rebuild output is no
     },
   }
 
-  await expect(
-    runReviewServingProjectorWorkerClaimedRebuildChunk({chunk: projectScopeChunk, leaseOwner: 'worker-1'}, database),
-  ).rejects.toThrow('cannot run projectScope rebuild chunk without an identity manifest')
+  await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: projectScopeChunk, leaseOwner: 'worker-1'},
+    database,
+  ).then(
+    () => {
+      throw new Error('expected projectScope rebuild chunk to reject')
+    },
+    (error) => {
+      expect(String(error)).toContain('cannot run projectScope rebuild chunk without an identity manifest')
+    },
+  )
   const joined = statements.join('\n')
   const childInserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')

@@ -823,6 +823,7 @@ test.skip('retired legacy mart diagnostics: stale snapshots usable during refres
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
+  expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({failedCount: 0, pendingCount: 1})
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
   expect(body.data.indexing.progressState).toBe('queued')
   expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
@@ -1024,7 +1025,7 @@ test('reviews warnings ignore superseded terminal V4 rebuild chunks', async () =
   expect(body.data.indexing.status).toBe('ready')
 })
 
-test('reviews warnings treat expired V4 rebuild chunk leases as queued instead of in-flight', async () => {
+test('reviews warnings block queued V4 rebuild work when server mutation work is disabled', async () => {
   const projectId = 'project-v4-expired-rebuild-lease-warning'
 
   await insertProjectFixture(projectId)
@@ -1052,13 +1053,15 @@ test('reviews warnings treat expired V4 rebuild chunk leases as queued instead o
 
   expect(response.status).toBe(200)
   expect(body.data.indexing.activeWorkCount).toBe(0)
-  expect(body.data.indexing.blockedReason).toBe(null)
+  expect(body.data.indexing.blockedReason).toBe('waiting_for_maintenance_worker')
+  expect(body.data.indexing.eligibleConsumerCount).toBe(0)
+  expect(body.data.indexing.eligibleConsumerPresent).toBe(false)
   expect(body.data.indexing.inFlightRefreshCount).toBe(0)
   expect(body.data.indexing.oldestQueuedAt).toBe('2026-04-02 11:59:00+00')
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
-  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.progressState).toBe('blocked')
   expect(body.data.indexing.queuedRefreshCount).toBe(1)
-  expect(body.data.indexing.status).toBe('refreshing')
+  expect(body.data.indexing.status).toBe('blocked')
 })
 
 test('reviews warnings keep retryable V4 rebuild chunk failures queued', async () => {

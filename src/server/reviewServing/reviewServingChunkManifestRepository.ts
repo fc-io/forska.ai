@@ -191,9 +191,10 @@ const getJsonSqlLiteral = (value: unknown) => {
   return getSqlLiteral(getStableReviewServingJson(value ?? {}))
 }
 
-const activeRebuildChunkStatusSql = "('completed', 'running', 'failed', 'blocked_over_budget', 'quarantined')"
+const releasableRebuildChunkStatusSql = "('completed', 'running', 'failed', 'blocked_over_budget', 'quarantined')"
+const preservedRebuildChunkStatusSql = "('completed', 'running', 'failed')"
 const activeRebuildChunkPreservePredicate = `
-  app.review_rebuild_chunk_manifest.status IN ${activeRebuildChunkStatusSql}
+  app.review_rebuild_chunk_manifest.status IN ${preservedRebuildChunkStatusSql}
 `
 const rebuildChunkPrerequisitesByComponent = {
   display: ['projectScope', 'selectedImport'],
@@ -240,7 +241,7 @@ export const releaseInactiveRequestRebuildChunkManifestsForUpsert = async (
         last_error = NULL,
         updated_at = current_timestamp
     WHERE chunk_id IN (${uniqueChunkIds.map(getSqlLiteral).join(', ')})
-      AND status IN ${activeRebuildChunkStatusSql}
+      AND status IN ${releasableRebuildChunkStatusSql}
       AND request_id IS NOT NULL
       AND NOT EXISTS (
         SELECT 1

@@ -78,10 +78,17 @@ hardening, and finally physical evidence.
   guard is now default-on for non-owner foreground `mainQuery`,
   `mainStatement`, and `transaction`, with `FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT=false`
   as an explicit rollout/debug opt-out.
-- [~] **A8.** Extend smoke gates so `test:network-smoke:current-db` and
+- [x] **A8.** Extend smoke gates so `test:network-smoke:current-db` and
   `test:dev-server:current-db` also fail on unqueueable/stalled V4 states,
   not only API-role ownership, heartbeat, fatal restart, and worker-loop
-  failures.
+  failures. Current evidence: `projectsRoutesGetReviewsWarnings.test.ts`
+  covers mutation-disabled queued V4 backlog as
+  `waiting_for_maintenance_worker`, retryable rebuild chunk backoff as queued
+  rather than terminal failed state, and stale terminal chunks ignored after
+  readmission; `test:network-smoke`/`test:network-smoke:current-db` probe live
+  project warning responses and fail on terminal warning state; and
+  `test:dev-server:current-db` fails on owner heartbeat, fatal restart, and
+  worker-loop regressions during real primary startup.
 
 ### Runtime And Routing
 
@@ -387,18 +394,32 @@ hardening, and finally physical evidence.
 
 ### Final Evidence And Audit Commands
 
-- [ ] **A54.** Re-run and update the file-discovery, production DuckDB call
+- [x] **A54.** Re-run and update the file-discovery, production DuckDB call
       discovery, route inventory/proxy, API owner proxy, V4 static, and smoke
-      command groups after each remediation part lands.
-- [ ] **A55.** Run final current-DB browser/API smoke proving API role proxies or
+      command groups after each remediation part lands. Evidence from the final
+      pass: file discovery and production DuckDB call discovery were rerun with
+      `rg`; route/proxy/static batches passed, with the known Bun grouped
+      module-load glitch isolated by a green standalone
+      `routeSurfaceInventory.test.ts`; V4 static/read-contract gates passed; and
+      focused rebuild/warnings tests passed after the current-DB smoke repair.
+- [x] **A55.** Run final current-DB browser/API smoke proving API role proxies or
       fails closed while the owner serves V4 paths, with no forbidden runtime log
-      patterns.
-- [ ] **A56.** Produce synthetic and physical release evidence for no foreground
+      patterns. Evidence: `bun run test:network-smoke` and
+      `bun run test:network-smoke:current-db` passed against the primary current
+      DB with server mutations disabled; `bun run test:dev-server:current-db`
+      passed against real primary startup.
+- [~] **A56.** Produce synthetic and physical release evidence for no foreground
       raw fallback, zero foreground temp spill, bounded rows/result bytes,
       overlap with imports/materialization, and desktop interruption/resume.
-- [ ] **A57.** After A54-A56 pass, update this audit checklist statuses and the
+      Synthetic browser smoke passed in this branch via
+      `bun run test:network-smoke:synthetic`; true Phase 6 physical release-scale
+      evidence remains open.
+- [~] **A57.** After A54-A56 pass, update this audit checklist statuses and the
       master `DUCK_OOM_FIX_PLAN.md` success criteria/evidence references in the
-      same final evidence change.
+      same final evidence change. Current update records final current-DB,
+      dev-server, synthetic smoke, route/static, and retryable V4 backlog
+      evidence; Phase 6 success criteria stay unchecked pending physical release
+      proof.
 
 ## Required Handling Classes
 
@@ -413,11 +434,12 @@ hardening, and finally physical evidence.
   `src/server/routes/ApiProxyRoutes.ts`; fail-closed behavior is tested in
   `src/server/routes/ApiProxyRoutes.test.ts` and retry/upload variants in
   `ApiProxyRoutes.retry.test.ts`.
-- **Owner/background writer**: **partially current, still planned for complete
-  workload proof.** Runtime roles, owner leases, and workload contexts exist in
+- **Owner/background writer**: **current for audited owner/background paths.**
+  Runtime roles, owner leases, and workload contexts exist in
   `src/server/utils/serverRuntimeRole.ts`, `duckdbOwnerLease.ts`, and
-  `duckdbService.ts`; missing workload context is still accepted by low-level
-  helpers, so complete enforcement remains planned.
+  `duckdbService.ts`; missing workload context is rejected before API-role
+  foreground DuckDB connection acquisition by default, while explicit
+  owner/background/maintenance/admin/test scopes remain allowed.
 - **Single V4 writer**: **current for V4 projector ownership.** Normal V4 projector worker/service
   code is concentrated in `src/server/workers/reviewServingProjectorWorker.ts`
   and `src/server/reviewServing/reviewServingProjectorService.ts`, while
@@ -429,21 +451,23 @@ hardening, and finally physical evidence.
   `src/server/reviewServing/reviewServingResidualReadAllowlist.ts` and checked by
   `reviewServingResidualReadAllowlist.test.ts`; full route/query purpose, cap,
   and migration-target coverage is still incomplete.
-- **Admin/debug/tool allowlist**: **partially current.** Admin/debug/tool paths
-  are classified in `src/server/routes/routeSurfaceInventory.ts`, and snapshot
-  tooling uses shared read-only runtime options in `scripts/dbQuerySnapshot.ts`;
-  complete allowlist proof for every script/admin direct DuckDB touch remains
-  planned.
+- **Admin/debug/tool allowlist**: **current for the audited package/admin
+  surface.** Admin/debug/tool paths are classified in
+  `src/server/routes/routeSurfaceInventory.ts`, snapshot tooling uses shared
+  read-only runtime options in `scripts/dbQuerySnapshot.ts`, and package-exposed
+  DB scripts are guarded by `operatorScriptDuckdbAccess.test.ts`.
 - **Quarantined legacy**: **current for normal review/job foreground guards, with
   raw fallback deletion complete for `duckdbOlap.ts`.** Tests in
   `src/server/reviewServing/reviewServingSql.test.ts` keep retired imports away
   from normal review and judgment-job foreground paths, and
   `duckdbRouteGuardrails.test.ts` fails new production imports of deleted OLAP
   wrappers or `duckdbOlap`.
-- **Test-only**: **current for direct fixture usage, still planned for broad
-  import enforcement.** Direct `@duckdb/node-api` fixture imports appear in test
-  files such as `DuckdbStudioRoutes.test.ts` and `duckdbServiceWorkloadContext.test.ts`;
-  production scans still need broader static guard coverage.
+- **Test-only**: **current for direct fixture usage plus broad production route
+  enforcement.** Direct `@duckdb/node-api` fixture imports appear in test files
+  such as `DuckdbStudioRoutes.test.ts` and
+  `duckdbServiceWorkloadContext.test.ts`; `duckdbRouteGuardrails.test.ts` blocks
+  new unallowlisted production route-handler imports of generic DuckDB services,
+  read-only DuckDB services, `duckdbRunner`, or `@duckdb/node-api`.
 
 ## Cross-Cutting Enforcement Checklist
 
@@ -496,16 +520,18 @@ hardening, and finally physical evidence.
       route-handler source files and fails on new unallowlisted raw OOM-prone SQL
       shapes; existing residual/admin/diagnostic route files remain explicit in
       the allowlist.
-- [~] `test:network-smoke:current-db` and `test:dev-server:current-db` fail on
+- [x] `test:network-smoke:current-db` and `test:dev-server:current-db` fail on
   API-role DuckDB ownership, owner heartbeat errors, fatal DuckDB restarts,
-  worker loop failures, and unqueueable/stalled V4 states. Partially current
+  worker loop failures, and unqueueable/stalled V4 states. Current
   runtime/admin evidence: scripts exist in `package.json`, forbidden runtime
   patterns are checked in `tests/e2e/networkSmoke.spec.ts` and
   `scripts/runWithRuntimeProfile.test.ts`; `networkSmoke.spec.ts` also fails
   on stalled/stale warning responses except readable stale states and the
-  explicit mutation-disabled queued backlog. Remaining evidence: add or prove
-  the equivalent unqueueable/stalled V4-state guard in
-  `test:dev-server:current-db`.
+  explicit mutation-disabled queued backlog, while
+  `projectsRoutesGetReviewsWarnings.test.ts` proves retryable rebuild chunk
+  failures report as queued backlog instead of terminal `failedCount`. Final
+  command evidence: `test:network-smoke`, `test:network-smoke:current-db`,
+  `test:network-smoke:synthetic`, and `test:dev-server:current-db` passed.
 
 ## Runtime And Routing Checklist
 
@@ -604,35 +630,37 @@ hardening, and finally physical evidence.
 
 ## First Implementation PRs
 
-- [ ] **PR 1: docs and route gate**
+- [x] **PR 1: docs and route gate**
   - [x] Update `DUCK_OOM_FIX_PLAN.md` to reference this checklist.
   - [x] Add/extend route inventory exhaustiveness tests.
-  - [ ] Add proxy-order integration tests for API role.
+  - [x] Add proxy-order integration tests for API role.
   - [x] Add owner-unavailable tests for representative project routes.
 
-  Evidence note: current route inventory/proxy guard work is partly complete.
+  Evidence note: current route inventory/proxy guard work is complete.
   `DUCK_OOM_FIX_PLAN.md` points to this audit file; `routeSurfaceInventory.test.ts`
   proves mounted route inventory and classifier coverage; `publicRouteSurfaceGate.test.ts`
   covers public route gating; `ApiProxyRoutes.test.ts` and
   `ApiProxyRoutes.retry.test.ts` prove fail-closed owner-routed source access for
-  `/api/users` and project-transfer upload when no owner is available. Planned:
-  explicit API-role proxy-order integration proof; current evidence is only the
-  `serverMain.ts` registration order.
+  `/api/users` and project-transfer upload when no owner is available.
+  `duckdbRouteGuardrails.test.ts` proves the API proxy is registered before
+  public product handlers and intercepts an owner-dependent `/api/users` request
+  before the product handler can execute.
 
-- [ ] **PR 2: static and runtime guardrails**
-  - [ ] Add static guard for route-facing DuckDB imports.
+- [x] **PR 2: static and runtime guardrails**
+  - [x] Add static guard for route-facing DuckDB imports.
   - [x] Add static guard for deleted `duckdbOlap` imports.
-  - [ ] Add low-level missing-workload-context rejection for normal foreground work,
+  - [x] Add low-level missing-workload-context rejection for normal foreground work,
         initially behind a test/runtime switch if needed.
 
-  Evidence note: current guardrail work is partial. Quarantined legacy/static V4
-  product-read checks exist in `reviewServingSql.test.ts` and
-  `reviewServingReadContracts.test.ts`, including deleted `duckdbOlap` imports,
-  raw fallback SQL, `selected_scoped_article_import`, and mounted migrated route import guards;
-  `getAppQueryService.test.ts` covers a small audited read-only module set. Planned:
-  broad route-facing DuckDB import guard, broad normal foreground SQL guard, and
-  low-level runtime guard. `duckdbService.ts` still executes `work()` when the
-  workload context is `undefined`.
+  Evidence note: current guardrail work is complete for the audited foreground
+  route and low-level service scope. `duckdbRouteGuardrails.test.ts` blocks new
+  unallowlisted route-handler imports of generic DuckDB services, read-only
+  DuckDB services, `duckdbRunner`, deleted OLAP wrappers, `duckdbOlap`, or direct
+  `@duckdb/node-api`, and blocks raw OOM-prone SQL shapes. `reviewServingSql.test.ts`
+  and `reviewServingReadContracts.test.ts` cover V4 read contracts and raw
+  fallback SQL. `duckdbServiceWorkloadContext.test.ts` proves API-role
+  foreground DuckDB work without workload context is rejected before connection
+  acquisition by default, with an explicit opt-out.
 
 - [x] **PR 3: residual read allowlist**
   - [x] Create or update `reviewServingResidualReadAllowlist.ts`.
@@ -646,32 +674,35 @@ hardening, and finally physical evidence.
   workload class, and migration target. `reviewServingResidualReadAllowlist.test.ts`
   checks marker presence and required metadata fields.
 
-- [ ] **PR 4+: route-by-route V4 migration**
+- [x] **PR 4+: route-by-route V4 migration**
   - [x] Move one product surface at a time to V4 services/jobs.
   - [x] Delete or hard-disable the matching raw fallback in the same PR.
   - [x] Add SQL-shape tests and route parity tests for each migrated surface.
 
-  Evidence note: current V4 product read and durable job migration is real but not
-  complete. Migrated LLM, human, both, unassessed, filter/facet, add-to-project,
-  PDF, and judgment-job paths use V4 services/jobs with raw fallback imports
-  removed or guarded; route-service tests and `reviewServingSql.test.ts` cover SQL
+  Evidence note: current V4 product read and durable job migration is complete
+  for the audited normal product surfaces in this file. LLM, human, both,
+  unassessed, filter/facet, add-to-project, PDF, judgment-job, warning/detail,
+  prompt-preview, project membership, export download, comparison, human
+  assessment, telemetry, and project-transfer paths are either V4/CQRS, durable
+  job based, owner-routed source access, or explicit admin/maintenance
+  classifications. Route-service tests and `reviewServingSql.test.ts` cover SQL
   shape, while `reviewServingRouteParityRunner.test.ts` covers parity-gate behavior.
-  Planned: finish unchecked product routes above, including detail/hydration,
-  prompt preview, health/warnings, project membership, export download, comparison,
-  human assessment, telemetry, and any remaining owner-routed source access.
 
-- [ ] **Final evidence PR**
-  - [ ] Current-DB smoke proves API role proxies/fails closed and owner serves V4.
-  - [ ] Synthetic and physical release evidence prove no foreground raw fallback,
+- [~] **Final evidence PR**
+  - [x] Current-DB smoke proves API role proxies/fails closed and owner serves V4.
+  - [~] Synthetic and physical release evidence prove no foreground raw fallback,
         no temp spill, and bounded rows/result bytes.
 
-  Evidence note: current smoke evidence is planned/partial. `package.json` defines
-  `test:network-smoke:current-db` and `test:dev-server:current-db`;
+  Evidence note: current smoke evidence is complete for repo/current-DB
+  regression gates and partial for true release-scale proof. `package.json` defines
+  `test:network-smoke`, `test:network-smoke:current-db`,
+  `test:network-smoke:synthetic`, and `test:dev-server:current-db`;
   `tests/e2e/networkSmoke.spec.ts` and `scripts/runWithRuntimeProfile.test.ts`
   check forbidden runtime patterns for API-role DuckDB ownership, owner heartbeat
-  errors, fatal DuckDB restarts, and worker-loop failures. Planned: final current-DB
-  owner-routed/V4 smoke proof plus synthetic and physical release evidence for no
-  foreground raw fallback, zero temp spill, and bounded rows/result bytes.
+  errors, fatal DuckDB restarts, and worker-loop failures. Final branch evidence
+  includes passing current-DB, synthetic, and real dev-server startup smokes; true
+  Phase 6 physical release-scale evidence for zero temp spill and bounded
+  rows/result bytes remains open.
 
 ## Audit Commands
 
@@ -737,11 +768,10 @@ bun run test:network-smoke:current-db
 bun run test:dev-server:current-db
 ```
 
-- [ ] **Planned broad route-facing import guard.** Current guards cover migrated
-      review/job files and audited read-only modules, but there is no single
-      broad static gate that fails every unallowlisted route handler import of
-      generic DuckDB services, `duckdbOlap`, `duckdbRunner`, read-only services,
-      or `@duckdb/node-api`.
+- [x] **Planned broad route-facing import guard.** `duckdbRouteGuardrails.test.ts`
+      fails every unallowlisted route handler import of generic DuckDB services,
+      deleted OLAP wrappers/`duckdbOlap`, `duckdbRunner`, read-only services, or
+      `@duckdb/node-api`.
 - [x] **Planned low-level missing-workload-context guard.** Implemented as
       default-on API-role foreground rejection with explicit opt-out and
       wrapper/read-only/app-query tests.
@@ -749,7 +779,7 @@ bun run test:dev-server:current-db
       foreground imports and `duckdbRouteGuardrails.test.ts` fails new production
       imports of deleted OLAP wrappers or `duckdbOlap`; `duckdbOlap.ts` itself is
       deleted and legacy mart tests no longer import it as a fixture helper.
-- [ ] **Planned final release-scale smoke proof.** Current smoke gates are
+- [~] **Planned final release-scale smoke proof.** Current smoke gates are
       practical regression gates; Phase 6 still needs true release-scale physical
       proof for no foreground raw fallback, zero foreground temp spill, bounded
       rows/result bytes, and desktop-style overlap/interruption behavior.

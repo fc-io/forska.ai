@@ -9,6 +9,7 @@ import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
+import {shouldDisableServerMutationWork} from '../../utils/serverMutationMode.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 type ReviewsIndexingBlockedReason = 'paused_by_policy' | 'quarantine_barrier' | 'waiting_for_maintenance_worker' | null
@@ -112,6 +113,7 @@ const getReviewsIndexingStatus = (params: {
   hasAnyArticlesInScope: boolean
   hasReviewServingRows: boolean
   hasTerminalV4Work: boolean
+  isServerMutationWorkDisabled: boolean
   pendingRefreshCount: number
   runningRefreshCount: number
 }): ReviewsIndexingStatus => {
@@ -119,15 +121,17 @@ const getReviewsIndexingStatus = (params: {
 
   return !shouldIndexReviews
     ? 'not-needed'
-    : params.hasTerminalV4Work
-      ? 'failed'
-      : params.pendingRefreshCount > 0 && params.runningRefreshCount > 0
-        ? 'refreshing'
-        : params.pendingRefreshCount > 0
+    : params.isServerMutationWorkDisabled && params.pendingRefreshCount > 0 && params.runningRefreshCount === 0
+      ? 'blocked'
+      : params.hasTerminalV4Work
+        ? 'failed'
+        : params.pendingRefreshCount > 0 && params.runningRefreshCount > 0
           ? 'refreshing'
-          : params.hasReviewServingRows
-            ? 'ready'
-            : 'stale'
+          : params.pendingRefreshCount > 0
+            ? 'refreshing'
+            : params.hasReviewServingRows
+              ? 'ready'
+              : 'stale'
 }
 
 const getReviewsIndexingProgressState = (params: {
@@ -232,6 +236,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const terminalRebuildChunkCount =
       servingDiagnostics.rebuildChunks.blockedOverBudgetCount + servingDiagnostics.rebuildChunks.quarantinedCount
     const terminalDirtyWorkCount = servingDiagnostics.dirtyWork.failedCount
+    const isServerMutationWorkDisabled = shouldDisableServerMutationWork()
     const pendingDirtyWorkCount =
       servingDiagnostics.dirtyWork.pendingCount
       + servingDiagnostics.dirtyWork.failedCount
@@ -245,10 +250,14 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       hasAnyArticlesInScope,
       hasReviewServingRows,
       hasTerminalV4Work: terminalRebuildChunkCount + terminalDirtyWorkCount > 0,
+      isServerMutationWorkDisabled,
       pendingRefreshCount,
       runningRefreshCount: inFlightRefreshCount,
     })
     const progressState = getReviewsIndexingProgressState({inFlightRefreshCount, status: indexingStatus})
+    const blockedReason: ReviewsIndexingBlockedReason =
+      indexingStatus === 'blocked' && isServerMutationWorkDisabled ? 'waiting_for_maintenance_worker' : null
+    const eligibleConsumerCount = pendingRefreshCount > 0 && !isServerMutationWorkDisabled ? 1 : 0
 
     return {
       data: {
@@ -259,7 +268,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           activeConsumerCount: inFlightRefreshCount > 0 ? 1 : 0,
           activeWorkCount: inFlightRefreshCount,
           articleRefreshesPerMinute: null,
-          blockedReason: null as ReviewsIndexingBlockedReason,
+          blockedReason,
           cleanup: {inFlightGenerationCleanupCount: 0, lastProgressedAt: null},
           diagnostics: getEmptyRuntimeDiagnostics(),
           dirtyMaterialization: {
@@ -273,8 +282,8 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
             runningCount: 0,
             unreconciledCount: 0,
           },
-          eligibleConsumerCount: pendingRefreshCount > 0 ? 1 : 0,
-          eligibleConsumerPresent: pendingRefreshCount > 0,
+          eligibleConsumerCount,
+          eligibleConsumerPresent: eligibleConsumerCount > 0,
           freshness: {
             dirtyToken: null,
             hasIncompleteDirtyMaterialization: false,
