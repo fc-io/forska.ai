@@ -193,7 +193,7 @@ test('inspectProjectMartRefreshRisk reports scope dirty count and planned mode',
   })
 })
 
-test('runProjectMartRefreshWorkerOnce CLI completes one claim and leaves the ledger idle', () => {
+test('runProjectMartRefreshWorkerOnce legacy CLI requests V4 rebuild work and leaves the ledger idle', () => {
   const duckdbPath = join(projectRoot, '.tmp', 'run-project-mart-refresh-worker-once.duckdb')
   removeFileIfExists(dirname(duckdbPath))
   seedDatabase({dirtyArticleCount: 1, duckdbPath, projectId: 'project-run-once', refreshStatus: 'idle'})
@@ -209,11 +209,13 @@ test('runProjectMartRefreshWorkerOnce CLI completes one claim and leaves the led
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
     projectId: string
+    requestId: string
     status: string
     workerId: string
   }
 
-  expect(result).toMatchObject({projectId: 'project-run-once', status: 'completed', workerId: 'test-worker'})
+  expect(result).toMatchObject({projectId: 'project-run-once', status: 'v4_rebuild_requested', workerId: 'test-worker'})
+  expect(result.requestId).toBeTruthy()
 
   const [state] = runQuery(
     duckdbPath,
@@ -221,6 +223,17 @@ test('runProjectMartRefreshWorkerOnce CLI completes one claim and leaves the led
   ) as Array<{lastCompletedDirtyToken: string; refreshStatus: string}>
 
   expect(state).toEqual({lastCompletedDirtyToken: '1', refreshStatus: 'idle'})
+
+  const [request] = runQuery(
+    duckdbPath,
+    "SELECT project_id AS projectId, reason, status FROM app.review_rebuild_request WHERE project_id = 'project-run-once'",
+  ) as Array<{projectId: string; reason: string; status: string}>
+
+  expect(request).toEqual({
+    projectId: 'project-run-once',
+    reason: 'runProjectMartRefreshWorkerOnceIsolated.dirtyRefreshClaim',
+    status: 'admitted',
+  })
 })
 
 test('runProjectMartRefreshWorkerOnce legacy CLI blocks without admin acknowledgement', () => {
@@ -237,17 +250,14 @@ test('runProjectMartRefreshWorkerOnce legacy CLI blocks without admin acknowledg
   })
 })
 
-test('runProjectMartRefreshWorkerOnce routes oversized full refreshes into V4 rebuild requests', () => {
+test('runProjectMartRefreshWorkerOnce routes dirty refresh claims into V4 rebuild requests', () => {
   const duckdbPath = join(projectRoot, '.tmp', 'run-project-mart-refresh-worker-once-blocked.duckdb')
   removeFileIfExists(dirname(duckdbPath))
   seedDatabase({dirtyArticleCount: 4, duckdbPath, projectId: 'project-blocked', refreshStatus: 'idle'})
 
   const runScript = globalThis.Bun.spawnSync(
     ['bun', runOnceScriptPath, '--worker-id=test-worker', '--legacy-admin-ack=legacy-dirty-refresh'],
-    {
-      cwd: projectRoot,
-      env: {...defaultEnv, DUCKDB_PATH: duckdbPath, PROJECT_MART_REFRESH_MAX_FULL_SCOPE_ARTICLES: '3'},
-    },
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
   )
 
   expect(runScript.exitCode).toBe(0)
@@ -287,7 +297,7 @@ test('runProjectMartRefreshWorkerOnce routes oversized full refreshes into V4 re
   expect(state.lastCompletedDirtyToken).toBe(1)
   expect(request).toEqual({
     projectId: 'project-blocked',
-    reason: 'runProjectMartRefreshWorkerOnceIsolated.fullRefresh',
+    reason: 'runProjectMartRefreshWorkerOnceIsolated.dirtyRefreshClaim',
     status: 'admitted',
   })
   expect(largeRebuildCount).toEqual({count: 0})
