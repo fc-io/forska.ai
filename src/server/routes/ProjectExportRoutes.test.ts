@@ -453,8 +453,10 @@ test('project export download hydrates completed durable job selection as CSV', 
               useTitle: false,
             },
           },
+          latestSnapshotSemantics: true,
           resultManifestJson: {batches: {'article-1': ['article-1']}},
           reviewConfigHash: 'config-1',
+          snapshotId: null,
           status: 'completed',
         },
       ]
@@ -468,11 +470,11 @@ test('project export download hydrates completed durable job selection as CSV', 
       return [{modelId: 'model-1', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}]
     }
 
-    if (statement.includes('FROM app.article')) {
+    if (statement.includes('mart.review_article_serving_v4')) {
       return [
         {
-          articleAuthors: ['Author 1'],
           articleCreatedAt: '2026-01-01T00:00:00.000Z',
+          articleExternalId: 'article-1',
           articleId: 'article-1',
           articleOriginalData: null,
           articleSourceMetadata: null,
@@ -489,7 +491,7 @@ test('project export download hydrates completed durable job selection as CSV', 
       ]
     }
 
-    if (statement.includes('FROM app.judgment')) {
+    if (statement.includes('mart.review_article_judgment_detail_serving_v4')) {
       return [
         {
           answeredOriginal: 'yes',
@@ -515,13 +517,11 @@ test('project export download hydrates completed durable job selection as CSV', 
     'Title,Article ID,Article Link,Abstract/Summary,Journal,Prompt 1,Prompt 1 - Explanation,Prompt 1 - Quotes',
   )
   expect(text).toContain('Article 1,article-1,,Summary 1,,yes,Because,Quote 1')
-  expect(queryStatements.join('\n')).toContain('FROM app.article_import_route air')
-  expect(queryStatements.join('\n')).toContain('COALESCE(scoped_import.raw_payload, a.original_data)')
-  expect(queryStatements.join('\n')).toContain('json_merge_patch')
+  expect(queryStatements.join('\n')).toContain('JOIN mart.review_article_serving_v4')
+  expect(queryStatements.join('\n')).toContain('JOIN mart.review_article_judgment_detail_serving_v4')
+  expect(queryStatements.join('\n')).not.toContain('FROM app.article')
+  expect(queryStatements.join('\n')).not.toContain('FROM app.judgment')
+  expect(queryStatements.join('\n')).not.toContain('OFFSET')
   expect(queryStatements.join('\n')).not.toContain('model_id AS modelId')
-  expect(queryStatements.join('\n')).toContain("j.model_id = 'queued-model'")
-  expect(queryStatements.join('\n')).toContain('j.use_title = FALSE')
-  expect(queryStatements.join('\n')).toContain('j.use_abstract = FALSE')
-  expect(queryStatements.join('\n')).toContain('j.use_fulltext = TRUE')
-  expect(queryStatements.join('\n')).toContain('j.use_fulltext_no_images = TRUE')
+  expect(queryStatements.join('\n')).toContain("detail.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash")
 })
