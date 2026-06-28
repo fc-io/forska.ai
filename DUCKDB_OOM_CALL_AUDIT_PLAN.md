@@ -72,9 +72,12 @@ hardening, and finally physical evidence.
       `selected_scoped_article_import`, `ROW_NUMBER(`, raw `app.article` or
       `app.judgment` scans, unbounded `GROUP BY`, `OFFSET`, and runtime JSON
       sort/extraction.
-- [~] **A7.** Tighten low-level DuckDB execution so normal foreground work with
+- [x] **A7.** Tighten low-level DuckDB execution so normal foreground work with
   missing `DuckdbWorkloadContext` is rejected before connection acquisition,
-  while explicit owner/background/admin/test scopes remain allowlisted.
+  while explicit owner/background/admin/test scopes remain allowlisted. The
+  guard is now default-on for non-owner foreground `mainQuery`,
+  `mainStatement`, and `transaction`, with `FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT=false`
+  as an explicit rollout/debug opt-out.
 - [~] **A8.** Extend smoke gates so `test:network-smoke:current-db` and
   `test:dev-server:current-db` also fail on unqueueable/stalled V4 states,
   not only API-role ownership, heartbeat, fatal restart, and worker-loop
@@ -91,9 +94,12 @@ hardening, and finally physical evidence.
   read-only wrappers; `getAppQueryService.test.ts` now proves app-query
   residual source reads carry explicit owner source workload contexts, while
   route proxy/inventory guardrails keep those source reads owner-routed.
-- [~] **A11.** Implement the missing-workload-context rejection from A7 with tests
+- [x] **A11.** Implement the missing-workload-context rejection from A7 with tests
   beside `duckdbServiceWorkloadContext.test.ts`, including allowed
-  maintenance/admin/test paths.
+  maintenance/admin/test paths. Current tests cover default API-role rejection,
+  explicit opt-out behavior, `appDatabaseService.ts` wrapper rejection before
+  DuckDB instance creation, owner/background/maintenance allowance, read-only
+  workload forwarding, and `getAppQueryService.ts` owner-source contexts.
 - [x] **A12.** Finish residual read classification for `getAppQueryService.ts`
       and `appQueryServiceCore.ts` by giving every remaining product-facing source
       read a purpose, cap, workload class, and migration target.
@@ -461,17 +467,17 @@ hardening, and finally physical evidence.
       Current owner-routed/source-access enforcement: `ApiProxyRoutes.ts`
       returns the error, and `ApiProxyRoutes.test.ts` covers an API server without
       an owner returning `502` for `/api/users`.
-- [~] Low-level foreground DuckDB execution rejects missing workload context
-  outside explicit owner/background/admin/test scopes. Partial current
-  enforcement: when `FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT=true`,
+- [x] Low-level foreground DuckDB execution rejects missing workload context
+  outside explicit owner/background/admin/test scopes. Current enforcement:
   `duckdbService.ts` rejects API-role `mainQuery`, `mainStatement`, and
   `transaction` work without `DuckdbWorkloadContext` before connection
-  acquisition; `duckdbServiceWorkloadContext.test.ts` covers direct low-level API
-  rejection, `appDatabaseService.ts` wrapper rejection without creating a DuckDB
-  instance, and owner/background/maintenance allowance. Remaining rollout: enable the guard
-  by default after legitimate foreground callers are fully classified, and
-  extend wrapper-specific assertions through `appDatabaseService.ts`,
-  `getAppQueryService.ts`, and read-only wrappers.
+  acquisition by default; `FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT=false`
+  remains as an explicit rollout/debug opt-out. Evidence:
+  `duckdbServiceWorkloadContext.test.ts` covers default low-level API rejection,
+  opt-out behavior, `appDatabaseService.ts` wrapper rejection without creating a
+  DuckDB instance, and owner/background/maintenance allowance; `getAppQueryService.test.ts`
+  covers owner-source app-query contexts; and read-only workload forwarding is
+  covered by `readOnlyDuckdbServiceWorkloadContext.test.ts`.
 - [x] Static guards fail when route handlers import generic DuckDB services,
       `duckdbOlap`, `duckdbRunner`, `readOnlyDuckdbService`, or `@duckdb/node-api`
       without an allowlist entry. Current evidence:
@@ -502,7 +508,7 @@ hardening, and finally physical evidence.
 | ------ | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | ------------- | ------------- | ------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [x]    | API owner proxy                 | `src/server/routes/ApiProxyRoutes.ts`, `src/server/routes/apiRouteClassification.ts`, `src/server/routes/routeSurfaceInventory.ts`                                                                                        | Owner-routed source access                                      | N/A           | Routing       | N/A           | false                       | Current: API-role proxying, fail-closed unknown/owner-dependent classification, and inventory exhaustiveness are implemented/test-covered. `duckdbRouteGuardrails.test.ts` proves `apiProxyRoutes` is registered before public product routes in `serverMain.ts` and intercepts `/api/users` before the product handler can execute.                                                                                                            |
 | [x]    | Runtime role and owner registry | `src/server/utils/serverRuntimeRole.ts`, `src/server/utils/duckdbOwnerConnections.ts`, `src/server/utils/duckdbOwnerConnectionHeartbeat.ts`, `src/server/utils/duckdbOwnerLease.ts`, `src/server/utils/runtimeCutover.ts` | Owner/background writer                                         | N/A           | Control       | N/A           | false                       | Current: owner election, heartbeat, cutover compatibility, and failover registry code/tests exist. `duckdbServiceWorkloadContext.test.ts` proves API-role foreground work through the low-level service and `appDatabaseService.ts` wrapper fails before DuckDB instance creation when the workload-context guard is enabled; `getAppQueryService.test.ts` proves app-query residual source reads carry explicit owner source workload contexts; route proxy/inventory guardrails keep owner-dependent source reads off API-role local DuckDB ownership. |
-| [~]    | Low-level DuckDB service        | `src/server/utils/duckdbService.ts`, `src/server/services/appDatabaseService.ts`                                                                                                                                          | Owner/background writer                                         | Partial       | Reader/writer | Partial       | false                       | Partial: workload metrics, budgets, and `DuckdbWorkloadContext` are implemented/tested in `duckdbServiceWorkloadContext.test.ts`. With `FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT=true`, API-role foreground `mainQuery`/`mainStatement`/`transaction` without context is rejected before connection acquisition while owner/background/maintenance scopes remain allowed; `appDatabaseService.ts` `queryJson`/`run`/`transaction` inherit that guard without creating a DuckDB instance, and app-query residual source reads now pass explicit owner source contexts. Full default-on rollout remains planned. |
+| [x]    | Low-level DuckDB service        | `src/server/utils/duckdbService.ts`, `src/server/services/appDatabaseService.ts`                                                                                                                                          | Owner/background writer                                         | Complete      | Reader/writer | Complete      | false                       | Complete for the low-level guard scope: workload metrics, budgets, and `DuckdbWorkloadContext` are implemented/tested in `duckdbServiceWorkloadContext.test.ts`. API-role foreground `mainQuery`/`mainStatement`/`transaction` without context is rejected before connection acquisition by default while owner/background/maintenance scopes remain allowed; `FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT=false` is the explicit rollout/debug opt-out. `appDatabaseService.ts` `queryJson`/`run`/`transaction` inherit that guard without creating a DuckDB instance, app-query residual source reads pass explicit owner source contexts, and read-only helpers forward workload contexts without using owner-capable writer APIs. |
 | [x]    | Read-only DB services           | `src/server/services/readOnlyDuckdbService.ts`, `src/server/services/appReadOnlyDatabaseService.ts`, `src/server/services/getAppReadOnlyQueryService.ts`                                                                  | Residual allowlist / admin-debug-tool / owner-background writer | N/A           | Reader        | N/A           | false                       | Current: `readOnlyDuckdbService.ts` rejects write-capable SQL, disables live API read-only access when an owner proxy is configured, and uses shared read-only runtime options; `getAppQueryService.test.ts` and `readOnlyDuckdbServiceWorkloadContext.test.ts` cover read-only behavior and workload forwarding.                                                                                                                               |
 | [x]    | App query wrapper               | `src/server/services/getAppQueryService.ts`, `src/server/services/appQueryServiceCore.ts`                                                                                                                                 | Owner-routed source access / residual allowlist                 | Partial       | Reader        | N/A           | false                       | Current classification: source metadata/detail reads are owner-routed by API proxying, `reviewServingResidualReadAllowlist.ts` lists each product-facing `appQueryServiceCore.ts` method with purpose, cap, workload class, and migration target, and `getAppQueryService.test.ts` proves the wrapper passes explicit `owner.sourceAppQuery` workload contexts for project config, prompt, hydration, and full-article residual reads. Planned: finish V4 detail/payload migration so residual app-query reads can be removed. |
 | [x]    | Legacy OLAP runner              | `src/services/olap/duckdbRunner.ts`                                                                                                                                                                                       | Quarantined legacy                                              | No            | Reader        | No            | true - need further changes | Current quarantine: `duckdbRunner.ts` forwards default-path queries through `appDatabaseService` with optional workload context. `duckdbOlap.ts` is deleted, `reviewServingSql.test.ts` prevents retired OLAP imports in normal review and judgment-job foreground paths, and `duckdbRouteGuardrails.test.ts` blocks reintroduced production imports. Deletion remains planned for any remaining generic runner residue after all raw fallback callers are gone. |
@@ -731,9 +737,9 @@ bun run test:dev-server:current-db
       broad static gate that fails every unallowlisted route handler import of
       generic DuckDB services, `duckdbOlap`, `duckdbRunner`, read-only services,
       or `@duckdb/node-api`.
-- [ ] **Planned low-level missing-workload-context guard.** Current workload
-      tests prove context forwarding and metrics behavior, but low-level DuckDB
-      execution still allows `undefined` workload context in explicit paths.
+- [x] **Planned low-level missing-workload-context guard.** Implemented as
+      default-on API-role foreground rejection with explicit opt-out and
+      wrapper/read-only/app-query tests.
 - [x] **OLAP retirement guard.** Current tests quarantine normal review/job
       foreground imports and `duckdbRouteGuardrails.test.ts` fails new production
       imports of deleted OLAP wrappers or `duckdbOlap`; `duckdbOlap.ts` itself is
