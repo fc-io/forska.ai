@@ -33,30 +33,6 @@ type StoredModel = {
 }
 type MaintenanceRuntimeDiagnostics = {
   duckdb?: {configured?: {databasePath?: string | null}; effective?: {memoryLimit?: string | null}}
-  projectMartLargeRebuildHeartbeat?: {
-    automatic?: {
-      activeLargeRebuildProjectCount?: number
-      batchSize?: number
-      maxCyclesPerWake?: number
-      maxWakeMs?: number
-      pollIntervalMs?: number
-      profile?: string
-      totalMemoryGb?: number
-    }
-    batchSize?: number
-    maxCyclesPerWake?: number
-    maxWakeMs?: number
-    pollIntervalMs?: number
-    sources?: {batchSize?: string; maxCyclesPerWake?: string; maxWakeMs?: string; pollIntervalMs?: string}
-    stored?: {
-      maintenanceWorkerDuckdbMemoryLimit?: string | null
-      batchSize?: number | null
-      maxCyclesPerWake?: number | null
-      maxWakeMs?: number | null
-      pollIntervalMs?: number | null
-      tuningMode?: ProjectMartLargeRebuildTuningMode
-    }
-  }
 }
 type WorkerRuntimeRegistryCapability = {
   capability: string
@@ -192,23 +168,6 @@ const getNullablePositiveInteger = (value: string): number | null => {
   const parsed = Number.parseInt(normalized, 10)
 
   return normalized !== '' && Number.isInteger(parsed) && parsed > 0 ? parsed : null
-}
-
-const formatTuningSource = (value: string | null | undefined) => {
-  if (value === 'env') return 'Env override'
-  if (value === 'manual') return 'Manual setting'
-  return 'Automatic'
-}
-
-const formatTuningSummary = (value: {
-  batchSize?: number | null
-  maxCyclesPerWake?: number | null
-  maxWakeMs?: number | null
-  pollIntervalMs?: number | null
-}) => {
-  return value.batchSize && value.maxCyclesPerWake && value.maxWakeMs && value.pollIntervalMs
-    ? `batch ${value.batchSize}, poll ${value.pollIntervalMs}ms, burst ${value.maxCyclesPerWake}, budget ${value.maxWakeMs}ms`
-    : 'N/A'
 }
 
 const formatWorkerRuntimeBoolean = (value: boolean | null | undefined) => {
@@ -481,27 +440,8 @@ const Settings = () => {
                 </p>
               </div>
               <div class="pt-2 border-t border-gray-200">
-                <h3 class="text-sm font-semibold text-gray-900 mb-3">Maintenance rebuild tuning</h3>
+                <h3 class="text-sm font-semibold text-gray-900 mb-3">Maintenance runtime</h3>
                 <div class="space-y-4">
-                  <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Tuning mode</label>
-                    <select
-                      value={projectMartLargeRebuildTuningMode()}
-                      onInput={(event) => {
-                        setProjectMartLargeRebuildTuningMode(
-                          event.currentTarget.value as ProjectMartLargeRebuildTuningMode,
-                        )
-                      }}
-                      class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
-                    >
-                      <option value="automatic">Automatic</option>
-                      <option value="manual">Manual</option>
-                    </select>
-                    <p class="mt-2 text-xs text-gray-500">
-                      Automatic mode tunes the rebuild heartbeat from machine memory and active rebuild count. Manual
-                      mode lets you pin batch size, poll interval, burst size, and wake budget.
-                    </p>
-                  </div>
                   <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">
                       Maintenance DuckDB Memory Limit (restart required)
@@ -521,60 +461,8 @@ const Settings = () => {
                       take effect.
                     </p>
                   </div>
-                  <Show when={projectMartLargeRebuildTuningMode() === 'manual'}>
-                    <div class="grid gap-4 md:grid-cols-4">
-                      <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Batch Size</label>
-                        <input
-                          type="number"
-                          min="1"
-                          value={projectMartLargeRebuildBatchSize()}
-                          onInput={(event) => {
-                            setProjectMartLargeRebuildBatchSize(event.currentTarget.value)
-                          }}
-                          class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Poll Interval (ms)</label>
-                        <input
-                          type="number"
-                          min="1"
-                          value={projectMartLargeRebuildPollIntervalMs()}
-                          onInput={(event) => {
-                            setProjectMartLargeRebuildPollIntervalMs(event.currentTarget.value)
-                          }}
-                          class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Max Cycles Per Wake</label>
-                        <input
-                          type="number"
-                          min="1"
-                          value={projectMartLargeRebuildMaxCyclesPerWake()}
-                          onInput={(event) => {
-                            setProjectMartLargeRebuildMaxCyclesPerWake(event.currentTarget.value)
-                          }}
-                          class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Max Wake (ms)</label>
-                        <input
-                          type="number"
-                          min="1"
-                          value={projectMartLargeRebuildMaxWakeMs()}
-                          onInput={(event) => {
-                            setProjectMartLargeRebuildMaxWakeMs(event.currentTarget.value)
-                          }}
-                          class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
-                        />
-                      </div>
-                    </div>
-                  </Show>
                   <div class="rounded-md border border-gray-200 bg-gray-50 p-4 space-y-2">
-                    <p class="text-sm font-medium text-gray-900">Effective maintenance config</p>
+                    <p class="text-sm font-medium text-gray-900">Maintenance diagnostics</p>
                     <Show when={runtimeReadyQuery.isLoading && !canLoadSettingsDiagnostics()}>
                       <p class="text-xs text-gray-500">Checking Settings diagnostics access...</p>
                     </Show>
@@ -605,51 +493,12 @@ const Settings = () => {
                         </span>
                       </p>
                       <p class="text-xs text-gray-600">
-                        Current:{' '}
-                        {formatTuningSummary(
-                          maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat ?? {},
-                        )}
-                      </p>
-                      <p class="text-xs text-gray-600">
-                        Sources: batch{' '}
-                        {formatTuningSource(
-                          maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.sources?.batchSize,
-                        )}
-                        , poll{' '}
-                        {formatTuningSource(
-                          maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.sources
-                            ?.pollIntervalMs,
-                        )}
-                        , burst{' '}
-                        {formatTuningSource(
-                          maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.sources
-                            ?.maxCyclesPerWake,
-                        )}
-                        , budget{' '}
-                        {formatTuningSource(
-                          maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.sources?.maxWakeMs,
-                        )}
-                      </p>
-                      <p class="text-xs text-gray-600">
-                        Automatic recommendation:{' '}
-                        {formatTuningSummary(
-                          maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.automatic ?? {},
-                        )}
-                      </p>
-                      <p class="text-xs text-gray-600">
-                        Auto profile:{' '}
-                        {maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.automatic?.profile
-                          ?? 'N/A'}{' '}
-                        | Active rebuilds:{' '}
-                        {maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.automatic
-                          ?.activeLargeRebuildProjectCount ?? 'N/A'}{' '}
-                        | Maintenance memory:{' '}
+                        Maintenance memory:{' '}
                         {maintenanceRuntimeDiagnosticsQuery.data?.duckdb?.effective?.memoryLimit ?? 'N/A'}
                       </p>
                     </Show>
                     <p class="text-xs text-gray-500">
-                      Heartbeat tuning changes apply to the running maintenance runtime within a few seconds. DuckDB
-                      memory-limit changes are saved immediately but only apply after the next server restart.
+                      DuckDB memory-limit changes are saved immediately but only apply after the next server restart.
                     </p>
                   </div>
                   <div class="rounded-md border border-gray-200 bg-gray-50 p-4 space-y-2">

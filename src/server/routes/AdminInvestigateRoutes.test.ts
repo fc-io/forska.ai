@@ -466,10 +466,6 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
         DUCKDB_MEMORY_LIMIT: '256MiB',
         DUCKDB_PATH: duckdbPath,
         DUCKDB_TEMP_DIRECTORY: tempDirectory,
-        PROJECT_MART_LARGE_REBUILD_BATCH_SIZE: '8',
-        PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE: '4',
-        PROJECT_MART_LARGE_REBUILD_MAX_WAKE_MS: '1250',
-        PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS: '1500',
         SERVER_ROLE: 'maintenance-worker',
         VITE_PORT: '3000',
       },
@@ -521,15 +517,6 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
       }
       pid: number
       processMemory: {heapUsedBytes: number; rssBytes: number}
-      projectMartLargeRebuildHeartbeat: {
-        automatic: {batchSize: number; maxCyclesPerWake: number; maxWakeMs: number; pollIntervalMs: number}
-        batchSize: number
-        maxCyclesPerWake: number
-        maxWakeMs: number
-        pollIntervalMs: number
-        sources: {batchSize: string; maxCyclesPerWake: string; maxWakeMs: string; pollIntervalMs: string}
-        stored: {tuningMode: string}
-      }
       projectMartLargeRebuildRuntimeMetrics: {
         perPhase: Array<{
           committedRowCount: number
@@ -590,21 +577,7 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
     expect(responseBody.duckdb.queues.background.queueDepth).toBe(0)
     expect(responseBody.processMemory.rssBytes).toBeGreaterThan(0)
     expect(responseBody.processMemory.heapUsedBytes).toBeGreaterThan(0)
-    expect(responseBody.projectMartLargeRebuildHeartbeat.batchSize).toBe(8)
-    expect(responseBody.projectMartLargeRebuildHeartbeat.maxCyclesPerWake).toBe(4)
-    expect(responseBody.projectMartLargeRebuildHeartbeat.maxWakeMs).toBe(1250)
-    expect(responseBody.projectMartLargeRebuildHeartbeat.pollIntervalMs).toBe(1500)
-    expect(responseBody.projectMartLargeRebuildHeartbeat.sources).toEqual({
-      batchSize: 'env',
-      maxCyclesPerWake: 'env',
-      maxWakeMs: 'env',
-      pollIntervalMs: 'env',
-    })
-    expect(responseBody.projectMartLargeRebuildHeartbeat.stored.tuningMode).toBe('automatic')
-    expect(responseBody.projectMartLargeRebuildHeartbeat.automatic.batchSize).toBeGreaterThan(0)
-    expect(responseBody.projectMartLargeRebuildHeartbeat.automatic.maxCyclesPerWake).toBeGreaterThan(0)
-    expect(responseBody.projectMartLargeRebuildHeartbeat.automatic.maxWakeMs).toBeGreaterThan(0)
-    expect(responseBody.projectMartLargeRebuildHeartbeat.automatic.pollIntervalMs).toBeGreaterThan(0)
+    expect('projectMartLargeRebuildHeartbeat' in responseBody).toBe(false)
     expect(responseBody.projectMartLargeRebuildRuntimeMetrics.recentCycles[0]).toMatchObject({
       committedRowCount: 37,
       lastCommittedCursor: {articleCreatedAt: '2026-04-02T00:00:00.000Z', articleId: 'article-runtime-metric'},
