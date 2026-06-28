@@ -38,11 +38,20 @@ bun run db:duck:request-review-serving-all-projects-rebuild
 
 ## Skill Routing
 
+The detailed guidance lives in Markdown files under `.opencode/skills/`. If
+your agent runtime does not auto-discover OpenCode project skills, read the
+matching `SKILL.md` file directly before starting that kind of work.
+
 - Load `forskai-code-style` before TypeScript, refactor, lint, import, file-structure, or style-sensitive edits.
+  Path: `.opencode/skills/forskai-code-style/SKILL.md`
 - Load `forskai-frontend-solid` before SolidJS UI, TanStack Query, routing, desktop/web shared UI, Suspense, or stale-data work.
+  Path: `.opencode/skills/forskai-frontend-solid/SKILL.md`
 - Load `forskai-api-server` before server routes, Eden/RPC, API boundaries, ArkType validation, upload/download, or environment wiring.
+  Path: `.opencode/skills/forskai-api-server/SKILL.md`
 - Load `forskai-duckdb` before DuckDB, migrations, marts, queues, judgment queries, OOM errors, or `db:*` commands.
+  Path: `.opencode/skills/forskai-duckdb/SKILL.md`
 - Load `forskai-reporting` before plans, PRDs, reviews, commits, PRs, or task breakdowns.
+  Path: `.opencode/skills/forskai-reporting/SKILL.md`
 
 ## Quality Gates
 
