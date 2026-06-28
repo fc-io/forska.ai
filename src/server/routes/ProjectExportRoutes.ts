@@ -11,20 +11,12 @@ import {
 } from '../reviewServing/reviewServingManifestRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
-  getAndClause,
   getDateValue,
   getJsonValue,
-  getJudgmentConfigClause,
   getQuotedStringList,
   getSqlLiteral,
 } from '../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
-import {
-  getScopedArticleImportJoinSql,
-  getScopedArticleImportSelectionCteSql,
-  getScopedArticleMetadataExpression,
-  getScopedArticleOriginalDataExpression,
-} from '../services/scopedArticleReadAdapter.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {parseArktypeOptions} from './projectsRoutes/articlesReviewsFiltersUtils.ts'
@@ -34,8 +26,10 @@ type PromptDetails = {id: string; promptHeading: string | null; originalText: st
 type PromptInfoRow = {prompt: string; title: string; type: string}
 type ExportJobRow = {
   criteriaJson: unknown
+  latestSnapshotSemantics: boolean
   resultManifestJson: unknown
   reviewConfigHash: string | null
+  snapshotId: string | null
   status: string
 }
 type ExportContract = {
@@ -77,9 +71,11 @@ type ExportJudgmentRow = {
   answeredOriginalAsArray: unknown
   articleId: string
   explanation: string | null
+  judgmentPayloadJson?: unknown
   promptId: string
   quotes: unknown
 }
+type ExportServingSnapshotScope = {projectId: string; reviewConfigHash: string | null; snapshotId: string}
 
 const appDatabaseService = getAppDatabaseService()
 const projectExportLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
@@ -110,12 +106,6 @@ const getExportSourceProjectIds = (criteriaJson: unknown) => {
     : []
 }
 
-const getExportConfigProjectId = (input: {criteriaJson: unknown; projectId: string}) => {
-  const [sourceProjectId] = getExportSourceProjectIds(input.criteriaJson)
-
-  return sourceProjectId ?? input.projectId
-}
-
 const getExportArticleIds = (resultManifestJson: unknown) => {
   const manifest = getJsonValue(resultManifestJson)
 
@@ -127,6 +117,26 @@ const getExportArticleIds = (resultManifestJson: unknown) => {
 
   return batches && typeof batches === 'object' && !Array.isArray(batches)
     ? Object.values(batches).flatMap(getStringArray)
+    : []
+}
+
+const getExportArticleIdBatches = (resultManifestJson: unknown) => {
+  const manifest = getJsonValue(resultManifestJson)
+
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || !('batches' in manifest)) {
+    return []
+  }
+
+  const batches = (manifest as {batches?: unknown}).batches
+
+  return batches && typeof batches === 'object' && !Array.isArray(batches)
+    ? Object.values(batches).flatMap((batch) => {
+        const articleIds = getStringArray(batch)
+
+        return Array.from({length: Math.ceil(articleIds.length / exportBatchSize)}, (_, index) => {
+          return articleIds.slice(index * exportBatchSize, (index + 1) * exportBatchSize)
+        })
+      })
     : []
 }
 
@@ -180,39 +190,14 @@ const getProjectReviewConfig = async (projectId: string) => {
   return project ?? null
 }
 
-const isExportReviewConfig = (value: unknown): value is ExportReviewConfig => {
-  return Boolean(
-    value
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && ('modelId' in value ? typeof value.modelId === 'string' || value.modelId === null : false)
-    && 'useTitle' in value
-    && typeof value.useTitle === 'boolean'
-    && 'useAbstract' in value
-    && typeof value.useAbstract === 'boolean'
-    && 'useFulltext' in value
-    && typeof value.useFulltext === 'boolean'
-    && 'useFulltextNoImages' in value
-    && typeof value.useFulltextNoImages === 'boolean',
-  )
-}
-
-const getExportReviewConfig = (criteriaJson: unknown) => {
-  const criteria = getJsonValue(criteriaJson)
-  const reviewConfig =
-    criteria && typeof criteria === 'object' && !Array.isArray(criteria)
-      ? (criteria as {reviewConfig?: unknown}).reviewConfig
-      : null
-
-  return isExportReviewConfig(reviewConfig) ? reviewConfig : null
-}
-
 const getExportJob = async (projectId: string, jobId: string) => {
   const [job] = await appDatabaseService.queryJson<ExportJobRow>(`
     SELECT
       criteria_json AS criteriaJson,
+      latest_snapshot_semantics AS latestSnapshotSemantics,
       result_manifest_json AS resultManifestJson,
       review_config_hash AS reviewConfigHash,
+      snapshot_id AS snapshotId,
       status
     FROM app.review_bulk_operation_job
     WHERE job_id = ${getSqlLiteral(jobId)}
@@ -308,56 +293,118 @@ const getExportHeaders = (input: {
 const getExportArticles = async (input: {
   articleIds: string[]
   selectedMetadata: Record<string, boolean | undefined>
-  sourceProjectIds: string[]
+  snapshotScopes: ExportServingSnapshotScope[]
 }) => {
-  return appDatabaseService.queryJson<ExportArticleRow>(`
-    WITH ${getScopedArticleImportSelectionCteSql({articleIds: input.articleIds, projectIds: input.sourceProjectIds})}
+  const scopeRows = input.snapshotScopes
+    .map((scope, index) => {
+      return `(${getSqlLiteral(scope.projectId)}, ${getSqlLiteral(scope.reviewConfigHash)}, ${getSqlLiteral(scope.snapshotId)}, ${index})`
+    })
+    .join(', ')
+  const articleRows = input.articleIds
+    .map((articleId) => {
+      return `(${getSqlLiteral(articleId)})`
+    })
+    .join(', ')
+  const rows = await appDatabaseService.queryJson<ExportArticleRow & {sourceProjectOrder: number}>(`
+    WITH
+      export_scope(project_id, review_config_hash, snapshot_id, source_project_order) AS (VALUES ${scopeRows}),
+      export_article(article_id) AS (VALUES ${articleRows})
     SELECT
-      a.id AS articleId,
-      COALESCE(scoped_import.external_article_id, a.article_id) AS articleExternalId,
-      a.arxiv_id AS arxivId,
-      a.biorxiv_id AS biorxivId,
-      a.doi AS doi,
-      a.medrxiv_id AS medrxivId,
-      a.pubmed_id AS pubmedId,
-      a.url AS articleUrl,
-      a.article_title AS articleTitle,
-      a.article_summary AS articleSummary,
-      TO_JSON(a.article_authors) AS articleAuthors,
-      a.article_created_at AS articleCreatedAt,
-      a.article_updated_at AS articleUpdatedAt,
-      ${input.selectedMetadata.includeArticleLink ? `TO_JSON(${getScopedArticleOriginalDataExpression({articleAlias: 'a'})})` : 'NULL'} AS articleOriginalData,
-      ${input.selectedMetadata.includeJournal || input.selectedMetadata.includeArticleLink ? `TO_JSON(${getScopedArticleMetadataExpression({articleAlias: 'a'})})` : 'NULL'} AS articleSourceMetadata
-    FROM app.article a
-    ${getScopedArticleImportJoinSql({articleIdExpression: 'a.id'})}
-    WHERE a.id IN (${getQuotedStringList(input.articleIds).join(', ')})
-    ORDER BY a.id ASC
+      s.article_id AS articleId,
+      s.article_external_id AS articleExternalId,
+      s.arxiv_id AS arxivId,
+      s.biorxiv_id AS biorxivId,
+      s.doi AS doi,
+      s.medrxiv_id AS medrxivId,
+      s.pmid AS pubmedId,
+      s.url AS articleUrl,
+      s.article_title AS articleTitle,
+      payload.abstract_text AS articleSummary,
+      NULL AS articleAuthors,
+      s.article_created_at AS articleCreatedAt,
+      s.article_updated_at AS articleUpdatedAt,
+      NULL AS articleOriginalData,
+      payload.source_metadata AS articleSourceMetadata,
+      export_scope.source_project_order AS sourceProjectOrder
+    FROM export_scope
+    INNER JOIN mart.review_article_serving_v4 s
+      ON s.project_id = export_scope.project_id
+     AND s.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash
+     AND s.snapshot_id = export_scope.snapshot_id
+    INNER JOIN export_article
+      ON export_article.article_id = s.article_id
+    LEFT JOIN mart.review_article_serving_payload_v4 payload
+      ON payload.project_id = s.project_id
+     AND payload.display_identity = s.display_identity
+     AND payload.payload_identity = s.payload_identity
+     AND payload.snapshot_id = s.snapshot_id
+     AND payload.article_id = s.article_id
+    ORDER BY s.article_id ASC, export_scope.source_project_order ASC
+    LIMIT ${getSqlLiteral(input.articleIds.length * Math.max(input.snapshotScopes.length, 1))}
   `)
+
+  return rows.reduce<ExportArticleRow[]>((articles, row) => {
+    return articles.some((article) => article.articleId === row.articleId) ? articles : [...articles, row]
+  }, [])
 }
 
 const getExportJudgments = async (input: {
   articleIds: string[]
   promptIds: string[]
-  projectConfig: NonNullable<Awaited<ReturnType<typeof getProjectReviewConfig>>>
+  snapshotScopes: ExportServingSnapshotScope[]
 }) => {
-  return input.promptIds.length === 0
-    ? []
-    : appDatabaseService.queryJson<ExportJudgmentRow>(`
-        SELECT
-          j.article_id AS articleId,
-          j.prompt_id AS promptId,
-          j.answered_original AS answeredOriginal,
-          TO_JSON(j.answered_original_as_array) AS answeredOriginalAsArray,
-          j.explanation AS explanation,
-          TO_JSON(j.quotes) AS quotes
-        FROM app.judgment j
-        WHERE ${getAndClause([
-          `j.article_id IN (${getQuotedStringList(input.articleIds).join(', ')})`,
-          `j.prompt_id IN (${getQuotedStringList(input.promptIds).join(', ')})`,
-          'j.deleted_at IS NULL',
-          getJudgmentConfigClause({configs: [input.projectConfig], judgmentAlias: 'j'}),
-        ])}
-      `)
+  if (input.promptIds.length === 0 || input.articleIds.length === 0 || input.snapshotScopes.length === 0) {
+    return []
+  }
+
+  const scopeRows = input.snapshotScopes
+    .map((scope, index) => {
+      return `(${getSqlLiteral(scope.projectId)}, ${getSqlLiteral(scope.reviewConfigHash)}, ${getSqlLiteral(scope.snapshotId)}, ${index})`
+    })
+    .join(', ')
+  const articleRows = input.articleIds
+    .map((articleId) => {
+      return `(${getSqlLiteral(articleId)})`
+    })
+    .join(', ')
+  const promptRows = input.promptIds
+    .map((promptId) => {
+      return `(${getSqlLiteral(promptId)})`
+    })
+    .join(', ')
+  const rows = await appDatabaseService.queryJson<ExportJudgmentRow & {sourceProjectOrder: number}>(`
+    WITH
+      export_scope(project_id, review_config_hash, snapshot_id, source_project_order) AS (VALUES ${scopeRows}),
+      export_article(article_id) AS (VALUES ${articleRows}),
+      export_prompt(prompt_id) AS (VALUES ${promptRows})
+    SELECT
+      detail.article_id AS articleId,
+      detail.prompt_id AS promptId,
+      detail.answered_original AS answeredOriginal,
+      TO_JSON(detail.answered_original_as_array) AS answeredOriginalAsArray,
+      json_extract_string(detail.judgment_payload_json, '$.explanation') AS explanation,
+      json_extract(detail.judgment_payload_json, '$.quotes') AS quotes,
+      detail.judgment_payload_json AS judgmentPayloadJson,
+      export_scope.source_project_order AS sourceProjectOrder
+    FROM export_scope
+    INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
+      ON detail.project_id = export_scope.project_id
+     AND detail.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash
+     AND detail.snapshot_id = export_scope.snapshot_id
+     AND detail.payload_kind = 'llm'
+    INNER JOIN export_article
+      ON export_article.article_id = detail.article_id
+    INNER JOIN export_prompt
+      ON export_prompt.prompt_id = detail.prompt_id
+    ORDER BY detail.article_id ASC, detail.prompt_order ASC NULLS LAST, detail.prompt_id ASC, export_scope.source_project_order ASC
+    LIMIT ${getSqlLiteral(input.articleIds.length * input.promptIds.length * Math.max(input.snapshotScopes.length, 1))}
+  `)
+
+  return rows.reduce<ExportJudgmentRow[]>((judgments, row) => {
+    return judgments.some((judgment) => judgment.articleId === row.articleId && judgment.promptId === row.promptId)
+      ? judgments
+      : [...judgments, row]
+  }, [])
 }
 
 const getAnswerValue = (row: ExportJudgmentRow) => {
@@ -382,6 +429,40 @@ const getQuotesValue = (value: unknown) => {
       : quotesValue === null || quotesValue === undefined
         ? ''
         : JSON.stringify(quotesValue)
+}
+
+const getExportReviewConfigHashBySourceProjectId = (criteriaJson: unknown) => {
+  const criteria = getJsonValue(criteriaJson)
+  const hashes =
+    criteria && typeof criteria === 'object' && !Array.isArray(criteria)
+      ? (criteria as {sourceProjectReviewConfigHashes?: unknown}).sourceProjectReviewConfigHashes
+      : null
+
+  return hashes && typeof hashes === 'object' && !Array.isArray(hashes)
+    ? (hashes as Record<string, string | null>)
+    : {}
+}
+
+const getExportServingSnapshotScopes = async (input: {job: ExportJobRow; sourceProjectIds: string[]}) => {
+  const reviewConfigHashByProjectId = getExportReviewConfigHashBySourceProjectId(input.job.criteriaJson)
+  const scopes = await Promise.all(
+    input.sourceProjectIds.map(async (projectId) => {
+      const reviewConfigHash = reviewConfigHashByProjectId[projectId] ?? input.job.reviewConfigHash
+      const manifest = input.job.latestSnapshotSemantics
+        ? await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash})
+        : input.job.snapshotId
+          ? await getReviewServingSnapshotManifest({projectId, snapshotId: input.job.snapshotId})
+          : null
+
+      return manifest?.status === 'active'
+        ? {projectId, reviewConfigHash: manifest.reviewConfigHash ?? reviewConfigHash, snapshotId: manifest.snapshotId}
+        : null
+    }),
+  )
+
+  return scopes.filter((scope): scope is ExportServingSnapshotScope => {
+    return scope !== null
+  })
 }
 
 const buildExportCsvRows = (input: {
@@ -436,11 +517,9 @@ const buildExportCsvRows = (input: {
 }
 
 const buildExportCsvStream = (input: {
-  articleIds: string[]
+  articleIdBatches: string[][]
   contract: ExportContract
-  projectConfigProjectId: string
-  reviewConfig: ExportReviewConfig | null
-  sourceProjectIds: string[]
+  snapshotScopes: ExportServingSnapshotScope[]
 }) => {
   const encoder = new TextEncoder()
 
@@ -461,26 +540,17 @@ const buildExportCsvStream = (input: {
 
           return prompt ? [prompt] : []
         })
-        const projectConfig =
-          promptIds.length > 0
-            ? (input.reviewConfig ?? (await getProjectReviewConfig(input.projectConfigProjectId)))
-            : null
-        const batches = Array.from({length: Math.ceil(input.articleIds.length / exportBatchSize)}, (_, index) => {
-          return input.articleIds.slice(index * exportBatchSize, (index + 1) * exportBatchSize)
-        })
         const headerRow = getExportHeaders({contract: input.contract, orderedPromptDetails, selectedMetadata})
           .map(escapeCSV)
           .join(',')
 
         controller.enqueue(encoder.encode(headerRow + '\n'))
 
-        await batches.reduce<Promise<void>>(async (previousBatch, articleIds) => {
+        await input.articleIdBatches.reduce<Promise<void>>(async (previousBatch, articleIds) => {
           await previousBatch
           const [articles, judgments] = await Promise.all([
-            getExportArticles({articleIds, selectedMetadata, sourceProjectIds: input.sourceProjectIds}),
-            projectConfig
-              ? getExportJudgments({articleIds, projectConfig, promptIds})
-              : Promise.resolve([] as ExportJudgmentRow[]),
+            getExportArticles({articleIds, selectedMetadata, snapshotScopes: input.snapshotScopes}),
+            getExportJudgments({articleIds, promptIds, snapshotScopes: input.snapshotScopes}),
           ])
           const batchCsvRows = buildExportCsvRows({
             articles,
@@ -771,13 +841,22 @@ export const projectExportRoutes = new Elysia()
       }
 
       const articleIds = getExportArticleIds(job.resultManifestJson)
+      const articleIdBatches = getExportArticleIdBatches(job.resultManifestJson)
       const sourceProjectIds = getExportSourceProjectIds(job.criteriaJson)
-      const csv = buildExportCsvStream({
-        articleIds,
-        contract: getExportContract(job.criteriaJson),
-        projectConfigProjectId: getExportConfigProjectId({criteriaJson: job.criteriaJson, projectId: params.id}),
-        reviewConfig: getExportReviewConfig(job.criteriaJson),
+      const snapshotScopes = await getExportServingSnapshotScopes({
+        job,
         sourceProjectIds: sourceProjectIds.length > 0 ? sourceProjectIds : [params.id],
+      })
+
+      if (articleIds.length > 0 && snapshotScopes.length === 0) {
+        set.status = 409
+        return {error: 'Export serving snapshot is unavailable', success: false}
+      }
+
+      const csv = buildExportCsvStream({
+        articleIdBatches,
+        contract: getExportContract(job.criteriaJson),
+        snapshotScopes,
       })
       const filename = `${project.name.replace(/[^a-zA-Z0-9]/g, '_')}_export_${new Date().toISOString().slice(0, 10)}.csv`
 
