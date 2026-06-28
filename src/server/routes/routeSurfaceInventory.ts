@@ -364,7 +364,6 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
   ...ownerDependentProduct('ArticlesRoutes.ts', [
     ['GET', '/api/articles/latest'],
     ['GET', '/api/articles/search'],
-    ['GET', '/api/articles/:id'],
     ['GET', '/api/articles/pdf-fetch-jobs/:jobId'],
   ]),
   ...ownerDependentDiagnostics('ArticlesRoutes.ts', 'Article conversion and PDF-fetch status.', [
@@ -378,6 +377,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
       ['POST', '/api/articles/pdf-fetch-by-filter'],
       ['POST', '/api/articles/pdf-fetch-by-project'],
       ['POST', '/api/articles/batch-upsert'],
+      ['GET', '/api/articles/:id'],
       ['DELETE', '/api/articles/:id'],
     ],
   ),

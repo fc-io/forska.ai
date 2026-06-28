@@ -202,34 +202,6 @@ export const reviewServingResidualReadAllowlist = [
     ],
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetPromptPreview.ts',
   },
-  {
-    classification: 'boundedArticleDetailHydration',
-    sourceReads: [
-      sourceRead({
-        cap: 'single explicit articleId via appQueryServiceCore.getFullArticlesByIds',
-        marker: 'getFullArticlesByIds([id])',
-        migrationTarget:
-          'article detail should use keyed V4 article/detail payloads or remain outside review foreground flow',
-        purpose: 'hydrate the requested article detail record',
-        workloadClass: 'foreground-detail',
-      }),
-      sourceRead({
-        cap: 'one articleId, ordered judgment history for that article only',
-        marker: 'FROM app.judgment j',
-        migrationTarget: 'article judgment history should move to keyed detail/history contracts',
-        purpose: 'hydrate judgment history for a single article detail page',
-        workloadClass: 'foreground-detail',
-      }),
-      sourceRead({
-        cap: 'snapshot project IDs referenced by the single-article judgment payload',
-        marker: 'FROM app.project',
-        migrationTarget: 'snapshot project display names should move to detail/history payloads',
-        purpose: 'hydrate project display names for snapshot judgments in article detail',
-        workloadClass: 'foreground-metadata',
-      }),
-    ],
-    routeFile: 'src/server/routes/ArticlesRoutes.ts',
-  },
 ] as const
 
 export const getReviewServingResidualReadMarkers = (entry: (typeof reviewServingResidualReadAllowlist)[number]) => {
