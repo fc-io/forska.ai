@@ -5,26 +5,24 @@ import {createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
-import {ImportedArticlesPaginationControls} from './importedArticles/importedArticlesPaginationControls'
 
-type CuratedArticle = {
-  id: string
-  articleTitle: string
-  importedFromProjectId: string | null
-  importedFromProjectName: string | null
-}
+type CuratedArticle = {id: string; articleTitle: string}
 
 export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
-  const [currentPage, setCurrentPage] = createSignal(1)
+  const [cursorStack, setCursorStack] = createSignal<Array<string | null>>([])
+  const [currentCursor, setCurrentCursor] = createSignal<string | null>(null)
   const [pageLimit, setPageLimit] = createSignal(10)
+  const currentPage = () => {
+    return cursorStack().length + 1
+  }
 
   const query = useQuery(() => {
     return {
-      queryKey: ['project-curated-articles', props.projectId, currentPage(), pageLimit()],
+      queryKey: ['project-curated-articles', props.projectId, currentCursor(), pageLimit()],
       queryFn: async () => {
         const response = await apiClient.api
           .projects({id: props.projectId})
-          .articles.get({query: {page: String(currentPage()), limit: String(pageLimit())}})
+          .articles.get({query: {cursor: currentCursor() ?? undefined, limit: String(pageLimit())}})
         const data = handleApiResponse(response, 'Failed to fetch project articles')
         return data
       },
@@ -59,27 +57,6 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
         )
       },
     },
-    {
-      accessorKey: 'importedFromProjectId',
-      header: 'Imported From',
-      size: 320,
-      minSize: 200,
-      cell: (info) => {
-        const id = info.getValue() as string | null
-        const name = info.row.original.importedFromProjectName
-        return (
-          <Show when={id} fallback={<span class="text-gray-500">—</span>}>
-            {(nonNullId) => {
-              return (
-                <Link to="/projects/$id" params={{id: nonNullId()} as never} class="text-blue-600 hover:underline">
-                  {name || nonNullId()}
-                </Link>
-              )
-            }}
-          </Show>
-        )
-      },
-    },
   ]
 
   const table = createSolidTable({
@@ -96,28 +73,61 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
   return (
     <div>
       <h2 class="text-lg font-semibold mb-2">Individually Imported Articles</h2>
-      <Show when={query.data && Number(query.data.totalCount ?? 0) > 0}>
-        <ImportedArticlesPaginationControls
-          page={query.data?.page ?? 1}
-          totalPages={query.data?.totalPages ?? 1}
-          totalCount={query.data?.totalCount ?? 0}
-          limit={query.data?.limit ?? 10}
-          onPageChange={(p) => {
-            setCurrentPage(p)
-          }}
-          onLimitChange={(l) => {
-            setPageLimit(l)
-            setCurrentPage(1)
-          }}
-        />
-      </Show>
       <Show when={query.isPending}>
         <div class="text-sm text-gray-500">Loading imported articles...</div>
       </Show>
       <Show when={query.error}>
         <div class="text-sm text-red-600">{(query.error as Error).message}</div>
       </Show>
-      <Show when={query.data && Number(query.data.totalCount ?? 0) > 0}>
+      <Show when={(query.data?.articles?.length ?? 0) > 0}>
+        <div class="mb-3 flex flex-wrap items-center gap-3 text-sm text-gray-700">
+          <span>Page {currentPage()}</span>
+          <label class="flex items-center gap-2">
+            <span>Rows</span>
+            <select
+              class="rounded border border-gray-300 px-2 py-1"
+              value={pageLimit()}
+              onChange={(event) => {
+                setPageLimit(Number(event.currentTarget.value))
+                setCursorStack([])
+                setCurrentCursor(null)
+              }}
+            >
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            class="rounded border border-gray-300 px-3 py-1 disabled:opacity-50"
+            disabled={cursorStack().length === 0 || query.isFetching}
+            onClick={() => {
+              const stack = cursorStack()
+              const previousCursor = stack[stack.length - 1] ?? null
+              setCursorStack(stack.slice(0, -1))
+              setCurrentCursor(previousCursor)
+            }}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            class="rounded border border-gray-300 px-3 py-1 disabled:opacity-50"
+            disabled={!query.data?.nextCursor || query.isFetching}
+            onClick={() => {
+              const nextCursor = query.data?.nextCursor ?? null
+
+              if (nextCursor) {
+                setCursorStack([...cursorStack(), currentCursor()])
+                setCurrentCursor(nextCursor)
+              }
+            }}
+          >
+            Next
+          </button>
+        </div>
         <div class="overflow-x-auto bg-white rounded-lg shadow">
           <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
@@ -173,25 +183,8 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
           </table>
         </div>
       </Show>
-      <Show when={query.data && Number(query.data.totalCount ?? 0) <= 0}>
+      <Show when={!query.isPending && query.data && (query.data.articles?.length ?? 0) <= 0}>
         <div class="p-8 text-center text-gray-500">There are no imported articles from other projects.</div>
-      </Show>
-      <Show when={query.data && Number(query.data.totalCount ?? 0) > 0}>
-        <div class="mt-3">
-          <ImportedArticlesPaginationControls
-            page={query.data?.page ?? 1}
-            totalPages={query.data?.totalPages ?? 1}
-            totalCount={query.data?.totalCount ?? 0}
-            limit={query.data?.limit ?? 10}
-            onPageChange={(p) => {
-              setCurrentPage(p)
-            }}
-            onLimitChange={(l) => {
-              setPageLimit(l)
-              setCurrentPage(1)
-            }}
-          />
-        </div>
       </Show>
     </div>
   )

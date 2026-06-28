@@ -102,6 +102,9 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
     {createdAt: '2026-01-01T00:00:00.000Z', id: `${prefix}-article-1`, title: `${prefix} Article 1`},
   ]
   const importedArticle = articleRows[0]
+  const required = ['display', 'projectScope', 'selectedImport', 'payload'].map((component) => {
+    return {baseGeneration: '1', component, patchWatermark: '0', projectionIdentity: `${component}:${prefix}`}
+  })
 
   if (!importedArticle) {
     throw new Error('Membership fixture article not initialized')
@@ -122,7 +125,7 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
     INSERT INTO app.article (id, article_title, article_created_at)
     VALUES ${articleRows
       .map((article) => {
-        return `('${article.id}', '${article.title}', TIMESTAMPTZ '${article.createdAt}')`
+        return `('${article.id}', '${article.id} stale source title', TIMESTAMPTZ '${article.createdAt}')`
       })
       .join(', ')};
 
@@ -133,6 +136,59 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
     VALUES ${articleRows
       .map((article) => {
         return `('${projectId}', '${article.id}', TRUE, FALSE, TIMESTAMPTZ '${article.createdAt}')`
+      })
+      .join(', ')};
+
+    INSERT INTO app.review_serving_snapshot_manifest (
+      project_id,
+      snapshot_id,
+      snapshot_status,
+      review_config_hash,
+      composed_identity_json,
+      component_state_json,
+      required_components_json,
+      optional_components_json,
+      source_watermarks_json,
+      activated_at,
+      updated_at
+    ) VALUES (
+      '${projectId}',
+      '${prefix}-snapshot',
+      'active',
+      '${prefix}-review-config',
+      '{}'::JSON,
+      '${JSON.stringify({optional: [], required}).replaceAll("'", "''")}'::JSON,
+      '${JSON.stringify(required).replaceAll("'", "''")}'::JSON,
+      '[]'::JSON,
+      '{}'::JSON,
+      TIMESTAMPTZ '2026-01-04T00:00:00.000Z',
+      TIMESTAMPTZ '2026-01-04T00:00:00.000Z'
+    );
+
+    INSERT INTO mart.review_article_serving_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      base_generation,
+      patch_watermark,
+      display_identity,
+      project_scope_identity,
+      selected_import_identity,
+      llm_status_identity,
+      human_status_identity,
+      posting_identity,
+      summary_identity,
+      payload_identity,
+      list_mode_key,
+      article_id,
+      article_created_at,
+      article_updated_at,
+      sort_key,
+      activity_sort_at,
+      article_title
+    ) VALUES ${articleRows
+      .map((article) => {
+        return `('${projectId}', '${prefix}-review-config', '${prefix}-snapshot', 1, 0, 'display:${prefix}', 'projectScope:${prefix}', 'selectedImport:${prefix}', 'llmStatus:${prefix}', 'humanStatus:${prefix}', 'posting:${prefix}', 'summary:${prefix}', 'payload:${prefix}', 'llm', '${article.id}', TIMESTAMPTZ '${article.createdAt}', NULL, TIMESTAMPTZ '${article.createdAt}', TIMESTAMPTZ '${article.createdAt}', '${article.title}')`
       })
       .join(', ')};
   `)
@@ -235,7 +291,7 @@ test('project article delete rolls back when dirty marking fails', async () => {
   ])
 })
 
-test('project article membership listing uses cursor pagination over project-scope state', async () => {
+test('project article membership listing uses cursor pagination over project-scope and v4 state', async () => {
   if (!app) {
     throw new Error('Test app not initialized')
   }
@@ -268,8 +324,8 @@ test('project article membership listing uses cursor pagination over project-sco
     {
       articleTitle: newestArticle.title,
       id: newestArticle.id,
-      importedFromProjectId: fixture.importedFromProjectId,
-      importedFromProjectName: 'project-article-membership-cursor Imported Project',
+      importedFromProjectId: null,
+      importedFromProjectName: null,
     },
     {
       articleTitle: middleArticle.title,
