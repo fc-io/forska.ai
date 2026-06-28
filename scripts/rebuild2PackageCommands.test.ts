@@ -52,12 +52,8 @@ test('package exposes final rebuild2 command surface and removes obsolete mart r
   )
   expect(packageJson.scripts['db:duck:run-large-rebuild-worker-once']).toBeUndefined()
   expect(packageJson.scripts['db:duck:run-large-rebuild-worker-cycles']).toBeUndefined()
-  expect(packageJson.scripts['db:duck:legacy-admin-run-large-rebuild-worker-once']).toBe(
-    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runLargeRebuildWorkerOnce.ts --legacy-admin-ack=legacy-large-rebuild',
-  )
-  expect(packageJson.scripts['db:duck:legacy-admin-run-large-rebuild-worker-cycles']).toBe(
-    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runLargeRebuildWorkerCycles.ts --legacy-admin-ack=legacy-large-rebuild',
-  )
+  expect(packageJson.scripts['db:duck:legacy-admin-run-large-rebuild-worker-once']).toBeUndefined()
+  expect(packageJson.scripts['db:duck:legacy-admin-run-large-rebuild-worker-cycles']).toBeUndefined()
   expect(packageJson.scripts['db:duck:quarantine-dirty-refresh-article']).toBe(
     'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/quarantineDirtyRefreshArticle.ts',
   )
