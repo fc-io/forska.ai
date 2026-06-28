@@ -332,7 +332,6 @@ test('legacy mart maintenance paths do not write V4 review-serving snapshots', (
     .filter((repoPath) => {
       return (
         repoPath === 'src/server/services/getDuckdbMartMaintenanceService.ts'
-        || repoPath === 'src/server/workers/projectMartRefreshWorker.ts'
         || repoPath.startsWith('src/server/services/projectMartDirty')
         || repoPath.startsWith('src/server/services/projectMartLargeRebuild')
       )
@@ -376,7 +375,6 @@ test('legacy mart maintenance paths do not write V4 review-serving snapshots', (
     'src/server/services/projectMartLargeRebuildProgressService.ts',
     'src/server/services/projectMartLargeRebuildRunner.ts',
     'src/server/services/projectMartLargeRebuildStateService.ts',
-    'src/server/workers/projectMartRefreshWorker.ts',
   ])
   expect(offenders).toEqual([])
 })
