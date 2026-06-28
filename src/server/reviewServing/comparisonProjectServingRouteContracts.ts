@@ -89,11 +89,12 @@ export const comparisonProjectServingRouteContracts = [
     servingContract: 'comparison.conflictResolutionExport.activeGeneration',
   },
   {
-    handling: 'owner-source-validation',
+    handling: 'serving-read',
     method: 'POST',
     migrationTarget:
-      'import analysis still needs target article matching source reads until comparison serving owns match keys',
+      'import analysis must target-match against active comparison serving article/identifier rows and fail closed without an active generation',
     routePath: '/api/comparison-projects/:id/conflict-resolutions/import/analyze',
+    servingContract: 'comparison.conflictResolutionImport.activeGeneration',
   },
   {
     handling: 'owner-write-plus-serving-rebuild',

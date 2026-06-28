@@ -60,6 +60,10 @@ import {
   getComparisonProjectConflictResolutionImportIdTitleKey,
   getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql,
   getComparisonProjectConflictResolutionImportPlan,
+  getComparisonProjectConflictResolutionImportServingArticleIdTargetArticlesSql,
+  getComparisonProjectConflictResolutionImportServingIdentifierTargetArticlesSql,
+  getComparisonProjectConflictResolutionImportServingIdTitleTargetArticlesSql,
+  getComparisonProjectConflictResolutionImportServingTitleTargetArticlesSql,
   getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact,
   getComparisonProjectConflictResolutionImportSourceRowsSql,
   getComparisonProjectConflictResolutionImportSourcesSql,
@@ -1453,11 +1457,83 @@ const getConflictResolutionImportUnmatchedSourceRows = (params: {
   })
 }
 
+const getConflictResolutionImportServingCandidateTargetRows = async (params: {
+  generation: number
+  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
+  scope: ComparisonProjectScope
+  tx: AppQueryRunner
+}) => {
+  const sourceArticleIds = getConflictResolutionImportSourceArticleIds(params.sourceRows)
+  const articleIdTargetRows =
+    sourceArticleIds.length > 0
+      ? await params.tx.queryJson<ComparisonProjectConflictResolutionImportTargetArticleQueryRow>(
+          getComparisonProjectConflictResolutionImportServingArticleIdTargetArticlesSql({
+            articleIds: sourceArticleIds,
+            comparisonProjectId: params.scope.id,
+            generation: params.generation,
+          }),
+        )
+      : []
+  const unmatchedSourceRows = getConflictResolutionImportUnmatchedSourceRows({
+    articleIdTargetRows,
+    sourceRows: params.sourceRows,
+  })
+  const identifierKeys = getConflictResolutionImportIdentifierKeys(unmatchedSourceRows)
+  const idTitleKeys = getConflictResolutionImportIdTitleKeys(unmatchedSourceRows)
+  const titleKeys = getConflictResolutionImportTitleKeys(unmatchedSourceRows)
+  const identifierTargetRows =
+    identifierKeys.length > 0
+      ? await params.tx.queryJson<ComparisonProjectConflictResolutionImportTargetArticleQueryRow>(
+          getComparisonProjectConflictResolutionImportServingIdentifierTargetArticlesSql({
+            comparisonProjectId: params.scope.id,
+            generation: params.generation,
+            identifierKeys,
+          }),
+        )
+      : []
+  const idTitleTargetRows =
+    idTitleKeys.length > 0
+      ? await params.tx.queryJson<ComparisonProjectConflictResolutionImportTargetArticleQueryRow>(
+          getComparisonProjectConflictResolutionImportServingIdTitleTargetArticlesSql({
+            comparisonProjectId: params.scope.id,
+            generation: params.generation,
+            idTitleKeys,
+          }),
+        )
+      : []
+  const titleTargetRows =
+    titleKeys.length > 0
+      ? await params.tx.queryJson<ComparisonProjectConflictResolutionImportTargetArticleQueryRow>(
+          getComparisonProjectConflictResolutionImportServingTitleTargetArticlesSql({
+            comparisonProjectId: params.scope.id,
+            generation: params.generation,
+            titleKeys,
+          }),
+        )
+      : []
+
+  return mergeComparisonProjectConflictResolutionImportTargetArticleRows([
+    ...articleIdTargetRows,
+    ...identifierTargetRows,
+    ...idTitleTargetRows,
+    ...titleTargetRows,
+  ])
+}
+
 const getConflictResolutionImportCandidateTargetRows = async (params: {
   sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
   scope: ComparisonProjectScope
   tx: AppQueryRunner
 }) => {
+  if (params.scope.activeGeneration !== null) {
+    return getConflictResolutionImportServingCandidateTargetRows({
+      generation: params.scope.activeGeneration,
+      sourceRows: params.sourceRows,
+      scope: params.scope,
+      tx: params.tx,
+    })
+  }
+
   const articleScopeConditions = getArticleScopeConditions(
     params.scope.importRouteIds,
     params.scope.sourceProjectIds,
@@ -1823,6 +1899,12 @@ const validateConflictResolutionImportAnalyzeTarget = (scope: ComparisonProjectS
   if (!scope.allowConflictResolution || !getIsSummaryMode(scope)) {
     throw getConflictResolutionImportRejectedError(
       'Conflict resolution imports require summary mode and allow conflict resolution to be enabled',
+    )
+  }
+
+  if (scope.activeGeneration === null) {
+    throw getConflictResolutionImportRejectedError(
+      'Conflict resolution imports require an active comparison serving generation',
     )
   }
 }

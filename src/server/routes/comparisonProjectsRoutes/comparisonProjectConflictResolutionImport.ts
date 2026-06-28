@@ -602,6 +602,135 @@ export const getComparisonProjectConflictResolutionImportArticleIdTargetArticles
   `
 }
 
+const getComparisonProjectConflictResolutionImportServingIdentifierListSql = () => {
+  const identifierKeySql = `strong_identifier.kind || ${getSqlLiteral(identifierKeySeparator)} || strong_identifier.normalized_value`
+
+  return `LIST(DISTINCT ${identifierKeySql} ORDER BY ${identifierKeySql}) FILTER (WHERE strong_identifier.kind IS NOT NULL) AS identifierKeys`
+}
+
+const getComparisonProjectConflictResolutionImportServingArticleSelectSql = () => {
+  return `
+      a.article_id AS articleId,
+      MIN(CASE WHEN strong_identifier.kind = 'doi' THEN strong_identifier.normalized_value ELSE NULL END) AS doi,
+      ${getComparisonProjectConflictResolutionImportServingIdentifierListSql()},
+      a.doi AS legacyDoi,
+      a.pubmed_id AS pubmedId,
+      a.arxiv_id AS arxivId,
+      a.article_external_id AS externalArticleId,
+      a.article_title AS title
+  `
+}
+
+const getComparisonProjectConflictResolutionImportServingGroupBySql = () => {
+  return `
+      a.article_id,
+      a.doi,
+      a.pubmed_id,
+      a.arxiv_id,
+      a.article_external_id,
+      a.article_title
+  `
+}
+
+const getComparisonProjectConflictResolutionImportServingArticleJoinSql = (params: {
+  comparisonProjectId: string
+  generation: number
+}) => {
+  return `
+    LEFT JOIN mart.comparison_article_identifier_serving strong_identifier
+      ON strong_identifier.comparison_project_id = a.comparison_project_id
+     AND strong_identifier.generation = a.generation
+     AND strong_identifier.article_id = a.article_id
+     AND strong_identifier.kind IN ('doi', 'pmid', 'arxiv')
+    WHERE a.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+      AND a.generation = ${getSqlLiteral(params.generation)}
+  `
+}
+
+export const getComparisonProjectConflictResolutionImportServingArticleIdTargetArticlesSql = (params: {
+  articleIds: string[]
+  comparisonProjectId: string
+  generation: number
+}) => {
+  return `
+    SELECT
+${getComparisonProjectConflictResolutionImportServingArticleSelectSql()}
+    FROM mart.comparison_article_serving a
+${getComparisonProjectConflictResolutionImportServingArticleJoinSql(params)}
+      AND ${params.articleIds.length > 0 ? `a.article_id IN (${getInClause(params.articleIds)})` : 'FALSE'}
+    GROUP BY ${getComparisonProjectConflictResolutionImportServingGroupBySql()}
+    ORDER BY a.article_id ASC
+  `
+}
+
+export const getComparisonProjectConflictResolutionImportServingIdentifierTargetArticlesSql = (params: {
+  comparisonProjectId: string
+  generation: number
+  identifierKeys: string[]
+}) => {
+  const identifierKeySql = `matched_identifier.kind || ${getSqlLiteral(identifierKeySeparator)} || matched_identifier.normalized_value`
+
+  return `
+    WITH matched_article AS (
+      SELECT DISTINCT matched_identifier.article_id AS articleId
+      FROM mart.comparison_article_identifier_serving matched_identifier
+      WHERE matched_identifier.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+        AND matched_identifier.generation = ${getSqlLiteral(params.generation)}
+        AND matched_identifier.kind IN ('doi', 'pmid', 'arxiv')
+        AND ${params.identifierKeys.length > 0 ? `${identifierKeySql} IN (${getInClause(params.identifierKeys)})` : 'FALSE'}
+    )
+    SELECT
+${getComparisonProjectConflictResolutionImportServingArticleSelectSql()}
+    FROM matched_article
+    INNER JOIN mart.comparison_article_serving a
+      ON a.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+     AND a.generation = ${getSqlLiteral(params.generation)}
+     AND a.article_id = matched_article.articleId
+${getComparisonProjectConflictResolutionImportServingArticleJoinSql(params)}
+    GROUP BY ${getComparisonProjectConflictResolutionImportServingGroupBySql()}
+    ORDER BY a.article_id ASC
+  `
+}
+
+export const getComparisonProjectConflictResolutionImportServingIdTitleTargetArticlesSql = (params: {
+  comparisonProjectId: string
+  generation: number
+  idTitleKeys: string[]
+}) => {
+  const idTitleKeySql = getComparisonProjectConflictResolutionImportIdTitleKeySql({
+    externalArticleIdColumn: 'a.article_external_id',
+    titleColumn: 'a.article_title',
+  })
+
+  return `
+    SELECT
+${getComparisonProjectConflictResolutionImportServingArticleSelectSql()}
+    FROM mart.comparison_article_serving a
+${getComparisonProjectConflictResolutionImportServingArticleJoinSql(params)}
+      AND ${params.idTitleKeys.length > 0 ? `${idTitleKeySql} IN (${getInClause(params.idTitleKeys)})` : 'FALSE'}
+    GROUP BY ${getComparisonProjectConflictResolutionImportServingGroupBySql()}
+    ORDER BY a.article_id ASC
+  `
+}
+
+export const getComparisonProjectConflictResolutionImportServingTitleTargetArticlesSql = (params: {
+  comparisonProjectId: string
+  generation: number
+  titleKeys: string[]
+}) => {
+  const titleKeySql = getComparisonProjectConflictResolutionImportTitleKeySql('a.article_title')
+
+  return `
+    SELECT
+${getComparisonProjectConflictResolutionImportServingArticleSelectSql()}
+    FROM mart.comparison_article_serving a
+${getComparisonProjectConflictResolutionImportServingArticleJoinSql(params)}
+      AND ${params.titleKeys.length > 0 ? `${titleKeySql} IN (${getInClause(params.titleKeys)})` : 'FALSE'}
+    GROUP BY ${getComparisonProjectConflictResolutionImportServingGroupBySql()}
+    ORDER BY a.article_id ASC
+  `
+}
+
 export const getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql = (params: {
   articleIdentifierTable: string
   articleScopeConditions: readonly string[]

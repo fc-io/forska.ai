@@ -37,6 +37,11 @@ test('comparison serving read routes declare active-generation contracts', () =>
       '/api/comparison-projects/:id/conflict-resolutions/export',
       'comparison.conflictResolutionExport.activeGeneration',
     ],
+    [
+      'POST',
+      '/api/comparison-projects/:id/conflict-resolutions/import/analyze',
+      'comparison.conflictResolutionImport.activeGeneration',
+    ],
     ['POST', '/api/comparison-projects/:id/export', 'comparison.export.activeGeneration'],
   ])
   expect(
@@ -61,9 +66,9 @@ test('comparison source and mutation routes are classified away from serving rea
   expect(
     sourceOrWriteEntries.some((entry) => {
       return (
-        entry.routePath === '/api/comparison-projects/:id/conflict-resolutions/import/analyze'
+        entry.routePath === '/api/comparison-projects/conflict-resolution-import-preview'
         && entry.handling === 'owner-source-validation'
-        && entry.migrationTarget.includes('comparison serving owns match keys')
+        && entry.migrationTarget.includes('preview source validation')
       )
     }),
   ).toBe(true)
