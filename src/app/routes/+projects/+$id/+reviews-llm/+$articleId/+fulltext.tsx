@@ -11,6 +11,11 @@ import {ReviewHumanAssessments} from '../../../../../../components/main/projects
 import {ReviewJudgments} from '../../../../../../components/main/projects/reviews/review/reviewJudgments.tsx'
 import {apiClient} from '../../../../../../services/apiClient.ts'
 import {getArticleDocumentTitle} from '../../../../../utils/getArticleDocumentTitle'
+import {
+  getAvailableReviewDetail,
+  isUnavailableReviewDetail,
+  ReviewDetailUnavailableState,
+} from './reviewDetailReadiness'
 
 export const ReviewDetailFulltext = () => {
   const params = Route.useParams()
@@ -34,7 +39,7 @@ export const ReviewDetailFulltext = () => {
   })
 
   const selectedJudgment = createMemo(() => {
-    const data = articleQuery.data
+    const data = getAvailableReviewDetail(articleQuery.data)
     const selectedId = articleViewToShow()
     if (!data || !selectedId) return undefined
 
@@ -48,12 +53,20 @@ export const ReviewDetailFulltext = () => {
         })
   })
 
+  const availableDetail = createMemo(() => {
+    return getAvailableReviewDetail(articleQuery.data)
+  })
+
+  const unavailableDetail = createMemo(() => {
+    return isUnavailableReviewDetail(articleQuery.data) ? articleQuery.data : null
+  })
+
   createEffect(() => {
-    document.title = getArticleDocumentTitle(articleQuery.data?.article?.articleTitle)
+    document.title = getArticleDocumentTitle(availableDetail()?.article?.articleTitle)
   })
 
   const hasFullText = () => {
-    const article = articleQuery.data?.article
+    const article = availableDetail()?.article
     const fullText = article?.fullText?.trim()
     const fullTextHtml = article?.fullTextHtml?.trim()
     return Boolean(fullText || fullTextHtml)
@@ -81,7 +94,13 @@ export const ReviewDetailFulltext = () => {
             </div>
           </Show>
 
-          <Show when={articleQuery.data}>
+          <Show when={unavailableDetail()}>
+            {(data) => {
+              return <ReviewDetailUnavailableState data={data()} />
+            }}
+          </Show>
+
+          <Show when={availableDetail()}>
             {(data) => {
               return (
                 <div class="flex gap-6">
