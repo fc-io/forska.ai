@@ -5606,7 +5606,7 @@ test('comparison judgments count endpoint returns zero when active generation is
     state.queryStatements.some((statement) => {
       return statement.includes('FROM mart.comparison_filter_stats stats')
     }),
-  ).toBe(true)
+  ).toBe(false)
   expect(
     state.queryStatements.some((statement) => {
       return (
@@ -6211,6 +6211,44 @@ test('comparison project conflict resolution export returns saved resolutions as
   expect(exportStatement).not.toContain('LIMIT')
   expect(exportStatement).not.toContain('row_filter')
   expect(exportStatement).not.toContain('difference_filter')
+})
+
+test('comparison project conflict resolution export fails closed without active serving generation', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1'],
+      summarySourceProjectId: null,
+    },
+    conflictResolutionRows: [
+      {
+        answerValue: 'yes',
+        articleId: 'article-1',
+        externalArticleId: 'external-1',
+        id: 'resolution-1',
+        promptId: null,
+        title: 'Export Article 1',
+      },
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolutionExport(app)
+  const artifact = (await response.json()) as {rows: unknown[]}
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(artifact.rows).toEqual([])
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM app.comparison_project_conflict_resolution cr')
+    }),
+  ).toBe(false)
 })
 
 test('summary comparison project export streams synthetic summary csv columns', async () => {

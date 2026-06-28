@@ -31,6 +31,7 @@ test('comparison product reads are admitted through bounded serving helpers', ()
   const judgmentCountBody = getFunctionBody('getComparisonProjectJudgmentsCount')
   const statsBody = getFunctionBody('getComparisonProjectStatsResponse')
   const exportBody = getFunctionBody('getComparisonProjectExportResponse')
+  const conflictResolutionExportBody = getFunctionBody('getComparisonProjectConflictResolutionExportSourceRows')
 
   expect(judgmentPageBody).toContain('scope.activeGeneration === null')
   expect(judgmentPageBody).toContain('getComparisonProjectServingJudgmentRowsPage')
@@ -46,6 +47,8 @@ test('comparison product reads are admitted through bounded serving helpers', ()
   expect(exportBody).toContain('forEachComparisonProjectServingJudgmentRowBatch')
   expect(exportBody).not.toContain('forEachComparisonProjectJudgmentRowBatch')
   expect(exportBody).not.toContain(' OFFSET ')
+  expect(conflictResolutionExportBody).toContain('scope.activeGeneration === null')
+  expect(conflictResolutionExportBody).toContain('return []')
 })
 
 test('comparison source writes stay owner routed and queue serving rebuilds', () => {
