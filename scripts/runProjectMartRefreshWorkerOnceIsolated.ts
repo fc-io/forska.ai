@@ -2,26 +2,16 @@ import {hostname} from 'node:os'
 
 import {requestReviewServingV4Rebuild} from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
-import {getDuckdbMartMaintenanceService} from '../src/server/services/getDuckdbMartMaintenanceService.ts'
 import {getMaintenanceWorkLeaseService} from '../src/server/services/maintenanceWorkLeaseService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 import {legacyDirtyRefreshAckValue, requireLegacyAdminAck} from './legacyAdminAck.ts'
 
-type CliOptions = {
-  heartbeatMs: number | undefined
-  incrementalArticleThreshold: number
-  leaseMs: number
-  maxFullProjectScopeArticles: number
-  projectId: string | undefined
-  workerId: string
-}
+type CliOptions = {heartbeatMs: number | undefined; leaseMs: number; projectId: string | undefined; workerId: string}
 
 type Claim = {claimedToken: number; lastCompletedToken: number; projectId: string; workerId: string}
 
 const defaultLeaseMs = 30_000
 const defaultHeartbeatMs = 10_000
-const defaultIncrementalArticleThreshold = 3
-const defaultMaxFullProjectScopeArticles = 100_000
 
 const getArgValue = (names: string[]) => {
   const matchedArgument = process.argv.slice(2).find((argument) => {
@@ -40,33 +30,13 @@ const getNumberArgValue = (names: string[]) => {
   return rawValue === undefined || Number.isNaN(parsed) ? undefined : parsed
 }
 
-const getExecutionMode = ({
-  dirtyArticleCount,
-  incrementalArticleThreshold,
-}: {
-  dirtyArticleCount: number
-  incrementalArticleThreshold: number
-}) => {
-  return dirtyArticleCount === 0 ? 'idle' : dirtyArticleCount <= incrementalArticleThreshold ? 'incremental' : 'full'
-}
-
 const getCliOptions = (): CliOptions => {
   const workerId =
     getArgValue(['--workerId', '--worker-id']) ?? `project-mart-refresh-worker-isolated:${hostname()}:${process.pid}`
-  const envMaxFullProjectScopeArticles = Number(process.env.PROJECT_MART_REFRESH_MAX_FULL_SCOPE_ARTICLES ?? '')
-  const maxFullProjectScopeArticles =
-    getNumberArgValue(['--maxFullProjectScopeArticles', '--max-full-project-scope-articles'])
-    ?? (Number.isFinite(envMaxFullProjectScopeArticles) && envMaxFullProjectScopeArticles > 0
-      ? envMaxFullProjectScopeArticles
-      : defaultMaxFullProjectScopeArticles)
 
   return {
     heartbeatMs: getNumberArgValue(['--heartbeatMs', '--heartbeat-ms']) ?? defaultHeartbeatMs,
-    incrementalArticleThreshold:
-      getNumberArgValue(['--incrementalArticleThreshold', '--incremental-article-threshold'])
-      ?? defaultIncrementalArticleThreshold,
     leaseMs: getNumberArgValue(['--leaseMs', '--lease-ms']) ?? defaultLeaseMs,
-    maxFullProjectScopeArticles,
     projectId: getArgValue(['--projectId', '--project-id']),
     workerId,
   }
@@ -176,7 +146,6 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
 
   const options = getCliOptions()
   const stateService = getProjectMartDirtyRefreshStateService()
-  const refreshService = getDuckdbMartMaintenanceService()
 
   try {
     const claim = await claimProject({
@@ -201,19 +170,11 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
       const dirtyArticleIds = dirtyArticles.map((row) => {
         return row.articleId
       })
-      const executionMode = getExecutionMode({
-        dirtyArticleCount: dirtyArticleIds.length,
-        incrementalArticleThreshold: options.incrementalArticleThreshold,
-      })
 
-      if (executionMode === 'incremental') {
-        await refreshService.refreshDirtyProjectArticleBatch(claim.projectId, dirtyArticleIds)
-      }
-
-      if (executionMode === 'full') {
+      if (dirtyArticleIds.length > 0) {
         const request = await requestReviewServingV4Rebuild({
           projectId: claim.projectId,
-          reason: 'runProjectMartRefreshWorkerOnceIsolated.fullRefresh',
+          reason: 'runProjectMartRefreshWorkerOnceIsolated.dirtyRefreshClaim',
         })
         await stateService.completeProjectRefresh({
           completedToken: claim.claimedToken,
