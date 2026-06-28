@@ -10,8 +10,7 @@ import type {
 } from '../../../db/schemaTypes.ts'
 import {getArticleSourceMetadataValue} from '../../../utils/articleSourceMetadata.ts'
 import {readReviewServingRows, type ReviewServingReaderResult} from '../../reviewServing/reviewServingReader.ts'
-import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString, getDateValue, getJsonValue} from '../../services/appQueryHelpers.ts'
+import {getDateValue, getJsonValue} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
 import {getSystemActor} from '../../utils/getSystemActor.ts'
@@ -85,6 +84,7 @@ type ProjectReviewDetailJudgmentRow = {
   modelMetadataJson: unknown
   modelName: string | null
   modelProvider: string | null
+  modelThinking: string | null
   modelVersion: string | null
 }
 
@@ -153,6 +153,23 @@ type ProjectPromptRow = {
   originProjectId: string | null
 }
 
+type PromptDisplayPayload = {
+  criteriaDisposition?: 'include' | 'exclude' | 'combined' | null
+  id?: string | null
+  order?: number | null
+  originalText?: string | null
+  promptHeading?: string | null
+  type?: string | null
+}
+
+type ModelDisplayPayload = {
+  id?: string | null
+  name?: string | null
+  provider?: string | null
+  thinking?: string | null
+  version?: string | null
+}
+
 type ReviewJudgmentDetail = {
   judgment: JudgmentRecord
   prompt: Pick<PromptRecord, 'originalText' | 'promptHeading'>
@@ -200,6 +217,31 @@ const getStringPayloadValue = (value: unknown, fallback: string) => {
   return typeof value === 'string' ? value : fallback
 }
 
+const getPromptPayload = (payload: Record<string, unknown>, promptId: string): ProjectPromptRow => {
+  const prompt = getJsonObjectValue(payload.prompt) as PromptDisplayPayload
+
+  return {
+    criteriaDisposition: prompt.criteriaDisposition ?? null,
+    enabled: true,
+    id: prompt.id ?? promptId,
+    order: prompt.order ?? null,
+    originalText: prompt.originalText ?? '',
+    originProjectId: null,
+    promptHeading: prompt.promptHeading ?? null,
+    type: prompt.type ?? null,
+  }
+}
+
+const getModelPayload = (payload: Record<string, unknown>): ModelDisplayPayload => {
+  return getJsonObjectValue(payload.model) as ModelDisplayPayload
+}
+
+const upsertPromptRow = (promptRowsById: Map<string, ProjectPromptRow>, promptRow: ProjectPromptRow) => {
+  return promptRow.id.length === 0 || promptRow.id === 'summary'
+    ? promptRowsById
+    : promptRowsById.set(promptRow.id, promptRow)
+}
+
 const detailReaderPageSize = 512
 
 const readAllReviewServingRows = async <T>(
@@ -230,10 +272,9 @@ const getPromptValue = (row: {promptOriginalText: string; promptHeading: string 
 const getProjectReviewDetailJudgmentRows = async (params: {
   projectId: string
   articleId: string
-  promptRows: ProjectPromptRow[]
   reviewConfigHash: string | null
   projectReviewConfig: ProjectReviewConfig
-}): Promise<ProjectReviewDetailJudgmentRow[] | null> => {
+}): Promise<{judgmentRows: ProjectReviewDetailJudgmentRow[]; promptRows: ProjectPromptRow[]} | null> => {
   const rows = await readAllReviewServingRows<ServingJudgmentDetailRow>({
     allowStale: true,
     articleId: params.articleId,
@@ -248,13 +289,13 @@ const getProjectReviewDetailJudgmentRows = async (params: {
     return null
   }
 
-  const promptsById = new Map(
-    params.promptRows.map((row) => {
-      return [row.id, row]
-    }),
-  )
+  const promptRowsById = rows.reduce((promptMap, row) => {
+    const promptId = row.prompt_id ?? ''
+    const payload = getJsonObjectValue(row.judgment_payload_json)
+    return upsertPromptRow(promptMap, getPromptPayload(payload, promptId))
+  }, new Map<string, ProjectPromptRow>())
 
-  return rows
+  const judgmentRows = rows
     .filter((row) => {
       return row.placeholder_kind === null || row.placeholder_kind === undefined
     })
@@ -262,7 +303,8 @@ const getProjectReviewDetailJudgmentRows = async (params: {
       const payload = getJsonObjectValue(row.judgment_payload_json)
       const promptId = row.prompt_id ?? ''
       const modelId = row.model_id ?? ''
-      const prompt = promptsById.get(promptId)
+      const prompt = getPromptPayload(payload, promptId)
+      const model = getModelPayload(payload)
 
       return {
         judgmentId: row.judgment_id ?? getStringPayloadValue(payload.id, `placeholder:${promptId}`),
@@ -286,20 +328,22 @@ const getProjectReviewDetailJudgmentRows = async (params: {
         judgmentQuotes: payload.quotes ?? [],
         judgmentSnapshotProjectId: (payload.snapshotProjectId as string | null | undefined) ?? null,
         judgmentSnapshotProjectModelName: (payload.snapshotProjectModelName as string | null | undefined) ?? null,
-        promptOriginalText: prompt?.originalText ?? '',
-        promptHeading: prompt?.promptHeading ?? null,
+        promptOriginalText: prompt.originalText,
+        promptHeading: prompt.promptHeading,
         modelMetadataJson: null,
-        modelName: null,
-        modelProvider: null,
-        modelVersion: null,
+        modelName: model.name ?? null,
+        modelProvider: model.provider ?? null,
+        modelThinking: model.thinking ?? null,
+        modelVersion: model.version ?? null,
       }
     })
+
+  return {judgmentRows, promptRows: [...promptRowsById.values()]}
 }
 
 const getProjectReviewDetailHumanRows = async (params: {
   articleId: string
   projectId: string
-  promptRows: ProjectPromptRow[]
   reviewConfigHash: string | null
 }) => {
   const rows = await readAllReviewServingRows<ServingHumanJudgmentDetailRow>({
@@ -316,25 +360,19 @@ const getProjectReviewDetailHumanRows = async (params: {
     return []
   }
 
-  const promptsById = new Map(
-    params.promptRows.map((row) => {
-      return [row.id, row]
-    }),
-  )
-
   return rows
     .map((row) => {
       const payload = getJsonObjectValue(row.judgment_payload_json)
       const promptId = row.prompt_id ?? ''
-      const prompt = promptId === 'summary' ? null : promptsById.get(promptId)
+      const prompt = getPromptPayload(payload, promptId)
 
       return {
         judgmentId: row.judgment_id ?? getStringPayloadValue(payload.id, ''),
         promptId,
         answer: row.answered_original ?? (payload.answer as string | null | undefined) ?? null,
         comment: (payload.comment as string | null | undefined) ?? null,
-        promptOriginalText: prompt?.originalText ?? 'Overall human screening decision',
-        promptOrder: promptId === 'summary' ? 0 : (row.prompt_order ?? prompt?.order ?? null),
+        promptOriginalText: prompt.originalText || 'Overall human screening decision',
+        promptOrder: promptId === 'summary' ? 0 : (row.prompt_order ?? prompt.order ?? null),
         updatedAt: getServingDateValue(payload.updatedAt ?? row.detail_updated_at),
       }
     })
@@ -538,29 +576,10 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       await assertProjectIsActive(projectId)
 
-      const projectPromptRowsPromise: Promise<ProjectPromptRow[]> = getAppDatabaseService()
-        .queryJson<ProjectPromptRow>(`
-          SELECT
-            p.id AS id,
-            p.original_text AS originalText,
-            p.prompt_heading AS promptHeading,
-            pp.prompt_order AS "order",
-            p.type AS type,
-            pp.enabled AS enabled,
-            pp.criteria_disposition AS criteriaDisposition,
-            pp.origin_project_id AS originProjectId
-          FROM app.project_prompt pp
-          INNER JOIN app.prompt p ON p.id = pp.prompt_id
-          WHERE pp.project_id = '${escapeSqlString(projectId)}'
-          ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC
-        `)
       const projectReviewConfigPromise: Promise<ProjectReviewConfig | null> =
         getAppQueryService().getProjectReviewConfig(projectId)
       const reviewConfigHashPromise = getCurrentReviewConfigHash(projectId)
-      const [projectPromptRows, projectReviewConfig] = await Promise.all([
-        projectPromptRowsPromise,
-        projectReviewConfigPromise,
-      ])
+      const projectReviewConfig = await projectReviewConfigPromise
       const reviewConfigHash = await reviewConfigHashPromise
 
       if (!projectReviewConfig) {
@@ -590,17 +609,21 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       const article = getArticleRecordFromServing({articleId, detail: articleDetail, payload: articlePayload})
       const covidenceRelatedRecords = getCovidenceRelatedRecords(article)
 
-      const projectReviewDetailJudgmentRows = await getProjectReviewDetailJudgmentRows({
+      const projectReviewDetailJudgmentResult = await getProjectReviewDetailJudgmentRows({
         projectId,
         articleId,
-        promptRows: projectPromptRows,
         projectReviewConfig,
         reviewConfigHash,
       })
 
-      if (projectReviewDetailJudgmentRows === null) {
+      if (projectReviewDetailJudgmentResult === null) {
         return getUnavailableReviewDetail({articleId, reason: 'detail judgments unavailable'})
       }
+
+      const projectReviewDetailJudgmentRows = projectReviewDetailJudgmentResult.judgmentRows
+      const projectPromptRows = projectReviewDetailJudgmentResult.promptRows.sort((a, b) => {
+        return (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER)
+      })
 
       const promptIds = projectPromptRows.map((p) => {
         return p.id
@@ -625,7 +648,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           prompt: getPromptValue(row),
           modelName: row.modelName,
           modelProvider: row.modelProvider,
-          modelThinking: null,
+          modelThinking: row.modelThinking,
           modelVersion: row.modelVersion,
         }
       })
@@ -725,12 +748,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       const systemActor = getSystemActor()
 
-      const humanRows = await getProjectReviewDetailHumanRows({
-        articleId,
-        projectId,
-        promptRows: projectPromptRows,
-        reviewConfigHash,
-      })
+      const humanRows = await getProjectReviewDetailHumanRows({articleId, projectId, reviewConfigHash})
 
       const humanAssessmentsByUser =
         humanRows.length === 0

@@ -52,11 +52,20 @@ type LlmJudgmentPayloadRow = {
   judgmentUpdatedAt: Date | string | null
   modelId: string | null
   placeholderKind: string | null
+  promptCriteriaDisposition: string | null
+  promptHeading: string | null
   promptId: string
   promptOrder: number | null
+  promptOriginalText: string
+  promptType: string | null
   quotes: ReviewServingIdentityValue | string | null
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
+  modelDisplayName: string | null
+  modelMetadataJson: ReviewServingIdentityValue | string | null
+  modelProvider: string | null
+  modelThinking: string | null
+  modelVersion: string | null
 }
 
 type HumanJudgmentPayloadRow = {
@@ -68,8 +77,12 @@ type HumanJudgmentPayloadRow = {
   humanJudgmentUpdatedAt: Date | string | null
   isAnswered: boolean | null
   payloadReferenceKind: 'human_prompt' | 'human_summary'
+  promptCriteriaDisposition: string | null
+  promptHeading: string | null
   promptId: string
   promptOrder: number | null
+  promptOriginalText: string | null
+  promptType: string | null
 }
 
 const rowNumberSql = ['row', 'number'].join('_')
@@ -148,6 +161,10 @@ const parseJsonValue = (value: ReviewServingIdentityValue | string | null) => {
   } catch (_error) {
     return value
   }
+}
+
+const getPayloadTimestamp = (value: Date | string | null) => {
+  return value instanceof Date ? value.toISOString() : value
 }
 
 const getLlmListModeKeys = (listModeKeys: readonly ReviewServingListMode[]) => {
@@ -240,7 +257,13 @@ const getLlmJudgmentRows = async (
     : database.queryJson<LlmJudgmentPayloadRow>(`
         WITH ${getActiveArticleCte(input)},
         enabled_prompt AS (
-          SELECT prompt.id AS prompt_id, project_prompt.prompt_order
+          SELECT
+            prompt.id AS prompt_id,
+            project_prompt.prompt_order,
+            prompt.original_text AS prompt_original_text,
+            prompt.prompt_heading,
+            prompt.type AS prompt_type,
+            project_prompt.criteria_disposition AS prompt_criteria_disposition
           FROM app.project_prompt project_prompt
           INNER JOIN app.prompt prompt
             ON prompt.id = project_prompt.prompt_id
@@ -280,6 +303,15 @@ const getLlmJudgmentRows = async (
           judgment.quotes,
           judgment.snapshot_project_id AS snapshotProjectId,
           judgment.snapshot_project_model_name AS snapshotProjectModelName,
+          COALESCE(model.display_name, model.name, judgment.snapshot_project_model_name) AS modelDisplayName,
+          model.metadata_json AS modelMetadataJson,
+          provider_connection.provider_kind AS modelProvider,
+          json_extract_string(model.metadata_json, '$.options.thinking') AS modelThinking,
+          model.variant AS modelVersion,
+          prompt.prompt_original_text AS promptOriginalText,
+          prompt.prompt_heading AS promptHeading,
+          prompt.prompt_type AS promptType,
+          prompt.prompt_criteria_disposition AS promptCriteriaDisposition,
           assessment.id AS assessmentId,
           assessment.assessment_is_correct AS assessmentIsCorrect,
           assessment.assessment_comment AS assessmentComment,
@@ -292,6 +324,10 @@ const getLlmJudgmentRows = async (
           ON judgment.article_id = active.article_id
           AND judgment.prompt_id = prompt.prompt_id
           AND judgment.judgment_rank = 1
+        LEFT JOIN app.model model
+          ON model.id = COALESCE(judgment.model_id, ${getSqlLiteral(input.modelId)})
+        LEFT JOIN app.provider_connection provider_connection
+          ON provider_connection.id = model.provider_connection_id
         LEFT JOIN app."judgment_assessment" assessment
           ON assessment.judgment_id = judgment.id
         ORDER BY active.article_id ASC, prompt.prompt_order ASC NULLS LAST, prompt.prompt_id ASC
@@ -307,7 +343,13 @@ const getHumanJudgmentRows = async (
     : database.queryJson<HumanJudgmentPayloadRow>(`
         WITH ${getActiveArticleCte(input)},
         enabled_prompt AS (
-          SELECT prompt.id AS prompt_id, project_prompt.prompt_order
+          SELECT
+            prompt.id AS prompt_id,
+            project_prompt.prompt_order,
+            prompt.original_text AS prompt_original_text,
+            prompt.prompt_heading,
+            prompt.type AS prompt_type,
+            project_prompt.criteria_disposition AS prompt_criteria_disposition
           FROM app.project_prompt project_prompt
           INNER JOIN app.prompt prompt
             ON prompt.id = project_prompt.prompt_id
@@ -326,7 +368,11 @@ const getHumanJudgmentRows = async (
           judgment_human.comment,
           judgment_human.created_at AS humanJudgmentCreatedAt,
           judgment_human.updated_at AS humanJudgmentUpdatedAt,
-          'human_prompt' AS payloadReferenceKind
+          'human_prompt' AS payloadReferenceKind,
+          prompt.prompt_original_text AS promptOriginalText,
+          prompt.prompt_heading AS promptHeading,
+          prompt.prompt_type AS promptType,
+          prompt.prompt_criteria_disposition AS promptCriteriaDisposition
         FROM active_article active
         INNER JOIN app.project project
           ON project.id = ${getSqlLiteral(input.projectId)}
@@ -347,7 +393,11 @@ const getHumanJudgmentRows = async (
           NULL AS comment,
           judgment_human_summary.created_at AS humanJudgmentCreatedAt,
           judgment_human_summary.updated_at AS humanJudgmentUpdatedAt,
-          'human_summary' AS payloadReferenceKind
+          'human_summary' AS payloadReferenceKind,
+          'Overall human screening decision' AS promptOriginalText,
+          NULL AS promptHeading,
+          'summary' AS promptType,
+          NULL AS promptCriteriaDisposition
         FROM active_article active
         INNER JOIN app.project project
           ON project.id = ${getSqlLiteral(input.projectId)}
@@ -366,12 +416,41 @@ const getAssessmentPayload = (row: LlmJudgmentPayloadRow) => {
         {
           assessmentComment: row.assessmentComment,
           assessmentIsCorrect: row.assessmentIsCorrect ?? false,
-          createdAt: row.assessmentCreatedAt,
+          createdAt: getPayloadTimestamp(row.assessmentCreatedAt),
           id: row.assessmentId,
           judgmentId: row.judgmentId,
-          updatedAt: row.assessmentUpdatedAt,
+          updatedAt: getPayloadTimestamp(row.assessmentUpdatedAt),
         },
       ]
+}
+
+const getPromptDisplayPayload = (row: {
+  promptCriteriaDisposition: string | null
+  promptHeading: string | null
+  promptId: string
+  promptOrder: number | null
+  promptOriginalText: string | null
+  promptType: string | null
+}): ReviewServingIdentityValue => {
+  return {
+    criteriaDisposition: row.promptCriteriaDisposition,
+    id: row.promptId,
+    order: row.promptOrder,
+    originalText: row.promptOriginalText ?? '',
+    promptHeading: row.promptHeading,
+    type: row.promptType,
+  }
+}
+
+const getModelDisplayPayload = (row: LlmJudgmentPayloadRow): ReviewServingIdentityValue => {
+  return {
+    id: row.modelId,
+    metadataJson: parseJsonValue(row.modelMetadataJson),
+    name: row.modelDisplayName,
+    provider: row.modelProvider,
+    thinking: row.modelThinking,
+    version: row.modelVersion,
+  }
 }
 
 const getLlmJudgmentPayload = (row: LlmJudgmentPayloadRow): ReviewServingIdentityValue => {
@@ -379,16 +458,18 @@ const getLlmJudgmentPayload = (row: LlmJudgmentPayloadRow): ReviewServingIdentit
     assessments: getAssessmentPayload(row),
     chunkingStrategy: row.chunkingStrategy,
     confidenceOriginal: row.confidenceOriginal,
-    createdAt: row.judgmentCreatedAt,
+    createdAt: getPayloadTimestamp(row.judgmentCreatedAt),
     explanation: row.explanation,
     id: row.judgmentId ?? `placeholder:${row.promptId}`,
     isAnswered: row.isAnswered ?? false,
+    model: getModelDisplayPayload(row),
     payloadReference: {kind: row.placeholderKind === null ? 'llm_judgment' : 'placeholder', judgmentId: row.judgmentId},
     placeholderKind: row.placeholderKind,
+    prompt: getPromptDisplayPayload(row),
     quotes: parseJsonValue(row.quotes),
     snapshotProjectId: row.snapshotProjectId,
     snapshotProjectModelName: row.snapshotProjectModelName,
-    updatedAt: row.judgmentUpdatedAt,
+    updatedAt: getPayloadTimestamp(row.judgmentUpdatedAt),
   }
 }
 
@@ -396,11 +477,12 @@ const getHumanJudgmentPayload = (row: HumanJudgmentPayloadRow): ReviewServingIde
   return {
     answer: row.answer,
     comment: row.comment,
-    createdAt: row.humanJudgmentCreatedAt,
+    createdAt: getPayloadTimestamp(row.humanJudgmentCreatedAt),
     id: row.humanJudgmentId,
     isAnswered: row.isAnswered ?? false,
     payloadReference: {humanJudgmentId: row.humanJudgmentId, kind: row.payloadReferenceKind},
-    updatedAt: row.humanJudgmentUpdatedAt,
+    prompt: getPromptDisplayPayload(row),
+    updatedAt: getPayloadTimestamp(row.humanJudgmentUpdatedAt),
   }
 }
 
