@@ -1093,13 +1093,6 @@ test('judgment job serving queue SQL keeps current config and stable keyset sema
 })
 
 test('duckdbOlap imports stay quarantined away from normal review and judgment job foreground paths', () => {
-  const allowedImportFiles = new Set([
-    'src/services/olap/articlesReviewsBothOlap.ts',
-    'src/services/olap/articlesReviewsFiltersOlap.ts',
-    'src/services/olap/articlesReviewsOlap.ts',
-    'src/services/olap/selectArticleIdsOlap.ts',
-    'src/services/olap/unassessedArticlesOlap.ts',
-  ])
   const candidateFiles = [
     ...reviewServingAdjacentRouteClassifications.map((entry) => {
       return entry.routeFile
@@ -1111,9 +1104,7 @@ test('duckdbOlap imports stay quarantined away from normal review and judgment j
     'src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts',
   ]
   const violations = [...new Set(candidateFiles)].filter((routeFile) => {
-    return (
-      !allowedImportFiles.has(routeFile) && readFileSync(join(workspaceRoot, routeFile), 'utf8').includes('duckdbOlap')
-    )
+    return readFileSync(join(workspaceRoot, routeFile), 'utf8').includes('duckdbOlap')
   })
 
   expect(violations).toEqual([])

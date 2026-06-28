@@ -2,11 +2,6 @@ import {expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 const appQueryServiceModulePath = new URL('../../services/getAppQueryService.ts', import.meta.url).pathname
-const articlesReviewsOlapModulePath = new URL('../../../services/olap/articlesReviewsOlap.ts', import.meta.url).pathname
-const articlesReviewsBothOlapModulePath = new URL('../../../services/olap/articlesReviewsBothOlap.ts', import.meta.url)
-  .pathname
-const unassessedArticlesOlapModulePath = new URL('../../../services/olap/unassessedArticlesOlap.ts', import.meta.url)
-  .pathname
 const llmReviewRouteServiceModulePath = new URL(
   '../../reviewServing/reviewServingLlmReviewRouteService.ts',
   import.meta.url,
@@ -77,34 +72,6 @@ void mock.module(appQueryServiceModulePath, () => {
   }
 })
 
-void mock.module(articlesReviewsOlapModulePath, () => {
-  return {
-    countArticlesReviewsFromOlap: (params: unknown) => {
-      return countReviewsRef.current(params)
-    },
-    queryArticlesReviewsFromOlap: (params: unknown) => {
-      queryReviewsParamsRef.current = [...queryReviewsParamsRef.current, params]
-      return queryReviewsRef.current(params)
-    },
-  }
-})
-
-void mock.module(articlesReviewsBothOlapModulePath, () => {
-  return {
-    queryArticlesReviewsBothFromOlap: (params: unknown) => {
-      return queryBothRef.current(params)
-    },
-  }
-})
-
-void mock.module(unassessedArticlesOlapModulePath, () => {
-  return {
-    getUnassessedArticlesFromOlap: (params: unknown) => {
-      return queryUnassessedRef.current(params)
-    },
-  }
-})
-
 void mock.module(llmReviewRouteServiceModulePath, () => {
   return {
     countLlmReviewArticlesFromServing: (params: unknown) => {
@@ -137,7 +104,7 @@ void mock.module(projectAccessGuardModulePath, () => {
   }
 })
 
-test('articles reviews route forwards unfiltered request params to olap', async () => {
+test('articles reviews route forwards unfiltered request params to serving', async () => {
   queryReviewsParamsRef.current = []
   reviewHydrationCallCountRef.current = 0
   reviewHydrationRowsRef.current = async () => {
@@ -163,7 +130,7 @@ test('articles reviews route forwards unfiltered request params to olap', async 
   ])
 })
 
-test('articles reviews route forwards filtered request params to olap', async () => {
+test('articles reviews route forwards filtered request params to serving', async () => {
   queryReviewsParamsRef.current = []
   reviewHydrationCallCountRef.current = 0
   reviewHydrationRowsRef.current = async () => {
@@ -211,7 +178,7 @@ test('articles reviews route forwards filtered request params to olap', async ()
   ])
 })
 
-test('articles reviews route forwards llmStatus modes to olap unchanged', async () => {
+test('articles reviews route forwards llmStatus modes to serving unchanged', async () => {
   queryReviewsParamsRef.current = []
   reviewHydrationCallCountRef.current = 0
   reviewHydrationRowsRef.current = async () => {
@@ -270,7 +237,7 @@ test('articles reviews route forwards llmStatus modes to olap unchanged', async 
   ])
 })
 
-test('articles reviews count route forwards llmStatus to olap when present', async () => {
+test('articles reviews count route forwards llmStatus to serving when present', async () => {
   const receivedParams: unknown[] = []
   countReviewsRef.current = async (params?: unknown): Promise<unknown> => {
     receivedParams.push(params)
@@ -304,7 +271,7 @@ test('articles reviews count route forwards llmStatus to olap when present', asy
   ])
 })
 
-test('articles reviews count route forwards llmStatus modes to olap unchanged', async () => {
+test('articles reviews count route forwards llmStatus modes to serving unchanged', async () => {
   const receivedParams: unknown[] = []
   countReviewsRef.current = async (params?: unknown): Promise<unknown> => {
     receivedParams.push(params)
@@ -366,7 +333,7 @@ test('articles reviews count route forwards llmStatus modes to olap unchanged', 
   ])
 })
 
-test('articles reviews route skips hydration query when olap already returns hydrated article fields', async () => {
+test('articles reviews route skips hydration query when serving already returns hydrated article fields', async () => {
   reviewHydrationCallCountRef.current = 0
   queryReviewsRef.current = async (_params?: unknown): Promise<unknown> => {
     return {
@@ -412,7 +379,7 @@ test('articles reviews route skips hydration query when olap already returns hyd
   expect(body.data[0]?.articleId).toBe('external-1')
 })
 
-test('articles reviews route falls back to olap article fields when sqlite row is missing', async () => {
+test('articles reviews route falls back to serving article fields when sqlite row is missing', async () => {
   reviewHydrationRowsRef.current = async () => {
     return []
   }
@@ -585,7 +552,7 @@ test('articles reviews both route preserves summary-mode overall answers', async
   })
 })
 
-test('articles reviews unassessed route preserves olap ordering after sqlite hydration', async () => {
+test('articles reviews unassessed route preserves serving ordering after sqlite hydration', async () => {
   projectReviewConfigRef.current = async () => {
     return {
       dateFrom: null,
@@ -627,7 +594,7 @@ test('articles reviews unassessed route preserves olap ordering after sqlite hyd
   ).toEqual(['article-b', 'article-a'])
 })
 
-test('articles reviews count route returns legacy error payload on olap failure', async () => {
+test('articles reviews count route returns legacy error payload on serving failure', async () => {
   countReviewsRef.current = async (_params?: unknown): Promise<unknown> => {
     throw new Error('count failed')
   }
