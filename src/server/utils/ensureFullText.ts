@@ -13,6 +13,11 @@ const DOCLING_CONVERSION_TIMEOUT_MS = 600_000 // 10 minutes - same as cron job
 const ensureFullTextLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const ensureFullTextWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 const ensureFullTextComponent = 'ensureFullText'
+const ensureFullTextWorkloadContext = {
+  fallbackIntent: 'reject' as const,
+  routeOrJobKey: 'fullText.ensure',
+  workloadClass: 'background.fullText.ensure',
+}
 
 // In-memory lock map to prevent concurrent conversions of the same article
 const conversionLocks = new Map<string, Promise<void>>()
@@ -48,12 +53,13 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
   if (existingLock) {
     await existingLock // Wait for other conversion to finish
     // Re-fetch article to get result
-    const [updated] = await getAppDatabaseService().queryJson<{
+    const [updated] = await getAppDatabaseService().queryJsonBackground<{
       fullText: string | null
       fullTextPDF: string | null
       fullTextConversionStatus: string | null
       fullTextConversionAttempts: number | null
-    }>(`
+    }>(
+      `
       SELECT
         full_text AS fullText,
         full_text_pdf AS fullTextPDF,
@@ -62,7 +68,9 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
       FROM app.article
       WHERE id = '${escapeSqlString(articleId)}'
       LIMIT 1
-    `)
+    `,
+      {...ensureFullTextWorkloadContext, maxResultRows: 1},
+    )
     if (updated?.fullText) {
       return {text: updated.fullText, shouldSkip: false}
     }
@@ -84,12 +92,13 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
 
   try {
     // Double-check after acquiring lock (another process may have finished)
-    const [fresh] = await getAppDatabaseService().queryJson<{
+    const [fresh] = await getAppDatabaseService().queryJsonBackground<{
       fullText: string | null
       fullTextPDF: string | null
       fullTextConversionStatus: string | null
       fullTextConversionAttempts: number | null
-    }>(`
+    }>(
+      `
       SELECT
         full_text AS fullText,
         full_text_pdf AS fullTextPDF,
@@ -98,7 +107,9 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
       FROM app.article
       WHERE id = '${escapeSqlString(articleId)}'
       LIMIT 1
-    `)
+    `,
+      {...ensureFullTextWorkloadContext, maxResultRows: 1},
+    )
     if (fresh?.fullText) {
       return {text: fresh.fullText, shouldSkip: false}
     }
@@ -148,7 +159,7 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
         sourceOperation: 'update',
         sourceUpdatedAt,
       })
-    })
+    }, ensureFullTextWorkloadContext)
 
     ensureFullTextLogger.log('ensureFullText:conversionSucceeded', '[ensureFullText] On-demand conversion succeeded', {
       articleId,
@@ -171,26 +182,32 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
       || msg.includes('file not found')
 
     // Get current attempts
-    const [current] = await getAppDatabaseService().queryJson<{attempts: number | null}>(`
+    const [current] = await getAppDatabaseService().queryJsonBackground<{attempts: number | null}>(
+      `
       SELECT full_text_conversion_attempts AS attempts
       FROM app.article
       WHERE id = '${escapeSqlString(articleId)}'
       LIMIT 1
-    `)
+    `,
+      {...ensureFullTextWorkloadContext, maxResultRows: 1},
+    )
     const attempts = (current?.attempts ?? 0) + 1
     const maxRetries = 3
 
     // If permanent OR max retries exceeded → 'failed'
     const isFinalFailure = isPerm || attempts >= maxRetries
 
-    await getAppDatabaseService().run(`
+    await getAppDatabaseService().runBackground(
+      `
       UPDATE app.article
       SET full_text_conversion_status = ${isFinalFailure ? `'failed'` : 'NULL'},
           full_text_conversion_error = ${getSqlLiteral(errorMessage)},
           full_text_conversion_attempts = ${attempts},
           updated_at = current_timestamp
       WHERE id = '${escapeSqlString(articleId)}'
-    `)
+    `,
+      ensureFullTextWorkloadContext,
+    )
 
     ensureFullTextWarningLogger.warn(
       `fulltext:conversion:${isFinalFailure ? 'failed' : 'retry'}`,

@@ -2,6 +2,10 @@ import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
 import {getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
+import {
+  appendArticleReviewServingDeltas,
+  getArticleReviewServingMutationValueHash,
+} from '../reviewServing/articleReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -19,8 +23,15 @@ import {fullTextArticleFetchFromUnpaywall} from './fullTextJobs/fullTextArticleF
 import {attemptsToLegacyResult, type PdfFetchAttemptResult} from './fullTextJobs/pdfFetchTypes.ts'
 
 const NEW_ARTICLES_INTERVAL = '0 * * * * *'
+const MAX_RUNNING_JOB_PROJECTS_PER_SCAN = 100
+const MAX_PROJECT_IMPORT_ROUTES_PER_SCAN = 100
 const fullTextFetchLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const fullTextFetchComponent = 'fullTextJobs'
+const fullTextFetchWorkloadContext = {
+  fallbackIntent: 'reject' as const,
+  routeOrJobKey: 'fullText.fetch.cron',
+  workloadClass: 'background.fullText.fetch',
+}
 
 type ArticleResult = {
   id: string
@@ -42,13 +53,14 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
 
   // Step 1: Get running jobs with their projects
   const runningJobsQueryStartedAt = Date.now()
-  const runningJobsWithProjects = await getAppDatabaseService().queryJson<{
+  const runningJobsWithProjects = await getAppDatabaseService().queryJsonBackground<{
     jobId: string
     projectId: string
     useFulltext: boolean
     dateFrom: unknown
     dateTo: unknown
-  }>(`
+  }>(
+    `
     SELECT
       jj.id AS jobId,
       p.id AS projectId,
@@ -59,7 +71,10 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
     INNER JOIN app.project p ON jj.project_id = p.id
     WHERE jj.status = 'running'
     ORDER BY p.use_fulltext DESC
-  `)
+    LIMIT ${MAX_RUNNING_JOB_PROJECTS_PER_SCAN}
+  `,
+    {...fullTextFetchWorkloadContext, maxResultRows: MAX_RUNNING_JOB_PROJECTS_PER_SCAN},
+  )
 
   fullTextFetchLogger.log('fullTextJobs:runningJobsQueried', '[fullTextJobs] Running jobs queried', {
     component: fullTextFetchComponent,
@@ -90,11 +105,16 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
 
     // Try importRoute path first
     const projectRoutesQueryStartedAt = Date.now()
-    const projectRoutes = await getAppDatabaseService().queryJson<{importRouteId: string}>(`
+    const projectRoutes = await getAppDatabaseService().queryJsonBackground<{importRouteId: string}>(
+      `
       SELECT import_route_id AS importRouteId
       FROM app.project_import_route
       WHERE project_id = '${escapeSqlString(projectId)}'
-    `)
+      ORDER BY import_route_id ASC
+      LIMIT ${MAX_PROJECT_IMPORT_ROUTES_PER_SCAN}
+    `,
+      {...fullTextFetchWorkloadContext, maxResultRows: MAX_PROJECT_IMPORT_ROUTES_PER_SCAN, projectId},
+    )
     fullTextFetchLogger.log('fullTextJobs:projectRoutesQueried', '[fullTextJobs] Project import routes queried', {
       component: fullTextFetchComponent,
       durationMs: Date.now() - projectRoutesQueryStartedAt,
@@ -107,12 +127,13 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
         return r.importRouteId
       })
       const articlesViaRouteQueryStartedAt = Date.now()
-      const articlesViaRoute = await getAppDatabaseService().queryJson<{
+      const articlesViaRoute = await getAppDatabaseService().queryJsonBackground<{
         id: string
         arxivId: string | null
         doi: string | null
         sourceMetadata: unknown
-      }>(`
+      }>(
+        `
         SELECT
           a.id AS id,
           a.arxiv_id AS arxivId,
@@ -125,7 +146,9 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
           ${dateConditions.length > 0 ? `AND ${dateConditions.join(' AND ')}` : ''}
         ORDER BY a.article_created_at DESC NULLS LAST
         LIMIT ${remaining}
-      `)
+      `,
+        {...fullTextFetchWorkloadContext, maxResultRows: remaining, projectId},
+      )
       fullTextFetchLogger.log(
         'fullTextJobs:articlesViaImportRouteQueried',
         '[fullTextJobs] Articles via import route queried',
@@ -149,12 +172,13 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
 
     // Try project_articles path
     const articlesViaProjectQueryStartedAt = Date.now()
-    const articlesViaDirect = await getAppDatabaseService().queryJson<{
+    const articlesViaDirect = await getAppDatabaseService().queryJsonBackground<{
       id: string
       arxivId: string | null
       doi: string | null
       sourceMetadata: unknown
-    }>(`
+    }>(
+      `
       SELECT
         a.id AS id,
         a.arxiv_id AS arxivId,
@@ -167,7 +191,9 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
         ${dateConditions.length > 0 ? `AND ${dateConditions.join(' AND ')}` : ''}
       ORDER BY a.article_created_at DESC NULLS LAST
       LIMIT ${remaining}
-    `)
+    `,
+      {...fullTextFetchWorkloadContext, maxResultRows: remaining, projectId},
+    )
     fullTextFetchLogger.log('fullTextJobs:articlesViaProjectQueried', '[fullTextJobs] Articles via project queried', {
       component: fullTextFetchComponent,
       durationMs: Date.now() - articlesViaProjectQueryStartedAt,
@@ -187,12 +213,14 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
   if (collectedArticles.length < numberOfArticlesToFetch) {
     const remaining = numberOfArticlesToFetch - collectedArticles.length
     const fallbackQueryStartedAt = Date.now()
-    const fallbackArticles = await getAppDatabaseService().queryJson<{
+    const fallbackLimit = remaining + seenIds.size
+    const fallbackArticles = await getAppDatabaseService().queryJsonBackground<{
       id: string
       arxivId: string | null
       doi: string | null
       sourceMetadata: unknown
-    }>(`
+    }>(
+      `
       SELECT
         id,
         arxiv_id AS arxivId,
@@ -201,8 +229,10 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
       FROM app.article
       WHERE full_text_fetched_at IS NULL
       ORDER BY created_at DESC
-      LIMIT ${remaining + seenIds.size}
-    `)
+      LIMIT ${fallbackLimit}
+    `,
+      {...fullTextFetchWorkloadContext, maxResultRows: fallbackLimit},
+    )
     fullTextFetchLogger.log('fullTextJobs:fallbackArticlesQueried', '[fullTextJobs] Fallback articles queried', {
       component: fullTextFetchComponent,
       durationMs: Date.now() - fallbackQueryStartedAt,
@@ -256,15 +286,25 @@ const getFullTextForArticle = async (articleData: Pick<ArticleResult, 'arxivId' 
 }
 
 const storeFullText = async (id: string, fullText: NonNullable<Awaited<ReturnType<typeof getFullTextForArticle>>>) => {
-  await getAppDatabaseService().run(`
-    UPDATE app.article
-    SET full_text_source = ${getSqlLiteral(fullText.fullTextSource)},
-        full_text_original_format = ${getSqlLiteral(fullText.fullTextOriginalFormat)},
-        full_text_pdf = ${getSqlLiteral(fullText.fullTextPDF)},
-        full_text_fetched_at = ${getTimestampLiteral(new Date())},
-        updated_at = current_timestamp
-    WHERE id = '${escapeSqlString(id)}'
-  `)
+  await getAppDatabaseService().transaction(async (tx) => {
+    const sourceUpdatedAt = new Date()
+    await tx.run(`
+      UPDATE app.article
+      SET full_text_source = ${getSqlLiteral(fullText.fullTextSource)},
+          full_text_original_format = ${getSqlLiteral(fullText.fullTextOriginalFormat)},
+          full_text_pdf = ${getSqlLiteral(fullText.fullTextPDF)},
+          full_text_fetched_at = ${getTimestampLiteral(sourceUpdatedAt)},
+          updated_at = ${getTimestampLiteral(sourceUpdatedAt)}
+      WHERE id = '${escapeSqlString(id)}'
+    `)
+    await appendArticleReviewServingDeltas(tx, {
+      articleId: id,
+      changedFields: fullText.fullTextPDF ? ['fullTextPDF'] : [],
+      sourceMutationKey: `fullTextJobs|article|${id}|${sourceUpdatedAt.toISOString()}|${getArticleReviewServingMutationValueHash(fullText)}`,
+      sourceOperation: 'update',
+      sourceUpdatedAt,
+    })
+  }, fullTextFetchWorkloadContext)
 }
 
 const fetchFullTextForArticles = async () => {
