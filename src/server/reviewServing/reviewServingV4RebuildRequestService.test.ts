@@ -450,6 +450,7 @@ test('V4 missing snapshot rebuild requests reuse active admitted work', async ()
 
   expect(secondRequest.requestId).toBe(firstRequest.requestId)
   expect(rebuildRequestInsertCount).toBe(1)
+  expect(statements.join('\n')).toContain("chunk.status IN ('blocked_over_budget', 'quarantined')")
 })
 
 test('V4 missing snapshot rebuild requests do not reuse running active work', async () => {

@@ -96,6 +96,7 @@ type ReviewServingProjectorWorkerRebuildChunkService = {
   getNextChunk: (input: {
     database: ReviewServingChunkManifestRepositoryDatabase
     now: Date
+    projectId?: string | null
   }) => Promise<ReviewServingProjectorWorkerChunkInput | null>
   heartbeatChunk: typeof heartbeatReviewServingRebuildChunkLease
   isChunkComplete: typeof isReviewServingRebuildChunkComplete
@@ -136,6 +137,7 @@ type ReviewServingProjectorWorkerCycleOptions = {
   maxRowsPerWake?: number
   maxWakeMs?: number
   now?: Date
+  rebuildProjectId?: string | null
   workerId?: string
 }
 
@@ -2588,8 +2590,8 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
   rebuildChunkService: {
     claimChunk: claimReviewServingRebuildChunk,
     failChunk: markReviewServingRebuildChunkFailed,
-    getNextChunk: ({database, now}) => {
-      return getNextClaimableReviewServingRebuildChunk({now}, database)
+    getNextChunk: ({database, now, projectId}) => {
+      return getNextClaimableReviewServingRebuildChunk({now, projectId}, database)
     },
     heartbeatChunk: heartbeatReviewServingRebuildChunkLease,
     isChunkComplete: isReviewServingRebuildChunkComplete,
@@ -2990,7 +2992,11 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
   workerId: string
 }): Promise<ReviewServingProjectorWorkerChunkResult> => {
   const service = dependencies.rebuildChunkService
-  const chunkInput = await service?.getNextChunk({database, now: getWorkerNow(options)})
+  const chunkInput = await service?.getNextChunk({
+    database,
+    now: getWorkerNow(options),
+    projectId: options.rebuildProjectId,
+  })
 
   if (!service || chunkInput === null || chunkInput === undefined) {
     return {chunkId: null, status: 'idle'}

@@ -574,6 +574,12 @@ export const getActiveReviewServingRebuildRequestForProject = async (
       ${reasonFilter}
       AND status = 'admitted'
       AND admission_state = 'admitted'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest chunk
+        WHERE chunk.request_id = app.review_rebuild_request.request_id
+          AND chunk.status IN ('blocked_over_budget', 'quarantined')
+      )
     ORDER BY priority DESC, updated_at ASC, request_id ASC
     LIMIT 1
   `)

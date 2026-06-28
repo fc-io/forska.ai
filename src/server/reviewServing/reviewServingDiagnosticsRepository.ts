@@ -357,9 +357,9 @@ const getRebuildChunkRowsEffect = (
         LIMIT 1
       )
       SELECT
-        CAST(COUNT(*) FILTER (WHERE chunk.status = 'pending') AS INTEGER) AS pendingCount,
+        CAST(COUNT(*) FILTER (WHERE chunk.status IN ('pending', 'failed')) AS INTEGER) AS pendingCount,
         CAST(COUNT(*) FILTER (WHERE chunk.status = 'running') AS INTEGER) AS runningCount,
-        CAST(COUNT(*) FILTER (WHERE chunk.status = 'failed') AS INTEGER) AS failedCount,
+        CAST(0 AS INTEGER) AS failedCount,
         CAST(COUNT(*) FILTER (WHERE chunk.status = 'completed') AS INTEGER) AS completedCount,
         CAST(COUNT(*) FILTER (
           WHERE chunk.status = 'blocked_over_budget'

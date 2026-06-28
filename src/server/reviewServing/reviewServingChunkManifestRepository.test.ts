@@ -84,9 +84,7 @@ const getErrorMessage = (error: unknown) => {
 }
 
 const shouldPreserveChunkStateOnUpsert = (row: FakeChunkRow | undefined) => {
-  return row === undefined
-    ? false
-    : ['blocked_over_budget', 'completed', 'failed', 'quarantined', 'running'].includes(row.status)
+  return row === undefined ? false : ['completed', 'failed', 'running'].includes(row.status)
 }
 
 const getChunkRowFromIdentity = (
@@ -165,7 +163,9 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       actualTempBytes: existing?.actualTempBytes ?? null,
       admissionState: preserveState
         ? existing?.admissionState
-        : (existing?.admissionState ?? (strings.includes('blocked_over_budget') ? 'blocked_over_budget' : 'admitted')),
+        : strings[7] === 'blocked_over_budget'
+          ? 'blocked_over_budget'
+          : 'admitted',
       budgetJson: existing?.budgetJson ?? {},
       checksum: preserveState ? (existing?.checksum ?? null) : (strings[9] ?? null),
       chunkEndKey: strings[6] ?? '',
@@ -494,7 +494,42 @@ test('idempotent rebuild chunk upserts preserve active retry and lease state', a
     retryCount: 1,
     status: 'failed',
   })
-  expect(joined).toContain("status IN ('completed', 'running', 'failed', 'blocked_over_budget', 'quarantined')")
+  expect(joined).toContain("status IN ('completed', 'running', 'failed')")
+})
+
+test('rebuild chunk upserts replace terminal chunks so fresh V4 plans can repair obsolete budget blocks', async () => {
+  const blocked = {
+    ...getChunkRowFromIdentity(baseChunkIdentity, []),
+    admissionState: 'blocked_over_budget' as const,
+    lastError: 'old planner over budget',
+    oomCategory: 'request_over_budget',
+    overBudgetReason: 'input rows: estimated 480025 > max 250000',
+    retryCount: 3,
+    status: 'blocked_over_budget' as const,
+  }
+  const quarantined = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-quarantined'}, []),
+    lastError: 'old quarantine',
+    retryCount: 3,
+    status: 'quarantined' as const,
+  }
+  const {database, rows} = createFakeChunkManifestDatabase([blocked, quarantined])
+
+  await upsertReviewServingRebuildChunkManifests(
+    [
+      {...baseChunkIdentity, status: 'pending'},
+      {...baseChunkIdentity, inputDigest: 'digest-quarantined', status: 'pending'},
+    ],
+    database,
+  )
+
+  expect(rows.get(blocked.chunkId)).toMatchObject({
+    admissionState: 'admitted',
+    lastError: null,
+    retryCount: 0,
+    status: 'pending',
+  })
+  expect(rows.get(quarantined.chunkId)).toMatchObject({lastError: null, retryCount: 0, status: 'pending'})
 })
 
 test('next claimable chunk discovery returns maintained identity and checksum', async () => {

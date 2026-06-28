@@ -61,9 +61,9 @@ const createDiagnosticsDatabase = () => {
             blockedOverBudgetCount: 2,
             completedCount: 8,
             expiredLeaseCount: 1,
-            failedCount: 1,
+            failedCount: 0,
             oldestQueuedAt: '2026-06-18T08:00:00.000Z',
-            pendingCount: 4,
+            pendingCount: 5,
             quarantinedCount: 1,
             runningCount: 2,
             updatedAt: '2026-06-18T10:02:00.000Z',
@@ -127,8 +127,8 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
     rebuildChunks: {
       blockedOverBudgetCount: 2,
       expiredLeaseCount: 1,
-      failedCount: 1,
-      pendingCount: 4,
+      failedCount: 0,
+      pendingCount: 5,
       quarantinedCount: 1,
       runningCount: 2,
     },
@@ -138,6 +138,8 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   expect(statements.join('\n')).toContain('app.review_serving_snapshot_manifest')
   expect(statements.join('\n')).toContain('app.review_serving_dirty_work')
   expect(statements.join('\n')).toContain('app.review_rebuild_chunk_manifest')
+  expect(statements.join('\n')).toContain("chunk.status IN ('pending', 'failed')")
+  expect(statements.join('\n')).toContain('CAST(0 AS INTEGER) AS failedCount')
   expect(statements.join('\n')).toContain("latest_request.status IN ('blocked_over_budget', 'failed')")
   expect(statements.join('\n')).toContain("latest_request.status IN ('quarantined', 'failed')")
   expect(statements.join('\n')).toContain('app.review_source_change_outbox')
