@@ -62,6 +62,7 @@ import {
   getProjectTransferProgressWithStaging,
   validateProjectTransferReviewedPlanStagingRevision,
 } from '../services/projectTransfer/projectTransferStaging.ts'
+import {projectTransferRouteLookupWorkloadContext} from '../services/projectTransfer/projectTransferWorkloadContext.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
 type ProjectTransferExportNonReadyStatus = 'assembling' | 'packaging' | 'queued'
@@ -266,12 +267,15 @@ type CommitImportSessionRequest = typeof commitImportSessionRequestShape.infer
 type CancelImportSessionRequest = typeof cancelImportSessionRequestShape.infer
 
 const getProjectTransferExportSourceProject = async (projectId: string) => {
-  const [project] = await getAppDatabaseService().queryJson<ProjectTransferSourceProjectRow>(`
+  const [project] = await getAppDatabaseService().queryJson<ProjectTransferSourceProjectRow>(
+    `
     SELECT id, delete_pending_at AS deletePendingAt
     FROM app.project
     WHERE id = ${getSqlLiteral(projectId)}
     LIMIT 1
-  `)
+  `,
+    projectTransferRouteLookupWorkloadContext,
+  )
 
   return project ?? null
 }

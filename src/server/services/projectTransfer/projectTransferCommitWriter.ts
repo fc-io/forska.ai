@@ -20,6 +20,7 @@ import {
 } from '../../reviewServing/reviewImportHotFieldService.ts'
 import {appendReviewServingImportRunArticleDelta} from '../../reviewServing/reviewServingDeltaLedger.ts'
 import {computePromptContentHash} from '../../utils/computePromptContentHash.ts'
+import type {DuckdbWorkloadContext} from '../../utils/duckdbService.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {
   getDateValue,
@@ -70,14 +71,18 @@ import {
   getProjectTransferTargetStateDirtyTokenService,
   type ProjectTransferTargetStateSafetySurface,
 } from './projectTransferTargetStateDirtyTokenService.ts'
+import {projectTransferCommitTransactionWorkloadContext} from './projectTransferWorkloadContext.ts'
 
 type ProjectTransferCommitWriterTx = {
-  queryJson: <T>(statement: string) => Promise<T[]>
-  run: (statement: string) => Promise<void>
+  queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+  run: (statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<void>
 }
 
 type ProjectTransferCommitWriterDatabase = ProjectTransferCommitWriterTx & {
-  transaction: <T>(work: (tx: ProjectTransferCommitWriterTx) => Promise<T> | T) => Promise<T>
+  transaction: <T>(
+    work: (tx: ProjectTransferCommitWriterTx) => Promise<T> | T,
+    workloadContext?: DuckdbWorkloadContext,
+  ) => Promise<T>
 }
 
 export type ProjectTransferCommitWriterInput = {
@@ -6924,7 +6929,7 @@ export const writeProjectTransferCommitAppTables = async ({
   const transaction = await measureProjectTransferPhase('appTableWrites', () => {
     return database.transaction((tx) => {
       return writeProjectTransferCommitAppTablesTx({...input, tx})
-    }) as Promise<ProjectTransferCommitAppWriteResult>
+    }, projectTransferCommitTransactionWorkloadContext) as Promise<ProjectTransferCommitAppWriteResult>
   })
   const transactionMetrics = getProjectTransferPerformanceMetrics({
     benchmark: {writerTransactionMs: transaction.timing.durationMs},

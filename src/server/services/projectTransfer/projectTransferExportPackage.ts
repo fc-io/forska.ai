@@ -59,6 +59,7 @@ import {
   type ProjectTransferExportTempLayout,
 } from './projectTransferSession.ts'
 import {getProjectTransferSessionRepository} from './projectTransferSessionRepository.ts'
+import {projectTransferExportTransactionWorkloadContext} from './projectTransferWorkloadContext.ts'
 import {
   getProjectTransferZipCrc32Digest,
   type ProjectTransferZipEntryInput,
@@ -959,7 +960,9 @@ export const buildProjectTransferExportPackage = async (
                     rawArticleProvenanceMode: input.rawArticleProvenanceMode,
                     rootPath: buildPath,
                   })
-                })) as Awaited<ReturnType<typeof stageProjectTransferExportPayloadRows>>
+                }, projectTransferExportTransactionWorkloadContext)) as Awaited<
+                  ReturnType<typeof stageProjectTransferExportPayloadRows>
+                >
                 await publishExportBuildProgress({
                   expiresAt,
                   input,

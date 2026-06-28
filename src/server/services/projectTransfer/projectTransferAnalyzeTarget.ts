@@ -1,4 +1,5 @@
 import {computePromptContentHash} from '../../utils/computePromptContentHash.ts'
+import type {DuckdbWorkloadContext} from '../../utils/duckdbService.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getDateValue, getSqlLiteral} from '../appQueryHelpers.ts'
 import type {
@@ -32,10 +33,11 @@ import type {
 } from './projectTransferPayloadSchemas.ts'
 import type {ProjectTransferPackageWarning} from './projectTransferSchemas.ts'
 import type {ProjectTransferImportTempLayout} from './projectTransferSession.ts'
+import {projectTransferAnalyzeOperationWorkloadContext} from './projectTransferWorkloadContext.ts'
 
 export type ProjectTransferAnalyzeTargetRunner = {
-  queryJson: <T>(statement: string) => Promise<T[]>
-  run?: (statement: string) => Promise<void>
+  queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+  run?: (statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<void>
 }
 
 type ProjectTransferAnalyzeTargetInput = {
@@ -2306,6 +2308,7 @@ export const getProjectTransferAnalyzeTargetPlanWithOperationTables = async ({
     layout,
     operationId,
     runner,
+    workloadContext: projectTransferAnalyzeOperationWorkloadContext,
     work: ({runner: operationRunner, tables}) => {
       return getProjectTransferAnalyzeTargetPlan({
         operationTables: tables,
