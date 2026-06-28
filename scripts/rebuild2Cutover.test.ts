@@ -80,7 +80,9 @@ const runCutoverScript = <T>(body: string) => {
 }
 
 test('package exposes the rebuild2 cutover command', async () => {
-  const packageJson = (await Bun.file(join(projectRoot, 'package.json')).json()) as {scripts: Record<string, string>}
+  const packageJson = (await globalThis.Bun.file(join(projectRoot, 'package.json')).json()) as {
+    scripts: Record<string, string>
+  }
 
   expect(packageJson.scripts['db:duck:rebuild2-cutover']).toBe(
     'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/rebuild2Cutover.ts',
@@ -99,11 +101,11 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
       quarantineRows: number
       refreshArticleRows: number
       refreshRows: number
+      reviewRebuildRequests: number
     }
     fence: {ownerToken: string; status: string}
     finalQuarantine: {articleId: string; dirtyToken: number; projectId: string} | undefined
-    largeRebuild: {refreshStatus: string; refreshToken: number}
-    materialization: {materializationStatus: string; owner: string | null; targetDirtyToken: number}
+    materialization: {materializationStatus: string; owner: string | null; targetDirtyToken: number} | undefined
     refreshState: {
       dirtyToken: number
       lastCompletedDirtyToken: number
@@ -111,6 +113,7 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
       requestedBy: string
       workerId: string | null
     }
+    reviewRebuildRequest: {admissionState: string; projectId: string; reason: string; status: string}
     report: {
       afterClearProof: {martRefreshQueueRows: number; nonCutoverRefreshRows: number}
       beforeProof: {martRefreshQueueRows: number; nonCutoverRefreshRows: number; quarantineRows: number}
@@ -368,6 +371,17 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
       FROM app.project_mart_large_rebuild_state
       WHERE project_id = 'rebuild2-project'
     \`)
+    const [reviewRebuildRequest] = await database.queryJson(\`
+      SELECT
+        project_id AS projectId,
+        reason,
+        status,
+        admission_state AS admissionState
+      FROM app.review_rebuild_request
+      WHERE project_id = 'rebuild2-project'
+      ORDER BY created_at DESC
+      LIMIT 1
+    \`)
     const [fence] = await database.queryJson(\`
       SELECT owner_token AS ownerToken, status
       FROM app.rebuild2_cutover_fence
@@ -383,7 +397,8 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
         CAST((SELECT COUNT(*) FROM app.project_mart_dirty_refresh_article_quarantine) AS INTEGER) AS quarantineRows,
         CAST((SELECT COUNT(*) FROM app.project_mart_refresh_article_quarantine) AS INTEGER) AS obsoleteQuarantineRows,
         CAST((SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import) AS INTEGER) AS outboxImportRows,
-        CAST((SELECT COUNT(*) FROM app.maintenance_work_lease) AS INTEGER) AS maintenanceLeases
+        CAST((SELECT COUNT(*) FROM app.maintenance_work_lease) AS INTEGER) AS maintenanceLeases,
+        CAST((SELECT COUNT(*) FROM app.review_rebuild_request) AS INTEGER) AS reviewRebuildRequests
     \`)
     const [finalQuarantine] = await database.queryJson(\`
       SELECT
@@ -395,7 +410,7 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
       LIMIT 1
     \`)
 
-    console.log(JSON.stringify({counts, fence, finalQuarantine, largeRebuild, materialization, refreshState, report}))
+    console.log(JSON.stringify({counts, fence, finalQuarantine, largeRebuild, materialization, refreshState, report, reviewRebuildRequest}))
   `)
 
   expect(result.report.beforeProof).toMatchObject({
@@ -410,21 +425,18 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
   expect(result.report.rederivedQuarantineCount).toBe(1)
   expect(result.report.largeRebuildProjectIds).toEqual(['rebuild2-project'])
   expect(result.counts).toEqual({
-    largeRebuildRows: 1,
+    largeRebuildRows: 0,
     maintenanceLeases: 0,
-    materializationRows: 1,
+    materializationRows: 0,
     obsoleteQuarantineRows: 0,
     outboxImportRows: 0,
     queueRows: 0,
     quarantineRows: 1,
     refreshArticleRows: 1,
     refreshRows: 1,
+    reviewRebuildRequests: 1,
   })
-  expect(result.finalQuarantine).toEqual({
-    articleId: 'rebuild2-article',
-    dirtyToken: 1,
-    projectId: 'rebuild2-project',
-  })
+  expect(result.finalQuarantine).toEqual({articleId: 'rebuild2-article', dirtyToken: 1, projectId: 'rebuild2-project'})
   expect(result.refreshState).toEqual({
     dirtyToken: 1,
     lastCompletedDirtyToken: 0,
@@ -432,8 +444,13 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
     requestedBy: 'test-rebuild2-cutover-owner',
     workerId: null,
   })
-  expect(result.materialization).toMatchObject({materializationStatus: 'pending', owner: null, targetDirtyToken: 1})
-  expect(result.largeRebuild).toEqual({refreshStatus: 'idle', refreshToken: 1})
+  expect(result.materialization).toBeUndefined()
+  expect(result.reviewRebuildRequest).toMatchObject({
+    admissionState: 'admitted',
+    projectId: 'rebuild2-project',
+    reason: 'rebuild2-cutover',
+    status: 'admitted',
+  })
   expect(result.fence).toEqual({ownerToken: 'test-rebuild2-cutover-owner', status: 'completed'})
 })
 

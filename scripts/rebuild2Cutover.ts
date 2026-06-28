@@ -2,10 +2,12 @@ import {randomUUID} from 'node:crypto'
 import {readdir, readFile} from 'node:fs/promises'
 import {join, relative} from 'node:path'
 
+import {Effect} from 'effect'
+
+import {requestReviewServingV4RebuildEffect} from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getSqlLiteral, getTimestampLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
-import {getProjectMartLargeRebuildStateService} from '../src/server/services/projectMartLargeRebuildStateService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 import {sleep} from '../src/utils/sleep.ts'
@@ -779,6 +781,21 @@ const clearObsoleteRebuild2State = async (runner: CutoverRunner, options: Rebuil
   await runner.run('DELETE FROM app.maintenance_work_lease')
 }
 
+const requestReviewServingV4RebuildInCutoverTransaction = async (runner: CutoverRunner, projectId: string) => {
+  await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {projectId, reason: cutoverReason},
+      {
+        queryJson: runner.queryJson,
+        run: runner.run,
+        transaction: async (operation) => {
+          return operation(runner)
+        },
+      },
+    ),
+  )
+}
+
 const rederiveReplacementWork = async (
   runner: CutoverRunner,
   options: Rebuild2CutoverOptions,
@@ -800,14 +817,7 @@ const rederiveReplacementWork = async (
     await accPromise
 
     return largeRebuildProjectIdSet.has(state.projectId)
-      ? getProjectMartLargeRebuildStateService()
-          .requestLargeRebuild({
-            projectId: state.projectId,
-            rebuildPhase: 'project_scope_article',
-            refreshToken: state.dirtyToken,
-            runner,
-          })
-          .then(() => {})
+      ? requestReviewServingV4RebuildInCutoverTransaction(runner, state.projectId)
       : Promise.resolve()
   }, Promise.resolve())
 
