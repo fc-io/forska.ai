@@ -5,6 +5,7 @@ import {expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 const workspaceRoot = process.cwd()
+const srcRoot = join(workspaceRoot, 'src')
 const routesRoot = join(workspaceRoot, 'src/server/routes')
 const serverMainPath = join(workspaceRoot, 'src/server/serverMain.ts')
 
@@ -22,6 +23,12 @@ const getRouteSourceFiles = () => {
   })
 }
 
+const getProductionSourceFiles = () => {
+  return getSourceFiles(srcRoot).filter((filePath) => {
+    return filePath.endsWith('.ts') && !filePath.endsWith('.test.ts')
+  })
+}
+
 const getRelativeWorkspacePath = (filePath: string) => {
   return relative(workspaceRoot, filePath)
 }
@@ -35,6 +42,20 @@ const forbiddenDuckdbImportPatterns = [
   {label: 'getAppQueryService', pattern: /from ['"][^'"]*\/services\/getAppQueryService(?:\.ts)?['"]/u},
   {label: 'duckdbOlap', pattern: /from ['"][^'"]*\/duckdbOlap(?:\.ts)?['"]/u},
   {label: 'duckdbRunner', pattern: /from ['"][^'"]*\/duckdbRunner(?:\.ts)?['"]/u},
+]
+const retiredOlapImportPatterns = [
+  {label: 'duckdbOlap', pattern: /(?:from\s+|import\(\s*)['"][^'"]*\/duckdbOlap(?:\.ts)?['"]/u},
+  {
+    label: 'articlesReviewsBothOlap',
+    pattern: /(?:from\s+|import\(\s*)['"][^'"]*\/articlesReviewsBothOlap(?:\.ts)?['"]/u,
+  },
+  {
+    label: 'articlesReviewsFiltersOlap',
+    pattern: /(?:from\s+|import\(\s*)['"][^'"]*\/articlesReviewsFiltersOlap(?:\.ts)?['"]/u,
+  },
+  {label: 'articlesReviewsOlap', pattern: /(?:from\s+|import\(\s*)['"][^'"]*\/articlesReviewsOlap(?:\.ts)?['"]/u},
+  {label: 'selectArticleIdsOlap', pattern: /(?:from\s+|import\(\s*)['"][^'"]*\/selectArticleIdsOlap(?:\.ts)?['"]/u},
+  {label: 'unassessedArticlesOlap', pattern: /(?:from\s+|import\(\s*)['"][^'"]*\/unassessedArticlesOlap(?:\.ts)?['"]/u},
 ]
 const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/AdminInvestigateRoutes.ts',
@@ -155,9 +176,9 @@ test('api proxy onRequest intercepts owner-dependent routes before product handl
   })
 
   try {
-    const {apiProxyRoutes} = (await import(`${apiProxyRoutesModulePath}?proxy-order=${Date.now()}`)) as typeof import(
-      './ApiProxyRoutes.ts'
-    )
+    const {apiProxyRoutes} = (await import(
+      `${apiProxyRoutesModulePath}?proxy-order=${Date.now()}`
+    )) as typeof import('./ApiProxyRoutes.ts')
     const app = new Elysia().use(apiProxyRoutes).get('/api/users', () => {
       productHandlerCalled = true
       return {data: []}
@@ -201,6 +222,23 @@ test('normal foreground route SQL cannot add unallowlisted raw OOM-prone shapes'
       })
       .map((entry) => {
         return `${routeFile}: ${entry.label}`
+      })
+  })
+
+  expect(violations).toEqual([])
+})
+
+test('production code cannot reintroduce retired OLAP wrapper or duckdbOlap imports', () => {
+  const violations = getProductionSourceFiles().flatMap((filePath) => {
+    const sourceFile = getRelativeWorkspacePath(filePath)
+    const fileText = readFileSync(filePath, 'utf8')
+
+    return retiredOlapImportPatterns
+      .filter((entry) => {
+        return entry.pattern.test(fileText)
+      })
+      .map((entry) => {
+        return `${sourceFile}: ${entry.label}`
       })
   })
 
