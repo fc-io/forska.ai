@@ -45,6 +45,198 @@ Table column guide:
   legacy-backed path is still active, still needed by fallback/tests, or needs
   more migration/hardening before deletion.
 
+## Sequential Remediation Action Items
+
+Implement these in order. The sequence prefers enforcement before migrations,
+then product route cutovers and legacy deletion, then background/admin/client
+hardening, and finally physical evidence.
+
+### Cross-Cutting Enforcement
+
+- [x] **A1.** Keep `DUCK_OOM_FIX_PLAN.md` linked to this call-site audit so the
+      master plan and implementation checklist share one coordination source.
+- [x] **A2.** Keep `routeSurfaceInventory.ts` exhaustive for mounted public
+      `/api/*` routes and keep unknown public API routes classified as
+      fail-closed `unclassified` routes.
+- [x] **A3.** Keep representative owner-unavailable coverage for
+      owner-dependent API routes returning the owner proxy target unavailable
+      error instead of opening DuckDB locally.
+- [ ] **A4.** Add an explicit API-role proxy-order integration test proving
+      `apiProxyRoutes` intercepts owner-dependent product routes before product
+      handlers mounted from `getProductApiRoutes()` can execute.
+- [ ] **A5.** Add a broad route-facing static import guard that fails on
+      unallowlisted route-handler imports of generic DuckDB services,
+      `duckdbOlap`, `duckdbRunner`, read-only DuckDB services, or
+      `@duckdb/node-api`.
+- [ ] **A6.** Add a broad normal-foreground SQL guard for forbidden raw shapes:
+      `selected_scoped_article_import`, `ROW_NUMBER(`, raw `app.article` or
+      `app.judgment` scans, unbounded `GROUP BY`, `OFFSET`, and runtime JSON
+      sort/extraction.
+- [ ] **A7.** Tighten low-level DuckDB execution so normal foreground work with
+      missing `DuckdbWorkloadContext` is rejected before connection acquisition,
+      while explicit owner/background/admin/test scopes remain allowlisted.
+- [~] **A8.** Extend smoke gates so `test:network-smoke:current-db` and
+  `test:dev-server:current-db` also fail on unqueueable/stalled V4 states,
+  not only API-role ownership, heartbeat, fatal restart, and worker-loop
+  failures.
+
+### Runtime And Routing
+
+- [ ] **A9.** Land the proxy-order test from A4 against the actual
+      `serverMain.ts` registration order and keep it focused on API-role behavior.
+- [ ] **A10.** Add runtime-role assertions proving API role cannot acquire
+      owner-only foreground project reads through `duckdbService.ts`,
+      `appDatabaseService.ts`, `getAppQueryService.ts`, or read-only wrappers.
+- [ ] **A11.** Implement the missing-workload-context rejection from A7 with tests
+      beside `duckdbServiceWorkloadContext.test.ts`, including allowed
+      maintenance/admin/test paths.
+- [~] **A12.** Finish residual read classification for `getAppQueryService.ts`
+  and `appQueryServiceCore.ts` by giving every remaining product-facing source
+  read a purpose, cap, workload class, and migration target.
+- [x] **A13.** Keep read-only services blocked for live API read-only access when
+      an owner proxy is configured and keep shared read-only runtime options for
+      snapshots/tools.
+- [x] **A14.** Keep direct production `@duckdb/node-api` access concentrated in
+      shared runtime helpers and explicit admin/test-only fixture paths.
+
+### Product Routes
+
+- [x] **A15.** Keep migrated LLM, human, both-mode, unassessed, filter/facet,
+      add-to-project, PDF, and judgment-job routes on V4 readers/jobs with raw
+      OLAP imports removed or guarded.
+- [ ] **A16.** Complete the review health/warnings migration by separating V4
+      readiness/manifest diagnostics from legacy mart, owner, dirty-materializer,
+      and maintenance state, then register any remaining diagnostics-only source
+      reads with caps.
+- [ ] **A17.** Complete prompt preview by replacing the
+      `mart.project_scope_article`/`app.project_article` fallback and bounded
+      article hydration with a serving contract or explicitly capped diagnostic
+      residual path.
+- [ ] **A18.** Complete review detail/hydration by moving judgment, prompt,
+      article, assessment, and import-source detail reads to keyed V4/detail
+      contracts or capped residual source reads with migration targets.
+- [ ] **A19.** Move project article membership listing away from owner-side
+      `COUNT(*)`, `app.project_article`/`app.article` joins, and `OFFSET` toward
+      V4 job/keyset state.
+- [ ] **A20.** Finish project export by making download expansion/CSV generation
+      consume bounded job output and serving/detail contracts instead of broad
+      owner-side `app.article`, `app.judgment`, and `app.prompt` reads.
+- [ ] **A21.** Migrate comparison project reads to complete bounded serving
+      contracts/admission and keep source writes owner-routed.
+- [ ] **A22.** Audit data-source/import create routes for atomic delta/hot-field
+      append, workload context, and absence of synchronous project fanout across
+      structured-file, Covidence, PubMed, Europe PMC, and FHIR paths.
+- [ ] **A23.** Prove prompt/subproject/model/provider changes enqueue V4
+      dirty/rebuild work instead of owner-side foreground project-scale scans.
+- [ ] **A24.** Complete human-assessment overview/init migration so product reads
+      use serving state/overlays and remaining source reads are bounded.
+- [ ] **A25.** Prove token, request-attempt, and provider-telemetry services have
+      workload contexts and do not run project-review raw scans in normal product
+      routes.
+
+### V4 Serving And Projector
+
+- [x] **A26.** Keep V4 contracts, admission, cursors, SQL builders, migrated route
+      services, and SQL-shape tests as the product-read baseline.
+- [x] **A27.** Keep manifest, snapshot pin, promotion, retention, delta intake,
+      dirty work, projector service, projector writer, and component projector
+      tests covering single-writer and bounded-work behavior.
+- [x] **A28.** Keep rebuild request/chunk manifests, bulk/search/export/PDF job
+      services, parity runner, benchmark harness, diagnostics repository, and
+      desktop interruption evidence in the V4 evidence set.
+- [ ] **A29.** Add repo-wide proof that no legacy mart maintenance path can write
+      or promote V4 review-serving snapshots outside the V4 projector writer.
+- [ ] **A30.** Extend admission/diagnostic evidence for unchecked detail,
+      prompt-preview, warning/health, export-download, comparison, and
+      human-assessment contracts before marking those product rows migrated.
+
+### Legacy OLAP Retirement
+
+- [x] **A31.** Keep quarantined `duckdbOlap`/raw fallback static guards for normal
+      review and judgment-job foreground paths.
+- [x] **A32.** Keep migrated wrapper evidence showing no production callers remain
+      for `articlesReviewsOlap.ts`, `articlesReviewsBothOlap.ts`,
+      `articlesReviewsFiltersOlap.ts`, `unassessedArticlesOlap.ts`, and
+      `selectArticleIdsOlap.ts`.
+- [ ] **A33.** Delete ready-to-remove OLAP wrapper files and update or remove tests
+      that only assert wrapper delegation once the broad route import guard is in
+      place.
+- [ ] **A34.** Retire `duckdbOlap.ts` raw fallback branches after the last product
+      detail/prompt/diagnostic/export/comparison route no longer needs them.
+- [ ] **A35.** Add a final OLAP retirement guard that fails on new production
+      imports of deleted legacy OLAP wrappers or `duckdbOlap` outside explicit
+      admin/test fixtures.
+
+### Background, Cron, Import, And Maintenance
+
+- [x] **A36.** Keep judgment cron/LLM processing on V4 queue/projection reads and
+      delta/outbox dirty writes.
+- [ ] **A37.** Audit full-text fetch/conversion jobs for bounded running-job and
+      project scans, workload contexts, and delta append on every
+      `app.article.full_text_pdf` update path.
+- [ ] **A38.** Prove provider admission, provider repositories, and dispatch
+      telemetry reads are owner/background scoped with workload contexts and no
+      product-review raw scans.
+- [ ] **A39.** Complete import/store workflow audit for agent workflows,
+      structured-file imports, PubMed, Europe PMC, FHIR, Covidence, hot-field
+      extraction, delta append, and no synchronous affected-project fanout.
+- [ ] **A40.** Retire dirty materialization and mart refresh as legacy serving
+      writers so they either feed V4 dirty/projector state or become deletion-only
+      maintenance.
+- [ ] **A41.** Convert large rebuild services into V4 chunk-manifest/backfill
+      drivers or retire them once V4 rebuild requests cover their purpose.
+- [ ] **A42.** Finish comparison serving builder migration in tandem with
+      comparison route contracts so reads and writers share bounded serving
+      identities.
+- [ ] **A43.** Audit project-transfer import/export for batching, workload
+      context, owner routing, dirty-token-only fanout, and bounded artifact
+      cleanup.
+- [ ] **A44.** Complete archived cleanup, maintenance lease, recovery, and script
+      allowlist proof for workload contexts, memory caps, and batched legacy/source
+      cleanup.
+- [x] **A45.** Keep DuckDB migrations under `withDuckdbMaintenanceAccess`,
+      maintenance workload context, transaction/non-transaction tests, and
+      checkpoint behavior.
+- [ ] **A46.** Add a repo-wide operator-script allowlist/proof for DB-touching
+      scripts, including explicit memory/runtime options for snapshot, backup,
+      checkpoint, recovery, rebuild, and request scripts.
+
+### Admin And Diagnostics
+
+- [x] **A47.** Keep admin investigation, owner diagnostics, DuckDB Studio/snapshot,
+      and ownerless readable backend routes classified as admin/diagnostic rather
+      than product fallback.
+- [ ] **A48.** Remove or rewire admin UI/API controls for legacy project-mart large
+      rebuild, dirty refresh, and mart maintenance once V4 replacements exist.
+- [ ] **A49.** Add explicit proof that every admin page/API is diagnostics-only,
+      owner-routed maintenance, V4-rewired control, or remove-before-release.
+
+### Client/UI
+
+- [~] **A50.** Keep review UI article queries gated on V4 warning/readiness data
+  and keep stale/unavailable browser copy covered by tests.
+- [ ] **A51.** Change review UI warning-query failure handling so failure does not
+      grant permission to load article rows through product APIs.
+- [ ] **A52.** Update review UI to consume final health/warning/detail readiness
+      states after A16-A18, including browser and desktop behavior.
+- [ ] **A53.** Rewire admin UI away from legacy mart large-rebuild controls and
+      prove every admin surface is diagnostic-only or V4-backed.
+
+### Final Evidence And Audit Commands
+
+- [ ] **A54.** Re-run and update the file-discovery, production DuckDB call
+      discovery, route inventory/proxy, API owner proxy, V4 static, and smoke
+      command groups after each remediation part lands.
+- [ ] **A55.** Run final current-DB browser/API smoke proving API role proxies or
+      fails closed while the owner serves V4 paths, with no forbidden runtime log
+      patterns.
+- [ ] **A56.** Produce synthetic and physical release evidence for no foreground
+      raw fallback, zero foreground temp spill, bounded rows/result bytes,
+      overlap with imports/materialization, and desktop interruption/resume.
+- [ ] **A57.** After A54-A56 pass, update this audit checklist statuses and the
+      master `DUCK_OOM_FIX_PLAN.md` success criteria/evidence references in the
+      same final evidence change.
+
 ## Required Handling Classes
 
 - **V4 product read**: **partially current, still planned for full route
