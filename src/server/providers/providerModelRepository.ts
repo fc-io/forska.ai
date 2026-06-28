@@ -4,6 +4,7 @@ import {
   getProviderModelOptions,
   type ProviderModelOptions,
 } from '../../utils/providerModelOptions.ts'
+import {appendProviderModelExecutionIdentityReviewServingDeltas} from '../reviewServing/reviewConfigReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {
@@ -515,6 +516,11 @@ export const createProviderModel = async ({
       }))
 
     if (row) {
+      await appendProviderModelExecutionIdentityReviewServingDeltas(databaseRunner, {
+        modelIds: [row.id],
+        sourceMutationKey: 'providerModel.create',
+        sourceOperation: 'insert',
+      })
       await advanceProviderModelProjectTransferDirtyTokens({databaseRunner, reason: 'providerModel.create'})
     }
 
@@ -592,6 +598,11 @@ export const updateProviderModel = async (
     }
 
     await advanceProviderModelProjectTransferDirtyTokens({databaseRunner, reason: 'providerModel.update'})
+    await appendProviderModelExecutionIdentityReviewServingDeltas(databaseRunner, {
+      modelIds: [id],
+      sourceMutationKey: 'providerModel.update',
+      sourceOperation: 'update',
+    })
 
     return getProviderModelRowByIdWithRunner(databaseRunner, id)
   }, providerModelUpdateWorkloadContext)) as ProviderModelRow | null
@@ -619,6 +630,13 @@ export const upsertDiscoveredModels = async ({
     })
 
     if (models.length > 0) {
+      await appendProviderModelExecutionIdentityReviewServingDeltas(databaseRunner, {
+        modelIds: savedModels.map((model) => {
+          return model.id
+        }),
+        sourceMutationKey: 'providerModel.upsertDiscovered',
+        sourceOperation: 'upsert',
+      })
       await advanceProviderModelProjectTransferDirtyTokens({databaseRunner, reason: 'providerModel.upsertDiscovered'})
     }
 
