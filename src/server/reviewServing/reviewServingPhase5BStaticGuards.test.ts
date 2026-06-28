@@ -16,6 +16,7 @@ test('Phase 5B startup stays cut over to V4 projector work', async () => {
     'src/server/utils/projectMartLargeRebuildHeartbeat.ts',
     'src/server/workers/projectMartRefreshWorker.ts',
     'src/server/services/projectMartDirtyMaterializationService.ts',
+    'src/server/services/reviewAnswerDictionaryStabilityService.ts',
   ]
 
   expect(source).toContain('startReviewServingProjectorWorkerHeartbeat')
