@@ -230,35 +230,6 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
         const {Elysia} = await import('elysia')
         const {adminInvestigateRoutes} = await import('./src/server/routes/AdminInvestigateRoutes.ts')
         const {closeDuckdbService} = await import('./src/server/utils/duckdbService.ts')
-        const {
-          recordProjectMartLargeRebuildCycleMetric,
-          resetProjectMartLargeRebuildRuntimeMetricsForTests,
-        } = await import('./src/server/utils/projectMartLargeRebuildRuntimeMetrics.ts')
-
-        resetProjectMartLargeRebuildRuntimeMetricsForTests()
-        recordProjectMartLargeRebuildCycleMetric({
-          articleCount: 99,
-          committedRowCount: 37,
-          durationMs: 2000,
-          duckdbQueues: null,
-          endedAt: '2026-05-02T10:00:02.000Z',
-          error: null,
-          lastCommittedCursor: {articleCreatedAt: '2026-04-02T00:00:00.000Z', articleId: 'article-runtime-metric'},
-          phase: 'prompt_answer_fact',
-          processMemory: {rssBytes: 123456},
-          projectId: 'project-runtime-metric',
-          queueWaitMs: 12,
-          startedAt: '2026-05-02T10:00:00.000Z',
-          status: 'progressed',
-          tempSpill: {
-            available: true,
-            error: null,
-            fileCount: 2,
-            tempDirectory: '${tempDirectory}',
-            totalBytes: 4096,
-          },
-          workerId: 'metric-worker',
-        })
 
         const app = new Elysia().use(adminInvestigateRoutes)
         const response = await app.handle(new Request('http://localhost/api/admin/maintenance-runtime-diagnostics'))
@@ -325,32 +296,6 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
       }
       pid: number
       processMemory: {heapUsedBytes: number; rssBytes: number}
-      projectMartLargeRebuildRuntimeMetrics: {
-        perPhase: Array<{
-          committedRowCount: number
-          durationMs: number
-          lastCommittedCursor: {articleCreatedAt: string | null; articleId: string} | null
-          lastRssBytes: number | null
-          lastTempSpill: {available: boolean; tempDirectory: string | null; totalBytes: number | null} | null
-          phase: string | null
-          queueWaitMs: number | null
-          rowsPerSecond: number | null
-        }>
-        recentCycles: Array<{
-          committedRowCount: number
-          lastCommittedCursor: {articleCreatedAt: string | null; articleId: string} | null
-          queueWaitMs: number | null
-          rowsPerSecond: number | null
-          tempSpill: {available: boolean; tempDirectory: string | null; totalBytes: number | null} | null
-        }>
-        totals: {
-          cyclesCompleted: number
-          cyclesFailed: number
-          cyclesIdle: number
-          cyclesProgressed: number
-          rowsProcessed: number
-        }
-      }
       role: string
       serverRole: string | null
     }
@@ -386,30 +331,7 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
     expect(responseBody.processMemory.rssBytes).toBeGreaterThan(0)
     expect(responseBody.processMemory.heapUsedBytes).toBeGreaterThan(0)
     expect('projectMartLargeRebuildHeartbeat' in responseBody).toBe(false)
-    expect(responseBody.projectMartLargeRebuildRuntimeMetrics.recentCycles[0]).toMatchObject({
-      committedRowCount: 37,
-      lastCommittedCursor: {articleCreatedAt: '2026-04-02T00:00:00.000Z', articleId: 'article-runtime-metric'},
-      queueWaitMs: 12,
-      rowsPerSecond: 18.5,
-      tempSpill: {available: true, tempDirectory, totalBytes: 4096},
-    })
-    expect(responseBody.projectMartLargeRebuildRuntimeMetrics.perPhase[0]).toMatchObject({
-      committedRowCount: 37,
-      durationMs: 2000,
-      lastCommittedCursor: {articleCreatedAt: '2026-04-02T00:00:00.000Z', articleId: 'article-runtime-metric'},
-      lastRssBytes: 123456,
-      lastTempSpill: {available: true, tempDirectory, totalBytes: 4096},
-      phase: 'prompt_answer_fact',
-      queueWaitMs: 12,
-      rowsPerSecond: 18.5,
-    })
-    expect(responseBody.projectMartLargeRebuildRuntimeMetrics.totals).toEqual({
-      cyclesCompleted: 0,
-      cyclesFailed: 0,
-      cyclesIdle: 0,
-      cyclesProgressed: 1,
-      rowsProcessed: 37,
-    })
+    expect('projectMartLargeRebuildRuntimeMetrics' in responseBody).toBe(false)
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(tempDirectory)
