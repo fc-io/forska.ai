@@ -259,7 +259,6 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     'Admin diagnostics, retired legacy rebuild/materialization controls, and prompt/judgment cleanup.',
     [
       ['GET', '/api/admin/duckdb-append-metrics'],
-      ['GET', '/api/admin/project-mart-large-rebuild-status'],
       ['POST', '/api/admin/project-mart-large-rebuild-run'],
       ['POST', '/api/admin/project-mart-large-rebuild-pause'],
       ['POST', '/api/admin/project-mart-large-rebuild-resume'],
