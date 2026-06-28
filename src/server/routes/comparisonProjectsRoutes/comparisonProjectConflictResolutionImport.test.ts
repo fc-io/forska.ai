@@ -17,6 +17,10 @@ import {
   getComparisonProjectConflictResolutionImportIdTitleKey,
   getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql,
   getComparisonProjectConflictResolutionImportPlan,
+  getComparisonProjectConflictResolutionImportServingArticleIdTargetArticlesSql,
+  getComparisonProjectConflictResolutionImportServingIdentifierTargetArticlesSql,
+  getComparisonProjectConflictResolutionImportServingIdTitleTargetArticlesSql,
+  getComparisonProjectConflictResolutionImportServingTitleTargetArticlesSql,
   getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact,
   getComparisonProjectConflictResolutionImportSourceRowsSql,
   getComparisonProjectConflictResolutionImportSourcesSql,
@@ -227,6 +231,51 @@ test('target article queries are constrained by selected normalized matching key
   expect(titleSql).toContain('strong_identifier.normalizedValue')
   expect(titleSql).toContain(titleKey ?? '')
   expect(titleSql).toContain('EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)')
+})
+
+test('serving target article queries use active comparison serving identity tables', () => {
+  const articleIdSql = getComparisonProjectConflictResolutionImportServingArticleIdTargetArticlesSql({
+    articleIds: ['article-1'],
+    comparisonProjectId: 'comparison-project-1',
+    generation: 4,
+  })
+  const identifierSql = getComparisonProjectConflictResolutionImportServingIdentifierTargetArticlesSql({
+    comparisonProjectId: 'comparison-project-1',
+    generation: 4,
+    identifierKeys: ['pmid\u001F12345'],
+  })
+  const idTitleKey = getComparisonProjectConflictResolutionImportIdTitleKey({
+    externalArticleId: ' External-1 ',
+    title: ' A   Multi\nLine   Title ',
+  })
+  const idTitleSql = getComparisonProjectConflictResolutionImportServingIdTitleTargetArticlesSql({
+    comparisonProjectId: 'comparison-project-1',
+    generation: 4,
+    idTitleKeys: [idTitleKey ?? ''],
+  })
+  const titleKey = getComparisonProjectConflictResolutionImportTitleKey({title: ' A   Multi\nLine   Title '})
+  const titleSql = getComparisonProjectConflictResolutionImportServingTitleTargetArticlesSql({
+    comparisonProjectId: 'comparison-project-1',
+    generation: 4,
+    titleKeys: [titleKey ?? ''],
+  })
+  const combinedSql = [articleIdSql, identifierSql, idTitleSql, titleSql].join('\n')
+
+  expect(combinedSql).toContain('FROM mart.comparison_article_serving a')
+  expect(combinedSql).toContain('LEFT JOIN mart.comparison_article_identifier_serving strong_identifier')
+  expect(combinedSql).toContain("a.comparison_project_id = 'comparison-project-1'")
+  expect(combinedSql).toContain('a.generation = 4')
+  expect(combinedSql).toContain('a.article_external_id AS externalArticleId')
+  expect(combinedSql).toContain('a.article_title AS title')
+  expect(articleIdSql).toContain("a.article_id IN ('article-1')")
+  expect(identifierSql).toContain('FROM mart.comparison_article_identifier_serving matched_identifier')
+  expect(identifierSql).toContain('pmid\u001F12345')
+  expect(idTitleSql).toContain('regexp_replace(LOWER(TRIM(COALESCE(a.article_title')
+  expect(idTitleSql).toContain(idTitleKey ?? '')
+  expect(titleSql).toContain(titleKey ?? '')
+  expect(combinedSql).not.toContain('app.article')
+  expect(combinedSql).not.toContain('app.article_identifier')
+  expect(combinedSql).not.toContain('app.project_article')
 })
 
 test('target article query rows merge DOI and id-title metadata by article id', () => {

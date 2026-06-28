@@ -538,6 +538,43 @@ const getMockConflictResolutionImportArticleIdTargetRows = (statement: string) =
   })
 }
 
+const getMockConflictResolutionImportServingTargetRows = (statement: string) => {
+  const isArticleIdLookup = statement.includes('a.article_id IN')
+  const isIdentifierLookup = statement.includes('FROM mart.comparison_article_identifier_serving matched_identifier')
+  const isTitleLookup = statement.includes('regexp_replace(LOWER(TRIM(COALESCE(a.article_title')
+
+  return conflictResolutionImportTargetRows
+    .filter((row) => {
+      if (isArticleIdLookup) {
+        return statement.includes(`'${row.articleId}'`)
+      }
+
+      if (isIdentifierLookup) {
+        return row.identifierKeys.some((identifierKey) => {
+          return statement.includes(`'${identifierKey}'`)
+        })
+      }
+
+      if (isTitleLookup) {
+        return statement.includes(row.externalArticleId) || statement.includes(row.title.toLowerCase())
+      }
+
+      return false
+    })
+    .map((row) => {
+      return {
+        arxivId: null,
+        articleId: row.articleId,
+        doi: row.doi,
+        externalArticleId: row.externalArticleId,
+        identifierKeys: row.identifierKeys,
+        legacyDoi: row.doi,
+        pubmedId: null,
+        title: row.title,
+      }
+    })
+}
+
 const getMockConflictResolutionExistingTargetResolutionRows = (statement: string, state: MockDatabaseState) => {
   const comparisonProjectId = statement.match(/comparison_project_id = '([^']+)'/)?.[1] ?? ''
 
@@ -1494,6 +1531,15 @@ const queryJson = async (
     const generation = getMockDatabaseState().servingStatus.activeGeneration
 
     return generation === null ? [] : getMockServingArticlePageRows(statement, getMockDatabaseState(), generation)
+  }
+
+  if (
+    statement.includes('FROM mart.comparison_article_identifier_serving matched_identifier')
+    || (statement.includes('FROM mart.comparison_article_serving a')
+      && statement.includes('strong_identifier')
+      && statement.includes('a.article_external_id AS externalArticleId'))
+  ) {
+    return getMockConflictResolutionImportServingTargetRows(statement)
   }
 
   if (statement.includes('FROM mart.comparison_article_serving')) {
@@ -3106,7 +3152,7 @@ test('comparison project conflict resolution import preview returns counts witho
 
 test('comparison project conflict resolution import analyze returns row details without creating upload session', async () => {
   mockDatabaseStateRef.current = {
-    ...createMockDatabaseState(),
+    ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
       allowConflictResolution: true,
       compareWithHumans: true,
@@ -3297,7 +3343,7 @@ test('comparison project conflict resolution import analyze returns row details 
 
 test('comparison project conflict resolution import matches same article rows before identifier lookup', async () => {
   mockDatabaseStateRef.current = {
-    ...createMockDatabaseState(),
+    ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
       allowConflictResolution: true,
       compareWithHumans: true,
@@ -3373,7 +3419,7 @@ test('comparison project conflict resolution import matches same article rows be
 
 test('comparison project conflict resolution import commit writes safe rows and skips existing target rows', async () => {
   mockDatabaseStateRef.current = {
-    ...createMockDatabaseState(),
+    ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
       allowConflictResolution: true,
       compareWithHumans: true,
@@ -3508,7 +3554,7 @@ test('comparison project conflict resolution import commit writes safe rows and 
 
 test('comparison project conflict resolution import commit can include non-conflicting matched rows', async () => {
   mockDatabaseStateRef.current = {
-    ...createMockDatabaseState(),
+    ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
       allowConflictResolution: true,
       compareWithHumans: true,
@@ -3601,7 +3647,7 @@ test('comparison project conflict resolution import commit can include non-confl
 
 test('comparison project conflict resolution import commit skips rows that became unsafe after preview', async () => {
   mockDatabaseStateRef.current = {
-    ...createMockDatabaseState(),
+    ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
       allowConflictResolution: true,
       compareWithHumans: true,

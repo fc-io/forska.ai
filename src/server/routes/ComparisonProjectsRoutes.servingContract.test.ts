@@ -32,6 +32,8 @@ test('comparison product reads are admitted through bounded serving helpers', ()
   const statsBody = getFunctionBody('getComparisonProjectStatsResponse')
   const exportBody = getFunctionBody('getComparisonProjectExportResponse')
   const conflictResolutionExportBody = getFunctionBody('getComparisonProjectConflictResolutionExportSourceRows')
+  const conflictResolutionImportTargetBody = getFunctionBody('getConflictResolutionImportServingCandidateTargetRows')
+  const conflictResolutionImportValidationBody = getFunctionBody('validateConflictResolutionImportAnalyzeTarget')
 
   expect(judgmentPageBody).toContain('scope.activeGeneration === null')
   expect(judgmentPageBody).toContain('getComparisonProjectServingJudgmentRowsPage')
@@ -53,6 +55,25 @@ test('comparison product reads are admitted through bounded serving helpers', ()
   expect(conflictResolutionExportBody).toContain('LEFT JOIN mart.comparison_article_identifier_serving')
   expect(conflictResolutionExportBody).not.toContain('INNER JOIN ${articleTable}')
   expect(conflictResolutionExportBody).not.toContain('LEFT JOIN ${articleIdentifierTable}')
+  expect(conflictResolutionImportTargetBody).toContain(
+    'getComparisonProjectConflictResolutionImportServingArticleIdTargetArticlesSql',
+  )
+  expect(conflictResolutionImportTargetBody).toContain(
+    'getComparisonProjectConflictResolutionImportServingIdentifierTargetArticlesSql',
+  )
+  expect(conflictResolutionImportTargetBody).toContain(
+    'getComparisonProjectConflictResolutionImportServingIdTitleTargetArticlesSql',
+  )
+  expect(conflictResolutionImportTargetBody).toContain(
+    'getComparisonProjectConflictResolutionImportServingTitleTargetArticlesSql',
+  )
+  expect(conflictResolutionImportTargetBody).not.toContain('articleTable')
+  expect(conflictResolutionImportTargetBody).not.toContain('articleIdentifierTable')
+  expect(conflictResolutionImportTargetBody).not.toContain('getArticleScopeConditions')
+  expect(conflictResolutionImportValidationBody).toContain('scope.activeGeneration === null')
+  expect(conflictResolutionImportValidationBody).toContain(
+    'Conflict resolution imports require an active comparison serving generation',
+  )
 })
 
 test('comparison source writes stay owner routed and queue serving rebuilds', () => {
