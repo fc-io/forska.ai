@@ -2,7 +2,6 @@ import {expect, test} from 'bun:test'
 
 type CovidenceReimportResult = {
   clearCalls?: string[]
-  martQueueCalls?: Array<{importRouteIds: string[]; reason: string}>
   queueCalls: string[][]
   seedCalls?: Array<{importRoute: string; mode: string}>
   scopeCalls?: Array<{importRoute: string; mode: string}>
@@ -42,29 +41,24 @@ test('Covidence reimport reloads config and updates the existing datasource rout
         const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartMaintenanceService.ts', 'file://' + process.cwd() + '/').pathname
 
-        const state = {clearCalls: [], martQueueCalls: [], queueCalls: [], scopeCalls: [], seedCalls: [], txStatements: []}
+        const state = {clearCalls: [], queueCalls: [], scopeCalls: [], seedCalls: [], txStatements: []}
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
+            articleImportStoreWorkloadContext: {
+              allowsTempSpill: true,
+              fallbackIntent: 'reject',
+              routeOrJobKey: 'import.storeArticles',
+              timeoutMs: 120000,
+              workloadClass: 'background.importStore',
+            },
             markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }
         })
 
-        void mock.module(duckdbMartRefreshServiceModulePath, () => {
-          return {
-            getDuckdbMartMaintenanceService: () => {
-              return {
-                markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
-                  state.martQueueCalls.push({importRouteIds, reason})
-                },
-              }
-            },
-          }
-        })
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
@@ -138,7 +132,7 @@ test('Covidence reimport reloads config and updates the existing datasource rout
 
         const set = {status: 200}
         const result = await dataSourcesImportRoutesPostCovidence({body: {id: 'datasource-1'}, set})
-        console.log(JSON.stringify({clearCalls: state.clearCalls, martQueueCalls: state.martQueueCalls, queueCalls: state.queueCalls, result, scopeCalls: state.scopeCalls, seedCalls: state.seedCalls, setStatus: set.status, txStatements: state.txStatements}))
+        console.log(JSON.stringify({clearCalls: state.clearCalls, queueCalls: state.queueCalls, result, scopeCalls: state.scopeCalls, seedCalls: state.seedCalls, setStatus: set.status, txStatements: state.txStatements}))
       `,
     ],
     {cwd: process.cwd(), env: process.env},
@@ -158,7 +152,6 @@ test('Covidence reimport reloads config and updates the existing datasource rout
   expect(parsed.txStatements[1]).toContain('items_after_last_import = 3')
   expect(parsed.scopeCalls).toEqual([{importRoute: 'covidence:datasource-1', mode: 'title_abstract'}])
   expect(parsed.seedCalls).toEqual([{importRoute: 'covidence:datasource-1', mode: 'title_abstract'}])
-  expect(parsed.martQueueCalls).toEqual([])
   expect(parsed.queueCalls).toEqual([])
   expect(parsed.result.success).toBe(true)
   expect((parsed.result.data as {id: string} | null)?.id).toBe('datasource-1')
@@ -250,29 +243,24 @@ test('Covidence reimport clears and reseeds full-text project judgments', () => 
         const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartMaintenanceService.ts', 'file://' + process.cwd() + '/').pathname
 
-        const state = {clearCalls: [], martQueueCalls: [], queueCalls: [], scopeCalls: [], seedCalls: [], txStatements: []}
+        const state = {clearCalls: [], queueCalls: [], scopeCalls: [], seedCalls: [], txStatements: []}
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
+            articleImportStoreWorkloadContext: {
+              allowsTempSpill: true,
+              fallbackIntent: 'reject',
+              routeOrJobKey: 'import.storeArticles',
+              timeoutMs: 120000,
+              workloadClass: 'background.importStore',
+            },
             markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }
         })
 
-        void mock.module(duckdbMartRefreshServiceModulePath, () => {
-          return {
-            getDuckdbMartMaintenanceService: () => {
-              return {
-                markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
-                  state.martQueueCalls.push({importRouteIds, reason})
-                },
-              }
-            },
-          }
-        })
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
@@ -346,7 +334,7 @@ test('Covidence reimport clears and reseeds full-text project judgments', () => 
 
         const set = {status: 200}
         const result = await dataSourcesImportRoutesPostCovidence({body: {id: 'datasource-1'}, set})
-        console.log(JSON.stringify({clearCalls: state.clearCalls, martQueueCalls: state.martQueueCalls, queueCalls: state.queueCalls, result, scopeCalls: state.scopeCalls, seedCalls: state.seedCalls, setStatus: set.status, txStatements: state.txStatements}))
+        console.log(JSON.stringify({clearCalls: state.clearCalls, queueCalls: state.queueCalls, result, scopeCalls: state.scopeCalls, seedCalls: state.seedCalls, setStatus: set.status, txStatements: state.txStatements}))
       `,
     ],
     {cwd: process.cwd(), env: process.env},
@@ -364,7 +352,6 @@ test('Covidence reimport clears and reseeds full-text project judgments', () => 
   expect(parsed.clearCalls).toEqual(['covidence:datasource-1'])
   expect(parsed.scopeCalls).toEqual([{importRoute: 'covidence:datasource-1', mode: 'full_text'}])
   expect(parsed.seedCalls).toEqual([{importRoute: 'covidence:datasource-1', mode: 'full_text'}])
-  expect(parsed.martQueueCalls).toEqual([])
   expect(parsed.queueCalls).toEqual([])
   expect(parsed.result.success).toBe(true)
   expect(parsed.result.stats).toEqual({importedCount: 3, itemCount: 4})

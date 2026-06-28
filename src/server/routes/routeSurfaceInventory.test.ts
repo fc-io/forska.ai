@@ -205,7 +205,6 @@ test('admin client pages only call inventoried admin APIs and do not import serv
         || specifier.includes('@duckdb')
         || specifier.includes('appDatabaseService')
         || specifier.includes('duckdbService')
-        || specifier.includes('getDuckdbMartMaintenanceService')
       )
     })
   })

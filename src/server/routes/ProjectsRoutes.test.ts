@@ -18,7 +18,6 @@ let closeDatabase: (() => Promise<void>) | null = null
 let flushMartRefreshes: (() => Promise<void>) | null = null
 let cleanupArchivedProjectMartDataBatch: ((projectId: string) => Promise<{deletedRowCount: number}>) | null = null
 let markArticleProjectsDirty: ((articleId: string, reason: string) => Promise<void>) | null = null
-let refreshProject: ((projectId: string) => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 
@@ -445,7 +444,6 @@ beforeAll(async () => {
     {getAppDatabaseService},
     {resetDuckdbServiceForTests},
     {resetServerRuntimeRoleForTests},
-    {getDuckdbMartMaintenanceService},
     {getProjectMartDirtyRefreshStateService},
     {projectsRoutes},
   ] = await Promise.all([
@@ -453,7 +451,6 @@ beforeAll(async () => {
     import('../services/appDatabaseService.ts'),
     import('../utils/duckdbService.ts'),
     import('../utils/serverRuntimeRole.ts'),
-    import('../services/getDuckdbMartMaintenanceService.ts'),
     import('../services/projectMartDirtyRefreshStateService.ts'),
     import('./ProjectsRoutes.ts'),
   ])
@@ -469,14 +466,32 @@ beforeAll(async () => {
     return database.close()
   }
   flushMartRefreshes = async () => {}
-  cleanupArchivedProjectMartDataBatch = (projectId: string) => {
-    return getDuckdbMartMaintenanceService().cleanupArchivedProjectMartDataBatch(projectId)
+  cleanupArchivedProjectMartDataBatch = async (projectId: string) => {
+    const rows = await database.queryJson<{rowId: bigint | number | string}>(`
+      SELECT rowid AS rowId
+      FROM mart.review_article_serving
+      WHERE project_id = '${projectId}'
+      ORDER BY generation ASC, article_id ASC
+      LIMIT 10
+    `)
+
+    if (rows.length === 0) {
+      return {deletedRowCount: 0}
+    }
+
+    await database.run(`
+      DELETE FROM mart.review_article_serving
+      WHERE rowid IN (${rows
+        .map((row) => {
+          return `${row.rowId}`
+        })
+        .join(', ')})
+    `)
+
+    return {deletedRowCount: rows.length}
   }
   markArticleProjectsDirty = async (articleId: string, reason: string) => {
     await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({articleIds: [articleId], reason})
-  }
-  refreshProject = (projectId: string) => {
-    return getDuckdbMartMaintenanceService().refreshProject(projectId)
   }
   queryDatabase = (statement: string) => {
     return database.queryJson(statement)
@@ -5410,8 +5425,8 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
   await flushMartRefreshes()
 })
 
-test('unchanged cloned project reruns reuse shared judgments when prompt model and content flags match', async () => {
-  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes || !markArticleProjectsDirty || !refreshProject) {
+test('cloning a project appends V4 deltas for copied article scope and review config', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes || !markArticleProjectsDirty) {
     throw new Error('Test app not initialized')
   }
 
@@ -5457,7 +5472,6 @@ test('unchanged cloned project reruns reuse shared judgments when prompt model a
     promptId,
   })
   await markArticleProjectsDirty(articleId, 'ProjectsRoutes.test.cloneUnchangedRerunJudgmentFact')
-  await refreshProject(sourceProjectId)
   await flushMartRefreshes()
 
   const cloneResponse = await app.handle(
@@ -5468,46 +5482,26 @@ test('unchanged cloned project reruns reuse shared judgments when prompt model a
 
   expect(cloneResponse.status).toBe(200)
 
-  await refreshProject(clonedProjectId)
-  await flushMartRefreshes()
   await flushMartRefreshes()
   await assertSourceCloneRerunState({articleId, promptId, sourceJudgmentId, sourceProjectId})
 
-  const [martCounts] = await queryDatabase<{
-    activeCloneDetailCount: number
-    activeCloneDetailJudgmentId: string | null
-    cloneDetailCount: number
-    cloneScopeCount: number
-    judgmentFactCount: number
+  const [cloneDeltaCounts] = await queryDatabase<{
+    cloneProjectDirtyArticleRows: number
+    configDeltaRows: number
+    legacyDirtyMaterializationRows: number
+    scopeDeltaRows: number
   }>(`
     SELECT
-      (SELECT COUNT(*) FROM mart.judgment_fact WHERE judgment_id = '${sourceJudgmentId}') AS judgmentFactCount,
-      (SELECT COUNT(*) FROM mart.project_scope_article WHERE project_id = '${clonedProjectId}') AS cloneScopeCount,
-      (SELECT COUNT(*) FROM mart.review_article_serving_detail WHERE project_id = '${clonedProjectId}') AS cloneDetailCount,
-      (
-        SELECT COUNT(*)
-        FROM mart.review_article_serving_detail detail
-        INNER JOIN app.project_review_serving_generation generation
-          ON generation.project_id = detail.project_id
-         AND generation.active_generation = detail.generation
-        WHERE detail.project_id = '${clonedProjectId}'
-      ) AS activeCloneDetailCount,
-      (
-        SELECT detail.judgment_id
-        FROM mart.review_article_serving_detail detail
-        INNER JOIN app.project_review_serving_generation generation
-          ON generation.project_id = detail.project_id
-         AND generation.active_generation = detail.generation
-        WHERE detail.project_id = '${clonedProjectId}'
-        LIMIT 1
-      ) AS activeCloneDetailJudgmentId
+      (SELECT COUNT(*) FROM app.review_change_delta WHERE project_id = '${clonedProjectId}' AND change_kind = 'projectScope.article.added') AS scopeDeltaRows,
+      (SELECT COUNT(*) FROM app.review_change_delta WHERE project_id = '${clonedProjectId}' AND change_kind = 'project.reviewConfig.updated') AS configDeltaRows,
+      (SELECT COUNT(*) FROM app.project_mart_refresh_article_state WHERE project_id = '${clonedProjectId}') AS cloneProjectDirtyArticleRows,
+      (SELECT COUNT(*) FROM app.project_mart_dirty_materialization_state WHERE project_id = '${clonedProjectId}') AS legacyDirtyMaterializationRows
   `)
 
-  expect(Number(martCounts?.judgmentFactCount ?? 0)).toBe(1)
-  expect(Number(martCounts?.cloneScopeCount ?? 0)).toBe(1)
-  expect(Number(martCounts?.cloneDetailCount ?? 0)).toBe(1)
-  expect(Number(martCounts?.activeCloneDetailCount ?? 0)).toBe(1)
-  expect(martCounts?.activeCloneDetailJudgmentId).toBe(sourceJudgmentId)
+  expect(Number(cloneDeltaCounts?.scopeDeltaRows ?? 0)).toBe(1)
+  expect(Number(cloneDeltaCounts?.configDeltaRows ?? 0)).toBeGreaterThanOrEqual(1)
+  expect(Number(cloneDeltaCounts?.cloneProjectDirtyArticleRows ?? 0)).toBe(1)
+  expect(Number(cloneDeltaCounts?.legacyDirtyMaterializationRows ?? 0)).toBe(0)
 })
 
 test('editing a cloned project model leaves the source project model unchanged', async () => {
