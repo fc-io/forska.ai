@@ -33,9 +33,8 @@ export const appQueryServiceResidualReadClassifications = [
       sourceRead({
         cap: 'explicit articleIds only; zero rows for empty input; optional full text controlled by caller',
         marker: 'const getFullArticlesByIds = (database: AppQueryDatabaseService)',
-        migrationTarget:
-          'prompt preview and detail hydration should consume keyed V4 article display/fulltext payloads',
-        purpose: 'hydrate explicitly requested article records for detail, prompt preview, and article detail routes',
+        migrationTarget: 'detail hydration should consume keyed V4 article display/fulltext payloads',
+        purpose: 'hydrate explicitly requested article records for detail and article detail routes',
         workloadClass: 'foreground-detail',
       }),
     ],
@@ -287,23 +286,8 @@ export const reviewServingResidualReadAllowlist = [
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts',
   },
   {
-    classification: 'boundedPromptPreviewMetadataAndSampleArticle',
+    classification: 'boundedPromptPreviewMetadata',
     sourceReads: [
-      sourceRead({
-        cap: 'first scoped article only; ORDER BY with LIMIT 1 for one projectId',
-        marker: 'FROM mart.project_scope_article scope',
-        migrationTarget:
-          'review.prompt.preview should be the only sample-article source after the unsafe fallback is removed',
-        purpose: 'diagnostic fallback to choose one sample article when V4 prompt-preview serving rows are unavailable',
-        workloadClass: 'foreground-diagnostic',
-      }),
-      sourceRead({
-        cap: 'first curated article only; ORDER BY with LIMIT 1 for one projectId',
-        marker: 'FROM app.project_article project_article',
-        migrationTarget: 'remove after review.prompt.preview serving contract is mandatory',
-        purpose: 'last-resort diagnostic fallback to choose one sample article for prompt preview',
-        workloadClass: 'foreground-diagnostic',
-      }),
       sourceRead({
         cap: 'single project row for one projectId',
         marker: 'FROM app.project',
@@ -324,13 +308,6 @@ export const reviewServingResidualReadAllowlist = [
         migrationTarget: 'prompt preview should read model display/provider metadata from V4 config payloads',
         purpose: 'read model provider metadata needed for token budgeting and prompt formatting',
         workloadClass: 'foreground-metadata',
-      }),
-      sourceRead({
-        cap: 'single explicit articleId via appQueryServiceCore.getFullArticlesByIds',
-        marker: 'getFullArticlesByIds([firstArticleId]',
-        migrationTarget: 'prompt preview should hydrate article content from keyed V4 article preview payloads',
-        purpose: 'hydrate the one selected sample article for prompt preview rendering',
-        workloadClass: 'foreground-detail',
       }),
     ],
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetPromptPreview.ts',

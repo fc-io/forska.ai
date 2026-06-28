@@ -6,20 +6,42 @@ import {
   getSinglePromptJudgmentRequest,
 } from '../../../agent/judge/getSinglePromptJudgmentRequest.ts'
 import type {ArticleRecord} from '../../../db/schemaTypes.ts'
-import {prepareLiveArticleForJudging} from '../../cron/judgmentsJobs/judgmentsJobsSendToLLM/prepareLiveArticleForJudging.ts'
 import {getProviderModelMetadataPromptTokenLimit} from '../../providers/providerModelMetadata.ts'
 import {readReviewServingRows, type ReviewServingReaderResult} from '../../reviewServing/reviewServingReader.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getJsonValue} from '../../services/appQueryHelpers.ts'
-import {getAppQueryService} from '../../services/getAppQueryService.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
+import {processFulltextForLLM} from '../../utils/fulltextProcessing.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 const defaultJudgmentModelContext = 32768
 const defaultJudgmentPromptTokenLimit = Math.max(0, defaultJudgmentModelContext - MAX_COMPLETION_TOKENS)
 
-type PromptPreviewServingRow = {article_id: string}
-type PromptPreviewArticle = Awaited<ReturnType<ReturnType<typeof getAppQueryService>['getFullArticlesByIds']>>[number]
+type PromptPreviewServingRow = {
+  abstract_text: string | null
+  article_id: string
+  full_text_preview: string | null
+  source_metadata: unknown
+}
+type PromptPreviewDetailRow = {
+  article_created_at: unknown
+  article_external_id: string | null
+  article_id: string
+  article_title: string | null
+  article_updated_at: unknown
+  arxiv_id: string | null
+  biorxiv_id: string | null
+  doi: string | null
+  full_text_conversion_status: string | null
+  full_text_fetched_at: unknown
+  full_text_pdf: string | null
+  journal_title: string | null
+  medrxiv_id: string | null
+  pmid: string | null
+  publication_year: number | null
+  source_metadata: unknown
+  url: string | null
+}
 
 const getUnavailablePromptPreview = (input: {
   articleId: string | null
@@ -51,46 +73,68 @@ const getFirstProjectArticleFromServing = async (projectId: string, reviewConfig
   })
 }
 
-const getFirstProjectArticleIdFromScope = async (projectId: string) => {
-  const [row] = await getAppDatabaseService().queryJson<{articleId: string}>(`
-    SELECT scope.article_id AS articleId
-    FROM mart.project_scope_article scope
-    WHERE scope.project_id = '${escapeSqlString(projectId)}'
-      AND (scope.in_curated_scope OR scope.in_route_scope)
-    ORDER BY scope.article_created_at ASC NULLS LAST, scope.article_id ASC
-    LIMIT 1
-  `)
-
-  return row?.articleId ?? null
+const getPromptPreviewArticleDetailFromServing = async (input: {
+  articleId: string
+  projectId: string
+  reviewConfigHash: string | null
+}) => {
+  return readReviewServingRows<PromptPreviewDetailRow>({
+    articleId: input.articleId,
+    contractKey: 'review.detail.row',
+    estimatedResultRows: 1,
+    limit: 1,
+    projectId: input.projectId,
+    reviewConfigHash: input.reviewConfigHash,
+  })
 }
 
-const getFirstProjectArticleIdFromApp = async (projectId: string) => {
-  const [row] = await getAppDatabaseService().queryJson<{articleId: string}>(`
-    SELECT project_article.article_id AS articleId
-    FROM app.project_article project_article
-    LEFT JOIN app.project_article_ordinal article_ordinal
-      ON article_ordinal.project_id = project_article.project_id
-     AND article_ordinal.article_id = project_article.article_id
-    WHERE project_article.project_id = '${escapeSqlString(projectId)}'
-    ORDER BY article_ordinal.article_seq ASC NULLS LAST, project_article.article_id ASC
-    LIMIT 1
-  `)
-
-  return row?.articleId ?? null
+const getDateValue = (value: unknown) => {
+  return value instanceof Date ? value : typeof value === 'string' || typeof value === 'number' ? new Date(value) : null
 }
 
-const getFirstProjectArticleIdFromFallbacks = async (projectId: string) => {
-  const articleId = await getFirstProjectArticleIdFromScope(projectId)
+const getPromptPreviewArticleRecord = (input: {
+  detail: PromptPreviewDetailRow
+  fullText: string | null
+  payload: PromptPreviewServingRow
+}): ArticleRecord => {
+  const sourceMetadata = input.payload.source_metadata ?? input.detail.source_metadata
 
-  return articleId ?? getFirstProjectArticleIdFromApp(projectId)
-}
-
-const getPromptPreviewArticleRecord = (article: PromptPreviewArticle): ArticleRecord => {
   return {
-    ...article,
-    createdAt: article.createdAt ?? new Date(0),
-    updatedAt: article.updatedAt ?? new Date(0),
-  } as ArticleRecord
+    articleAuthors: null,
+    articleCreatedAt: getDateValue(input.detail.article_created_at),
+    articleId: input.detail.article_external_id,
+    articleSummary: input.payload.abstract_text,
+    articleTitle: input.detail.article_title ?? '',
+    articleUpdatedAt: getDateValue(input.detail.article_updated_at),
+    articleVersion: null,
+    arxivId: input.detail.arxiv_id,
+    biorxivId: input.detail.biorxiv_id,
+    contentHash: null,
+    createdAt: new Date(0),
+    doi: input.detail.doi,
+    fullText: input.fullText,
+    fullTextAssets: null,
+    fullTextCharCount: input.fullText?.length ?? null,
+    fullTextConversionAttempts: null,
+    fullTextConversionError: null,
+    fullTextConversionMetadata: null,
+    fullTextConversionModelId: null,
+    fullTextConversionStatus: input.detail.full_text_conversion_status,
+    fullTextFetchedAt: getDateValue(input.detail.full_text_fetched_at),
+    fullTextHtml: null,
+    fullTextOriginalFormat: null,
+    fullTextPDF: input.detail.full_text_pdf,
+    fullTextSource: null,
+    id: input.detail.article_id,
+    importRoute: null,
+    medrxivId: input.detail.medrxiv_id,
+    originalData: null,
+    publicationStatus: null,
+    pubmedId: input.detail.pmid,
+    sourceMetadata,
+    updatedAt: new Date(0),
+    url: input.detail.url,
+  }
 }
 
 export const projectsRoutesGetPromptPreview = new Elysia().get(
@@ -149,11 +193,9 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
 
     const reviewConfigHash = await getCurrentReviewConfigHash(params.id)
     const previewArticleRead = await getFirstProjectArticleFromServing(params.id, reviewConfigHash)
-    const servingArticleId =
-      previewArticleRead.status === 'accepted' ? (previewArticleRead.rows[0]?.article_id ?? null) : null
-    const firstArticleId = servingArticleId ?? (await getFirstProjectArticleIdFromFallbacks(params.id))
+    const previewArticle = previewArticleRead.status === 'accepted' ? (previewArticleRead.rows[0] ?? null) : null
 
-    if (!firstArticleId) {
+    if (!previewArticle) {
       return getUnavailablePromptPreview({
         articleId: null,
         diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
@@ -162,8 +204,25 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       })
     }
 
-    const [modelRow, article] = await Promise.all([
-      getAppDatabaseService().queryJson<{modelMetadataJson: unknown; provider: string | null}>(`
+    const firstArticleId = previewArticle.article_id
+
+    const detailRead = await getPromptPreviewArticleDetailFromServing({
+      articleId: firstArticleId,
+      projectId: params.id,
+      reviewConfigHash,
+    })
+    const firstArticleDetail = detailRead.status === 'accepted' ? (detailRead.rows[0] ?? null) : null
+
+    if (!firstArticleDetail) {
+      return getUnavailablePromptPreview({
+        articleId: firstArticleId,
+        diagnostics: detailRead.status === 'accepted' ? detailRead.diagnostics : previewArticleRead.diagnostics,
+        reason:
+          detailRead.status === 'accepted' ? 'serving_detail_unavailable' : detailRead.diagnostics.manifest.freshness,
+      })
+    }
+
+    const modelRow = await getAppDatabaseService().queryJson<{modelMetadataJson: unknown; provider: string | null}>(`
         SELECT
           TO_JSON(m.metadata_json) AS modelMetadataJson,
           pc.provider_kind AS provider
@@ -171,54 +230,37 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
         WHERE m.id = '${escapeSqlString(projectRow.modelId)}'
         LIMIT 1
-      `),
-      getAppQueryService().getFullArticlesByIds([firstArticleId], {
-        includeFullText: projectRow.useFulltext || projectRow.useFulltextNoImages,
-        projectId: params.id,
-      }),
-    ])
+      `)
 
     const [projectModel] = modelRow
-    const [firstArticle] = article
-
-    if (!firstArticle) {
-      return getUnavailablePromptPreview({
-        articleId: firstArticleId,
-        diagnostics: previewArticleRead.diagnostics,
-        reason: 'no_articles',
-      })
-    }
-
     const modelContext =
       getProviderModelMetadataPromptTokenLimit(getJsonValue(projectModel?.modelMetadataJson), MAX_COMPLETION_TOKENS)
       ?? defaultJudgmentPromptTokenLimit
-    const preparedArticle = await prepareLiveArticleForJudging({
-      article: getPromptPreviewArticleRecord(firstArticle),
-      modelContext,
-      useFulltext: projectRow.useFulltext,
-      useFulltextNoImages: projectRow.useFulltextNoImages,
+    const needsFulltext = projectRow.useFulltext || projectRow.useFulltextNoImages
+    const fullTextResult =
+      needsFulltext && previewArticle.full_text_preview
+        ? processFulltextForLLM(previewArticle.full_text_preview, {
+            promptTokenLimit: modelContext,
+            stripImages: projectRow.useFulltextNoImages,
+          }).processedText
+        : null
+    const firstArticle = getPromptPreviewArticleRecord({
+      detail: firstArticleDetail,
+      fullText: fullTextResult,
+      payload: previewArticle,
     })
 
-    if (preparedArticle.kind === 'skipped') {
+    if (needsFulltext && !fullTextResult) {
       return getUnavailablePromptPreview({
         articleId: firstArticle.id,
         articleTitle: firstArticle.articleTitle,
         diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
-        reason: preparedArticle.skipReason,
-      })
-    }
-
-    if (preparedArticle.kind === 'retry') {
-      return getUnavailablePromptPreview({
-        articleId: firstArticle.id,
-        articleTitle: firstArticle.articleTitle,
-        diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
-        reason: 'transient_failure',
+        reason: 'no_fulltext',
       })
     }
 
     const {systemPrompt, userPrompt} = getSinglePromptJudgmentRequest({
-      article: preparedArticle.article,
+      article: firstArticle,
       contentSettings: {
         useAbstract: projectRow.useAbstract,
         useFulltext: projectRow.useFulltext,
@@ -231,8 +273,8 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
 
     return {
       data: {
-        articleId: preparedArticle.article.id,
-        articleTitle: preparedArticle.article.articleTitle,
+        articleId: firstArticle.id,
+        articleTitle: firstArticle.articleTitle,
         diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
         previewText: getSinglePromptJudgmentPreviewText({systemPrompt, userPrompt}),
         reason: null,
