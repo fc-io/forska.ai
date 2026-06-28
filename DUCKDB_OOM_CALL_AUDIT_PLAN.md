@@ -287,14 +287,80 @@ file discovery.
 
 ## Audit Commands
 
-Use these to keep this file current:
+Use these command groups to keep this file current. Checked groups exist today
+and match current repo naming; unchecked groups are still planned proof gaps for
+the V4/owner-routing cutover.
+
+- [x] **File discovery.** Refreshes the exact DuckDB-related file set used to
+      maintain this checklist across server code, scripts, docs, and package
+      scripts.
 
 ```bash
 git fetch origin main --prune
 git status --short --branch
 rg -l "DuckDB|duckdb|runDuckdb|DuckDBInstance|@duckdb/node-api|duckdbOlap|readOnlyDuckdb|appReadOnlyDatabase|appDatabaseService|getAppDatabaseService|getAppQueryService" src scripts TESTS.md DUCK*.md package.json
+```
+
+- [x] **Production DuckDB call discovery.** Lists non-test production call sites
+      that still touch low-level DuckDB services, legacy OLAP wrappers, app query
+      helpers, read-only services, or direct `@duckdb/node-api` access so each
+      row can stay classified as V4 product read, owner-routed source access,
+      owner/background writer, residual allowlist, admin/debug/tool, quarantined
+      legacy, or test-only.
+
+```bash
 rg -n "runDuckdbJsonQuery|runDuckdbStatement|DuckDBInstance|@duckdb/node-api|duckdbOlap|readOnlyDuckdbService|appReadOnlyDatabaseService|appDatabaseService|getAppDatabaseService|getAppQueryService|duckdbRunner" src --glob '!**/*.test.ts' --glob '!**/*.vitest.tsx'
+```
+
+- [x] **Route inventory/proxy gates.** Proves current route classification names
+      and mounted public route inventory are present, exhaustive, and aligned
+      with API-role owner proxying/fail-closed behavior.
+
+```bash
 bun test src/server/routes/apiRouteClassification.test.ts src/server/routes/routeSurfaceInventory.test.ts src/server/routes/publicRouteSurfaceGate.test.ts
+```
+
+- [x] **API owner proxy gates.** Proves API-role owner proxy behavior, retry
+      behavior, and fail-closed owner-unavailable behavior for owner-dependent
+      routes.
+
+```bash
+bun test src/server/routes/ApiProxyRoutes.test.ts src/server/routes/ApiProxyRoutes.retry.test.ts
+```
+
+- [x] **V4 product-read and owner-routing static gates.** Proves current V4
+      serving contracts, admission, SQL-shape guards, residual allowlist markers,
+      migrated route-service guards, search ownership, parity harness shape, and
+      audited read-only module guard still match the V4/owner-routing
+      classification work.
+
+```bash
+bun test src/server/reviewServing/reviewServingReadContracts.test.ts src/server/reviewServing/reviewServingAdmission.test.ts src/server/reviewServing/reviewServingSql.test.ts src/server/reviewServing/reviewServingResidualReadAllowlist.test.ts src/server/reviewServing/reviewServingLlmReviewRouteService.test.ts src/server/reviewServing/reviewServingFilterRouteService.test.ts src/server/reviewServing/reviewServingHumanBothUnassessedRouteService.test.ts src/server/reviewServing/reviewSearchService.test.ts src/server/reviewServing/reviewServingSearchOwnership.test.ts src/server/reviewServing/reviewServingRouteParityRunner.test.ts src/server/services/getAppQueryService.test.ts
+```
+
+- [x] **Smoke gates.** Current repo scripts exist for current-DB browser/API
+      smoke and real dev-server runtime smoke. They check API-role DuckDB
+      ownership failures, owner heartbeat errors, fatal DuckDB restarts, worker
+      loop failures, forbidden runtime logs, and related current-DB route/runtime
+      regressions; they are not final release-scale physical proof.
+
+```bash
 bun run test:network-smoke:current-db
 bun run test:dev-server:current-db
 ```
+
+- [ ] **Planned broad route-facing import guard.** Current guards cover migrated
+      review/job files and audited read-only modules, but there is no single
+      broad static gate that fails every unallowlisted route handler import of
+      generic DuckDB services, `duckdbOlap`, `duckdbRunner`, read-only services,
+      or `@duckdb/node-api`.
+- [ ] **Planned low-level missing-workload-context guard.** Current workload
+      tests prove context forwarding and metrics behavior, but low-level DuckDB
+      execution still allows `undefined` workload context in explicit paths.
+- [ ] **Planned OLAP retirement guard.** Current tests quarantine normal
+      review/job foreground imports and migrated wrapper callers, but
+      `duckdbOlap.ts` and wrapper tests still exist until final deletion.
+- [ ] **Planned final release-scale smoke proof.** Current smoke gates are
+      practical regression gates; Phase 6 still needs true release-scale physical
+      proof for no foreground raw fallback, zero foreground temp spill, bounded
+      rows/result bytes, and desktop-style overlap/interruption behavior.
