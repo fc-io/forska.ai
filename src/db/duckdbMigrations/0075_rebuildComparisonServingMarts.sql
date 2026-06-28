@@ -12,6 +12,7 @@ DROP INDEX IF EXISTS idx_mart_comparison_filter_stats_lookup;
 DROP TABLE IF EXISTS mart.comparison_filter_stats;
 DROP TABLE IF EXISTS mart.comparison_filter_member;
 DROP TABLE IF EXISTS mart.comparison_cell_serving;
+DROP TABLE IF EXISTS mart.comparison_article_identifier_serving;
 DROP TABLE IF EXISTS mart.comparison_article_serving;
 
 CREATE TABLE mart.comparison_article_serving (
@@ -23,6 +24,11 @@ CREATE TABLE mart.comparison_article_serving (
   article_title VARCHAR NOT NULL,
   article_summary VARCHAR,
   article_external_id VARCHAR,
+  doi VARCHAR,
+  pubmed_id VARCHAR,
+  arxiv_id VARCHAR,
+  biorxiv_id VARCHAR,
+  medrxiv_id VARCHAR,
   journal_title VARCHAR,
   url VARCHAR,
   full_text_pdf VARCHAR,
@@ -56,6 +62,19 @@ CREATE TABLE mart.comparison_article_serving (
   has_conflict BOOLEAN NOT NULL,
   serving_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   PRIMARY KEY(comparison_project_id, generation, article_id)
+);
+
+CREATE TABLE mart.comparison_article_identifier_serving (
+  comparison_project_id VARCHAR NOT NULL,
+  generation BIGINT NOT NULL,
+  article_id VARCHAR NOT NULL,
+  source_identifier_id VARCHAR NOT NULL,
+  kind VARCHAR NOT NULL,
+  normalized_value VARCHAR NOT NULL,
+  source VARCHAR NOT NULL,
+  is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+  serving_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+  PRIMARY KEY(comparison_project_id, generation, article_id, source_identifier_id)
 );
 
 CREATE TABLE mart.comparison_cell_serving (
@@ -120,6 +139,9 @@ SET
 
 CREATE INDEX IF NOT EXISTS idx_mart_comparison_article_serving_order
 ON mart.comparison_article_serving(comparison_project_id, generation, row_sort_created_at, row_sort_title, row_sort_article_id);
+
+CREATE INDEX IF NOT EXISTS idx_mart_comparison_article_identifier_serving_lookup
+ON mart.comparison_article_identifier_serving(comparison_project_id, generation, article_id, is_primary, kind, normalized_value, source_identifier_id);
 
 CREATE INDEX IF NOT EXISTS idx_mart_comparison_filter_member_lookup
 ON mart.comparison_filter_member(comparison_project_id, generation, row_filter, difference_filter, ordinal, article_id);

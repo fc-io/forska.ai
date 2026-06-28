@@ -1392,7 +1392,7 @@ const queryJson = async (
 
   if (
     statement.includes('FROM app.comparison_project_conflict_resolution cr')
-    && statement.includes('LEFT JOIN app.article_identifier ai')
+    && statement.includes('LEFT JOIN mart.comparison_article_identifier_serving ai')
   ) {
     return getMockConflictResolutionExportRows(statement, getMockDatabaseState())
   }
@@ -6145,7 +6145,7 @@ test('comparison project conflict resolution export returns saved resolutions as
   const state = getMockDatabaseState()
   const exportStatement =
     state.queryStatements.find((statement) => {
-      return statement.includes('LEFT JOIN app.article_identifier ai')
+      return statement.includes('LEFT JOIN mart.comparison_article_identifier_serving ai')
     }) ?? ''
 
   expect(response.status).toBe(200)
@@ -6206,8 +6206,10 @@ test('comparison project conflict resolution export returns saved resolutions as
     },
   ])
   expect(exportStatement).toContain('FROM app.comparison_project_conflict_resolution cr')
-  expect(exportStatement).toContain('INNER JOIN app.article a ON a.id = cr.article_id')
-  expect(exportStatement).toContain('LEFT JOIN app.article_identifier ai ON ai.article_id = a.id')
+  expect(exportStatement).toContain('INNER JOIN mart.comparison_article_serving a')
+  expect(exportStatement).toContain('LEFT JOIN mart.comparison_article_identifier_serving ai')
+  expect(exportStatement).not.toContain('INNER JOIN app.article a ON a.id = cr.article_id')
+  expect(exportStatement).not.toContain('LEFT JOIN app.article_identifier ai ON ai.article_id = a.id')
   expect(exportStatement).not.toContain('LIMIT')
   expect(exportStatement).not.toContain('row_filter')
   expect(exportStatement).not.toContain('difference_filter')

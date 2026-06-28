@@ -131,6 +131,27 @@ const getScript = (body: string) => {
         )
       \`)
       await database.run(\`
+        INSERT INTO mart.comparison_article_identifier_serving (
+          comparison_project_id,
+          generation,
+          article_id,
+          source_identifier_id,
+          kind,
+          normalized_value,
+          source,
+          is_primary
+        ) VALUES (
+          '\${comparisonProjectId}',
+          \${generation},
+          '\${articleId}',
+          'identifier-\${articleId}',
+          'doi',
+          '10.1000/\${articleId}',
+          'test',
+          TRUE
+        )
+      \`)
+      await database.run(\`
         INSERT INTO mart.comparison_filter_member (
           comparison_project_id,
           generation,
@@ -177,6 +198,11 @@ const getScript = (body: string) => {
         UNION ALL
         SELECT 'cell' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount
         FROM mart.comparison_cell_serving
+        WHERE comparison_project_id = '\${comparisonProjectId}'
+        GROUP BY generation
+        UNION ALL
+        SELECT 'identifier' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount
+        FROM mart.comparison_article_identifier_serving
         WHERE comparison_project_id = '\${comparisonProjectId}'
         GROUP BY generation
         UNION ALL
@@ -314,12 +340,14 @@ test('comparison serving cleanup removes old generations without deleting active
   `)
 
   expect(result.activeGeneration).toBe(2)
-  expect(result.cleanupResult.deletedRowCount).toBe(4)
+  expect(result.cleanupResult.deletedRowCount).toBe(5)
   expect(result.rowsBeforeCleanup).toEqual([
     {generation: '1', rowCount: '1', tableName: 'article'},
     {generation: '2', rowCount: '1', tableName: 'article'},
     {generation: '1', rowCount: '1', tableName: 'cell'},
     {generation: '2', rowCount: '1', tableName: 'cell'},
+    {generation: '1', rowCount: '1', tableName: 'identifier'},
+    {generation: '2', rowCount: '1', tableName: 'identifier'},
     {generation: '1', rowCount: '1', tableName: 'member'},
     {generation: '2', rowCount: '1', tableName: 'member'},
     {generation: '1', rowCount: '1', tableName: 'stats'},
@@ -328,6 +356,7 @@ test('comparison serving cleanup removes old generations without deleting active
   expect(result.rowsAfterCleanup).toEqual([
     {generation: '2', rowCount: '1', tableName: 'article'},
     {generation: '2', rowCount: '1', tableName: 'cell'},
+    {generation: '2', rowCount: '1', tableName: 'identifier'},
     {generation: '2', rowCount: '1', tableName: 'member'},
     {generation: '2', rowCount: '1', tableName: 'stats'},
   ])
@@ -355,10 +384,11 @@ test('comparison serving explicit cleanup refuses the active generation', () => 
   `)
 
   expect(result.activeCleanupResult.deletedRowCount).toBe(0)
-  expect(result.stagedCleanupResult.deletedRowCount).toBe(4)
+  expect(result.stagedCleanupResult.deletedRowCount).toBe(5)
   expect(result.rowsAfterCleanup).toEqual([
     {generation: '1', rowCount: '1', tableName: 'article'},
     {generation: '1', rowCount: '1', tableName: 'cell'},
+    {generation: '1', rowCount: '1', tableName: 'identifier'},
     {generation: '1', rowCount: '1', tableName: 'member'},
     {generation: '1', rowCount: '1', tableName: 'stats'},
   ])
@@ -399,7 +429,7 @@ test('comparison serving full cleanup removes mart rows and the generation statu
     await database.close()
   `)
 
-  expect(result.cleanupResult.deletedRowCount).toBe(9)
+  expect(result.cleanupResult.deletedRowCount).toBe(11)
   expect(result.activeAfterCleanup).toBeNull()
   expect(result.generationRowsAfterCleanup).toEqual([])
   expect(result.rowsBeforeCleanup).toEqual([
@@ -407,6 +437,8 @@ test('comparison serving full cleanup removes mart rows and the generation statu
     {generation: '2', rowCount: '1', tableName: 'article'},
     {generation: '1', rowCount: '1', tableName: 'cell'},
     {generation: '2', rowCount: '1', tableName: 'cell'},
+    {generation: '1', rowCount: '1', tableName: 'identifier'},
+    {generation: '2', rowCount: '1', tableName: 'identifier'},
     {generation: '1', rowCount: '1', tableName: 'member'},
     {generation: '2', rowCount: '1', tableName: 'member'},
     {generation: '1', rowCount: '1', tableName: 'stats'},
@@ -464,12 +496,14 @@ test('failed comparison serving rebuild path preserves the last active generatio
   expect(result.failureText).toContain('simulated comparison serving rebuild failure')
   expect(result.activeAfterFailure).toBe(1)
   expect(result.activeAfterCleanup).toBe(1)
-  expect(result.cleanupResult.deletedRowCount).toBe(4)
+  expect(result.cleanupResult.deletedRowCount).toBe(5)
   expect(result.rowsAfterFailure).toEqual([
     {generation: '1', rowCount: '1', tableName: 'article'},
     {generation: '2', rowCount: '1', tableName: 'article'},
     {generation: '1', rowCount: '1', tableName: 'cell'},
     {generation: '2', rowCount: '1', tableName: 'cell'},
+    {generation: '1', rowCount: '1', tableName: 'identifier'},
+    {generation: '2', rowCount: '1', tableName: 'identifier'},
     {generation: '1', rowCount: '1', tableName: 'member'},
     {generation: '2', rowCount: '1', tableName: 'member'},
     {generation: '1', rowCount: '1', tableName: 'stats'},
@@ -478,6 +512,7 @@ test('failed comparison serving rebuild path preserves the last active generatio
   expect(result.rowsAfterCleanup).toEqual([
     {generation: '1', rowCount: '1', tableName: 'article'},
     {generation: '1', rowCount: '1', tableName: 'cell'},
+    {generation: '1', rowCount: '1', tableName: 'identifier'},
     {generation: '1', rowCount: '1', tableName: 'member'},
     {generation: '1', rowCount: '1', tableName: 'stats'},
   ])

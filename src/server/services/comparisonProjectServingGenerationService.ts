@@ -13,6 +13,7 @@ type ComparisonProjectServingGenerationDependencies = {
 
 type ComparisonProjectServingGenerationMartCleanupTableName =
   | 'mart.comparison_article_serving'
+  | 'mart.comparison_article_identifier_serving'
   | 'mart.comparison_cell_serving'
   | 'mart.comparison_filter_member'
   | 'mart.comparison_filter_stats'
@@ -30,6 +31,7 @@ const comparisonProjectServingGenerationCleanupTableNames: ComparisonProjectServ
   'mart.comparison_cell_serving',
   'mart.comparison_filter_member',
   'mart.comparison_filter_stats',
+  'mart.comparison_article_identifier_serving',
   'mart.comparison_article_serving',
 ]
 

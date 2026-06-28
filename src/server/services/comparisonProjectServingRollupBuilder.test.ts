@@ -109,12 +109,23 @@ type ScopedImportRollupRow = {
   articleExternalId: string | null
   canonicalOnly: string | null
   comparisonProjectId: string
+  doi: string | null
   journalTitle: string | null
+  pubmedId: string | null
   sameValue: string | null
   scopedOnly: string | null
 }
 
-type ScopedImportRollupResult = {articleRows: ScopedImportRollupRow[]}
+type ScopedImportRollupResult = {
+  articleRows: ScopedImportRollupRow[]
+  identifierRows: Array<{
+    comparisonProjectId: string
+    isPrimary: boolean
+    kind: string
+    normalizedValue: string
+    sourceIdentifierId: string
+  }>
+}
 
 type ArticleCategory = 'chinese' | 'non_chinese'
 
@@ -1001,6 +1012,8 @@ const getScopedImportRollupScript = () => {
         article_id,
         article_title,
         article_summary,
+        doi,
+        pubmed_id,
         article_created_at,
         article_updated_at,
         source_metadata
@@ -1009,11 +1022,18 @@ const getScopedImportRollupScript = () => {
         'legacy-article-id',
         'Scoped Import Article',
         'Scoped Import Summary',
+        '10.1000/scoped-import',
+        '12345',
         TIMESTAMPTZ '2026-08-01T00:00:00.000Z',
         TIMESTAMPTZ '2026-08-01T01:00:00.000Z',
         CAST('{"canonicalOnly":"canonical","same":"canonical","journalTitle":"Canonical Journal"}' AS JSON)
       )
     \`)
+
+    await insertRows('app.article_identifier', ['id', 'article_id', 'kind', 'normalized_value', 'source', 'is_primary'], [
+      {id: 'identifier-scoped-import-doi', article_id: 'canonical-scoped-import-article', kind: 'doi', normalized_value: '10.1000/scoped-import', source: 'doi', is_primary: true},
+      {id: 'identifier-scoped-import-pmid', article_id: 'canonical-scoped-import-article', kind: 'pmid', normalized_value: '12345', source: 'pubmed_id', is_primary: false}
+    ])
 
     await insertRows('app.project', ['id', 'name', 'description', 'model_id', 'human_judgment_mode', 'use_title', 'use_abstract', 'use_fulltext', 'use_fulltext_no_images'], [
       {id: 'source-project-a', name: 'Source Project A', description: null, model_id: 'model-scoped-import', human_judgment_mode: 'prompt', use_title: true, use_abstract: true, use_fulltext: false, use_fulltext_no_images: false},
@@ -1129,6 +1149,8 @@ const getScopedImportRollupScript = () => {
       SELECT
         comparison_project_id AS comparisonProjectId,
         article_external_id AS articleExternalId,
+        doi,
+        pubmed_id AS pubmedId,
         journal_title AS journalTitle,
         json_extract_string(source_metadata, '$.canonicalOnly') AS canonicalOnly,
         json_extract_string(source_metadata, '$.scopedOnly') AS scopedOnly,
@@ -1138,7 +1160,19 @@ const getScopedImportRollupScript = () => {
       ORDER BY comparison_project_id ASC
     \`)
 
-    console.log(JSON.stringify({articleRows}))
+    const identifierRows = await database.queryJson(\`
+      SELECT
+        comparison_project_id AS comparisonProjectId,
+        source_identifier_id AS sourceIdentifierId,
+        kind,
+        normalized_value AS normalizedValue,
+        is_primary AS isPrimary
+      FROM mart.comparison_article_identifier_serving
+      WHERE comparison_project_id IN ('comparison-no-scope', 'comparison-source-scope', 'comparison-route-scope')
+      ORDER BY comparison_project_id ASC, is_primary DESC, kind ASC, normalized_value ASC, source_identifier_id ASC
+    \`)
+
+    console.log(JSON.stringify({articleRows, identifierRows}))
   `
 }
 
@@ -1658,7 +1692,9 @@ test('serving rollups use selected scoped import external ids and merged metadat
       articleExternalId: 'legacy-article-id',
       canonicalOnly: 'canonical',
       comparisonProjectId: 'comparison-no-scope',
+      doi: '10.1000/scoped-import',
       journalTitle: 'Canonical Journal',
+      pubmedId: '12345',
       sameValue: 'canonical',
       scopedOnly: null,
     },
@@ -1666,7 +1702,9 @@ test('serving rollups use selected scoped import external ids and merged metadat
       articleExternalId: 'external-route-a',
       canonicalOnly: 'canonical',
       comparisonProjectId: 'comparison-route-scope',
+      doi: '10.1000/scoped-import',
       journalTitle: 'Route A Journal',
+      pubmedId: '12345',
       sameValue: 'route-a',
       scopedOnly: 'route-a',
     },
@@ -1674,9 +1712,55 @@ test('serving rollups use selected scoped import external ids and merged metadat
       articleExternalId: 'external-route-a',
       canonicalOnly: 'canonical',
       comparisonProjectId: 'comparison-source-scope',
+      doi: '10.1000/scoped-import',
       journalTitle: 'Route A Journal',
+      pubmedId: '12345',
       sameValue: 'route-a',
       scopedOnly: 'route-a',
+    },
+  ])
+  expect(result.identifierRows).toEqual([
+    {
+      comparisonProjectId: 'comparison-no-scope',
+      sourceIdentifierId: 'identifier-scoped-import-doi',
+      kind: 'doi',
+      normalizedValue: '10.1000/scoped-import',
+      isPrimary: true,
+    },
+    {
+      comparisonProjectId: 'comparison-no-scope',
+      sourceIdentifierId: 'identifier-scoped-import-pmid',
+      kind: 'pmid',
+      normalizedValue: '12345',
+      isPrimary: false,
+    },
+    {
+      comparisonProjectId: 'comparison-route-scope',
+      sourceIdentifierId: 'identifier-scoped-import-doi',
+      kind: 'doi',
+      normalizedValue: '10.1000/scoped-import',
+      isPrimary: true,
+    },
+    {
+      comparisonProjectId: 'comparison-route-scope',
+      sourceIdentifierId: 'identifier-scoped-import-pmid',
+      kind: 'pmid',
+      normalizedValue: '12345',
+      isPrimary: false,
+    },
+    {
+      comparisonProjectId: 'comparison-source-scope',
+      sourceIdentifierId: 'identifier-scoped-import-doi',
+      kind: 'doi',
+      normalizedValue: '10.1000/scoped-import',
+      isPrimary: true,
+    },
+    {
+      comparisonProjectId: 'comparison-source-scope',
+      sourceIdentifierId: 'identifier-scoped-import-pmid',
+      kind: 'pmid',
+      normalizedValue: '12345',
+      isPrimary: false,
     },
   ])
 })
