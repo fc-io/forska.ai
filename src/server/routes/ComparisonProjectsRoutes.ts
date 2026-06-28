@@ -3501,7 +3501,7 @@ const getComparisonProjectJudgmentsCount = async (
   rowFilter: ComparisonProjectRowFilter,
   differenceFilter: ComparisonProjectDifferenceFilter,
 ) => {
-  if (scope.archived || scope.prompts.length === 0 || scope.columns.length === 0) {
+  if (scope.archived || scope.prompts.length === 0 || scope.columns.length === 0 || scope.activeGeneration === null) {
     return {
       activeGeneration: scope.activeGeneration,
       isServingReady: scope.isServingReady,
