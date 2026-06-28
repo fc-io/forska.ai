@@ -162,6 +162,68 @@ test('summarizes registered runtime capabilities from fresh heartbeats', async (
   })
 })
 
+test('registry overview ignores persisted mutation-worker capabilities while mutations are disabled', async () => {
+  const previousDisableServerMutations = process.env.FORSKA_DISABLE_SERVER_MUTATIONS
+  const startedAt = new Date().toISOString()
+  const maintenanceWorker = await upsertDuckdbOwnerConnectionHeartbeat(
+    {
+      apiServerPort: 4011,
+      hostname: 'test-host',
+      instanceId: `maintenance-worker-server:test-host:4011:12346:${startedAt}`,
+      listenPort: 4011,
+      pid: 12346,
+      processStartedAt: startedAt,
+      runtimeProfile: 'primary',
+      serverRole: 'maintenance-worker',
+      service: 'maintenance-worker-server',
+      startedAt,
+      memoryLimit: '20GB',
+      duckdbOwnerUrl: 'http://127.0.0.1:4011',
+    },
+    testStorageOptions,
+  )
+  const judgeWorker = await upsertDuckdbOwnerConnectionHeartbeat(
+    {
+      apiServerPort: 4012,
+      hostname: 'test-host',
+      instanceId: `judge-worker-server:test-host:4012:12347:${startedAt}`,
+      listenPort: 4012,
+      pid: 12347,
+      processStartedAt: startedAt,
+      runtimeProfile: 'primary',
+      serverRole: 'judge-worker',
+      service: 'judge-worker-server',
+      startedAt,
+      memoryLimit: '20GB',
+      duckdbOwnerUrl: 'http://127.0.0.1:4011',
+    },
+    testStorageOptions,
+  )
+
+  process.env.FORSKA_DISABLE_SERVER_MUTATIONS = 'true'
+
+  try {
+    const registry = getRuntimeCapabilityRegistryOverview([maintenanceWorker, judgeWorker])
+
+    expect(
+      registry.capabilities.find((capability) => {
+        return capability.capability === 'maintenance'
+      }),
+    ).toMatchObject({eligibleConsumerCount: 0, freshConsumerCount: 0, registeredConsumerCount: 0})
+    expect(
+      registry.capabilities.find((capability) => {
+        return capability.capability === 'judging'
+      }),
+    ).toMatchObject({eligibleConsumerCount: 0, freshConsumerCount: 0, registeredConsumerCount: 0})
+  } finally {
+    if (previousDisableServerMutations === undefined) {
+      delete process.env.FORSKA_DISABLE_SERVER_MUTATIONS
+    } else {
+      process.env.FORSKA_DISABLE_SERVER_MUTATIONS = previousDisableServerMutations
+    }
+  }
+})
+
 test('rejects pre-cutover DuckDB owner connection heartbeats', () => {
   const startedAt = new Date().toISOString()
 
