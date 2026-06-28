@@ -5,6 +5,7 @@ import {
   projectTransferProviderDependencyDirtyTokenSurfaces,
 } from '../services/projectTransfer/projectTransferTargetStateDirtyTokenService.ts'
 import {getProviderCatalogEntry, type ProviderKind} from '../services/providerCatalog.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   attachModelsToConnections,
   type DatabaseRunner,
@@ -41,6 +42,61 @@ type ProviderConnectionUsage = {
 }
 type DeleteProviderConnectionOptions = {afterModelCleanup?: () => Promise<void>}
 
+const getProviderConnectionWorkloadContext = (params: {
+  maxResultRows?: number
+  routeOrJobKey: string
+}): DuckdbWorkloadContext => {
+  return {
+    fallbackIntent: 'reject',
+    maxResultRows: params.maxResultRows,
+    routeOrJobKey: params.routeOrJobKey,
+    workloadClass: 'owner.providerRepository',
+  }
+}
+
+const providerConnectionByKindWorkloadContext = getProviderConnectionWorkloadContext({
+  routeOrJobKey: 'providers.connections.byKind',
+})
+const providerConnectionDeleteWorkloadContext = getProviderConnectionWorkloadContext({
+  routeOrJobKey: 'providers.connections.delete',
+})
+const providerConnectionArchiveWorkloadContext = getProviderConnectionWorkloadContext({
+  routeOrJobKey: 'providers.connections.archive',
+})
+const providerConnectionListWorkloadContext = getProviderConnectionWorkloadContext({
+  routeOrJobKey: 'providers.connections.list',
+})
+const providerConnectionListModelsWorkloadContext = getProviderConnectionWorkloadContext({
+  routeOrJobKey: 'providers.connections.listModels',
+})
+const providerConnectionGetWorkloadContext = getProviderConnectionWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.connections.get',
+})
+const providerConnectionForModelWorkloadContext = getProviderConnectionWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.connections.forModel',
+})
+const providerConnectionFirstEnabledWorkloadContext = getProviderConnectionWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.connections.firstEnabled',
+})
+const providerConnectionCreateWorkloadContext = getProviderConnectionWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.connections.create',
+})
+const providerConnectionUpdateWorkloadContext = getProviderConnectionWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.connections.update',
+})
+const providerConnectionCheckStateWorkloadContext = getProviderConnectionWorkloadContext({
+  routeOrJobKey: 'providers.connections.checkState',
+})
+const providerConnectionHasEnabledKindWorkloadContext = getProviderConnectionWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.connections.hasEnabledKind',
+})
+
 const advanceProviderConnectionProjectTransferDirtyTokens = async ({
   databaseRunner,
   reason,
@@ -64,7 +120,8 @@ const isSingletonProviderKind = (providerKind: ProviderKind): boolean => {
 }
 
 const getProviderConnectionRowsByKind = async (providerKind: ProviderKind): Promise<ProviderConnectionRow[]> => {
-  return getAppDatabaseService().queryJson<ProviderConnectionRow>(`
+  return getAppDatabaseService().queryJson<ProviderConnectionRow>(
+    `
     SELECT
       id,
       provider_kind AS providerKind,
@@ -82,7 +139,9 @@ const getProviderConnectionRowsByKind = async (providerKind: ProviderKind): Prom
     FROM app.provider_connection
     WHERE provider_kind = ${getSqlLiteral(providerKind)}
     ORDER BY created_at ASC, label ASC
-  `)
+  `,
+    providerConnectionByKindWorkloadContext,
+  )
 }
 
 const getVisibleProviderConnections = (connections: ProviderConnectionRecord[]): ProviderConnectionRecord[] => {
@@ -338,7 +397,7 @@ const deleteProviderConnectionWithFallback = async (
       await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner, reason: 'providerConnection.delete'})
 
       return getDeletedDeleteResult(usage)
-    })) as DeleteProviderConnectionResult
+    }, providerConnectionDeleteWorkloadContext)) as DeleteProviderConnectionResult
   } catch (error) {
     if (!isForeignKeyConstraintError(error)) {
       throw error
@@ -355,12 +414,13 @@ const deleteProviderConnectionWithFallback = async (
       await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner, reason: 'providerConnection.archive'})
 
       return getArchivedDeleteResult(usage)
-    })) as DeleteProviderConnectionResult
+    }, providerConnectionArchiveWorkloadContext)) as DeleteProviderConnectionResult
   }
 }
 
 const getProviderConnectionRows = async (): Promise<ProviderConnectionRecord[]> => {
-  const rows = await getAppDatabaseService().queryJson<ProviderConnectionRow>(`
+  const rows = await getAppDatabaseService().queryJson<ProviderConnectionRow>(
+    `
     SELECT
       id,
       provider_kind AS providerKind,
@@ -377,13 +437,16 @@ const getProviderConnectionRows = async (): Promise<ProviderConnectionRecord[]> 
       updated_at AS updatedAt
     FROM app.provider_connection
     ORDER BY created_at ASC, label ASC
-  `)
+  `,
+    providerConnectionListWorkloadContext,
+  )
 
   return rows.map(getProviderConnectionRecordFromRow)
 }
 
 const getProviderModelRows = async (): Promise<ProviderModelRecord[]> => {
-  const rows = await getAppDatabaseService().queryJson<ProviderModelRow>(`
+  const rows = await getAppDatabaseService().queryJson<ProviderModelRow>(
+    `
     SELECT
       m.id,
       m.provider_connection_id AS providerConnectionId,
@@ -405,13 +468,16 @@ const getProviderModelRows = async (): Promise<ProviderModelRecord[]> => {
     FROM app.model m
     INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     ORDER BY COALESCE(pc.label, m.name) ASC, m.created_at ASC, m.name ASC
-  `)
+  `,
+    providerConnectionListModelsWorkloadContext,
+  )
 
   return rows.map(getProviderModelRecordFromRow)
 }
 
 const getProviderConnectionRecordById = async (id: string): Promise<ProviderConnectionRecord | null> => {
-  const [row] = await getAppDatabaseService().queryJson<ProviderConnectionRow>(`
+  const [row] = await getAppDatabaseService().queryJson<ProviderConnectionRow>(
+    `
     SELECT
       id,
       provider_kind AS providerKind,
@@ -428,7 +494,9 @@ const getProviderConnectionRecordById = async (id: string): Promise<ProviderConn
     FROM app.provider_connection
     WHERE id = ${getSqlLiteral(id)}
     LIMIT 1
-  `)
+  `,
+    providerConnectionGetWorkloadContext,
+  )
 
   return row ? getProviderConnectionRecordFromRow(row) : null
 }
@@ -449,7 +517,8 @@ export const getProviderConnectionForStoredModel = async (
   modelId: string,
   databaseRunner: DatabaseRunner = getAppDatabaseService(),
 ): Promise<ProviderConnectionRecord | null> => {
-  const [row] = await databaseRunner.queryJson<ProviderConnectionRow>(`
+  const [row] = await databaseRunner.queryJson<ProviderConnectionRow>(
+    `
     SELECT
       pc.id,
       pc.provider_kind AS providerKind,
@@ -468,7 +537,9 @@ export const getProviderConnectionForStoredModel = async (
     INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE m.id = ${getSqlLiteral(modelId)}
     LIMIT 1
-  `)
+  `,
+    providerConnectionForModelWorkloadContext,
+  )
 
   if (!row) {
     return null
@@ -478,7 +549,8 @@ export const getProviderConnectionForStoredModel = async (
 }
 
 export const getFirstEnabledProviderConnection = async (providerKind: ProviderKind) => {
-  const [row] = await getAppDatabaseService().queryJson<ProviderConnectionRow>(`
+  const [row] = await getAppDatabaseService().queryJson<ProviderConnectionRow>(
+    `
     SELECT
       id,
       provider_kind AS providerKind,
@@ -498,7 +570,9 @@ export const getFirstEnabledProviderConnection = async (providerKind: ProviderKi
       AND enabled = TRUE
     ORDER BY created_at ASC
     LIMIT 1
-  `)
+  `,
+    providerConnectionFirstEnabledWorkloadContext,
+  )
 
   return row ? getProviderConnectionRecordFromRow(row) : null
 }
@@ -574,7 +648,7 @@ export const createProviderConnection = async ({
     }
 
     return rows
-  })) as ProviderConnectionRow[]
+  }, providerConnectionCreateWorkloadContext)) as ProviderConnectionRow[]
 
   if (!created) {
     throw new Error('Failed to create provider connection')
@@ -644,7 +718,7 @@ export const updateProviderConnection = async ({
     await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner: tx, reason: 'providerConnection.update'})
 
     return getProviderConnectionRecordFromRow(nextConnection)
-  })) as ProviderConnectionRecord
+  }, providerConnectionUpdateWorkloadContext)) as ProviderConnectionRecord
 
   return updated ?? current
 }
@@ -665,23 +739,29 @@ export const setProviderConnectionCheckState = async ({
   id: string
   lastError: string | null
 }): Promise<void> => {
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     UPDATE app.provider_connection
     SET last_checked_at = current_timestamp,
         last_error = ${getSqlLiteral(lastError)},
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(id)}
-  `)
+  `,
+    providerConnectionCheckStateWorkloadContext,
+  )
 }
 
 export const hasEnabledProviderConnectionKind = async (providerKind: ProviderKind): Promise<boolean> => {
-  const [row] = await getAppDatabaseService().queryJson<{id: string}>(`
+  const [row] = await getAppDatabaseService().queryJson<{id: string}>(
+    `
     SELECT id
     FROM app.provider_connection
     WHERE provider_kind = ${getSqlLiteral(providerKind)}
       AND enabled = TRUE
     LIMIT 1
-  `)
+  `,
+    providerConnectionHasEnabledKindWorkloadContext,
+  )
 
   return Boolean(row)
 }

@@ -7,8 +7,16 @@ import {createProviderModel, updateProviderModel} from '../providers/providerMod
 import {syncProviderConnectionModels} from '../providers/providerSyncService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {getTrimmedValue} from './providerRoutes/providerRoutesShared.ts'
+
+const providerModelRouteWorkloadContext: DuckdbWorkloadContext = {
+  fallbackIntent: 'reject',
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.models.route.findExisting',
+  workloadClass: 'owner.providerRepository',
+}
 
 export const providerModelsRoutes = new Elysia()
   .use(withErrorHandler())
@@ -58,14 +66,17 @@ export const providerModelsRoutes = new Elysia()
         variant: body.variant,
       })
       const displayName = getTrimmedValue(body.displayName) ?? remoteModelId
-      const [existing] = await getAppDatabaseService().queryJson<{id: string}>(`
+      const [existing] = await getAppDatabaseService().queryJson<{id: string}>(
+        `
         SELECT id
         FROM app.model
         WHERE provider_connection_id = ${getSqlLiteral(connection.id)}
           AND remote_model_id = ${getSqlLiteral(remoteModelId)}
           AND ${variant ? `variant = ${getSqlLiteral(variant)}` : 'variant IS NULL'}
         LIMIT 1
-      `)
+      `,
+        providerModelRouteWorkloadContext,
+      )
 
       const model = existing
         ? await updateProviderModel({displayName, enabled: true, id: existing.id, options: body.options, variant})
