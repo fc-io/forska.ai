@@ -17,7 +17,6 @@ let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
 let flushMartRefreshes: (() => Promise<void>) | null = null
 let cleanupArchivedProjectMartDataBatch: ((projectId: string) => Promise<{deletedRowCount: number}>) | null = null
-let markArticleProjectsDirty: ((articleId: string, reason: string) => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 
@@ -444,14 +443,12 @@ beforeAll(async () => {
     {getAppDatabaseService},
     {resetDuckdbServiceForTests},
     {resetServerRuntimeRoleForTests},
-    {getProjectMartDirtyRefreshStateService},
     {projectsRoutes},
   ] = await Promise.all([
     import('../../db/migrateDuckdb.ts'),
     import('../services/appDatabaseService.ts'),
     import('../utils/duckdbService.ts'),
     import('../utils/serverRuntimeRole.ts'),
-    import('../services/projectMartDirtyRefreshStateService.ts'),
     import('./ProjectsRoutes.ts'),
   ])
 
@@ -489,9 +486,6 @@ beforeAll(async () => {
     `)
 
     return {deletedRowCount: rows.length}
-  }
-  markArticleProjectsDirty = async (articleId: string, reason: string) => {
-    await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({articleIds: [articleId], reason})
   }
   queryDatabase = (statement: string) => {
     return database.queryJson(statement)
@@ -863,7 +857,7 @@ test('archive route leaves archived mart cleanup to bounded maintenance batches 
   await flushMartRefreshes()
 })
 
-test('unarchive route rebuilds dirty articles from current date-bounded app scope', async () => {
+test('unarchive route invalidates V4 project scope without legacy dirty state', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
   }
@@ -925,23 +919,17 @@ test('unarchive route rebuilds dirty articles from current date-bounded app scop
     WHERE id = '${projectId}'
     LIMIT 1
   `)
-  const [refreshState] = await queryDatabase<{dirtyToken: number; projectId: string; reason: string | null}>(`
-    SELECT
-      project_id AS projectId,
-      CAST(dirty_token AS INTEGER) AS dirtyToken,
-      last_request_reason AS reason
-    FROM app.project_mart_refresh_state
+  const [configDelta] = await queryDatabase<{changeKind: string; projectId: string}>(`
+    SELECT change_kind AS changeKind, project_id AS projectId
+    FROM app.review_change_delta
     WHERE project_id = '${projectId}'
+      AND change_kind = 'project.reviewConfig.updated'
     LIMIT 1
   `)
-  const dirtyArticleRows = await queryDatabase<{articleId: string; firstDirtyToken: number; lastDirtyToken: number}>(`
-    SELECT
-      article_id AS articleId,
-      CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
-      CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
+  const [dirtyArticleCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*)::INTEGER AS count
     FROM app.project_mart_refresh_article_state
     WHERE project_id = '${projectId}'
-    ORDER BY article_id ASC
   `)
   const [materializationCount] = await queryDatabase<{count: number}>(`
     SELECT COUNT(*)::INTEGER AS count
@@ -950,11 +938,8 @@ test('unarchive route rebuilds dirty articles from current date-bounded app scop
   `)
 
   expect(storedProject?.archived).toBe(false)
-  expect(refreshState).toEqual({dirtyToken: 1, projectId, reason: 'ProjectsRoutes.unarchive'})
-  expect(dirtyArticleRows).toEqual([
-    {articleId: 'unarchive-direct-in-range', firstDirtyToken: 1, lastDirtyToken: 1},
-    {articleId: 'unarchive-route-in-range', firstDirtyToken: 1, lastDirtyToken: 1},
-  ])
+  expect(configDelta).toEqual({changeKind: 'project.reviewConfig.updated', projectId})
+  expect(Number(dirtyArticleCount?.count ?? 0)).toBe(0)
   expect(Number(materializationCount?.count ?? 0)).toBe(0)
 
   await flushMartRefreshes()
@@ -2418,10 +2403,11 @@ test('edit route allows safe prompt replacement with a drained judgment job and 
     WHERE id = 'edit-job-safe-prompt-job'
     LIMIT 1
   `)
-  const [refreshState] = await queryDatabase<{dirtyToken: number; reason: string | null}>(`
-    SELECT CAST(dirty_token AS INTEGER) AS dirtyToken, last_request_reason AS reason
-    FROM app.project_mart_refresh_state
+  const [configDelta] = await queryDatabase<{changeKind: string; projectId: string}>(`
+    SELECT change_kind AS changeKind, project_id AS projectId
+    FROM app.review_change_delta
     WHERE project_id = '${projectId}'
+      AND change_kind = 'project.reviewConfig.updated'
     LIMIT 1
   `)
 
@@ -2449,7 +2435,7 @@ test('edit route allows safe prompt replacement with a drained judgment job and 
   expect(Number(editedProjectHumanCount?.count ?? 0)).toBe(0)
   expect(Number(otherProjectHumanCount?.count ?? 0)).toBe(1)
   expect(jobRow).toEqual({status: 'paused', storageState: 'draining'})
-  expect(refreshState).toEqual({dirtyToken: 1, reason: 'ProjectsRoutes.edit'})
+  expect(configDelta).toEqual({changeKind: 'project.reviewConfig.updated', projectId})
 })
 
 test('edit route reuses existing prompt judgments and preserves association metadata during safe replacement', async () => {
@@ -4292,11 +4278,10 @@ test('edit route accepts full client payload when the model is unchanged', async
     FROM app.project_article
     WHERE project_id = '${projectId}'
   `)
-  const [refreshState] = await queryDatabase<{dirtyToken: number; projectId: string}>(`
-    SELECT project_id AS projectId, CAST(dirty_token AS INTEGER) AS dirtyToken
+  const [dirtyStateCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*)::INTEGER AS count
     FROM app.project_mart_refresh_state
     WHERE project_id = '${projectId}'
-    LIMIT 1
   `)
   const [materializationState] = await queryDatabase<{projectId: string; targetDirtyToken: number}>(`
     SELECT
@@ -4306,20 +4291,16 @@ test('edit route accepts full client payload when the model is unchanged', async
     WHERE project_id = '${projectId}'
     LIMIT 1
   `)
-  const [articleState] = await queryDatabase<{articleId: string; lastDirtyToken: number; projectId: string}>(`
-    SELECT
-      project_id AS projectId,
-      article_id AS articleId,
-      CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
+  const [articleStateCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*)::INTEGER AS count
     FROM app.project_mart_refresh_article_state
     WHERE project_id = '${projectId}'
-    LIMIT 1
   `)
 
   expect(Number(storedProjectArticle?.count ?? 0)).toBe(1)
-  expect(refreshState).toEqual({dirtyToken: 1, projectId})
+  expect(Number(dirtyStateCount?.count ?? 0)).toBe(0)
   expect(materializationState).toBeUndefined()
-  expect(articleState).toEqual({articleId: 'edit-same-model-article', lastDirtyToken: 1, projectId})
+  expect(Number(articleStateCount?.count ?? 0)).toBe(0)
 
   await flushMartRefreshes()
 })
@@ -5426,7 +5407,7 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
 })
 
 test('cloning a project appends V4 deltas for copied article scope and review config', async () => {
-  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes || !markArticleProjectsDirty) {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
   }
 
@@ -5471,8 +5452,6 @@ test('cloning a project appends V4 deltas for copied article scope and review co
     projectId: sourceProjectId,
     promptId,
   })
-  await markArticleProjectsDirty(articleId, 'ProjectsRoutes.test.cloneUnchangedRerunJudgmentFact')
-  await flushMartRefreshes()
 
   const cloneResponse = await app.handle(
     new Request(`http://localhost/api/projects/${sourceProjectId}/clone`, {method: 'POST'}),
@@ -5500,7 +5479,7 @@ test('cloning a project appends V4 deltas for copied article scope and review co
 
   expect(Number(cloneDeltaCounts?.scopeDeltaRows ?? 0)).toBe(1)
   expect(Number(cloneDeltaCounts?.configDeltaRows ?? 0)).toBeGreaterThanOrEqual(1)
-  expect(Number(cloneDeltaCounts?.cloneProjectDirtyArticleRows ?? 0)).toBe(1)
+  expect(Number(cloneDeltaCounts?.cloneProjectDirtyArticleRows ?? 0)).toBe(0)
   expect(Number(cloneDeltaCounts?.legacyDirtyMaterializationRows ?? 0)).toBe(0)
 })
 

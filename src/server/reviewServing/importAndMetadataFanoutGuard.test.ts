@@ -151,6 +151,7 @@ test('prompt subproject model and provider mutations use enqueue or delta marker
   expect(providerConnectionSource).toContain("sourceMutationKey: 'providerConnection.archive'")
 
   const forbiddenMatches = getMatches(metadataMutationEntrypoints, [
+    'getProjectMartDirtyRefreshStateService',
     'requestReviewServingV4Rebuild',
     'rebuildProjectReviewServingBatch',
     'setupProjectReviewServingStaging',

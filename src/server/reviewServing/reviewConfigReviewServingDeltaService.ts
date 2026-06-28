@@ -16,6 +16,7 @@ export type PromptConfigReviewServingField =
   | 'thresholding'
 
 export type ProjectReviewConfigReviewServingField =
+  | 'archived'
   | 'dateFrom'
   | 'dateTo'
   | 'humanJudgmentMode'

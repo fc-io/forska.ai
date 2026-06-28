@@ -1140,15 +1140,8 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
         projectId: parsed.createdProject.id,
       },
     ])
-    expect(parsed.refreshStateRows).toEqual([
-      {dirtyToken: 1, projectId: parsed.createdProject.id, reason: 'syncCovidenceProjectScopeFromConfig'},
-    ])
-    expect(parsed.refreshArticleStateRows).toHaveLength(3)
-    expect(
-      parsed.refreshArticleStateRows.every((row) => {
-        return row.firstDirtyToken === 1 && row.lastDirtyToken === 1 && row.projectId === parsed.createdProject.id
-      }),
-    ).toBe(true)
+    expect(parsed.refreshStateRows).toEqual([])
+    expect(parsed.refreshArticleStateRows).toEqual([])
   } finally {
     deleteCovidencePackageFiles(datasourceId)
     ;[
@@ -1166,7 +1159,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
   }
 })
 
-test('syncCovidenceProjectScopeFromConfig marks removed and added full-text articles dirty across reimport', async () => {
+test('syncCovidenceProjectScopeFromConfig avoids legacy dirty rows across reimport', async () => {
   const duckdbPath = `/tmp/f1-covidence-scope-reimport-${Date.now()}.duckdb`
   const datasourceId = `covidence-scope-reimport-${Date.now()}`
   const importRoute = `covidence:${datasourceId}`
@@ -1332,29 +1325,8 @@ test('syncCovidenceProjectScopeFromConfig marks removed and added full-text arti
       {articleExternalId: `${importRoute}:doi%3A10.1000%2Falpha`, articleTitle: 'Study A', projectId: parsed.projectId},
       {articleExternalId: `${importRoute}:doi%3A10.1000%2Fgamma`, articleTitle: 'Study C', projectId: parsed.projectId},
     ])
-    expect(parsed.refreshStateRows).toEqual([
-      {dirtyToken: 2, projectId: parsed.projectId, reason: 'syncCovidenceProjectScopeFromConfig'},
-    ])
-    expect(parsed.refreshArticleStateRows).toEqual([
-      {
-        articleExternalId: `${importRoute}:doi%3A10.1000%2Falpha`,
-        firstDirtyToken: 1,
-        lastDirtyToken: 2,
-        projectId: parsed.projectId,
-      },
-      {
-        articleExternalId: `${importRoute}:doi%3A10.1000%2Fbeta`,
-        firstDirtyToken: 1,
-        lastDirtyToken: 2,
-        projectId: parsed.projectId,
-      },
-      {
-        articleExternalId: `${importRoute}:doi%3A10.1000%2Fgamma`,
-        firstDirtyToken: 2,
-        lastDirtyToken: 2,
-        projectId: parsed.projectId,
-      },
-    ])
+    expect(parsed.refreshStateRows).toEqual([])
+    expect(parsed.refreshArticleStateRows).toEqual([])
   } finally {
     deleteCovidencePackageFiles(datasourceId)
     ;[
@@ -1572,29 +1544,8 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered titl
     expect(parsed.judgmentRows[2]?.comment).toBeNull()
     expect(parsed.judgmentRows[2]?.isAnswered).toBe(true)
     expect(parsed.judgmentRows[2]?.promptId).toBe(parsed.promptId)
-    expect(parsed.refreshStateRows).toEqual([
-      {dirtyToken: 3, projectId: parsed.projectId, reason: 'seedCovidenceHumanJudgmentsFromConfig'},
-    ])
-    expect(parsed.refreshArticleStateRows).toEqual([
-      {
-        articleExternalId: `${importRoute}:doi%3A10.1000%2Falpha`,
-        firstDirtyToken: 1,
-        lastDirtyToken: 3,
-        projectId: parsed.projectId,
-      },
-      {
-        articleExternalId: `${importRoute}:doi%3A10.1000%2Fbeta`,
-        firstDirtyToken: 1,
-        lastDirtyToken: 3,
-        projectId: parsed.projectId,
-      },
-      {
-        articleExternalId: `${importRoute}:doi%3A10.1000%2Fgamma`,
-        firstDirtyToken: 1,
-        lastDirtyToken: 3,
-        projectId: parsed.projectId,
-      },
-    ])
+    expect(parsed.refreshStateRows).toEqual([])
+    expect(parsed.refreshArticleStateRows).toEqual([])
   } finally {
     deleteCovidencePackageFiles(datasourceId)
     ;[
@@ -2583,29 +2534,8 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and exclu
         projectId: parsed.projectId,
       },
     ])
-    expect(parsed.refreshStateRows).toEqual([
-      {dirtyToken: 3, projectId: parsed.projectId, reason: 'seedCovidenceHumanJudgmentsFromConfig'},
-    ])
-    expect(parsed.refreshArticleStateRows).toEqual([
-      {
-        articleExternalId: `${importRoute}:doi%3A10.1000%2Falpha`,
-        firstDirtyToken: 1,
-        lastDirtyToken: 3,
-        projectId: parsed.projectId,
-      },
-      {
-        articleExternalId: `${importRoute}:doi%3A10.1000%2Fbeta`,
-        firstDirtyToken: 1,
-        lastDirtyToken: 3,
-        projectId: parsed.projectId,
-      },
-      {
-        articleExternalId: `${importRoute}:doi%3A10.1000%2Fgamma`,
-        firstDirtyToken: 1,
-        lastDirtyToken: 3,
-        projectId: parsed.projectId,
-      },
-    ])
+    expect(parsed.refreshStateRows).toEqual([])
+    expect(parsed.refreshArticleStateRows).toEqual([])
   } finally {
     deleteCovidencePackageFiles(datasourceId)
     ;[

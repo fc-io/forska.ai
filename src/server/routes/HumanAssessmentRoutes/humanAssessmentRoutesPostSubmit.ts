@@ -5,7 +5,6 @@ import {appendHumanJudgmentReviewServingDeltas} from '../../reviewServing/humanJ
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getComparisonProjectServingInvalidationService} from '../../services/comparisonProjectServingInvalidationService.ts'
-import {getProjectMartDirtyRefreshStateService} from '../../services/projectMartDirtyRefreshStateService.ts'
 import {syncPendingHumanJudgmentsForArticle} from './humanAssessmentPendingJudgments.ts'
 
 export const humanAssessmentRoutesPostSubmit = async ({
@@ -222,11 +221,6 @@ export const humanAssessmentRoutesPostSubmit = async ({
         }),
     )
 
-    await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-      projects: [{articleIds: [currentArticleId], projectId: body.projectId}],
-      reason: 'humanAssessmentRoutesPostSubmit',
-      runner: tx,
-    })
     await getComparisonProjectServingInvalidationService().markComparisonProjectsServingStaleForHumanPromptJudgments(
       pending
         .filter((row) => {

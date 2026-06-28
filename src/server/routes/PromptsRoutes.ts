@@ -16,7 +16,6 @@ import {
   getSqlLiteral,
 } from '../services/appQueryHelpers'
 import {immutablePromptIdentityReviewServingFields} from '../services/immutablePromptService.ts'
-import {getProjectMartDirtyRefreshStateService} from '../services/projectMartDirtyRefreshStateService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {promptsReadOnlyRoutes} from './promptsRoutes/promptsRoutesReadOnly.ts'
@@ -720,19 +719,6 @@ const promptsAdminRoutes = new Elysia()
             }
           }),
         )
-
-        const dirtyProjects = await getProjectMartDirtyRefreshStateService().getDirtyProjectsForProjectIds(
-          tx,
-          affectedProjects.map((project) => {
-            return project.projectId
-          }),
-        )
-
-        await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-          projects: dirtyProjects,
-          reason: 'PromptsRoutes.merge',
-          runner: tx,
-        })
       })
 
       await getAppDatabaseService().transaction(async (tx) => {
@@ -880,8 +866,27 @@ const promptsAdminRoutes = new Elysia()
       const now = new Date()
 
       await getAppDatabaseService().transaction(async (tx) => {
-        const affectedJudgments = await tx.queryJson<{articleId: string}>(`
-          SELECT DISTINCT article_id AS articleId
+        const affectedJudgments = await tx.queryJson<{
+          articleId: string
+          judgmentId: string
+          modelId: string | null
+          projectId: string | null
+          promptId: string | null
+          useAbstract: boolean
+          useFulltext: boolean
+          useFulltextNoImages: boolean
+          useTitle: boolean
+        }>(`
+          SELECT
+            article_id AS articleId,
+            id AS judgmentId,
+            model_id AS modelId,
+            project_id AS projectId,
+            prompt_id AS promptId,
+            COALESCE(use_abstract, FALSE) AS useAbstract,
+            COALESCE(use_fulltext, FALSE) AS useFulltext,
+            COALESCE(use_fulltext_no_images, FALSE) AS useFulltextNoImages,
+            COALESCE(use_title, FALSE) AS useTitle
           FROM app.judgment
           WHERE id IN (${getQuotedStringList(judgmentIds).join(', ')})
         `)
@@ -893,13 +898,30 @@ const promptsAdminRoutes = new Elysia()
           WHERE id IN (${getQuotedStringList(judgmentIds).join(', ')})
         `)
 
-        await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({
-          articleIds: affectedJudgments.map((judgment) => {
-            return judgment.articleId
-          }),
-          reason: 'PromptsRoutes.deleteInvalidJudgments',
-          runner: tx,
-        })
+        await appendLlmJudgmentReviewServingDeltas(
+          tx,
+          affectedJudgments
+            .filter((judgment) => {
+              return judgment.modelId !== null && judgment.promptId !== null
+            })
+            .map((judgment) => {
+              return {
+                articleId: judgment.articleId,
+                changeKind: 'judgment.llm.deleted' as const,
+                judgmentId: judgment.judgmentId,
+                modelId: judgment.modelId ?? '',
+                projectId: judgment.projectId,
+                promptId: judgment.promptId ?? '',
+                sourceMutationKey: `PromptsRoutes.deleteInvalidJudgments|${judgment.judgmentId}|${now.toISOString()}`,
+                sourceOperation: 'delete' as const,
+                sourceUpdatedAt: now,
+                useAbstract: judgment.useAbstract,
+                useFulltext: judgment.useFulltext,
+                useFulltextNoImages: judgment.useFulltextNoImages,
+                useTitle: judgment.useTitle,
+              }
+            }),
+        )
       })
 
       return {success: true, data: {deletedCount: judgmentIds.length}}

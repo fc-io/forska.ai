@@ -211,6 +211,23 @@ const getProjectArticleCount = async (fixture: {articleId: string; projectId: st
   return row?.rowCount ?? 0
 }
 
+const getProjectScopeDeltaRows = async (fixture: {articleId: string; projectId: string}) => {
+  if (!database) {
+    throw new Error('Database not initialized')
+  }
+
+  return database.queryJson<{articleId: string; changeKind: string; projectId: string}>(`
+    SELECT
+      article_id AS articleId,
+      change_kind AS changeKind,
+      project_id AS projectId
+    FROM app.review_change_delta
+    WHERE project_id = '${fixture.projectId}'
+      AND article_id = '${fixture.articleId}'
+    ORDER BY source_high_water_mark ASC
+  `)
+}
+
 beforeAll(async () => {
   registerModuleMocks()
 
@@ -247,7 +264,7 @@ afterAll(async () => {
   tempRuntimeRoot.cleanup()
 })
 
-test('project article delete commits the row deletion and dirty mark together', async () => {
+test('project article delete commits the row deletion and V4 scope delta together', async () => {
   if (!app) {
     throw new Error('Test app not initialized')
   }
@@ -260,16 +277,12 @@ test('project article delete commits the row deletion and dirty mark together', 
   expect(response.status).toBe(200)
   expect(await response.json()).toEqual({success: true})
   expect(await getProjectArticleCount(fixture)).toBe(0)
-  expect(dirtyMarkState.marks).toEqual([
-    {
-      hasRunner: true,
-      projects: [{articleIds: [fixture.articleId], projectId: fixture.projectId}],
-      reason: 'ProjectArticlesRoutes.delete',
-    },
+  expect(await getProjectScopeDeltaRows(fixture)).toEqual([
+    {articleId: fixture.articleId, changeKind: 'projectScope.article.removed', projectId: fixture.projectId},
   ])
 })
 
-test('project article delete rolls back when dirty marking fails', async () => {
+test('project article delete no longer depends on the legacy dirty ledger', async () => {
   if (!app) {
     throw new Error('Test app not initialized')
   }
@@ -280,14 +293,10 @@ test('project article delete rolls back when dirty marking fails', async () => {
     new Request(`http://localhost/api/projects/${fixture.projectId}/articles/${fixture.articleId}`, {method: 'DELETE'}),
   )
 
-  expect(response.status).toBe(500)
-  expect(await getProjectArticleCount(fixture)).toBe(1)
-  expect(dirtyMarkState.marks).toEqual([
-    {
-      hasRunner: true,
-      projects: [{articleIds: [fixture.articleId], projectId: fixture.projectId}],
-      reason: 'ProjectArticlesRoutes.delete',
-    },
+  expect(response.status).toBe(200)
+  expect(await getProjectArticleCount(fixture)).toBe(0)
+  expect(await getProjectScopeDeltaRows(fixture)).toEqual([
+    {articleId: fixture.articleId, changeKind: 'projectScope.article.removed', projectId: fixture.projectId},
   ])
 })
 

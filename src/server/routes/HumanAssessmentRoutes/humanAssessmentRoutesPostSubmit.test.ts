@@ -5,10 +5,6 @@ const comparisonProjectServingInvalidationServiceModulePath = new URL(
   '../../services/comparisonProjectServingInvalidationService.ts',
   import.meta.url,
 ).pathname
-const projectMartDirtyRefreshStateServiceModulePath = new URL(
-  '../../services/projectMartDirtyRefreshStateService.ts',
-  import.meta.url,
-).pathname
 
 const queryJsonRef = {
   current: async (_statement: string): Promise<unknown[]> => {
@@ -24,14 +20,6 @@ const transactionRef = {
   ) => {
     return operation({queryJson: queryJsonRef.current, run: runRef.current})
   },
-}
-
-const dirtyMarksRef = {
-  current: [] as Array<{
-    hasRunner: boolean
-    projects: Array<{articleIds?: string[]; projectId: string}>
-    reason: string | null | undefined
-  }>,
 }
 
 const comparisonServingInvalidationMarksRef = {
@@ -51,26 +39,6 @@ const registerModuleMocks = () => {
           },
           transaction: (operation: Parameters<typeof transactionRef.current>[0]) => {
             return transactionRef.current(operation)
-          },
-        }
-      },
-    }
-  })
-
-  void mock.module(projectMartDirtyRefreshStateServiceModulePath, () => {
-    return {
-      getProjectMartDirtyRefreshStateService: () => {
-        return {
-          markProjectsDirtyAtomically: async (params: {
-            projects: Array<{articleIds?: string[]; projectId: string}>
-            reason?: string | null
-            runner?: unknown
-          }) => {
-            dirtyMarksRef.current.push({
-              hasRunner: params.runner != null,
-              projects: params.projects,
-              reason: params.reason,
-            })
           },
         }
       },
@@ -105,9 +73,8 @@ afterEach(() => {
   mock.restore()
 })
 
-test('human assessment submit marks the project dirty in the same transaction for the pending article', async () => {
+test('human assessment submit appends V4 deltas without legacy dirty ledger writes', async () => {
   const statements: string[] = []
-  dirtyMarksRef.current = []
   comparisonServingInvalidationMarksRef.current = []
   queryJsonRef.current = async (statement) => {
     statements.push(statement)
@@ -144,13 +111,6 @@ test('human assessment submit marks the project dirty in the same transaction fo
   })
 
   expect(response).toEqual({data: {updated: 1}})
-  expect(dirtyMarksRef.current).toEqual([
-    {
-      hasRunner: true,
-      projects: [{articleIds: ['article-1'], projectId: 'project-1'}],
-      reason: 'humanAssessmentRoutesPostSubmit',
-    },
-  ])
   expect(comparisonServingInvalidationMarksRef.current).toEqual([
     {changes: [{articleId: 'article-1', promptId: 'prompt-1'}], hasRunner: true},
   ])
@@ -188,7 +148,6 @@ test('human assessment submit marks the project dirty in the same transaction fo
 
 test('human assessment submit rejects summary-mode projects before prompt validation', async () => {
   const statements: string[] = []
-  dirtyMarksRef.current = []
   comparisonServingInvalidationMarksRef.current = []
   queryJsonRef.current = async (statement) => {
     statements.push(statement)
@@ -211,7 +170,6 @@ test('human assessment submit rejects summary-mode projects before prompt valida
 
   expect(set.status).toBe(409)
   expect(response).toEqual({data: null, error: 'Summary-mode projects do not support prompt-based human assessment'})
-  expect(dirtyMarksRef.current).toEqual([])
   expect(comparisonServingInvalidationMarksRef.current).toEqual([])
   expect(
     statements.some((statement) => {
@@ -224,7 +182,6 @@ test('human assessment submit rejects summary-mode projects before prompt valida
 
 test('human assessment submit skips deltas for blank optional answers', async () => {
   const statements: string[] = []
-  dirtyMarksRef.current = []
   comparisonServingInvalidationMarksRef.current = []
   queryJsonRef.current = async (statement) => {
     statements.push(statement)
@@ -270,11 +227,7 @@ test('human assessment submit skips deltas for blank optional answers', async ()
       return statement.includes('INSERT INTO app.review_change_delta') && statement.includes('judgment.human.updated')
     }),
   ).toBe(false)
-  expect(dirtyMarksRef.current).toEqual([
-    {
-      hasRunner: true,
-      projects: [{articleIds: ['article-optional'], projectId: 'project-optional'}],
-      reason: 'humanAssessmentRoutesPostSubmit',
-    },
+  expect(comparisonServingInvalidationMarksRef.current).toEqual([
+    {changes: [{articleId: 'article-optional', promptId: 'prompt-optional'}], hasRunner: true},
   ])
 })

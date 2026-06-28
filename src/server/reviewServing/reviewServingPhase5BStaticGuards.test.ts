@@ -121,6 +121,29 @@ test('Phase 5B legacy worker scripts require explicit admin acknowledgements or 
   expect(existingLargeRebuildScripts).toEqual([])
 })
 
+test('production app code no longer writes through the legacy dirty-refresh ledger', () => {
+  const result = globalThis.Bun.spawnSync([
+    'rg',
+    '-n',
+    'projectMartDirtyRefreshStateService',
+    'src/agent',
+    'src/server',
+    '-g',
+    '*.ts',
+    '-g',
+    '!*.test.ts',
+  ])
+  const output = result.stdout.toString().trim()
+  const offenders = output
+    .split('\n')
+    .filter(Boolean)
+    .filter((line) => {
+      return !line.startsWith('src/server/services/projectMartDirtyRefreshStateService.ts:')
+    })
+
+  expect(offenders).toEqual([])
+})
+
 test('Phase 5B package commands do not expose normal legacy rebuild workers', async () => {
   const packageJson = (await globalThis.Bun.file(join(projectRoot, 'package.json')).json()) as {
     scripts: Record<string, string>
