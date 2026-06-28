@@ -181,8 +181,8 @@ hardening, and finally physical evidence.
 
 ### Legacy OLAP Retirement
 
-- [x] **A31.** Keep quarantined `duckdbOlap`/raw fallback static guards for normal
-      review and judgment-job foreground paths.
+- [x] **A31.** Keep deleted OLAP/raw fallback static guards for normal review and
+      judgment-job foreground paths.
 - [x] **A32.** Keep migrated wrapper evidence showing no production callers remain
       for `articlesReviewsOlap.ts`, `articlesReviewsBothOlap.ts`,
       `articlesReviewsFiltersOlap.ts`, `unassessedArticlesOlap.ts`, and
@@ -190,13 +190,12 @@ hardening, and finally physical evidence.
 - [x] **A33.** Delete ready-to-remove OLAP wrapper files and update or remove tests
       that only assert wrapper delegation once the broad route import guard is in
       place.
-- [~] **A34.** Retire `duckdbOlap.ts` raw fallback branches after the last product
-  detail/prompt/diagnostic/comparison route no longer needs them. Partial:
-  `duckdbOlap.ts` remains because raw fallback coverage still exists in
-  `duckdbOlap.test.ts` and the diagnostic and comparison route rows
-  above still list residual blockers; prompt preview, normal project review
-  detail, global article-detail history, project article membership, and normal
-  CSV export no longer contribute raw-fallback blockers.
+- [x] **A34.** Retire `duckdbOlap.ts` raw fallback branches after the last product
+      detail/prompt/diagnostic/comparison route no longer needs them. Current:
+      `src/services/olap/duckdbOlap.ts` and `duckdbOlap.test.ts` are deleted,
+      the route parity runner no longer accepts OLAP-forwarding-only evidence,
+      and remaining legacy mart maintenance tests assert table state directly
+      instead of importing the retired raw reader.
 - [x] **A35.** Add a final OLAP retirement guard that fails on new production
       imports of deleted legacy OLAP wrappers or `duckdbOlap` outside explicit
       admin/test fixtures.
@@ -387,9 +386,9 @@ hardening, and finally physical evidence.
   tooling uses shared read-only runtime options in `scripts/dbQuerySnapshot.ts`;
   complete allowlist proof for every script/admin direct DuckDB touch remains
   planned.
-- **Quarantined legacy**: **current for normal review/job foreground guards,
-  still planned for final raw fallback deletion.** `duckdbOlap.ts` remains legacy;
-  tests in `src/server/reviewServing/reviewServingSql.test.ts` keep imports away
+- **Quarantined legacy**: **current for normal review/job foreground guards, with
+  raw fallback deletion complete for `duckdbOlap.ts`.** Tests in
+  `src/server/reviewServing/reviewServingSql.test.ts` keep retired imports away
   from normal review and judgment-job foreground paths, and
   `duckdbRouteGuardrails.test.ts` fails new production imports of deleted OLAP
   wrappers or `duckdbOlap`.
@@ -468,7 +467,7 @@ hardening, and finally physical evidence.
 | [~]    | Low-level DuckDB service        | `src/server/utils/duckdbService.ts`, `src/server/services/appDatabaseService.ts`                                                                                                                                          | Owner/background writer                                         | Partial       | Reader/writer | Partial       | false                       | Partial: workload metrics, budgets, and `DuckdbWorkloadContext` are implemented/tested in `duckdbServiceWorkloadContext.test.ts`. With `FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT=true`, API-role foreground `mainQuery`/`mainStatement`/`transaction` without context is rejected before connection acquisition while owner/background/maintenance scopes remain allowed. Full default-on rollout and wrapper-specific assertions remain planned. |
 | [x]    | Read-only DB services           | `src/server/services/readOnlyDuckdbService.ts`, `src/server/services/appReadOnlyDatabaseService.ts`, `src/server/services/getAppReadOnlyQueryService.ts`                                                                  | Residual allowlist / admin-debug-tool / owner-background writer | N/A           | Reader        | N/A           | false                       | Current: `readOnlyDuckdbService.ts` rejects write-capable SQL, disables live API read-only access when an owner proxy is configured, and uses shared read-only runtime options; `getAppQueryService.test.ts` and `readOnlyDuckdbServiceWorkloadContext.test.ts` cover read-only behavior and workload forwarding.                                                                                                                               |
 | [x]    | App query wrapper               | `src/server/services/getAppQueryService.ts`, `src/server/services/appQueryServiceCore.ts`                                                                                                                                 | Owner-routed source access / residual allowlist                 | Partial       | Reader        | N/A           | false                       | Current classification: source metadata/detail reads are owner-routed by API proxying, and `reviewServingResidualReadAllowlist.ts` lists each product-facing `appQueryServiceCore.ts` method with purpose, cap, workload class, and migration target. Planned: finish V4 detail/payload migration so residual app-query reads can be removed.                                                                                                   |
-| [x]    | Legacy OLAP runner              | `src/services/olap/duckdbRunner.ts`                                                                                                                                                                                       | Quarantined legacy                                              | No            | Reader        | No            | true - need further changes | Current quarantine: `duckdbRunner.ts` forwards default-path queries through `appDatabaseService` with optional workload context, and `reviewServingSql.test.ts` prevents `duckdbOlap` imports in normal review and judgment-job foreground paths. Deletion remains planned in legacy checklist rows.                                                                                                                                            |
+| [x]    | Legacy OLAP runner              | `src/services/olap/duckdbRunner.ts`                                                                                                                                                                                       | Quarantined legacy                                              | No            | Reader        | No            | true - need further changes | Current quarantine: `duckdbRunner.ts` forwards default-path queries through `appDatabaseService` with optional workload context. `duckdbOlap.ts` is deleted, `reviewServingSql.test.ts` prevents retired OLAP imports in normal review and judgment-job foreground paths, and `duckdbRouteGuardrails.test.ts` blocks reintroduced production imports. Deletion remains planned for any remaining generic runner residue after all raw fallback callers are gone. |
 | [x]    | Direct node-api use             | `@duckdb/node-api` imports, `DuckDBInstance.create` call sites                                                                                                                                                            | Admin/debug/tool allowlist / test-only                          | N/A           | Admin/test    | N/A           | false                       | Current: production direct use is concentrated in shared runtime helpers (`duckdbService.ts`, `readOnlyDuckdbService.ts`, `backgroundServerStack.ts`); admin snapshot script `scripts/dbQuerySnapshot.ts` uses `getReadOnlyDuckdbRuntimeOptions()`, direct fixture usage is test-only, and `duckdbRouteGuardrails.test.ts` fails on new unallowlisted route-handler `@duckdb/node-api` imports.                                                 |
 
 ## Product Route Checklist
@@ -514,7 +513,7 @@ hardening, and finally physical evidence.
 
 | Status | Files                                             | Classification     | V4 compatible | R/W        | Uses new CQRS | Legacy                      | Required handling                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ------ | ------------------------------------------------- | ------------------ | ------------- | ---------- | ------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [~]    | `src/services/olap/duckdbOlap.ts`                 | Quarantined legacy | No            | Reader     | No            | true - need further changes | Current handling is quarantined legacy plus deletion planned, not retired. Evidence: normal review/job foreground imports are guarded by `src/server/reviewServing/reviewServingSql.test.ts`, and `duckdbRouteGuardrails.test.ts` blocks new production imports. Leave partial because `src/services/olap/duckdbOlap.test.ts` still covers raw fallback branches and the product detail, diagnostic, export, and comparison rows still list residual blockers. |
+| [x]    | Deleted `src/services/olap/duckdbOlap.ts`         | Quarantined legacy | N/A           | Reader     | N/A           | true - deleted              | Deleted after the final normal product raw-fallback blockers moved to V4 or adjacent-source classifications. Evidence: no production callers remained; `duckdbOlap.test.ts` is deleted; mart maintenance tests assert legacy table state directly; `reviewServingRouteParityRunner.ts` no longer accepts OLAP-forwarding-only evidence; and `duckdbRouteGuardrails.test.ts` blocks reintroduced production imports. |
 | [x]    | Deleted `src/services/olap/articlesReviewsOlap.ts`        | Quarantined legacy | N/A           | Reader     | N/A           | true - deleted              | Deleted after V4 product read replacement. Evidence: no production callers of `queryArticlesReviewsFromOlap` or `countArticlesReviewsFromOlap` remained, `src/server/reviewServing/reviewServingLlmReviewRouteService.test.ts` asserts the list/count routes do not import it, and `duckdbRouteGuardrails.test.ts` blocks reintroduced production imports.                                     |
 | [x]    | Deleted `src/services/olap/articlesReviewsBothOlap.ts`    | Quarantined legacy | N/A           | Reader     | N/A           | true - deleted              | Deleted after V4 product read replacement. Evidence: no production caller of `queryArticlesReviewsBothFromOlap` remained, `src/server/reviewServing/reviewServingHumanBothUnassessedRouteService.test.ts` asserts the both-mode route does not import it, and `duckdbRouteGuardrails.test.ts` blocks reintroduced production imports.                                                                                      |
 | [x]    | Deleted `src/services/olap/articlesReviewsFiltersOlap.ts` | Quarantined legacy | N/A           | Reader     | N/A           | true - deleted              | Deleted after V4 product read replacement. Evidence: no production callers of `getDatabaseBasedFiltersFromOlap` or `getNumericFiltersFromOlap` remained, `src/server/reviewServing/reviewServingFilterRouteService.test.ts` asserts filter routes do not import it, and `duckdbRouteGuardrails.test.ts` blocks reintroduced production imports.                                                |
@@ -573,14 +572,14 @@ hardening, and finally physical evidence.
 
 - [ ] **PR 2: static and runtime guardrails**
   - [ ] Add static guard for route-facing DuckDB imports.
-  - [x] Add static guard for `duckdbOlap` quarantine.
+  - [x] Add static guard for deleted `duckdbOlap` imports.
   - [ ] Add low-level missing-workload-context rejection for normal foreground work,
         initially behind a test/runtime switch if needed.
 
   Evidence note: current guardrail work is partial. Quarantined legacy/static V4
   product-read checks exist in `reviewServingSql.test.ts` and
-  `reviewServingReadContracts.test.ts`, including `duckdbOlap`, raw fallback SQL,
-  `selected_scoped_article_import`, and mounted migrated route import guards;
+  `reviewServingReadContracts.test.ts`, including deleted `duckdbOlap` imports,
+  raw fallback SQL, `selected_scoped_article_import`, and mounted migrated route import guards;
   `getAppQueryService.test.ts` covers a small audited read-only module set. Planned:
   broad route-facing DuckDB import guard, broad normal foreground SQL guard, and
   low-level runtime guard. `duckdbService.ts` still executes `work()` when the
@@ -699,8 +698,8 @@ bun run test:dev-server:current-db
       execution still allows `undefined` workload context in explicit paths.
 - [x] **OLAP retirement guard.** Current tests quarantine normal review/job
       foreground imports and `duckdbRouteGuardrails.test.ts` fails new production
-      imports of deleted OLAP wrappers or `duckdbOlap`. `duckdbOlap.ts` itself
-      remains until product residual blockers are removed.
+      imports of deleted OLAP wrappers or `duckdbOlap`; `duckdbOlap.ts` itself is
+      deleted and legacy mart tests no longer import it as a fixture helper.
 - [ ] **Planned final release-scale smoke proof.** Current smoke gates are
       practical regression gates; Phase 6 still needs true release-scale physical
       proof for no foreground raw fallback, zero foreground temp spill, bounded

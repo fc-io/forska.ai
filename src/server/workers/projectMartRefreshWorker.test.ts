@@ -695,7 +695,6 @@ test('dirty batch routing keeps review pages counts warnings and prompt queueing
           const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
           const {projectsRoutesGetReviewsWarnings} = await import('./src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts')
           const {judgmentsJobsCronGetPrompts} = await import('./src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts')
-          const {queryArticlesReviewsFromDuckdb, getUnassessedCountFromDuckdb} = await import('./src/services/olap/duckdbOlap.ts')
           const {runProjectMartRefreshWorkerCycle} = await import('./src/server/workers/projectMartRefreshWorker.ts')
 
           await migrateDuckdb()
@@ -703,6 +702,52 @@ test('dirty batch routing keeps review pages counts warnings and prompt queueing
           const database = getAppDatabaseService()
           const martRefreshService = getDuckdbMartMaintenanceService()
           const refreshStateService = getProjectMartDirtyRefreshStateService()
+          const parsePromptIds = (value) => {
+            if (Array.isArray(value)) {
+              return value
+            }
+            if (typeof value === 'string' && value.length > 0) {
+              return JSON.parse(value)
+            }
+            return []
+          }
+          const queryLegacyServingReviewRows = async ({limit, projectId}) => {
+            const rows = await database.queryJson(\`
+              SELECT
+                serving.article_id AS id,
+                serving.has_all_llm_judgments AS isFullyJudged,
+                COALESCE(TO_JSON(serving.llm_judged_prompt_ids), '[]') AS judgedPromptIdsJson
+              FROM mart.review_article_serving serving
+              INNER JOIN app.project_review_serving_generation active
+                ON active.project_id = serving.project_id
+               AND active.active_generation = serving.generation
+              WHERE serving.project_id = '\${projectId}'
+              ORDER BY serving.article_created_at DESC, serving.article_id ASC
+              LIMIT \${limit}
+            \`)
+            return {
+              data: rows.map((row) => {
+                return {
+                  id: row.id,
+                  isFullyJudged: Boolean(row.isFullyJudged),
+                  judgedPromptIds: parsePromptIds(row.judgedPromptIdsJson).sort(),
+                }
+              }),
+              totalCount: null,
+            }
+          }
+          const getLegacyServingUnassessedCount = async ({projectId}) => {
+            const [row] = await database.queryJson(\`
+              SELECT COUNT(*)::INTEGER AS count
+              FROM mart.review_article_serving serving
+              INNER JOIN app.project_review_serving_generation active
+                ON active.project_id = serving.project_id
+               AND active.active_generation = serving.generation
+              WHERE serving.project_id = '\${projectId}'
+                AND serving.has_all_llm_judgments = FALSE
+            \`)
+            return Number(row?.count ?? 0)
+          }
 
           await database.run(\`
             INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
@@ -830,8 +875,8 @@ test('dirty batch routing keeps review pages counts warnings and prompt queueing
             workerId: 'worker-routing-delta',
           })
 
-          const reviews = await queryArticlesReviewsFromDuckdb({limit: 10, page: 1, projectId: 'project-worker-routing-test'})
-          const unassessedCount = await getUnassessedCountFromDuckdb({jobId: 'job-worker-routing-test', projectId: 'project-worker-routing-test'})
+          const reviews = await queryLegacyServingReviewRows({limit: 10, projectId: 'project-worker-routing-test'})
+          const unassessedCount = await getLegacyServingUnassessedCount({projectId: 'project-worker-routing-test'})
           const promptQueue = await judgmentsJobsCronGetPrompts('project-worker-routing-test', 'job-worker-routing-test', 10)
 
           const app = new Elysia().use(projectsRoutesGetReviewsWarnings)
