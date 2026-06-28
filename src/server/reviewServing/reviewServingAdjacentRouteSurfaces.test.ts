@@ -10,6 +10,7 @@ import {reviewServingReadContractKeys} from './reviewServingContracts.ts'
 const requiredUs013SurfaceKeys = [
   'GET /api/articles/latest',
   'GET /api/articles/search',
+  'GET /api/articles/:id',
   'GET /api/projects/:id/articles',
   'POST /api/projects/:id/articles',
   'DELETE /api/projects/:id/articles/:articleId',
@@ -70,6 +71,7 @@ test('US-013 out-of-scope adjacent surfaces are guarded and excluded from normal
   ).toEqual([
     ['GET', '/api/articles/latest', 'out-of-scope-non-review'],
     ['GET', '/api/articles/search', 'out-of-scope-non-review'],
+    ['GET', '/api/articles/:id', 'out-of-scope-source-detail'],
     ['GET', '/api/projects/:id/articles', 'out-of-scope-non-review'],
     ['GET', '/api/humanassessment/overview', 'out-of-scope-admin-debug'],
     ['GET', '/api/humanassessment/overview-both-projects', 'out-of-scope-admin-debug'],
@@ -105,6 +107,26 @@ test('US-013 admin UI adjacent surfaces stay product-classified in route invento
     'GET /api/humanassessment/overview supported-local-api',
     'GET /api/humanassessment/overview-both-projects supported-local-api',
   ])
+})
+
+test('US-013 source article detail stays outside normal review detail fallback', () => {
+  const routeSurfaceByKey = new Map(
+    routeSurfaceRoutes.map((route) => {
+      return [getRouteSurfaceRouteKey(route), route]
+    }),
+  )
+  const articleDetail = reviewServingAdjacentRouteClassifications.find((entry) => {
+    return entry.method === 'GET' && entry.routePath === '/api/articles/:id'
+  })
+  const routeSurface = articleDetail
+    ? routeSurfaceByKey.get(getReviewServingAdjacentRouteClassificationKey(articleDetail))
+    : undefined
+
+  expect(articleDetail).toMatchObject({
+    classification: 'out-of-scope-source-detail',
+    excludedFromNormalReviewFlow: true,
+  })
+  expect(routeSurface?.category).toBe('sensitive-local-api')
 })
 
 test('US-013 migrated judgment job adjacent surfaces stay product-classified in route inventory', () => {

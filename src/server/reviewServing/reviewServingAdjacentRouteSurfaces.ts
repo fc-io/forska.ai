@@ -24,6 +24,18 @@ export const reviewServingAdjacentRouteClassifications = [
     routePath: '/api/articles/search',
   },
   {
+    classification: 'out-of-scope-source-detail',
+    contractKeys: [],
+    excludedFromNormalReviewFlow: true,
+    guard:
+      'owner-dependent sensitive local API for global article pages; review pages use /api/projects/:id/article-review-details',
+    method: 'GET',
+    reason:
+      'Global source article detail and full judgment history page; it is not project scoped and is not the normal product review detail path.',
+    routeFile: 'src/server/routes/ArticlesRoutes.ts',
+    routePath: '/api/articles/:id',
+  },
+  {
     classification: 'out-of-scope-non-review',
     contractKeys: [],
     excludedFromNormalReviewFlow: true,
@@ -128,6 +140,7 @@ export const reviewServingAdjacentRouteClassifications = [
     | 'migrated-serving'
     | 'out-of-scope-admin-debug'
     | 'out-of-scope-non-review'
+    | 'out-of-scope-source-detail'
   contractKeys: readonly ReviewServingReadContractKey[]
   excludedFromNormalReviewFlow: boolean
   guard: string
