@@ -6,6 +6,7 @@ import type {
   JudgmentDispatchTelemetrySnapshot,
   JudgmentTelemetryAggregateCompleteness,
 } from '../cron/judgmentsJobs/judgmentDispatchTelemetry.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getDateValue, getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
 
@@ -88,7 +89,9 @@ export type JudgmentProviderTelemetryBucketedHistory = {
   rangeEnd: Date
   rangeStart: Date
 }
-export type JudgmentProviderTelemetryHistoryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
+export type JudgmentProviderTelemetryHistoryRunner = {
+  queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+}
 
 type BottleneckCandidate = JudgmentProviderTelemetryBottleneckSummary & {latestSampledAtMs: number}
 type JudgmentProviderTelemetryHistoryRow = {
@@ -106,6 +109,23 @@ type JudgmentProviderTelemetryHistoryRow = {
 const getDateFlooredToMs = (date: Date, sizeMs: number) => {
   return new Date(Math.floor(date.getTime() / sizeMs) * sizeMs)
 }
+
+const getJudgmentProviderTelemetryWorkloadContext = (routeOrJobKey: string): DuckdbWorkloadContext => {
+  return {fallbackIntent: 'reject', routeOrJobKey, workloadClass: 'admin.telemetry'}
+}
+
+const judgmentProviderTelemetryInsertWorkloadContext = getJudgmentProviderTelemetryWorkloadContext(
+  'judgmentProviderTelemetry.history.insert',
+)
+const judgmentProviderTelemetryPruneWorkloadContext = getJudgmentProviderTelemetryWorkloadContext(
+  'judgmentProviderTelemetry.history.prune',
+)
+const judgmentProviderTelemetryDeleteJobWorkloadContext = getJudgmentProviderTelemetryWorkloadContext(
+  'judgmentProviderTelemetry.history.deleteJob',
+)
+const judgmentProviderTelemetryBucketedHistoryWorkloadContext = getJudgmentProviderTelemetryWorkloadContext(
+  'judgmentProviderTelemetry.history.bucketed',
+)
 
 const getBucketSizeMs = (bucketSizeSeconds: number) => {
   return bucketSizeSeconds * 1000
@@ -528,6 +548,7 @@ export const insertJudgmentProviderTelemetryHistorySamples = async (params: {
   const createdAt = params.createdAt ?? new Date()
   const rows = await getHistoryRunner(params.runner).queryJson<{id: string}>(
     getSampleInsertSql({createdAt, samples: params.samples}),
+    judgmentProviderTelemetryInsertWorkloadContext,
   )
   const inserted = rows.length
 
@@ -588,11 +609,14 @@ export const pruneJudgmentProviderTelemetryHistorySamples = async (
   params: {now?: Date; runner?: JudgmentProviderTelemetryHistoryRunner} = {},
 ): Promise<number> => {
   const cutoff = new Date((params.now ?? new Date()).getTime() - judgmentProviderTelemetryHistoryRetentionMs)
-  const rows = await getHistoryRunner(params.runner).queryJson<{id: string}>(`
+  const rows = await getHistoryRunner(params.runner).queryJson<{id: string}>(
+    `
     DELETE FROM app.judgment_job_provider_telemetry_sample
     WHERE sampled_at < ${getTimestampLiteral(cutoff)}
     RETURNING id
-  `)
+  `,
+    judgmentProviderTelemetryPruneWorkloadContext,
+  )
 
   return rows.length
 }
@@ -601,11 +625,14 @@ export const deleteJudgmentProviderTelemetryHistoryForJob = async (params: {
   jobId: string
   runner?: JudgmentProviderTelemetryHistoryRunner
 }): Promise<number> => {
-  const rows = await getHistoryRunner(params.runner).queryJson<{id: string}>(`
+  const rows = await getHistoryRunner(params.runner).queryJson<{id: string}>(
+    `
     DELETE FROM app.judgment_job_provider_telemetry_sample
     WHERE job_id = ${getSqlLiteral(params.jobId)}
     RETURNING id
-  `)
+  `,
+    judgmentProviderTelemetryDeleteJobWorkloadContext,
+  )
 
   return rows.length
 }
@@ -618,7 +645,8 @@ export const queryJudgmentProviderTelemetryBucketedHistory = async (params: {
   runner?: JudgmentProviderTelemetryHistoryRunner
 }): Promise<JudgmentProviderTelemetryBucketedHistory> => {
   const range = getJudgmentProviderTelemetryAlignedRange({now: params.now, range: params.range})
-  const rows = await getHistoryRunner(params.runner).queryJson<JudgmentProviderTelemetryHistoryRow>(`
+  const rows = await getHistoryRunner(params.runner).queryJson<JudgmentProviderTelemetryHistoryRow>(
+    `
     SELECT
       sampled_at AS sampledAt,
       normal_request_capacity AS normalRequestCapacity,
@@ -635,7 +663,9 @@ export const queryJudgmentProviderTelemetryBucketedHistory = async (params: {
       AND sampled_at >= ${getTimestampLiteral(range.rangeStart)}
       AND sampled_at < ${getTimestampLiteral(range.rangeEnd)}
     ORDER BY sampled_at ASC
-  `)
+  `,
+    judgmentProviderTelemetryBucketedHistoryWorkloadContext,
+  )
   const samples = rows.map(getHistorySampleFromRow)
 
   return {
