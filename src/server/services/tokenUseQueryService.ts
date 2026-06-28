@@ -1,4 +1,5 @@
 import type {TokenUseRecord} from '../../db/schemaTypes.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -11,8 +12,8 @@ import {
 import {projectRequestAttemptCloseoutsForTokenUse} from './requestAttemptCloseoutService.ts'
 
 type TokenUseMutationRunner = {
-  queryJson: <T>(statement: string) => Promise<T[]>
-  run: (statement: string) => Promise<void>
+  queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+  run: (statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<void>
 }
 
 type TokenUseRow = {
@@ -66,6 +67,55 @@ type TokenTimelineInterval = '1min' | '5min' | '15min' | '1h' | '24h' | '1w' | '
 
 type ModelInfo = {provider: string | null; modelName: string | null; version: string | null}
 type FailedRequestDetailRecord = Record<string, unknown>
+
+const failedRequestsMaxLimit = 100
+const failedRequestsMaxOffset = 10_000
+
+const getTokenUseWorkloadContext = (params: {maxResultRows?: number; routeOrJobKey: string}): DuckdbWorkloadContext => {
+  return {
+    fallbackIntent: 'reject',
+    maxResultRows: params.maxResultRows,
+    routeOrJobKey: params.routeOrJobKey,
+    workloadClass: 'admin.telemetry',
+  }
+}
+
+const tokenUseInsertWorkloadContext = getTokenUseWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'tokens.usage.insert',
+})
+const tokenUseInsertOnceWorkloadContext = getTokenUseWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'tokens.usage.insertOnce',
+})
+const tokenUseTopRequestsWorkloadContext = getTokenUseWorkloadContext({
+  maxResultRows: 5,
+  routeOrJobKey: 'tokens.usage.largestSingleRequest',
+})
+const tokenUseTotalsWorkloadContext = getTokenUseWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'tokens.usage.totals',
+})
+const tokenUseTimelineProjectWorkloadContext = getTokenUseWorkloadContext({routeOrJobKey: 'tokens.timeline.project'})
+const tokenUseTimelineAllJobsWorkloadContext = getTokenUseWorkloadContext({routeOrJobKey: 'tokens.timeline.allJobs'})
+const tokenUseFailedRequestsListWorkloadContext = getTokenUseWorkloadContext({
+  maxResultRows: failedRequestsMaxLimit,
+  routeOrJobKey: 'tokens.failedRequests.list',
+})
+const tokenUseFailedRequestsCountWorkloadContext = getTokenUseWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'tokens.failedRequests.count',
+})
+const tokenUsePromptLookupWorkloadContext = getTokenUseWorkloadContext({
+  routeOrJobKey: 'tokens.failedRequests.promptLookup',
+})
+const tokenUseModelLookupWorkloadContext = getTokenUseWorkloadContext({
+  routeOrJobKey: 'tokens.failedRequests.modelLookup',
+})
+const tokenUseFailedRequestDetailWorkloadContext = getTokenUseWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'tokens.failedRequests.detail',
+})
 
 export class TokenUseIdempotencyConflictError extends Error {
   id: string
@@ -146,6 +196,13 @@ const getTokenUseValue = (row: TokenUseRow): TokenUseRecord => {
     totalFailedCompletionTokens: row.totalFailedCompletionTokens,
     totalFailedTokens: row.totalFailedTokens,
     requestAttemptsJson: getJsonValue(row.requestAttemptsJson),
+  }
+}
+
+const getBoundedFailedRequestsPagination = (params: {limit: number; offset: number}) => {
+  return {
+    limit: Math.min(failedRequestsMaxLimit, Math.max(1, Math.floor(params.limit))),
+    offset: Math.min(failedRequestsMaxOffset, Math.max(0, Math.floor(params.offset))),
   }
 }
 
@@ -439,7 +496,7 @@ const insertTokenUse = async (values: Record<string, unknown>) => {
     }
 
     return tokenUse
-  }) as Promise<TokenUseRecord | null>
+  }, tokenUseInsertWorkloadContext) as Promise<TokenUseRecord | null>
 }
 
 const insertTokenUseOnce = async (values: Record<string, unknown>) => {
@@ -465,17 +522,20 @@ const insertTokenUseOnce = async (values: Record<string, unknown>) => {
     await projectRequestAttemptCloseoutsForTokenUseValue(tx, existingValue)
 
     return existingValue
-  }) as Promise<TokenUseRecord | null>
+  }, tokenUseInsertOnceWorkloadContext) as Promise<TokenUseRecord | null>
 }
 
 const getLargestSingleRequestRows = async (orderColumn: 'total_prompt_tokens' | 'total_completion_tokens') => {
-  const rows = await getAppDatabaseService().queryJson<TokenUseRow>(`
+  const rows = await getAppDatabaseService().queryJson<TokenUseRow>(
+    `
     SELECT ${tokenUseSelectClause}
     FROM app.token_use
     WHERE requests = 1
     ORDER BY ${orderColumn} DESC NULLS LAST
     LIMIT 5
-  `)
+  `,
+    tokenUseTopRequestsWorkloadContext,
+  )
 
   return rows.map((row) => {
     return getTokenUseValue(row)
@@ -493,14 +553,17 @@ const getTotals = async (params: {startTime?: string; endTime?: string}) => {
     totalPromptTokens: number | null
     totalCompletionTokens: number | null
     totalTokens: number | null
-  }>(`
+  }>(
+    `
     SELECT
       SUM(total_prompt_tokens) AS totalPromptTokens,
       SUM(total_completion_tokens) AS totalCompletionTokens,
       SUM(total_tokens) AS totalTokens
     FROM app.token_use
     ${whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : ''}
-  `)
+  `,
+    tokenUseTotalsWorkloadContext,
+  )
 
   return {
     totalPromptTokens: Number(row?.totalPromptTokens ?? 0),
@@ -510,7 +573,8 @@ const getTotals = async (params: {startTime?: string; endTime?: string}) => {
 }
 
 const getTimelineRowsForProject = async (params: {projectId: string; startDate: Date; endDate: Date}) => {
-  const rows = await getAppDatabaseService().queryJson<TokenUseProjectionDatabaseRow>(`
+  const rows = await getAppDatabaseService().queryJson<TokenUseProjectionDatabaseRow>(
+    `
     SELECT
       tu.created_at AS createdAt,
       tu.total_prompt_tokens AS totalPromptTokens,
@@ -526,13 +590,16 @@ const getTimelineRowsForProject = async (params: {projectId: string; startDate: 
     WHERE jj.project_id = '${escapeSqlString(params.projectId)}'
       AND tu.created_at >= ${getTimestampLiteral(params.startDate)}
       AND tu.created_at < ${getTimestampLiteral(params.endDate)}
-  `)
+  `,
+    tokenUseTimelineProjectWorkloadContext,
+  )
 
   return getTimelineProjectionRows(rows)
 }
 
 const getTimelineRowsAllJobs = async (params: {startDate: Date; endDate: Date}) => {
-  const rows = await getAppDatabaseService().queryJson<TokenUseProjectionDatabaseRow>(`
+  const rows = await getAppDatabaseService().queryJson<TokenUseProjectionDatabaseRow>(
+    `
     SELECT
       created_at AS createdAt,
       total_prompt_tokens AS totalPromptTokens,
@@ -547,7 +614,9 @@ const getTimelineRowsAllJobs = async (params: {startDate: Date; endDate: Date}) 
     WHERE judgment_job_id IS NOT NULL
       AND created_at >= ${getTimestampLiteral(params.startDate)}
       AND created_at < ${getTimestampLiteral(params.endDate)}
-  `)
+  `,
+    tokenUseTimelineAllJobsWorkloadContext,
+  )
 
   return getTimelineProjectionRows(rows)
 }
@@ -558,7 +627,8 @@ const getTimelineBucketRowsAllJobs = async (params: {
   startDate: Date
 }) => {
   const bucketExpression = getTimelineBucketExpression(params.interval)
-  const rows = await getAppDatabaseService().queryJson<TokenUseProjectionDatabaseRow>(`
+  const rows = await getAppDatabaseService().queryJson<TokenUseProjectionDatabaseRow>(
+    `
     SELECT
       ${bucketExpression} AS createdAt,
       SUM(COALESCE(total_prompt_tokens, 0)) AS totalPromptTokens,
@@ -575,12 +645,15 @@ const getTimelineBucketRowsAllJobs = async (params: {
       AND created_at < ${getTimestampLiteral(params.endDate)}
     GROUP BY 1
     ORDER BY 1
-  `)
+  `,
+    tokenUseTimelineAllJobsWorkloadContext,
+  )
 
   return getTimelineProjectionRows(rows)
 }
 
 const getFailedRequestsRows = async (params: {limit: number; offset: number}) => {
+  const pagination = getBoundedFailedRequestsPagination(params)
   const rows = await getAppDatabaseService().queryJson<{
     id: string
     createdAt: unknown
@@ -591,7 +664,8 @@ const getFailedRequestsRows = async (params: {limit: number; offset: number}) =>
     failedRequests: number | null
     failedRequestsDetails: unknown
     totalTokens: number
-  }>(`
+  }>(
+    `
     SELECT
       tu.id AS id,
       tu.created_at AS createdAt,
@@ -607,9 +681,11 @@ const getFailedRequestsRows = async (params: {limit: number; offset: number}) =>
     LEFT JOIN app.project p ON jj.project_id = p.id
     WHERE tu.has_failed_requests = TRUE
     ORDER BY tu.created_at DESC
-    LIMIT ${params.limit}
-    OFFSET ${params.offset}
-  `)
+    LIMIT ${pagination.limit}
+    OFFSET ${pagination.offset}
+  `,
+    tokenUseFailedRequestsListWorkloadContext,
+  )
 
   return rows.map((row) => {
     return {
@@ -621,11 +697,14 @@ const getFailedRequestsRows = async (params: {limit: number; offset: number}) =>
 }
 
 const getFailedRequestsCount = async () => {
-  const [row] = await getAppDatabaseService().queryJson<{count: number}>(`
+  const [row] = await getAppDatabaseService().queryJson<{count: number}>(
+    `
     SELECT COUNT(*) AS count
     FROM app.token_use
     WHERE has_failed_requests = TRUE
-  `)
+  `,
+    tokenUseFailedRequestsCountWorkloadContext,
+  )
 
   return Number(row?.count ?? 0)
 }
@@ -635,11 +714,14 @@ const getPromptHeadingMap = async (promptIds: string[]) => {
     return new Map<string, string | null>()
   }
 
-  const rows = await getAppDatabaseService().queryJson<{id: string; promptHeading: string | null}>(`
+  const rows = await getAppDatabaseService().queryJson<{id: string; promptHeading: string | null}>(
+    `
     SELECT id, prompt_heading AS promptHeading
     FROM app.prompt
     WHERE id IN (${getQuotedStringList(promptIds).join(', ')})
-  `)
+  `,
+    tokenUsePromptLookupWorkloadContext,
+  )
 
   return new Map(
     rows.map((row) => {
@@ -658,7 +740,8 @@ const getModelInfoMap = async (modelIds: string[]) => {
     provider: string | null
     modelName: string | null
     version: string | null
-  }>(`
+  }>(
+    `
     SELECT
       m.id AS id,
       pc.provider_kind AS provider,
@@ -667,7 +750,9 @@ const getModelInfoMap = async (modelIds: string[]) => {
     FROM app.model m
     LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE m.id IN (${getQuotedStringList(modelIds).join(', ')})
-  `)
+  `,
+    tokenUseModelLookupWorkloadContext,
+  )
 
   return new Map(
     rows.map((row) => {
@@ -688,7 +773,8 @@ const getFailedRequestById = async (id: string) => {
     totalTokens: number
     requests: number
     successfulRequests: number | null
-  }>(`
+  }>(
+    `
     SELECT
       tu.id AS id,
       tu.created_at AS createdAt,
@@ -704,7 +790,9 @@ const getFailedRequestById = async (id: string) => {
     LEFT JOIN app.judgment_job jj ON tu.judgment_job_id = jj.id
     WHERE tu.id = '${escapeSqlString(id)}'
     LIMIT 1
-  `)
+  `,
+    tokenUseFailedRequestDetailWorkloadContext,
+  )
 
   return row
     ? {
