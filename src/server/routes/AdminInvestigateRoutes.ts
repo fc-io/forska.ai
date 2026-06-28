@@ -19,7 +19,6 @@ import {type DuckdbOwnerConnectionRecord, getDuckdbOwnerConnectionsOverview} fro
 import {getDuckdbBackgroundRuntimeDiagnostics} from '../utils/duckdbService.ts'
 import {getOwnerlessRouteBackendSelections} from '../utils/ownerlessReadableBackends.ts'
 import {getProjectMartLargeRebuildRuntimeMetrics} from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
-import {getProjectMartLargeRebuildHeartbeatConfig} from '../utils/projectMartLargeRebuildTuning.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {
   getRuntimeCutoverVersion,
@@ -962,7 +961,6 @@ export const adminInvestigateRoutes = new Elysia()
         heapUsedBytes: processMemory.heapUsed,
         rssBytes: processMemory.rss,
       },
-      projectMartLargeRebuildHeartbeat: await getProjectMartLargeRebuildHeartbeatConfig(),
       projectMartLargeRebuildRuntimeMetrics: getProjectMartLargeRebuildRuntimeMetrics(),
       role: getCurrentServerRole(),
       serverRole: process.env.SERVER_ROLE ?? null,
