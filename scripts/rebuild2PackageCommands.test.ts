@@ -44,8 +44,9 @@ test('package exposes final rebuild2 command surface and removes obsolete mart r
   expect(packageJson.scripts['db:duck:rebuild2-cutover']).toBe(
     'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/rebuild2Cutover.ts',
   )
-  expect(packageJson.scripts['db:duck:request-project-large-rebuild']).toBe(
-    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestProjectLargeRebuild.ts',
+  expect(packageJson.scripts['db:duck:request-project-large-rebuild']).toBeUndefined()
+  expect(packageJson.scripts['db:duck:request-review-serving-project-rebuild']).toBe(
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestReviewServingProjectRebuild.ts',
   )
   expect(packageJson.scripts['db:duck:request-review-serving-large-rebuild']).toBe(
     'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestReviewServingLargeRebuild.ts',

@@ -63,7 +63,7 @@ const getRequestStatus = (result: RequestReviewServingLargeRebuildResult) => {
       : 'requested_with_failures'
 }
 
-const requestProjectLargeRebuilds = async (
+const requestReviewServingProjectRebuilds = async (
   projectIds: string[],
   index = 0,
 ): Promise<RequestReviewServingLargeRebuildResult> => {
@@ -79,13 +79,13 @@ const requestProjectLargeRebuilds = async (
       projectId: currentProjectId,
       reason: 'requestReviewServingLargeRebuild',
     })
-    const remaining = await requestProjectLargeRebuilds(projectIds, index + 1)
+    const remaining = await requestReviewServingProjectRebuilds(projectIds, index + 1)
 
     return {failedProjects: remaining.failedProjects, requestIds: [request.requestId, ...remaining.requestIds]}
   } catch (error) {
     const failure = {error: getFailureMessage(error), projectId: currentProjectId}
     console.error(`[requestReviewServingLargeRebuild] failed ${currentProjectId}: ${failure.error}`)
-    const remaining = await requestProjectLargeRebuilds(projectIds, index + 1)
+    const remaining = await requestReviewServingProjectRebuilds(projectIds, index + 1)
 
     return {failedProjects: [failure, ...remaining.failedProjects], requestIds: remaining.requestIds}
   }
@@ -103,7 +103,7 @@ const main = async () => {
       return
     }
 
-    const result = await requestProjectLargeRebuilds(projectIds)
+    const result = await requestReviewServingProjectRebuilds(projectIds)
     console.log(
       JSON.stringify({
         failedCount: result.failedProjects.length,

@@ -55,7 +55,7 @@
     "db:duck:checkpoint": "bun scripts/duckdbCheckpoint.ts",
     "db:query:snapshot": "bun scripts/dbQuerySnapshot.ts",
     "db:duck:inspect-dirty-refresh-risk": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/inspectDirtyRefreshRisk.ts",
-    "db:duck:request-project-large-rebuild": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestProjectLargeRebuild.ts",
+    "db:duck:request-review-serving-project-rebuild": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestReviewServingProjectRebuild.ts",
     "db:duck:request-review-serving-large-rebuild": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestReviewServingLargeRebuild.ts",
     "db:duck:quarantine-dirty-refresh-article": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/quarantineDirtyRefreshArticle.ts",
     "db:duck:unquarantine-dirty-refresh-article": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/unquarantineDirtyRefreshArticle.ts",
