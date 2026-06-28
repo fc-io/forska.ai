@@ -15,7 +15,7 @@ const defaultEnv = {
 
 const inspectScriptPath = join(projectRoot, 'scripts/inspectDirtyRefreshRisk.ts')
 const recoverScriptPath = join(projectRoot, 'scripts/recoverDirtyRefreshClaims.ts')
-const runOnceScriptPath = join(projectRoot, 'scripts/runProjectMartRefreshWorkerOnceIsolated.ts')
+const requestDirtyRefreshClaimScriptPath = join(projectRoot, 'scripts/requestReviewServingForDirtyRefreshClaim.ts')
 
 const getLastJsonLine = (output: string) => {
   const [lastLine = ''] = output
@@ -193,13 +193,13 @@ test('inspectProjectMartRefreshRisk reports scope dirty count and planned mode',
   })
 })
 
-test('runProjectMartRefreshWorkerOnce legacy CLI requests V4 rebuild work and leaves the ledger idle', () => {
-  const duckdbPath = join(projectRoot, '.tmp', 'run-project-mart-refresh-worker-once.duckdb')
+test('requestReviewServingForDirtyRefreshClaim requests V4 rebuild work and leaves the ledger idle', () => {
+  const duckdbPath = join(projectRoot, '.tmp', 'request-review-serving-for-dirty-refresh-claim.duckdb')
   removeFileIfExists(dirname(duckdbPath))
   seedDatabase({dirtyArticleCount: 1, duckdbPath, projectId: 'project-run-once', refreshStatus: 'idle'})
 
   const runScript = globalThis.Bun.spawnSync(
-    ['bun', runOnceScriptPath, '--worker-id=test-worker', '--legacy-admin-ack=legacy-dirty-refresh'],
+    ['bun', requestDirtyRefreshClaimScriptPath, '--worker-id=test-worker', '--legacy-admin-ack=legacy-dirty-refresh'],
     {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
   )
 
@@ -231,32 +231,32 @@ test('runProjectMartRefreshWorkerOnce legacy CLI requests V4 rebuild work and le
 
   expect(request).toEqual({
     projectId: 'project-run-once',
-    reason: 'runProjectMartRefreshWorkerOnceIsolated.dirtyRefreshClaim',
+    reason: 'requestReviewServingForDirtyRefreshClaim.dirtyRefreshClaim',
     status: 'admitted',
   })
 })
 
-test('runProjectMartRefreshWorkerOnce legacy CLI blocks without admin acknowledgement', () => {
-  const runScript = globalThis.Bun.spawnSync(['bun', runOnceScriptPath, '--worker-id=test-worker'], {
+test('requestReviewServingForDirtyRefreshClaim blocks without admin acknowledgement', () => {
+  const runScript = globalThis.Bun.spawnSync(['bun', requestDirtyRefreshClaimScriptPath, '--worker-id=test-worker'], {
     cwd: projectRoot,
     env: {...defaultEnv, DUCKDB_PATH: join(projectRoot, '.tmp', 'unused-dirty-refresh.duckdb')},
   })
 
   expect(runScript.exitCode).toBe(1)
   expect(JSON.parse(getLastJsonLine(runScript.stderr.toString()))).toEqual({
-    command: 'runProjectMartRefreshWorkerOnceIsolated',
+    command: 'requestReviewServingForDirtyRefreshClaim',
     requiredAck: 'legacy-dirty-refresh',
     status: 'blocked_legacy_admin_ack_required',
   })
 })
 
-test('runProjectMartRefreshWorkerOnce routes dirty refresh claims into V4 rebuild requests', () => {
-  const duckdbPath = join(projectRoot, '.tmp', 'run-project-mart-refresh-worker-once-blocked.duckdb')
+test('requestReviewServingForDirtyRefreshClaim routes dirty refresh claims into V4 rebuild requests', () => {
+  const duckdbPath = join(projectRoot, '.tmp', 'request-review-serving-for-dirty-refresh-claim-blocked.duckdb')
   removeFileIfExists(dirname(duckdbPath))
   seedDatabase({dirtyArticleCount: 4, duckdbPath, projectId: 'project-blocked', refreshStatus: 'idle'})
 
   const runScript = globalThis.Bun.spawnSync(
-    ['bun', runOnceScriptPath, '--worker-id=test-worker', '--legacy-admin-ack=legacy-dirty-refresh'],
+    ['bun', requestDirtyRefreshClaimScriptPath, '--worker-id=test-worker', '--legacy-admin-ack=legacy-dirty-refresh'],
     {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
   )
 
@@ -297,7 +297,7 @@ test('runProjectMartRefreshWorkerOnce routes dirty refresh claims into V4 rebuil
   expect(state.lastCompletedDirtyToken).toBe(1)
   expect(request).toEqual({
     projectId: 'project-blocked',
-    reason: 'runProjectMartRefreshWorkerOnceIsolated.dirtyRefreshClaim',
+    reason: 'requestReviewServingForDirtyRefreshClaim.dirtyRefreshClaim',
     status: 'admitted',
   })
   expect(largeRebuildCount).toEqual({count: 0})

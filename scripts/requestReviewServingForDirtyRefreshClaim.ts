@@ -32,7 +32,8 @@ const getNumberArgValue = (names: string[]) => {
 
 const getCliOptions = (): CliOptions => {
   const workerId =
-    getArgValue(['--workerId', '--worker-id']) ?? `project-mart-refresh-worker-isolated:${hostname()}:${process.pid}`
+    getArgValue(['--workerId', '--worker-id'])
+    ?? `review-serving-dirty-refresh-claim-recovery:${hostname()}:${process.pid}`
 
   return {
     heartbeatMs: getNumberArgValue(['--heartbeatMs', '--heartbeat-ms']) ?? defaultHeartbeatMs,
@@ -134,10 +135,10 @@ const startHeartbeat = (claim: Claim, heartbeatMs: number, leaseMs: number) => {
   }
 }
 
-export const runProjectMartRefreshWorkerOnceIsolated = async () => {
+export const requestReviewServingForDirtyRefreshClaim = async () => {
   if (
     !requireLegacyAdminAck({
-      command: 'runProjectMartRefreshWorkerOnceIsolated',
+      command: 'requestReviewServingForDirtyRefreshClaim',
       expectedAck: legacyDirtyRefreshAckValue,
     })
   ) {
@@ -174,7 +175,7 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
       if (dirtyArticleIds.length > 0) {
         const request = await requestReviewServingV4Rebuild({
           projectId: claim.projectId,
-          reason: 'runProjectMartRefreshWorkerOnceIsolated.dirtyRefreshClaim',
+          reason: 'requestReviewServingForDirtyRefreshClaim.dirtyRefreshClaim',
         })
         await stateService.completeProjectRefresh({
           completedToken: claim.claimedToken,
@@ -228,4 +229,4 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
   }
 }
 
-void runProjectMartRefreshWorkerOnceIsolated()
+void requestReviewServingForDirtyRefreshClaim()
