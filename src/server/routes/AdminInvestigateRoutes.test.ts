@@ -861,7 +861,7 @@ test('admin worker runtime diagnostics route reports local capabilities, registr
   }
 })
 
-test('admin project mart large rebuild run route triggers bounded rebuild cycles for the selected project', () => {
+test('admin project mart large rebuild run route is retired for the selected project', () => {
   const duckdbPath = `/tmp/f1-admin-large-rebuild-run-route-${Date.now()}.duckdb`
   const runRoute = globalThis.Bun.spawnSync(
     [
@@ -1015,21 +1015,16 @@ test('admin project mart large rebuild run route triggers bounded rebuild cycles
     }
 
     const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
-      completedCycles: number
-      cycleResults: Array<{projectId: string | null; status: string}>
-      maxWakeMs: number | null
+      projectId: string
+      retired: boolean
       status: string
-      stopReason: string
-      workerId: string
     }
 
-    expect(responseBody.status).toBe('completed')
-    expect(responseBody.stopReason).toBe('max-cycles')
-    expect(responseBody.completedCycles).toBe(1)
-    expect(responseBody.maxWakeMs).toBe(10_000)
-    expect(responseBody.workerId).toBe('admin-runner')
-    expect(responseBody.cycleResults[0]?.projectId).toBe('project-admin-large-rebuild-run')
-    expect(responseBody.cycleResults[0]?.status).toBe('progressed')
+    expect(responseBody).toMatchObject({
+      projectId: 'project-admin-large-rebuild-run',
+      retired: true,
+      status: 'retired',
+    })
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
@@ -1037,7 +1032,7 @@ test('admin project mart large rebuild run route triggers bounded rebuild cycles
   }
 })
 
-test('admin project mart large rebuild pause and resume routes toggle operator status explicitly', () => {
+test('admin project mart large rebuild pause and resume routes are retired', () => {
   const duckdbPath = `/tmp/f1-admin-large-rebuild-pause-route-${Date.now()}.duckdb`
   const runRoute = globalThis.Bun.spawnSync(
     [
@@ -1108,15 +1103,20 @@ test('admin project mart large rebuild pause and resume routes toggle operator s
     }
 
     const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
-      paused: {cursorArticleId: string | null; lastError: string | null; refreshStatus: string}
-      resumed: {cursorArticleId: string | null; refreshStatus: string}
+      paused: {projectId: string; retired: boolean; status: string}
+      resumed: {projectId: string; retired: boolean; status: string}
     }
 
-    expect(responseBody.paused.refreshStatus).toBe('paused')
-    expect(responseBody.paused.cursorArticleId).toBe('article-pause-1')
-    expect(responseBody.paused.lastError).toBe('Paused by operator for inspection')
-    expect(responseBody.resumed.refreshStatus).toBe('idle')
-    expect(responseBody.resumed.cursorArticleId).toBe('article-pause-1')
+    expect(responseBody.paused).toMatchObject({
+      projectId: 'project-admin-large-rebuild-pause',
+      retired: true,
+      status: 'retired',
+    })
+    expect(responseBody.resumed).toMatchObject({
+      projectId: 'project-admin-large-rebuild-pause',
+      retired: true,
+      status: 'retired',
+    })
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
@@ -1124,7 +1124,7 @@ test('admin project mart large rebuild pause and resume routes toggle operator s
   }
 })
 
-test('admin project mart large rebuild note route persists operator notes without overwriting errors', () => {
+test('admin project mart large rebuild note route is retired', () => {
   const duckdbPath = `/tmp/f1-admin-large-rebuild-note-route-${Date.now()}.duckdb`
   const runRoute = globalThis.Bun.spawnSync(
     [
@@ -1188,14 +1188,16 @@ test('admin project mart large rebuild note route persists operator notes withou
     }
 
     const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
-      lastError: string | null
-      operatorNote: string | null
-      refreshStatus: string
+      projectId: string
+      retired: boolean
+      status: string
     }
 
-    expect(responseBody.refreshStatus).toBe('failed')
-    expect(responseBody.lastError).toBe('existing failure')
-    expect(responseBody.operatorNote).toBe('Watch cursor after restarting worker')
+    expect(responseBody).toMatchObject({
+      projectId: 'project-admin-large-rebuild-note',
+      retired: true,
+      status: 'retired',
+    })
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
