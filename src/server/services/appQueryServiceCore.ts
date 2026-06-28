@@ -108,6 +108,20 @@ type GetReviewHydrationOptions = {projectId?: string}
 
 const appTableColumnNameCache = new WeakMap<AppQueryDatabaseService, Map<string, Promise<Set<string>>>>()
 
+const getAppQueryWorkloadContext = (params: {
+  maxResultRows?: number
+  projectId?: string
+  routeOrJobKey: string
+}): DuckdbWorkloadContext => {
+  return {
+    fallbackIntent: 'reject',
+    maxResultRows: params.maxResultRows,
+    projectId: params.projectId,
+    routeOrJobKey: `appQuery.${params.routeOrJobKey}`,
+    workloadClass: 'owner.sourceAppQuery',
+  }
+}
+
 const escapeSqlString = (value: string) => {
   return value.replaceAll("'", "''")
 }
@@ -147,6 +161,7 @@ const getAppTableColumnNames = async (database: AppQueryDatabaseService, tableNa
       WHERE table_schema = 'app'
         AND table_name = '${escapeSqlString(tableName)}'
     `,
+      getAppQueryWorkloadContext({maxResultRows: 128, routeOrJobKey: `columns.${tableName}`}),
     )
     .then((rows) => {
       return new Set(
@@ -256,7 +271,8 @@ const getReviewHydrationRows = (database: AppQueryDatabaseService) => {
       selectedImportRoute: string | null
       selectedSourceRecordKey: string | null
       sourceMetadata: unknown
-    }>(`
+    }>(
+      `
       ${readSql.withClause}
       SELECT
         a.id,
@@ -287,7 +303,13 @@ const getReviewHydrationRows = (database: AppQueryDatabaseService) => {
       FROM app.article a
       ${readSql.joinClause}
       WHERE a.id IN (${getQuotedStringList(articleIds).join(', ')})
-    `)
+    `,
+      getAppQueryWorkloadContext({
+        maxResultRows: articleIds.length,
+        projectId: options.projectId,
+        routeOrJobKey: options.projectId ? 'reviewHydrationRows.scoped' : 'reviewHydrationRows',
+      }),
+    )
 
     return rows.map((row) => {
       const compatibilityValues = getScopedArticleCompatibilityValues({
@@ -386,7 +408,8 @@ const getFullArticlesByIds = (database: AppQueryDatabaseService) => {
       selectedSourceRecordKey: string | null
       sourceMetadata: unknown
       publicationStatus: string | null
-    }>(`
+    }>(
+      `
       ${readSql.withClause}
       SELECT
         a.id,
@@ -436,7 +459,13 @@ const getFullArticlesByIds = (database: AppQueryDatabaseService) => {
       FROM app.article a
       ${readSql.joinClause}
       WHERE a.id IN (${getQuotedStringList(articleIds).join(', ')})
-    `)
+    `,
+      getAppQueryWorkloadContext({
+        maxResultRows: articleIds.length,
+        projectId,
+        routeOrJobKey: projectId ? 'fullArticlesByIds.scoped' : 'fullArticlesByIds',
+      }),
+    )
 
     return rows.map((row) => {
       const articleAuthors = getJsonValue(row.articleAuthors)
@@ -517,7 +546,8 @@ const getProjectReviewConfig = (database: AppQueryDatabaseService) => {
         useAbstract: boolean | null
         useFulltext: boolean | null
         useFulltextNoImages: boolean | null
-      }>(`
+      }>(
+        `
         SELECT
           date_from AS dateFrom,
           date_to AS dateTo,
@@ -530,12 +560,17 @@ const getProjectReviewConfig = (database: AppQueryDatabaseService) => {
         FROM app.project
         WHERE id = '${escapeSqlString(projectId)}'
         LIMIT 1
-      `),
-      database.queryJson<{importRouteId: string}>(`
+      `,
+        getAppQueryWorkloadContext({maxResultRows: 1, projectId, routeOrJobKey: 'projectReviewConfig.project'}),
+      ),
+      database.queryJson<{importRouteId: string}>(
+        `
         SELECT import_route_id AS importRouteId
         FROM app.project_import_route
         WHERE project_id = '${escapeSqlString(projectId)}'
-      `),
+      `,
+        getAppQueryWorkloadContext({maxResultRows: 1_000, projectId, routeOrJobKey: 'projectReviewConfig.routes'}),
+      ),
     ])
     const [projectConfig] = projectRows
 
@@ -559,7 +594,8 @@ const getProjectReviewConfig = (database: AppQueryDatabaseService) => {
 
 const getProjectPromptRows = (database: AppQueryDatabaseService) => {
   return async (projectId: string): Promise<ProjectPromptRow[]> => {
-    const rows = await database.queryJson<ProjectPromptRow>(`
+    const rows = await database.queryJson<ProjectPromptRow>(
+      `
       SELECT
         p.id AS id,
         p.prompt_heading AS promptHeading,
@@ -570,7 +606,9 @@ const getProjectPromptRows = (database: AppQueryDatabaseService) => {
       WHERE pp.project_id = '${escapeSqlString(projectId)}'
         AND pp.enabled = TRUE
       ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC
-    `)
+    `,
+      getAppQueryWorkloadContext({maxResultRows: 1_000, projectId, routeOrJobKey: 'projectPromptRows'}),
+    )
 
     return rows
   }
