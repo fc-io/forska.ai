@@ -63,10 +63,13 @@ test('Phase 5B legacy worker scripts require explicit admin acknowledgements or 
   const existingLargeRebuildScripts = largeRebuildScripts.filter((path) => {
     return existsSync(join(projectRoot, path))
   })
+  const existingDirtyWorkerScripts = dirtyWorkerScripts.filter((path) => {
+    return existsSync(join(projectRoot, path))
+  })
 
   const dirtyWorkerMissingAck = (
     await Promise.all(
-      dirtyWorkerScripts.map(async (path) => {
+      existingDirtyWorkerScripts.map(async (path) => {
         const source = await readText(path)
 
         return source.includes('requireLegacyAdminAck') && source.includes('legacyDirtyRefreshAckValue') ? [] : [path]
