@@ -29,7 +29,6 @@ import {
   getTimestampLiteral,
 } from '../appQueryHelpers.ts'
 import {immutablePromptIdentityReviewServingFields} from '../immutablePromptService.ts'
-import {getProjectMartDirtyRefreshStateService} from '../projectMartDirtyRefreshStateService.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../projectVisibleJudgmentRule.ts'
 import type {ProjectTransferImportPlanArtifact} from './projectTransferAnalyze.ts'
 import type {ProjectTransferTargetPlan} from './projectTransferAnalyzeTarget.ts'
@@ -3740,38 +3739,6 @@ const insertProjectArticles = async ({
       })
 }
 
-const markUpdatedReusedArticlesDirty = async ({
-  promotion,
-  tx,
-}: {
-  promotion: ProjectTransferCommitPromotionResult
-  tx: ProjectTransferCommitWriterTx
-}) => {
-  const updatedReusedArticleIds = [
-    ...new Set(
-      promotion.articleFieldFills.map((fill) => {
-        return fill.targetArticleId
-      }),
-    ),
-  ]
-
-  return updatedReusedArticleIds.length === 0
-    ? undefined
-    : getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({
-        articleIds: updatedReusedArticleIds,
-        reason: 'projectTransferCommit.reusedArticleUpdate',
-        runner: tx,
-      })
-}
-
-const markImportedProjectDirty = async ({projectId, tx}: {projectId: string; tx: ProjectTransferCommitWriterTx}) => {
-  await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-    projects: [{projectId}],
-    reason: 'projectTransferCommit.import',
-    runner: tx,
-  })
-}
-
 const getOmittedRouteWarnings = ({
   articleRoutePlan,
   projectRoutePlan,
@@ -6744,7 +6711,6 @@ const writeProjectTransferCommitAppTablesTx = async ({
     await insertCreatedArticles({articleIdBySourceId, context: setBasedContext, now: importedAt, promotion, tx})
     const targetArticleById = await getFillTargetArticleRows({promotion, tx})
     await updateReusedArticles({context: setBasedContext, now: importedAt, promotion, targetArticleById, tx})
-    await markUpdatedReusedArticlesDirty({promotion, tx})
     await insertArticleIdentifiers({
       articleIdBySourceId,
       articleMatches: materializedPlan.targetPlan.articleMatches,
@@ -6794,7 +6760,6 @@ const writeProjectTransferCommitAppTablesTx = async ({
       projectId: createdProject.id,
       tx,
     })
-    await markImportedProjectDirty({projectId: createdProject.id, tx})
     const judgmentRows = getJudgmentRows({
       articleIdBySourceId,
       commitIdMaps: materializedPlan.commitIdMaps,
