@@ -1,6 +1,7 @@
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 import {getArticleSourceMetadata} from '../src/utils/articleSourceMetadata.ts'
 import {sleep} from '../src/utils/sleep.ts'
 
@@ -14,6 +15,7 @@ const europePmcFetchTimeoutMs = 20_000
 const europePmcRetryDelays = [5_000, 15_000, 60_000, 300_000]
 const targetedLookupBatchSize = 25
 const updateBatchSize = 500
+const workloadContext = getMaintenanceDuckdbWorkloadContext('backfillPprHostLabels')
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -25,12 +27,15 @@ const asNonEmptyString = (value: unknown) => {
 }
 
 const getTargetRows = async (): Promise<PprTargetRow[]> => {
-  return getAppDatabaseService().queryJson<PprTargetRow>(`
+  return getAppDatabaseService().queryJson<PprTargetRow>(
+    `
     SELECT id, article_id AS articleId, doi
     FROM app.article
     WHERE lower(coalesce(json_extract_string(source_metadata, '$.preprintSource'), '')) = 'ppr'
       AND nullif(trim(coalesce(json_extract_string(source_metadata, '$.preprintHostLabel'), '')), '') IS NULL
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const getUpdateChunks = <T>(values: T[], chunkSize: number): T[][] => {
@@ -46,7 +51,8 @@ const applyUpdateChunks = async (chunks: PprHostLabelUpdate[][], index = 0): Pro
     return
   }
 
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     UPDATE app.article AS article
     SET source_metadata = json_merge_patch(coalesce(article.source_metadata, json('{}')), patch_rows.patch)
     FROM (
@@ -57,7 +63,9 @@ const applyUpdateChunks = async (chunks: PprHostLabelUpdate[][], index = 0): Pro
         .join(', ')}
     ) AS patch_rows(id, patch)
     WHERE article.id = patch_rows.id;
-  `)
+  `,
+    workloadContext,
+  )
 
   return applyUpdateChunks(chunks, index + 1)
 }
@@ -341,7 +349,7 @@ const runBackfillPprHostLabels = async () => {
       articleIdToTargetRow,
       Array.from(articleIdToTargetRow.keys()),
     )
-    await getAppDatabaseService().maintenance('checkpoint')
+    await getAppDatabaseService().maintenance('checkpoint', workloadContext)
     console.log(
       `[backfillPprHostLabels] done. scanned ${cursorResult.scannedCount}, updated ${cursorResult.updatedCount + targetedUpdatedCount}, remaining ${articleIdToTargetRow.size}`,
     )

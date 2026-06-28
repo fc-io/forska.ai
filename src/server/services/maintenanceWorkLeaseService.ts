@@ -1,3 +1,4 @@
+import {getMaintenanceDuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
 
@@ -58,6 +59,8 @@ const getNow = (now?: Date) => {
   return now ?? new Date()
 }
 
+const maintenanceWorkLeaseWorkloadContext = getMaintenanceDuckdbWorkloadContext('maintenanceWorkLease')
+
 const getFreshUntilAt = ({leaseMs, now}: {leaseMs: number; now: Date}) => {
   return new Date(now.getTime() + leaseMs)
 }
@@ -114,7 +117,8 @@ const claimMaintenanceWorkLease = async (params: MaintenanceWorkLeaseParams) => 
   const id = getMaintenanceWorkLeaseId(params)
   const [row] = await getAppDatabaseService().queryJson<
     Omit<FreshMaintenanceWorkLeaseRecord, 'recoveryContext'> & {recoveryContext: unknown}
-  >(`
+  >(
+    `
     INSERT INTO app.maintenance_work_lease (
       id,
       work_kind,
@@ -173,7 +177,9 @@ const claimMaintenanceWorkLease = async (params: MaintenanceWorkLeaseParams) => 
       completed_at = NULL,
       updated_at = EXCLUDED.updated_at
     RETURNING ${getMaintenanceWorkLeaseSelectSql()}
-  `)
+  `,
+    maintenanceWorkLeaseWorkloadContext,
+  )
 
   return row ? mapMaintenanceWorkLeaseRow(row) : null
 }
@@ -184,7 +190,8 @@ const progressMaintenanceWorkLease = async (params: MaintenanceWorkLeaseParams) 
   const id = getMaintenanceWorkLeaseId(params)
   const [row] = await getAppDatabaseService().queryJson<
     Omit<FreshMaintenanceWorkLeaseRecord, 'recoveryContext'> & {recoveryContext: unknown}
-  >(`
+  >(
+    `
     UPDATE app.maintenance_work_lease
     SET
       required_consumer_role = ${getSqlLiteral(params.requiredConsumerRole)},
@@ -199,7 +206,9 @@ const progressMaintenanceWorkLease = async (params: MaintenanceWorkLeaseParams) 
       updated_at = ${getTimestampLiteral(currentNow)}
     WHERE id = ${getSqlLiteral(id)}
     RETURNING ${getMaintenanceWorkLeaseSelectSql()}
-  `)
+  `,
+    maintenanceWorkLeaseWorkloadContext,
+  )
 
   return row ? mapMaintenanceWorkLeaseRow(row) : claimMaintenanceWorkLease(params)
 }
@@ -208,7 +217,8 @@ const completeMaintenanceWorkLease = async (params: CompleteMaintenanceWorkLease
   const currentNow = getNow(params.now)
   const consumerFilter = params.consumerId === undefined ? '' : `AND consumer_id = ${getSqlLiteral(params.consumerId)}`
 
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     UPDATE app.maintenance_work_lease
     SET
       last_progressed_at = ${getTimestampLiteral(currentNow)},
@@ -218,13 +228,16 @@ const completeMaintenanceWorkLease = async (params: CompleteMaintenanceWorkLease
       updated_at = ${getTimestampLiteral(currentNow)}
     WHERE id = ${getSqlLiteral(getMaintenanceWorkLeaseId(params))}
       ${consumerFilter}
-  `)
+  `,
+    maintenanceWorkLeaseWorkloadContext,
+  )
 }
 
 const failMaintenanceWorkLease = async (params: MaintenanceWorkLeaseParams) => {
   const currentNow = getNow(params.now)
 
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     UPDATE app.maintenance_work_lease
     SET
       required_consumer_role = ${getSqlLiteral(params.requiredConsumerRole)},
@@ -237,13 +250,16 @@ const failMaintenanceWorkLease = async (params: MaintenanceWorkLeaseParams) => {
       recovery_context = ${getRecoveryContextSql(params.recoveryContext)},
       updated_at = ${getTimestampLiteral(currentNow)}
     WHERE id = ${getSqlLiteral(getMaintenanceWorkLeaseId(params))}
-  `)
+  `,
+    maintenanceWorkLeaseWorkloadContext,
+  )
 }
 
 const clearMaintenanceWorkLeasesForProject = async ({now, projectId}: ClearMaintenanceWorkLeasesForProjectParams) => {
   const currentNow = getNow(now)
 
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     UPDATE app.maintenance_work_lease
     SET
       lease_expires_at = NULL,
@@ -264,13 +280,16 @@ const clearMaintenanceWorkLeasesForProject = async ({now, projectId}: ClearMaint
           WHERE pir.project_id = ${getSqlLiteral(projectId)}
         )
       )
-  `)
+  `,
+    maintenanceWorkLeaseWorkloadContext,
+  )
 }
 
 const getFreshProjectMaintenanceWorkLeases = async (projectId: string, now = new Date()) => {
   const rows = await getAppDatabaseService().queryJson<
     Omit<FreshMaintenanceWorkLeaseRecord, 'recoveryContext'> & {recoveryContext: unknown}
-  >(`
+  >(
+    `
     WITH scoped_article AS (
       SELECT article_id AS articleId
       FROM app.project_article
@@ -298,7 +317,9 @@ const getFreshProjectMaintenanceWorkLeases = async (projectId: string, now = new
         OR lease.article_id IN (SELECT articleId FROM scoped_article)
       )
     ORDER BY lease.last_progressed_at DESC NULLS LAST, lease.id ASC
-  `)
+  `,
+    maintenanceWorkLeaseWorkloadContext,
+  )
 
   return rows.map(mapMaintenanceWorkLeaseRow)
 }
@@ -306,7 +327,8 @@ const getFreshProjectMaintenanceWorkLeases = async (projectId: string, now = new
 const getProjectMaintenanceRecoveryContext = async (projectId: string, now = new Date()) => {
   const [row] = await getAppDatabaseService().queryJson<
     Omit<FreshMaintenanceWorkLeaseRecord, 'recoveryContext'> & {recoveryContext: unknown}
-  >(`
+  >(
+    `
     WITH scoped_article AS (
       SELECT article_id AS articleId
       FROM app.project_article
@@ -330,7 +352,9 @@ const getProjectMaintenanceRecoveryContext = async (projectId: string, now = new
       )
     ORDER BY lease.updated_at DESC, lease.id ASC
     LIMIT 1
-  `)
+  `,
+    maintenanceWorkLeaseWorkloadContext,
+  )
 
   return row ? mapMaintenanceWorkLeaseRow(row) : null
 }

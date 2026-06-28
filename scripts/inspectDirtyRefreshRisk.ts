@@ -1,9 +1,8 @@
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
+import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 
-type CliOptions = {
-  incrementalArticleThreshold: number
-  projectId: string
-}
+type CliOptions = {incrementalArticleThreshold: number; projectId: string}
 
 type RefreshStateRow = {
   activeDirtyToken: number | string | null
@@ -49,6 +48,7 @@ type LargeRebuildStateRow = {
 type CountRow = {count: number | string}
 
 const defaultDirtyRefreshIncrementalArticleThreshold = 3
+const workloadContext = getMaintenanceDuckdbWorkloadContext('inspectDirtyRefreshRisk')
 
 const quoteSqlString = (value: string) => {
   return `'${value.replaceAll("'", "''")}'`
@@ -101,7 +101,8 @@ const toNumber = (value: number | string | null | undefined) => {
 }
 
 const getRefreshState = async (projectId: string) => {
-  const [row] = await getAppDatabaseService().queryJson<RefreshStateRow>(`
+  const [row] = await getAppDatabaseService().queryJson<RefreshStateRow>(
+    `
     SELECT
       dirty_token AS dirtyToken,
       active_dirty_token AS activeDirtyToken,
@@ -112,13 +113,16 @@ const getRefreshState = async (projectId: string) => {
     FROM app.project_mart_refresh_state
     WHERE project_id = ${quoteSqlString(projectId)}
     LIMIT 1
-  `)
+  `,
+    workloadContext,
+  )
 
   return row ?? null
 }
 
 const getDirtyMaterializations = async (projectId: string) => {
-  return getAppDatabaseService().queryJson<DirtyMaterializationRow>(`
+  return getAppDatabaseService().queryJson<DirtyMaterializationRow>(
+    `
     SELECT
       source_kind AS sourceKind,
       target_dirty_token AS targetDirtyToken,
@@ -132,11 +136,14 @@ const getDirtyMaterializations = async (projectId: string) => {
     FROM app.project_mart_dirty_materialization_state
     WHERE project_id = ${quoteSqlString(projectId)}
     ORDER BY target_dirty_token ASC, source_kind ASC
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const getQuarantineBarriers = async (projectId: string) => {
-  return getAppDatabaseService().queryJson<QuarantineBarrierRow>(`
+  return getAppDatabaseService().queryJson<QuarantineBarrierRow>(
+    `
     SELECT
       article_id AS articleId,
       dirty_token AS dirtyToken,
@@ -147,11 +154,14 @@ const getQuarantineBarriers = async (projectId: string) => {
     WHERE project_id = ${quoteSqlString(projectId)}
       AND resolved_at IS NULL
     ORDER BY dirty_token ASC, article_id ASC
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const getLargeRebuildState = async (projectId: string) => {
-  const [row] = await getAppDatabaseService().queryJson<LargeRebuildStateRow>(`
+  const [row] = await getAppDatabaseService().queryJson<LargeRebuildStateRow>(
+    `
     SELECT
       refresh_token AS refreshToken,
       rebuild_phase AS rebuildPhase,
@@ -165,13 +175,15 @@ const getLargeRebuildState = async (projectId: string) => {
     FROM app.project_mart_large_rebuild_state
     WHERE project_id = ${quoteSqlString(projectId)}
     LIMIT 1
-  `)
+  `,
+    workloadContext,
+  )
 
   return row ?? null
 }
 
 const getCount = async (statement: string) => {
-  const [row] = await getAppDatabaseService().queryJson<CountRow>(statement)
+  const [row] = await getAppDatabaseService().queryJson<CountRow>(statement, workloadContext)
 
   return toNumber(row?.count)
 }
@@ -275,15 +287,9 @@ const getRiskSnapshot = async ({incrementalArticleThreshold, projectId}: CliOpti
     plannedRefreshMode,
     plannedWork: getPlannedWork({blockingMaterializationCount, dirtyArticleCount, dirtyToken, largeRebuildState}),
     projectId,
-    quarantine: {
-      rows: quarantineBarriers,
-      unresolvedBarrierCount: quarantineBarriers.length,
-    },
+    quarantine: {rows: quarantineBarriers, unresolvedBarrierCount: quarantineBarriers.length},
     refreshStatus: refreshState?.refreshStatus ?? null,
-    scope: {
-      articleCount: scopeArticleCount,
-      dirtyArticleCount,
-    },
+    scope: {articleCount: scopeArticleCount, dirtyArticleCount},
     scopeArticleCount,
     workerId: refreshState?.workerId ?? null,
   }
@@ -292,11 +298,9 @@ const getRiskSnapshot = async ({incrementalArticleThreshold, projectId}: CliOpti
 export const inspectDirtyRefreshRisk = async () => {
   const options = getCliOptions()
 
-  try {
+  await withDuckdbMaintenanceAccess('inspect dirty refresh risk', async () => {
     console.log(JSON.stringify(await getRiskSnapshot(options)))
-  } finally {
-    await getAppDatabaseService().close()
-  }
+  })
 }
 
 if (import.meta.main) {

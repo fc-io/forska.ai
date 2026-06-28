@@ -1,6 +1,7 @@
 import {requestReviewServingV4Rebuild} from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
+import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 
 type CliOptions = {recover: boolean; yes: boolean}
@@ -256,7 +257,10 @@ const requestProjectRecovery = async (
   }
 }
 
-const requestReviewServingV4Rebuilds = async (params: {projectIds: string[]; reason: string}): Promise<RecoveryResult[]> => {
+const requestReviewServingV4Rebuilds = async (params: {
+  projectIds: string[]
+  reason: string
+}): Promise<RecoveryResult[]> => {
   const projectIds = getUniqueProjectIds(params.projectIds)
 
   if (projectIds.length === 0) {
@@ -445,7 +449,7 @@ const getRecoveryStatus = (recoveryResults: RecoveryResult[]) => {
 export const recoverDirtyRefreshClaimState = async () => {
   const options = getCliOptions()
 
-  try {
+  await withDuckdbMaintenanceAccess('recover dirty refresh claims', async () => {
     const [dirtyRefreshClaims, dirtyMaterializations, largeRebuildClaims, quarantineBarriers] = await Promise.all([
       getStaleDirtyRefreshClaims(),
       getStaleDirtyMaterializationClaims(),
@@ -493,9 +497,7 @@ export const recoverDirtyRefreshClaimState = async () => {
         unresolvedQuarantineBarriers,
       }),
     )
-  } finally {
-    await getAppDatabaseService().close()
-  }
+  })
 }
 
 if (import.meta.main) {

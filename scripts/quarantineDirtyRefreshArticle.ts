@@ -1,6 +1,10 @@
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
+import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
+
+const workloadContext = getMaintenanceDuckdbWorkloadContext('quarantineDirtyRefreshArticle')
 
 const getArgValue = (names: string[]) => {
   const matchedArgument = process.argv.slice(2).find((argument) => {
@@ -30,14 +34,19 @@ export const quarantineDirtyRefreshArticle = async () => {
   const detectedBy = getArgValue(['--detectedBy', '--detected-by']) ?? `manual:${process.pid}`
   const service = getProjectMartDirtyRefreshStateService()
 
-  try {
-    const quarantineRecord = await service.quarantineProjectRefreshArticle({articleId, detectedBy, error})
-    const impactedProjects = await getAppDatabaseService().queryJson<{projectId: string}>(`
+  await withDuckdbMaintenanceAccess('quarantine dirty refresh article', async () => {
+    const quarantineRecord = await getAppDatabaseService().transaction(async (tx) => {
+      return service.quarantineProjectRefreshArticle({articleId, detectedBy, error, runner: tx})
+    }, workloadContext)
+    const impactedProjects = await getAppDatabaseService().queryJson<{projectId: string}>(
+      `
       SELECT DISTINCT project_id AS projectId
       FROM app.project_mart_refresh_article_state
       WHERE article_id = ${getSqlLiteral(articleId)}
       ORDER BY project_id ASC
-    `)
+    `,
+      workloadContext,
+    )
     console.log(
       JSON.stringify({
         articleId,
@@ -50,9 +59,7 @@ export const quarantineDirtyRefreshArticle = async () => {
         status: 'quarantined',
       }),
     )
-  } finally {
-    await getAppDatabaseService().close()
-  }
+  })
 }
 
 if (import.meta.main) {

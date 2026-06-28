@@ -4,12 +4,14 @@ import {
 } from '../src/server/reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 
 type CliOptions = {allActiveProjects: boolean; projectId: string | null; reason: string}
 type RepairProjectFailure = {error: string; projectId: string}
 type RepairProjectResult = {failedProjects: RepairProjectFailure[]; requestIds: string[]}
 
 const defaultReason = 'requestJudgmentFactRepair'
+const workloadContext = getMaintenanceDuckdbWorkloadContext('requestJudgmentFactRepair')
 
 const quoteSqlString = (value: string) => {
   return `'${value.replaceAll("'", "''")}'`
@@ -34,12 +36,15 @@ const getCliOptions = (): CliOptions => {
 }
 
 const getActiveProjectIds = async () => {
-  const rows = await getAppDatabaseService().queryJson<{projectId: string}>(`
+  const rows = await getAppDatabaseService().queryJson<{projectId: string}>(
+    `
     SELECT id AS projectId
     FROM app.project
     WHERE archived = FALSE
     ORDER BY id ASC
-  `)
+  `,
+    workloadContext,
+  )
 
   return rows.map((row) => {
     return row.projectId
@@ -47,12 +52,15 @@ const getActiveProjectIds = async () => {
 }
 
 const getExplicitProjectIds = async (projectId: string) => {
-  const rows = await getAppDatabaseService().queryJson<{projectId: string}>(`
+  const rows = await getAppDatabaseService().queryJson<{projectId: string}>(
+    `
     SELECT id AS projectId
     FROM app.project
     WHERE id = ${quoteSqlString(projectId)}
       AND archived = FALSE
-  `)
+  `,
+    workloadContext,
+  )
 
   return rows.map((row) => {
     return row.projectId
