@@ -12,6 +12,7 @@ import {getEnv} from './env.ts'
 import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
 import {exitWithRuntimeLogFlush, writeRuntimeFailureLogEvent, writeRuntimeOperatorLogEvent} from './runtimeLogger.ts'
 import {
+  canCurrentServerOwnDuckdb,
   ensureCurrentDuckdbOwnerLease,
   registerDuckdbOwnerDemotionHandler,
   releaseCurrentDuckdbOwnerLease,
@@ -190,6 +191,11 @@ const duckdbRestartRequiredErrorFragments = [
   'must be restarted prior to being used again',
 ]
 const duckdbWorkloadMetricsLimit = 50
+const enforcedForegroundDuckdbOperations = new Set<DuckdbWorkloadOperation>([
+  'mainQuery',
+  'mainStatement',
+  'transaction',
+])
 
 declare global {
   var __forskaDuckdbServiceState: DuckdbServiceState | undefined
@@ -1600,6 +1606,21 @@ const recordDuckdbWorkloadRuntimeMetric = (metric: DuckdbWorkloadRuntimeMetric) 
   )
 }
 
+const shouldEnforceForegroundDuckdbWorkloadContext = () => {
+  return String(process.env.FORSKA_ENFORCE_DUCKDB_WORKLOAD_CONTEXT ?? '').trim().toLowerCase() === 'true'
+}
+
+const assertDuckdbWorkloadContextIsAllowed = (operation: DuckdbWorkloadOperation, context?: DuckdbWorkloadContext) => {
+  if (
+    context === undefined
+    && shouldEnforceForegroundDuckdbWorkloadContext()
+    && enforcedForegroundDuckdbOperations.has(operation)
+    && !canCurrentServerOwnDuckdb()
+  ) {
+    throw new Error(`DuckDB ${operation} requires DuckdbWorkloadContext before connection acquisition`)
+  }
+}
+
 const getDuckdbWorkloadRuntimeMetric = ({
   context,
   durationMs,
@@ -1666,6 +1687,8 @@ const withDuckdbWorkloadContext = <T>({
   queueDepthAtStart: number
   work: () => Promise<T>
 }) => {
+  assertDuckdbWorkloadContextIsAllowed(operation, context)
+
   if (context === undefined) {
     return work()
   }
