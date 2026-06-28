@@ -368,7 +368,6 @@ test('legacy mart maintenance paths do not write V4 review-serving snapshots', (
 
   expect(legacyMartMaintenanceFiles.sort()).toEqual([
     'src/server/services/getDuckdbMartMaintenanceService.ts',
-    'src/server/services/projectMartDirtyMaterializationService.ts',
     'src/server/services/projectMartDirtyRefreshStateService.ts',
     'src/server/services/projectMartLargeRebuildCyclesService.ts',
     'src/server/services/projectMartLargeRebuildExecutor.ts',
