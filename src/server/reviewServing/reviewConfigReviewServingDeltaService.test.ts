@@ -3,11 +3,13 @@ import {expect, test} from 'bun:test'
 import {
   appendProjectReviewConfigReviewServingDelta,
   appendPromptConfigReviewServingDelta,
+  appendProviderConnectionExecutionIdentityReviewServingDeltas,
+  appendProviderModelExecutionIdentityReviewServingDeltas,
 } from './reviewConfigReviewServingDeltaService.ts'
 import type {ReviewServingDeltaLedgerTransaction} from './reviewServingDeltaLedger.ts'
 import {getReviewServingInvalidationRuleOrNull} from './reviewServingInvalidationRegistry.ts'
 
-const createFakeLedgerTransaction = () => {
+const createFakeLedgerTransaction = (queryRows: Record<string, unknown[]> = {}) => {
   const statements: string[] = []
   const highWaterByPartition: Record<string, number> = {}
   const tx: ReviewServingDeltaLedgerTransaction = {
@@ -17,6 +19,14 @@ const createFakeLedgerTransaction = () => {
       if (statement.includes('FROM app.review_delta_reconciliation_cursor')) {
         const sourcePartition = statement.match(/source_partition = '([^']+)'/)?.[1] ?? ''
         return [{sourceHighWaterMark: highWaterByPartition[sourcePartition] ?? 0}] as T[]
+      }
+
+      const matchingRows = Object.entries(queryRows).find(([marker]) => {
+        return statement.includes(marker)
+      })?.[1]
+
+      if (matchingRows) {
+        return matchingRows as T[]
       }
 
       return []
@@ -79,6 +89,58 @@ test('project review config updates emit review scoped model content prompt and 
   expect(inserts).toContain('project.reviewConfig.updated')
   expect(inserts).toContain('dateFrom,humanJudgmentMode,modelExecutionIdentity,promptMembership,useTitle')
   expect(inserts).toContain('projectReviewConfig:project-1')
+})
+
+test('provider model execution identity changes emit project review config deltas for affected projects only', async () => {
+  const {statements, tx} = createFakeLedgerTransaction({
+    'FROM app.project p': [
+      {modelId: 'model-1', projectId: 'project-1'},
+      {modelId: 'model-1', projectId: 'project-2'},
+    ],
+  })
+
+  await appendProviderModelExecutionIdentityReviewServingDeltas(tx, {
+    modelIds: ['model-1'],
+    sourceMutationKey: 'providerModel.update',
+    sourceOperation: 'update',
+  })
+
+  const joined = statements.join('\n')
+  const inserts = getReviewChangeInsertStatements(statements)
+
+  expect(joined).toContain('WHERE p.model_id IN')
+  expect(joined).toContain("'model-1'")
+  expect(joined).not.toContain('app.judgment')
+  expect(joined).not.toContain('app.article')
+  expect(inserts).toHaveLength(2)
+  expect(inserts.join('\n')).toContain('modelExecutionIdentity')
+  expect(inserts.join('\n')).toContain('providerModelExecutionIdentity:model-1')
+})
+
+test('provider connection execution identity changes emit project review config deltas through scoped model join', async () => {
+  const {statements, tx} = createFakeLedgerTransaction({
+    'INNER JOIN app.model m ON m.id = p.model_id': [
+      {projectId: 'project-1', providerConnectionId: 'provider-1'},
+      {projectId: 'project-2', providerConnectionId: 'provider-1'},
+    ],
+  })
+
+  await appendProviderConnectionExecutionIdentityReviewServingDeltas(tx, {
+    providerConnectionIds: ['provider-1'],
+    sourceMutationKey: 'providerConnection.update',
+    sourceOperation: 'update',
+  })
+
+  const joined = statements.join('\n')
+  const inserts = getReviewChangeInsertStatements(statements)
+
+  expect(joined).toContain('WHERE m.provider_connection_id IN')
+  expect(joined).toContain("'provider-1'")
+  expect(joined).not.toContain('app.judgment')
+  expect(joined).not.toContain('app.article')
+  expect(inserts).toHaveLength(2)
+  expect(inserts.join('\n')).toContain('modelExecutionIdentity')
+  expect(inserts.join('\n')).toContain('providerConnectionExecutionIdentity:provider-1')
 })
 
 test('config delta invalidation includes project scope for date and import-route edits', () => {

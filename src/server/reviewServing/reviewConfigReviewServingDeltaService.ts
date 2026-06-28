@@ -1,3 +1,4 @@
+import {getQuotedStringList} from '../services/appQueryHelpers.ts'
 import {
   appendReviewServingChangeDelta,
   type ReviewServingDeltaLedgerTransaction,
@@ -50,6 +51,9 @@ export type AppendProjectReviewConfigReviewServingDeltaInput = {
   sourceTable?: string
   sourceUpdatedAt?: Date | string | null
 }
+
+type ProjectModelExecutionIdentityRow = {modelId: string; projectId: string}
+type ProjectProviderExecutionIdentityRow = {projectId: string; providerConnectionId: string}
 
 const getSortedUniqueFields = <T extends string>(fields: readonly T[]) => {
   return Array.from(new Set(fields)).sort((left, right) => {
@@ -123,4 +127,81 @@ export const appendProjectReviewConfigReviewServingDeltas = async (
     await previousRun
     await appendProjectReviewConfigReviewServingDelta(tx, input)
   }, Promise.resolve())
+}
+
+export const appendProviderModelExecutionIdentityReviewServingDeltas = async (
+  tx: ReviewServingDeltaLedgerTransaction,
+  input: {modelIds: readonly string[]; sourceMutationKey: string; sourceOperation: ReviewServingSourceOperation},
+) => {
+  const modelIds = Array.from(new Set(input.modelIds)).filter((modelId) => {
+    return modelId.trim().length > 0
+  })
+
+  if (modelIds.length === 0) {
+    return
+  }
+
+  const rows = await tx.queryJson<ProjectModelExecutionIdentityRow>(`
+    SELECT p.id AS projectId,
+           p.model_id AS modelId
+    FROM app.project p
+    WHERE p.model_id IN (${getQuotedStringList(modelIds).join(', ')})
+    ORDER BY p.id ASC
+  `)
+
+  await appendProjectReviewConfigReviewServingDeltas(
+    tx,
+    rows.map((row) => {
+      return {
+        changedReviewConfigFields: ['modelExecutionIdentity'],
+        projectId: row.projectId,
+        sourceMutationKey: input.sourceMutationKey,
+        sourceOperation: input.sourceOperation,
+        sourcePartition: `providerModelExecutionIdentity:${row.modelId}`,
+        sourceRowId: `${row.projectId}:${row.modelId}`,
+        sourceTable: 'app.model',
+      }
+    }),
+  )
+}
+
+export const appendProviderConnectionExecutionIdentityReviewServingDeltas = async (
+  tx: ReviewServingDeltaLedgerTransaction,
+  input: {
+    providerConnectionIds: readonly string[]
+    sourceMutationKey: string
+    sourceOperation: ReviewServingSourceOperation
+  },
+) => {
+  const providerConnectionIds = Array.from(new Set(input.providerConnectionIds)).filter((providerConnectionId) => {
+    return providerConnectionId.trim().length > 0
+  })
+
+  if (providerConnectionIds.length === 0) {
+    return
+  }
+
+  const rows = await tx.queryJson<ProjectProviderExecutionIdentityRow>(`
+    SELECT p.id AS projectId,
+           m.provider_connection_id AS providerConnectionId
+    FROM app.project p
+    INNER JOIN app.model m ON m.id = p.model_id
+    WHERE m.provider_connection_id IN (${getQuotedStringList(providerConnectionIds).join(', ')})
+    ORDER BY p.id ASC
+  `)
+
+  await appendProjectReviewConfigReviewServingDeltas(
+    tx,
+    rows.map((row) => {
+      return {
+        changedReviewConfigFields: ['modelExecutionIdentity'],
+        projectId: row.projectId,
+        sourceMutationKey: input.sourceMutationKey,
+        sourceOperation: input.sourceOperation,
+        sourcePartition: `providerConnectionExecutionIdentity:${row.providerConnectionId}`,
+        sourceRowId: `${row.projectId}:${row.providerConnectionId}`,
+        sourceTable: 'app.provider_connection',
+      }
+    }),
+  )
 }

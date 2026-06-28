@@ -1,3 +1,4 @@
+import {appendProviderConnectionExecutionIdentityReviewServingDeltas} from '../reviewServing/reviewConfigReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {
@@ -384,6 +385,11 @@ const deleteProviderConnectionWithFallback = async (
       }
 
       if (hasProviderConnectionDeleteUsage(usage)) {
+        await appendProviderConnectionExecutionIdentityReviewServingDeltas(databaseRunner, {
+          providerConnectionIds: deleteTarget.connectionIds,
+          sourceMutationKey: 'providerConnection.archive',
+          sourceOperation: 'update',
+        })
         await archiveProviderConnections(databaseRunner, deleteTarget, options)
         await advanceProviderConnectionProjectTransferDirtyTokens({
           databaseRunner,
@@ -393,6 +399,11 @@ const deleteProviderConnectionWithFallback = async (
         return getArchivedDeleteResult(usage)
       }
 
+      await appendProviderConnectionExecutionIdentityReviewServingDeltas(databaseRunner, {
+        providerConnectionIds: deleteTarget.connectionIds,
+        sourceMutationKey: 'providerConnection.delete',
+        sourceOperation: 'delete',
+      })
       await deleteProviderConnections(databaseRunner, deleteTarget.connectionIds, options)
       await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner, reason: 'providerConnection.delete'})
 
@@ -410,6 +421,11 @@ const deleteProviderConnectionWithFallback = async (
         throw new Error('Provider connection not found')
       }
 
+      await appendProviderConnectionExecutionIdentityReviewServingDeltas(databaseRunner, {
+        providerConnectionIds: deleteTarget.connectionIds,
+        sourceMutationKey: 'providerConnection.archive',
+        sourceOperation: 'update',
+      })
       await archiveProviderConnections(databaseRunner, deleteTarget)
       await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner, reason: 'providerConnection.archive'})
 
@@ -644,6 +660,13 @@ export const createProviderConnection = async ({
     `)
 
     if (rows.length > 0) {
+      await appendProviderConnectionExecutionIdentityReviewServingDeltas(databaseRunner, {
+        providerConnectionIds: rows.map((row) => {
+          return row.id
+        }),
+        sourceMutationKey: 'providerConnection.create',
+        sourceOperation: 'insert',
+      })
       await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner, reason: 'providerConnection.create'})
     }
 
@@ -715,6 +738,11 @@ export const updateProviderConnection = async ({
       throw new Error('Failed to update provider connection')
     }
 
+    await appendProviderConnectionExecutionIdentityReviewServingDeltas(tx, {
+      providerConnectionIds: [id],
+      sourceMutationKey: 'providerConnection.update',
+      sourceOperation: 'update',
+    })
     await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner: tx, reason: 'providerConnection.update'})
 
     return getProviderConnectionRecordFromRow(nextConnection)
