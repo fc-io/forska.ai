@@ -73,6 +73,16 @@ test('admin maintenance diagnostics do not expose retired large-rebuild runtime 
   expect(adminSource).not.toContain('projectMartLargeRebuildRuntimeMetrics')
 })
 
+test('settings no longer expose retired large-rebuild tuning controls', async () => {
+  const settingsSource = await readText('src/app/routes/+settings/+index.tsx')
+  const usersRouteSource = await readText('src/server/routes/UsersRoutes.ts')
+  const localSettingsSource = await readText('src/server/utils/localAppSettings.ts')
+
+  expect(settingsSource).not.toContain('projectMartLargeRebuild')
+  expect(usersRouteSource).not.toContain('projectMartLargeRebuild')
+  expect(localSettingsSource).not.toContain('ProjectMartLargeRebuildTuningMode')
+})
+
 test('Phase 5B legacy worker scripts require explicit admin acknowledgements or deletion', async () => {
   const dirtyWorkerScripts = [
     'scripts/runProjectMartRefreshWorker.ts',

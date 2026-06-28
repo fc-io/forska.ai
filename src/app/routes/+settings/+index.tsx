@@ -5,7 +5,6 @@ import {createEffect, createSignal, For, Show} from 'solid-js'
 import {apiClient} from '../../../services/apiClient'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
-type ProjectMartLargeRebuildTuningMode = 'automatic' | 'manual'
 type LocalUser = {
   maintenanceWorkerDuckdbMemoryLimit?: string | null
   codexBin?: string | null
@@ -14,11 +13,6 @@ type LocalUser = {
   email: string
   role?: string | null
   fullTextConversionModelId?: string | null
-  projectMartLargeRebuildBatchSize?: number | null
-  projectMartLargeRebuildMaxCyclesPerWake?: number | null
-  projectMartLargeRebuildMaxWakeMs?: number | null
-  projectMartLargeRebuildPollIntervalMs?: number | null
-  projectMartLargeRebuildTuningMode?: ProjectMartLargeRebuildTuningMode | null
   unpaywallEmail?: string | null
   duckdbBin?: string | null
 }
@@ -94,11 +88,6 @@ type UpdateLocalUserInput = {
   email: string
   name: string
   fullTextConversionModelId: string
-  projectMartLargeRebuildBatchSize: string
-  projectMartLargeRebuildMaxCyclesPerWake: string
-  projectMartLargeRebuildMaxWakeMs: string
-  projectMartLargeRebuildPollIntervalMs: string
-  projectMartLargeRebuildTuningMode: ProjectMartLargeRebuildTuningMode
   unpaywallEmail: string
 }
 type UpdateUserResponse = {data: LocalUser}
@@ -163,13 +152,6 @@ const getNullableString = (value: string): string | null => {
   return normalized === '' ? null : normalized
 }
 
-const getNullablePositiveInteger = (value: string): number | null => {
-  const normalized = value.trim()
-  const parsed = Number.parseInt(normalized, 10)
-
-  return normalized !== '' && Number.isInteger(parsed) && parsed > 0 ? parsed : null
-}
-
 const formatWorkerRuntimeBoolean = (value: boolean | null | undefined) => {
   return value ? 'Yes' : 'No'
 }
@@ -196,11 +178,6 @@ const updateLocalUser = async (input: UpdateLocalUserInput): Promise<LocalUser> 
     email: input.email,
     fullTextConversionModelId: getNullableString(input.fullTextConversionModelId),
     name: input.name,
-    projectMartLargeRebuildBatchSize: getNullablePositiveInteger(input.projectMartLargeRebuildBatchSize),
-    projectMartLargeRebuildMaxCyclesPerWake: getNullablePositiveInteger(input.projectMartLargeRebuildMaxCyclesPerWake),
-    projectMartLargeRebuildMaxWakeMs: getNullablePositiveInteger(input.projectMartLargeRebuildMaxWakeMs),
-    projectMartLargeRebuildPollIntervalMs: getNullablePositiveInteger(input.projectMartLargeRebuildPollIntervalMs),
-    projectMartLargeRebuildTuningMode: input.projectMartLargeRebuildTuningMode,
     unpaywallEmail: getNullableString(input.unpaywallEmail),
   })
   const result = handleApiResponse<UpdateUserResponse>(response, 'Failed to save settings')
@@ -220,12 +197,6 @@ const Settings = () => {
   const [displayName, setDisplayName] = createSignal('')
   const [profileEmail, setProfileEmail] = createSignal('')
   const [fullTextConversionModelId, setFullTextConversionModelId] = createSignal('')
-  const [projectMartLargeRebuildBatchSize, setProjectMartLargeRebuildBatchSize] = createSignal('')
-  const [projectMartLargeRebuildMaxCyclesPerWake, setProjectMartLargeRebuildMaxCyclesPerWake] = createSignal('')
-  const [projectMartLargeRebuildMaxWakeMs, setProjectMartLargeRebuildMaxWakeMs] = createSignal('')
-  const [projectMartLargeRebuildPollIntervalMs, setProjectMartLargeRebuildPollIntervalMs] = createSignal('')
-  const [projectMartLargeRebuildTuningMode, setProjectMartLargeRebuildTuningMode] =
-    createSignal<ProjectMartLargeRebuildTuningMode>('automatic')
   const [unpaywallEmail, setUnpaywallEmail] = createSignal('')
   const [duckdbBin, setDuckdbBin] = createSignal('')
   const [codexBin, setCodexBin] = createSignal('')
@@ -292,11 +263,6 @@ const Settings = () => {
         setDisplayName(user.name)
         setProfileEmail(user.email)
         setFullTextConversionModelId(user.fullTextConversionModelId ?? '')
-        setProjectMartLargeRebuildBatchSize(String(user.projectMartLargeRebuildBatchSize ?? ''))
-        setProjectMartLargeRebuildMaxCyclesPerWake(String(user.projectMartLargeRebuildMaxCyclesPerWake ?? ''))
-        setProjectMartLargeRebuildMaxWakeMs(String(user.projectMartLargeRebuildMaxWakeMs ?? ''))
-        setProjectMartLargeRebuildPollIntervalMs(String(user.projectMartLargeRebuildPollIntervalMs ?? ''))
-        setProjectMartLargeRebuildTuningMode(user.projectMartLargeRebuildTuningMode ?? 'automatic')
         setUnpaywallEmail(user.unpaywallEmail ?? '')
         setDuckdbBin(user.duckdbBin ?? '')
         setCodexBin(user.codexBin ?? '')
@@ -326,13 +292,6 @@ const Settings = () => {
     setDisplayName(localUserQuery.data?.name ?? '')
     setProfileEmail(localUserQuery.data?.email ?? '')
     setFullTextConversionModelId(localUserQuery.data?.fullTextConversionModelId ?? '')
-    setProjectMartLargeRebuildBatchSize(String(localUserQuery.data?.projectMartLargeRebuildBatchSize ?? ''))
-    setProjectMartLargeRebuildMaxCyclesPerWake(
-      String(localUserQuery.data?.projectMartLargeRebuildMaxCyclesPerWake ?? ''),
-    )
-    setProjectMartLargeRebuildMaxWakeMs(String(localUserQuery.data?.projectMartLargeRebuildMaxWakeMs ?? ''))
-    setProjectMartLargeRebuildPollIntervalMs(String(localUserQuery.data?.projectMartLargeRebuildPollIntervalMs ?? ''))
-    setProjectMartLargeRebuildTuningMode(localUserQuery.data?.projectMartLargeRebuildTuningMode ?? 'automatic')
     setUnpaywallEmail(localUserQuery.data?.unpaywallEmail ?? '')
     setDuckdbBin(localUserQuery.data?.duckdbBin ?? '')
     setCodexBin(localUserQuery.data?.codexBin ?? '')
@@ -349,15 +308,6 @@ const Settings = () => {
       displayName().trim() !== (localUserQuery.data?.name ?? '').trim()
       || profileEmail().trim() !== (localUserQuery.data?.email ?? '').trim()
       || fullTextConversionModelId().trim() !== (localUserQuery.data?.fullTextConversionModelId ?? '').trim()
-      || projectMartLargeRebuildTuningMode() !== (localUserQuery.data?.projectMartLargeRebuildTuningMode ?? 'automatic')
-      || projectMartLargeRebuildBatchSize().trim()
-        !== String(localUserQuery.data?.projectMartLargeRebuildBatchSize ?? '').trim()
-      || projectMartLargeRebuildMaxCyclesPerWake().trim()
-        !== String(localUserQuery.data?.projectMartLargeRebuildMaxCyclesPerWake ?? '').trim()
-      || projectMartLargeRebuildMaxWakeMs().trim()
-        !== String(localUserQuery.data?.projectMartLargeRebuildMaxWakeMs ?? '').trim()
-      || projectMartLargeRebuildPollIntervalMs().trim()
-        !== String(localUserQuery.data?.projectMartLargeRebuildPollIntervalMs ?? '').trim()
       || maintenanceWorkerDuckdbMemoryLimit().trim()
         !== (localUserQuery.data?.maintenanceWorkerDuckdbMemoryLimit ?? '').trim()
       || unpaywallEmail().trim() !== (localUserQuery.data?.unpaywallEmail ?? '').trim()
@@ -725,11 +675,6 @@ const Settings = () => {
                     email: profileEmail(),
                     fullTextConversionModelId: fullTextConversionModelId(),
                     name: displayName(),
-                    projectMartLargeRebuildBatchSize: projectMartLargeRebuildBatchSize(),
-                    projectMartLargeRebuildMaxCyclesPerWake: projectMartLargeRebuildMaxCyclesPerWake(),
-                    projectMartLargeRebuildMaxWakeMs: projectMartLargeRebuildMaxWakeMs(),
-                    projectMartLargeRebuildPollIntervalMs: projectMartLargeRebuildPollIntervalMs(),
-                    projectMartLargeRebuildTuningMode: projectMartLargeRebuildTuningMode(),
                     unpaywallEmail: unpaywallEmail(),
                   })
                 }}

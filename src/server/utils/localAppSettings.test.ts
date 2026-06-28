@@ -50,14 +50,14 @@ test('local app settings rewrite legacy maintenance-worker memory key', () => {
       maintenanceWorkerDuckdbMemoryLimit: '12GB',
       codexBin: '/opt/codex',
       duckdbBin: '/opt/duckdb',
-      projectMartLargeRebuildBatchSize: 256,
-      projectMartLargeRebuildMaxCyclesPerWake: 3,
-      projectMartLargeRebuildMaxWakeMs: 1500,
-      projectMartLargeRebuildPollIntervalMs: 750,
-      projectMartLargeRebuildTuningMode: 'manual',
     })
     expect(stored).toEqual(settings)
     expect('backgroundWriterDuckdbMemoryLimit' in stored).toBe(false)
+    expect('projectMartLargeRebuildBatchSize' in stored).toBe(false)
+    expect('projectMartLargeRebuildMaxCyclesPerWake' in stored).toBe(false)
+    expect('projectMartLargeRebuildMaxWakeMs' in stored).toBe(false)
+    expect('projectMartLargeRebuildPollIntervalMs' in stored).toBe(false)
+    expect('projectMartLargeRebuildTuningMode' in stored).toBe(false)
   } finally {
     rmSync(tempDir, {force: true, recursive: true})
   }

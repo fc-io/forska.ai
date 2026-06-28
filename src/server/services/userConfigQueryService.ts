@@ -2,7 +2,6 @@ import type {UserRecord} from '../../db/schemaTypes.ts'
 import {localUserDefaults} from '../../utils/localUser.ts'
 import {getProviderConnectionConfigFromJson} from '../providers/providerDbUtils.ts'
 import {getProviderConnectionEffectiveBaseURL} from '../providers/providerRuntimeState.ts'
-import {readLocalAppSettings} from '../utils/localAppSettings.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getDateValue, getSqlLiteral} from './appQueryHelpers.ts'
 
@@ -13,11 +12,6 @@ type UserConfigRow = {
   email: string
   role: string | null
   fullTextConversionModelId: string | null
-  projectMartLargeRebuildBatchSize: number | null
-  projectMartLargeRebuildMaxCyclesPerWake: number | null
-  projectMartLargeRebuildMaxWakeMs: number | null
-  projectMartLargeRebuildPollIntervalMs: number | null
-  projectMartLargeRebuildTuningMode: string | null
   unpaywallEmail: string | null
   createdAt: unknown
   updatedAt: unknown
@@ -44,11 +38,6 @@ const userConfigSelectClause = `
   role,
   maintenance_worker_duckdb_memory_limit AS maintenanceWorkerDuckdbMemoryLimit,
   full_text_conversion_model_id AS fullTextConversionModelId,
-  project_mart_large_rebuild_batch_size AS projectMartLargeRebuildBatchSize,
-  project_mart_large_rebuild_max_cycles_per_wake AS projectMartLargeRebuildMaxCyclesPerWake,
-  project_mart_large_rebuild_max_wake_ms AS projectMartLargeRebuildMaxWakeMs,
-  project_mart_large_rebuild_poll_interval_ms AS projectMartLargeRebuildPollIntervalMs,
-  project_mart_large_rebuild_tuning_mode AS projectMartLargeRebuildTuningMode,
   unpaywall_email AS unpaywallEmail,
   created_at AS createdAt,
   updated_at AS updatedAt
@@ -62,39 +51,6 @@ const getNullableTrimmedValue = (value: string | null | undefined): string | nul
 
 const getValueOrFallback = (value: string | null | undefined, fallback: string): string => {
   return getNullableTrimmedValue(value) ?? fallback
-}
-
-const getNullablePositiveInteger = (value: number | string | null | undefined): number | null => {
-  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? '').trim(), 10)
-
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
-}
-
-const getProjectMartLargeRebuildTuningMode = (
-  value: string | null | undefined,
-): UserRecord['projectMartLargeRebuildTuningMode'] => {
-  return value === 'manual' ? 'manual' : 'automatic'
-}
-
-const hasStoredProjectMartLargeRebuildSettings = (
-  userConfig: Pick<
-    UserRecord,
-    | 'maintenanceWorkerDuckdbMemoryLimit'
-    | 'projectMartLargeRebuildBatchSize'
-    | 'projectMartLargeRebuildMaxCyclesPerWake'
-    | 'projectMartLargeRebuildMaxWakeMs'
-    | 'projectMartLargeRebuildPollIntervalMs'
-    | 'projectMartLargeRebuildTuningMode'
-  >,
-) => {
-  return (
-    userConfig.maintenanceWorkerDuckdbMemoryLimit !== null
-    || userConfig.projectMartLargeRebuildBatchSize !== null
-    || userConfig.projectMartLargeRebuildMaxCyclesPerWake !== null
-    || userConfig.projectMartLargeRebuildMaxWakeMs !== null
-    || userConfig.projectMartLargeRebuildPollIntervalMs !== null
-    || userConfig.projectMartLargeRebuildTuningMode === 'manual'
-  )
 }
 
 const getDefaultUserRecord = (): UserRecord => {
@@ -126,11 +82,11 @@ const getUserConfigValue = (row: UserConfigRow): UserRecord => {
     email: row.email,
     role: row.role,
     fullTextConversionModelId: row.fullTextConversionModelId,
-    projectMartLargeRebuildBatchSize: getNullablePositiveInteger(row.projectMartLargeRebuildBatchSize),
-    projectMartLargeRebuildMaxCyclesPerWake: getNullablePositiveInteger(row.projectMartLargeRebuildMaxCyclesPerWake),
-    projectMartLargeRebuildMaxWakeMs: getNullablePositiveInteger(row.projectMartLargeRebuildMaxWakeMs),
-    projectMartLargeRebuildPollIntervalMs: getNullablePositiveInteger(row.projectMartLargeRebuildPollIntervalMs),
-    projectMartLargeRebuildTuningMode: getProjectMartLargeRebuildTuningMode(row.projectMartLargeRebuildTuningMode),
+    projectMartLargeRebuildBatchSize: null,
+    projectMartLargeRebuildMaxCyclesPerWake: null,
+    projectMartLargeRebuildMaxWakeMs: null,
+    projectMartLargeRebuildPollIntervalMs: null,
+    projectMartLargeRebuildTuningMode: 'automatic',
     unpaywallEmail: row.unpaywallEmail,
     createdAt: getDateValue(row.createdAt) ?? new Date(0),
     updatedAt: getDateValue(row.updatedAt) ?? new Date(0),
@@ -156,11 +112,6 @@ const insertDefaultUserConfig = async (): Promise<UserRecord | null> => {
       role,
       maintenance_worker_duckdb_memory_limit,
       full_text_conversion_model_id,
-      project_mart_large_rebuild_batch_size,
-      project_mart_large_rebuild_max_cycles_per_wake,
-      project_mart_large_rebuild_max_wake_ms,
-      project_mart_large_rebuild_poll_interval_ms,
-      project_mart_large_rebuild_tuning_mode,
       unpaywall_email
     )
     SELECT
@@ -170,11 +121,6 @@ const insertDefaultUserConfig = async (): Promise<UserRecord | null> => {
       ${getSqlLiteral(localUserDefaults.role)},
       NULL,
       ${getSqlLiteral(localUserDefaults.fullTextConversionModelId)},
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      'automatic',
       ${getSqlLiteral(localUserDefaults.unpaywallEmail)}
     WHERE NOT EXISTS (
       SELECT 1
@@ -186,46 +132,12 @@ const insertDefaultUserConfig = async (): Promise<UserRecord | null> => {
   return row ? getUserConfigValue(row) : null
 }
 
-const syncLocalProjectMartLargeRebuildSettings = async (userConfig: UserRecord): Promise<UserRecord> => {
-  if (hasStoredProjectMartLargeRebuildSettings(userConfig)) {
-    return userConfig
-  }
-
-  const localSettings = readLocalAppSettings()
-  const hasLocalSettings = hasStoredProjectMartLargeRebuildSettings({
-    maintenanceWorkerDuckdbMemoryLimit: localSettings.maintenanceWorkerDuckdbMemoryLimit,
-    projectMartLargeRebuildBatchSize: localSettings.projectMartLargeRebuildBatchSize,
-    projectMartLargeRebuildMaxCyclesPerWake: localSettings.projectMartLargeRebuildMaxCyclesPerWake,
-    projectMartLargeRebuildMaxWakeMs: localSettings.projectMartLargeRebuildMaxWakeMs,
-    projectMartLargeRebuildPollIntervalMs: localSettings.projectMartLargeRebuildPollIntervalMs,
-    projectMartLargeRebuildTuningMode: localSettings.projectMartLargeRebuildTuningMode,
-  })
-
-  if (!hasLocalSettings) {
-    return userConfig
-  }
-
-  return updateUserConfigRow({
-    maintenanceWorkerDuckdbMemoryLimit: localSettings.maintenanceWorkerDuckdbMemoryLimit,
-    current: userConfig,
-    email: userConfig.email,
-    fullTextConversionModelId: userConfig.fullTextConversionModelId,
-    name: userConfig.name,
-    projectMartLargeRebuildBatchSize: localSettings.projectMartLargeRebuildBatchSize,
-    projectMartLargeRebuildMaxCyclesPerWake: localSettings.projectMartLargeRebuildMaxCyclesPerWake,
-    projectMartLargeRebuildMaxWakeMs: localSettings.projectMartLargeRebuildMaxWakeMs,
-    projectMartLargeRebuildPollIntervalMs: localSettings.projectMartLargeRebuildPollIntervalMs,
-    projectMartLargeRebuildTuningMode: localSettings.projectMartLargeRebuildTuningMode,
-    unpaywallEmail: userConfig.unpaywallEmail,
-  })
-}
-
 const getOrCreateUserConfig = async (): Promise<UserRecord> => {
   const existing = await getUserConfig()
   const inserted = existing ? null : await insertDefaultUserConfig()
   const loaded = existing ?? inserted ?? (await getUserConfig())
 
-  return loaded ? syncLocalProjectMartLargeRebuildSettings(loaded) : getDefaultUserRecord()
+  return loaded ?? getDefaultUserRecord()
 }
 
 const getFullTextConversionModelAvailability = (row: FullTextConversionModelAvailabilityRow) => {
@@ -271,11 +183,6 @@ const updateUserConfigRow = async ({
   email,
   fullTextConversionModelId,
   name,
-  projectMartLargeRebuildBatchSize,
-  projectMartLargeRebuildMaxCyclesPerWake,
-  projectMartLargeRebuildMaxWakeMs,
-  projectMartLargeRebuildPollIntervalMs,
-  projectMartLargeRebuildTuningMode,
   unpaywallEmail,
 }: {
   maintenanceWorkerDuckdbMemoryLimit: string | null
@@ -283,11 +190,6 @@ const updateUserConfigRow = async ({
   email: string
   fullTextConversionModelId: string | null
   name: string
-  projectMartLargeRebuildBatchSize: number | null
-  projectMartLargeRebuildMaxCyclesPerWake: number | null
-  projectMartLargeRebuildMaxWakeMs: number | null
-  projectMartLargeRebuildPollIntervalMs: number | null
-  projectMartLargeRebuildTuningMode: UserRecord['projectMartLargeRebuildTuningMode']
   unpaywallEmail: string | null
 }): Promise<UserRecord> => {
   const validatedFullTextConversionModelId = await getValidatedFullTextConversionModelId(fullTextConversionModelId)
@@ -298,11 +200,11 @@ const updateUserConfigRow = async ({
         email = ${getSqlLiteral(getValueOrFallback(email, current.email))},
         maintenance_worker_duckdb_memory_limit = ${getSqlLiteral(getNullableTrimmedValue(maintenanceWorkerDuckdbMemoryLimit))},
         full_text_conversion_model_id = ${getSqlLiteral(validatedFullTextConversionModelId)},
-        project_mart_large_rebuild_batch_size = ${getSqlLiteral(getNullablePositiveInteger(projectMartLargeRebuildBatchSize))},
-        project_mart_large_rebuild_max_cycles_per_wake = ${getSqlLiteral(getNullablePositiveInteger(projectMartLargeRebuildMaxCyclesPerWake))},
-        project_mart_large_rebuild_max_wake_ms = ${getSqlLiteral(getNullablePositiveInteger(projectMartLargeRebuildMaxWakeMs))},
-        project_mart_large_rebuild_poll_interval_ms = ${getSqlLiteral(getNullablePositiveInteger(projectMartLargeRebuildPollIntervalMs))},
-        project_mart_large_rebuild_tuning_mode = ${getSqlLiteral(getProjectMartLargeRebuildTuningMode(projectMartLargeRebuildTuningMode))},
+        project_mart_large_rebuild_batch_size = NULL,
+        project_mart_large_rebuild_max_cycles_per_wake = NULL,
+        project_mart_large_rebuild_max_wake_ms = NULL,
+        project_mart_large_rebuild_poll_interval_ms = NULL,
+        project_mart_large_rebuild_tuning_mode = 'automatic',
         unpaywall_email = ${getSqlLiteral(getNullableTrimmedValue(unpaywallEmail))},
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(localUserDefaults.id)}
@@ -317,22 +219,12 @@ const updateUserConfig = async ({
   email,
   fullTextConversionModelId,
   name,
-  projectMartLargeRebuildBatchSize,
-  projectMartLargeRebuildMaxCyclesPerWake,
-  projectMartLargeRebuildMaxWakeMs,
-  projectMartLargeRebuildPollIntervalMs,
-  projectMartLargeRebuildTuningMode,
   unpaywallEmail,
 }: {
   maintenanceWorkerDuckdbMemoryLimit: string | null
   email: string
   fullTextConversionModelId: string | null
   name: string
-  projectMartLargeRebuildBatchSize: number | null
-  projectMartLargeRebuildMaxCyclesPerWake: number | null
-  projectMartLargeRebuildMaxWakeMs: number | null
-  projectMartLargeRebuildPollIntervalMs: number | null
-  projectMartLargeRebuildTuningMode: UserRecord['projectMartLargeRebuildTuningMode']
   unpaywallEmail: string | null
 }): Promise<UserRecord> => {
   const current = await getOrCreateUserConfig()
@@ -343,11 +235,6 @@ const updateUserConfig = async ({
     email,
     fullTextConversionModelId,
     name,
-    projectMartLargeRebuildBatchSize,
-    projectMartLargeRebuildMaxCyclesPerWake,
-    projectMartLargeRebuildMaxWakeMs,
-    projectMartLargeRebuildPollIntervalMs,
-    projectMartLargeRebuildTuningMode,
     unpaywallEmail,
   })
 }

@@ -3,47 +3,31 @@ import {dirname, join} from 'path'
 
 import {getConfiguredDuckdbPath, getDuckdbPath} from './getDuckdbPath.ts'
 
-export type ProjectMartLargeRebuildTuningMode = 'automatic' | 'manual'
-
 export type LocalAppSettings = {
   maintenanceWorkerDuckdbMemoryLimit: string | null
   codexBin: string | null
   duckdbBin: string | null
-  projectMartLargeRebuildBatchSize: number | null
-  projectMartLargeRebuildMaxCyclesPerWake: number | null
-  projectMartLargeRebuildMaxWakeMs: number | null
-  projectMartLargeRebuildPollIntervalMs: number | null
-  projectMartLargeRebuildTuningMode: ProjectMartLargeRebuildTuningMode
 }
 
 const defaultLocalAppSettings: LocalAppSettings = {
   maintenanceWorkerDuckdbMemoryLimit: null,
   codexBin: null,
   duckdbBin: null,
-  projectMartLargeRebuildBatchSize: null,
-  projectMartLargeRebuildMaxCyclesPerWake: null,
-  projectMartLargeRebuildMaxWakeMs: null,
-  projectMartLargeRebuildPollIntervalMs: null,
-  projectMartLargeRebuildTuningMode: 'automatic',
 }
 const legacyMaintenanceWorkerDuckdbMemoryLimitKey = 'backgroundWriterDuckdbMemoryLimit'
+const retiredProjectMartLargeRebuildSettingKeys = [
+  'projectMartLargeRebuildBatchSize',
+  'projectMartLargeRebuildMaxCyclesPerWake',
+  'projectMartLargeRebuildMaxWakeMs',
+  'projectMartLargeRebuildPollIntervalMs',
+  'projectMartLargeRebuildTuningMode',
+]
 type ParsedLocalAppSettings = {settings: LocalAppSettings; shouldRewrite: boolean}
 
 const getNullableTrimmedValue = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim()
 
   return normalized === '' ? null : normalized
-}
-
-const getNullablePositiveInteger = (value: unknown): number | null => {
-  const parsed =
-    typeof value === 'number' ? value : typeof value === 'string' ? Number.parseInt(value.trim(), 10) : Number.NaN
-
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
-}
-
-const getProjectMartLargeRebuildTuningMode = (value: unknown): ProjectMartLargeRebuildTuningMode => {
-  return value === 'manual' ? 'manual' : 'automatic'
 }
 
 const getLocalAppSettingsDatabasePath = (): string => {
@@ -76,7 +60,13 @@ const getMaintenanceWorkerDuckdbMemoryLimit = (record: Record<string, unknown> |
 }
 
 const shouldRewriteLocalAppSettings = (record: Record<string, unknown> | null): boolean => {
-  return record !== null && legacyMaintenanceWorkerDuckdbMemoryLimitKey in record
+  return (
+    record !== null
+    && (legacyMaintenanceWorkerDuckdbMemoryLimitKey in record
+      || retiredProjectMartLargeRebuildSettingKeys.some((key) => {
+        return key in record
+      }))
+  )
 }
 
 const writeLocalAppSettings = (filePath: string, settings: LocalAppSettings): void => {
@@ -94,17 +84,6 @@ const parseLocalAppSettings = (raw: string): ParsedLocalAppSettings => {
         maintenanceWorkerDuckdbMemoryLimit: getMaintenanceWorkerDuckdbMemoryLimit(record),
         codexBin: getNullableTrimmedValue(getOptionalString(record, 'codexBin')),
         duckdbBin: getNullableTrimmedValue(getOptionalString(record, 'duckdbBin')),
-        projectMartLargeRebuildBatchSize: getNullablePositiveInteger(record?.projectMartLargeRebuildBatchSize),
-        projectMartLargeRebuildMaxCyclesPerWake: getNullablePositiveInteger(
-          record?.projectMartLargeRebuildMaxCyclesPerWake,
-        ),
-        projectMartLargeRebuildMaxWakeMs: getNullablePositiveInteger(record?.projectMartLargeRebuildMaxWakeMs),
-        projectMartLargeRebuildPollIntervalMs: getNullablePositiveInteger(
-          record?.projectMartLargeRebuildPollIntervalMs,
-        ),
-        projectMartLargeRebuildTuningMode: getProjectMartLargeRebuildTuningMode(
-          record?.projectMartLargeRebuildTuningMode,
-        ),
       },
       shouldRewrite: shouldRewriteLocalAppSettings(record),
     }
@@ -133,31 +112,16 @@ export const updateLocalAppSettings = ({
   maintenanceWorkerDuckdbMemoryLimit,
   codexBin,
   duckdbBin,
-  projectMartLargeRebuildBatchSize,
-  projectMartLargeRebuildMaxCyclesPerWake,
-  projectMartLargeRebuildMaxWakeMs,
-  projectMartLargeRebuildPollIntervalMs,
-  projectMartLargeRebuildTuningMode,
 }: {
   maintenanceWorkerDuckdbMemoryLimit: string | null
   codexBin: string | null
   duckdbBin: string | null
-  projectMartLargeRebuildBatchSize: number | null
-  projectMartLargeRebuildMaxCyclesPerWake: number | null
-  projectMartLargeRebuildMaxWakeMs: number | null
-  projectMartLargeRebuildPollIntervalMs: number | null
-  projectMartLargeRebuildTuningMode: ProjectMartLargeRebuildTuningMode
 }): LocalAppSettings => {
   const filePath = getLocalAppSettingsPath()
   const nextValue = {
     maintenanceWorkerDuckdbMemoryLimit: getNullableTrimmedValue(maintenanceWorkerDuckdbMemoryLimit),
     codexBin: getNullableTrimmedValue(codexBin),
     duckdbBin: getNullableTrimmedValue(duckdbBin),
-    projectMartLargeRebuildBatchSize: getNullablePositiveInteger(projectMartLargeRebuildBatchSize),
-    projectMartLargeRebuildMaxCyclesPerWake: getNullablePositiveInteger(projectMartLargeRebuildMaxCyclesPerWake),
-    projectMartLargeRebuildMaxWakeMs: getNullablePositiveInteger(projectMartLargeRebuildMaxWakeMs),
-    projectMartLargeRebuildPollIntervalMs: getNullablePositiveInteger(projectMartLargeRebuildPollIntervalMs),
-    projectMartLargeRebuildTuningMode: getProjectMartLargeRebuildTuningMode(projectMartLargeRebuildTuningMode),
   } satisfies LocalAppSettings
 
   writeLocalAppSettings(filePath, nextValue)
