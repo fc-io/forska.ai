@@ -3,7 +3,6 @@ import {randomUUID} from 'node:crypto'
 import {getImportedFileImportRoute} from '../../../utils/importRouteUtils.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
-import {markImportedArticleProjectsDirty} from '../../services/articleImportStoreService.ts'
 import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
 import {
   buildStructuredFileImportConfig,
@@ -82,8 +81,6 @@ export const dataSourcesImportRoutesPostStructuredFileCreate = async (body: {
 
     return importResult
   })) as Awaited<ReturnType<typeof importStructuredFileFromConfig>>
-
-  await markImportedArticleProjectsDirty(result.importRouteIds ?? [])
 
   const dataSource = await getDataSourceQueryService().getDataSourceById(dataSourceId)
 

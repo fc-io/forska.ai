@@ -30,7 +30,7 @@ const getLastJsonLine = (stdout: string) => {
   )
 }
 
-test('structured file datasource create runs import inside a transaction and queues refreshes after commit', () => {
+test('structured file datasource create runs import inside a transaction without affected-project fanout', () => {
   const runRoute = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -163,7 +163,7 @@ test('structured file datasource create runs import inside a transaction and que
   expect(parsed.transactionCallCount).toBe(1)
   expect(parsed.importCallHasTx).toBe(true)
   expect(parsed.txStatements).toHaveLength(3)
-  expect(parsed.queueCalls).toEqual([['route-1']])
+  expect(parsed.queueCalls).toEqual([])
   expect(parsed.getDataSourceCallCount).toBe(1)
   expect(parsed.result.success).toBe(true)
   expect(parsed.result.data.stats).toEqual({itemCount: 2, importedCount: 2})
