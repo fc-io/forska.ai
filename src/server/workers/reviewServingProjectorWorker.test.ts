@@ -1310,7 +1310,7 @@ test('article range presplit covers gaps between sparse scoped article buckets',
 
       if (statement.includes('NTILE(2)') && statement.includes('FROM mart.project_scope_article scope')) {
         return [
-          {articleCount: 1, chunkEndKey: 'article-500', chunkStartKey: 'article-001'},
+          {articleCount: 1, chunkEndKey: 'article-100', chunkStartKey: 'article-001'},
           {articleCount: 1, chunkEndKey: 'article-999', chunkStartKey: 'article-100'},
         ] as T[]
       }
@@ -1341,9 +1341,10 @@ test('article range presplit covers gaps between sparse scoped article buckets',
   expect(result).toEqual({status: 'completed'})
   expect(joined).toContain('LAG(scoped_end_key)')
   expect(joined).toContain('LEAD(scoped_start_key)')
+  expect(joined).toContain('ELSE scoped_end_key')
   expect(childInserts).toHaveLength(2)
   expect(childInserts[0]).toContain("'article-001'")
-  expect(childInserts[0]).toContain("'article-500'")
+  expect(childInserts[0]).toContain("'article-100'")
   expect(childInserts[1]).toContain("'article-100'")
   expect(childInserts[1]).toContain("'article-999'")
 })

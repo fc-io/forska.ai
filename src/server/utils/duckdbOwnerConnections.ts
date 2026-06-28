@@ -370,7 +370,13 @@ const getCapabilitySummary = (
   registeredProcesses: DuckdbOwnerConnectionRecord[],
 ): RuntimeCapabilityRegistrySummary => {
   const registeredConsumers = registeredProcesses.filter((registeredProcess) => {
-    return registeredProcess.capabilities.includes(capability)
+    const capabilities = shouldDisableServerMutationWork()
+      ? registeredProcess.capabilities.filter((recordCapability) => {
+          return recordCapability !== 'maintenance' && recordCapability !== 'judging'
+        })
+      : registeredProcess.capabilities
+
+    return capabilities.includes(capability)
   })
   const staleConsumerCount = registeredConsumers.filter((registeredProcess) => {
     return registeredProcess.isStale

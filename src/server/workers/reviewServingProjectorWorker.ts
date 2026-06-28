@@ -470,7 +470,10 @@ const getArticleRangeRebuildChunkSplitRanges = async (
     SELECT
       article_count AS articleCount,
       COALESCE(previous_scoped_end_key, ${getSqlLiteral(input.chunk.chunkStartKey)}) AS chunkStartKey,
-      COALESCE(next_scoped_start_key, ${getSqlLiteral(input.chunk.chunkEndKey)}) AS chunkEndKey
+      CASE
+        WHEN next_scoped_start_key IS NULL THEN ${getSqlLiteral(input.chunk.chunkEndKey)}
+        ELSE scoped_end_key
+      END AS chunkEndKey
     FROM bucket_range_with_neighbors
     ORDER BY scoped_start_key
   `)
