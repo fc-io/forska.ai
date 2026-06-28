@@ -294,12 +294,14 @@ hardening, and finally physical evidence.
 - [x] **A47.** Keep admin investigation, owner diagnostics, DuckDB Studio/snapshot,
       and ownerless readable backend routes classified as admin/diagnostic rather
       than product fallback.
-- [~] **A48.** Remove or rewire admin UI/API controls for legacy project-mart large
+- [x] **A48.** Remove or rewire admin UI/API controls for legacy project-mart large
       rebuild, dirty refresh, and mart maintenance once V4 replacements exist.
       Current cleanup retires the remaining
       `/api/admin/project-mart-dirty-materialization-requeue` mutation response
       instead of calling `projectMartDirtyMaterializationService`, alongside the
-      already-retired large-rebuild run/pause/resume/note controls.
+      already-retired large-rebuild run/pause/resume/note controls, removed the
+      stale admin client page/link, and removed retired large-rebuild heartbeat
+      tuning from settings/admin diagnostics.
 - [x] **A49.** Add explicit proof that every admin page/API is diagnostics-only,
       owner-routed maintenance, V4-rewired control, or remove-before-release.
       Evidence: `routeSurfaceInventory.test.ts` now checks every `/api/admin/*`
