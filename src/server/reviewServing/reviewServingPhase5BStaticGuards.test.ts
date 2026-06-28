@@ -66,6 +66,13 @@ test('review warnings product route stays separated from legacy mart diagnostics
   expect(presentMarkers).toEqual([])
 })
 
+test('admin maintenance diagnostics do not expose retired large-rebuild runtime metrics', async () => {
+  const adminSource = await readText('src/server/routes/AdminInvestigateRoutes.ts')
+
+  expect(adminSource).not.toContain('getProjectMartLargeRebuildRuntimeMetrics')
+  expect(adminSource).not.toContain('projectMartLargeRebuildRuntimeMetrics')
+})
+
 test('Phase 5B legacy worker scripts require explicit admin acknowledgements or deletion', async () => {
   const dirtyWorkerScripts = [
     'scripts/runProjectMartRefreshWorker.ts',
