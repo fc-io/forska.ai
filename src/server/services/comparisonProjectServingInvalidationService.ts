@@ -1,6 +1,7 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
 import {getComparisonProjectServingRebuildService} from './comparisonProjectServingRebuildService.ts'
+import {getComparisonProjectServingWorkloadContext} from './comparisonProjectServingWorkloadContext.ts'
 
 type ComparisonProjectServingInvalidationRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -41,13 +42,23 @@ export type ComparisonProjectHumanPromptJudgmentChange = {articleId: string; pro
 export type ComparisonProjectHumanSummaryJudgmentChange = {articleId: string; projectId: string}
 
 type ComparisonProjectIdRow = {comparisonProjectId: string}
+const comparisonProjectServingInvalidationWorkloadContext = getComparisonProjectServingWorkloadContext({
+  routeOrJobKey: 'comparisonServing.invalidation',
+})
 
 const getDefaultComparisonProjectServingInvalidationDependencies =
   (): ComparisonProjectServingInvalidationDependencies => {
     const database = getAppDatabaseService()
 
     return {
-      database: {queryJson: database.queryJsonBackground, transaction: database.transaction},
+      database: {
+        queryJson: (statement) => {
+          return database.queryJsonBackground(statement, comparisonProjectServingInvalidationWorkloadContext)
+        },
+        transaction: (operation) => {
+          return database.transaction(operation, comparisonProjectServingInvalidationWorkloadContext)
+        },
+      },
       servingRebuildService: getComparisonProjectServingRebuildService(),
     }
   }

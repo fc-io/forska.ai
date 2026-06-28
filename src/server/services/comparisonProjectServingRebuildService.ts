@@ -7,6 +7,7 @@ import {
   type ComparisonProjectServingRollupBuilderParams,
   getComparisonProjectServingRollupBuilder,
 } from './comparisonProjectServingRollupBuilder.ts'
+import {getComparisonProjectServingWorkloadContext} from './comparisonProjectServingWorkloadContext.ts'
 
 type ComparisonProjectServingRebuildRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -115,6 +116,9 @@ const comparisonProjectServingGenerationTable = 'app.comparison_project_serving_
 const comparisonProjectTable = 'app.comparison_project'
 const comparisonProjectServingRebuildClaimTimeoutMs = 15 * 60 * 1000
 const emptyComparisonProjectServingCleanupResult = {deletedRowCount: 0, tables: []}
+const comparisonProjectServingRebuildWorkloadContext = getComparisonProjectServingWorkloadContext({
+  routeOrJobKey: 'comparisonServing.rebuild',
+})
 const comparisonProjectServingStatuses = new Set<ComparisonProjectServingStatus>([
   'failed',
   'missing',
@@ -135,12 +139,16 @@ const comparisonProjectServingProgressPhases = new Set<ComparisonProjectServingP
 const getDefaultComparisonProjectServingRebuildDependencies = (): ComparisonProjectServingRebuildDependencies => {
   const database = getAppDatabaseService()
   const rebuildDatabase: ComparisonProjectServingRebuildDatabase = {
-    queryJson: database.queryJsonBackground,
-    run: database.runBackground,
+    queryJson: (statement) => {
+      return database.queryJsonBackground(statement, comparisonProjectServingRebuildWorkloadContext)
+    },
+    run: (statement) => {
+      return database.runBackground(statement, comparisonProjectServingRebuildWorkloadContext)
+    },
     transaction: <T>(operation: (runner: ComparisonProjectServingRebuildRunner) => Promise<T>) => {
       return database.transaction((runner) => {
         return operation(runner)
-      }) as Promise<T>
+      }, comparisonProjectServingRebuildWorkloadContext) as Promise<T>
     },
   }
 

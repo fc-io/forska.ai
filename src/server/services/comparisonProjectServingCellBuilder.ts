@@ -5,6 +5,7 @@ import {
   ensureComparisonProjectServingGenerationConfig,
   getComparisonProjectServingGenerationSql,
 } from './comparisonProjectServingGenerationConfig.ts'
+import {getComparisonProjectServingWorkloadContext} from './comparisonProjectServingWorkloadContext.ts'
 
 type ComparisonProjectServingCellBuilderRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -30,11 +31,21 @@ type ComparisonProjectScopeCteParams = {useArticleBatch?: boolean}
 const comparisonCellServingTable = 'mart.comparison_cell_serving'
 const comparisonProjectServingCellArticleBatchSize = 250
 const summaryPromptId = 'summary'
+const comparisonProjectServingCellBuilderWorkloadContext = getComparisonProjectServingWorkloadContext({
+  routeOrJobKey: 'comparisonServing.cellBuilder',
+})
 
 const getDefaultComparisonProjectServingCellBuilderDependencies = (): ComparisonProjectServingCellBuilderRunner => {
   const database = getAppDatabaseService()
 
-  return {queryJson: database.queryJsonBackground, run: database.runBackground}
+  return {
+    queryJson: (statement) => {
+      return database.queryJsonBackground(statement, comparisonProjectServingCellBuilderWorkloadContext)
+    },
+    run: (statement) => {
+      return database.runBackground(statement, comparisonProjectServingCellBuilderWorkloadContext)
+    },
+  }
 }
 
 const getPromptModeComparisonProjectPredicateSql = () => {
