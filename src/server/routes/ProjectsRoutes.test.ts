@@ -587,15 +587,19 @@ test('project prompt preview uses the first project article and shared prompt bu
       )
   `)
   const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
-  const required = ['judgmentInputContent', 'projectScope', 'selectedImport', 'payload'].map((component) => {
+  const required = [
+    'display',
+    'humanStatus',
+    'judgmentInputContent',
+    'llmStatus',
+    'payload',
+    'posting',
+    'projectScope',
+    'selectedImport',
+    'summary',
+  ].map((component) => {
     return {baseGeneration: '1', component, patchWatermark: '0', projectionIdentity: `${component}:preview-identity`}
   })
-  const displayState = {
-    baseGeneration: '1',
-    component: 'display',
-    patchWatermark: '0',
-    projectionIdentity: 'display:preview-identity',
-  }
   await runDatabase(`
     INSERT INTO app.review_serving_snapshot_manifest (
       project_id,
@@ -615,12 +619,57 @@ test('project prompt preview uses the first project article and shared prompt bu
       'active',
       ${getSqlLiteral(reviewConfigHash)},
       '{}'::JSON,
-      '${JSON.stringify({optional: [displayState], required}).replaceAll("'", "''")}'::JSON,
+      '${JSON.stringify({optional: [], required}).replaceAll("'", "''")}'::JSON,
       '${JSON.stringify(required).replaceAll("'", "''")}'::JSON,
       '[]'::JSON,
       '{}'::JSON,
       TIMESTAMPTZ '2026-02-02T00:00:00.000Z',
       TIMESTAMPTZ '2026-02-02T00:00:00.000Z'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO mart.review_article_serving_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      base_generation,
+      patch_watermark,
+      display_identity,
+      project_scope_identity,
+      selected_import_identity,
+      llm_status_identity,
+      human_status_identity,
+      posting_identity,
+      summary_identity,
+      payload_identity,
+      list_mode_key,
+      article_id,
+      article_created_at,
+      article_updated_at,
+      sort_key,
+      activity_sort_at,
+      article_title
+    ) VALUES (
+      '${projectId}',
+      ${getSqlLiteral(reviewConfigHash)},
+      'snapshot-preview-route',
+      1,
+      0,
+      'display:preview-identity',
+      'projectScope:preview-identity',
+      'selectedImport:preview-identity',
+      'llmStatus:preview-identity',
+      'humanStatus:preview-identity',
+      'posting:preview-identity',
+      'summary:preview-identity',
+      'payload:preview-identity',
+      'llm',
+      'preview-article-second',
+      TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
+      NULL,
+      TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
+      TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
+      'Second article title'
     )
   `)
   await runDatabase(`
@@ -674,7 +723,7 @@ test('project prompt preview uses the first project article and shared prompt bu
   expect(payload.data.previewText).toContain('## User Prompt')
 })
 
-test('project prompt preview falls back to project articles while serving scope rebuilds', async () => {
+test('project prompt preview fails closed while serving scope rebuilds', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')
   }
@@ -717,11 +766,14 @@ test('project prompt preview falls back to project articles while serving scope 
   const response = await app.handle(
     new Request(`http://localhost/api/projects/${projectId}/prompts/${promptId}/preview`),
   )
-  const payload = (await response.json()) as {data: {articleId: string | null; status: 'ready' | 'unavailable'}}
+  const payload = (await response.json()) as {
+    data: {articleId: string | null; reason: string | null; status: 'ready' | 'unavailable'}
+  }
 
   expect(response.status).toBe(200)
-  expect(payload.data.status).toBe('ready')
-  expect(payload.data.articleId).toBe('preview-app-fallback-first')
+  expect(payload.data.status).toBe('unavailable')
+  expect(payload.data.articleId).toBeNull()
+  expect(payload.data.reason).toBe('unavailable')
 })
 
 test('archive route clears refresh state for archived projects without depending on the legacy queue', async () => {

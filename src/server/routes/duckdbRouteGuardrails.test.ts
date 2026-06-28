@@ -228,6 +228,14 @@ test('normal foreground route SQL cannot add unallowlisted raw OOM-prone shapes'
   expect(violations).toEqual([])
 })
 
+test('prompt preview route cannot reintroduce legacy sample article fallback reads', () => {
+  const routeText = readFileSync(join(routesRoot, 'projectsRoutes/projectsRoutesGetPromptPreview.ts'), 'utf8')
+
+  expect(routeText).not.toContain('mart.project_scope_article')
+  expect(routeText).not.toContain('app.project_article')
+  expect(routeText).not.toContain('getFullArticlesByIds')
+})
+
 test('production code cannot reintroduce retired OLAP wrapper or duckdbOlap imports', () => {
   const violations = getProductionSourceFiles().flatMap((filePath) => {
     const sourceFile = getRelativeWorkspacePath(filePath)
