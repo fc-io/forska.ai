@@ -207,15 +207,12 @@ afterEach(async () => {
     return getDefaultRuntimeMatch()
   })
   state.resolveProviderConnectionRuntimeMatch.mockClear()
-  const {resetProjectMartLargeRebuildRuntimeMetricsForTests} =
-    await import('../utils/projectMartLargeRebuildRuntimeMetrics.ts')
   const {resetJudgmentEndpointAvailabilityForTests} =
     await import('../cron/judgmentsJobs/judgmentEndpointAvailability.ts')
   const {resetJudgmentJobStorageTransferRuntimeForTests} =
     await import('../cron/judgmentsJobs/judgmentJobStorageTransferRuntime.ts')
   const {resetDuckdbOwnerConnectionsForTests} = await import('../utils/duckdbOwnerConnections.ts')
 
-  resetProjectMartLargeRebuildRuntimeMetricsForTests()
   resetJudgmentEndpointAvailabilityForTests()
   resetJudgmentJobStorageTransferRuntimeForTests()
   await resetDuckdbOwnerConnectionsForTests()

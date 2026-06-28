@@ -365,13 +365,6 @@ test('legacy mart maintenance paths do not write V4 review-serving snapshots', (
       })
   })
 
-  expect(legacyMartMaintenanceFiles.sort()).toEqual([
-    'src/server/services/projectMartDirtyRefreshStateService.ts',
-    'src/server/services/projectMartLargeRebuildCyclesService.ts',
-    'src/server/services/projectMartLargeRebuildExecutor.ts',
-    'src/server/services/projectMartLargeRebuildProgressService.ts',
-    'src/server/services/projectMartLargeRebuildRunner.ts',
-    'src/server/services/projectMartLargeRebuildStateService.ts',
-  ])
+  expect(legacyMartMaintenanceFiles.sort()).toEqual(['src/server/services/projectMartDirtyRefreshStateService.ts'])
   expect(offenders).toEqual([])
 })

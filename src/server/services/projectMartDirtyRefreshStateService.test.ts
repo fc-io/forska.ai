@@ -1732,27 +1732,33 @@ test('dirty project claims keep quarantined articles as completion barriers', ()
   })
 })
 
-test('claimDirtyProjects skips projects already handed off to large rebuild state', () => {
+test('claimDirtyProjects ignores retired large rebuild state', () => {
   const result = runRefreshStateScript<{claims: Array<{projectId: string}>}>(`
     const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
-    const {getProjectMartLargeRebuildStateService} = await import('./src/server/services/projectMartLargeRebuildStateService.ts')
     const refreshStateService = getProjectMartDirtyRefreshStateService()
-    const largeRebuildStateService = getProjectMartLargeRebuildStateService()
 
     await refreshStateService.markProjectsDirtyAtomically({
       projects: [{articleIds: ['refresh-article-1'], projectId: 'refresh-project-1'}],
       reason: 'refresh-state-test.large-rebuild-handoff',
     })
-    await largeRebuildStateService.requestLargeRebuild({
-      projectId: 'refresh-project-1',
-      rebuildPhase: 'prompt_answer_fact',
-      refreshToken: 1,
-    })
+    await database.run(\`
+      INSERT INTO app.project_mart_large_rebuild_state (
+        project_id,
+        refresh_token,
+        rebuild_phase,
+        refresh_status
+      ) VALUES (
+        'refresh-project-1',
+        1,
+        'prompt_answer_fact',
+        'running'
+      )
+    \`)
     const claims = await refreshStateService.claimDirtyProjects({leaseMs: 5000, limit: 5, workerId: 'worker-1'})
 
     console.log(JSON.stringify({claims: claims.map((claim) => ({projectId: claim.projectId}))}))
     await database.close()
   `)
 
-  expect(result.claims).toEqual([])
+  expect(result.claims).toEqual([{projectId: 'refresh-project-1'}])
 })

@@ -607,12 +607,6 @@ const claimDirtyProjects = async ({
       AND state.dirty_token > state.last_completed_dirty_token
       AND NOT EXISTS (
         SELECT 1
-        FROM app.project_mart_large_rebuild_state large_rebuild
-        WHERE large_rebuild.project_id = state.project_id
-          AND large_rebuild.refresh_token >= state.dirty_token
-      )
-      AND NOT EXISTS (
-        SELECT 1
         FROM app.project_mart_dirty_materialization_state materialization
         WHERE materialization.project_id = state.project_id
           AND materialization.target_dirty_token <= state.dirty_token
