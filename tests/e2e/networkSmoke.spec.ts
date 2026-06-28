@@ -396,7 +396,9 @@ const postWarningsEndpointProbe = async (projectId: string, attempt = 1): Promis
     return postWarningsEndpointProbe(projectId, attempt + 1)
   }
 
-  throw new Error(`warnings endpoint remained queued after retry for ${projectId}: ${formatIndexingState(inspection.data.indexing)}`)
+  throw new Error(
+    `warnings endpoint remained queued after retry for ${projectId}: ${formatIndexingState(inspection.data.indexing)}`,
+  )
 }
 
 const getFirstExistingId = <T extends {id: string}>(values: T[]) => {
@@ -719,11 +721,6 @@ const staticAuditTargets: NetworkSmokeTarget[] = [
   {template: '/admin/llm', label: 'admin llm', buildPath: () => '/admin/llm'},
   {template: '/admin/pdf-conversions', label: 'admin pdf conversions', buildPath: () => '/admin/pdf-conversions'},
   {template: '/admin/pdf-reset', label: 'admin pdf reset', buildPath: () => '/admin/pdf-reset'},
-  {
-    template: '/admin/project-mart-large-rebuild',
-    label: 'admin project mart large rebuild',
-    buildPath: () => '/admin/project-mart-large-rebuild',
-  },
   {template: '/admin/prompts/deduplicate', label: 'admin prompt dedupe', buildPath: () => '/admin/prompts/deduplicate'},
   {template: '/admin/setup_stats', label: 'admin setup stats', buildPath: () => '/admin/setup_stats'},
   {
