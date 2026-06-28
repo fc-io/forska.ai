@@ -7,7 +7,10 @@ import {createGunzip} from 'node:zlib'
 
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList} from '../../server/services/appQueryHelpers.ts'
-import {storeImportedArticles} from '../../server/services/articleImportStoreService.ts'
+import {
+  articleImportStoreWorkloadContext,
+  storeImportedArticles,
+} from '../../server/services/articleImportStoreService.ts'
 import {HttpError} from '../../server/utils/httpError.ts'
 import {resolveRuntimeFilePath} from '../../server/utils/runtimeWritablePath.ts'
 import {buildFhirPatientMarkdown} from './buildFhirPatientMarkdown.ts'
@@ -426,11 +429,14 @@ const upsertArticlesBatch = async ({
   const existing =
     articleIds.length === 0
       ? []
-      : await getAppDatabaseService().queryJson<{articleId: string}>(`
+      : await getAppDatabaseService().queryJson<{articleId: string}>(
+          `
           SELECT article_id AS articleId
           FROM app.article
           WHERE article_id IN (${getQuotedStringList(articleIds).join(', ')})
-        `)
+        `,
+          articleImportStoreWorkloadContext,
+        )
 
   const existingSet = new Set(
     existing
@@ -468,18 +474,24 @@ const upsertArticlesBatch = async ({
 }
 
 const ensureImportRouteRow = async (route: string): Promise<string> => {
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     INSERT INTO app.import_route (id, route, name, active)
     VALUES (${getQuotedStringList([crypto.randomUUID(), route, route]).join(', ')}, TRUE)
     ON CONFLICT(route) DO NOTHING
-  `)
+  `,
+    articleImportStoreWorkloadContext,
+  )
 
-  const [row] = await getAppDatabaseService().queryJson<{id: string}>(`
+  const [row] = await getAppDatabaseService().queryJson<{id: string}>(
+    `
     SELECT id
     FROM app.import_route
     WHERE route = '${escapeSqlString(route)}'
     LIMIT 1
-  `)
+  `,
+    articleImportStoreWorkloadContext,
+  )
 
   if (!row) {
     throw new Error('Failed to ensure import route')

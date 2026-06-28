@@ -27,11 +27,31 @@ const importWriteEntrypoints = [
   'src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostPubmed.ts',
   'src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostEuropePmcPpr.ts',
   'src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.ts',
+  'src/agent/arxivWorkflow/arxivWorkflowStoreEntires.ts',
+  'src/agent/biorxivWorkflowStoreEntries.ts',
+  'src/agent/medrxivWorkflowStoreEntries.ts',
   'src/agent/pubmedWorkflowStoreEntries.ts',
   'src/agent/europePmcPprWorkflowStoreEntries.ts',
   'src/agent/fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowStoreEntries.ts',
   'src/server/services/structuredFileImportService.ts',
   'src/server/services/articleImportStoreService.ts',
+]
+
+const importStoreWorkloadEntrypoints = [
+  'src/server/services/articleImportStoreService.ts',
+  'src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostStructuredFileCreate.ts',
+  'src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.ts',
+  'src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.ts',
+  'src/agent/fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowStoreEntries.ts',
+]
+
+const agentStoreEntrypoints = [
+  'src/agent/arxivWorkflow/arxivWorkflowStoreEntires.ts',
+  'src/agent/biorxivWorkflowStoreEntries.ts',
+  'src/agent/medrxivWorkflowStoreEntries.ts',
+  'src/agent/pubmedWorkflowStoreEntries.ts',
+  'src/agent/europePmcPprWorkflowStoreEntries.ts',
+  'src/agent/fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowStoreEntries.ts',
 ]
 
 const metadataMutationEntrypoints = [
@@ -51,6 +71,9 @@ test('import and source-metadata writes keep review-serving delta append hooks',
   expect(articleImportStoreSource).toContain('appendArticleReviewServingDeltas')
   expect(articleImportStoreSource).toContain('appendReviewServingImportRunArticleDelta')
   expect(articleImportStoreSource).toContain('upsertReviewImportArticleHotField')
+  expect(articleImportStoreSource).toContain('clearStaleImportRouteLinks')
+  expect(articleImportStoreSource).toContain("changeKind: 'importRoute.article.removed'")
+  expect(articleImportStoreSource).toContain("changeKind: 'importRoute.article.rankFields.updated'")
   expect(articleImportStoreSource).toContain("'sourceMetadata'")
   expect(covidenceImportSource).toContain('appendProjectScopeArticleReviewServingDeltas')
   expect(covidenceImportSource).toContain('appendHumanJudgmentReviewServingDeltas')
@@ -59,12 +82,49 @@ test('import and source-metadata writes keep review-serving delta append hooks',
   expect(structuredFileImportSource).toContain('storeImportedArticlesWithTx')
 })
 
+test('broad import store paths carry explicit DuckDB workload contexts', () => {
+  const articleImportStoreSource = readSource('src/server/services/articleImportStoreService.ts')
+
+  expect(articleImportStoreSource).toContain('articleImportStoreWorkloadContext')
+  expect(articleImportStoreSource).toContain("workloadClass: 'background.importStore'")
+  expect(articleImportStoreSource).toContain("routeOrJobKey: 'import.storeArticles'")
+  expect(articleImportStoreSource).toContain('}, articleImportStoreWorkloadContext)')
+
+  const missingContextMatches = importStoreWorkloadEntrypoints.filter((filePath) => {
+    return !readSource(filePath).includes('articleImportStoreWorkloadContext')
+  })
+
+  expect(missingContextMatches).toEqual([])
+})
+
+test('agent import workflows use the shared import store batch path', () => {
+  const missingStorePathMatches = agentStoreEntrypoints.filter((filePath) => {
+    return !readSource(filePath).includes('storeImportedArticles')
+  })
+  const missingBatchMatches = agentStoreEntrypoints.filter((filePath) => {
+    const source = readSource(filePath)
+
+    return !source.includes('batch') && !source.includes('SHARD_COUNT')
+  })
+
+  expect(missingStorePathMatches).toEqual([])
+  expect(missingBatchMatches).toEqual([])
+})
+
 test('import create paths do not synchronously fan out affected projects after source writes', () => {
   const forbiddenMatches = getMatches(importWriteEntrypoints, [
     'markImportedArticleProjectsDirty',
     'markProjectRefreshesDirtyByImportRouteIds',
     'markArticleProjectsDirtyAtomically',
     'getDirtyProjectsForProjectIds',
+    'await requestReviewServingV4Rebuild',
+    'await rebuildProjectReviewServingBatch',
+    'rebuildProjectReviewServingBatch(',
+    'setupProjectReviewServingStaging',
+    'promoteReviewServingSnapshot',
+    'INSERT INTO mart.review_',
+    'UPDATE mart.review_',
+    'DELETE FROM mart.review_',
     'SELECT DISTINCT project_import_route.project_id AS projectId',
   ])
 
