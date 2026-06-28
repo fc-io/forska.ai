@@ -437,7 +437,13 @@ test('project export download hydrates completed durable job selection as CSV', 
           criteriaJson: {
             sourceProjectIds: ['project-1'],
             exportContract: {
-              promptOutput: {includeExplanation: true, includeQuotes: true, promptIds: ['prompt-1']},
+              promptOutput: {
+                includeExplanation: true,
+                includePromptContent: true,
+                includePromptType: true,
+                includeQuotes: true,
+                promptIds: ['prompt-1'],
+              },
               selectedMetadata: {
                 includeArticleId: true,
                 includeArticleLink: true,
@@ -460,10 +466,6 @@ test('project export download hydrates completed durable job selection as CSV', 
           status: 'completed',
         },
       ]
-    }
-
-    if (statement.includes('FROM app.prompt')) {
-      return [{id: 'prompt-1', originalText: 'Prompt text', promptHeading: 'Prompt 1', type: 'string'}]
     }
 
     if (statement.includes('model_id AS modelId')) {
@@ -492,6 +494,18 @@ test('project export download hydrates completed durable job selection as CSV', 
     }
 
     if (statement.includes('mart.review_article_judgment_detail_serving_v4')) {
+      if (statement.includes("'$.prompt.promptHeading'")) {
+        return [
+          {
+            id: 'prompt-1',
+            originalText: 'V4 prompt content',
+            promptHeading: 'V4 Prompt Heading',
+            sourceProjectOrder: 0,
+            type: 'V4 prompt type',
+          },
+        ]
+      }
+
       return [
         {
           answeredOriginal: 'yes',
@@ -514,14 +528,17 @@ test('project export download hydrates completed durable job selection as CSV', 
   expect(response.status).toBe(200)
   expect(response.headers.get('content-type')).toContain('text/csv')
   expect(text).toContain(
-    'Title,Article ID,Article Link,Abstract/Summary,Journal,Prompt 1,Prompt 1 - Explanation,Prompt 1 - Quotes',
+    'Title,Article ID,Article Link,Abstract/Summary,Journal,"V4 Prompt Heading\nType: V4 prompt type\nContent: V4 prompt content",V4 Prompt Heading - Explanation,V4 Prompt Heading - Quotes',
   )
   expect(text).toContain('Article 1,article-1,,Summary 1,,yes,Because,Quote 1')
   expect(queryStatements.join('\n')).toContain('JOIN mart.review_article_serving_v4')
   expect(queryStatements.join('\n')).toContain('JOIN mart.review_article_judgment_detail_serving_v4')
   expect(queryStatements.join('\n')).not.toContain('FROM app.article')
   expect(queryStatements.join('\n')).not.toContain('FROM app.judgment')
+  expect(queryStatements.join('\n')).not.toContain('FROM app.prompt')
   expect(queryStatements.join('\n')).not.toContain('OFFSET')
   expect(queryStatements.join('\n')).not.toContain('model_id AS modelId')
-  expect(queryStatements.join('\n')).toContain("detail.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash")
+  expect(queryStatements.join('\n')).toContain(
+    'detail.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash',
+  )
 })

@@ -10,12 +10,7 @@ import {
   getReviewServingSnapshotManifest,
 } from '../reviewServing/reviewServingManifestRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {
-  getDateValue,
-  getJsonValue,
-  getQuotedStringList,
-  getSqlLiteral,
-} from '../services/appQueryHelpers.ts'
+import {getDateValue, getJsonValue, getQuotedStringList, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -23,6 +18,7 @@ import {parseArktypeOptions} from './projectsRoutes/articlesReviewsFiltersUtils.
 import {assertProjectIsActive} from './projectsRoutes/projectAccessGuard.ts'
 
 type PromptDetails = {id: string; promptHeading: string | null; originalText: string | null; type: string | null}
+type PromptDetailsRow = PromptDetails & {sourceProjectOrder: number}
 type PromptInfoRow = {prompt: string; title: string; type: string}
 type ExportJobRow = {
   criteriaJson: unknown
@@ -257,6 +253,65 @@ const getPromptDetails = async (promptIds: string[]) => {
       `)
 }
 
+const getExportPromptDetails = async (input: {
+  articleIds: string[]
+  promptIds: string[]
+  snapshotScopes: ExportServingSnapshotScope[]
+}) => {
+  if (input.articleIds.length === 0 || input.promptIds.length === 0 || input.snapshotScopes.length === 0) {
+    return input.promptIds.map((promptId) => {
+      return {id: promptId, originalText: null, promptHeading: promptId, type: null}
+    })
+  }
+
+  const scopeRows = input.snapshotScopes
+    .map((scope, index) => {
+      return `(${getSqlLiteral(scope.projectId)}, ${getSqlLiteral(scope.reviewConfigHash)}, ${getSqlLiteral(scope.snapshotId)}, ${index})`
+    })
+    .join(', ')
+  const articleRows = input.articleIds
+    .map((articleId) => {
+      return `(${getSqlLiteral(articleId)})`
+    })
+    .join(', ')
+  const promptRows = input.promptIds
+    .map((promptId) => {
+      return `(${getSqlLiteral(promptId)})`
+    })
+    .join(', ')
+  const rows = await appDatabaseService.queryJson<PromptDetailsRow>(`
+    WITH
+      export_scope(project_id, review_config_hash, snapshot_id, source_project_order) AS (VALUES ${scopeRows}),
+      export_article(article_id) AS (VALUES ${articleRows}),
+      export_prompt(prompt_id) AS (VALUES ${promptRows})
+    SELECT
+      detail.prompt_id AS id,
+      json_extract_string(detail.judgment_payload_json, '$.prompt.promptHeading') AS promptHeading,
+      json_extract_string(detail.judgment_payload_json, '$.prompt.originalText') AS originalText,
+      json_extract_string(detail.judgment_payload_json, '$.prompt.type') AS type,
+      export_scope.source_project_order AS sourceProjectOrder
+    FROM export_scope
+    INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
+      ON detail.project_id = export_scope.project_id
+     AND detail.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash
+     AND detail.snapshot_id = export_scope.snapshot_id
+     AND detail.payload_kind = 'llm'
+    INNER JOIN export_article
+      ON export_article.article_id = detail.article_id
+    INNER JOIN export_prompt
+      ON export_prompt.prompt_id = detail.prompt_id
+    ORDER BY detail.prompt_order ASC NULLS LAST, detail.prompt_id ASC, export_scope.source_project_order ASC
+    LIMIT ${getSqlLiteral(input.articleIds.length * input.promptIds.length * Math.max(input.snapshotScopes.length, 1))}
+  `)
+  const rowByPromptId = rows.reduce<Map<string, PromptDetails>>((details, row) => {
+    return details.has(row.id) ? details : details.set(row.id, row)
+  }, new Map())
+
+  return input.promptIds.map((promptId) => {
+    return rowByPromptId.get(promptId) ?? {id: promptId, originalText: null, promptHeading: promptId, type: null}
+  })
+}
+
 const getExportHeaders = (input: {
   contract: ExportContract
   orderedPromptDetails: PromptDetails[]
@@ -344,7 +399,11 @@ const getExportArticles = async (input: {
   `)
 
   return rows.reduce<ExportArticleRow[]>((articles, row) => {
-    return articles.some((article) => article.articleId === row.articleId) ? articles : [...articles, row]
+    return articles.some((article) => {
+      return article.articleId === row.articleId
+    })
+      ? articles
+      : [...articles, row]
   }, [])
 }
 
@@ -401,7 +460,9 @@ const getExportJudgments = async (input: {
   `)
 
   return rows.reduce<ExportJudgmentRow[]>((judgments, row) => {
-    return judgments.some((judgment) => judgment.articleId === row.articleId && judgment.promptId === row.promptId)
+    return judgments.some((judgment) => {
+      return judgment.articleId === row.articleId && judgment.promptId === row.promptId
+    })
       ? judgments
       : [...judgments, row]
   }, [])
@@ -438,9 +499,7 @@ const getExportReviewConfigHashBySourceProjectId = (criteriaJson: unknown) => {
       ? (criteria as {sourceProjectReviewConfigHashes?: unknown}).sourceProjectReviewConfigHashes
       : null
 
-  return hashes && typeof hashes === 'object' && !Array.isArray(hashes)
-    ? (hashes as Record<string, string | null>)
-    : {}
+  return hashes && typeof hashes === 'object' && !Array.isArray(hashes) ? (hashes as Record<string, string | null>) : {}
 }
 
 const getExportServingSnapshotScopes = async (input: {job: ExportJobRow; sourceProjectIds: string[]}) => {
@@ -529,7 +588,11 @@ const buildExportCsvStream = (input: {
         const promptOutput = input.contract.promptOutput ?? {}
         const selectedMetadata = input.contract.selectedMetadata ?? {}
         const promptIds = promptOutput.promptIds ?? []
-        const promptDetails = await getPromptDetails(promptIds)
+        const promptDetails = await getExportPromptDetails({
+          articleIds: input.articleIdBatches[0] ?? [],
+          promptIds,
+          snapshotScopes: input.snapshotScopes,
+        })
         const promptDetailsById = new Map(
           promptDetails.map((prompt) => {
             return [prompt.id, prompt]
