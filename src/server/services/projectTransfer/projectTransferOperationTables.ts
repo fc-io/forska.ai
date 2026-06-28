@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto'
 
+import type {DuckdbWorkloadContext} from '../../utils/duckdbService.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getSqlLiteral} from '../appQueryHelpers.ts'
 import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
@@ -14,12 +15,15 @@ import type {ProjectTransferImportTempLayout} from './projectTransferSession.ts'
 type RuntimePathOptions = {cwd?: string; envValues?: Record<string, string | undefined>}
 
 export type ProjectTransferOperationTableRunner = {
-  queryJson: <T>(statement: string) => Promise<T[]>
-  run: (statement: string) => Promise<void>
+  queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+  run: (statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<void>
 }
 
 type ProjectTransferOperationTableDatabase = {
-  transaction: <T>(work: (runner: ProjectTransferOperationTableRunner) => Promise<T> | T) => Promise<T>
+  transaction: <T>(
+    work: (runner: ProjectTransferOperationTableRunner) => Promise<T> | T,
+    workloadContext?: DuckdbWorkloadContext,
+  ) => Promise<T>
 }
 
 export type ProjectTransferOperationTableSet = {
@@ -37,6 +41,7 @@ type ProjectTransferOperationTableInput = RuntimePathOptions & {
   layout: ProjectTransferImportTempLayout
   operationId?: string
   runner?: ProjectTransferOperationTableRunner
+  workloadContext?: DuckdbWorkloadContext
 }
 
 type ProjectTransferOperationTableWork<T> = ProjectTransferOperationTableInput & {
@@ -205,7 +210,7 @@ export const withProjectTransferOperationTables = async <T>({
 
     return operationDatabase.transaction((tx) => {
       return withProjectTransferOperationTables({...runtimeOptions, layout, operationId, runner: tx, work})
-    })
+    }, runtimeOptions.workloadContext)
   }
 
   const tables = await loadProjectTransferOperationTables({...runtimeOptions, layout, operationId, runner})

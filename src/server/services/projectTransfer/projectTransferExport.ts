@@ -68,6 +68,7 @@ import {
   projectTransferPayloadPathByKey,
   projectTransferSchemaVNextPayloadKeys,
 } from './projectTransferSchemas.ts'
+import {projectTransferExportWorkloadContext} from './projectTransferWorkloadContext.ts'
 import {
   getProjectTransferZipCrc32Digest,
   getProjectTransferZipFinalCrc32,
@@ -476,7 +477,13 @@ const rawArticleProvenanceFields = [
 ] as const
 
 const getDatabase = (options: ProjectTransferExportQueryOptions = {}) => {
-  return options.database ?? getAppDatabaseService()
+  const database = options.database ?? getAppDatabaseService()
+
+  return {
+    queryJson: <T>(statement: string) => {
+      return database.queryJson<T>(statement, projectTransferExportWorkloadContext)
+    },
+  } satisfies AppQueryDatabaseService
 }
 
 const getIsoDateValue = (value: unknown) => {

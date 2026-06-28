@@ -1,4 +1,5 @@
 import {type ArticleSourceMetadata, getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   getScopedArticleCompatibilityValues,
   getScopedArticleExternalIdExpression,
@@ -10,7 +11,9 @@ import {
   getScopedArticleUrlExpression,
 } from './scopedArticleReadAdapter.ts'
 
-export type AppQueryDatabaseService = {queryJson: <T>(statement: string) => Promise<T[]>}
+export type AppQueryDatabaseService = {
+  queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+}
 
 type ReviewHydrationRow = {
   id: string

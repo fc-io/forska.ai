@@ -82,6 +82,7 @@ import {
   getProjectTransferTargetStateDirtyTokenService,
   type ProjectTransferTargetStateDirtyTokenSnapshot,
 } from './projectTransferTargetStateDirtyTokenService.ts'
+import {projectTransferCommitTransactionWorkloadContext} from './projectTransferWorkloadContext.ts'
 
 type RuntimePathOptions = {cwd?: string; envValues?: Record<string, string | undefined>}
 
@@ -1400,7 +1401,7 @@ const runProjectTransferCommitAppTableWrites = async ({
               })
             },
           })
-        })
+        }, projectTransferCommitTransactionWorkloadContext)
       },
     )
     const phaseMetrics = getProjectTransferPerformanceMetrics({
