@@ -16,7 +16,6 @@ export type ReviewServingRouteParityMismatchKind =
   | 'invariant'
   | 'latency'
   | 'namedCountState'
-  | 'olapForwardingOnly'
   | 'responseSize'
   | 'sampledParity'
   | 'semanticFixture'
@@ -51,7 +50,6 @@ export type ReviewServingRouteParityCase<T> = {
 
 export type ReviewServingRouteParityRunnerInput<T> = {
   cases: readonly ReviewServingRouteParityCase<T>[]
-  legacyOlapForwardingTests?: readonly string[]
   reader?: (request: ReviewServingReaderRequest) => Promise<ReviewServingReaderResult<T>>
   routeKey: string
 }
@@ -342,20 +340,6 @@ const runCase = async <T>(
   ]
 }
 
-const getOlapForwardingOnlyMismatches = <T>(input: ReviewServingRouteParityRunnerInput<T>) => {
-  return input.cases.length > 0 || (input.legacyOlapForwardingTests?.length ?? 0) === 0
-    ? []
-    : [
-        {
-          actual: input.legacyOlapForwardingTests,
-          caseName: input.routeKey,
-          expected: 'reviewServingReader parity fixtures',
-          kind: 'olapForwardingOnly' as const,
-          message: `OLAP forwarding tests alone do not satisfy Phase 4 serving parity for ${input.routeKey}`,
-        },
-      ]
-}
-
 export const runReviewServingRouteParity = async <T>(
   input: ReviewServingRouteParityRunnerInput<T>,
 ): Promise<ReviewServingRouteParityResult> => {
@@ -365,7 +349,7 @@ export const runReviewServingRouteParity = async <T>(
       return runCase(caseInput, reader)
     }),
   )
-  const mismatches = [...getOlapForwardingOnlyMismatches(input), ...caseMismatchGroups.flat()]
+  const mismatches = caseMismatchGroups.flat()
 
   return mismatches.length === 0
     ? {mismatches: [], routeKey: input.routeKey, status: 'passed'}

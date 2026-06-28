@@ -279,14 +279,3 @@ test('runReviewServingRouteParity blocks route migration on response-size mismat
     routeKey: 'review.llm.rows',
   })
 })
-
-test('runReviewServingRouteParity does not treat OLAP forwarding tests as Phase 4 serving parity', async () => {
-  await runSingleMismatchCase('olapForwardingOnly', {
-    cases: [],
-    legacyOlapForwardingTests: ['src/services/olap/duckdbOlap.test.ts'],
-    reader: async () => {
-      return getAcceptedResult(fixtureRows)
-    },
-    routeKey: 'review.llm.rows',
-  })
-})

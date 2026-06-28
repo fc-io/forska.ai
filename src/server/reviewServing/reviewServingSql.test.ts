@@ -1092,7 +1092,7 @@ test('judgment job serving queue SQL keeps current config and stable keyset sema
   expect(serviceText).not.toContain('GROUP BY queue.article_id, queue.priority_bucket, queue.activity_sort_at')
 })
 
-test('duckdbOlap imports stay quarantined away from normal review and judgment job foreground paths', () => {
+test('retired OLAP imports stay away from normal review and judgment job foreground paths', () => {
   const candidateFiles = [
     ...reviewServingAdjacentRouteClassifications.map((entry) => {
       return entry.routeFile

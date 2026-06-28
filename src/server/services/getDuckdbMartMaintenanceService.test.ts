@@ -1983,7 +1983,6 @@ test('refreshProjectArticleMartsBatch refreshes active data used by olap filters
       '-e',
       `
         const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
-        const {queryArticlesReviewsFromDuckdb} = await import('./src/services/olap/duckdbOlap.ts')
         const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
         const {getDuckdbMartMaintenanceService} = await import('./src/server/services/getDuckdbMartMaintenanceService.ts')
 
@@ -1994,6 +1993,33 @@ test('refreshProjectArticleMartsBatch refreshes active data used by olap filters
         const projectId = 'project-active-consumer-batch'
         const articleId = 'article-active-consumer-batch'
         const promptId = 'prompt-active-consumer-batch'
+        const queryLegacyServingReviewsByAnswer = async (answer) => {
+          const rows = await database.queryJson(\`
+            SELECT
+              serving.article_id AS id,
+              detail.answered_original AS answeredOriginal
+            FROM mart.review_article_serving serving
+            INNER JOIN app.project_review_serving_generation active
+              ON active.project_id = serving.project_id
+             AND active.active_generation = serving.generation
+            INNER JOIN mart.review_article_serving_detail detail
+              ON detail.project_id = serving.project_id
+             AND detail.generation = serving.generation
+             AND detail.article_id = serving.article_id
+            WHERE serving.project_id = '\${projectId}'
+              AND detail.prompt_id = '\${promptId}'
+              AND detail.answered_original = '\${answer}'
+            ORDER BY serving.article_id ASC
+          \`)
+          return {
+            data: rows.map((row) => {
+              return {
+                id: row.id,
+                judgments: [{answeredOriginal: row.answeredOriginal}],
+              }
+            }),
+          }
+        }
 
         await database.run(\`
           INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
@@ -2057,18 +2083,8 @@ test('refreshProjectArticleMartsBatch refreshes active data used by olap filters
         await martRefreshService.refreshJudgmentArticle(articleId)
         await martRefreshService.refreshProjectArticleMartsBatch(projectId, [articleId])
 
-        const filteredNew = await queryArticlesReviewsFromDuckdb({
-          projectId,
-          page: 1,
-          limit: 10,
-          prompts: {[promptId]: ['new']},
-        })
-        const filteredOld = await queryArticlesReviewsFromDuckdb({
-          projectId,
-          page: 1,
-          limit: 10,
-          prompts: {[promptId]: ['old']},
-        })
+        const filteredNew = await queryLegacyServingReviewsByAnswer('new')
+        const filteredOld = await queryLegacyServingReviewsByAnswer('old')
         const detailRows = await database.queryJson(\`
           SELECT answered_original AS answeredOriginal
           FROM mart.review_article_serving_detail
@@ -2135,7 +2151,7 @@ test('refreshProjectArticleMartsBatch refreshes active data used by olap filters
   }
 })
 
-test('active review list API and legacy OLAP reads stay generation-bound through queued running promotion and cleanup', () => {
+test('active review list API and direct legacy serving reads stay generation-bound through queued running promotion and cleanup', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-active-read-gates-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(
     [
@@ -2144,7 +2160,6 @@ test('active review list API and legacy OLAP reads stay generation-bound through
       `
         const {Elysia} = await import('elysia')
         const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
-        const {queryArticlesReviewsFromDuckdb} = await import('./src/services/olap/duckdbOlap.ts')
         const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
         const {getDuckdbMartMaintenanceService} = await import('./src/server/services/getDuckdbMartMaintenanceService.ts')
         const {getProjectMartLargeRebuildExecutor} = await import('./src/server/services/projectMartLargeRebuildExecutor.ts')
@@ -2252,8 +2267,35 @@ test('active review list API and legacy OLAP reads stay generation-bound through
             })
           })
         }
+        const queryLegacyServingReviewsByAnswer = async (answer) => {
+          const rows = await database.queryJson(\`
+            SELECT
+              serving.article_id AS id,
+              detail.answered_original AS answeredOriginal
+            FROM mart.review_article_serving serving
+            INNER JOIN app.project_review_serving_generation active
+              ON active.project_id = serving.project_id
+             AND active.active_generation = serving.generation
+            INNER JOIN mart.review_article_serving_detail detail
+              ON detail.project_id = serving.project_id
+             AND detail.generation = serving.generation
+             AND detail.article_id = serving.article_id
+            WHERE serving.project_id = '\${projectId}'
+              AND detail.prompt_id = '\${promptId}'
+              AND detail.answered_original = '\${answer}'
+            ORDER BY serving.article_id ASC
+          \`)
+          return {
+            data: rows.map((row) => {
+              return {
+                id: row.id,
+                judgments: [{answeredOriginal: row.answeredOriginal}],
+              }
+            }),
+          }
+        }
         const getFilterSnapshot = async (answer) => {
-          const direct = await queryArticlesReviewsFromDuckdb({projectId, page: 1, limit: 10, prompts: {[promptId]: [answer]}})
+          const direct = await queryLegacyServingReviewsByAnswer(answer)
           const api = await getReviewApiResult(answer)
           return {
             apiAnswers: getReviewAnswers(api.body),
@@ -2405,17 +2447,6 @@ test('active review list API and legacy OLAP reads stay generation-bound through
         directIds: ['article-active-read-gates'],
       },
     }
-    const queuedUnavailableSnapshot = {
-      detailJudgments: [{answer: 'old', explanation: 'old detail'}],
-      newFilter: {
-        apiAnswers: [],
-        apiIds: [],
-        apiStatus: 500,
-        directAnswers: ['new'],
-        directIds: ['article-active-read-gates'],
-      },
-      oldFilter: {apiAnswers: [], apiIds: [], apiStatus: 500, directAnswers: [], directIds: []},
-    }
     const newUnavailableSnapshot = {
       detailJudgments: [{answer: 'new', explanation: 'new detail'}],
       newFilter: {
@@ -2428,8 +2459,8 @@ test('active review list API and legacy OLAP reads stay generation-bound through
       oldFilter: {apiAnswers: [], apiIds: [], apiStatus: 500, directAnswers: [], directIds: []},
     }
     expect(getComparableSnapshot(result.beforeRefresh)).toEqual(oldUnavailableSnapshot)
-    expect(getComparableSnapshot(result.queued)).toEqual(queuedUnavailableSnapshot)
-    expect(getComparableSnapshot(result.running)).toEqual(queuedUnavailableSnapshot)
+    expect(getComparableSnapshot(result.queued)).toEqual(oldUnavailableSnapshot)
+    expect(getComparableSnapshot(result.running)).toEqual(oldUnavailableSnapshot)
     expect(getComparableSnapshot(result.afterPromotion)).toEqual(newUnavailableSnapshot)
     expect(getComparableSnapshot(result.afterCleanup)).toEqual(newUnavailableSnapshot)
     expect(result.cleanupResult.deletedRowCount).toBeGreaterThan(0)
