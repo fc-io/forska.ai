@@ -1,4 +1,4 @@
-import {rmSync} from 'node:fs'
+import {readFileSync, rmSync} from 'node:fs'
 
 import {beforeEach, expect, mock, test} from 'bun:test'
 
@@ -28,6 +28,39 @@ const getLastJsonLine = (output: string) => {
       return line.trim().startsWith('{')
     })
 }
+
+const readSource = (path: string) => {
+  return readFileSync(new URL(path, import.meta.url), 'utf8')
+}
+
+test('legacy mart refresh writers stay background bounded and cannot write V4 snapshots', () => {
+  const workerSource = readSource('./projectMartRefreshWorker.ts')
+  const martMaintenanceSource = readSource('../services/getDuckdbMartMaintenanceService.ts')
+  const dirtyMaterializationSource = readSource('../services/projectMartDirtyMaterializationService.ts')
+  const dirtyRefreshStateSource = readSource('../services/projectMartDirtyRefreshStateService.ts')
+  const legacyWriterSources = [
+    workerSource,
+    martMaintenanceSource,
+    dirtyMaterializationSource,
+    dirtyRefreshStateSource,
+  ].join('\n')
+
+  expect(workerSource).toContain('defaultProjectMartRefreshWorkerDirtyArticleBatchSize = 128')
+  expect(workerSource).toContain('claimDirtyMaterializations({')
+  expect(workerSource).toContain('claimDirtyProjects({')
+  expect(workerSource).toContain('limit: 1')
+  expect(workerSource).toContain('sourceKind: projectScopeDirtyMaterializationSourceKind')
+  expect(workerSource).toContain('releaseProjectRefreshClaim')
+  expect(martMaintenanceSource).toContain('queryJsonBackground')
+  expect(martMaintenanceSource).toContain('runBackground')
+  expect(martMaintenanceSource).toContain('refreshDirtyProjectArticleBatch')
+  expect(martMaintenanceSource).toContain('mart.review_article_serving')
+  expect(dirtyMaterializationSource).toContain('app.project_mart_dirty_materialization_state')
+  expect(dirtyRefreshStateSource).toContain('app.project_mart_refresh_state')
+  expect(legacyWriterSources).not.toContain('review_serving_snapshot_manifest')
+  expect(legacyWriterSources).not.toContain('reviewServingSnapshot')
+  expect(legacyWriterSources).not.toContain('reviewServingProjectorWorker')
+})
 
 const createWorkerTestContext = (params: {
   ackPublishShouldThrow?: boolean
