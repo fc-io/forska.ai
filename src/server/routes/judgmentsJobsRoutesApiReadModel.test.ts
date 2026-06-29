@@ -40,11 +40,21 @@ test('judgment jobs list allows stale health projections for drained jobs on api
         }
         const appReadOnlyModulePath = getModulePath('./src/server/services/appReadOnlyDatabaseService.ts')
         const appDatabaseServiceModule = await import('./src/server/services/appDatabaseService.ts')
+        const apiReadModelTestDatabaseService = {
+          queryJson: (statement) => {
+            return appDatabaseServiceModule.getAppDatabaseService().queryJson(statement, {
+              fallbackIntent: 'serveStale',
+              maxResultRows: 1_000,
+              routeOrJobKey: 'judgmentsjobs.apiReadModelTest',
+              workloadClass: 'test',
+            })
+          },
+        }
 
         mock.module(appReadOnlyModulePath, () => {
           return {
             closeAppReadOnlyDatabaseServices: async () => {},
-            getApiReadOnlyAppDatabaseService: appDatabaseServiceModule.getAppDatabaseService,
+            getApiReadOnlyAppDatabaseService: () => apiReadModelTestDatabaseService,
             getJudgeWorkerReadOnlyAppDatabaseService: appDatabaseServiceModule.getAppDatabaseService,
           }
         })
