@@ -148,6 +148,7 @@ test('duckdb service serializes background work with the main queue on low-memor
 
             void mock.module(serverRuntimeRoleModulePath, () => {
               return {
+                canCurrentServerOwnDuckdb: () => true,
                 ensureCurrentDuckdbOwnerLease: async () => {},
                 registerDuckdbOwnerDemotionHandler: () => {},
                 releaseCurrentDuckdbOwnerLease: async () => {},
@@ -246,6 +247,7 @@ test('duckdb service serializes append work with the main queue on low-memory wo
 
             void mock.module(serverRuntimeRoleModulePath, () => {
               return {
+                canCurrentServerOwnDuckdb: () => true,
                 ensureCurrentDuckdbOwnerLease: async () => {},
                 registerDuckdbOwnerDemotionHandler: () => {},
                 releaseCurrentDuckdbOwnerLease: async () => {},
