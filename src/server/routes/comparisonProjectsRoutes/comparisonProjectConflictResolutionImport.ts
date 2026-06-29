@@ -669,15 +669,53 @@ export const getComparisonProjectConflictResolutionImportServingIdentifierTarget
   identifierKeys: string[]
 }) => {
   const identifierKeySql = `matched_identifier.kind || ${getSqlLiteral(identifierKeySeparator)} || matched_identifier.normalized_value`
+  const legacyDoiSql = getComparisonProjectConflictResolutionImportDoiIdentifierValueSql('legacy_article.doi')
+  const legacyPmidSql = getComparisonProjectConflictResolutionImportPmidIdentifierValueSql('legacy_article.pubmed_id')
+  const legacyArxivSql = getComparisonProjectConflictResolutionImportArxivIdentifierValueSql('legacy_article.arxiv_id')
+  const legacyIdentifierKeySql = `legacy_identifier.kind || ${getSqlLiteral(identifierKeySeparator)} || legacy_identifier.normalizedValue`
+  const identifierFilterSql =
+    params.identifierKeys.length > 0 ? `IN (${getInClause(params.identifierKeys)})` : 'IN (NULL)'
 
   return `
-    WITH matched_article AS (
+    WITH legacy_identifier AS (
+      SELECT
+        legacy_article.article_id AS articleId,
+        'doi' AS kind,
+        ${legacyDoiSql} AS normalizedValue
+      FROM mart.comparison_article_serving legacy_article
+      WHERE legacy_article.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+        AND legacy_article.generation = ${getSqlLiteral(params.generation)}
+        AND ${legacyDoiSql} <> ''
+      UNION ALL
+      SELECT
+        legacy_article.article_id AS articleId,
+        'pmid' AS kind,
+        ${legacyPmidSql} AS normalizedValue
+      FROM mart.comparison_article_serving legacy_article
+      WHERE legacy_article.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+        AND legacy_article.generation = ${getSqlLiteral(params.generation)}
+        AND ${legacyPmidSql} <> ''
+      UNION ALL
+      SELECT
+        legacy_article.article_id AS articleId,
+        'arxiv' AS kind,
+        ${legacyArxivSql} AS normalizedValue
+      FROM mart.comparison_article_serving legacy_article
+      WHERE legacy_article.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+        AND legacy_article.generation = ${getSqlLiteral(params.generation)}
+        AND ${legacyArxivSql} <> ''
+    ),
+    matched_article AS (
       SELECT DISTINCT matched_identifier.article_id AS articleId
       FROM mart.comparison_article_identifier_serving matched_identifier
       WHERE matched_identifier.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
         AND matched_identifier.generation = ${getSqlLiteral(params.generation)}
         AND matched_identifier.kind IN ('doi', 'pmid', 'arxiv')
-        AND ${params.identifierKeys.length > 0 ? `${identifierKeySql} IN (${getInClause(params.identifierKeys)})` : 'FALSE'}
+        AND ${identifierKeySql} ${identifierFilterSql}
+      UNION
+      SELECT DISTINCT legacy_identifier.articleId
+      FROM legacy_identifier
+      WHERE ${legacyIdentifierKeySql} ${identifierFilterSql}
     )
     SELECT
 ${getComparisonProjectConflictResolutionImportServingArticleSelectSql()}
