@@ -363,75 +363,84 @@ const getExportArticles = async (input: {
   const rows = await appDatabaseService.queryJson<ExportArticleRow & {sourceProjectOrder: number}>(`
     WITH
       export_scope(project_id, review_config_hash, snapshot_id, source_project_order) AS (VALUES ${scopeRows}),
-      export_article(article_id) AS (VALUES ${articleRows})
-    SELECT
-      s.article_id AS articleId,
-      s.article_external_id AS articleExternalId,
-      s.arxiv_id AS arxivId,
-      s.biorxiv_id AS biorxivId,
-      s.doi AS doi,
-      s.medrxiv_id AS medrxivId,
-      s.pmid AS pubmedId,
-      s.url AS articleUrl,
-      s.article_title AS articleTitle,
-      payload.abstract_text AS articleSummary,
-      TO_JSON(article.article_authors) AS articleAuthors,
-      s.article_created_at AS articleCreatedAt,
-      s.article_updated_at AS articleUpdatedAt,
-      selected_source.raw_payload AS articleOriginalData,
-      payload.source_metadata AS articleSourceMetadata,
-      export_scope.source_project_order AS sourceProjectOrder
-    FROM export_scope
-    INNER JOIN mart.review_article_serving_v4 s
-      ON s.project_id = export_scope.project_id
-     AND s.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash
-     AND s.snapshot_id = export_scope.snapshot_id
-    INNER JOIN export_article
-      ON export_article.article_id = s.article_id
-    LEFT JOIN app.article article
-      ON article.id = s.article_id
-    LEFT JOIN app.review_serving_snapshot_manifest manifest
-      ON manifest.project_id = s.project_id
-     AND manifest.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
-     AND manifest.snapshot_id = s.snapshot_id
-    LEFT JOIN app.review_selected_article_import_v4 selected_base
-      ON selected_base.project_id = s.project_id
-     AND selected_base.project_scope_identity = s.project_scope_identity
-     AND selected_base.selected_import_snapshot_id = manifest.selected_import_snapshot_id
-     AND selected_base.article_id = s.article_id
-    LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
-      ON selected_patch.project_id = s.project_id
-     AND selected_patch.project_scope_identity = s.project_scope_identity
-     AND selected_patch.selected_import_snapshot_id = manifest.selected_import_snapshot_id
-     AND selected_patch.article_id = s.article_id
-     AND selected_patch.patch_watermark = (
-       SELECT MAX(newer.patch_watermark)
-       FROM mart.review_selected_import_patch_v4 newer
-       WHERE newer.project_id = selected_patch.project_id
-         AND newer.project_scope_identity = selected_patch.project_scope_identity
-         AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
-         AND newer.article_id = selected_patch.article_id
-     )
-    LEFT JOIN app.article_import_route_source_record selected_source
-      ON selected_source.import_route_id = CASE
-        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id
-        ELSE selected_base.import_route_id
-      END
-     AND selected_source.article_id = s.article_id
-     AND selected_source.source_record_key = CASE
-       WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-       WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key
-       ELSE selected_base.source_record_key
-     END
-     AND selected_source.quarantined_at IS NULL
-    LEFT JOIN mart.review_article_serving_payload_v4 payload
-      ON payload.project_id = s.project_id
-     AND payload.display_identity = s.display_identity
-     AND payload.payload_identity = s.payload_identity
-     AND payload.snapshot_id = s.snapshot_id
-     AND payload.article_id = s.article_id
-    ORDER BY s.article_id ASC, export_scope.source_project_order ASC
+      export_article(article_id) AS (VALUES ${articleRows}),
+      ranked_export_article AS (
+        SELECT
+          s.article_id AS articleId,
+          s.article_external_id AS articleExternalId,
+          s.arxiv_id AS arxivId,
+          s.biorxiv_id AS biorxivId,
+          s.doi AS doi,
+          s.medrxiv_id AS medrxivId,
+          s.pmid AS pubmedId,
+          s.url AS articleUrl,
+          s.article_title AS articleTitle,
+          payload.abstract_text AS articleSummary,
+          TO_JSON(article.article_authors) AS articleAuthors,
+          s.article_created_at AS articleCreatedAt,
+          s.article_updated_at AS articleUpdatedAt,
+          selected_source.raw_payload AS articleOriginalData,
+          payload.source_metadata AS articleSourceMetadata,
+          export_scope.source_project_order AS sourceProjectOrder,
+          ROW_NUMBER() OVER (
+            PARTITION BY s.article_id
+            ORDER BY export_scope.source_project_order ASC, s.list_mode_key ASC
+          ) AS exportArticleRank
+        FROM export_scope
+        INNER JOIN mart.review_article_serving_v4 s
+          ON s.project_id = export_scope.project_id
+         AND s.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash
+         AND s.snapshot_id = export_scope.snapshot_id
+        INNER JOIN export_article
+          ON export_article.article_id = s.article_id
+        LEFT JOIN app.article article
+          ON article.id = s.article_id
+        LEFT JOIN app.review_serving_snapshot_manifest manifest
+          ON manifest.project_id = s.project_id
+         AND manifest.review_config_hash IS NOT DISTINCT FROM s.review_config_hash
+         AND manifest.snapshot_id = s.snapshot_id
+        LEFT JOIN app.review_selected_article_import_v4 selected_base
+          ON selected_base.project_id = s.project_id
+         AND selected_base.project_scope_identity = s.project_scope_identity
+         AND selected_base.selected_import_snapshot_id = manifest.selected_import_snapshot_id
+         AND selected_base.article_id = s.article_id
+        LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
+          ON selected_patch.project_id = s.project_id
+         AND selected_patch.project_scope_identity = s.project_scope_identity
+         AND selected_patch.selected_import_snapshot_id = manifest.selected_import_snapshot_id
+         AND selected_patch.article_id = s.article_id
+         AND selected_patch.patch_watermark = (
+           SELECT MAX(newer.patch_watermark)
+           FROM mart.review_selected_import_patch_v4 newer
+           WHERE newer.project_id = selected_patch.project_id
+             AND newer.project_scope_identity = selected_patch.project_scope_identity
+             AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
+             AND newer.article_id = selected_patch.article_id
+         )
+        LEFT JOIN app.article_import_route_source_record selected_source
+          ON selected_source.import_route_id = CASE
+            WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
+            WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id
+            ELSE selected_base.import_route_id
+          END
+         AND selected_source.article_id = s.article_id
+         AND selected_source.source_record_key = CASE
+           WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
+           WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key
+           ELSE selected_base.source_record_key
+         END
+         AND selected_source.quarantined_at IS NULL
+        LEFT JOIN mart.review_article_serving_payload_v4 payload
+          ON payload.project_id = s.project_id
+         AND payload.display_identity = s.display_identity
+         AND payload.payload_identity = s.payload_identity
+         AND payload.snapshot_id = s.snapshot_id
+         AND payload.article_id = s.article_id
+      )
+    SELECT * EXCLUDE (exportArticleRank)
+    FROM ranked_export_article
+    WHERE exportArticleRank = 1
+    ORDER BY articleId ASC, sourceProjectOrder ASC
     LIMIT ${getSqlLiteral(input.articleIds.length * Math.max(input.snapshotScopes.length, 1))}
   `)
 
@@ -472,27 +481,36 @@ const getExportJudgments = async (input: {
     WITH
       export_scope(project_id, review_config_hash, snapshot_id, source_project_order) AS (VALUES ${scopeRows}),
       export_article(article_id) AS (VALUES ${articleRows}),
-      export_prompt(prompt_id) AS (VALUES ${promptRows})
-    SELECT
-      detail.article_id AS articleId,
-      detail.prompt_id AS promptId,
-      detail.answered_original AS answeredOriginal,
-      TO_JSON(detail.answered_original_as_array) AS answeredOriginalAsArray,
-      json_extract_string(detail.judgment_payload_json, '$.explanation') AS explanation,
-      json_extract(detail.judgment_payload_json, '$.quotes') AS quotes,
-      detail.judgment_payload_json AS judgmentPayloadJson,
-      export_scope.source_project_order AS sourceProjectOrder
-    FROM export_scope
-    INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
-      ON detail.project_id = export_scope.project_id
-     AND detail.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash
-     AND detail.snapshot_id = export_scope.snapshot_id
-     AND detail.payload_kind = 'llm'
-    INNER JOIN export_article
-      ON export_article.article_id = detail.article_id
-    INNER JOIN export_prompt
-      ON export_prompt.prompt_id = detail.prompt_id
-    ORDER BY detail.article_id ASC, detail.prompt_order ASC NULLS LAST, detail.prompt_id ASC, export_scope.source_project_order ASC
+      export_prompt(prompt_id) AS (VALUES ${promptRows}),
+      ranked_export_judgment AS (
+        SELECT
+          detail.article_id AS articleId,
+          detail.prompt_id AS promptId,
+          detail.answered_original AS answeredOriginal,
+          TO_JSON(detail.answered_original_as_array) AS answeredOriginalAsArray,
+          json_extract_string(detail.judgment_payload_json, '$.explanation') AS explanation,
+          json_extract(detail.judgment_payload_json, '$.quotes') AS quotes,
+          detail.judgment_payload_json AS judgmentPayloadJson,
+          export_scope.source_project_order AS sourceProjectOrder,
+          ROW_NUMBER() OVER (
+            PARTITION BY detail.article_id, detail.prompt_id
+            ORDER BY export_scope.source_project_order ASC
+          ) AS exportJudgmentRank
+        FROM export_scope
+        INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
+          ON detail.project_id = export_scope.project_id
+         AND detail.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash
+         AND detail.snapshot_id = export_scope.snapshot_id
+         AND detail.payload_kind = 'llm'
+        INNER JOIN export_article
+          ON export_article.article_id = detail.article_id
+        INNER JOIN export_prompt
+          ON export_prompt.prompt_id = detail.prompt_id
+      )
+    SELECT * EXCLUDE (exportJudgmentRank)
+    FROM ranked_export_judgment
+    WHERE exportJudgmentRank = 1
+    ORDER BY articleId ASC, promptId ASC, sourceProjectOrder ASC
     LIMIT ${getSqlLiteral(input.articleIds.length * input.promptIds.length * Math.max(input.snapshotScopes.length, 1))}
   `)
 

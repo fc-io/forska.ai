@@ -9,7 +9,7 @@ import type {ArticleRecord} from '../../../db/schemaTypes.ts'
 import {getProviderModelMetadataPromptTokenLimit} from '../../providers/providerModelMetadata.ts'
 import {readReviewServingRows, type ReviewServingReaderResult} from '../../reviewServing/reviewServingReader.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString, getJsonValue} from '../../services/appQueryHelpers.ts'
+import {escapeSqlString, getJsonValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
 import {processFulltextForLLM} from '../../utils/fulltextProcessing.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
@@ -42,6 +42,7 @@ type PromptPreviewDetailRow = {
   source_metadata: unknown
   url: string | null
 }
+type PromptPreviewFullTextRow = {fullText: string | null}
 
 const getUnavailablePromptPreview = (input: {
   articleId: string | null
@@ -86,6 +87,17 @@ const getPromptPreviewArticleDetailFromServing = async (input: {
     projectId: input.projectId,
     reviewConfigHash: input.reviewConfigHash,
   })
+}
+
+const getPromptPreviewArticleFullText = async (articleId: string) => {
+  const rows = await getAppDatabaseService().queryJson<PromptPreviewFullTextRow>(`
+    SELECT full_text AS fullText
+    FROM app.article
+    WHERE id = ${getSqlLiteral(articleId)}
+    LIMIT 1
+  `)
+
+  return rows[0]?.fullText ?? null
 }
 
 const getDateValue = (value: unknown) => {
@@ -237,9 +249,10 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       getProviderModelMetadataPromptTokenLimit(getJsonValue(projectModel?.modelMetadataJson), MAX_COMPLETION_TOKENS)
       ?? defaultJudgmentPromptTokenLimit
     const needsFulltext = projectRow.useFulltext || projectRow.useFulltextNoImages
+    const previewFullText = needsFulltext ? await getPromptPreviewArticleFullText(firstArticleId) : null
     const fullTextResult =
-      needsFulltext && previewArticle.full_text_preview
-        ? processFulltextForLLM(previewArticle.full_text_preview, {
+      needsFulltext && previewFullText
+        ? processFulltextForLLM(previewFullText, {
             promptTokenLimit: modelContext,
             stripImages: projectRow.useFulltextNoImages,
           }).processedText
