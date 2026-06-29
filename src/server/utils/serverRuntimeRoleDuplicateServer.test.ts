@@ -136,6 +136,56 @@ test('auto role resumes writer when the existing lease belongs to the current pr
   }
 })
 
+test('auto role keeps ownership when a promotion handler fails', () => {
+  const tempDirectory = mkdtempSync('/tmp/f1-server-runtime-role-')
+  const duckdbPath = join(tempDirectory, 'test.duckdb')
+
+  try {
+    const result = globalThis.Bun.spawnSync(
+      [
+        'bun',
+        '-e',
+        `
+          const {
+            getCurrentServerRole,
+            initializeServerRuntimeRole,
+            registerDuckdbOwnerPromotionHandler,
+            releaseCurrentDuckdbOwnerLease,
+          } = await import('./src/server/utils/serverRuntimeRole.ts')
+
+          registerDuckdbOwnerPromotionHandler(() => {
+            throw new Error('promotion hook failed')
+          })
+
+          await initializeServerRuntimeRole()
+          const role = getCurrentServerRole()
+          await releaseCurrentDuckdbOwnerLease()
+          console.log(JSON.stringify({role}))
+        `,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          API_SERVER_PORT: '3999',
+          DUCKDB_MEMORY_LIMIT: '1GB',
+          DUCKDB_PATH: duckdbPath,
+          RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+          RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+          SERVER_ROLE: 'auto',
+          SERVER_DUCKDB_OWNER_URL: '',
+          VITE_PORT: '3000',
+        },
+      },
+    )
+
+    expect(result.exitCode).toBe(0)
+    expect(JSON.parse(getLastJsonLine(result.stdout.toString()))).toEqual({role: 'maintenance-worker'})
+  } finally {
+    rmSync(tempDirectory, {force: true, recursive: true})
+  }
+})
+
 test('explicit owner role refreshes its DuckDB owner lease heartbeat after acquisition', {timeout: 15_000}, () => {
   const tempDirectory = mkdtempSync('/tmp/f1-server-runtime-role-')
   const duckdbPath = join(tempDirectory, 'test.duckdb')
