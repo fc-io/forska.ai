@@ -42,6 +42,7 @@ type ServerRuntimeState = {
   ownerLeaseHeartbeatPromise: Promise<void> | null
   lastKnownDuckdbOwnerUrl: string | null
   duckdbOwnerDemotionHandlers: Array<(reason: string) => Promise<void> | void>
+  duckdbOwnerPromotionHandlers: Array<(reason: string) => Promise<void> | void>
 }
 
 declare global {
@@ -80,6 +81,7 @@ const getServerRuntimeState = () => {
     ownerLeaseHeartbeatPromise: null,
     lastKnownDuckdbOwnerUrl: null,
     duckdbOwnerDemotionHandlers: [],
+    duckdbOwnerPromotionHandlers: [],
   }
 
   return globalThis.__forskaServerRuntimeState
@@ -156,6 +158,14 @@ const isDuckdbOwnerUrlResponsive = async (duckdbOwnerUrl: string) => {
 const runDuckdbOwnerDemotionHandlers = async (reason: string) => {
   await Promise.all(
     serverRuntimeState.duckdbOwnerDemotionHandlers.map(async (handler) => {
+      return handler(reason)
+    }),
+  )
+}
+
+const runDuckdbOwnerPromotionHandlers = async (reason: string) => {
+  await Promise.all(
+    serverRuntimeState.duckdbOwnerPromotionHandlers.map(async (handler) => {
       return handler(reason)
     }),
   )
@@ -304,6 +314,7 @@ const promoteAutoServerToDuckdbOwner = async (reason: string, takeoverLeaseId?: 
     setCurrentServerRole('maintenance-worker')
     setLastKnownDuckdbOwnerUrl(getCurrentServerUrl())
     clearUnresponsiveDuckdbOwnerWarnings()
+    await runDuckdbOwnerPromotionHandlers(reason)
     autoServerRoleLogger.force('server-role:duckdb-owner', `[server] auto DuckDB owner active (${reason})`, 'log', {
       apiServerPort: getRuntimeEnv().API_SERVER_PORT,
       reason,
@@ -334,6 +345,7 @@ const resumeAutoDuckdbOwnerLeaseForCurrentProcess = async () => {
   setCurrentServerRole('maintenance-worker')
   setLastKnownDuckdbOwnerUrl(getCurrentServerUrl())
   clearUnresponsiveDuckdbOwnerWarnings()
+  await runDuckdbOwnerPromotionHandlers('same-process-lease-resume')
   autoServerRoleLogger.force(
     'server-role:duckdb-owner-resume',
     '[server] auto DuckDB owner resumed from existing same-process lease',
@@ -590,6 +602,10 @@ export const registerDuckdbOwnerDemotionHandler = (handler: (reason: string) => 
   serverRuntimeState.duckdbOwnerDemotionHandlers = [...serverRuntimeState.duckdbOwnerDemotionHandlers, handler]
 }
 
+export const registerDuckdbOwnerPromotionHandler = (handler: (reason: string) => Promise<void> | void) => {
+  serverRuntimeState.duckdbOwnerPromotionHandlers = [...serverRuntimeState.duckdbOwnerPromotionHandlers, handler]
+}
+
 export const resetServerRuntimeRoleForTests = () => {
   const env = getRuntimeEnv()
 
@@ -604,6 +620,7 @@ export const resetServerRuntimeRoleForTests = () => {
   serverRuntimeState.ownerLeaseHeartbeatPromise = null
   serverRuntimeState.lastKnownDuckdbOwnerUrl = null
   serverRuntimeState.duckdbOwnerDemotionHandlers = []
+  serverRuntimeState.duckdbOwnerPromotionHandlers = []
 }
 
 export const withCurrentServerRoleOverride = async <_T>(nextRole: EffectiveServerRole, work: () => Promise<_T>) => {
