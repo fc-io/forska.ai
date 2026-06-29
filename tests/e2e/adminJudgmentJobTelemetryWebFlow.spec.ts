@@ -94,7 +94,7 @@ test('admin jobs list stays compact while preserving job row behavior', async ({
     await expect(page.getByRole('heading', {name: 'Judgment Jobs'})).toBeVisible()
     await expect(page.getByRole('link', {name: 'Health Triage'})).toBeVisible()
     await expect(page.getByRole('link', {name: 'DuckDB Append Metrics'})).toBeVisible()
-    await expect(page.getByRole('link', {name: 'Large Rebuild Status'})).toBeVisible()
+    await expect(page.getByRole('link', {name: 'Large Rebuild Status'})).toHaveCount(0)
     await expect(page.getByRole('columnheader', {name: 'Job ID'})).toBeVisible()
     await expect(page.getByRole('columnheader', {name: 'Project'})).toBeVisible()
     await expect(page.getByRole('columnheader', {name: 'Health'})).toBeVisible()
