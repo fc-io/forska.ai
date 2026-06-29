@@ -259,7 +259,11 @@ const repairOrphanedDrainingJobs = async (jobIds: string[]): Promise<void> => {
     return
   }
 
-  await runJudgmentJobRepairAction({action: 'repair', claimedBy: getDefaultJudgmentServerJobId(), jobId: currentJobId})
+  await runJudgmentJobRepairAction({
+    action: 'repair_orphaned_queue',
+    claimedBy: getDefaultJudgmentServerJobId(),
+    jobId: currentJobId,
+  })
 
   return repairOrphanedDrainingJobs(jobIds.slice(1))
 }
