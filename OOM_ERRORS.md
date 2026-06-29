@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-30 - V4 Bootstrap Project Scope Admission
+
+- Error: `missingReviewServingSnapshot` V4 bootstrap request remained `blocked_over_budget` with `input rows: estimated 2597735 > max 250000` after re-request.
+- Context: Live V4-only project `0dc6463f-ba0d-4c8e-8337-f92bba016224`, request reason `missingReviewServingSnapshot`; legacy dirty materialization was completed and V4 dirty work was empty.
+- Cause: Bootstrap admission still treated `projectScope` as a full-project chunk, so large project scopes could dominate the combined request estimate after other components were range chunked.
+- Fix: Project-scope bootstrap chunks are now article-range chunks, and worker pre-splitting includes project-scope rebuild chunks.
+- Verification: `bun test src/server/reviewServing/reviewServingV4RebuildRequestService.test.ts src/server/workers/reviewServingProjectorWorker.test.ts`.
+
 ## 2026-06-30 - V4 Bootstrap Selected Import And Summary Admission
 
 - Error: `missingReviewServingSnapshot` V4 bootstrap request remained `blocked_over_budget` with `input rows: estimated 1395741 > max 250000` after candidate-only bootstrap recovery.
