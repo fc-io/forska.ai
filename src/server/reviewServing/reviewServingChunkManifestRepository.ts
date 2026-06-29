@@ -231,6 +231,13 @@ export const releaseInactiveRequestRebuildChunkManifestsForUpsert = async (
         admission_state = 'admitted',
         retry_after = NULL,
         retry_count = 0,
+        actual_input_rows = NULL,
+        actual_output_bytes = NULL,
+        actual_output_rows = NULL,
+        actual_payload_bytes = NULL,
+        actual_prompt_count = NULL,
+        actual_temp_bytes = NULL,
+        duration_ms = NULL,
         oom_category = NULL,
         over_budget_reason = NULL,
         budget_json = NULL,
@@ -239,6 +246,8 @@ export const releaseInactiveRequestRebuildChunkManifestsForUpsert = async (
         lease_owner = NULL,
         lease_expires_at = NULL,
         last_error = NULL,
+        started_at = NULL,
+        completed_at = NULL,
         updated_at = current_timestamp
     WHERE chunk_id IN (${uniqueChunkIds.map(getSqlLiteral).join(', ')})
       AND status IN ${releasableRebuildChunkStatusSql}
@@ -748,6 +757,34 @@ export const upsertReviewServingRebuildChunkManifests = async (
             WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.retry_count
             ELSE excluded.retry_count
           END,
+          actual_input_rows = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_input_rows
+            ELSE excluded.actual_input_rows
+          END,
+          actual_output_bytes = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_output_bytes
+            ELSE excluded.actual_output_bytes
+          END,
+          actual_output_rows = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_output_rows
+            ELSE excluded.actual_output_rows
+          END,
+          actual_payload_bytes = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_payload_bytes
+            ELSE excluded.actual_payload_bytes
+          END,
+          actual_prompt_count = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_prompt_count
+            ELSE excluded.actual_prompt_count
+          END,
+          actual_temp_bytes = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_temp_bytes
+            ELSE excluded.actual_temp_bytes
+          END,
+          duration_ms = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.duration_ms
+            ELSE excluded.duration_ms
+          END,
           oom_category = CASE
             WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.oom_category
             ELSE excluded.oom_category
@@ -778,6 +815,14 @@ export const upsertReviewServingRebuildChunkManifests = async (
           END,
           last_error = CASE
             WHEN ${activeRebuildChunkPreservePredicate} THEN last_error
+            ELSE NULL
+          END,
+          started_at = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN started_at
+            ELSE NULL
+          END,
+          completed_at = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN completed_at
             ELSE NULL
           END,
           updated_at = ${nowSql}

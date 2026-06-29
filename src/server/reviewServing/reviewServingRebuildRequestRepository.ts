@@ -693,13 +693,19 @@ export const createReviewServingRebuildRequestEffect = (
           status = excluded.status,
           admission_state = excluded.admission_state,
           retry_after = excluded.retry_after,
+          retry_count = 0,
           oom_category = excluded.oom_category,
           over_budget_reason = excluded.over_budget_reason,
           diagnostics_json = excluded.diagnostics_json,
+          lease_owner = NULL,
+          lease_expires_at = NULL,
           admitted_at = CASE
             WHEN excluded.status = 'admitted' THEN COALESCE(app.review_rebuild_request.admitted_at, ${nowSql})
             ELSE app.review_rebuild_request.admitted_at
           END,
+          completed_at = NULL,
+          failed_at = NULL,
+          last_error = NULL,
           updated_at = ${nowSql}
       `)
 
