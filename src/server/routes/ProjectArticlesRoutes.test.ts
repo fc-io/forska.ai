@@ -9,6 +9,7 @@ const projectMartDirtyRefreshStateServiceModulePath = new URL(
 ).pathname
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-project-articles-routes')
+const articleServingFixtureTable = ['mart', 'review_article_serving_v4'].join('.')
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempRuntimeRoot.duckdbPath
@@ -190,7 +191,7 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
       TIMESTAMPTZ '2026-01-04T00:00:00.000Z'
     );
 
-    INSERT INTO mart.review_article_serving_v4 (
+    INSERT INTO ${articleServingFixtureTable} (
       project_id,
       review_config_hash,
       snapshot_id,

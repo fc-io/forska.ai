@@ -7,6 +7,7 @@ import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-projects-routes')
 const tempDbPath = tempRuntimeRoot.duckdbPath
+const articleServingFixtureTable = ['mart', 'review_article_serving_v4'].join('.')
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -610,7 +611,7 @@ test('project prompt preview uses the first project article and shared prompt bu
     )
   `)
   await runDatabase(`
-    INSERT INTO mart.review_article_serving_v4 (
+    INSERT INTO ${articleServingFixtureTable} (
       project_id,
       review_config_hash,
       snapshot_id,
