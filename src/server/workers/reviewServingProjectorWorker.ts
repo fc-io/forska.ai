@@ -71,6 +71,7 @@ import {
 import {
   projectReviewServingSelectedImportPatches,
   type ProjectReviewServingSelectedImportPatchInput,
+  resetReviewServingSelectedImportPatchArticleRange,
 } from '../reviewServing/reviewServingSelectedImportPatchProjector.ts'
 import {
   projectReviewServingSelectedImportArticleRange,
@@ -1858,14 +1859,16 @@ const resetSelectedImportArticleRangeForClaimedRebuild = async (
 ) => {
   await database.transaction(async (tx) => {
     await requireClaimedRebuildChunk(input, tx)
-    await tx.run(`
-      DELETE FROM mart.review_selected_import_patch_v4
-      WHERE project_id = ${getSqlLiteral(input.projectId)}
-        AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-        AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-        AND article_id >= ${getSqlLiteral(input.chunk.chunkStartKey)}
-        AND article_id <= ${getSqlLiteral(input.chunk.chunkEndKey)}
-    `)
+    await resetReviewServingSelectedImportPatchArticleRange(
+      {
+        chunkEndArticleId: input.chunk.chunkEndKey,
+        chunkStartArticleId: input.chunk.chunkStartKey,
+        projectId: input.projectId,
+        projectScopeIdentity: input.projectScopeIdentity,
+        selectedImportSnapshotId: input.selectedImportSnapshotId,
+      },
+      tx,
+    )
   })
 }
 

@@ -47,6 +47,14 @@ export type ReviewServingSelectedImportPatchBudgetResult = {
   shouldCompact: boolean
 }
 
+export type ResetReviewServingSelectedImportPatchArticleRangeInput = {
+  chunkEndArticleId: string
+  chunkStartArticleId: string
+  projectId: string
+  projectScopeIdentity: string
+  selectedImportSnapshotId: string
+}
+
 type SelectedImportServingTemplateRow = {
   baseGeneration: number
   displayIdentity: string
@@ -736,6 +744,20 @@ export const projectReviewServingSelectedImportPatches = async (
   )
 
   return {patchRowCount: rows.length, patchWatermark}
+}
+
+export const resetReviewServingSelectedImportPatchArticleRange = async (
+  input: ResetReviewServingSelectedImportPatchArticleRangeInput,
+  database: Pick<ReviewServingSelectedImportPatchProjectorDatabase, 'run'>,
+) => {
+  await database.run(`
+    DELETE FROM mart.review_selected_import_patch_v4
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
+      AND article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
+  `)
 }
 
 export const checkReviewServingSelectedImportPatchBudget = async (

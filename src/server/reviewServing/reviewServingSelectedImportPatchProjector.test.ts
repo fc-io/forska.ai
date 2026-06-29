@@ -4,6 +4,7 @@ import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.
 import {
   checkReviewServingSelectedImportPatchBudget,
   projectReviewServingSelectedImportPatches,
+  resetReviewServingSelectedImportPatchArticleRange,
   type ReviewServingSelectedImportPatchProjectorDatabase,
 } from './reviewServingSelectedImportPatchProjector.ts'
 
@@ -422,6 +423,29 @@ test('selected-import patch budget requests compaction when patch read cost exce
   expect(result).toEqual({patchRows: 51, patchWatermarks: 3, shouldCompact: true})
   expect(statements.join('\n')).toContain('COUNT(DISTINCT patch_watermark)')
   expect(statements.join('\n')).toContain('FROM mart.review_selected_import_patch_v4')
+})
+
+test('selected-import patch projector resets only the requested article range', async () => {
+  const {database, statements} = createSelectedImportPatchDatabase()
+
+  await resetReviewServingSelectedImportPatchArticleRange(
+    {
+      chunkEndArticleId: 'article-099',
+      chunkStartArticleId: 'article-050',
+      projectId: 'project-1',
+      projectScopeIdentity: 'projectScope:identity-1',
+      selectedImportSnapshotId: 'selected-import-snapshot-1',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('DELETE FROM mart.review_selected_import_patch_v4')
+  expect(joined).toContain("project_id = 'project-1'")
+  expect(joined).toContain("project_scope_identity = 'projectScope:identity-1'")
+  expect(joined).toContain("selected_import_snapshot_id = 'selected-import-snapshot-1'")
+  expect(joined).toContain("article_id >= 'article-050'")
+  expect(joined).toContain("article_id <= 'article-099'")
 })
 
 test('project-scoped selected-import rebuilds all project scope articles', async () => {
