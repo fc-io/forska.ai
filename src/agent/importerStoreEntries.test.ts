@@ -14,6 +14,13 @@ const storedRowsRef: {current: StoredArticleRow[][]} = {current: []}
 const registerModuleMocks = () => {
   void mock.module(articleImportStoreServiceModulePath, () => {
     return {
+      articleImportStoreWorkloadContext: {
+        allowsTempSpill: true,
+        fallbackIntent: 'reject',
+        routeOrJobKey: 'import.storeArticles',
+        timeoutMs: 120_000,
+        workloadClass: 'background.importStore',
+      },
       storeImportedArticles: async (rows: StoredArticleRow[]) => {
         storedRowsRef.current.push(rows)
       },
