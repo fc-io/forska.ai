@@ -1,5 +1,6 @@
 import {
   appendReviewServingChangeDelta,
+  type ReviewServingDeltaAppendResult,
   type ReviewServingDeltaLedgerTransaction,
   type ReviewServingSourceOperation,
 } from './reviewServingDeltaLedger.ts'
@@ -43,7 +44,7 @@ export const appendLlmJudgmentReviewServingDelta = async (
 ) => {
   const contentFlags = getContentFlags(input)
 
-  await appendReviewServingChangeDelta(tx, {
+  return appendReviewServingChangeDelta(tx, {
     articleId: input.articleId,
     changeKind: input.changeKind,
     judgmentId: input.judgmentId,
@@ -84,8 +85,10 @@ export const appendLlmJudgmentReviewServingDeltas = async (
   tx: ReviewServingDeltaLedgerTransaction,
   inputs: readonly AppendLlmJudgmentReviewServingDeltaInput[],
 ) => {
-  await inputs.reduce<Promise<void>>(async (previousRun, input) => {
-    await previousRun
-    await appendLlmJudgmentReviewServingDelta(tx, input)
-  }, Promise.resolve())
+  return inputs.reduce<Promise<ReviewServingDeltaAppendResult[]>>(async (previousRun, input) => {
+    const results = await previousRun
+    const result = await appendLlmJudgmentReviewServingDelta(tx, input)
+
+    return [...results, result]
+  }, Promise.resolve([]))
 }
