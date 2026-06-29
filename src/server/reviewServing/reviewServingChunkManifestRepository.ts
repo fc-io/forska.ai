@@ -209,6 +209,19 @@ const rebuildChunkPrerequisitesByComponent = {
   selectedImport: ['projectScope'],
   summary: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue'],
 } as const satisfies Record<ReviewServingProjectionComponent, readonly ReviewServingProjectionComponent[]>
+const rebuildChunkClaimComponentOrder = [
+  'projectScope',
+  'selectedImport',
+  'judgmentInputContent',
+  'display',
+  'llmStatus',
+  'humanStatus',
+  'queue',
+  'search',
+  'payload',
+  'posting',
+  'summary',
+] as const satisfies readonly ReviewServingProjectionComponent[]
 
 const getComponentSqlList = (components: readonly ReviewServingProjectionComponent[]) => {
   return `(${components.map(getSqlLiteral).join(', ')})`
@@ -281,6 +294,28 @@ const getRebuildChunkComponentPrerequisitePredicate = (tableAlias?: string) => {
         )`
     })
     .join('\n      OR ')
+}
+
+const getRebuildChunkSingleComponentPrerequisitePredicate = (
+  component: ReviewServingProjectionComponent,
+  tableAlias?: string,
+) => {
+  const source = tableAlias ? `${tableAlias}.` : ''
+  const prerequisites = rebuildChunkPrerequisitesByComponent[component]
+
+  return prerequisites.length === 0
+    ? `${source}projection_component = ${getSqlLiteral(component)}`
+    : `
+      ${source}projection_component = ${getSqlLiteral(component)}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest prerequisite
+        WHERE prerequisite.request_id = ${source}request_id
+          AND prerequisite.project_id IS NOT DISTINCT FROM ${source}project_id
+          AND prerequisite.projection_component IN ${getComponentSqlList(prerequisites)}
+          AND prerequisite.status <> 'completed'
+      )
+    `
 }
 
 const getChunkRequestId = (input: ReviewServingRebuildChunkIdentity) => {
@@ -443,11 +478,15 @@ const getReviewServingRebuildChunkIdentityPredicate = (input: ReviewServingRebui
   `
 }
 
-const getReviewServingRebuildChunkClaimPredicate = (input: {now: Date | string}, tableAlias?: string) => {
+const getReviewServingRebuildChunkClaimPredicate = (
+  input: {now: Date | string; projectionComponent?: ReviewServingProjectionComponent},
+  tableAlias?: string,
+) => {
   const source = tableAlias ? `${tableAlias}.` : ''
 
   return `
     ${source}admission_state = 'admitted'
+    ${input.projectionComponent === undefined ? '' : `AND ${source}projection_component = ${getSqlLiteral(input.projectionComponent)}`}
     AND (
       ${source}status = 'pending'
       OR (
@@ -490,7 +529,11 @@ const getReviewServingRebuildChunkClaimPredicate = (input: {now: Date | string},
     )
     AND (
       ${source}request_id IS NULL
-      OR ${getRebuildChunkComponentPrerequisitePredicate(tableAlias)}
+      OR ${
+        input.projectionComponent === undefined
+          ? getRebuildChunkComponentPrerequisitePredicate(tableAlias)
+          : getRebuildChunkSingleComponentPrerequisitePredicate(input.projectionComponent, tableAlias)
+      }
     )
   `
 }
@@ -504,7 +547,7 @@ const getReviewServingRebuildChunkProjectPredicate = (input: {projectId?: string
 }
 
 const getReviewServingRebuildChunkClaimWhere = (
-  input: {now: Date | string; projectId?: string | null},
+  input: {now: Date | string; projectId?: string | null; projectionComponent?: ReviewServingProjectionComponent},
   tableAlias?: string,
 ) => {
   return `
@@ -577,11 +620,20 @@ export const getNextClaimableReviewServingRebuildChunk = async (
   input: {now: Date | string; projectId?: string | null},
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
 ) => {
-  const rows = await database.queryJson<ReviewServingRebuildChunkManifestRow>(`
-    ${getReviewServingRebuildChunkSelect({tableAlias: 'candidate'})}
-    WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
-    LIMIT 1
-  `)
+  const rows = await rebuildChunkClaimComponentOrder.reduce<Promise<ReviewServingRebuildChunkManifestRow[]>>(
+    async (previousRows, projectionComponent) => {
+      const claimedRows = await previousRows
+
+      return claimedRows.length > 0
+        ? claimedRows
+        : database.queryJson<ReviewServingRebuildChunkManifestRow>(`
+              ${getReviewServingRebuildChunkSelect({tableAlias: 'candidate'})}
+              WHERE ${getReviewServingRebuildChunkClaimWhere({...input, projectionComponent}, 'candidate')}
+              LIMIT 1
+            `)
+    },
+    Promise.resolve([]),
+  )
   const row = rows[0]
 
   return row === undefined
