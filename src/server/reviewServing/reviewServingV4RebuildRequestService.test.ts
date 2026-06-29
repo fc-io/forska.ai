@@ -5,6 +5,7 @@ import type {ReviewServingChunkManifestRepositoryDatabase} from './reviewServing
 import {requestReviewServingV4RebuildEffect} from './reviewServingV4RebuildRequestService.ts'
 
 type FakeStats = {
+  activeSnapshotCount: number
   enabledPromptCount: number
   humanJudgmentCount: number
   humanJudgmentUpdatedAt: string | null
@@ -83,6 +84,7 @@ const getSqlStrings = (statement: string) => {
 }
 
 const baseStats = {
+  activeSnapshotCount: 1,
   enabledPromptCount: 2,
   humanJudgmentCount: 8,
   humanJudgmentUpdatedAt: '2026-06-20T10:03:00.000Z',
@@ -132,6 +134,7 @@ const getFakeArticleRanges = (chunkCount: number, stats: FakeStats) => {
 }
 
 const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabaseOptions = {}) => {
+  const effectiveStats = {...stats, activeSnapshotCount: Math.min(stats.activeSnapshotCount, stats.snapshotCount)}
   const requests = new Map<string, FakeRequestRow>()
   const projectionManifests = new Map<string, FakeProjectionManifestRow>()
   const statements: string[] = []
@@ -213,16 +216,16 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     if (statement.includes('NTILE(')) {
       const chunkCount = Number(statement.match(/NTILE\((\d+)\)/u)?.[1] ?? 1)
 
-      return (stats.scopedArticleCount === 0 ? [] : getFakeArticleRanges(chunkCount, stats)) as T[]
+      return (effectiveStats.scopedArticleCount === 0 ? [] : getFakeArticleRanges(chunkCount, effectiveStats)) as T[]
     }
 
     if (statement.includes('WITH project_settings')) {
-      return [stats] as T[]
+      return [effectiveStats] as T[]
     }
 
     if (statement.includes('FROM app.project_article')) {
       return [
-        {chunkEndKey: 'article-z', chunkStartKey: 'article-a', scopedArticleCount: stats.scopedArticleCount},
+        {chunkEndKey: 'article-z', chunkStartKey: 'article-a', scopedArticleCount: effectiveStats.scopedArticleCount},
       ] as T[]
     }
 
@@ -360,6 +363,7 @@ test('V4 rebuild request service estimates admission budget from project data', 
   expect(joined).toContain('AND COALESCE(prompt.archived, FALSE) = FALSE')
   expect(joined).toContain('COALESCE(prompt.content_hash, sha256(prompt.original_text))')
   expect(joined).toContain("snapshot.snapshot_status IN ('candidate', 'active')")
+  expect(joined).toContain("WHERE snapshot_status = 'active'")
   expect(joined).toContain('judgment.model_id = project.model_id')
   expect(joined).not.toContain('judgment.project_id = project.id')
   expect(joined).toContain('judgment.use_fulltext_no_images = project.use_fulltext_no_images')
@@ -535,6 +539,34 @@ test('V4 rebuild request service splits missing snapshot bootstraps into bounded
   expect(summaryChunkInserts).toHaveLength(1)
   expect(summaryChunkInserts[0]).toContain('article-000-a')
   expect(summaryChunkInserts[0]).toContain('article-008-z')
+  expect(joined).toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(joined).toContain('INSERT INTO app.review_serving_snapshot_manifest')
+})
+
+test('V4 missing snapshot rebuild bootstraps candidate-only projects with bounded chunks', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    ...baseStats,
+    activeSnapshotCount: 0,
+    humanJudgmentCount: 0,
+    judgmentCount: 0,
+    promptCount: 0,
+    scopedArticleCount: 20_000,
+    snapshotCount: 1,
+    summaryHumanJudgmentCount: 0,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const joined = statements.join('\n')
+  const displayChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes('display')
+  })
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+  expect(joined).toContain('NTILE(')
+  expect(displayChunkInserts.length).toBeGreaterThan(1)
   expect(joined).toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).toContain('INSERT INTO app.review_serving_snapshot_manifest')
 })
