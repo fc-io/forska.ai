@@ -73,6 +73,22 @@ The current branch still has these legacy surfaces to retire, block, or classify
 | [~]    | Static and runtime guards                      | Extend Phase 5B focused guards to SQL shape, producer inventory, admin controls, dirty-refresh workers, and runtime legacy blocks.                                                               | Tests fail on normal legacy SQL shape, broad raw maintenance in normal paths, and unclassified DuckDB work.                                                              |
 | [ ]    | Release evidence handoff                       | Update Phase 6 evidence scope and scripts around the Phase 5C cut line.                                                                                                                          | Physical release evidence runs with legacy normal rebuild disabled and V4 projector/chunk paths enabled.                                                                 |
 
+### Current PR #99 Evidence - 2026-06-29
+
+The live selected-import OOM found after PR #98 lands is handled as V4
+projector work. PR #99 keeps the path in `app.review_rebuild_request`,
+`app.review_rebuild_chunk_manifest`, and `reviewServing.projector.worker`; it
+does not revive legacy dirty materialization, project mart large rebuild, or V3
+review mart refresh as a repair path. The selected-import executor now releases
+the reset, base-batch drain, patch projection, validation, and completion work
+across bounded transactions, and the change includes an `OOM_ERRORS.md` entry.
+
+This is only a Phase 5C hardening step. It does not satisfy the full selected
+import rebuild contract below until selected-import work is budgeted by durable
+article/import-route/rank-key ranges or precomputed winner state, failed live
+requests can be safely re-admitted through V4 diagnostics, and Phase 6 captures
+physical release-scale evidence.
+
 ## Required Fixes
 
 | #   | Fix                                                       | What It Does Now                                                                           | What It Should Do                                                                                                                                            | Why It Helps                                                               |

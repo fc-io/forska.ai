@@ -210,6 +210,15 @@ hardening, and finally physical evidence.
       conflict-resolution import analysis/commit and explicit owner-source
       classification for create-from-project preview.
 
+      2026-06-29 PR #99 live-primary follow-up remains part of this V4 evidence
+      set: owner promotion wakes `reviewServing.projector.worker`, warning
+      status reads V4 request/chunk progress instead of legacy mart state, and
+      the selected-import OOM mitigation executes through
+      `app.review_rebuild_request` plus `app.review_rebuild_chunk_manifest`.
+      This is not legacy repair evidence and does not mark Phase 5C adversarial
+      OOM recovery complete; the remaining gate is durable V4 re-admission,
+      split/quarantine diagnostics, and physical release-scale proof.
+
 ### Legacy OLAP Retirement
 
 - [x] **A31.** Keep deleted OLAP/raw fallback static guards for normal review and
