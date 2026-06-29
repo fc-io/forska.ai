@@ -17,6 +17,7 @@ Entry format:
 - Error: `DuckDB OOM failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` left a `missingReviewServingSnapshot` V4 rebuild request in terminal `failed` status while downstream chunks stayed pending.
 - Context: Current-DB review warnings for project `4ec939b2-47bb-48dd-ad62-ad9f4b5acecf` reported queued review indexing with eligible consumers and no running chunks.
 - Cause: Warning diagnostics counted retryable/pending chunks but did not count the latest terminal V4 rebuild request as failed work, so an unclaimable failed request collapsed into healthy queued progress.
+- Legacy rule-out: live legacy `project_mart_*` rows for the affected project were idle/completed residue, not active blockers: dirty refresh was fully caught up, dirty materialization was completed, quarantine was empty, and the old large-rebuild row had no current error.
 - Fix: V4 diagnostics now surface the latest terminal failed/quarantined rebuild request as `failedCount`, and warning status treats that as terminal without converting it into queued work.
 - Verification: `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts`.
 
