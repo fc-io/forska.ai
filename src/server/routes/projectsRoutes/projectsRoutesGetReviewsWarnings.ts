@@ -241,17 +241,16 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       servingDiagnostics.rebuildChunks.runningCount,
       servingDiagnostics.rebuildChunks.expiredLeaseCount,
     )
-    const queuedRebuildChunkCount =
-      servingDiagnostics.rebuildChunks.pendingCount
-      + servingDiagnostics.rebuildChunks.failedCount
-      + expiredRebuildChunkLeaseCount
+    const queuedRebuildChunkCount = servingDiagnostics.rebuildChunks.pendingCount + expiredRebuildChunkLeaseCount
     const inFlightRebuildChunkCount = getNonNegativeDifference(
       servingDiagnostics.rebuildChunks.runningCount,
       expiredRebuildChunkLeaseCount,
     )
     const pendingRebuildChunkCount = queuedRebuildChunkCount + inFlightRebuildChunkCount
     const terminalRebuildChunkCount =
-      servingDiagnostics.rebuildChunks.blockedOverBudgetCount + servingDiagnostics.rebuildChunks.quarantinedCount
+      servingDiagnostics.rebuildChunks.blockedOverBudgetCount
+      + servingDiagnostics.rebuildChunks.failedCount
+      + servingDiagnostics.rebuildChunks.quarantinedCount
     const terminalDirtyWorkCount =
       servingDiagnostics.dirtyWork.failedCount + servingDiagnostics.quarantine.quarantinedOutboxCount
     const isServerMutationWorkDisabled = shouldDisableServerMutationWork()
