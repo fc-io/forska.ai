@@ -347,10 +347,14 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
 
     if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
       if (statement.includes("candidate.admission_state = 'admitted'")) {
+        const projectionComponent = statement
+          .match(/candidate\.projection_component\s*=\s*'((?:''|[^'])*)'/u)?.[1]
+          ?.replaceAll("''", "'")
         const [claimable] = [...rows.values()]
           .filter((row) => {
             return (
               row.admissionState === 'admitted'
+              && (projectionComponent === undefined || row.projectionComponent === projectionComponent)
               && (row.status === 'pending' || row.status === 'failed' || row.status === 'running')
             )
           })

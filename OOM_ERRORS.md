@@ -17,7 +17,7 @@ Entry format:
 - Error: `DuckDB workload budget exceeded for reviewServing.projector.worker: temp spill 819200 bytes is not allowed`.
 - Context: Live maintenance worker claim discovery for admitted V4 `missingReviewServingSnapshot` rebuild chunks on project `4ec939b2-47bb-48dd-ad62-ad9f4b5acecf`.
 - Cause: The claim query used multi-pass global `MIN(...)` CTEs over claimable chunk rows before fetching one chunk, which could spill temp data under the projector worker no-spill workload budget.
-- Fix: Claim discovery now uses one project-scoped claimable-row probe with the same admission, request, retry, and prerequisite predicates and `LIMIT 1`, avoiding the global min/sort shape.
+- Fix: Claim discovery now probes one component at a time in dependency order with the same admission, request, retry, and prerequisite predicates and `LIMIT 1`, avoiding the global min/sort shape and broad prerequisite-graph scan.
 - Verification: `bun test src/server/reviewServing/reviewServingChunkManifestRepository.test.ts` and live maintenance-worker progress check.
 
 ## 2026-06-30 - V4 Bootstrap Project Scope Admission
