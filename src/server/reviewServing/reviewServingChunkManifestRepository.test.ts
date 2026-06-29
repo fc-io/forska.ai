@@ -346,7 +346,7 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
     }
 
     if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
-      if (statement.includes('claimable_chunk')) {
+      if (statement.includes("candidate.admission_state = 'admitted'")) {
         const [claimable] = [...rows.values()]
           .filter((row) => {
             return (
@@ -590,8 +590,9 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).not.toContain("prerequisite.status IN ('failed', 'blocked_over_budget', 'quarantined')")
   expect(statements.join('\n')).not.toContain('prerequisite.updated_at < candidate.updated_at')
   expect(statements.join('\n')).toContain("project_id IS NOT DISTINCT FROM 'project-1'")
-  expect(statements.join('\n')).toContain('MIN(candidate.updated_at)')
-  expect(statements.join('\n')).toContain('MIN(candidate.chunk_id)')
+  expect(statements.join('\n')).not.toContain('MIN(candidate.updated_at)')
+  expect(statements.join('\n')).not.toContain('MIN(candidate.chunk_id)')
+  expect(statements.join('\n')).not.toContain('claimable_min_updated')
   expect(statements.join('\n')).not.toContain('ORDER BY updated_at ASC')
 })
 
