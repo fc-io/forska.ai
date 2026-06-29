@@ -26,6 +26,7 @@ const queryJsonRef = {
 const reviewConfigHashes = new Map<string, string | null>()
 const activeSnapshotProjectIds = new Set<string>(['project-1', 'project-2'])
 const pinnedSnapshotProjectIds = new Set<string>(['project-1', 'project-2'])
+const pinnedSnapshotStatuses = new Map<string, string>()
 const createReviewBulkOperationJobCalls: unknown[] = []
 
 const projectReviewConfigRow = {
@@ -112,7 +113,9 @@ const registerModuleMocks = () => {
           : null
       },
       getReviewServingSnapshotManifest: async ({projectId, snapshotId}: {projectId: string; snapshotId: string}) => {
-        return pinnedSnapshotProjectIds.has(projectId) ? {projectId, snapshotId, status: 'active'} : null
+        return pinnedSnapshotProjectIds.has(projectId)
+          ? {projectId, snapshotId, status: pinnedSnapshotStatuses.get(projectId) ?? 'active'}
+          : null
       },
     }
   })
@@ -143,6 +146,7 @@ afterEach(() => {
   pinnedSnapshotProjectIds.clear()
   pinnedSnapshotProjectIds.add('project-1')
   pinnedSnapshotProjectIds.add('project-2')
+  pinnedSnapshotStatuses.clear()
   mock.restore()
 })
 
@@ -425,6 +429,49 @@ test('project export rejects cross-project jobs when a source pinned snapshot is
   expect(createReviewBulkOperationJobCalls).toHaveLength(0)
 })
 
+test('project export allows retired explicit pinned snapshots', async () => {
+  pinnedSnapshotStatuses.set('project-2', 'retired')
+  queryJsonRef.current = async (statement) => {
+    return getProjectQueryRows(statement)
+  }
+  const {projectExportRoutes} = await loadRoutes()
+  const app = new Elysia().use(projectExportRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/project-1/export', {
+      body: JSON.stringify({
+        promptIds: ['prompt-1'],
+        snapshotId: 'snapshot-1',
+        sourceProjectIds: ['project-1', 'project-2'],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+
+  expect(response.status).toBe(202)
+  expect(createReviewBulkOperationJobCalls).toHaveLength(1)
+  expect(createReviewBulkOperationJobCalls[0]).toMatchObject({snapshot: {snapshotId: 'snapshot-1', type: 'pinned'}})
+})
+
+test('project export still rejects retired latest snapshots', async () => {
+  activeSnapshotProjectIds.delete('project-2')
+  queryJsonRef.current = async (statement) => {
+    return getProjectQueryRows(statement)
+  }
+  const {projectExportRoutes} = await loadRoutes()
+  const app = new Elysia().use(projectExportRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/project-1/export', {
+      body: JSON.stringify({promptIds: ['prompt-1'], sourceProjectIds: ['project-1', 'project-2']}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+
+  expect(response.status).toBe(400)
+  expect(createReviewBulkOperationJobCalls).toHaveLength(0)
+})
+
 test('project export download hydrates completed durable job selection as CSV', async () => {
   queryJsonRef.current = async (statement) => {
     if (statement.includes('FROM app.project') && statement.includes('LIMIT 1') && statement.includes('id, name')) {
@@ -445,6 +492,7 @@ test('project export download hydrates completed durable job selection as CSV', 
                 promptIds: ['prompt-1'],
               },
               selectedMetadata: {
+                includeArticleAuthors: true,
                 includeArticleId: true,
                 includeArticleLink: true,
                 includeJournal: true,
@@ -479,6 +527,7 @@ test('project export download hydrates completed durable job selection as CSV', 
           articleExternalId: 'article-1',
           articleId: 'article-1',
           articleOriginalData: null,
+          articleAuthors: ['Alice Example', 'Bob Example'],
           articleSourceMetadata: null,
           articleSummary: 'Summary 1',
           articleTitle: 'Article 1',
@@ -528,9 +577,9 @@ test('project export download hydrates completed durable job selection as CSV', 
   expect(response.status).toBe(200)
   expect(response.headers.get('content-type')).toContain('text/csv')
   expect(text).toContain(
-    'Title,Article ID,Article Link,Abstract/Summary,Journal,"V4 Prompt Heading\nType: V4 prompt type\nContent: V4 prompt content",V4 Prompt Heading - Explanation,V4 Prompt Heading - Quotes',
+    'Title,Article ID,Article Link,Article Authors,Abstract/Summary,Journal,"V4 Prompt Heading\nType: V4 prompt type\nContent: V4 prompt content",V4 Prompt Heading - Explanation,V4 Prompt Heading - Quotes',
   )
-  expect(text).toContain('Article 1,article-1,,Summary 1,,yes,Because,Quote 1')
+  expect(text).toContain('Article 1,article-1,,Alice Example; Bob Example,Summary 1,,yes,Because,Quote 1')
   expect(queryStatements.join('\n')).toContain('JOIN mart.review_article_serving_v4')
   expect(queryStatements.join('\n')).toContain('JOIN mart.review_article_judgment_detail_serving_v4')
   expect(queryStatements.join('\n')).not.toContain('FROM app.article')

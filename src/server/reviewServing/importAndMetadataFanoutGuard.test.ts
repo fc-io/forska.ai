@@ -146,8 +146,8 @@ test('prompt subproject model and provider mutations use enqueue or delta marker
   expect(providerConnectionSource).toContain('advanceTargetStateDirtyTokensAtomically')
   expect(providerModelSource).toContain('appendProviderModelExecutionIdentityReviewServingDeltas')
   expect(providerConnectionSource).toContain('appendProviderConnectionExecutionIdentityReviewServingDeltas')
-  expect(providerModelSource).toContain("sourceMutationKey: 'providerModel.update'")
-  expect(providerConnectionSource).toContain("sourceMutationKey: 'providerConnection.update'")
+  expect(providerModelSource).toContain('sourceMutationKey: `providerModel.update|')
+  expect(providerConnectionSource).toContain('sourceMutationKey: `providerConnection.update|')
   expect(providerConnectionSource).toContain("sourceMutationKey: 'providerConnection.archive'")
 
   const forbiddenMatches = getMatches(metadataMutationEntrypoints, [
