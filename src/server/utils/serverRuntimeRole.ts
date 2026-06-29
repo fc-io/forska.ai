@@ -165,8 +165,16 @@ const runDuckdbOwnerDemotionHandlers = async (reason: string) => {
 
 const runDuckdbOwnerPromotionHandlers = async (reason: string) => {
   await Promise.all(
-    serverRuntimeState.duckdbOwnerPromotionHandlers.map(async (handler) => {
-      return handler(reason)
+    serverRuntimeState.duckdbOwnerPromotionHandlers.map(async (handler, index) => {
+      try {
+        await handler(reason)
+      } catch (error) {
+        autoServerRoleLogger.warn(
+          'server-role:duckdb-owner-promotion-handler',
+          '[server] DuckDB owner promotion handler failed',
+          {error, index, reason},
+        )
+      }
     }),
   )
 }

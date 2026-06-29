@@ -1684,7 +1684,7 @@ test('base rebuild chunks regenerate project scope and selected import state bef
     statements.filter((statement) => {
       return statement === 'BEGIN selectedImport'
     }).length,
-  ).toBeGreaterThanOrEqual(4)
+  ).toBe(1)
   expect(joined).toContain('DELETE FROM mart.project_scope_article')
   expect(joined).toContain('INSERT INTO mart.project_scope_article')
   expect(joined).toContain('projectScope.rebuild')
