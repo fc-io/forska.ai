@@ -16,6 +16,9 @@ type ReviewsIndexingBlockedReason = 'paused_by_policy' | 'quarantine_barrier' | 
 type ReviewsIndexingProgressState = 'blocked' | 'completed' | 'failed' | 'processing' | 'queued' | 'stalled'
 type ReviewsIndexingStatus = 'blocked' | 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
 
+const recentReviewServingProgressWindowMs = 120_000
+const reviewServingProgressClockSkewToleranceMs = 10_000
+
 const getEnabledPromptCount = async (projectId: string): Promise<number> => {
   const rows = await getAppDatabaseService().queryJson<{count: number}>(`
     SELECT COUNT(*) AS count
@@ -87,6 +90,17 @@ const getOldestTimestamp = (...values: Array<string | null>) => {
   }, null)
 }
 
+const getHasRecentReviewServingProgress = (value: string | null) => {
+  const progressedAtMs = new Date(value ?? Number.NaN).getTime()
+  const progressAgeMs = Date.now() - progressedAtMs
+
+  return (
+    Number.isFinite(progressedAtMs)
+    && progressAgeMs >= -reviewServingProgressClockSkewToleranceMs
+    && progressAgeMs <= recentReviewServingProgressWindowMs
+  )
+}
+
 const getNonNegativeDifference = (total: number, claimed: number) => {
   return Math.max(0, total - claimed)
 }
@@ -135,6 +149,7 @@ const getReviewsIndexingStatus = (params: {
 }
 
 const getReviewsIndexingProgressState = (params: {
+  hasRecentProgress: boolean
   inFlightRefreshCount: number
   status: ReviewsIndexingStatus
 }): ReviewsIndexingProgressState => {
@@ -146,9 +161,11 @@ const getReviewsIndexingProgressState = (params: {
         ? 'blocked'
         : params.status === 'refreshing' && params.inFlightRefreshCount > 0
           ? 'processing'
-          : params.status === 'refreshing'
-            ? 'queued'
-            : 'stalled'
+          : params.status === 'refreshing' && params.hasRecentProgress
+            ? 'processing'
+            : params.status === 'refreshing'
+              ? 'queued'
+              : 'stalled'
 }
 
 const isUsableReviewServingWarningSnapshot = (status: string) => {
@@ -246,6 +263,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const queuedRefreshCount = queuedRebuildChunkCount + servingDiagnostics.dirtyWork.pendingCount
     const inFlightRefreshCount = inFlightRebuildChunkCount + servingDiagnostics.dirtyWork.runningCount
     const pendingRefreshCount = pendingRebuildChunkCount + pendingDirtyWorkCount
+    const eligibleConsumerCount = pendingRefreshCount > 0 && !isServerMutationWorkDisabled ? 1 : 0
     const indexingStatus = getReviewsIndexingStatus({
       enabledPromptCount,
       hasAnyArticlesInScope,
@@ -255,22 +273,34 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       pendingRefreshCount,
       runningRefreshCount: inFlightRefreshCount,
     })
-    const progressState = getReviewsIndexingProgressState({inFlightRefreshCount, status: indexingStatus})
+    const lastProgressedAt = getLatestTimestamp(
+      servingDiagnostics.dirtyWork.updatedAt,
+      servingDiagnostics.rebuildChunks.updatedAt,
+      servingDiagnostics.snapshot.activeUpdatedAt,
+    )
+    const hasRecentProgress =
+      pendingRefreshCount > 0
+      && inFlightRefreshCount === 0
+      && eligibleConsumerCount > 0
+      && getHasRecentReviewServingProgress(lastProgressedAt)
+    const progressState = getReviewsIndexingProgressState({
+      hasRecentProgress,
+      inFlightRefreshCount,
+      status: indexingStatus,
+    })
     const blockedReason: ReviewsIndexingBlockedReason =
       indexingStatus === 'failed' && servingDiagnostics.quarantine.quarantinedOutboxCount > 0
         ? 'quarantine_barrier'
         : indexingStatus === 'blocked' && isServerMutationWorkDisabled
           ? 'waiting_for_maintenance_worker'
           : null
-    const eligibleConsumerCount = pendingRefreshCount > 0 && !isServerMutationWorkDisabled ? 1 : 0
-
     return {
       data: {
         projectId,
         enabledPromptCount,
         scope: {hasAnyArticlesInScope},
         indexing: {
-          activeConsumerCount: inFlightRefreshCount > 0 ? 1 : 0,
+          activeConsumerCount: inFlightRefreshCount > 0 || hasRecentProgress ? 1 : 0,
           activeWorkCount: inFlightRefreshCount,
           articleRefreshesPerMinute: null,
           blockedReason,
@@ -303,11 +333,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           inFlightProjectRefreshCount: inFlightRefreshCount,
           inFlightRefreshCount,
           largeRebuild: null,
-          lastProgressedAt: getLatestTimestamp(
-            servingDiagnostics.dirtyWork.updatedAt,
-            servingDiagnostics.rebuildChunks.updatedAt,
-            servingDiagnostics.snapshot.activeUpdatedAt,
-          ),
+          lastProgressedAt,
           lastProcessedAt: servingDiagnostics.snapshot.activeUpdatedAt,
           lastStartedAt: null,
           oldestQueuedAt: getOldestTimestamp(
