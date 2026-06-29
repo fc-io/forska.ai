@@ -11,6 +11,7 @@ import {
 import {
   claimReviewServingRebuildChunk,
   getNextClaimableReviewServingRebuildChunk,
+  getReviewServingRebuildChunkManifest,
   heartbeatReviewServingRebuildChunkLease,
   isReviewServingRebuildChunkComplete,
   markReviewServingRebuildChunkFailed,
@@ -67,7 +68,10 @@ import {
   type ReviewServingRetentionCleanupInput,
   type ReviewServingRetentionServiceDatabase,
 } from '../reviewServing/reviewServingRetentionService.ts'
-import {projectReviewServingSelectedImportPatches} from '../reviewServing/reviewServingSelectedImportPatchProjector.ts'
+import {
+  projectReviewServingSelectedImportPatches,
+  type ProjectReviewServingSelectedImportPatchInput,
+} from '../reviewServing/reviewServingSelectedImportPatchProjector.ts'
 import {projectReviewServingSelectedImportBatch} from '../reviewServing/reviewServingSelectedImportProjector.ts'
 import {composeReviewServingCandidateSnapshotManifest} from '../reviewServing/reviewServingSnapshotPromotionService.ts'
 import {projectReviewServingSummaries} from '../reviewServing/reviewServingSummaryProjector.ts'
@@ -1805,6 +1809,59 @@ const drainSelectedImportBaseProjection = async (
     : result.insertedRowCount + (await drainSelectedImportBaseProjection(input, database))
 }
 
+const requireClaimedRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const claimed = await getReviewServingRebuildChunkManifest({chunkId: input.chunk.chunkId}, database)
+  const canWrite = claimed?.status === 'running' && claimed.leaseOwner === input.leaseOwner
+
+  if (!canWrite) {
+    throw new Error(`review serving rebuild chunk ${input.chunk.chunkId} is no longer claimed by ${input.leaseOwner}`)
+  }
+}
+
+const resetSelectedImportSnapshotForClaimedRebuild = async (
+  input: {
+    chunk: ReviewServingRebuildChunkManifest
+    leaseOwner: string
+    projectId: string
+    projectScopeIdentity: string
+    selectedImportSnapshotId: string
+  },
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  await database.transaction(async (tx) => {
+    await requireClaimedRebuildChunk(input, tx)
+    await resetSelectedImportSnapshotForRebuild(input, tx)
+  })
+}
+
+const drainSelectedImportBaseProjectionForClaimedRebuild = async (
+  input: {
+    chunk: ReviewServingRebuildChunkManifest
+    leaseOwner: string
+    projectId: string
+    projectScopeIdentity: string
+    selectedImportSnapshotId: string
+    sourceDeltaHighWater: number
+  },
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  await requireClaimedRebuildChunk(input, database)
+  await drainSelectedImportBaseProjection(input, database)
+}
+
+const projectSelectedImportPatchesForClaimedRebuild = async (
+  input: ProjectReviewServingSelectedImportPatchInput & {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  await database.transaction(async (tx) => {
+    await requireClaimedRebuildChunk(input, tx)
+    await projectReviewServingSelectedImportPatches(input, getChunkProjectorDatabase(tx))
+  })
+}
+
 const runSelectedImportRebuildChunk = async (
   input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
@@ -1822,6 +1879,38 @@ const runSelectedImportRebuildChunk = async (
     sourceWatermarks: getSelectedImportRebuildPatchSourceWatermarks(manifest.inputWatermarks),
   })
 
+  await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+    await previous
+    const selectedImportSnapshotId = requireSelectedImportSnapshotId(snapshot)
+    const projectScopeIdentity = requireSnapshotComponentIdentity(snapshot, 'projectScope')
+    const existingSnapshot = await getSelectedImportSnapshotStatus(selectedImportSnapshotId, database)
+    const sourceDeltaHighWater = Number(existingSnapshot?.sourceDeltaHighWater ?? input.chunk.inputWatermark)
+
+    await resetSelectedImportSnapshotForClaimedRebuild(
+      {...input, projectId, projectScopeIdentity, selectedImportSnapshotId},
+      database,
+    )
+    await drainSelectedImportBaseProjectionForClaimedRebuild(
+      {...input, projectId, projectScopeIdentity, selectedImportSnapshotId, sourceDeltaHighWater},
+      database,
+    )
+    await projectSelectedImportPatchesForClaimedRebuild(
+      {
+        ...input,
+        acknowledgeClaims: false,
+        baseGeneration: input.chunk.outputBaseGeneration,
+        claims,
+        definitionVersion: manifest.definitionVersion,
+        manifestInputWatermarks: manifest.inputWatermarks,
+        projectId,
+        projectScopeIdentity,
+        projectionIdentity: input.chunk.projectionIdentity,
+        selectedImportSnapshotId,
+      },
+      database,
+    )
+  }, Promise.resolve())
+
   const completedChunk = await writeReviewServingRebuildChunkOutput(
     {
       ...input.chunk,
@@ -1838,37 +1927,7 @@ const runSelectedImportRebuildChunk = async (
           expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
         }
       },
-      writeOutput: async (tx) => {
-        const chunkDatabase = getChunkProjectorDatabase(tx)
-
-        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
-          await previous
-          const selectedImportSnapshotId = requireSelectedImportSnapshotId(snapshot)
-          const projectScopeIdentity = requireSnapshotComponentIdentity(snapshot, 'projectScope')
-          const existingSnapshot = await getSelectedImportSnapshotStatus(selectedImportSnapshotId, chunkDatabase)
-          const sourceDeltaHighWater = Number(existingSnapshot?.sourceDeltaHighWater ?? input.chunk.inputWatermark)
-
-          await resetSelectedImportSnapshotForRebuild({projectId, projectScopeIdentity, selectedImportSnapshotId}, tx)
-          await drainSelectedImportBaseProjection(
-            {projectId, projectScopeIdentity, selectedImportSnapshotId, sourceDeltaHighWater},
-            chunkDatabase,
-          )
-          await projectReviewServingSelectedImportPatches(
-            {
-              acknowledgeClaims: false,
-              baseGeneration: input.chunk.outputBaseGeneration,
-              claims,
-              definitionVersion: manifest.definitionVersion,
-              manifestInputWatermarks: manifest.inputWatermarks,
-              projectId,
-              projectScopeIdentity,
-              projectionIdentity: input.chunk.projectionIdentity,
-              selectedImportSnapshotId,
-            },
-            chunkDatabase,
-          )
-        }, Promise.resolve())
-      },
+      writeOutput: async () => {},
     },
     database,
   )
