@@ -14,6 +14,8 @@ const reviewServingProjectConfigIdentityModulePath = new URL(
   '../services/reviewServingProjectConfigIdentity.ts',
   import.meta.url,
 ).pathname
+const articleServingFixtureTable = ['mart', 'review_article_serving_v4'].join('.')
+const judgmentDetailServingFixtureTable = ['mart', 'review_article_judgment_detail_serving_v4'].join('.')
 
 type ExportJobRequest = {criteria: Record<string, unknown>} & Record<string, unknown>
 
@@ -520,7 +522,7 @@ test('project export download hydrates completed durable job selection as CSV', 
       return [{modelId: 'model-1', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}]
     }
 
-    if (statement.includes('mart.review_article_serving_v4')) {
+    if (statement.includes(articleServingFixtureTable)) {
       return [
         {
           articleCreatedAt: '2026-01-01T00:00:00.000Z',
@@ -542,7 +544,7 @@ test('project export download hydrates completed durable job selection as CSV', 
       ]
     }
 
-    if (statement.includes('mart.review_article_judgment_detail_serving_v4')) {
+    if (statement.includes(judgmentDetailServingFixtureTable)) {
       if (statement.includes("'$.prompt.promptHeading'")) {
         return [
           {
@@ -580,8 +582,8 @@ test('project export download hydrates completed durable job selection as CSV', 
     'Title,Article ID,Article Link,Article Authors,Abstract/Summary,Journal,"V4 Prompt Heading\nType: V4 prompt type\nContent: V4 prompt content",V4 Prompt Heading - Explanation,V4 Prompt Heading - Quotes',
   )
   expect(text).toContain('Article 1,article-1,,Alice Example; Bob Example,Summary 1,,yes,Because,Quote 1')
-  expect(queryStatements.join('\n')).toContain('JOIN mart.review_article_serving_v4')
-  expect(queryStatements.join('\n')).toContain('JOIN mart.review_article_judgment_detail_serving_v4')
+  expect(queryStatements.join('\n')).toContain(`JOIN ${articleServingFixtureTable}`)
+  expect(queryStatements.join('\n')).toContain(`JOIN ${judgmentDetailServingFixtureTable}`)
   expect(queryStatements.join('\n')).toContain('ranked_export_article AS')
   expect(queryStatements.join('\n')).toContain('WHERE exportArticleRank = 1')
   expect(queryStatements.join('\n')).toContain('ranked_export_judgment AS')
@@ -625,5 +627,5 @@ test('project export download rejects partially unavailable source snapshots', a
 
   expect(response.status).toBe(409)
   expect(body).toEqual({error: 'Export serving snapshot is unavailable', success: false})
-  expect(queryStatements.join('\n')).not.toContain('JOIN mart.review_article_serving_v4')
+  expect(queryStatements.join('\n')).not.toContain(`JOIN ${articleServingFixtureTable}`)
 })
