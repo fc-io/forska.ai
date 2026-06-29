@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-29 - V4 Terminal Rebuild Re-Admission
+
+- Error: `DuckDB OOM failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` left a V4 rebuild request terminal failed with failed/blocked `selectedImport` chunks and downstream pending chunks.
+- Context: Operator re-request of `missingReviewServingSnapshot`/large V4 rebuild work for project `4ec939b2-47bb-48dd-ad62-ad9f4b5acecf` after the terminal request was surfaced in warnings.
+- Cause: Same-request V4 re-admission updated status/admission fields but could preserve terminal request metadata such as `failed_at`/`last_error`, and retryable inactive chunks could retain stale execution timestamps/counts after being reset.
+- Fix: V4 request upsert now clears failure, completion, lease, and retry metadata on re-admission; inactive request chunk release/upsert clears stale execution metadata while preserving active running/failed/completed chunks only where intended.
+- Verification: `bun test src/server/reviewServing/reviewServingRebuildRequestRepository.test.ts src/server/reviewServing/reviewServingChunkManifestRepository.test.ts`.
+
 ## 2026-06-29 - V4 Failed Rebuild Request Warning State
 
 - Error: `DuckDB OOM failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` left a `missingReviewServingSnapshot` V4 rebuild request in terminal `failed` status while downstream chunks stayed pending.

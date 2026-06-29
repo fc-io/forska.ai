@@ -278,6 +278,42 @@ test('V4 rebuild request re-admission does not delete obsolete running chunks', 
   expect(statements.join('\n')).toContain("AND status <> 'running'")
 })
 
+test('V4 rebuild request re-admission clears terminal request metadata', async () => {
+  const {database, statements} = createFakeRequestDatabase()
+
+  await createReviewServingRebuildRequest(
+    {
+      chunks: [
+        {
+          chunkEndKey: 'article:010',
+          chunkStartKey: 'article:001',
+          inputDigest: 'digest-v1',
+          inputWatermark: 5,
+          outputBaseGeneration: 1,
+          projectId: 'project-v4',
+          projectionComponent: 'selectedImport',
+          projectionIdentity: 'selectedImport:v1',
+        },
+      ],
+      projectId: 'project-v4',
+      reason: 'missingReviewServingSnapshot',
+      requestedComponents: ['selectedImport'],
+      requestId: 'rebuild:readmitted-failed',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('ON CONFLICT(request_id) DO UPDATE SET')
+  expect(joined).toContain('retry_count = 0')
+  expect(joined).toContain('lease_owner = NULL')
+  expect(joined).toContain('lease_expires_at = NULL')
+  expect(joined).toContain('completed_at = NULL')
+  expect(joined).toContain('failed_at = NULL')
+  expect(joined).toContain('last_error = NULL')
+})
+
 test('over-budget V4 rebuild requests park before their chunks can be claimable', async () => {
   const {database, statements} = createFakeRequestDatabase()
 

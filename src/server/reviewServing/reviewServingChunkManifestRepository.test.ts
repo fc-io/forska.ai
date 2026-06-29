@@ -155,12 +155,12 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
     const existing = rows.get(chunkId)
     const preserveState = shouldPreserveChunkStateOnUpsert(existing)
     const row = {
-      actualInputRows: existing?.actualInputRows ?? null,
-      actualOutputBytes: existing?.actualOutputBytes ?? null,
-      actualOutputRows: existing?.actualOutputRows ?? null,
-      actualPayloadBytes: existing?.actualPayloadBytes ?? null,
-      actualPromptCount: existing?.actualPromptCount ?? null,
-      actualTempBytes: existing?.actualTempBytes ?? null,
+      actualInputRows: preserveState ? (existing?.actualInputRows ?? null) : null,
+      actualOutputBytes: preserveState ? (existing?.actualOutputBytes ?? null) : null,
+      actualOutputRows: preserveState ? (existing?.actualOutputRows ?? null) : null,
+      actualPayloadBytes: preserveState ? (existing?.actualPayloadBytes ?? null) : null,
+      actualPromptCount: preserveState ? (existing?.actualPromptCount ?? null) : null,
+      actualTempBytes: preserveState ? (existing?.actualTempBytes ?? null) : null,
       admissionState: preserveState
         ? existing?.admissionState
         : strings[7] === 'blocked_over_budget'
@@ -171,10 +171,10 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       chunkEndKey: strings[6] ?? '',
       chunkId,
       chunkStartKey: strings[5] ?? '',
-      completedAt: existing?.completedAt ?? null,
+      completedAt: preserveState ? (existing?.completedAt ?? null) : null,
       createdAt: existing?.createdAt ?? getClock(statements),
       diagnosticsJson: existing?.diagnosticsJson ?? {},
-      durationMs: existing?.durationMs ?? null,
+      durationMs: preserveState ? (existing?.durationMs ?? null) : null,
       estimatedInputRows: existing?.estimatedInputRows ?? null,
       estimatedOutputBytes: existing?.estimatedOutputBytes ?? null,
       estimatedOutputRows: existing?.estimatedOutputRows ?? null,
@@ -205,7 +205,7 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       snapshotCount: existing?.snapshotCount ?? 1,
       snapshotId: existing?.snapshotId ?? null,
       splitDepth: existing?.splitDepth ?? 0,
-      startedAt: existing?.startedAt ?? null,
+      startedAt: preserveState ? (existing?.startedAt ?? null) : null,
       status: (preserveState ? (existing?.status ?? 'pending') : (strings[7] ?? 'pending')) as FakeChunkRow['status'],
       updatedAt: getClock(statements),
       workloadClass: existing?.workloadClass ?? null,
@@ -530,6 +530,35 @@ test('rebuild chunk upserts replace terminal chunks so fresh V4 plans can repair
     status: 'pending',
   })
   expect(rows.get(quarantined.chunkId)).toMatchObject({lastError: null, retryCount: 0, status: 'pending'})
+})
+
+test('rebuild chunk upserts clear stale execution metadata when re-admitting inactive terminal chunks', async () => {
+  const blocked = {
+    ...getChunkRowFromIdentity(baseChunkIdentity, []),
+    actualInputRows: 10,
+    actualOutputRows: 20,
+    completedAt: '2026-06-16T14:30:00.000Z',
+    durationMs: 60_000,
+    lastError: 'old DuckDB OOM',
+    retryCount: 3,
+    startedAt: '2026-06-16T14:00:00.000Z',
+    status: 'quarantined' as const,
+  }
+  const {database, rows, statements} = createFakeChunkManifestDatabase([blocked])
+
+  await upsertReviewServingRebuildChunkManifests([{...baseChunkIdentity, status: 'pending'}], database)
+
+  expect(rows.get(blocked.chunkId)).toMatchObject({
+    actualInputRows: null,
+    actualOutputRows: null,
+    completedAt: null,
+    durationMs: null,
+    lastError: null,
+    retryCount: 0,
+    startedAt: null,
+    status: 'pending',
+  })
+  expect(statements.join('\n')).toContain('completed_at = CASE')
 })
 
 test('next claimable chunk discovery returns maintained identity and checksum', async () => {
