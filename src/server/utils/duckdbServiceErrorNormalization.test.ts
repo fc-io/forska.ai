@@ -6,10 +6,10 @@ test('duckdb service keeps the underlying Effect error detail', () => {
       'bun',
       '-e',
       `
-        const {runDuckdbJsonQuery} = await import('./src/server/utils/duckdbService.ts')
+        const {getMaintenanceDuckdbWorkloadContext, runDuckdbJsonQuery} = await import('./src/server/utils/duckdbService.ts')
 
         try {
-          await runDuckdbJsonQuery('SELECT 1 AS value')
+          await runDuckdbJsonQuery('SELECT 1 AS value', getMaintenanceDuckdbWorkloadContext('errorNormalization'))
         } catch (error) {
           console.log(error instanceof Error ? error.message : String(error))
         }
