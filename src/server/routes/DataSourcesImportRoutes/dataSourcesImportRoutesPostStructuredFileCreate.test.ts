@@ -53,6 +53,13 @@ test('structured file datasource create runs import inside a transaction without
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
+            articleImportStoreWorkloadContext: {
+              allowsTempSpill: true,
+              fallbackIntent: 'reject',
+              routeOrJobKey: 'import.storeArticles',
+              timeoutMs: 120_000,
+              workloadClass: 'background.importStore',
+            },
             markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
@@ -193,6 +200,13 @@ test('structured file datasource create does not queue refreshes when the transa
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
+            articleImportStoreWorkloadContext: {
+              allowsTempSpill: true,
+              fallbackIntent: 'reject',
+              routeOrJobKey: 'import.storeArticles',
+              timeoutMs: 120_000,
+              workloadClass: 'background.importStore',
+            },
             markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
