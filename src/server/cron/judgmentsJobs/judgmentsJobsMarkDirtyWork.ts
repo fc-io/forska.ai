@@ -1,9 +1,9 @@
 import {appendLlmJudgmentReviewServingDeltas} from '../../reviewServing/llmJudgmentReviewServingDeltaService.ts'
+import {intakeReviewChangeDeltaRangeToDirtyWork} from '../../reviewServing/reviewChangeDeltaDirtyIntakeService.ts'
 import type {JudgmentInsertRow} from '../../services/appDatabaseService.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
 import {getComparisonProjectServingInvalidationService} from '../../services/comparisonProjectServingInvalidationService.ts'
-import {getProjectMartDirtyRefreshStateService} from '../../services/projectMartDirtyRefreshStateService.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import type {JudgmentJobSqliteOutboxEntry} from './judgmentJobSqliteService.ts'
 
@@ -94,6 +94,29 @@ const getMarkedEntries = (entries: JudgmentJobSqliteOutboxEntry[], markerKeys: S
 const getJsonSql = (value: unknown) => {
   const jsonText = value === undefined ? null : JSON.stringify(value)
   return jsonText === null ? 'NULL::JSON' : `${getSqlLiteral(jsonText)}::JSON`
+}
+
+const getDeltaRangesBySourcePartition = (results: {sourceHighWaterMark: number; sourcePartition: string}[]) => {
+  return Array.from(
+    results
+      .reduce((ranges, result) => {
+        const key = `${result.sourcePartition}|${result.sourceHighWaterMark}`
+        const existing = ranges.get(key)
+
+        return ranges.set(key, existing ?? result)
+      }, new Map<string, {sourceHighWaterMark: number; sourcePartition: string}>())
+      .values(),
+  ).reduce((ranges, result) => {
+    const existing = ranges.get(result.sourcePartition)
+
+    ranges.set(result.sourcePartition, {
+      count: (existing?.count ?? 0) + 1,
+      end: Math.max(existing?.end ?? result.sourceHighWaterMark, result.sourceHighWaterMark),
+      start: Math.min(existing?.start ?? result.sourceHighWaterMark, result.sourceHighWaterMark),
+    })
+
+    return ranges
+  }, new Map<string, {count: number; end: number; start: number}>())
 }
 
 const getStringArraySql = (value: string[]) => {
@@ -335,27 +358,47 @@ const insertJudgments = async (runner: DirtyWorkRunner, entries: JudgmentJobSqli
       }),
   )
 
-  await appendLlmJudgmentReviewServingDeltas(
-    runner,
-    deltaRows.map((row) => {
-      return {
-        articleId: row.articleId,
-        changeKind: 'judgment.llm.created' as const,
-        judgmentId: row.judgmentId,
-        modelId: row.modelId,
-        projectId: row.projectId,
-        promptId: row.promptId,
-        sourceMutationKey: row.sourceMutationKey,
-        sourceOperation: 'insert' as const,
-        sourcePartition: row.sourcePartition,
-        sourceUpdatedAt: row.sourceUpdatedAt,
-        useAbstract: row.useAbstract,
-        useFulltext: row.useFulltext,
-        useFulltextNoImages: row.useFulltextNoImages,
-        useTitle: row.useTitle,
-      }
+  const deltaInputs = deltaRows.map((row) => {
+    return {
+      articleId: row.articleId,
+      changeKind: 'judgment.llm.created' as const,
+      judgmentId: row.judgmentId,
+      modelId: row.modelId,
+      projectId: row.projectId,
+      promptId: row.promptId,
+      sourceMutationKey: row.sourceMutationKey,
+      sourceOperation: 'insert' as const,
+      sourcePartition: row.sourcePartition,
+      sourceUpdatedAt: row.sourceUpdatedAt,
+      useAbstract: row.useAbstract,
+      useFulltext: row.useFulltext,
+      useFulltextNoImages: row.useFulltextNoImages,
+      useTitle: row.useTitle,
+    }
+  })
+  const deltaAppendResults = await appendLlmJudgmentReviewServingDeltas(runner, deltaInputs)
+  const deltaRanges = getDeltaRangesBySourcePartition(
+    deltaAppendResults.flatMap((result, index) => {
+      const input = deltaInputs[index]
+
+      return input === undefined
+        ? []
+        : [{sourceHighWaterMark: result.sourceHighWaterMark, sourcePartition: input.sourcePartition}]
     }),
   )
+
+  await Array.from(deltaRanges.entries()).reduce<Promise<void>>(async (previousRun, [sourcePartition, range]) => {
+    await previousRun
+    await intakeReviewChangeDeltaRangeToDirtyWork(
+      {
+        endSourceHighWaterMark: range.end,
+        limit: range.count,
+        sourcePartition,
+        startSourceHighWaterMark: range.start,
+      },
+      runner,
+    )
+  }, Promise.resolve())
 
   return insertedJudgmentIds
 }
@@ -366,11 +409,15 @@ const getInsertedEntries = (entries: JudgmentJobSqliteOutboxEntry[], insertedJud
   })
 }
 
-const markComparisonServingStaleForInsertedEntries = async (
-  runner: DirtyWorkRunner,
-  entries: JudgmentJobSqliteOutboxEntry[],
-  insertedJudgmentIds: Set<string>,
-) => {
+const markComparisonServingStaleForInsertedEntries = async ({
+  entries,
+  insertedJudgmentIds,
+  runner,
+}: {
+  entries: JudgmentJobSqliteOutboxEntry[]
+  insertedJudgmentIds: Set<string>
+  runner: DirtyWorkRunner
+}) => {
   const insertedEntries = getInsertedEntries(entries, insertedJudgmentIds)
 
   await getComparisonProjectServingInvalidationService().markComparisonProjectsServingStaleForLlmJudgments(
@@ -387,50 +434,6 @@ const markComparisonServingStaleForInsertedEntries = async (
     }),
     {runner},
   )
-}
-
-const getDirtyProjectsForInsertedEntries = (
-  entries: JudgmentJobSqliteOutboxEntry[],
-  insertedJudgmentIds: Set<string>,
-) => {
-  return getInsertedEntries(entries, insertedJudgmentIds).reduce((projects, entry) => {
-    if (entry.projectId === null) {
-      return projects
-    }
-
-    const existingArticleIds = projects.get(entry.projectId) ?? []
-    projects.set(entry.projectId, Array.from(new Set([...existingArticleIds, entry.articleId])))
-
-    return projects
-  }, new Map<string, string[]>())
-}
-
-const markProjectMartRefreshStateForInsertedEntries = async ({
-  insertedJudgmentIds,
-  entries,
-  now,
-  requestedBy,
-  runner,
-}: {
-  insertedJudgmentIds: Set<string>
-  entries: JudgmentJobSqliteOutboxEntry[]
-  now: Date
-  requestedBy: string | null | undefined
-  runner: DirtyWorkRunner
-}) => {
-  const dirtyProjects = Array.from(getDirtyProjectsForInsertedEntries(entries, insertedJudgmentIds).entries()).map(
-    ([projectId, articleIds]) => {
-      return {articleIds, projectId}
-    },
-  )
-
-  await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-    now,
-    projects: dirtyProjects,
-    requestedBy,
-    runner,
-    reason: 'judgment_sqlite_outbox_import',
-  })
 }
 
 const getOutboxImportMarkerValueSql = (
@@ -564,12 +567,9 @@ export const commitJudgmentSqliteOutboxImportDirtyWork = async ({
     })
     const insertedJudgmentIds = await insertJudgments(runner, unmarkedImportableEntries)
 
-    await markComparisonServingStaleForInsertedEntries(runner, unmarkedImportableEntries, insertedJudgmentIds)
-    await markProjectMartRefreshStateForInsertedEntries({
+    await markComparisonServingStaleForInsertedEntries({
       entries: unmarkedImportableEntries,
       insertedJudgmentIds,
-      now: currentNow,
-      requestedBy,
       runner,
     })
     await insertOutboxImportMarkers(

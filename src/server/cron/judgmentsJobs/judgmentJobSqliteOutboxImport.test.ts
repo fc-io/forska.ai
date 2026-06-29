@@ -1319,6 +1319,10 @@ test('replays a SQLite outbox batch after crashing between DuckDB commit and SQL
     INSERT INTO app.project_article (id, project_id, article_id)
     VALUES ('${jobId}-project-article', '${projectId}', '${articleId}')
   `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+    VALUES ('${jobId}-project-prompt', '${projectId}', '${promptId}', 1, TRUE)
+  `)
 
   await service.initializeJob(jobId)
   await service.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
@@ -1365,13 +1369,13 @@ test('replays a SQLite outbox batch after crashing between DuckDB commit and SQL
   expect(Number(rowsAfterCrash[0]?.count ?? 0)).toBe(1)
   expect(await service.getUnexportedOutboxCount(jobId)).toBe(1)
 
-  const [stateAfterCrash] = await queryDatabase<{dirtyToken: number; markerRows: number}>(`
+  const [stateAfterCrash] = await queryDatabase<{dirtyWorkRows: number; markerRows: number}>(`
     SELECT
-      (SELECT CAST(dirty_token AS INTEGER) FROM app.project_mart_refresh_state WHERE project_id = '${projectId}') AS dirtyToken,
+      (SELECT COUNT(*) FROM app.review_serving_dirty_work WHERE project_id = '${projectId}') AS dirtyWorkRows,
       (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${jobId}') AS markerRows
   `)
 
-  expect(Number(stateAfterCrash?.dirtyToken ?? 0)).toBe(1)
+  expect(Number(stateAfterCrash?.dirtyWorkRows ?? 0)).toBe(5)
   expect(Number(stateAfterCrash?.markerRows ?? 0)).toBe(1)
   expect(await importOutboxBatch()).toBe(1)
 
@@ -1386,13 +1390,13 @@ test('replays a SQLite outbox batch after crashing between DuckDB commit and SQL
   expect(Number(rows[0]?.count ?? 0)).toBe(1)
   expect(await service.getUnexportedOutboxCount(jobId)).toBe(0)
 
-  const [stateAfterRetry] = await queryDatabase<{dirtyToken: number; markerRows: number}>(`
+  const [stateAfterRetry] = await queryDatabase<{dirtyWorkRows: number; markerRows: number}>(`
     SELECT
-      (SELECT CAST(dirty_token AS INTEGER) FROM app.project_mart_refresh_state WHERE project_id = '${projectId}') AS dirtyToken,
+      (SELECT COUNT(*) FROM app.review_serving_dirty_work WHERE project_id = '${projectId}') AS dirtyWorkRows,
       (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${jobId}') AS markerRows
   `)
 
-  expect(Number(stateAfterRetry?.dirtyToken ?? 0)).toBe(1)
+  expect(Number(stateAfterRetry?.dirtyWorkRows ?? 0)).toBe(5)
   expect(Number(stateAfterRetry?.markerRows ?? 0)).toBe(1)
 })
 

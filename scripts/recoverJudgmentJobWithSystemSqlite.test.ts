@@ -49,6 +49,9 @@ const seedRecoverySql = `
   INSERT INTO app.project_article (id, project_id, article_id)
   VALUES ('project-article-sqlite-recovery-test', 'project-sqlite-recovery-test', 'article-sqlite-recovery-test');
 
+  INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+  VALUES ('project-prompt-sqlite-recovery-test', 'project-sqlite-recovery-test', 'prompt-sqlite-recovery-test', 1, TRUE);
+
   INSERT INTO app.judgment_job (id, project_id, status, storage_state)
   VALUES ('job-sqlite-recovery-test', 'project-sqlite-recovery-test', 'failed', 'quarantined');
 `
@@ -294,18 +297,16 @@ const runSmokeTest = async (scriptPath: string) => {
 
     const result = runRecoveryScript(duckdbPath, scriptPath, jobId)
     const [stateRow] = await queryDuckdbJson<{
-      articleStateRows: number | string
-      dirtyToken: number | string
+      dirtyWorkRows: number | string
+      deltaRows: number | string
       judgmentRows: number | string
-      lastCompletedDirtyToken: number | string
     }>(
       duckdbPath,
       `
         SELECT
           (SELECT COUNT(*) FROM app.judgment WHERE id = 'judgment-sqlite-recovery-test') AS judgmentRows,
-          (SELECT COUNT(*) FROM app.project_mart_refresh_article_state WHERE project_id = 'project-sqlite-recovery-test' AND article_id = 'article-sqlite-recovery-test') AS articleStateRows,
-          (SELECT dirty_token FROM app.project_mart_refresh_state WHERE project_id = 'project-sqlite-recovery-test') AS dirtyToken,
-          (SELECT last_completed_dirty_token FROM app.project_mart_refresh_state WHERE project_id = 'project-sqlite-recovery-test') AS lastCompletedDirtyToken
+          (SELECT COUNT(*) FROM app.review_change_delta WHERE judgment_id = 'judgment-sqlite-recovery-test') AS deltaRows,
+          (SELECT COUNT(*) FROM app.review_serving_dirty_work WHERE project_id = 'project-sqlite-recovery-test') AS dirtyWorkRows
       `,
     )
 
@@ -326,9 +327,8 @@ const runSmokeTest = async (scriptPath: string) => {
     expect(result.summary?.fullyRecovered).toBe(true)
     expect(result.summary?.importedRows).toBe(1)
     expect(Number(stateRow?.judgmentRows ?? 0)).toBe(1)
-    expect(Number(stateRow?.articleStateRows ?? 0)).toBe(1)
-    expect(Number(stateRow?.dirtyToken ?? 0)).toBe(1)
-    expect(Number(stateRow?.lastCompletedDirtyToken ?? 0)).toBe(0)
+    expect(Number(stateRow?.deltaRows ?? 0)).toBe(1)
+    expect(Number(stateRow?.dirtyWorkRows ?? 0)).toBe(5)
     expect(Number(sqliteCounts.outboxRows ?? 0)).toBe(0)
     expect(Number(sqliteCounts.queueRows ?? 0)).toBe(0)
   } finally {
@@ -340,10 +340,10 @@ const runSmokeTest = async (scriptPath: string) => {
   }
 }
 
-test('system sqlite recovery script marks refresh state instead of writing the retired mart queue', async () => {
+test('system sqlite recovery script creates V4 dirty work instead of writing the retired mart queue', async () => {
   await runSmokeTest(recoveryScriptPath)
 })
 
-test('system sqlite SQL import recovery script marks refresh state instead of writing the retired mart queue', async () => {
+test('system sqlite SQL import recovery script creates V4 dirty work instead of writing the retired mart queue', async () => {
   await runSmokeTest(sqlImportRecoveryScriptPath)
 })

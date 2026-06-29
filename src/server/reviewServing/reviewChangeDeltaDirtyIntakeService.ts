@@ -337,6 +337,62 @@ const markReviewChangeDeltasReconciled = async (
   }
 }
 
+const commitValidatedReviewChangeDeltasToDirtyWork = async (
+  deltas: readonly ValidatedReviewChangeDelta[],
+  tx: ReviewServingDirtyWorkTransaction,
+) => {
+  const projectionDeltas = deltas.flatMap((delta) => {
+    return delta.projections.map((projection) => {
+      return {...delta, ...projection}
+    })
+  })
+  const upserts = await projectionDeltas.reduce<Promise<{skipped: boolean}[]>>(async (previousRun, delta) => {
+    const results = await previousRun
+    const result = await upsertReviewServingDirtyWork(
+      {
+        latestDeltaId: delta.deltaId,
+        projectionComponent: delta.projectionComponent,
+        projectionIdentity: delta.projectionIdentity,
+        scope: delta.scope,
+      },
+      tx,
+    )
+
+    return [...results, result]
+  }, Promise.resolve([]))
+
+  await markReviewChangeDeltasReconciled(tx, deltas)
+
+  return {
+    dirtyWorkCount: upserts.filter((result) => {
+      return !result.skipped
+    }).length,
+    maxSourceHighWaterMark: deltas.at(-1)?.sourceHighWaterMark ?? null,
+    status: 'converted' as const,
+  }
+}
+
+export const intakeReviewChangeDeltaRangeToDirtyWork = async (
+  params: IntakeReviewChangeDeltaDirtyWorkParams,
+  database: Pick<ReviewChangeDeltaDirtyIntakeDatabase, 'queryJson' | 'run'>,
+): Promise<ReviewChangeDeltaDirtyIntakeResult> => {
+  const rows = await getReviewChangeDeltaRows(database as ReviewChangeDeltaDirtyIntakeDatabase, params)
+  const validated = (
+    await Promise.all(
+      rows.map((row) => {
+        return getValidatedReviewChangeDeltas(row, database as ReviewChangeDeltaDirtyIntakeDatabase)
+      }),
+    )
+  ).flat()
+  const invalid = validated.find(isInvalidReviewChangeDelta)
+
+  if (invalid !== undefined) {
+    return {deltaId: invalid.deltaId, reason: invalid.reason, status: 'failed'}
+  }
+
+  return commitValidatedReviewChangeDeltasToDirtyWork(validated as ValidatedReviewChangeDelta[], database)
+}
+
 export const intakeReviewChangeDeltasToDirtyWork = async (
   params: IntakeReviewChangeDeltaDirtyWorkParams,
   database: ReviewChangeDeltaDirtyIntakeDatabase = getAppDatabaseService() as ReviewChangeDeltaDirtyIntakeDatabase,
@@ -358,34 +414,6 @@ export const intakeReviewChangeDeltasToDirtyWork = async (
   const deltas = validated as ValidatedReviewChangeDelta[]
 
   return database.transaction(async (tx) => {
-    const projectionDeltas = deltas.flatMap((delta) => {
-      return delta.projections.map((projection) => {
-        return {...delta, ...projection}
-      })
-    })
-    const upserts = await projectionDeltas.reduce<Promise<{skipped: boolean}[]>>(async (previousRun, delta) => {
-      const results = await previousRun
-      const result = await upsertReviewServingDirtyWork(
-        {
-          latestDeltaId: delta.deltaId,
-          projectionComponent: delta.projectionComponent,
-          projectionIdentity: delta.projectionIdentity,
-          scope: delta.scope,
-        },
-        tx,
-      )
-
-      return [...results, result]
-    }, Promise.resolve([]))
-
-    await markReviewChangeDeltasReconciled(tx, deltas)
-
-    return {
-      dirtyWorkCount: upserts.filter((result) => {
-        return !result.skipped
-      }).length,
-      maxSourceHighWaterMark: deltas.at(-1)?.sourceHighWaterMark ?? null,
-      status: 'converted' as const,
-    }
+    return commitValidatedReviewChangeDeltasToDirtyWork(deltas, tx)
   })
 }

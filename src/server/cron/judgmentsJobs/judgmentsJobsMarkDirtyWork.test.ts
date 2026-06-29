@@ -125,6 +125,7 @@ const getEntry = (ids: Awaited<ReturnType<typeof seedImportFixture>>, outboxSeq 
     queuePromptId: ids.queuePromptId,
     quotes: ['quote'],
     rawResponseJson: {answer: 'include'},
+    requestAttemptsJson: null,
     snapshotProjectId: ids.projectId,
     snapshotProjectModelName: 'Qwen 35B',
     updatedAt: now,
@@ -154,7 +155,7 @@ test('dirty work commits judgment, import marker, and dirty state idempotently',
   })
   const [row] = await queryDatabase<{
     deltaRows: number
-    dirtyToken: number
+    dirtyWorkRows: number
     judgmentRows: number
     markerRows: number
     modelId: string | null
@@ -172,7 +173,7 @@ test('dirty work commits judgment, import marker, and dirty state idempotently',
       (SELECT use_abstract FROM app.review_change_delta WHERE judgment_id = '${ids.judgmentId}' LIMIT 1) AS useAbstract,
       (SELECT use_fulltext FROM app.review_change_delta WHERE judgment_id = '${ids.judgmentId}' LIMIT 1) AS useFulltext,
       (SELECT use_fulltext_no_images FROM app.review_change_delta WHERE judgment_id = '${ids.judgmentId}' LIMIT 1) AS useFulltextNoImages,
-      (SELECT CAST(dirty_token AS INTEGER) FROM app.project_mart_refresh_state WHERE project_id = '${ids.projectId}') AS dirtyToken
+      (SELECT COUNT(*) FROM app.review_serving_dirty_work WHERE project_id = '${ids.projectId}') AS dirtyWorkRows
   `)
 
   expect(firstResult.importedRows).toEqual([{jobId: ids.jobId, outboxSeq: 1}])
@@ -187,7 +188,7 @@ test('dirty work commits judgment, import marker, and dirty state idempotently',
   expect(row?.useAbstract).toBe(true)
   expect(row?.useFulltext).toBe(false)
   expect(row?.useFulltextNoImages).toBe(false)
-  expect(Number(row?.dirtyToken ?? 0)).toBe(1)
+  expect(Number(row?.dirtyWorkRows ?? 0)).toBe(5)
 })
 
 test('dirty work fans out SQLite LLM deltas to every visible project', async () => {
@@ -228,21 +229,13 @@ test('dirty work fans out SQLite LLM deltas to every visible project', async () 
   expect(rows).toEqual([{projectId: ids.projectId}, {projectId: visibleProjectId}])
 })
 
-test('dirty work records import before refresh claims can pass quarantine barriers', async () => {
+test('dirty work records import and V4 dirty work without legacy refresh claims', async () => {
   if (!queryDatabase || !runDatabase) {
     throw new Error('Test database not initialized')
   }
 
-  const {getProjectMartDirtyRefreshStateService} = await import('../../services/projectMartDirtyRefreshStateService.ts')
-  const refreshStateService = getProjectMartDirtyRefreshStateService()
   const ids = await seedImportFixture(`quarantine-${Date.now()}`)
   const entry = getEntry(ids)
-
-  await refreshStateService.quarantineProjectRefreshArticle({
-    articleId: ids.articleId,
-    detectedBy: 'test-suite',
-    error: 'blocked refresh',
-  })
 
   await commitJudgmentSqliteOutboxImportDirtyWork({
     discardedEntries: [],
@@ -250,21 +243,14 @@ test('dirty work records import before refresh claims can pass quarantine barrie
     requestedBy: 'test-importer',
   })
 
-  const [row] = await queryDatabase<{dirtyToken: number; markerRows: number}>(`
+  const [row] = await queryDatabase<{dirtyWorkRows: number; legacyStateRows: number; markerRows: number}>(`
     SELECT
       (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${ids.jobId}') AS markerRows,
-      (SELECT CAST(dirty_token AS INTEGER) FROM app.project_mart_refresh_state WHERE project_id = '${ids.projectId}') AS dirtyToken
+      (SELECT COUNT(*) FROM app.review_serving_dirty_work WHERE project_id = '${ids.projectId}') AS dirtyWorkRows,
+      (SELECT COUNT(*) FROM app.project_mart_refresh_state WHERE project_id = '${ids.projectId}') AS legacyStateRows
   `)
-  const claims = await refreshStateService.claimDirtyProjects({
-    leaseMs: 1_000,
-    limit: 1,
-    workerId: 'quarantine-claim-worker',
-  })
-  const projectClaims = claims.filter((claim) => {
-    return claim.projectId === ids.projectId
-  })
 
   expect(Number(row?.markerRows ?? 0)).toBe(1)
-  expect(Number(row?.dirtyToken ?? 0)).toBe(1)
-  expect(projectClaims).toEqual([])
+  expect(Number(row?.dirtyWorkRows ?? 0)).toBe(5)
+  expect(Number(row?.legacyStateRows ?? 0)).toBe(0)
 })
