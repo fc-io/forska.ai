@@ -578,36 +578,8 @@ export const getNextClaimableReviewServingRebuildChunk = async (
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
 ) => {
   const rows = await database.queryJson<ReviewServingRebuildChunkManifestRow>(`
-    WITH
-      claimable_min_updated AS (
-        SELECT MIN(candidate.updated_at) AS updated_at
-        FROM app.review_rebuild_chunk_manifest AS candidate
-        WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
-      ),
-      claimable_min_watermark AS (
-        SELECT MIN(candidate.input_watermark) AS input_watermark
-        FROM app.review_rebuild_chunk_manifest AS candidate
-        JOIN claimable_min_updated ON candidate.updated_at = claimable_min_updated.updated_at
-        WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
-      ),
-      claimable_min_start_key AS (
-        SELECT MIN(candidate.chunk_start_key) AS chunk_start_key
-        FROM app.review_rebuild_chunk_manifest AS candidate
-        JOIN claimable_min_updated ON candidate.updated_at = claimable_min_updated.updated_at
-        JOIN claimable_min_watermark ON candidate.input_watermark = claimable_min_watermark.input_watermark
-        WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
-      ),
-      claimable_chunk AS (
-        SELECT MIN(candidate.chunk_id) AS chunk_id
-        FROM app.review_rebuild_chunk_manifest AS candidate
-        JOIN claimable_min_updated ON candidate.updated_at = claimable_min_updated.updated_at
-        JOIN claimable_min_watermark ON candidate.input_watermark = claimable_min_watermark.input_watermark
-        JOIN claimable_min_start_key ON candidate.chunk_start_key = claimable_min_start_key.chunk_start_key
-        WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
-      )
-    ${getReviewServingRebuildChunkSelect({tableAlias: 'manifest'})}
-    JOIN claimable_chunk ON manifest.chunk_id = claimable_chunk.chunk_id
-    WHERE claimable_chunk.chunk_id IS NOT NULL
+    ${getReviewServingRebuildChunkSelect({tableAlias: 'candidate'})}
+    WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
     LIMIT 1
   `)
   const row = rows[0]
