@@ -1655,6 +1655,8 @@ test('base rebuild chunks regenerate project scope and selected import state bef
       statements.push(statement)
     },
     transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      statements.push(`BEGIN ${activeChunk.projectionComponent}`)
+
       return operation(database)
     },
   }
@@ -1678,6 +1680,11 @@ test('base rebuild chunks regenerate project scope and selected import state bef
 
   expect(projectScopeResult).toEqual({status: 'completed'})
   expect(selectedImportResult).toEqual({status: 'completed'})
+  expect(
+    statements.filter((statement) => {
+      return statement === 'BEGIN selectedImport'
+    }).length,
+  ).toBeGreaterThanOrEqual(4)
   expect(joined).toContain('DELETE FROM mart.project_scope_article')
   expect(joined).toContain('INSERT INTO mart.project_scope_article')
   expect(joined).toContain('projectScope.rebuild')
