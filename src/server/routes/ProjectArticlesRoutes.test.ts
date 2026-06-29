@@ -103,6 +103,7 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
       id: `${prefix}-article-route-only`,
       inCuratedScope: false,
       inRouteScope: true,
+      sourceTitle: `${prefix}-article-route-only stale source title`,
       title: `${prefix} Route Only Article`,
     },
     {
@@ -110,6 +111,7 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
       id: `${prefix}-article-3`,
       inCuratedScope: true,
       inRouteScope: false,
+      sourceTitle: `${prefix}-article-3 stale source title`,
       title: `${prefix} Article 3`,
     },
     {
@@ -117,6 +119,7 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
       id: `${prefix}-article-2`,
       inCuratedScope: true,
       inRouteScope: false,
+      sourceTitle: `${prefix}-article-2 stale source title`,
       title: `${prefix} Article 2`,
     },
     {
@@ -124,6 +127,7 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
       id: `${prefix}-article-1`,
       inCuratedScope: true,
       inRouteScope: false,
+      sourceTitle: `${prefix}-article-1 stale source title`,
       title: `${prefix} Article 1`,
     },
   ]
@@ -151,7 +155,7 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
     INSERT INTO app.article (id, article_title, article_created_at)
     VALUES ${articleRows
       .map((article) => {
-        return `('${article.id}', '${article.id} stale source title', TIMESTAMPTZ '${article.createdAt}')`
+        return `('${article.id}', '${article.sourceTitle}', TIMESTAMPTZ '${article.createdAt}')`
       })
       .join(', ')};
 
@@ -357,13 +361,13 @@ test('project article membership listing uses cursor pagination over project-sco
   expect(firstResponse.status).toBe(200)
   expect(firstBody.articles).toEqual([
     {
-      articleTitle: newestArticle.title,
+      articleTitle: newestArticle.sourceTitle,
       id: newestArticle.id,
       importedFromProjectId: null,
       importedFromProjectName: null,
     },
     {
-      articleTitle: middleArticle.title,
+      articleTitle: middleArticle.sourceTitle,
       id: middleArticle.id,
       importedFromProjectId: null,
       importedFromProjectName: null,
