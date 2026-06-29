@@ -2,6 +2,7 @@ import {afterAll, afterEach, beforeAll, expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 import {buildPromptConfigHash, buildReviewConfigHash} from '../../reviewServing/reviewProjectionIdentity.ts'
+import type {ReviewServingProjectionComponent} from '../../reviewServing/reviewServingContracts.ts'
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-project-reviews-warnings')
@@ -140,6 +141,7 @@ type LargeRebuildStateOverrides = {
 
 type ReviewRebuildChunkStatus = 'blocked_over_budget' | 'completed' | 'failed' | 'pending' | 'quarantined' | 'running'
 type DirtyMaterializationStatus = 'completed' | 'failed' | 'pending' | 'running' | 'unreconciled'
+type ReviewRebuildRequestStatus = 'admitted' | 'blocked_over_budget' | 'completed' | 'failed'
 
 let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
@@ -497,7 +499,9 @@ const insertReviewServingRow = async (projectId: string, articleId: string) => {
 
 const insertReviewRebuildChunk = async (input: {
   chunkId: string
+  component?: ReviewServingProjectionComponent
   createdAt: string
+  lastError?: string | null
   leaseExpiresAt?: string | null
   leaseOwner?: string | null
   projectId: string
@@ -509,6 +513,8 @@ const insertReviewRebuildChunk = async (input: {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
+
+  const component = input.component ?? 'summary'
 
   await runDatabase(`
     INSERT INTO app.review_rebuild_chunk_manifest (
@@ -525,6 +531,7 @@ const insertReviewRebuildChunk = async (input: {
       status,
       lease_owner,
       lease_expires_at,
+      last_error,
       retry_after,
       created_at,
       updated_at
@@ -532,9 +539,9 @@ const insertReviewRebuildChunk = async (input: {
       '${input.chunkId}',
       ${input.requestId === undefined || input.requestId === null ? 'NULL' : `'${input.requestId}'`},
       '${input.projectId}',
-      'summary',
-      'summary:identity-1',
-      'summary-digest-v1',
+      '${component}',
+      '${component}:identity-1',
+      '${component}-digest-v1',
       1,
       'article-a',
       'article-z',
@@ -542,6 +549,7 @@ const insertReviewRebuildChunk = async (input: {
       '${input.status}',
       ${input.leaseOwner === undefined || input.leaseOwner === null ? 'NULL' : `'${input.leaseOwner}'`},
       ${input.leaseExpiresAt === undefined || input.leaseExpiresAt === null ? 'NULL' : `TIMESTAMPTZ '${input.leaseExpiresAt}'`},
+      ${input.lastError === undefined || input.lastError === null ? 'NULL' : `'${input.lastError.replaceAll("'", "''")}'`},
       ${input.retryAfter === undefined || input.retryAfter === null ? 'NULL' : `TIMESTAMPTZ '${input.retryAfter}'`},
       TIMESTAMPTZ '${input.createdAt}',
       TIMESTAMPTZ '${input.updatedAt}'
@@ -552,9 +560,11 @@ const insertReviewRebuildChunk = async (input: {
 const insertReviewRebuildRequest = async (input: {
   completedAt?: string | null
   createdAt: string
+  failedAt?: string | null
+  lastError?: string | null
   projectId: string
   requestId: string
-  status: 'admitted' | 'blocked_over_budget' | 'completed'
+  status: ReviewRebuildRequestStatus
   updatedAt: string
 }) => {
   if (!runDatabase) {
@@ -576,6 +586,8 @@ const insertReviewRebuildRequest = async (input: {
       diagnostics_json,
       admitted_at,
       completed_at,
+      failed_at,
+      last_error,
       created_at,
       updated_at
     ) VALUES (
@@ -590,8 +602,10 @@ const insertReviewRebuildRequest = async (input: {
       '{}'::JSON,
       ${input.status === 'blocked_over_budget' ? "'test over budget'" : 'NULL'},
       '{}'::JSON,
-      TIMESTAMPTZ '${input.createdAt}',
+      ${input.status === 'admitted' || input.status === 'completed' || input.status === 'failed' ? `TIMESTAMPTZ '${input.createdAt}'` : 'NULL'},
       ${input.completedAt === undefined || input.completedAt === null ? 'NULL' : `TIMESTAMPTZ '${input.completedAt}'`},
+      ${input.failedAt === undefined || input.failedAt === null ? 'NULL' : `TIMESTAMPTZ '${input.failedAt}'`},
+      ${input.lastError === undefined || input.lastError === null ? 'NULL' : `'${input.lastError.replaceAll("'", "''")}'`},
       TIMESTAMPTZ '${input.createdAt}',
       TIMESTAMPTZ '${input.updatedAt}'
     )
@@ -1168,6 +1182,83 @@ test('reviews warnings keep retryable V4 rebuild chunk failures queued', async (
   expect(body.data.indexing.progressState).toBe('queued')
   expect(body.data.indexing.queuedRefreshCount).toBe(1)
   expect(body.data.indexing.status).toBe('refreshing')
+})
+
+test('reviews warnings fail terminal V4 rebuild requests instead of reporting healthy queued chunks', async () => {
+  const projectId = 'project-v4-terminal-request-queued-warning'
+  const requestId = 'rebuild:terminal-request-queued-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewRebuildRequest({
+    createdAt: '2026-04-02T11:50:00.000Z',
+    failedAt: '2026-04-02T11:55:52.494Z',
+    lastError: 'DuckDB OOM failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)',
+    projectId,
+    requestId,
+    status: 'failed',
+    updatedAt: '2026-04-02T11:55:52.494Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-terminal-request-project-scope-completed-warning',
+    component: 'projectScope',
+    createdAt: '2026-04-02T11:50:00.000Z',
+    projectId,
+    requestId,
+    status: 'completed',
+    updatedAt: '2026-04-02T11:51:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-terminal-request-selected-import-failed-warning',
+    component: 'selectedImport',
+    createdAt: '2026-04-02T11:51:00.000Z',
+    lastError: 'DuckDB OOM failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)',
+    projectId,
+    requestId,
+    retryAfter: '2026-04-02T11:56:52.494Z',
+    status: 'failed',
+    updatedAt: '2026-04-02T11:55:52.494Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-terminal-request-selected-import-blocked-warning',
+    component: 'selectedImport',
+    createdAt: '2026-04-02T11:52:00.000Z',
+    lastError: 'blocked_over_budget',
+    projectId,
+    requestId,
+    status: 'blocked_over_budget',
+    updatedAt: '2026-04-02T11:55:52.494Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-terminal-request-judgment-input-pending-warning',
+    component: 'judgmentInputContent',
+    createdAt: '2026-04-02T11:53:00.000Z',
+    projectId,
+    requestId,
+    status: 'pending',
+    updatedAt: '2026-04-02T11:53:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-terminal-request-summary-pending-warning',
+    component: 'summary',
+    createdAt: '2026-04-02T11:54:00.000Z',
+    projectId,
+    requestId,
+    status: 'pending',
+    updatedAt: '2026-04-02T11:54:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.activeConsumerCount).toBe(0)
+  expect(body.data.indexing.activeWorkCount).toBe(0)
+  expect(body.data.indexing.eligibleConsumerCount).toBe(1)
+  expect(body.data.indexing.pendingRefreshCount).toBe(3)
+  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.queuedRefreshCount).toBe(3)
+  expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({failedCount: 1, pendingCount: 3})
+  expect(body.data.indexing.status).toBe('failed')
 })
 
 test('reviews warnings mark quarantined V4 outbox barriers as blocked', async () => {

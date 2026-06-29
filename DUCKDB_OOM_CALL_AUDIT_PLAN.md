@@ -538,7 +538,9 @@ hardening, and finally physical evidence.
   on stalled/stale warning responses except readable stale states and the
   explicit mutation-disabled queued backlog, while
   `projectsRoutesGetReviewsWarnings.test.ts` proves retryable rebuild chunk
-  failures report as queued backlog instead of terminal `failedCount`. Final
+  failures report as queued backlog instead of terminal `failedCount`, while the
+  latest terminal failed V4 rebuild request reports failed even when downstream
+  chunks remain pending. Final
   command evidence: `test:network-smoke`, `test:network-smoke:current-db`,
   `test:network-smoke:synthetic`, and `test:dev-server:current-db` passed.
 
