@@ -7,11 +7,13 @@ import {
 } from '../../reviewServing/reviewServingManifestRepository.ts'
 import {readReviewServingRows, type ReviewServingReaderDatabase} from '../../reviewServing/reviewServingReader.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
 import {getSystemActor} from '../../utils/getSystemActor.ts'
 
 type HumanAssessmentOverviewProjectRow = {id: string; name: string}
 type HumanAssessmentOverviewCountRow = {availability?: string; count_value?: number | null; countValue?: number | null}
+type HumanAssessmentOverviewAnsweredCountRow = {totalCount: number | null}
 
 export const getHumanAssessmentOverviewProjectCountFromServing = async (
   projectId: string,
@@ -25,6 +27,21 @@ export const getHumanAssessmentOverviewProjectCountFromServing = async (
 
   if (!manifest) {
     return 0
+  }
+
+  const [answeredCount] = await database.queryJson<HumanAssessmentOverviewAnsweredCountRow>(`
+    SELECT COUNT(DISTINCT article_id) AS totalCount
+    FROM mart.review_article_serving_v4
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(manifest.reviewConfigHash)}
+      AND snapshot_id = ${getSqlLiteral(manifest.snapshotId)}
+      AND list_mode_key = ${getSqlLiteral(contractKey === 'review.both.count' ? 'both' : 'human')}
+      AND human_status_key = 'answered'
+      ${contractKey === 'review.both.count' ? "AND llm_status_key = 'answered'" : ''}
+  `)
+
+  if (answeredCount) {
+    return Number(answeredCount.totalCount ?? 0)
   }
 
   const result = await readReviewServingRows<HumanAssessmentOverviewCountRow>(

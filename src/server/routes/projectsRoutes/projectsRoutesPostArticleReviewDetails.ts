@@ -9,9 +9,12 @@ import type {
   PromptRecord,
 } from '../../../db/schemaTypes.ts'
 import {getArticleSourceMetadataValue} from '../../../utils/articleSourceMetadata.ts'
+import {getProviderModelMetadataOptions} from '../../providers/providerModelMetadata.ts'
 import {readReviewServingRows, type ReviewServingReaderResult} from '../../reviewServing/reviewServingReader.ts'
-import {getDateValue, getJsonValue} from '../../services/appQueryHelpers.ts'
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {getDateValue, getJsonValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
 import {getSystemActor} from '../../utils/getSystemActor.ts'
 import {
@@ -47,6 +50,8 @@ type PlaceholderJudgment = {
 }
 
 type ReviewJudgment = JudgmentWithPromptAndAssessments | PlaceholderJudgment
+
+type ArticleJudgmentRow = ProjectReviewDetailJudgmentRow & {judgmentDeletedAt: unknown}
 
 type ProjectReviewConfig = {
   humanJudgmentMode?: 'prompt' | 'summary'
@@ -140,6 +145,15 @@ type ServingArticlePayloadRow = {
   article_id?: string
   full_text_preview?: string | null
   source_metadata?: unknown
+}
+
+type ArticleFullTextRow = {
+  fullText: string | null
+  fullTextCharCount: number | null
+  fullTextHtml: string | null
+  fullTextOriginalFormat: string | null
+  fullTextSource: string | null
+  importRoute: string | null
 }
 
 type ProjectPromptRow = {
@@ -381,6 +395,73 @@ const getProjectReviewDetailHumanRows = async (params: {
     })
 }
 
+const getArticleJudgmentRows = async (params: {
+  articleId: string
+  projectId: string
+}): Promise<ArticleJudgmentRow[]> => {
+  return getAppDatabaseService().queryJson<ArticleJudgmentRow>(`
+    WITH project_scope_article AS (
+      SELECT pir.project_id, air.article_id
+      FROM app.project_import_route pir
+      INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+      WHERE pir.project_id = ${getSqlLiteral(params.projectId)}
+        AND air.article_id = ${getSqlLiteral(params.articleId)}
+      UNION
+      SELECT pa.project_id, pa.article_id
+      FROM app.project_article pa
+      WHERE pa.project_id = ${getSqlLiteral(params.projectId)}
+        AND pa.article_id = ${getSqlLiteral(params.articleId)}
+    )
+    SELECT
+      j.id AS judgmentId,
+      [] AS judgmentAssessments,
+      j.created_at AS judgmentCreatedAt,
+      j.updated_at AS judgmentUpdatedAt,
+      j.deleted_at AS judgmentDeletedAt,
+      j.article_id AS judgmentArticleId,
+      j.model_id AS judgmentModelId,
+      j.prompt_id AS judgmentPromptId,
+      j.project_id AS judgmentProjectId,
+      j.use_title AS judgmentUseTitle,
+      j.use_abstract AS judgmentUseAbstract,
+      j.use_fulltext AS judgmentUseFulltext,
+      j.use_fulltext_no_images AS judgmentUseFulltextNoImages,
+      j.chunking_strategy AS judgmentChunkingStrategy,
+      j.is_answered AS judgmentIsAnswered,
+      j.answered_original AS judgmentAnsweredOriginal,
+      TO_JSON(j.answered_original_as_array) AS judgmentAnsweredOriginalAsArray,
+      j.confidence_original AS judgmentConfidenceOriginal,
+      j.explanation AS judgmentExplanation,
+      TO_JSON(j.quotes) AS judgmentQuotes,
+      j.snapshot_project_id AS judgmentSnapshotProjectId,
+      j.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
+      p.original_text AS promptOriginalText,
+      p.prompt_heading AS promptHeading,
+      TO_JSON(m.metadata_json) AS modelMetadataJson,
+      COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+      pc.provider_kind AS modelProvider,
+      NULL AS modelThinking,
+      m.variant AS modelVersion
+    FROM app.judgment j
+    INNER JOIN project_scope_article scope_article ON scope_article.article_id = j.article_id
+    INNER JOIN app.project project ON project.id = scope_article.project_id
+    INNER JOIN app.project_prompt project_prompt ON project_prompt.prompt_id = j.prompt_id
+    INNER JOIN app.prompt p ON j.prompt_id = p.id
+    LEFT JOIN app.model m ON j.model_id = m.id
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE project.id = ${getSqlLiteral(params.projectId)}
+      AND project.archived = FALSE
+      AND ${getProjectVisibleJudgmentScopeSql({
+        judgmentAlias: 'j',
+        projectAlias: 'project',
+        projectPromptAlias: 'project_prompt',
+        projectScopeAlias: 'scope_article',
+      })}
+      AND j.deleted_at IS NULL
+    ORDER BY j.created_at DESC NULLS LAST, j.id ASC
+  `)
+}
+
 const getProjectReviewDetailJudgmentValue = (row: ProjectReviewDetailJudgmentRow): JudgmentRecord => {
   const answeredOriginalAsArray = getJsonValue(row.judgmentAnsweredOriginalAsArray)
   const quotes = getJsonValue(row.judgmentQuotes)
@@ -415,6 +496,14 @@ const getProjectReviewDetailJudgmentValue = (row: ProjectReviewDetailJudgmentRow
   }
 }
 
+const getJudgmentValue = (row: ArticleJudgmentRow): JudgmentRecord => {
+  return {...getProjectReviewDetailJudgmentValue(row), deletedAt: getDateValue(row.judgmentDeletedAt)}
+}
+
+const getModelThinkingValue = (row: {modelMetadataJson: unknown}) => {
+  return getProviderModelMetadataOptions(getJsonValue(row.modelMetadataJson)).thinking ?? null
+}
+
 const getAssessmentValue = (row: {
   id: string
   judgmentId: string
@@ -433,37 +522,114 @@ const getAssessmentValue = (row: {
   }
 }
 
-const getCovidenceRelatedRecords = (article: ArticleRecord): CovidenceRelatedRecord[] => {
+const getCovidenceRelatedRecords = async (params: {
+  article: ArticleRecord
+  projectId: string
+}): Promise<CovidenceRelatedRecord[]> => {
+  const article = params.article
   const covidence = getArticleSourceMetadataValue(article.sourceMetadata)?.covidence
 
-  return covidence?.studyKey
-    ? [
-        {
-          articleExternalId: article.articleId,
-          articleTitle: article.articleTitle,
-          articleUrl:
-            getArticleUrl({
-              arxivId: article.arxivId,
-              biorxivId: article.biorxivId,
-              doi: article.doi,
-              medrxivId: article.medrxivId,
-              originalData: article.originalData,
-              pubmedId: article.pubmedId,
-              sourceMetadata: article.sourceMetadata,
-              url: article.url,
-            }) || null,
-          covidenceIds: covidence.covidenceIds ?? [],
-          hasDuplicateStudyRecords: covidence.hasDuplicateStudyRecords ?? false,
-          hasStudyDecisionConflict: covidence.hasStudyDecisionConflict ?? false,
-          id: article.id,
-          isCurrentRecord: true,
-          isSeededHumanJudgmentAnswered: covidence.isSeededHumanJudgmentAnswered ?? false,
-          referenceIds: covidence.referenceIds ?? [],
-          seededHumanJudgmentAnswer: covidence.seededHumanJudgmentAnswer ?? null,
-          stageMembership: covidence.stageMembership ?? {},
-        },
-      ]
-    : []
+  if (!covidence?.studyKey) {
+    return []
+  }
+
+  const rows = await getAppDatabaseService().queryJson<{
+    articleExternalId: string | null
+    articleTitle: string
+    arxivId: string | null
+    biorxivId: string | null
+    doi: string | null
+    id: string
+    isCurrentRecord: boolean
+    medrxivId: string | null
+    pubmedId: string | null
+    rawPayload: unknown
+    sourceMetadata: unknown
+    url: string | null
+  }>(`
+    WITH project_route AS (
+      SELECT import_route_id
+      FROM app.project_import_route
+      WHERE project_id = ${getSqlLiteral(params.projectId)}
+    ),
+    source_record_related_record AS (
+      SELECT
+        source_record.id AS id,
+        source_record.external_article_id AS articleExternalId,
+        article.article_title AS articleTitle,
+        article.arxiv_id AS arxivId,
+        article.biorxiv_id AS biorxivId,
+        article.doi AS doi,
+        article.medrxiv_id AS medrxivId,
+        article.pubmed_id AS pubmedId,
+        COALESCE(json_extract_string(source_record.raw_payload, '$.covidence.citation.url'), article.url) AS url,
+        source_record.article_id = ${getSqlLiteral(article.id)} AS isCurrentRecord,
+        source_record.raw_payload AS rawPayload,
+        source_record.import_metadata AS sourceMetadata
+      FROM app.article_import_route_source_record source_record
+      INNER JOIN project_route ON project_route.import_route_id = source_record.import_route_id
+      INNER JOIN app.article article ON article.id = source_record.article_id
+      WHERE source_record.quarantined_at IS NULL
+        AND json_extract_string(source_record.import_metadata, '$.covidence.studyKey') = ${getSqlLiteral(covidence.studyKey)}
+    ),
+    legacy_related_record AS (
+      SELECT
+        article.id AS id,
+        article.article_id AS articleExternalId,
+        article.article_title AS articleTitle,
+        article.arxiv_id AS arxivId,
+        article.biorxiv_id AS biorxivId,
+        article.doi AS doi,
+        article.medrxiv_id AS medrxivId,
+        article.pubmed_id AS pubmedId,
+        article.url AS url,
+        article.id = ${getSqlLiteral(article.id)} AS isCurrentRecord,
+        article.original_data AS rawPayload,
+        article.source_metadata AS sourceMetadata
+      FROM app.article article
+      WHERE article.import_route = ${getSqlLiteral(article.importRoute)}
+        AND json_extract_string(article.source_metadata, '$.covidence.studyKey') = ${getSqlLiteral(covidence.studyKey)}
+    )
+    SELECT * FROM source_record_related_record
+    UNION ALL
+    SELECT * FROM legacy_related_record
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM source_record_related_record source_record
+      WHERE source_record.id = legacy_related_record.id
+    )
+    ORDER BY articleTitle ASC, articleExternalId ASC NULLS LAST, id ASC
+  `)
+
+  return rows.map((row) => {
+    const sourceMetadata = getJsonValue(row.sourceMetadata)
+    const relatedCovidence = getArticleSourceMetadataValue(sourceMetadata)?.covidence
+
+    return {
+      articleExternalId: row.articleExternalId,
+      articleTitle: row.articleTitle,
+      articleUrl:
+        getArticleUrl({
+          arxivId: row.arxivId,
+          biorxivId: row.biorxivId,
+          doi: row.doi,
+          medrxivId: row.medrxivId,
+          originalData: getJsonValue(row.rawPayload),
+          pubmedId: row.pubmedId,
+          sourceMetadata,
+          url: row.url,
+        }) || null,
+      covidenceIds: relatedCovidence?.covidenceIds ?? [],
+      hasDuplicateStudyRecords: relatedCovidence?.hasDuplicateStudyRecords ?? false,
+      hasStudyDecisionConflict: relatedCovidence?.hasStudyDecisionConflict ?? false,
+      id: row.id,
+      isCurrentRecord: row.isCurrentRecord || row.id === article.id,
+      isSeededHumanJudgmentAnswered: relatedCovidence?.isSeededHumanJudgmentAnswered ?? false,
+      referenceIds: relatedCovidence?.referenceIds ?? [],
+      seededHumanJudgmentAnswer: relatedCovidence?.seededHumanJudgmentAnswer ?? null,
+      stageMembership: relatedCovidence?.stageMembership ?? {},
+    }
+  })
 }
 
 const getUnavailableReviewDetail = (input: {
@@ -526,6 +692,7 @@ const readProjectReviewArticlePayload = async (input: {
 const getArticleRecordFromServing = (input: {
   articleId: string
   detail: ServingArticleDetailRow
+  fullText: ArticleFullTextRow | null
   payload: ServingArticlePayloadRow | null
 }): ArticleRecord => {
   const sourceMetadata = getJsonValue(input.payload?.source_metadata ?? input.detail.source_metadata)
@@ -543,21 +710,21 @@ const getArticleRecordFromServing = (input: {
     contentHash: null,
     createdAt: new Date(0),
     doi: input.detail.doi ?? null,
-    fullText: input.payload?.full_text_preview ?? null,
+    fullText: input.fullText?.fullText ?? input.payload?.full_text_preview ?? null,
     fullTextAssets: null,
-    fullTextCharCount: input.payload?.full_text_preview?.length ?? null,
+    fullTextCharCount: input.fullText?.fullTextCharCount ?? input.payload?.full_text_preview?.length ?? null,
     fullTextConversionAttempts: null,
     fullTextConversionError: null,
     fullTextConversionMetadata: null,
     fullTextConversionModelId: null,
     fullTextConversionStatus: input.detail.full_text_conversion_status ?? null,
     fullTextFetchedAt: getDateValue(input.detail.full_text_fetched_at),
-    fullTextHtml: null,
-    fullTextOriginalFormat: null,
+    fullTextHtml: input.fullText?.fullTextHtml ?? null,
+    fullTextOriginalFormat: input.fullText?.fullTextOriginalFormat ?? null,
     fullTextPDF: input.detail.full_text_pdf ?? null,
-    fullTextSource: null,
+    fullTextSource: input.fullText?.fullTextSource ?? null,
     id: input.detail.article_id ?? input.articleId,
-    importRoute: null,
+    importRoute: input.fullText?.importRoute ?? null,
     medrxivId: input.detail.medrxiv_id ?? null,
     originalData: null,
     publicationStatus: null,
@@ -605,9 +772,29 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         return getUnavailableReviewDetail({articleId, reason: 'detail row unavailable'})
       }
 
-      const articlePayload = articlePayloadResult.status === 'accepted' ? (articlePayloadResult.rows[0] ?? null) : null
-      const article = getArticleRecordFromServing({articleId, detail: articleDetail, payload: articlePayload})
-      const covidenceRelatedRecords = getCovidenceRelatedRecords(article)
+      const [articlePayload, articleFullTextRows, allArticleJudgments] = await Promise.all([
+        Promise.resolve(articlePayloadResult.status === 'accepted' ? (articlePayloadResult.rows[0] ?? null) : null),
+        getAppDatabaseService().queryJson<ArticleFullTextRow>(`
+          SELECT
+            full_text AS fullText,
+            full_text_char_count AS fullTextCharCount,
+            full_text_html AS fullTextHtml,
+            full_text_original_format AS fullTextOriginalFormat,
+            full_text_source AS fullTextSource,
+            import_route AS importRoute
+          FROM app.article
+          WHERE id = ${getSqlLiteral(articleId)}
+          LIMIT 1
+        `),
+        getArticleJudgmentRows({articleId, projectId}),
+      ])
+      const article = getArticleRecordFromServing({
+        articleId,
+        detail: articleDetail,
+        fullText: articleFullTextRows[0] ?? null,
+        payload: articlePayload,
+      })
+      const covidenceRelatedRecords = await getCovidenceRelatedRecords({article, projectId})
 
       const projectReviewDetailJudgmentResult = await getProjectReviewDetailJudgmentRows({
         projectId,
@@ -652,7 +839,43 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           modelVersion: row.modelVersion,
         }
       })
-      const articleJudgments: ReviewJudgmentDetail[] = projectReviewDetailJudgmentDetails
+      const enabledPromptIdSet = new Set(
+        enabledPromptRows.map((row) => {
+          return row.id
+        }),
+      )
+      const projectReviewDetailJudgmentIdSet = new Set<string>(
+        projectReviewDetailJudgmentDetails.map((detail) => {
+          return detail.judgment.id
+        }),
+      )
+      const projectReviewDetailPromptIdSet = new Set<string>(
+        projectReviewDetailJudgmentDetails.map((detail) => {
+          return detail.judgment.promptId
+        }),
+      )
+      const fallbackAppJudgmentDetails: ReviewJudgmentDetail[] = allArticleJudgments
+        .filter((row) => {
+          return (
+            enabledPromptIdSet.has(row.judgmentPromptId)
+            && !projectReviewDetailJudgmentIdSet.has(row.judgmentId)
+            && !projectReviewDetailPromptIdSet.has(row.judgmentPromptId)
+          )
+        })
+        .map((row) => {
+          return {
+            judgment: getJudgmentValue(row),
+            prompt: getPromptValue(row),
+            modelName: row.modelName,
+            modelProvider: row.modelProvider,
+            modelThinking: getModelThinkingValue(row),
+            modelVersion: row.modelVersion,
+          }
+        })
+      const articleJudgments: ReviewJudgmentDetail[] = [
+        ...projectReviewDetailJudgmentDetails,
+        ...fallbackAppJudgmentDetails,
+      ]
       const latestArticleJudgmentsByPrompt = articleJudgments.reduce<Map<string, ReviewJudgmentDetail>>(
         (judgmentMap, row) => {
           const existing = judgmentMap.get(row.judgment.promptId)
@@ -743,8 +966,48 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         return bt - at
       })
 
-      const allJudgments: ReviewJudgment[] = []
-      const projectsById: Record<string, {name: string}> = {}
+      const judgmentIdSet = new Set(
+        articleJudgments.map((row) => {
+          return row.judgment.id
+        }),
+      )
+      const allJudgments: ReviewJudgment[] = allArticleJudgments
+        .filter((row) => {
+          return !judgmentIdSet.has(row.judgmentId)
+        })
+        .map((row) => {
+          return {
+            ...getJudgmentValue(row),
+            prompt: getPromptValue(row),
+            assessments: [],
+            modelName: row.modelName,
+            modelProvider: row.modelProvider,
+            modelThinking: getModelThinkingValue(row),
+            modelVersion: row.modelVersion,
+          }
+        })
+      const snapshotProjectIds = Array.from(
+        new Set(
+          allJudgments
+            .map((judgment) => {
+              return 'snapshotProjectId' in judgment ? judgment.snapshotProjectId : null
+            })
+            .filter((id): id is string => {
+              return Boolean(id)
+            }),
+        ),
+      )
+      const projectNameRows =
+        snapshotProjectIds.length > 0
+          ? await getAppDatabaseService().queryJson<{id: string; name: string}>(`
+              SELECT id, name
+              FROM app.project
+              WHERE id IN (${getQuotedStringList(snapshotProjectIds).join(', ')})
+            `)
+          : []
+      const projectsById = projectNameRows.reduce<Record<string, {name: string}>>((acc, row) => {
+        return {...acc, [row.id]: {name: row.name}}
+      }, {})
 
       const systemActor = getSystemActor()
 

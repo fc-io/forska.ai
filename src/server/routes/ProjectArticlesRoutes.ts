@@ -106,7 +106,7 @@ const getProjectArticleMembershipArticleRows = async (projectId: string, article
       FROM app.review_serving_snapshot_manifest
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND snapshot_status IN ('active', 'retired')
-      ORDER BY updated_at DESC, snapshot_id DESC
+      ORDER BY CASE snapshot_status WHEN 'active' THEN 0 ELSE 1 END ASC, updated_at DESC, snapshot_id DESC
       LIMIT 1
     )
     SELECT
