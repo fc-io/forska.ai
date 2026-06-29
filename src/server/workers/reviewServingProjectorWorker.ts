@@ -11,6 +11,7 @@ import {
 import {
   claimReviewServingRebuildChunk,
   getNextClaimableReviewServingRebuildChunk,
+  getReviewServingRebuildChunkManifest,
   heartbeatReviewServingRebuildChunkLease,
   isReviewServingRebuildChunkComplete,
   markReviewServingRebuildChunkFailed,
@@ -855,6 +856,82 @@ const runValidatedRebuildChunkOutput = async (
   return {status: 'completed' as const}
 }
 
+const getRebuildChunkValidationError = (input: {
+  actualChecksum: string
+  actualCount?: number
+  expectedChecksum: string
+  expectedCount?: number
+}) => {
+  const checksumValid = input.actualChecksum === input.expectedChecksum
+  const countValid = input.expectedCount === undefined || input.actualCount === input.expectedCount
+
+  return checksumValid && countValid
+    ? null
+    : `chunk validation failed: expected checksum ${input.expectedChecksum} and count ${input.expectedCount ?? 'n/a'}, got checksum ${input.actualChecksum} and count ${input.actualCount ?? 'n/a'}`
+}
+
+const completeClaimedRebuildChunkWithValidation = async (
+  input: {
+    chunk: ReviewServingRebuildChunkManifest
+    leaseOwner: string
+    validateOutput: (
+      tx: ReviewServingChunkManifestRepositoryTransaction,
+    ) => Promise<{actualChecksum: string; actualCount?: number; expectedChecksum: string; expectedCount?: number}>
+  },
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  const completion = await database.transaction(async (tx) => {
+    const claimed = await getReviewServingRebuildChunkManifest({chunkId: input.chunk.chunkId}, tx)
+    const canWrite = claimed?.status === 'running' && claimed.leaseOwner === input.leaseOwner
+
+    if (!canWrite) {
+      return {completedChunk: null, validationError: null}
+    }
+
+    const validation = await input.validateOutput(tx)
+    const validationError = getRebuildChunkValidationError(validation)
+
+    if (validationError !== null) {
+      return {completedChunk: null, validationError}
+    }
+
+    await tx.run(`
+      UPDATE app.review_rebuild_chunk_manifest
+      SET
+        status = 'completed',
+        checksum = ${getSqlLiteral(validation.actualChecksum)},
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        last_error = NULL,
+        completed_at = current_timestamp,
+        updated_at = current_timestamp
+      WHERE chunk_id = ${getSqlLiteral(input.chunk.chunkId)}
+        AND status = 'running'
+        AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
+    `)
+
+    return {
+      completedChunk: await getReviewServingRebuildChunkManifest({chunkId: input.chunk.chunkId}, tx),
+      validationError: null,
+    }
+  })
+
+  if (completion.validationError !== null) {
+    const failedChunk = await markReviewServingRebuildChunkFailed(
+      {chunkId: input.chunk.chunkId, error: completion.validationError, leaseOwner: input.leaseOwner},
+      database,
+    )
+
+    throw new Error(failedChunk?.lastError ?? completion.validationError)
+  }
+
+  if (completion.completedChunk === null) {
+    throw new Error(`review serving rebuild chunk ${input.chunk.chunkId} is no longer claimed by ${input.leaseOwner}`)
+  }
+
+  return {status: 'completed' as const}
+}
+
 const runDisplayRebuildChunk = async (
   input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
@@ -1557,10 +1634,12 @@ const getRebuildChunkProjectClaims = (input: {
 
 const getSelectedImportRebuildPatchSourceWatermarks = (sourceWatermarks: Record<string, number>) => {
   const importRunArticleWatermark = sourceWatermarks.importRunArticle ?? sourceWatermarks['import-run-article']
+  const selectedImportWatermark =
+    typeof importRunArticleWatermark === 'number' && Number.isFinite(importRunArticleWatermark)
+      ? importRunArticleWatermark
+      : 0
 
-  return Number.isFinite(importRunArticleWatermark)
-    ? {importRunArticle: importRunArticleWatermark}
-    : {importRunArticle: 0}
+  return {importRunArticle: selectedImportWatermark}
 }
 
 const getProjectScopeRebuildChunkOutputChecksum = async (
@@ -1820,7 +1899,37 @@ const runSelectedImportRebuildChunk = async (
     sourceWatermarks: getSelectedImportRebuildPatchSourceWatermarks(manifest.inputWatermarks),
   })
 
-  return runValidatedRebuildChunkOutput(
+  await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+    await previous
+    const selectedImportSnapshotId = requireSelectedImportSnapshotId(snapshot)
+    const projectScopeIdentity = requireSnapshotComponentIdentity(snapshot, 'projectScope')
+    const existingSnapshot = await getSelectedImportSnapshotStatus(selectedImportSnapshotId, database)
+    const sourceDeltaHighWater = Number(existingSnapshot?.sourceDeltaHighWater ?? input.chunk.inputWatermark)
+
+    await database.transaction(async (tx) => {
+      await resetSelectedImportSnapshotForRebuild({projectId, projectScopeIdentity, selectedImportSnapshotId}, tx)
+    })
+    await drainSelectedImportBaseProjection(
+      {projectId, projectScopeIdentity, selectedImportSnapshotId, sourceDeltaHighWater},
+      database,
+    )
+    await projectReviewServingSelectedImportPatches(
+      {
+        acknowledgeClaims: false,
+        baseGeneration: input.chunk.outputBaseGeneration,
+        claims,
+        definitionVersion: manifest.definitionVersion,
+        manifestInputWatermarks: manifest.inputWatermarks,
+        projectId,
+        projectScopeIdentity,
+        projectionIdentity: input.chunk.projectionIdentity,
+        selectedImportSnapshotId,
+      },
+      database,
+    )
+  }, Promise.resolve())
+
+  return completeClaimedRebuildChunkWithValidation(
     {
       ...input,
       validateOutput: async (tx) => {
@@ -1834,37 +1943,6 @@ const runSelectedImportRebuildChunk = async (
           actualCount: checksum.actualCount,
           expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
         }
-      },
-      writeOutput: async (tx) => {
-        const chunkDatabase = getChunkProjectorDatabase(tx)
-
-        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
-          await previous
-          const selectedImportSnapshotId = requireSelectedImportSnapshotId(snapshot)
-          const projectScopeIdentity = requireSnapshotComponentIdentity(snapshot, 'projectScope')
-          const existingSnapshot = await getSelectedImportSnapshotStatus(selectedImportSnapshotId, chunkDatabase)
-          const sourceDeltaHighWater = Number(existingSnapshot?.sourceDeltaHighWater ?? input.chunk.inputWatermark)
-
-          await resetSelectedImportSnapshotForRebuild({projectId, projectScopeIdentity, selectedImportSnapshotId}, tx)
-          await drainSelectedImportBaseProjection(
-            {projectId, projectScopeIdentity, selectedImportSnapshotId, sourceDeltaHighWater},
-            chunkDatabase,
-          )
-          await projectReviewServingSelectedImportPatches(
-            {
-              acknowledgeClaims: false,
-              baseGeneration: input.chunk.outputBaseGeneration,
-              claims,
-              definitionVersion: manifest.definitionVersion,
-              manifestInputWatermarks: manifest.inputWatermarks,
-              projectId,
-              projectScopeIdentity,
-              projectionIdentity: input.chunk.projectionIdentity,
-              selectedImportSnapshotId,
-            },
-            chunkDatabase,
-          )
-        }, Promise.resolve())
       },
     },
     database,

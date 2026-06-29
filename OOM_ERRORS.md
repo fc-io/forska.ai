@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-29 - V4 Selected Import Rebuild Chunk
+
+- Error: `DuckDB Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)`.
+- Context: Live V4 `selectedImport` rebuild chunks for project `4ec939b2-47bb-48dd-ad62-ad9f4b5acecf`, request reason `missingReviewServingSnapshot`.
+- Cause: The full-project selected-import rebuild reset, base batch drain, patch projection, checksum validation, and chunk completion ran inside one DuckDB transaction, retaining too much work before downstream chunks could proceed.
+- Fix: Selected-import rebuild now keeps one logical prerequisite chunk but runs reset, base batches, patch projection, and final validation/completion in separate transactions.
+- Verification: `bun test src/server/workers/reviewServingProjectorWorker.test.ts` and touched-file ESLint.
+
 ## 2026-06-27 - V4 Judgment Input Content Rebuild Chunk
 
 - Error: `DuckDB Out of Memory Error: failed to allocate 32KiB (18.6 GiB/18.6 GiB used)`.
