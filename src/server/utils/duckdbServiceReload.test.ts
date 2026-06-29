@@ -106,6 +106,7 @@ test('duckdb service checkpoints before close', () => {
 
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
+            canCurrentServerOwnDuckdb: () => true,
             ensureCurrentDuckdbOwnerLease: async () => {},
             registerDuckdbOwnerDemotionHandler: () => {},
             releaseCurrentDuckdbOwnerLease: async () => {},
@@ -189,6 +190,7 @@ test('duckdb service retries startup after a recoverable WAL replay failure', ()
 
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
+            canCurrentServerOwnDuckdb: () => true,
             ensureCurrentDuckdbOwnerLease: async () => {},
             registerDuckdbOwnerDemotionHandler: () => {},
             releaseCurrentDuckdbOwnerLease: async () => {},
@@ -285,6 +287,7 @@ test('duckdb service quarantines a WAL that repeatedly fails replay during start
 
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
+            canCurrentServerOwnDuckdb: () => true,
             ensureCurrentDuckdbOwnerLease: async () => {},
             registerDuckdbOwnerDemotionHandler: () => {},
             releaseCurrentDuckdbOwnerLease: async () => {},
@@ -396,6 +399,7 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
 
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
+            canCurrentServerOwnDuckdb: () => true,
             ensureCurrentDuckdbOwnerLease: async () => {},
             registerDuckdbOwnerDemotionHandler: () => {},
             releaseCurrentDuckdbOwnerLease: async () => {},
