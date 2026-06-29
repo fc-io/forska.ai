@@ -1421,7 +1421,7 @@ test('article range presplit aborts when parent chunk lease is lost', async () =
   expect(childInserts).toHaveLength(0)
 })
 
-test('selected import rebuild chunk does not presplit because rebuild output is not range-scoped', async () => {
+test('selected import rebuild chunk presplits because rebuild output is range-scoped', async () => {
   const statements: string[] = []
   const selectedImportChunk: ReviewServingRebuildChunkManifest = {
     ...chunkManifest,
@@ -1454,6 +1454,10 @@ test('selected import rebuild chunk does not presplit because rebuild output is 
         ] as T[]
       }
 
+      if (statement.includes('RETURNING chunk_id AS chunkId')) {
+        return [{chunkId: selectedImportChunk.chunkId}] as T[]
+      }
+
       return [] as T[]
     },
     run: async (statement: string) => {
@@ -1464,24 +1468,19 @@ test('selected import rebuild chunk does not presplit because rebuild output is 
     },
   }
 
-  await runReviewServingProjectorWorkerClaimedRebuildChunk(
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
     {chunk: selectedImportChunk, leaseOwner: 'worker-1'},
     database,
-  ).then(
-    () => {
-      throw new Error('expected selectedImport rebuild chunk to reject')
-    },
-    (error) => {
-      expect(String(error)).toContain('cannot run selectedImport rebuild chunk without an identity manifest')
-    },
   )
   const joined = statements.join('\n')
   const childInserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
   })
 
-  expect(joined).not.toContain('NTILE(5)')
-  expect(childInserts).toHaveLength(0)
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain('NTILE(5)')
+  expect(childInserts.length).toBeGreaterThan(1)
+  expect(joined).toContain('"splitReason":"input_row_budget"')
 })
 
 test('project scope rebuild chunk does not presplit because rebuild output is not range-scoped', async () => {
@@ -1700,6 +1699,121 @@ test('base rebuild chunks regenerate project scope and selected import state bef
   )
   expect(joined).toContain("checksum = 'checksum-project-scope'")
   expect(joined).toContain("checksum = 'checksum-selected-import'")
+})
+
+test('selected import bootstrap rebuild chunk writes only its article range', async () => {
+  const statements: string[] = []
+  const selectedImportChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    checksum: null,
+    chunkEndKey: 'article-099',
+    chunkId: 'chunk-selected-import-bootstrap-range',
+    chunkStartKey: 'article-050',
+    inputDigest: 'freshReviewServingSnapshot',
+    inputWatermark: 9,
+    outputBaseGeneration: 7,
+    projectionComponent: 'selectedImport',
+    projectionIdentity: 'selectedImport:project-1',
+    requestId: 'request-bootstrap-range',
+  }
+  const componentState = {
+    optional: [],
+    required: [
+      {
+        baseGeneration: '7',
+        component: 'projectScope',
+        patchWatermark: '9',
+        projectionIdentity: 'projectScope:project-1',
+      },
+      {
+        baseGeneration: '7',
+        component: 'selectedImport',
+        patchWatermark: '9',
+        projectionIdentity: 'selectedImport:project-1',
+      },
+      {baseGeneration: '7', component: 'display', patchWatermark: '9', projectionIdentity: 'display:project-1'},
+      {baseGeneration: '7', component: 'llmStatus', patchWatermark: '9', projectionIdentity: 'llmStatus:project-1'},
+      {baseGeneration: '7', component: 'humanStatus', patchWatermark: '9', projectionIdentity: 'humanStatus:project-1'},
+      {baseGeneration: '7', component: 'posting', patchWatermark: '9', projectionIdentity: 'posting:project-1'},
+      {baseGeneration: '7', component: 'summary', patchWatermark: '9', projectionIdentity: 'summary:project-1'},
+      {baseGeneration: '7', component: 'payload', patchWatermark: '9', projectionIdentity: 'payload:project-1'},
+    ],
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+        return [selectedImportChunk] as T[]
+      }
+
+      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+        return [
+          {
+            baseGeneration: selectedImportChunk.outputBaseGeneration,
+            definitionVersion: 'selectedImport-v1',
+            inputDigest: selectedImportChunk.inputDigest,
+            inputWatermark: selectedImportChunk.inputWatermark,
+            inputWatermarksJson: {importRunArticle: 9},
+            invalidationReason: selectedImportChunk.inputDigest,
+            manifestId: 'manifest-selectedImport-bootstrap-range',
+            patchRangeEnd: selectedImportChunk.inputWatermark,
+            patchRangeStart: selectedImportChunk.inputWatermark,
+            patchWatermark: selectedImportChunk.inputWatermark,
+            projectId: selectedImportChunk.projectId,
+            projectionComponent: selectedImportChunk.projectionComponent,
+            projectionIdentity: selectedImportChunk.projectionIdentity,
+            promptConfigHash: null,
+            reviewConfigHash: 'review-config-1',
+            status: 'candidate',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return [
+          {
+            componentStateJson: componentState,
+            reviewConfigHash: 'review-config-1',
+            selectedImportSnapshotId: 'selected-import-snapshot-1',
+            snapshotId: 'snapshot-bootstrap-range-1',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('WITH selected_import_candidates')) {
+        return [] as T[]
+      }
+
+      if (statement.includes('WITH output_row')) {
+        return [{actualChecksum: 'checksum-selected-import-range', actualCount: 0}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: selectedImportChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain('DELETE FROM mart.review_selected_import_patch_v4')
+  expect(joined).toContain('DELETE FROM app.review_selected_article_import_v4')
+  expect(joined).not.toContain('DELETE FROM app.review_selected_import_snapshot')
+  expect(joined).toContain("article_id >= 'article-050'")
+  expect(joined).toContain("article_id <= 'article-099'")
+  expect(joined).toContain("scope.article_id >= 'article-050'")
+  expect(joined).toContain("serving.article_id >= 'article-050'")
+  expect(joined).toContain("checksum = 'checksum-selected-import-range'")
 })
 
 test('selected import rebuild uses import scoped zero watermark when manifest has no import watermark', async () => {

@@ -21,6 +21,8 @@ export type ReviewServingSelectedImportPatchProjectorDatabase = ReviewServingPro
 export type ProjectReviewServingSelectedImportPatchInput = {
   acknowledgeClaims?: boolean
   baseGeneration: number
+  chunkEndArticleId?: string
+  chunkStartArticleId?: string
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
   manifestInputWatermarks?: ReviewServingSourcePartitionWatermarks
@@ -108,6 +110,15 @@ const hasProjectScopedClaim = (claims: readonly ReviewServingDirtyWorkClaim[]) =
   })
 }
 
+const getDirtyArticleRangePredicateSql = (input: ProjectReviewServingSelectedImportPatchInput, alias: string) => {
+  return input.chunkStartArticleId === undefined || input.chunkEndArticleId === undefined
+    ? ''
+    : `
+      AND ${alias}.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
+      AND ${alias}.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
+    `
+}
+
 const getDirtyArticleCte = (input: ProjectReviewServingSelectedImportPatchInput, articleIds: readonly string[]) => {
   if (articleIds.length > 0) {
     return `dirty_article(article_id) AS (
@@ -124,12 +135,14 @@ const getDirtyArticleCte = (input: ProjectReviewServingSelectedImportPatchInput,
           SELECT scope.article_id
           FROM mart.project_scope_article scope
           WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
+            ${getDirtyArticleRangePredicateSql(input, 'scope')}
           UNION
           SELECT serving.article_id
           FROM mart.review_article_serving_v4 serving
           WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
             AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
             AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+            ${getDirtyArticleRangePredicateSql(input, 'serving')}
             AND EXISTS (
               SELECT 1
               FROM app.review_serving_snapshot_manifest snapshot
@@ -685,7 +698,7 @@ const getSelectedImportPatchManifest = (
 
 export const projectReviewServingSelectedImportPatches = async (
   input: ProjectReviewServingSelectedImportPatchInput,
-  database: ReviewServingSelectedImportPatchProjectorDatabase = getAppDatabaseService(),
+  database: ReviewServingSelectedImportPatchProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportPatchProjectorDatabase,
 ) => {
   const rows = await getSelectedImportPatchRows(input, database)
   const templates = await getSelectedImportServingTemplates(input, database)

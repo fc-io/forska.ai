@@ -72,7 +72,10 @@ import {
   projectReviewServingSelectedImportPatches,
   type ProjectReviewServingSelectedImportPatchInput,
 } from '../reviewServing/reviewServingSelectedImportPatchProjector.ts'
-import {projectReviewServingSelectedImportBatch} from '../reviewServing/reviewServingSelectedImportProjector.ts'
+import {
+  projectReviewServingSelectedImportArticleRange,
+  projectReviewServingSelectedImportBatch,
+} from '../reviewServing/reviewServingSelectedImportProjector.ts'
 import {composeReviewServingCandidateSnapshotManifest} from '../reviewServing/reviewServingSnapshotPromotionService.ts'
 import {projectReviewServingSummaries} from '../reviewServing/reviewServingSummaryProjector.ts'
 import {projectReviewServingTitleSearchRows} from '../reviewServing/reviewServingTitleSearchProjector.ts'
@@ -416,6 +419,8 @@ const splittableArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjecti
   'queue',
   'posting',
   'judgmentInputContent',
+  'selectedImport',
+  'summary',
 ])
 
 const getArticleRangeRebuildChunkEstimatedInputRows = (chunk: ReviewServingRebuildChunkManifest) => {
@@ -1722,9 +1727,10 @@ const getSelectedImportRebuildChunkOutputChecksum = async (
         COALESCE(CAST(journal_title AS VARCHAR), '') || ':' ||
         COALESCE(CAST(external_id AS VARCHAR), '') || ':' ||
         COALESCE(CAST(tombstone AS VARCHAR), '') AS row_value
-      FROM app.review_selected_article_import_v4
+      FROM app.review_selected_article_import_v4 base
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND ${getSelectedImportSnapshotIdPredicate(input.selectedImportSnapshotIds)}
+        AND ${getChunkArticleRangePredicate({alias: 'base', chunk: input.chunk})}
       UNION ALL
       SELECT
         'patch:' || CAST(selected_import_snapshot_id AS VARCHAR) || ':' || CAST(patch_watermark AS VARCHAR) || ':' || CAST(article_id AS VARCHAR) AS row_key,
@@ -1737,9 +1743,10 @@ const getSelectedImportRebuildChunkOutputChecksum = async (
         COALESCE(CAST(journal_title AS VARCHAR), '') || ':' ||
         COALESCE(CAST(external_id AS VARCHAR), '') || ':' ||
         COALESCE(CAST(tombstone AS VARCHAR), '') AS row_value
-      FROM mart.review_selected_import_patch_v4
+      FROM mart.review_selected_import_patch_v4 patch
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND ${getSelectedImportSnapshotIdPredicate(input.selectedImportSnapshotIds)}
+        AND ${getChunkArticleRangePredicate({alias: 'patch', chunk: input.chunk})}
     )
     SELECT
       CAST(COUNT(*) AS INTEGER) AS actualCount,
@@ -1839,6 +1846,62 @@ const resetSelectedImportSnapshotForClaimedRebuild = async (
   })
 }
 
+const resetSelectedImportArticleRangeForClaimedRebuild = async (
+  input: {
+    chunk: ReviewServingRebuildChunkManifest
+    leaseOwner: string
+    projectId: string
+    projectScopeIdentity: string
+    selectedImportSnapshotId: string
+  },
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  await database.transaction(async (tx) => {
+    await requireClaimedRebuildChunk(input, tx)
+    await tx.run(`
+      DELETE FROM mart.review_selected_import_patch_v4
+      WHERE project_id = ${getSqlLiteral(input.projectId)}
+        AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+        AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+        AND article_id >= ${getSqlLiteral(input.chunk.chunkStartKey)}
+        AND article_id <= ${getSqlLiteral(input.chunk.chunkEndKey)}
+    `)
+  })
+}
+
+const projectSelectedImportArticleRangeForClaimedRebuild = async (
+  input: {
+    chunk: ReviewServingRebuildChunkManifest
+    leaseOwner: string
+    projectId: string
+    projectScopeIdentity: string
+    selectedImportSnapshotId: string
+    sourceDeltaHighWater: number
+  },
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  await database.transaction(async (tx) => {
+    await requireClaimedRebuildChunk(input, tx)
+    await projectReviewServingSelectedImportArticleRange(
+      {
+        chunkEndArticleId: input.chunk.chunkEndKey,
+        chunkStartArticleId: input.chunk.chunkStartKey,
+        projectId: input.projectId,
+        projectScopeIdentity: input.projectScopeIdentity,
+        selectedImportSnapshotId: input.selectedImportSnapshotId,
+        sourceDeltaHighWater: input.sourceDeltaHighWater,
+      },
+      getChunkProjectorDatabase(tx),
+    )
+  })
+}
+
+const shouldRunFullSelectedImportRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
+  return (
+    chunk.inputDigest !== 'freshReviewServingSnapshot' && chunk.parentChunkId == null && (chunk.splitDepth ?? 0) === 0
+  )
+}
+
 const drainSelectedImportBaseProjectionForClaimedRebuild = async (
   input: {
     chunk: ReviewServingRebuildChunkManifest
@@ -1914,19 +1977,36 @@ const runSelectedImportRebuildChunk = async (
           const existingSnapshot = await getSelectedImportSnapshotStatus(selectedImportSnapshotId, projectorDatabase)
           const sourceDeltaHighWater = Number(existingSnapshot?.sourceDeltaHighWater ?? input.chunk.inputWatermark)
 
-          await resetSelectedImportSnapshotForClaimedRebuild(
-            {...input, projectId, projectScopeIdentity, selectedImportSnapshotId},
-            projectorDatabase,
-          )
-          await drainSelectedImportBaseProjectionForClaimedRebuild(
-            {...input, projectId, projectScopeIdentity, selectedImportSnapshotId, sourceDeltaHighWater},
-            projectorDatabase,
-          )
+          if (shouldRunFullSelectedImportRebuildChunk(input.chunk)) {
+            await resetSelectedImportSnapshotForClaimedRebuild(
+              {...input, projectId, projectScopeIdentity, selectedImportSnapshotId},
+              projectorDatabase,
+            )
+            await drainSelectedImportBaseProjectionForClaimedRebuild(
+              {...input, projectId, projectScopeIdentity, selectedImportSnapshotId, sourceDeltaHighWater},
+              projectorDatabase,
+            )
+          } else {
+            await resetSelectedImportArticleRangeForClaimedRebuild(
+              {...input, projectId, projectScopeIdentity, selectedImportSnapshotId},
+              projectorDatabase,
+            )
+            await projectSelectedImportArticleRangeForClaimedRebuild(
+              {...input, projectId, projectScopeIdentity, selectedImportSnapshotId, sourceDeltaHighWater},
+              projectorDatabase,
+            )
+          }
           await projectSelectedImportPatchesForClaimedRebuild(
             {
               ...input,
               acknowledgeClaims: false,
               baseGeneration: input.chunk.outputBaseGeneration,
+              chunkEndArticleId: shouldRunFullSelectedImportRebuildChunk(input.chunk)
+                ? undefined
+                : input.chunk.chunkEndKey,
+              chunkStartArticleId: shouldRunFullSelectedImportRebuildChunk(input.chunk)
+                ? undefined
+                : input.chunk.chunkStartKey,
               claims,
               definitionVersion: manifest.definitionVersion,
               manifestInputWatermarks: manifest.inputWatermarks,

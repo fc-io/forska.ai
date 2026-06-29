@@ -139,11 +139,7 @@ const selectedImportPostingFilterFanOut = 4
 const selectedImportPostingFanOut = listModeFanOut * selectedImportPostingFilterFanOut
 const syntheticHumanStatusPromptCount = 1
 const bootstrapOptionalComponents = ['search'] as const satisfies readonly ReviewServingProjectionComponent[]
-const fullProjectBootstrapComponents = [
-  'projectScope',
-  'selectedImport',
-  'summary',
-] as const satisfies readonly ReviewServingProjectionComponent[]
+const fullProjectBootstrapComponents = ['projectScope'] as const satisfies readonly ReviewServingProjectionComponent[]
 const articleScaledComponentFanOut = {
   display: listModeFanOut,
   humanStatus: 0,
