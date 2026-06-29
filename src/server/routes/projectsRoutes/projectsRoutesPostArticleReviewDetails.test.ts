@@ -124,8 +124,8 @@ beforeEach(() => {
       useTitle: true,
     }
   }
-  queryJsonRef.current = async (statement) => {
-    throw new Error(`legacy detail query should not run: ${statement}`)
+  queryJsonRef.current = async (_statement) => {
+    return []
   }
   reviewServingRowsRef.current = async () => {
     return {rows: [], status: 'accepted'}

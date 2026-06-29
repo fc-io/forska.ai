@@ -39,9 +39,9 @@ const summaryModeBlockedMessage = 'Summary-mode projects do not support prompt-b
 const getNextHumanAssessmentArticleFromServing = async (projectId: string) => {
   const database = getAppDatabaseService() as ReviewServingManifestRepositoryDatabase & ReviewServingReaderDatabase
   const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
+  const activeManifest = await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash}, database)
   const manifest =
-    (await getActiveReviewServingSnapshotManifest({projectId, reviewConfigHash}, database))
-    ?? (await getLastKnownGoodReviewServingSnapshotManifest({projectId, reviewConfigHash}, database))
+    activeManifest ?? (await getLastKnownGoodReviewServingSnapshotManifest({projectId, reviewConfigHash}, database))
 
   if (!manifest) {
     return null
@@ -49,7 +49,7 @@ const getNextHumanAssessmentArticleFromServing = async (projectId: string) => {
 
   const queueResult = await readReviewServingRows<HumanAssessmentQueueRow>(
     {
-      allowStale: false,
+      allowStale: !activeManifest,
       contractKey: 'review.queue.unassessed',
       filters: {queueKind: 'human-unreviewed'},
       limit: 1,
@@ -78,7 +78,7 @@ const getNextHumanAssessmentArticleFromServing = async (projectId: string) => {
 
   const articleResult = await readReviewServingRows<HumanAssessmentArticleRow>(
     {
-      allowStale: false,
+      allowStale: !activeManifest,
       articleIds: [articleId],
       contractKey: 'review.unassessed.rowsByArticleSet',
       filters: {articleId, queueKind: 'human-unreviewed'},
