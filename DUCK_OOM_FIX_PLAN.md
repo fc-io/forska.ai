@@ -922,9 +922,19 @@ complete and no normal product review flow can reach legacy raw fallback.
   specifically exercises discovered `POST /api/projectsreviewswarnings` project
   IDs and treats retryable V4 rebuild chunk backoff as queued maintenance work
   instead of terminal failed review state.
+- 2026-06-29 PR #99 selected-import OOM evidence stays on the Phase 5C V4 path:
+  the repair is in `app.review_rebuild_request`,
+  `app.review_rebuild_chunk_manifest`, and `reviewServing.projector.worker`
+  execution, not legacy V3 mart refresh/large-rebuild state. The current fix
+  narrows the selected-import rebuild transaction lifetime and records the OOM
+  in `OOM_ERRORS.md`; it does not close the stricter Phase 5C/Phase 6 gate for
+  fully budgeted selected-import chunk ranges, split/quarantine recovery, or
+  physical release-scale proof.
 - No true 10M DuckDB release-scale run, physical row-group/rows-scanned profile, temp-dir/RSS/latency profile, large local desktop sleep/process-kill simulation, or release-scale compaction proof exists in this branch.
 - Master checkboxes that require true physical release evidence remain unchecked. Synthetic fixture/report validation may be checked only as synthetic validation and must not be treated as the physical 10M pass.
-- `OOM_ERRORS.md` already records the Phase 5 desktop DuckDB runtime-memory default; this final audit did not add a new OOM or runtime-memory implementation change.
+- `OOM_ERRORS.md` records the Phase 5 desktop DuckDB runtime-memory default
+  and the 2026-06-29 selected-import V4 rebuild OOM mitigation. That mitigation
+  is a V4-path hardening step, not Phase 6 physical proof.
 
 - [ ] [Phase 0](./DUCK_CQRS_PLAN_PHASE_0.md) contracts, module boundaries, static guards, and benchmark harness are complete.
 - [ ] [Phase 1](./DUCK_CQRS_PLAN_PHASE_1.md) schema and DuckDB workload-admission foundations are complete.
