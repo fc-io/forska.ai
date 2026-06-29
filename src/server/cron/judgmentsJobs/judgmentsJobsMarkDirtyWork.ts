@@ -3,6 +3,7 @@ import type {JudgmentInsertRow} from '../../services/appDatabaseService.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
 import {getComparisonProjectServingInvalidationService} from '../../services/comparisonProjectServingInvalidationService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../../services/projectMartDirtyRefreshStateService.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import type {JudgmentJobSqliteOutboxEntry} from './judgmentJobSqliteService.ts'
 
@@ -388,6 +389,50 @@ const markComparisonServingStaleForInsertedEntries = async (
   )
 }
 
+const getDirtyProjectsForInsertedEntries = (
+  entries: JudgmentJobSqliteOutboxEntry[],
+  insertedJudgmentIds: Set<string>,
+) => {
+  return getInsertedEntries(entries, insertedJudgmentIds).reduce((projects, entry) => {
+    if (entry.projectId === null) {
+      return projects
+    }
+
+    const existingArticleIds = projects.get(entry.projectId) ?? []
+    projects.set(entry.projectId, Array.from(new Set([...existingArticleIds, entry.articleId])))
+
+    return projects
+  }, new Map<string, string[]>())
+}
+
+const markProjectMartRefreshStateForInsertedEntries = async ({
+  insertedJudgmentIds,
+  entries,
+  now,
+  requestedBy,
+  runner,
+}: {
+  insertedJudgmentIds: Set<string>
+  entries: JudgmentJobSqliteOutboxEntry[]
+  now: Date
+  requestedBy: string | null | undefined
+  runner: DirtyWorkRunner
+}) => {
+  const dirtyProjects = Array.from(getDirtyProjectsForInsertedEntries(entries, insertedJudgmentIds).entries()).map(
+    ([projectId, articleIds]) => {
+      return {articleIds, projectId}
+    },
+  )
+
+  await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
+    now,
+    projects: dirtyProjects,
+    requestedBy,
+    runner,
+    reason: 'judgment_sqlite_outbox_import',
+  })
+}
+
 const getOutboxImportMarkerValueSql = (
   {entry, errorMessage, importStatus}: JudgmentOutboxImportMarkerInput,
   now: Date,
@@ -501,6 +546,7 @@ export const commitJudgmentSqliteOutboxImportDirtyWork = async ({
   discardedEntries,
   importableEntries,
   now,
+  requestedBy,
 }: CommitJudgmentSqliteOutboxImportDirtyWorkParams): Promise<JudgmentSqliteOutboxDirtyWorkResult> => {
   return getAppDatabaseService().transaction(async (runner) => {
     const currentNow = now ?? new Date()
@@ -519,6 +565,13 @@ export const commitJudgmentSqliteOutboxImportDirtyWork = async ({
     const insertedJudgmentIds = await insertJudgments(runner, unmarkedImportableEntries)
 
     await markComparisonServingStaleForInsertedEntries(runner, unmarkedImportableEntries, insertedJudgmentIds)
+    await markProjectMartRefreshStateForInsertedEntries({
+      entries: unmarkedImportableEntries,
+      insertedJudgmentIds,
+      now: currentNow,
+      requestedBy,
+      runner,
+    })
     await insertOutboxImportMarkers(
       runner,
       getOutboxImportMarkerInputs({
