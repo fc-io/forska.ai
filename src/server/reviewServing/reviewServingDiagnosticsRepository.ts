@@ -333,7 +333,7 @@ const getDirtyWorkRowsEffect = (input: ReviewServingDiagnosticsInput, database: 
         CAST(COUNT(*) FILTER (WHERE status = 'failed') AS INTEGER) AS failedCount,
         CAST(COUNT(*) FILTER (WHERE status = 'completed') AS INTEGER) AS completedCount,
         MIN(created_at) FILTER (WHERE status IN ('pending', 'failed')) AS oldestQueuedAt,
-        MAX(updated_at) AS updatedAt
+        MAX(updated_at) FILTER (WHERE status IN ('running', 'completed')) AS updatedAt
       FROM app.review_serving_dirty_work
       WHERE project_id = ${getSqlLiteral(input.projectId)}
     `,
@@ -387,7 +387,7 @@ const getRebuildChunkRowsEffect = (
           WHERE chunk.status IN ('pending', 'failed')
             OR (chunk.status = 'running' AND chunk.lease_expires_at <= ${getSqlLiteral(now)})
         ) AS oldestQueuedAt,
-        MAX(chunk.updated_at) AS updatedAt
+        MAX(chunk.updated_at) FILTER (WHERE chunk.status IN ('running', 'completed')) AS updatedAt
       FROM app.review_rebuild_chunk_manifest chunk
       LEFT JOIN latest_request ON TRUE
       WHERE chunk.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}

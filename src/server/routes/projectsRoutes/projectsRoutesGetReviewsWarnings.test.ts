@@ -1016,6 +1016,39 @@ test('reviews warnings report processing for recently progressed queued V4 rebui
   expect(body.data.indexing.status).toBe('refreshing')
 })
 
+test('reviews warnings do not report processing for only recently enqueued V4 rebuild chunks', async () => {
+  const projectId = 'project-v4-recent-enqueue-warning'
+  const recentEnqueuedAt = new Date().toISOString()
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-v4-recent-enqueue-warning',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-recent-enqueue-warning',
+    createdAt: recentEnqueuedAt,
+    projectId,
+    status: 'pending',
+    updatedAt: recentEnqueuedAt,
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.activeConsumerCount).toBe(0)
+  expect(body.data.indexing.activeWorkCount).toBe(0)
+  expect(body.data.indexing.inFlightRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.queuedRefreshCount).toBe(1)
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
 test('reviews warnings ignore superseded terminal V4 rebuild chunks', async () => {
   const projectId = 'project-v4-superseded-terminal-rebuild-warning'
 

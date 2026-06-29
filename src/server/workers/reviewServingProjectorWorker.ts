@@ -1786,6 +1786,7 @@ const resetSelectedImportSnapshotForRebuild = async (
 
 const drainSelectedImportBaseProjection = async (
   input: {
+    beforeBatch?: () => Promise<void>
     projectId: string
     projectScopeIdentity: string
     selectedImportSnapshotId: string
@@ -1793,6 +1794,7 @@ const drainSelectedImportBaseProjection = async (
   },
   database: ReviewServingProjectorWorkerDatabase,
 ): Promise<number> => {
+  await input.beforeBatch?.()
   const result = await projectReviewServingSelectedImportBatch(
     {
       limit: defaultReviewServingSelectedImportBaseBatchSize,
@@ -1848,8 +1850,15 @@ const drainSelectedImportBaseProjectionForClaimedRebuild = async (
   },
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
-  await requireClaimedRebuildChunk(input, database)
-  await drainSelectedImportBaseProjection(input, database)
+  await drainSelectedImportBaseProjection(
+    {
+      ...input,
+      beforeBatch: async () => {
+        await requireClaimedRebuildChunk(input, database)
+      },
+    },
+    database,
+  )
 }
 
 const projectSelectedImportPatchesForClaimedRebuild = async (
@@ -1879,38 +1888,6 @@ const runSelectedImportRebuildChunk = async (
     sourceWatermarks: getSelectedImportRebuildPatchSourceWatermarks(manifest.inputWatermarks),
   })
 
-  await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
-    await previous
-    const selectedImportSnapshotId = requireSelectedImportSnapshotId(snapshot)
-    const projectScopeIdentity = requireSnapshotComponentIdentity(snapshot, 'projectScope')
-    const existingSnapshot = await getSelectedImportSnapshotStatus(selectedImportSnapshotId, database)
-    const sourceDeltaHighWater = Number(existingSnapshot?.sourceDeltaHighWater ?? input.chunk.inputWatermark)
-
-    await resetSelectedImportSnapshotForClaimedRebuild(
-      {...input, projectId, projectScopeIdentity, selectedImportSnapshotId},
-      database,
-    )
-    await drainSelectedImportBaseProjectionForClaimedRebuild(
-      {...input, projectId, projectScopeIdentity, selectedImportSnapshotId, sourceDeltaHighWater},
-      database,
-    )
-    await projectSelectedImportPatchesForClaimedRebuild(
-      {
-        ...input,
-        acknowledgeClaims: false,
-        baseGeneration: input.chunk.outputBaseGeneration,
-        claims,
-        definitionVersion: manifest.definitionVersion,
-        manifestInputWatermarks: manifest.inputWatermarks,
-        projectId,
-        projectScopeIdentity,
-        projectionIdentity: input.chunk.projectionIdentity,
-        selectedImportSnapshotId,
-      },
-      database,
-    )
-  }, Promise.resolve())
-
   const completedChunk = await writeReviewServingRebuildChunkOutput(
     {
       ...input.chunk,
@@ -1927,7 +1904,41 @@ const runSelectedImportRebuildChunk = async (
           expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
         }
       },
-      writeOutput: async () => {},
+      writeOutput: async (tx) => {
+        const projectorDatabase = getChunkProjectorDatabase(tx)
+
+        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+          await previous
+          const selectedImportSnapshotId = requireSelectedImportSnapshotId(snapshot)
+          const projectScopeIdentity = requireSnapshotComponentIdentity(snapshot, 'projectScope')
+          const existingSnapshot = await getSelectedImportSnapshotStatus(selectedImportSnapshotId, projectorDatabase)
+          const sourceDeltaHighWater = Number(existingSnapshot?.sourceDeltaHighWater ?? input.chunk.inputWatermark)
+
+          await resetSelectedImportSnapshotForClaimedRebuild(
+            {...input, projectId, projectScopeIdentity, selectedImportSnapshotId},
+            projectorDatabase,
+          )
+          await drainSelectedImportBaseProjectionForClaimedRebuild(
+            {...input, projectId, projectScopeIdentity, selectedImportSnapshotId, sourceDeltaHighWater},
+            projectorDatabase,
+          )
+          await projectSelectedImportPatchesForClaimedRebuild(
+            {
+              ...input,
+              acknowledgeClaims: false,
+              baseGeneration: input.chunk.outputBaseGeneration,
+              claims,
+              definitionVersion: manifest.definitionVersion,
+              manifestInputWatermarks: manifest.inputWatermarks,
+              projectId,
+              projectScopeIdentity,
+              projectionIdentity: input.chunk.projectionIdentity,
+              selectedImportSnapshotId,
+            },
+            projectorDatabase,
+          )
+        }, Promise.resolve())
+      },
     },
     database,
   )
