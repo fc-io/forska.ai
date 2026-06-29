@@ -209,10 +209,12 @@ afterEach(async () => {
   state.resolveProviderConnectionRuntimeMatch.mockClear()
   const {resetJudgmentEndpointAvailabilityForTests} =
     await import('../cron/judgmentsJobs/judgmentEndpointAvailability.ts')
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
   const {resetJudgmentJobStorageTransferRuntimeForTests} =
     await import('../cron/judgmentsJobs/judgmentJobStorageTransferRuntime.ts')
   const {resetDuckdbOwnerConnectionsForTests} = await import('../utils/duckdbOwnerConnections.ts')
 
+  await getJudgmentJobSqliteService().closeAll()
   resetJudgmentEndpointAvailabilityForTests()
   resetJudgmentJobStorageTransferRuntimeForTests()
   await resetDuckdbOwnerConnectionsForTests()
