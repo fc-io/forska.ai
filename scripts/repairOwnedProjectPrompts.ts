@@ -291,7 +291,7 @@ const getUniqueProjectIds = (projectIds: string[]) => {
   return Array.from(new Set(projectIds))
 }
 
-const queueProjectWideDirtyMaterializations = async (tx: TransactionRunner, projectIds: string[]) => {
+const markProjectWideDirtyRefreshStates = async (tx: TransactionRunner, projectIds: string[]) => {
   const refreshStateService = getProjectMartDirtyRefreshStateService()
   const uniqueProjectIds = getUniqueProjectIds(projectIds)
   const dirtyProjects = await refreshStateService.getDirtyProjectsForProjectIds(tx, uniqueProjectIds)
@@ -372,12 +372,12 @@ const main = async () => {
 
     const repairedDirtyStates = (await getAppDatabaseService().transaction(async (tx) => {
       const projectIds = getUniqueProjectIds(await repairCandidateRows(tx, safeRows))
-      return queueProjectWideDirtyMaterializations(tx, projectIds)
+      return markProjectWideDirtyRefreshStates(tx, projectIds)
     })) as Array<{dirtyToken: number; projectId: string}>
 
     console.log(`[repairOwnedProjectPrompts] repaired projects: ${repairedDirtyStates.length}`)
     console.log(`[repairOwnedProjectPrompts] repaired prompt links: ${safeRows.length}`)
-    console.log(`[repairOwnedProjectPrompts] queued dirty materializations: ${repairedDirtyStates.length}`)
+    console.log(`[repairOwnedProjectPrompts] marked dirty refresh states: ${repairedDirtyStates.length}`)
 
     if (options.flush) {
       console.log('[repairOwnedProjectPrompts] --flush skipped; project dirty state is drained by project mart workers')

@@ -100,7 +100,7 @@ const runQuery = (duckdbPath: string, sql: string) => {
   return JSON.parse(getLastJsonLine(result.stdout.toString()))
 }
 
-test('repairOwnedProjectPrompts queues project-wide dirty materialization for repaired prompts', () => {
+test('repairOwnedProjectPrompts marks project-wide dirty refresh state for repaired prompts', () => {
   const duckdbPath = join(projectRoot, '.tmp', `repair-owned-project-prompts-${Date.now()}.duckdb`)
   removeFileIfExists(dirname(duckdbPath))
   seedDatabase(duckdbPath)
@@ -126,17 +126,13 @@ test('repairOwnedProjectPrompts queues project-wide dirty materialization for re
     duckdbPath,
     "SELECT CAST(dirty_token AS INTEGER) AS dirtyToken, requested_by AS requestedBy FROM app.project_mart_refresh_state WHERE project_id = 'repair-prompts-project'",
   ) as Array<{dirtyToken: number; requestedBy: string}>
-  const [materialization] = runQuery(
+  const [refreshArticleState] = runQuery(
     duckdbPath,
-    "SELECT materialization_status AS materializationStatus, CAST(source_scope_expected_row_count AS INTEGER) AS expectedRowCount, CAST(target_dirty_token AS INTEGER) AS targetDirtyToken FROM app.project_mart_dirty_materialization_state WHERE project_id = 'repair-prompts-project'",
-  ) as Array<{expectedRowCount: number; materializationStatus: string; targetDirtyToken: number}>
+    "SELECT article_id AS articleId, CAST(first_dirty_token AS INTEGER) AS firstDirtyToken, CAST(last_dirty_token AS INTEGER) AS lastDirtyToken FROM app.project_mart_refresh_article_state WHERE project_id = 'repair-prompts-project'",
+  ) as Array<{articleId: string; firstDirtyToken: number; lastDirtyToken: number}>
 
-  expect(output).toContain('[repairOwnedProjectPrompts] queued dirty materializations: 1')
+  expect(output).toContain('[repairOwnedProjectPrompts] marked dirty refresh states: 1')
   expect(projectPrompt.promptId).not.toBe('repair-prompts-shared-prompt')
   expect(refreshState).toEqual({dirtyToken: 1, requestedBy: 'repairOwnedProjectPrompts'})
-  expect(materialization).toEqual({
-    expectedRowCount: 1,
-    materializationStatus: 'pending',
-    targetDirtyToken: 1,
-  })
+  expect(refreshArticleState).toEqual({articleId: 'repair-prompts-article', firstDirtyToken: 1, lastDirtyToken: 1})
 })
