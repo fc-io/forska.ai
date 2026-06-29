@@ -63,6 +63,12 @@ const providerModelGetByIdsWorkloadContext = getProviderModelWorkloadContext({
   routeOrJobKey: 'providers.models.getByIds',
 })
 
+const getProviderModelUpdateMutationTimestamp = (updatedAt: unknown) => {
+  const stringUpdatedAt = typeof updatedAt === 'string' ? updatedAt : new Date().toISOString()
+
+  return updatedAt instanceof Date ? updatedAt.toISOString() : stringUpdatedAt
+}
+
 const advanceProviderModelProjectTransferDirtyTokens = async ({
   databaseRunner,
   reason,
@@ -598,13 +604,15 @@ export const updateProviderModel = async (
     }
 
     await advanceProviderModelProjectTransferDirtyTokens({databaseRunner, reason: 'providerModel.update'})
+    const nextRow = await getProviderModelRowByIdWithRunner(databaseRunner, id)
+
     await appendProviderModelExecutionIdentityReviewServingDeltas(databaseRunner, {
       modelIds: [id],
-      sourceMutationKey: 'providerModel.update',
+      sourceMutationKey: `providerModel.update|${id}|${getProviderModelUpdateMutationTimestamp(nextRow?.updatedAt)}`,
       sourceOperation: 'update',
     })
 
-    return getProviderModelRowByIdWithRunner(databaseRunner, id)
+    return nextRow
   }, providerModelUpdateWorkloadContext)) as ProviderModelRow | null
 
   if (!refreshedRow) {

@@ -97,11 +97,36 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
   const projectId = `${prefix}-project`
   const importedFromProjectId = `${prefix}-imported-from-project`
   const articleRows = [
-    {createdAt: '2026-01-03T00:00:00.000Z', id: `${prefix}-article-3`, title: `${prefix} Article 3`},
-    {createdAt: '2026-01-02T00:00:00.000Z', id: `${prefix}-article-2`, title: `${prefix} Article 2`},
-    {createdAt: '2026-01-01T00:00:00.000Z', id: `${prefix}-article-1`, title: `${prefix} Article 1`},
+    {
+      createdAt: '2026-01-04T00:00:00.000Z',
+      id: `${prefix}-article-route-only`,
+      inCuratedScope: false,
+      inRouteScope: true,
+      title: `${prefix} Route Only Article`,
+    },
+    {
+      createdAt: '2026-01-03T00:00:00.000Z',
+      id: `${prefix}-article-3`,
+      inCuratedScope: true,
+      inRouteScope: false,
+      title: `${prefix} Article 3`,
+    },
+    {
+      createdAt: '2026-01-02T00:00:00.000Z',
+      id: `${prefix}-article-2`,
+      inCuratedScope: true,
+      inRouteScope: false,
+      title: `${prefix} Article 2`,
+    },
+    {
+      createdAt: '2026-01-01T00:00:00.000Z',
+      id: `${prefix}-article-1`,
+      inCuratedScope: true,
+      inRouteScope: false,
+      title: `${prefix} Article 1`,
+    },
   ]
-  const importedArticle = articleRows[0]
+  const importedArticle = articleRows[1]
   const required = ['display', 'projectScope', 'selectedImport', 'payload'].map((component) => {
     return {baseGeneration: '1', component, patchWatermark: '0', projectionIdentity: `${component}:${prefix}`}
   })
@@ -135,7 +160,7 @@ const seedProjectArticleMembershipFixture = async (prefix: string) => {
     INSERT INTO mart.project_scope_article (project_id, article_id, in_curated_scope, in_route_scope, article_created_at)
     VALUES ${articleRows
       .map((article) => {
-        return `('${projectId}', '${article.id}', TRUE, FALSE, TIMESTAMPTZ '${article.createdAt}')`
+        return `('${projectId}', '${article.id}', ${article.inCuratedScope ? 'TRUE' : 'FALSE'}, ${article.inRouteScope ? 'TRUE' : 'FALSE'}, TIMESTAMPTZ '${article.createdAt}')`
       })
       .join(', ')};
 
@@ -306,7 +331,7 @@ test('project article membership listing uses cursor pagination over project-sco
   }
 
   const fixture = await seedProjectArticleMembershipFixture('project-article-membership-cursor')
-  const [newestArticle, middleArticle, oldestArticle] = fixture.articleRows
+  const [_routeOnlyArticle, newestArticle, middleArticle, oldestArticle] = fixture.articleRows
 
   if (!newestArticle || !middleArticle || !oldestArticle) {
     throw new Error('Membership fixture articles not initialized')

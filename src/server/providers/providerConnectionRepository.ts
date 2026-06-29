@@ -98,6 +98,12 @@ const providerConnectionHasEnabledKindWorkloadContext = getProviderConnectionWor
   routeOrJobKey: 'providers.connections.hasEnabledKind',
 })
 
+const getProviderConnectionUpdateMutationTimestamp = (updatedAt: unknown) => {
+  const stringUpdatedAt = typeof updatedAt === 'string' ? updatedAt : new Date().toISOString()
+
+  return updatedAt instanceof Date ? updatedAt.toISOString() : stringUpdatedAt
+}
+
 const advanceProviderConnectionProjectTransferDirtyTokens = async ({
   databaseRunner,
   reason,
@@ -740,7 +746,7 @@ export const updateProviderConnection = async ({
 
     await appendProviderConnectionExecutionIdentityReviewServingDeltas(tx, {
       providerConnectionIds: [id],
-      sourceMutationKey: 'providerConnection.update',
+      sourceMutationKey: `providerConnection.update|${id}|${getProviderConnectionUpdateMutationTimestamp(nextConnection.updatedAt)}`,
       sourceOperation: 'update',
     })
     await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner: tx, reason: 'providerConnection.update'})

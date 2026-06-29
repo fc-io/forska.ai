@@ -86,6 +86,7 @@ const getProjectArticleMembershipRows = async (params: {
       CAST(scope.article_created_at AS VARCHAR) AS articleCreatedAt
     FROM mart.project_scope_article scope
     WHERE scope.project_id = ${getSqlLiteral(params.projectId)}
+      AND scope.in_curated_scope = TRUE
       ${getProjectArticleMembershipCursorClause(params.cursor)}
     ORDER BY scope.article_created_at DESC NULLS LAST, scope.article_id DESC
     LIMIT ${params.limit + 1}

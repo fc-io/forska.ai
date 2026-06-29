@@ -375,7 +375,7 @@ const getExportArticles = async (input: {
       s.url AS articleUrl,
       s.article_title AS articleTitle,
       payload.abstract_text AS articleSummary,
-      NULL AS articleAuthors,
+      TO_JSON(article.article_authors) AS articleAuthors,
       s.article_created_at AS articleCreatedAt,
       s.article_updated_at AS articleUpdatedAt,
       NULL AS articleOriginalData,
@@ -388,6 +388,8 @@ const getExportArticles = async (input: {
      AND s.snapshot_id = export_scope.snapshot_id
     INNER JOIN export_article
       ON export_article.article_id = s.article_id
+    LEFT JOIN app.article article
+      ON article.id = s.article_id
     LEFT JOIN mart.review_article_serving_payload_v4 payload
       ON payload.project_id = s.project_id
      AND payload.display_identity = s.display_identity
@@ -513,7 +515,7 @@ const getExportServingSnapshotScopes = async (input: {job: ExportJobRow; sourceP
           ? await getReviewServingSnapshotManifest({projectId, snapshotId: input.job.snapshotId})
           : null
 
-      return manifest?.status === 'active'
+      return manifest && (input.job.latestSnapshotSemantics ? manifest.status === 'active' : true)
         ? {projectId, reviewConfigHash: manifest.reviewConfigHash ?? reviewConfigHash, snapshotId: manifest.snapshotId}
         : null
     }),
@@ -682,7 +684,9 @@ const getMissingExportSnapshotSourceProjectIds = async (input: {
               reviewConfigHash: input.reviewConfigHashByProjectId[sourceProjectId] ?? input.reviewConfigHash,
             })
 
-      return manifest?.status === 'active' ? null : sourceProjectId
+      return manifest && (input.snapshot.type === 'latest' ? manifest.status === 'active' : true)
+        ? null
+        : sourceProjectId
     }),
   )
 
