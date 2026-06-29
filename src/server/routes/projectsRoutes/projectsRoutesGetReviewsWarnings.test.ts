@@ -1261,6 +1261,62 @@ test('reviews warnings fail terminal V4 rebuild requests instead of reporting he
   expect(body.data.indexing.status).toBe('failed')
 })
 
+test('reviews warnings prioritize terminal V4 rebuild requests when server mutation work is disabled', async () => {
+  const projectId = 'project-v4-terminal-request-disabled-mutations-warning'
+  const requestId = 'rebuild:terminal-request-disabled-mutations-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-v4-terminal-request-disabled-mutations-warning',
+  })
+  await insertReviewRebuildRequest({
+    createdAt: '2026-04-02T11:50:00.000Z',
+    failedAt: '2026-04-02T11:55:52.494Z',
+    lastError: 'DuckDB OOM failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)',
+    projectId,
+    requestId,
+    status: 'failed',
+    updatedAt: '2026-04-02T11:55:52.494Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-terminal-request-disabled-mutations-failed-warning',
+    component: 'selectedImport',
+    createdAt: '2026-04-02T11:51:00.000Z',
+    lastError: 'DuckDB OOM failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)',
+    projectId,
+    requestId,
+    retryAfter: '2026-04-02T11:56:52.494Z',
+    status: 'failed',
+    updatedAt: '2026-04-02T11:55:52.494Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-terminal-request-disabled-mutations-pending-warning',
+    component: 'summary',
+    createdAt: '2026-04-02T11:54:00.000Z',
+    projectId,
+    requestId,
+    status: 'pending',
+    updatedAt: '2026-04-02T11:54:00.000Z',
+  })
+
+  const {body, response} = await withServerMutationsDisabled(() => {
+    return postWarningsRequest(projectId)
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.blockedReason).toBe(null)
+  expect(body.data.indexing.eligibleConsumerCount).toBe(0)
+  expect(body.data.indexing.pendingRefreshCount).toBe(2)
+  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({failedCount: 1, pendingCount: 2})
+  expect(body.data.indexing.status).toBe('failed')
+})
+
 test('reviews warnings mark quarantined V4 outbox barriers as blocked', async () => {
   const projectId = 'project-v4-outbox-barrier-warning'
 
