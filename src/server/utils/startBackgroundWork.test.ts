@@ -22,6 +22,7 @@ const getLastJsonLine = (value: string) => {
 
 const runStartBackgroundWork = (input: {
   disableServerMutations?: boolean
+  promoteAfterStart?: boolean
   role: 'api' | 'judge-worker' | 'maintenance-worker'
 }) => {
   const runScript = globalThis.Bun.spawnSync(
@@ -43,11 +44,16 @@ const runStartBackgroundWork = (input: {
         const duckdbOwnerConnectionHeartbeatModulePath = getModulePath('./src/server/utils/duckdbOwnerConnectionHeartbeat.ts')
         const calls = []
         const input = ${JSON.stringify(input)}
+        const promotionHandlers = []
+        let currentRole = input.role
 
         void mock.module(reviewServingProjectorWorkerHeartbeatModulePath, () => {
           return {
             startReviewServingProjectorWorkerHeartbeat: () => {
               calls.push('reviewServingProjectorWorkerHeartbeat')
+              return () => {
+                calls.push('stopReviewServingProjectorWorkerHeartbeat')
+              }
             },
           }
         })
@@ -55,6 +61,9 @@ const runStartBackgroundWork = (input: {
           return {
             startReviewBulkOperationWorkerHeartbeat: () => {
               calls.push('reviewBulkOperationWorkerHeartbeat')
+              return () => {
+                calls.push('stopReviewBulkOperationWorkerHeartbeat')
+              }
             },
           }
         })
@@ -62,13 +71,20 @@ const runStartBackgroundWork = (input: {
           return {
             startRequestAttemptCloseoutBackfillScheduler: () => {
               calls.push('requestAttemptCloseoutBackfillScheduler')
+              return () => {
+                calls.push('stopRequestAttemptCloseoutBackfillScheduler')
+              }
             },
           }
         })
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            registerDuckdbOwnerPromotionHandler: (handler) => {
+              promotionHandlers.push(handler)
+            },
             shouldCurrentServerRunMaintenanceLoops: () => {
-              return input.role === 'maintenance-worker'
+              return currentRole === 'maintenance-worker'
             },
             startServerRuntimeRoleMonitor: () => {
               calls.push('serverRuntimeRoleMonitor')
@@ -92,6 +108,10 @@ const runStartBackgroundWork = (input: {
 
         const {startBackgroundWork} = await import(startBackgroundWorkModulePath + '?start=' + Date.now())
         startBackgroundWork()
+        if (input.promoteAfterStart) {
+          currentRole = 'maintenance-worker'
+          await Promise.all(promotionHandlers.map((handler) => handler('test-promotion')))
+        }
         console.log(JSON.stringify({calls}))
       `,
     ],
@@ -121,6 +141,18 @@ test('startBackgroundWork skips maintenance work when the current role lacks mai
   const result = runStartBackgroundWork({role: 'judge-worker'})
 
   expect(result.calls).toEqual(['serverRuntimeRoleMonitor', 'duckdbOwnerConnectionHeartbeat'])
+})
+
+test('startBackgroundWork starts maintenance work after auto owner promotion', () => {
+  const result = runStartBackgroundWork({promoteAfterStart: true, role: 'api'})
+
+  expect(result.calls).toEqual([
+    'serverRuntimeRoleMonitor',
+    'duckdbOwnerConnectionHeartbeat',
+    'requestAttemptCloseoutBackfillScheduler',
+    'reviewBulkOperationWorkerHeartbeat',
+    'reviewServingProjectorWorkerHeartbeat',
+  ])
 })
 
 test('startBackgroundWork skips all background work when server mutations are disabled', () => {
