@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-29 - V4 Candidate-Only Bootstrap Admission
+
+- Error: Candidate-only V4 snapshot recovery created `blocked_over_budget` requests with `estimatedInputRows 2233116 > max 250000` after an OOM/bootstrap attempt left no active snapshot.
+- Context: `scripts/requestReviewServingProjectRebuild.ts` for project `4ec939b2-47bb-48dd-ad62-ad9f4b5acecf`, reasons `operatorRetryAfterV4OomFix` and `missingReviewServingSnapshot`.
+- Cause: V4 rebuild stats counted candidate snapshots as `snapshotCount`, so missing-snapshot admission skipped fresh/bootstrap chunking even when no active usable snapshot existed.
+- Fix: V4 request admission now tracks active snapshots separately and treats `missingReviewServingSnapshot` with no active snapshot as bootstrap work while preserving queued candidate+active snapshot counts for normal estimates.
+- Verification: `bun test src/server/reviewServing/reviewServingV4RebuildRequestService.test.ts`.
+
 ## 2026-06-29 - V4 Terminal Rebuild Re-Admission
 
 - Error: `DuckDB OOM failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` left a V4 rebuild request terminal failed with failed/blocked `selectedImport` chunks and downstream pending chunks.

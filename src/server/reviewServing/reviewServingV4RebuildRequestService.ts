@@ -71,6 +71,7 @@ const defaultRequestBudget = {
 } as const
 
 type ReviewServingV4RebuildStatsRow = {
+  activeSnapshotCount: number
   enabledPromptCount: number
   humanJudgmentCount: number
   humanJudgmentUpdatedAt: string | null
@@ -972,6 +973,7 @@ const getReviewServingV4RebuildStats = async (
     queued_snapshot AS (
       SELECT DISTINCT
         snapshot.snapshot_id,
+        snapshot.snapshot_status,
         snapshot.updated_at
       FROM app.review_serving_snapshot_manifest snapshot
       INNER JOIN project_settings project ON project.id = snapshot.project_id
@@ -1008,6 +1010,7 @@ const getReviewServingV4RebuildStats = async (
         FROM rebuild_prompt
       ) AS patchPromptUpdatedAt,
       CAST((SELECT COUNT(*) FROM queued_snapshot) AS INTEGER) AS snapshotCount,
+      CAST((SELECT COUNT(*) FROM queued_snapshot WHERE snapshot_status = 'active') AS INTEGER) AS activeSnapshotCount,
       (SELECT MAX(updated_at) FROM queued_snapshot) AS snapshotUpdatedAt,
       CAST((
         SELECT COUNT(*)
@@ -1092,7 +1095,10 @@ export const requestReviewServingV4RebuildEffect = (
 
     const requestedComponents = input.components ?? defaultReviewServingV4RebuildComponents
     const stats = await getReviewServingV4RebuildStats({projectId: input.projectId}, database)
-    const isFreshBootstrap = getSafeCount(stats.snapshotCount) === 0
+    const hasQueuedSnapshot = getSafeCount(stats.snapshotCount) > 0
+    const hasActiveSnapshot = getSafeCount(stats.activeSnapshotCount) > 0
+    const isFreshBootstrap =
+      !hasQueuedSnapshot || (input.reason === 'missingReviewServingSnapshot' && !hasActiveSnapshot)
     const components = isFreshBootstrap
       ? getReviewServingV4BootstrapComponents(requestedComponents)
       : requestedComponents
