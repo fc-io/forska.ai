@@ -95,36 +95,17 @@ const getProjectArticleMembershipRows = async (params: {
   return rows
 }
 
-const getProjectArticleMembershipArticleRows = async (projectId: string, articleIds: string[]) => {
+const getProjectArticleMembershipArticleRows = async (articleIds: string[]) => {
   if (articleIds.length === 0) {
     return []
   }
 
   return getAppDatabaseService().queryJson<ProjectArticleMembershipArticleRow>(`
-    WITH latest_snapshot AS (
-      SELECT snapshot_id AS snapshotId
-      FROM app.review_serving_snapshot_manifest
-      WHERE project_id = ${getSqlLiteral(projectId)}
-        AND snapshot_status IN ('active', 'retired')
-      ORDER BY CASE snapshot_status WHEN 'active' THEN 0 ELSE 1 END ASC, updated_at DESC, snapshot_id DESC
-      LIMIT 1
-    )
     SELECT
-      serving.article_id AS id,
-      serving.article_title AS articleTitle
-    FROM mart.review_article_serving_v4 serving
-    INNER JOIN latest_snapshot latest
-      ON latest.snapshotId = serving.snapshot_id
-    WHERE serving.project_id = ${getSqlLiteral(projectId)}
-      AND serving.article_id IN (${articleIds.map(getSqlLiteral).join(', ')})
-    ORDER BY serving.article_id ASC,
-      CASE serving.list_mode_key
-        WHEN 'both' THEN 0
-        WHEN 'llm' THEN 1
-        WHEN 'human' THEN 2
-        WHEN 'unassessed' THEN 3
-        ELSE 4
-      END ASC
+      id,
+      article_title AS articleTitle
+    FROM app.article
+    WHERE id IN (${articleIds.map(getSqlLiteral).join(', ')})
   `)
 }
 
@@ -156,7 +137,7 @@ export const projectArticlesRoutes = new Elysia()
       const articleIds = pageRows.map((row) => {
         return row.id
       })
-      const articleRows = await getProjectArticleMembershipArticleRows(projectId, articleIds)
+      const articleRows = await getProjectArticleMembershipArticleRows(articleIds)
       const articleById = articleRows.reduce((map, row) => {
         return map.has(row.id) ? map : map.set(row.id, row)
       }, new Map<string, ProjectArticleMembershipArticleRow>())
