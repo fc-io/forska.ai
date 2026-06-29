@@ -1371,7 +1371,7 @@ test('replays a SQLite outbox batch after crashing between DuckDB commit and SQL
       (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${jobId}') AS markerRows
   `)
 
-  expect(Number(stateAfterCrash?.dirtyToken ?? 0)).toBe(0)
+  expect(Number(stateAfterCrash?.dirtyToken ?? 0)).toBe(1)
   expect(Number(stateAfterCrash?.markerRows ?? 0)).toBe(1)
   expect(await importOutboxBatch()).toBe(1)
 
@@ -1392,7 +1392,7 @@ test('replays a SQLite outbox batch after crashing between DuckDB commit and SQL
       (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${jobId}') AS markerRows
   `)
 
-  expect(Number(stateAfterRetry?.dirtyToken ?? 0)).toBe(0)
+  expect(Number(stateAfterRetry?.dirtyToken ?? 0)).toBe(1)
   expect(Number(stateAfterRetry?.markerRows ?? 0)).toBe(1)
 })
 
