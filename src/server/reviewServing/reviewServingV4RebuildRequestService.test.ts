@@ -592,7 +592,7 @@ test('V4 rebuild request service budgets split missing snapshot bootstraps by th
   )
 
   expect(request.status).toBe('blocked_over_budget')
-  expect(request.overBudgetReason).toBe('input rows: estimated 320033 > max 250000')
+  expect(request.overBudgetReason).toBe('input rows: estimated 300034 > max 250000')
   expect(statements.join('\n')).toContain('INSERT INTO app.review_rebuild_chunk_manifest')
   expect(statements.join('\n')).not.toContain('INSERT INTO app.review_serving_snapshot_manifest')
 })
@@ -621,7 +621,7 @@ test('V4 rebuild request service blocks terminally over-budget missing snapshot 
   expect(joined).not.toContain('INSERT INTO app.review_serving_snapshot_manifest')
 })
 
-test('V4 rebuild request service only keeps project scope as a full-project bootstrap component', async () => {
+test('V4 rebuild request service range-chunks project scope with other bootstrap components', async () => {
   const {database, statements} = createFakeRequestDatabase({
     ...baseStats,
     humanJudgmentCount: 0,
@@ -661,7 +661,7 @@ test('V4 rebuild request service only keeps project scope as a full-project boot
 
   expect(request.status).toBe('admitted')
   expect(selectedImportChunkInserts.length).toBeGreaterThan(1)
-  expect(projectScopeChunkInserts).toHaveLength(1)
+  expect(projectScopeChunkInserts.length).toBeGreaterThan(1)
   expect(summaryChunkInserts.length).toBeGreaterThan(1)
   expect(displayChunkInserts.length).toBeGreaterThan(1)
   expect(selectedImportChunkInserts[0]).toContain('article-000-a')
@@ -669,10 +669,10 @@ test('V4 rebuild request service only keeps project scope as a full-project boot
   expect(summaryChunkInserts[0]).toContain('article-000-a')
   expect(summaryChunkInserts[0]).toContain('article-000-z')
   expect(projectScopeChunkInserts[0]).toContain('article-000-a')
-  expect(projectScopeChunkInserts[0]).toContain('article-003-z')
+  expect(projectScopeChunkInserts[0]).toContain('article-000-z')
 })
 
-test('V4 missing snapshot bootstrap admits selected import and summary as bounded range chunks', async () => {
+test('V4 missing snapshot bootstrap admits selected import, project scope, and summary as bounded range chunks', async () => {
   const {database, statements} = createFakeRequestDatabase({
     ...baseStats,
     activeSnapshotCount: 0,
@@ -704,11 +704,37 @@ test('V4 missing snapshot bootstrap admits selected import and summary as bounde
   expect(request.overBudgetReason).toBeNull()
   expect(selectedImportChunkInserts.length).toBeGreaterThan(1)
   expect(summaryChunkInserts.length).toBeGreaterThan(1)
-  expect(projectScopeChunkInserts).toHaveLength(1)
+  expect(projectScopeChunkInserts.length).toBeGreaterThan(1)
   expect(selectedImportChunkInserts[0]).toContain('article-000-a')
   expect(selectedImportChunkInserts[0]).toContain('article-000-z')
   expect(summaryChunkInserts[0]).toContain('article-000-a')
   expect(summaryChunkInserts[0]).toContain('article-000-z')
+})
+
+test('V4 missing snapshot bootstrap bounds large project-scope request estimates', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    ...baseStats,
+    activeSnapshotCount: 0,
+    enabledPromptCount: 1,
+    humanJudgmentCount: 0,
+    judgmentCount: 86_264,
+    promptCount: 1,
+    scopedArticleCount: 544_684,
+    snapshotCount: 1,
+    summaryHumanJudgmentCount: 0,
+  })
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const projectScopeChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes('projectScope')
+  })
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+  expect(statements.join('\n')).toContain('"bootstrapChunkCount":109')
+  expect(projectScopeChunkInserts.length).toBeGreaterThan(100)
 })
 
 test('V4 rebuild request service accounts for list-mode fan-out in admission budgets', async () => {

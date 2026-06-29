@@ -1483,7 +1483,7 @@ test('selected import rebuild chunk presplits because rebuild output is range-sc
   expect(joined).toContain('"splitReason":"input_row_budget"')
 })
 
-test('project scope rebuild chunk does not presplit because rebuild output is not range-scoped', async () => {
+test('project scope rebuild chunk presplits before running oversized ranges', async () => {
   const statements: string[] = []
   const projectScopeChunk: ReviewServingRebuildChunkManifest = {
     ...chunkManifest,
@@ -1516,6 +1516,10 @@ test('project scope rebuild chunk does not presplit because rebuild output is no
         ] as T[]
       }
 
+      if (statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('RETURNING chunk_id')) {
+        return [{chunkId: 'chunk-project-scope-oom'}] as T[]
+      }
+
       return [] as T[]
     },
     run: async (statement: string) => {
@@ -1526,24 +1530,19 @@ test('project scope rebuild chunk does not presplit because rebuild output is no
     },
   }
 
-  await runReviewServingProjectorWorkerClaimedRebuildChunk(
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
     {chunk: projectScopeChunk, leaseOwner: 'worker-1'},
     database,
-  ).then(
-    () => {
-      throw new Error('expected projectScope rebuild chunk to reject')
-    },
-    (error) => {
-      expect(String(error)).toContain('cannot run projectScope rebuild chunk without an identity manifest')
-    },
   )
   const joined = statements.join('\n')
   const childInserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
   })
 
-  expect(joined).not.toContain('NTILE(5)')
-  expect(childInserts).toHaveLength(0)
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain('NTILE(5)')
+  expect(childInserts).toHaveLength(2)
+  expect(joined).not.toContain('cannot run projectScope rebuild chunk without an identity manifest')
 })
 
 test('base rebuild chunks regenerate project scope and selected import state before completion', async () => {
