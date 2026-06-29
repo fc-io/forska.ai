@@ -51,6 +51,15 @@ type SelectedImportProjectionRow = {
   tombstone: boolean
 }
 
+type ProjectReviewServingSelectedImportArticleRangeInput = {
+  chunkEndArticleId: string
+  chunkStartArticleId: string
+  projectId: string
+  projectScopeIdentity: string
+  selectedImportSnapshotId: string
+  sourceDeltaHighWater: number
+}
+
 const selectedImportProjectorDefinitionVersion = 'review-serving-selected-import-v2'
 const nullRankKeySort = '~'
 const nullRankNumericSort = 1e308
@@ -134,9 +143,22 @@ const getCursorPredicateSql = (cursor: SelectedImportCursor | null) => {
     `
 }
 
+const getArticleRangePredicateSql = (input: {chunkEndArticleId?: string; chunkStartArticleId?: string}) => {
+  return input.chunkStartArticleId === undefined || input.chunkEndArticleId === undefined
+    ? ''
+    : `
+      AND scope.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
+      AND scope.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
+    `
+}
+
 const getSelectedImportProjectionRows = async (
   database: ReviewServingSelectedImportProjectorDatabase,
-  input: ProjectReviewServingSelectedImportBatchInput & {selectedImportSnapshotId: string},
+  input: ProjectReviewServingSelectedImportBatchInput & {
+    chunkEndArticleId?: string
+    chunkStartArticleId?: string
+    selectedImportSnapshotId: string
+  },
   cursor: SelectedImportCursor | null,
 ) => {
   const limit = Math.max(0, Math.floor(input.limit))
@@ -177,6 +199,7 @@ const getSelectedImportProjectionRows = async (
           WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
             AND (scope.in_curated_scope OR scope.in_route_scope)
             AND NOT hot.tombstone
+            ${getArticleRangePredicateSql(input)}
         )
         SELECT
           candidate.article_id AS articleId,
@@ -223,6 +246,20 @@ const getSelectedImportProjectionRows = async (
       `)
 }
 
+const deleteSelectedImportArticleRangeRows = async (
+  input: ProjectReviewServingSelectedImportArticleRangeInput,
+  database: ReviewServingSelectedImportProjectorDatabase,
+) => {
+  await database.run(`
+    DELETE FROM app.review_selected_article_import_v4
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
+      AND article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
+  `)
+}
+
 const getSelectedImportCursorFromRows = (
   rows: readonly SelectedImportProjectionRow[],
   existingCursor: SelectedImportCursor | null,
@@ -241,7 +278,7 @@ const getSelectedImportCursorFromRows = (
 }
 
 const getSelectedImportProjectorRecord = (
-  input: ProjectReviewServingSelectedImportBatchInput & {selectedImportSnapshotId: string},
+  input: {projectId: string; projectScopeIdentity: string; selectedImportSnapshotId: string},
   row: SelectedImportProjectionRow,
 ): ReviewServingProjectorRecord => {
   return {
@@ -295,7 +332,7 @@ const getSelectedImportProjectionManifest = (input: {
 
 export const projectReviewServingSelectedImportBatch = async (
   params: ProjectReviewServingSelectedImportBatchInput,
-  database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService(),
+  database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportProjectorDatabase,
 ): Promise<ReviewServingSelectedImportProjectorBatchResult> => {
   const selectedImportSnapshotId =
     params.selectedImportSnapshotId
@@ -331,4 +368,49 @@ export const projectReviewServingSelectedImportBatch = async (
   )
 
   return {insertedRowCount: rows.length, selectedImportSnapshotId, status}
+}
+
+export const projectReviewServingSelectedImportArticleRange = async (
+  params: ProjectReviewServingSelectedImportArticleRangeInput,
+  database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportProjectorDatabase,
+) => {
+  const rows = await getSelectedImportProjectionRows(
+    database,
+    {
+      chunkEndArticleId: params.chunkEndArticleId,
+      chunkStartArticleId: params.chunkStartArticleId,
+      limit: Number.MAX_SAFE_INTEGER,
+      projectId: params.projectId,
+      projectScopeIdentity: params.projectScopeIdentity,
+      selectedImportSnapshotId: params.selectedImportSnapshotId,
+      sourceDeltaHighWater: params.sourceDeltaHighWater,
+    },
+    null,
+  )
+
+  await deleteSelectedImportArticleRangeRows(params, database)
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'selectedImport',
+      projectionManifests: [getSelectedImportProjectionManifest(params)],
+      records: rows.map((row) => {
+        return getSelectedImportProjectorRecord(params, row)
+      }),
+      selectedImportSnapshotCursor: {
+        cursorJson: null,
+        projectId: params.projectId,
+        projectScopeIdentity: params.projectScopeIdentity,
+        selectedImportSnapshotId: params.selectedImportSnapshotId,
+        sourceDeltaHighWater: params.sourceDeltaHighWater,
+        status: 'completed',
+      },
+    },
+    database,
+  )
+
+  return {
+    insertedRowCount: rows.length,
+    selectedImportSnapshotId: params.selectedImportSnapshotId,
+    status: 'completed' as const,
+  }
 }

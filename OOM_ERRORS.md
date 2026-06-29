@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-30 - V4 Bootstrap Selected Import And Summary Admission
+
+- Error: `missingReviewServingSnapshot` V4 bootstrap request remained `blocked_over_budget` with `input rows: estimated 1395741 > max 250000` after candidate-only bootstrap recovery.
+- Context: Live V4-only project `4ec939b2-47bb-48dd-ad62-ad9f4b5acecf`, request reason `missingReviewServingSnapshot`; no legacy mart mutation path involved.
+- Cause: Bootstrap admission still treated `selectedImport` and `summary` as full-project components; selected-import rebuild execution also reset/drained the shared snapshot per chunk, so range admission was unsafe.
+- Fix: Bootstrap admission now keeps only `projectScope` full-project, admits `selectedImport` and `summary` as bounded article-range chunks, and selected-import rebuild chunks use a range-scoped projection path for bootstrap/split chunks.
+- Verification: `bun test src/server/reviewServing/reviewServingV4RebuildRequestService.test.ts src/server/workers/reviewServingProjectorWorker.test.ts` and touched-file ESLint.
+
 ## 2026-06-29 - V4 Candidate-Only Bootstrap Admission
 
 - Error: Candidate-only V4 snapshot recovery created `blocked_over_budget` requests with `estimatedInputRows 2233116 > max 250000` after an OOM/bootstrap attempt left no active snapshot.
