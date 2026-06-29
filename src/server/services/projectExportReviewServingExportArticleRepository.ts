@@ -1,4 +1,4 @@
-import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getSqlLiteral} from './appQueryHelpers.ts'
 
 export type ReviewServingExportArticleRow = {
   arxivId: string | null
