@@ -139,7 +139,7 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   expect(statements.join('\n')).toContain('app.review_serving_dirty_work')
   expect(statements.join('\n')).toContain('app.review_rebuild_chunk_manifest')
   expect(statements.join('\n')).toContain("chunk.status IN ('pending', 'failed')")
-  expect(statements.join('\n')).toContain('CAST(0 AS INTEGER) AS failedCount')
+  expect(statements.join('\n')).toContain("latest_request.status IN ('failed', 'quarantined')")
   expect(statements.join('\n')).toContain("latest_request.status IN ('blocked_over_budget', 'failed')")
   expect(statements.join('\n')).toContain("latest_request.status IN ('quarantined', 'failed')")
   expect(statements.join('\n')).toContain('app.review_source_change_outbox')
