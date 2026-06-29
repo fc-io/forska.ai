@@ -1,9 +1,17 @@
-import {afterAll, beforeAll, expect, test} from 'bun:test'
+import {afterAll, beforeAll, expect, mock, test} from 'bun:test'
 
 import {createTempRuntimeRoot} from '../../../server/test/createTempRuntimeRoot.ts'
 import type {ShortIdMapping} from '../judgeGetPrompt.ts'
 
+const llmJudgmentReviewServingDeltaServiceModulePath = new URL(
+  '../../../server/reviewServing/llmJudgmentReviewServingDeltaService.ts',
+  import.meta.url,
+).pathname
 const tempRuntimeRoot = createTempRuntimeRoot('f1-judge-store-judgment-dirty-atomicity')
+
+type AppendLlmJudgmentReviewServingDeltas =
+  typeof import('../../../server/reviewServing/llmJudgmentReviewServingDeltaService.ts').appendLlmJudgmentReviewServingDeltas
+type AppendLlmJudgmentReviewServingDeltasArgs = Parameters<AppendLlmJudgmentReviewServingDeltas>
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempRuntimeRoot.duckdbPath
@@ -14,6 +22,17 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 let closeDatabase: (() => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
+let appendLlmJudgmentReviewServingDeltasOverride:
+  | ((...args: AppendLlmJudgmentReviewServingDeltasArgs) => Promise<void>)
+  | null = null
+
+void mock.module(llmJudgmentReviewServingDeltaServiceModulePath, () => {
+  return {
+    appendLlmJudgmentReviewServingDeltas: (...args: AppendLlmJudgmentReviewServingDeltasArgs) => {
+      return appendLlmJudgmentReviewServingDeltasOverride?.(...args) ?? Promise.resolve()
+    },
+  }
+})
 
 beforeAll(async () => {
   const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] =
@@ -53,10 +72,6 @@ test('judgeStoreJudgment rolls back the judgment when dirty-state marking fails'
   }
 
   const {judgeStoreJudgment} = await import('../judgeStoreJudgment.ts')
-  const {getProjectMartDirtyRefreshStateService} =
-    await import('../../../server/services/projectMartDirtyRefreshStateService.ts')
-  const refreshStateService = getProjectMartDirtyRefreshStateService()
-  const originalMarkArticleProjectsDirtyAtomically = refreshStateService.markArticleProjectsDirtyAtomically
   const originalConsoleError = console.error
   const now = Date.now()
   const connectionId = `connection-judge-store-atomic-${now}`
@@ -88,8 +103,8 @@ test('judgeStoreJudgment rolls back the judgment when dirty-state marking fails'
     VALUES ('${promptId}', 'Prompt', '${promptId}-hash')
   `)
 
-  refreshStateService.markArticleProjectsDirtyAtomically = async (params) => {
-    receivedRunner = params.runner != null
+  appendLlmJudgmentReviewServingDeltasOverride = async (runner) => {
+    receivedRunner = runner != null
     throw new Error('dirty mark failed inside transaction')
   }
   console.error = () => {}
@@ -105,17 +120,17 @@ test('judgeStoreJudgment rolls back the judgment when dirty-state marking fails'
       shortIdMapping,
     )
   } finally {
-    refreshStateService.markArticleProjectsDirtyAtomically = originalMarkArticleProjectsDirtyAtomically
+    appendLlmJudgmentReviewServingDeltasOverride = null
     console.error = originalConsoleError
   }
 
-  const [row] = await queryDatabase<{judgmentRows: number; refreshRows: number}>(`
+  const [row] = await queryDatabase<{deltaRows: number; judgmentRows: number}>(`
     SELECT
       (SELECT COUNT(*) FROM app.judgment WHERE article_id = '${articleId}') AS judgmentRows,
-      (SELECT COUNT(*) FROM app.project_mart_refresh_state WHERE project_id = '${projectId}') AS refreshRows
+      (SELECT COUNT(*) FROM app.review_change_delta WHERE article_id = '${articleId}') AS deltaRows
   `)
 
   expect(receivedRunner).toBe(true)
   expect(Number(row?.judgmentRows ?? 0)).toBe(0)
-  expect(Number(row?.refreshRows ?? 0)).toBe(0)
+  expect(Number(row?.deltaRows ?? 0)).toBe(0)
 })
