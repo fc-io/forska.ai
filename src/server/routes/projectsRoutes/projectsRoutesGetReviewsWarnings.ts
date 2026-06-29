@@ -235,13 +235,14 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const pendingRebuildChunkCount = queuedRebuildChunkCount + inFlightRebuildChunkCount
     const terminalRebuildChunkCount =
       servingDiagnostics.rebuildChunks.blockedOverBudgetCount + servingDiagnostics.rebuildChunks.quarantinedCount
-    const terminalDirtyWorkCount = servingDiagnostics.dirtyWork.failedCount
+    const terminalDirtyWorkCount =
+      servingDiagnostics.dirtyWork.failedCount + servingDiagnostics.quarantine.quarantinedOutboxCount
     const isServerMutationWorkDisabled = shouldDisableServerMutationWork()
     const pendingDirtyWorkCount =
       servingDiagnostics.dirtyWork.pendingCount
       + servingDiagnostics.dirtyWork.failedCount
       + servingDiagnostics.dirtyWork.runningCount
-      + servingDiagnostics.quarantine.unresolvedOutboxCount
+      + servingDiagnostics.quarantine.retryableOutboxCount
     const queuedRefreshCount = queuedRebuildChunkCount + servingDiagnostics.dirtyWork.pendingCount
     const inFlightRefreshCount = inFlightRebuildChunkCount + servingDiagnostics.dirtyWork.runningCount
     const pendingRefreshCount = pendingRebuildChunkCount + pendingDirtyWorkCount
@@ -256,7 +257,11 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     })
     const progressState = getReviewsIndexingProgressState({inFlightRefreshCount, status: indexingStatus})
     const blockedReason: ReviewsIndexingBlockedReason =
-      indexingStatus === 'blocked' && isServerMutationWorkDisabled ? 'waiting_for_maintenance_worker' : null
+      indexingStatus === 'failed' && servingDiagnostics.quarantine.quarantinedOutboxCount > 0
+        ? 'quarantine_barrier'
+        : indexingStatus === 'blocked' && isServerMutationWorkDisabled
+          ? 'waiting_for_maintenance_worker'
+          : null
     const eligibleConsumerCount = pendingRefreshCount > 0 && !isServerMutationWorkDisabled ? 1 : 0
 
     return {

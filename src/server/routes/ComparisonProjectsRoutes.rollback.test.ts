@@ -6287,11 +6287,11 @@ test('comparison project conflict resolution export fails closed without active 
   const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
   const app = new Elysia().use(comparisonProjectsRoutes)
   const response = await postComparisonProjectConflictResolutionExport(app)
-  const artifact = (await response.json()) as {rows: unknown[]}
+  const body = (await response.json()) as {error: string}
   const state = getMockDatabaseState()
 
-  expect(response.status).toBe(200)
-  expect(artifact.rows).toEqual([])
+  expect(response.status).toBe(409)
+  expect(body.error).toBe('Conflict resolution export requires an active comparison serving generation')
   expect(
     state.queryStatements.some((statement) => {
       return statement.includes('FROM app.comparison_project_conflict_resolution cr')

@@ -945,12 +945,10 @@ export const projectExportRoutes = new Elysia()
       const articleIds = getExportArticleIds(job.resultManifestJson)
       const articleIdBatches = getExportArticleIdBatches(job.resultManifestJson)
       const sourceProjectIds = getExportSourceProjectIds(job.criteriaJson)
-      const snapshotScopes = await getExportServingSnapshotScopes({
-        job,
-        sourceProjectIds: sourceProjectIds.length > 0 ? sourceProjectIds : [params.id],
-      })
+      const requestedSourceProjectIds = sourceProjectIds.length > 0 ? sourceProjectIds : [params.id]
+      const snapshotScopes = await getExportServingSnapshotScopes({job, sourceProjectIds: requestedSourceProjectIds})
 
-      if (articleIds.length > 0 && snapshotScopes.length === 0) {
+      if (articleIds.length > 0 && snapshotScopes.length !== requestedSourceProjectIds.length) {
         set.status = 409
         return {error: 'Export serving snapshot is unavailable', success: false}
       }
