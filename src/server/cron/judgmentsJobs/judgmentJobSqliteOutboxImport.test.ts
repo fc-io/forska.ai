@@ -908,6 +908,12 @@ test('imports SQLite-backed judgments into DuckDB in batches', async () => {
     VALUES ('${promptId}', 'Prompt', '${promptId}-hash')
   `)
   await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+    VALUES
+      ('${jobId}-project-prompt', '${projectId}', '${promptId}', 1, TRUE),
+      ('${jobId}-linked-project-prompt', '${linkedProjectId}', '${promptId}', 1, TRUE)
+  `)
+  await runDatabase(`
     INSERT INTO app.article (id, article_title)
     VALUES ('${articleId}', 'Article')
   `)
@@ -961,30 +967,21 @@ test('imports SQLite-backed judgments into DuckDB in batches', async () => {
       AND model_id = '${modelId}'
   `)
 
-  const refreshStateRows = await queryDatabase<{dirtyToken: number; projectId: string}>(`
+  const reviewChangeDeltaRows = await queryDatabase<{changeKind: string; projectId: string}>(`
     SELECT
-      CAST(dirty_token AS INTEGER) AS dirtyToken,
+      change_kind AS changeKind,
       project_id AS projectId
-    FROM app.project_mart_refresh_state
+    FROM app.review_change_delta
+    WHERE article_id = '${articleId}'
+      AND prompt_id = '${promptId}'
+      AND model_id = '${modelId}'
     ORDER BY project_id ASC
   `)
 
-  const articleStateRows = await queryDatabase<{articleId: string; projectId: string}>(`
-    SELECT
-      article_id AS articleId,
-      project_id AS projectId
-    FROM app.project_mart_refresh_article_state
-    ORDER BY project_id ASC, article_id ASC
-  `)
-
   expect(rows).toHaveLength(1)
-  expect(refreshStateRows).toEqual([
-    {dirtyToken: 1, projectId},
-    {dirtyToken: 1, projectId: linkedProjectId},
-  ])
-  expect(articleStateRows).toEqual([
-    {articleId, projectId},
-    {articleId, projectId: linkedProjectId},
+  expect(reviewChangeDeltaRows).toEqual([
+    {changeKind: 'judgment.llm.created', projectId},
+    {changeKind: 'judgment.llm.created', projectId: linkedProjectId},
   ])
   expect((await service.getPendingOutboxBatch({jobId, maxBytes: 1024 * 1024, maxRows: 10})).length).toBe(0)
 })
@@ -1374,7 +1371,7 @@ test('replays a SQLite outbox batch after crashing between DuckDB commit and SQL
       (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${jobId}') AS markerRows
   `)
 
-  expect(Number(stateAfterCrash?.dirtyToken ?? 0)).toBe(1)
+  expect(Number(stateAfterCrash?.dirtyToken ?? 0)).toBe(0)
   expect(Number(stateAfterCrash?.markerRows ?? 0)).toBe(1)
   expect(await importOutboxBatch()).toBe(1)
 
@@ -1395,7 +1392,7 @@ test('replays a SQLite outbox batch after crashing between DuckDB commit and SQL
       (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${jobId}') AS markerRows
   `)
 
-  expect(Number(stateAfterRetry?.dirtyToken ?? 0)).toBe(1)
+  expect(Number(stateAfterRetry?.dirtyToken ?? 0)).toBe(0)
   expect(Number(stateAfterRetry?.markerRows ?? 0)).toBe(1)
 })
 
@@ -1660,7 +1657,7 @@ test('leaves refresh acknowledgement publication to the worker when mart visibil
   expect((await service.getScanState(jobId)).lastProjectRefreshAckSeq).toBe(0)
 })
 
-test('keeps the previous refresh acknowledgement seq when mart visibility acknowledgement fails', async () => {
+test('does not call legacy mart visibility acknowledgement during outbox import', async () => {
   if (!runDatabase || !queryDatabase || !sqliteService || !importOutboxBatch || !storeSinglePromptJudgment) {
     throw new Error('Test database not initialized')
   }
@@ -1727,17 +1724,13 @@ test('keeps the previous refresh acknowledgement seq when mart visibility acknow
   }
 
   try {
-    await importOutboxBatch()
-    throw new Error('Expected refresh state dirty mark failure')
-  } catch (error) {
-    expect(error).toBeInstanceOf(Error)
-    expect(error instanceof Error ? error.message : '').toBe('refresh state dirty mark failed')
+    expect(await importOutboxBatch()).toBe(1)
   } finally {
     refreshStateService.markArticleProjectsDirtyAtomically = originalMarkArticleProjectsDirtyAtomically
   }
 
   expect((await service.getScanState(jobId)).lastProjectRefreshAckSeq).toBe(0)
-  expect(await service.getUnexportedOutboxCount(jobId)).toBe(1)
+  expect(await service.getUnexportedOutboxCount(jobId)).toBe(0)
 
   const [stateAfterFailure] = await queryDatabase<{judgmentRows: number; markerRows: number}>(`
     SELECT
@@ -1745,11 +1738,8 @@ test('keeps the previous refresh acknowledgement seq when mart visibility acknow
       (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${jobId}') AS markerRows
   `)
 
-  expect(Number(stateAfterFailure?.judgmentRows ?? 0)).toBe(0)
-  expect(Number(stateAfterFailure?.markerRows ?? 0)).toBe(0)
-
-  expect(await importOutboxBatch()).toBe(1)
-  expect((await service.getScanState(jobId)).lastProjectRefreshAckSeq).toBe(0)
+  expect(Number(stateAfterFailure?.judgmentRows ?? 0)).toBe(1)
+  expect(Number(stateAfterFailure?.markerRows ?? 0)).toBe(1)
 })
 
 test('single-job sqlite importer emits structured JSON success output', () => {

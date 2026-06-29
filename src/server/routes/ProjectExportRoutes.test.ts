@@ -591,3 +591,35 @@ test('project export download hydrates completed durable job selection as CSV', 
     'detail.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash',
   )
 })
+
+test('project export download rejects partially unavailable source snapshots', async () => {
+  activeSnapshotProjectIds.delete('project-2')
+  queryJsonRef.current = async (statement) => {
+    if (statement.includes('FROM app.project') && statement.includes('LIMIT 1') && statement.includes('id, name')) {
+      return [{id: 'project-1', name: 'Project 1'}]
+    }
+
+    if (statement.includes('FROM app.review_bulk_operation_job')) {
+      return [
+        {
+          criteriaJson: {sourceProjectIds: ['project-1', 'project-2'], exportContract: {}},
+          latestSnapshotSemantics: true,
+          resultManifestJson: {batches: {'article-1': ['article-1']}},
+          reviewConfigHash: 'config-1',
+          snapshotId: null,
+          status: 'completed',
+        },
+      ]
+    }
+
+    return []
+  }
+  const {projectExportRoutes} = await loadRoutes()
+  const app = new Elysia().use(projectExportRoutes)
+  const response = await app.handle(new Request('http://localhost/api/projects/project-1/export/export-job-1/download'))
+  const body = (await response.json()) as {error: string; success: boolean}
+
+  expect(response.status).toBe(409)
+  expect(body).toEqual({error: 'Export serving snapshot is unavailable', success: false})
+  expect(queryStatements.join('\n')).not.toContain('JOIN mart.review_article_serving_v4')
+})

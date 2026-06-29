@@ -3323,7 +3323,7 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
   scope: ComparisonProjectScope,
 ): Promise<ComparisonProjectConflictResolutionTransferSourceRow[]> => {
   if (scope.activeGeneration === null) {
-    return []
+    throw new HttpError(409, 'Conflict resolution export requires an active comparison serving generation')
   }
 
   const optionByValue = getComparisonProjectConflictResolutionOptionByValue(scope)
@@ -4460,6 +4460,11 @@ export const comparisonProjectsRoutes = new Elysia()
     if (!scope) {
       set.status = 404
       return {data: null, error: 'Comparison project not found'}
+    }
+
+    if (scope.activeGeneration === null) {
+      set.status = 409
+      return {data: null, error: 'Conflict resolution export requires an active comparison serving generation'}
     }
 
     return getComparisonProjectConflictResolutionExportResponse(scope)

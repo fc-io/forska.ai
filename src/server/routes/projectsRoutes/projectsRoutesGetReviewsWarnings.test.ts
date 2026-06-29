@@ -96,7 +96,10 @@ type ReviewsWarningsResponse = {
         snapshotId: string | null
       }
       serving: {
-        diagnostics: {quarantine: {retryableOutboxCount: number; unresolvedOutboxCount: number}}
+        diagnostics: {
+          rebuildChunks: {failedCount: number; pendingCount: number}
+          quarantine: {quarantinedOutboxCount: number; retryableOutboxCount: number; unresolvedOutboxCount: number}
+        }
         readable: boolean
         usable: boolean
       }
@@ -320,7 +323,7 @@ const insertDirtyMaterializationState = async (input: {
   `)
 }
 
-const insertReviewSourceChangeOutbox = async (projectId: string) => {
+const insertReviewSourceChangeOutbox = async (projectId: string, status: 'pending' | 'quarantined' = 'pending') => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
@@ -349,7 +352,7 @@ const insertReviewSourceChangeOutbox = async (projectId: string) => {
       'outbox-key-${projectId}',
       1,
       '{}'::JSON,
-      'pending',
+      '${status}',
       TIMESTAMPTZ '2026-04-02T12:00:00.000Z',
       TIMESTAMPTZ '2026-04-02T12:00:00.000Z'
     )
@@ -1094,24 +1097,26 @@ test('reviews warnings keep retryable V4 rebuild chunk failures queued', async (
   expect(body.data.indexing.status).toBe('refreshing')
 })
 
-test('reviews warnings keep pending V4 outbox barriers non-ready without a serving snapshot', async () => {
+test('reviews warnings mark quarantined V4 outbox barriers as blocked', async () => {
   const projectId = 'project-v4-outbox-barrier-warning'
 
   await insertProjectFixture(projectId)
   await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
-  await insertReviewSourceChangeOutbox(projectId)
+  await insertReviewSourceChangeOutbox(projectId, 'quarantined')
 
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.pendingRefreshCount).toBe(1)
-  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.blockedReason).toBe('quarantine_barrier')
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('failed')
   expect(body.data.indexing.serving.diagnostics.quarantine).toMatchObject({
-    retryableOutboxCount: 1,
+    quarantinedOutboxCount: 1,
+    retryableOutboxCount: 0,
     unresolvedOutboxCount: 1,
   })
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
-  expect(body.data.indexing.status).toBe('refreshing')
+  expect(body.data.indexing.status).toBe('failed')
 })
 
 test('reviews warnings search diagnostic ignores active snapshots for older review configs', async () => {

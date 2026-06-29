@@ -243,7 +243,7 @@ const getVisibleJudgmentDeltaRows = async (
         })
         .join(', ')}
     )
-    SELECT
+    SELECT DISTINCT
       imported_judgment.article_id AS articleId,
       imported_judgment.prompt_id AS promptId,
       imported_judgment.model_id AS modelId,
@@ -257,10 +257,19 @@ const getVisibleJudgmentDeltaRows = async (
       imported_judgment.source_partition AS sourcePartition,
       project.id AS projectId
     FROM imported_judgment
-    INNER JOIN app.project_article project_scope
+    INNER JOIN (
+      SELECT project_id, article_id
+      FROM app.project_article
+      UNION
+      SELECT pir.project_id, air.article_id
+      FROM app.project_import_route pir
+      INNER JOIN app.article_import_route air
+        ON air.import_route_id = pir.import_route_id
+    ) project_scope
       ON project_scope.article_id = imported_judgment.article_id
     INNER JOIN app.project project
       ON project.id = project_scope.project_id
+     AND NOT project.archived
     INNER JOIN app.project_prompt project_prompt
       ON ${getProjectVisibleJudgmentScopeSql({
         judgmentAlias: 'imported_judgment',
