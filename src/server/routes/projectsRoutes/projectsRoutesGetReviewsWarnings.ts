@@ -135,10 +135,10 @@ const getReviewsIndexingStatus = (params: {
 
   return !shouldIndexReviews
     ? 'not-needed'
-    : params.hasTerminalV4Work
-      ? 'failed'
-      : params.isServerMutationWorkDisabled && params.pendingRefreshCount > 0 && params.runningRefreshCount === 0
-        ? 'blocked'
+    : params.isServerMutationWorkDisabled && params.pendingRefreshCount > 0 && params.runningRefreshCount === 0
+      ? 'blocked'
+      : params.hasTerminalV4Work
+        ? 'failed'
         : params.pendingRefreshCount > 0 && params.runningRefreshCount > 0
           ? 'refreshing'
           : params.pendingRefreshCount > 0
@@ -270,7 +270,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       enabledPromptCount,
       hasAnyArticlesInScope,
       hasReviewServingRows,
-      hasTerminalV4Work: terminalRebuildChunkCount + terminalDirtyWorkCount > 0,
+      hasTerminalV4Work: terminalRebuildChunkCount + (isServerMutationWorkDisabled ? 0 : terminalDirtyWorkCount) > 0,
       isServerMutationWorkDisabled,
       pendingRefreshCount,
       runningRefreshCount: inFlightRefreshCount,

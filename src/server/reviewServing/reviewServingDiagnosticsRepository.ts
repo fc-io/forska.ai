@@ -410,7 +410,8 @@ const getRebuildChunkRowsEffect = (
       SELECT
         CAST(COUNT(*) FILTER (WHERE classified_chunk.status IN ('pending', 'failed')) AS INTEGER) AS pendingCount,
         CAST(COUNT(*) FILTER (WHERE classified_chunk.status = 'running') AS INTEGER) AS runningCount,
-        CAST(COALESCE(MAX(CASE WHEN latest_request.status IN ('failed', 'quarantined') THEN 1 ELSE 0 END), 0) AS INTEGER) AS failedCount,
+        CAST(COALESCE(MAX(CASE WHEN latest_request.status IN ('failed', 'quarantined') THEN 1 ELSE 0 END), 0) AS INTEGER)
+          * CAST(COUNT(*) FILTER (WHERE classified_chunk.claimable = 1) = 0 AS INTEGER) AS failedCount,
         CAST(COUNT(*) FILTER (WHERE classified_chunk.status = 'completed') AS INTEGER) AS completedCount,
         CAST(COUNT(*) FILTER (WHERE classified_chunk.claimable = 1) AS INTEGER) AS claimableCount,
         CAST(COUNT(*) FILTER (WHERE classified_chunk.queued = 1 AND classified_chunk.claimable = 0) AS INTEGER) AS blockedQueuedCount,
