@@ -9,6 +9,7 @@ import type {ReviewServingDirtyWorkClaim} from '../reviewServing/reviewServingDi
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   defaultReviewServingProjectorWorkerErrorBackoffMs,
+  defaultReviewServingProjectorWorkerProgressYieldMs,
   getDefaultReviewServingProjectorRunners,
   getReviewServingProjectorWorkerWorkloadContext,
   type ReviewServingProjectorWorkerDependencies,
@@ -566,6 +567,29 @@ test('worker backs off failed wakes and stops cleanly when aborted during sleep'
 
   expect(sleepCalls).toEqual([defaultReviewServingProjectorWorkerErrorBackoffMs])
   expect(harness.claimInputs).toHaveLength(1)
+})
+
+test('worker yields after completed request chunks so progress readers can run', async () => {
+  const harness = createWorkerHarness()
+  const controller = new AbortController()
+  const sleepCalls: number[] = []
+  const requestChunk = {...chunkManifest, requestId: 'rebuild-1'} satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return requestChunk
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.sleep = mock(async (delayMs: number) => {
+    sleepCalls.push(delayMs)
+    controller.abort()
+  })
+
+  await runReviewServingProjectorWorker({signal: controller.signal, workerId: 'worker-1'}, harness.dependencies)
+
+  expect(sleepCalls).toEqual([defaultReviewServingProjectorWorkerProgressYieldMs])
+  expect(harness.runChunkInputs).toEqual([requestChunk])
 })
 
 test('worker does not start a cycle when already aborted', async () => {
