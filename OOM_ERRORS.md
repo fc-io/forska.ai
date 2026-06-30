@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-30 - V4 Runtime OOM Chunk Split
+
+- Error: `DuckDB Out of Memory Error` while executing a claimed V4 article-range rebuild chunk.
+- Context: `reviewServing.projector.worker` rebuild chunk execution for splittable article-range components.
+- Cause: A chunk admitted within static budgets can still exceed runtime DuckDB memory on dense article ranges or payload-heavy work.
+- Fix: Runtime DuckDB OOM now splits the claimed article-range chunk into bounded child chunks and completes the parent as a container so the worker can resume smaller work units.
+- Verification: `bun test src/server/workers/reviewServingProjectorWorker.test.ts`.
+
 ## 2026-06-30 - V4 Rebuild Chunk Claim Discovery
 
 - Error: `DuckDB workload budget exceeded for reviewServing.projector.worker: temp spill 819200 bytes is not allowed`.

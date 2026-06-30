@@ -594,12 +594,10 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).not.toContain("prerequisite.status IN ('failed', 'blocked_over_budget', 'quarantined')")
   expect(statements.join('\n')).not.toContain('prerequisite.updated_at < candidate.updated_at')
   expect(statements.join('\n')).toContain("project_id IS NOT DISTINCT FROM 'project-1'")
-  expect(statements.join('\n')).toContain("WHEN candidate.status = 'running'")
+  expect(statements.join('\n')).toContain("candidate.status = 'running'")
   expect(statements.join('\n')).toContain('candidate.lease_expires_at IS NULL')
   expect(statements.join('\n')).toContain('candidate.lease_expires_at <=')
-  expect(statements.join('\n')).toContain('candidate.created_at ASC')
-  expect(statements.join('\n')).toContain('candidate.updated_at ASC')
-  expect(statements.join('\n')).toContain('candidate.chunk_id ASC')
+  expect(statements.join('\n')).not.toContain('ORDER BY')
 })
 
 test('over-budget chunks are parked before claim and cannot hot-loop', async () => {

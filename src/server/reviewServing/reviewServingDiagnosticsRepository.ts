@@ -382,7 +382,11 @@ const getRebuildChunkRowsEffect = (
         SELECT request_id, admission_state, status
         FROM app.review_rebuild_request
         WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
-        ORDER BY updated_at DESC, created_at DESC, request_id DESC
+        ORDER BY
+          CASE WHEN admission_state = 'admitted' AND status IN ('admitted', 'running') THEN 0 ELSE 1 END ASC,
+          updated_at DESC,
+          created_at DESC,
+          request_id DESC
         LIMIT 1
       ),
       visible_chunk AS (
