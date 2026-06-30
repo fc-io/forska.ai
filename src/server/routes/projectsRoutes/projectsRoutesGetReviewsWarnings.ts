@@ -125,6 +125,7 @@ const getHasReviewServingStateThatCanProgress = (diagnostics: ReviewServingDiagn
 const getReviewsIndexingStatus = (params: {
   enabledPromptCount: number
   hasAnyArticlesInScope: boolean
+  hasQuarantineBarrier: boolean
   hasReviewServingRows: boolean
   hasTerminalV4Work: boolean
   isServerMutationWorkDisabled: boolean
@@ -135,17 +136,19 @@ const getReviewsIndexingStatus = (params: {
 
   return !shouldIndexReviews
     ? 'not-needed'
-    : params.isServerMutationWorkDisabled && params.pendingRefreshCount > 0 && params.runningRefreshCount === 0
-      ? 'blocked'
-      : params.hasTerminalV4Work
+    : params.hasQuarantineBarrier
         ? 'failed'
-        : params.pendingRefreshCount > 0 && params.runningRefreshCount > 0
-          ? 'refreshing'
-          : params.pendingRefreshCount > 0
-            ? 'refreshing'
-            : params.hasReviewServingRows
-              ? 'ready'
-              : 'stale'
+        : params.isServerMutationWorkDisabled && params.pendingRefreshCount > 0 && params.runningRefreshCount === 0
+          ? 'blocked'
+          : params.hasTerminalV4Work
+            ? 'failed'
+            : params.pendingRefreshCount > 0 && params.runningRefreshCount > 0
+              ? 'refreshing'
+              : params.pendingRefreshCount > 0
+                ? 'refreshing'
+                : params.hasReviewServingRows
+                  ? 'ready'
+                  : 'stale'
 }
 
 const getReviewsIndexingProgressState = (params: {
@@ -269,6 +272,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const indexingStatus = getReviewsIndexingStatus({
       enabledPromptCount,
       hasAnyArticlesInScope,
+      hasQuarantineBarrier: terminalQuarantineCount > 0,
       hasReviewServingRows,
       hasTerminalV4Work:
         terminalRebuildChunkCount + terminalQuarantineCount + (isServerMutationWorkDisabled ? 0 : terminalDirtyWorkCount)

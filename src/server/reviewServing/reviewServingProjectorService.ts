@@ -536,7 +536,7 @@ export const wakeReviewServingProjectorService = async (
 
           if (blockedRebuildRequests.length > 0) {
             const blockedDiagnostic = getBlockedRebuildRequestDiagnostic(blockedRebuildRequests)
-            await releaseDirtyWork(claimIds, database)
+            await failDirtyWork(claimIds, database)
             logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic: blockedDiagnostic})
 
             return {
