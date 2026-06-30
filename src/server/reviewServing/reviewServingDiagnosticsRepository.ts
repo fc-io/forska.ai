@@ -9,6 +9,7 @@ import {
   type ReviewServingSearchAvailability,
   type ReviewServingSnapshotStatus,
 } from './reviewServingContracts.ts'
+import {defaultReviewServingDirtyWorkStaleClaimSeconds} from './reviewServingDirtyWorkService.ts'
 import {getReviewServingOptionalComponentAvailability} from './reviewServingSnapshotPromotionService.ts'
 
 export type ReviewServingDiagnosticsDatabase = {queryJson: <T>(statement: string) => Promise<T[]>}
@@ -341,13 +342,18 @@ const getSnapshotStatusCountRowsEffect = (
 }
 
 const getDirtyWorkRowsEffect = (input: ReviewServingDiagnosticsInput, database: ReviewServingDiagnosticsDatabase) => {
+  const now = input.now ?? new Date()
+  const retryableDirtyWorkPredicate = `updated_at <= ${getDiagnosticsTimestampLiteral(now)} - INTERVAL '${defaultReviewServingDirtyWorkStaleClaimSeconds} seconds'`
+
   return queryEffect<CountStateRow>(
     database,
     `
       SELECT
-        CAST(COUNT(*) FILTER (WHERE status = 'pending') AS INTEGER) AS pendingCount,
-        CAST(COUNT(*) FILTER (WHERE status = 'running') AS INTEGER) AS runningCount,
-        CAST(COUNT(*) FILTER (WHERE status = 'failed') AS INTEGER) AS failedCount,
+        CAST(COUNT(*) FILTER (
+          WHERE status = 'pending' OR (status IN ('failed', 'running') AND ${retryableDirtyWorkPredicate})
+        ) AS INTEGER) AS pendingCount,
+        CAST(COUNT(*) FILTER (WHERE status = 'running' AND NOT (${retryableDirtyWorkPredicate})) AS INTEGER) AS runningCount,
+        CAST(COUNT(*) FILTER (WHERE status = 'failed' AND NOT (${retryableDirtyWorkPredicate})) AS INTEGER) AS failedCount,
         CAST(COUNT(*) FILTER (WHERE status = 'completed') AS INTEGER) AS completedCount,
         MIN(created_at) FILTER (WHERE status IN ('pending', 'failed')) AS oldestQueuedAt,
         MAX(updated_at) FILTER (WHERE status IN ('running', 'completed')) AS updatedAt

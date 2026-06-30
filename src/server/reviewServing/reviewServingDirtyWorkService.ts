@@ -40,6 +40,8 @@ export type ClaimReviewServingDirtyWorkParams = {
   staleRunningClaimSeconds?: number
 }
 
+export const defaultReviewServingDirtyWorkStaleClaimSeconds = 15 * 60
+
 export type CompactReviewServingDirtyWorkAcknowledgementsParams = {
   completedSourceHighWaterMark: number
   projectionComponent: ReviewServingProjectionComponent
@@ -176,7 +178,7 @@ const getNormalizedLimit = (params: {limit: number; maxWakeCount?: number}) => {
 }
 
 const getStaleRunningClaimSeconds = (params: ClaimReviewServingDirtyWorkParams) => {
-  return Math.max(0, Math.floor(params.staleRunningClaimSeconds ?? 15 * 60))
+  return Math.max(0, Math.floor(params.staleRunningClaimSeconds ?? defaultReviewServingDirtyWorkStaleClaimSeconds))
 }
 
 const getClaimNowSql = (params: ClaimReviewServingDirtyWorkParams) => {
