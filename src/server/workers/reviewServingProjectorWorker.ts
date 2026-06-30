@@ -248,6 +248,7 @@ const defaultReviewServingProjectorWorkerMaxRetries = 1
 const defaultReviewServingProjectorWorkerMaxRowsPerWake = 512
 const defaultReviewServingProjectorWorkerMaxWakeMs = 5_000
 const defaultReviewServingProjectorWorkerPollIntervalMs = 2_000
+const defaultReviewServingProjectorWorkerProgressYieldMs = 100
 const defaultReviewServingProjectorWorkerErrorBackoffMs = 10_000
 const defaultReviewServingSelectedImportBaseBatchSize = 512
 const reviewServingProjectorWorkerRouteOrJobKey = 'reviewServing.projector.worker'
@@ -3440,6 +3441,8 @@ export const runReviewServingProjectorWorker = async (
   const delayMs =
     cycleResult.status === 'failed'
       ? (options.errorBackoffMs ?? defaultReviewServingProjectorWorkerErrorBackoffMs)
+      : shouldPrioritizeNextRebuildChunk(cycleResult.chunk)
+        ? defaultReviewServingProjectorWorkerProgressYieldMs
       : cycleResult.status === 'idle'
         ? (options.pollIntervalMs ?? defaultReviewServingProjectorWorkerPollIntervalMs)
         : 0
@@ -3466,6 +3469,7 @@ export {
   defaultReviewServingProjectorWorkerMaxRowsPerWake,
   defaultReviewServingProjectorWorkerMaxWakeMs,
   defaultReviewServingProjectorWorkerPollIntervalMs,
+  defaultReviewServingProjectorWorkerProgressYieldMs,
 }
 
 export type {

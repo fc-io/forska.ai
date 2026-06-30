@@ -223,6 +223,17 @@ const rebuildChunkClaimComponentOrder = [
   'summary',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 
+const getRebuildChunkClaimComponentOrderSql = (tableAlias: string) => {
+  return `CASE ${tableAlias}.projection_component
+    ${rebuildChunkClaimComponentOrder
+      .map((component, index) => {
+        return `WHEN ${getSqlLiteral(component)} THEN ${index}`
+      })
+      .join('\n    ')}
+    ELSE ${rebuildChunkClaimComponentOrder.length}
+  END`
+}
+
 const getComponentSqlList = (components: readonly ReviewServingProjectionComponent[]) => {
   return `(${components.map(getSqlLiteral).join(', ')})`
 }
@@ -611,20 +622,22 @@ export const getNextClaimableReviewServingRebuildChunk = async (
   input: {now: Date | string; projectId?: string | null},
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
 ) => {
-  const rows = await rebuildChunkClaimComponentOrder.reduce<Promise<ReviewServingRebuildChunkManifestRow[]>>(
-    async (previousRows, projectionComponent) => {
-      const claimedRows = await previousRows
-
-      return claimedRows.length > 0
-        ? claimedRows
-        : database.queryJson<ReviewServingRebuildChunkManifestRow>(`
-              ${getReviewServingRebuildChunkSelect({tableAlias: 'candidate'})}
-              WHERE ${getReviewServingRebuildChunkClaimWhere({...input, projectionComponent}, 'candidate')}
-              LIMIT 1
-            `)
-    },
-    Promise.resolve([]),
-  )
+  const rows = await database.queryJson<ReviewServingRebuildChunkManifestRow>(`
+    ${getReviewServingRebuildChunkSelect({tableAlias: 'candidate'})}
+    WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
+    ORDER BY
+      (
+        SELECT request.updated_at
+        FROM app.review_rebuild_request request
+        WHERE request.request_id = candidate.request_id
+        LIMIT 1
+      ) DESC NULLS LAST,
+      candidate.updated_at ASC,
+      candidate.created_at ASC,
+      ${getRebuildChunkClaimComponentOrderSql('candidate')} ASC,
+      candidate.chunk_id ASC
+    LIMIT 1
+  `)
   const row = rows[0]
 
   return row === undefined

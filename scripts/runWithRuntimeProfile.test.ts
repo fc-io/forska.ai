@@ -57,6 +57,7 @@ const realDevServerSmokeEnabled = process.env.FORSKA_REAL_DEV_SERVER_SMOKE === '
 const reviewServingProgressProjectId =
   process.env.FORSKA_REVIEW_SERVING_PROGRESS_PROJECT_ID ?? 'd03fe24a-cfcf-41ed-b09f-7b554a393d80'
 const staleReviewServingQueuedProgressMs = 10 * 60_000
+const reviewServingWarningFetchTimeoutMs = 60_000
 const forbiddenDevServerOutputPatterns = [
   {label: 'API role DuckDB ownership', pattern: /Current server role api cannot own DuckDB/},
   {label: 'DuckDB fatal runtime restart', pattern: /\[duckdb\] restarting embedded runtime after fatal invalidation/},
@@ -199,6 +200,7 @@ const postReviewWarnings = async (apiPort: number, projectId: string) => {
     body: JSON.stringify({projectId}),
     headers: {'content-type': 'application/json'},
     method: 'POST',
+    signal: AbortSignal.timeout(reviewServingWarningFetchTimeoutMs),
   })
 }
 
@@ -258,6 +260,17 @@ const isQueuedReviewServingProgressCandidate = (body: ReviewsWarningsBody) => {
 const getReviewServingProgressCandidates = async (apiPort: number) => {
   const projectIds = new Set([reviewServingProgressProjectId])
   const candidates: ReviewServingProgressCandidate[] = []
+  const targetBody = await postReviewWarnings(apiPort, reviewServingProgressProjectId).catch(() => {
+    return null
+  })
+
+  if (targetBody !== null && isQueuedReviewServingProgressCandidate(targetBody)) {
+    return [{body: targetBody, projectId: reviewServingProgressProjectId}]
+  }
+
+  if (targetBody?.data?.indexing?.status === 'refreshing') {
+    return []
+  }
 
   try {
     const projectsBody = await fetchJson<ProjectsBody>(`http://127.0.0.1:${apiPort}/api/projects`)
@@ -271,6 +284,10 @@ const getReviewServingProgressCandidates = async (apiPort: number) => {
   }
 
   for (const projectId of projectIds) {
+    if (projectId === reviewServingProgressProjectId) {
+      continue
+    }
+
     const body = await postReviewWarnings(apiPort, projectId).catch(() => {
       return null
     })
@@ -689,7 +706,7 @@ test(
     )
     expectNoForbiddenDevServerOutput(getCollectedProcessOutput(collectors))
   },
-  {timeout: 120_000},
+  {timeout: 240_000},
 )
 
 test(

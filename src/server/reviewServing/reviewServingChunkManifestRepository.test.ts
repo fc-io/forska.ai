@@ -346,15 +346,11 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
     }
 
     if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
-      if (statement.includes("candidate.admission_state = 'admitted'")) {
-        const projectionComponent = statement
-          .match(/candidate\.projection_component\s*=\s*'((?:''|[^'])*)'/u)?.[1]
-          ?.replaceAll("''", "'")
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest AS candidate')) {
         const [claimable] = [...rows.values()]
           .filter((row) => {
             return (
               row.admissionState === 'admitted'
-              && (projectionComponent === undefined || row.projectionComponent === projectionComponent)
               && (row.status === 'pending' || row.status === 'failed' || row.status === 'running')
             )
           })
@@ -597,7 +593,10 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).toContain("candidate.status = 'running'")
   expect(statements.join('\n')).toContain('candidate.lease_expires_at IS NULL')
   expect(statements.join('\n')).toContain('candidate.lease_expires_at <=')
-  expect(statements.join('\n')).not.toContain('ORDER BY')
+  expect(statements.join('\n')).toContain('ORDER BY')
+  expect(statements.join('\n')).toContain('SELECT request.updated_at')
+  expect(statements.join('\n')).toContain('candidate.updated_at ASC')
+  expect(statements.join('\n')).toContain('CASE candidate.projection_component')
 })
 
 test('over-budget chunks are parked before claim and cannot hot-loop', async () => {
