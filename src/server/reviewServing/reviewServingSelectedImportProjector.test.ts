@@ -145,8 +145,9 @@ test('selected-import projector reads project scope and hot fields in bounded de
   expect(batchSelect).toContain('INNER JOIN app.review_import_article_hot_field hot')
   expect(batchSelect).toContain('LEFT JOIN app.article_import_route current_link')
   expect(batchSelect).toContain("WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)")
-  expect(batchSelect).toContain('better.rank_numeric_sort < candidate.rank_numeric_sort')
-  expect(batchSelect).toContain('better.import_route_id < candidate.import_route_id')
+  expect(batchSelect).toContain('ROW_NUMBER() OVER')
+  expect(batchSelect).toContain('PARTITION BY candidate.article_id')
+  expect(batchSelect).toContain('candidate.import_route_id ASC')
   expect(batchSelect).toContain(
     'ORDER BY candidate.rank_numeric_sort ASC, candidate.rank_key_sort ASC, candidate.article_id ASC',
   )

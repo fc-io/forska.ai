@@ -313,8 +313,9 @@ const getFallbackTemplateCte = (input: {projectId: string; templates: readonly S
   return values.length === 0
     ? ''
     : `
-           UNION
+           UNION ALL
            SELECT DISTINCT
+             0 AS template_priority,
              ${getSqlLiteral(input.projectId)} AS project_id,
              fallback.review_config_hash,
              fallback.snapshot_id,
@@ -329,6 +330,123 @@ const getFallbackTemplateCte = (input: {projectId: string; templates: readonly S
              fallback.payload_identity,
              fallback.list_mode_key
            FROM (VALUES ${values}) AS fallback(project_scope_identity, review_config_hash, snapshot_id, base_generation, display_identity, selected_import_identity, llm_status_identity, human_status_identity, posting_identity, summary_identity, payload_identity, list_mode_key)`
+}
+
+const selectedImportChangedColumns = [
+  'article_id',
+  'import_route_id',
+  'selected_rank_key',
+  'publication_year',
+  'article_title',
+  'journal_title',
+  'external_id',
+  'selected_source_url',
+  'duplicate_flag',
+  'conflict_flag',
+  'tombstone',
+  'scope_tombstone',
+].join(', ')
+
+const getSelectedImportChangedRowsCte = (values: string) => {
+  return `changed_raw(${selectedImportChangedColumns}) AS (
+           SELECT * FROM (VALUES ${values})
+         ), changed AS (
+           SELECT
+             ${selectedImportChangedColumns}
+           FROM (
+             SELECT
+               raw.*,
+               ROW_NUMBER() OVER (
+                 PARTITION BY raw.article_id
+                 ORDER BY
+                   raw.scope_tombstone DESC,
+                   raw.tombstone ASC,
+                   raw.import_route_id ASC NULLS LAST,
+                   raw.selected_rank_key ASC NULLS LAST,
+                   raw.selected_source_url ASC NULLS LAST,
+                   raw.article_title ASC NULLS LAST,
+                   raw.external_id ASC NULLS LAST
+               ) AS changed_row_rank
+             FROM changed_raw raw
+           ) ranked
+           WHERE ranked.changed_row_rank = 1
+         )`
+}
+
+const getSelectedImportServingTemplateCte = (input: {
+  baseGeneration: number
+  projectId: string
+  projectionIdentity: string
+  selectedImportSnapshotId: string
+  templates: readonly SelectedImportServingTemplateRow[]
+}) => {
+  const fallbackTemplateCte = getFallbackTemplateCte({projectId: input.projectId, templates: input.templates})
+
+  return `serving_template_raw AS (
+            SELECT DISTINCT
+              1 AS template_priority,
+              serving.project_id,
+              serving.review_config_hash,
+              serving.snapshot_id,
+              serving.base_generation,
+              serving.display_identity,
+              serving.project_scope_identity,
+              serving.selected_import_identity,
+              serving.llm_status_identity,
+              serving.human_status_identity,
+              serving.posting_identity,
+              serving.summary_identity,
+              serving.payload_identity,
+              serving.list_mode_key
+            FROM mart.review_article_serving_v4 serving
+            WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+              AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
+              AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+              AND EXISTS (
+                SELECT 1
+                FROM app.review_serving_snapshot_manifest snapshot
+                WHERE snapshot.project_id = serving.project_id
+                  AND snapshot.snapshot_id = serving.snapshot_id
+                  AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+                  AND snapshot.snapshot_status IN ('candidate', 'active')
+              )
+            ${fallbackTemplateCte}
+           ), serving_template AS (
+            SELECT
+              project_id,
+              review_config_hash,
+              snapshot_id,
+              base_generation,
+              display_identity,
+              project_scope_identity,
+              selected_import_identity,
+              llm_status_identity,
+              human_status_identity,
+              posting_identity,
+              summary_identity,
+              payload_identity,
+              list_mode_key
+            FROM (
+              SELECT
+                raw.*,
+                ROW_NUMBER() OVER (
+                  PARTITION BY raw.project_id, raw.review_config_hash, raw.snapshot_id, raw.list_mode_key
+                  ORDER BY
+                    raw.template_priority ASC,
+                    raw.base_generation DESC,
+                    raw.display_identity ASC,
+                    raw.project_scope_identity ASC,
+                    raw.selected_import_identity ASC,
+                    raw.llm_status_identity ASC,
+                    raw.human_status_identity ASC,
+                    raw.posting_identity ASC,
+                    raw.summary_identity ASC,
+                    raw.payload_identity ASC
+                ) AS template_row_rank
+              FROM serving_template_raw raw
+            ) ranked
+            WHERE ranked.template_row_rank = 1
+           )`
 }
 
 const getSelectedImportPatchRows = async (
@@ -380,41 +498,33 @@ const getSelectedImportPatchRows = async (
         ),
         selected_import_winner AS (
           SELECT
-            candidate.article_id,
-            candidate.import_route_id,
-            candidate.source_record_key,
-            candidate.selected_rank_key,
-            candidate.selected_rank_numeric,
-            candidate.publication_year,
-            candidate.article_title,
-            candidate.journal_title,
-            candidate.external_id,
-            candidate.duplicate_flag,
-            candidate.conflict_flag
-          FROM selected_import_candidates candidate
-          WHERE NOT EXISTS (
-            SELECT 1
-            FROM selected_import_candidates better
-            WHERE better.article_id = candidate.article_id
-              AND (
-                better.rank_numeric_sort < candidate.rank_numeric_sort
-                OR (
-                  better.rank_numeric_sort = candidate.rank_numeric_sort
-                  AND better.rank_key_sort < candidate.rank_key_sort
-                )
-                OR (
-                  better.rank_numeric_sort = candidate.rank_numeric_sort
-                  AND better.rank_key_sort = candidate.rank_key_sort
-                  AND better.import_route_id < candidate.import_route_id
-                )
-                OR (
-                  better.rank_numeric_sort = candidate.rank_numeric_sort
-                  AND better.rank_key_sort = candidate.rank_key_sort
-                  AND better.import_route_id = candidate.import_route_id
-                  AND better.source_record_key < candidate.source_record_key
-                )
-              )
-          )
+            ranked.article_id,
+            ranked.import_route_id,
+            ranked.source_record_key,
+            ranked.selected_rank_key,
+            ranked.selected_rank_numeric,
+            ranked.publication_year,
+            ranked.article_title,
+            ranked.journal_title,
+            ranked.external_id,
+            ranked.duplicate_flag,
+            ranked.conflict_flag
+          FROM (
+            SELECT
+              candidate.*,
+              ROW_NUMBER() OVER (
+                PARTITION BY candidate.article_id
+                ORDER BY
+                  candidate.rank_numeric_sort ASC,
+                  candidate.rank_key_sort ASC,
+                  candidate.import_route_id ASC,
+                  candidate.source_record_key ASC,
+                  candidate.article_title ASC NULLS LAST,
+                  candidate.external_id ASC NULLS LAST
+              ) AS selected_import_row_rank
+            FROM selected_import_candidates candidate
+          ) ranked
+          WHERE ranked.selected_import_row_rank = 1
         )
         SELECT
           dirty.article_id AS articleId,
@@ -497,14 +607,13 @@ const getApplySelectedImportServingStatements = (input: {
       return `(${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.tombstone ? null : row.importRouteId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedRankKey)}, ${getSqlLiteral(row.tombstone ? null : row.publicationYear)}, ${getSqlLiteral(row.tombstone ? null : row.articleTitle)}, ${getSqlLiteral(row.tombstone ? null : row.journalTitle)}, ${getSqlLiteral(row.tombstone ? null : row.externalId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedSourceUrl)}, ${getSqlLiteral(row.tombstone ? false : (row.duplicateFlag ?? false))}, ${getSqlLiteral(row.tombstone ? false : (row.conflictFlag ?? false))}, ${getSqlLiteral(row.tombstone)}, ${getSqlLiteral(row.scopeTombstone)})`
     })
     .join(', ')
-  const fallbackTemplateCte = getFallbackTemplateCte({projectId: input.projectId, templates: input.templates})
+  const changedCte = getSelectedImportChangedRowsCte(values)
+  const servingTemplateCte = getSelectedImportServingTemplateCte(input)
 
   return values.length === 0
     ? []
     : [
-        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, article_title, journal_title, external_id, selected_source_url, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
-           SELECT * FROM (VALUES ${values})
-         )
+        `WITH ${changedCte}
          DELETE FROM mart.review_article_serving_v4 serving
          WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
            AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
@@ -521,39 +630,9 @@ const getApplySelectedImportServingStatements = (input: {
              SELECT 1
                FROM changed
               WHERE changed.article_id = serving.article_id
-                AND changed.scope_tombstone = TRUE
+               AND changed.scope_tombstone = TRUE
             )`,
-        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, article_title, journal_title, external_id, selected_source_url, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
-           SELECT * FROM (VALUES ${values})
-          ), serving_template AS (
-            SELECT DISTINCT
-              serving.project_id,
-              serving.review_config_hash,
-              serving.snapshot_id,
-              serving.base_generation,
-              serving.display_identity,
-              serving.project_scope_identity,
-              serving.selected_import_identity,
-              serving.llm_status_identity,
-              serving.human_status_identity,
-              serving.posting_identity,
-              serving.summary_identity,
-              serving.payload_identity,
-              serving.list_mode_key
-            FROM mart.review_article_serving_v4 serving
-            WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-              AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
-              AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
-              AND EXISTS (
-                SELECT 1
-                FROM app.review_serving_snapshot_manifest snapshot
-                WHERE snapshot.project_id = serving.project_id
-                  AND snapshot.snapshot_id = serving.snapshot_id
-                  AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-                  AND snapshot.snapshot_status IN ('candidate', 'active')
-              )
-            ${fallbackTemplateCte}
-           )
+        `WITH ${changedCte}, ${servingTemplateCte}
           INSERT INTO mart.review_article_serving_v4 (
             project_id,
             review_config_hash,
@@ -647,9 +726,7 @@ const getApplySelectedImportServingStatements = (input: {
           CROSS JOIN serving_template template
           WHERE changed.scope_tombstone = FALSE
           ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING`,
-        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, article_title, journal_title, external_id, selected_source_url, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
-           SELECT * FROM (VALUES ${values})
-           )
+        `WITH ${changedCte}
           UPDATE mart.review_article_serving_v4 serving
          SET
             article_title = COALESCE(changed.article_title, article.article_title),

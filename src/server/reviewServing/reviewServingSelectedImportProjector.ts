@@ -200,6 +200,26 @@ const getSelectedImportProjectionRows = async (
             AND (scope.in_curated_scope OR scope.in_route_scope)
             AND NOT hot.tombstone
             ${getArticleRangePredicateSql(input)}
+        ),
+        selected_import_winner AS (
+          SELECT
+            ranked.*
+          FROM (
+            SELECT
+              candidate.*,
+              ROW_NUMBER() OVER (
+                PARTITION BY candidate.article_id
+                ORDER BY
+                  candidate.rank_numeric_sort ASC,
+                  candidate.rank_key_sort ASC,
+                  candidate.import_route_id ASC,
+                  candidate.source_record_key ASC,
+                  candidate.article_title ASC NULLS LAST,
+                  candidate.external_id ASC NULLS LAST
+              ) AS selected_import_row_rank
+            FROM selected_import_candidates candidate
+          ) ranked
+          WHERE ranked.selected_import_row_rank = 1
         )
         SELECT
           candidate.article_id AS articleId,
@@ -216,30 +236,8 @@ const getSelectedImportProjectionRows = async (
           candidate.tombstone,
           candidate.rank_numeric_sort AS rankNumericSort,
           candidate.rank_key_sort AS rankKeySort
-        FROM selected_import_candidates candidate
-        WHERE NOT EXISTS (
-            SELECT 1
-            FROM selected_import_candidates better
-            WHERE better.article_id = candidate.article_id
-              AND (
-                better.rank_numeric_sort < candidate.rank_numeric_sort
-                OR (
-                  better.rank_numeric_sort = candidate.rank_numeric_sort
-                  AND better.rank_key_sort < candidate.rank_key_sort
-                )
-                OR (
-                  better.rank_numeric_sort = candidate.rank_numeric_sort
-                  AND better.rank_key_sort = candidate.rank_key_sort
-                  AND better.import_route_id < candidate.import_route_id
-                )
-                OR (
-                  better.rank_numeric_sort = candidate.rank_numeric_sort
-                  AND better.rank_key_sort = candidate.rank_key_sort
-                  AND better.import_route_id = candidate.import_route_id
-                  AND better.source_record_key < candidate.source_record_key
-                )
-              )
-          )
+        FROM selected_import_winner candidate
+        WHERE TRUE
           ${getCursorPredicateSql(cursor)}
         ORDER BY candidate.rank_numeric_sort ASC, candidate.rank_key_sort ASC, candidate.article_id ASC
         LIMIT ${limit}
