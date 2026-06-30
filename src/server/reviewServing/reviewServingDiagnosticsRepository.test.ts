@@ -153,7 +153,10 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   expect(statements.join('\n')).toContain(
     "CASE WHEN admission_state = 'admitted' AND status IN ('admitted', 'running')",
   )
-  expect(statements.join('\n')).toContain('COUNT(*) FILTER (WHERE classified_chunk.claimable = 1) = 0')
+  expect(statements.join('\n')).toContain('FROM terminal_request')
+  expect(statements.join('\n')).toContain(
+    'classified_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id',
+  )
   expect(statements.join('\n')).toContain("latest_request.status IN ('failed', 'quarantined')")
   expect(statements.join('\n')).toContain("latest_request.status IN ('blocked_over_budget', 'failed')")
   expect(statements.join('\n')).toContain("latest_request.status IN ('quarantined', 'failed')")

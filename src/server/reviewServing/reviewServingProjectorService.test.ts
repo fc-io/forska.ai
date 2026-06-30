@@ -115,6 +115,11 @@ const createDependencyHarness = (
       return claimed
     },
     database,
+    failDirtyWork: async (dirtyWorkIds: readonly string[]) => {
+      failedClaimIds.push(...dirtyWorkIds)
+
+      return {failedCount: dirtyWorkIds.length}
+    },
     releaseDirtyWork: async (dirtyWorkIds: readonly string[]) => {
       releasedClaimIds.push(...dirtyWorkIds)
 
@@ -316,7 +321,7 @@ test('wake retries a failing projector batch and avoids marking it failed after 
   expect(failedClaimIds).toEqual([])
 })
 
-test('wake releases exhausted failures with diagnostics for later bounded retry', async () => {
+test('wake marks exhausted failures as failed lane blockers with diagnostics', async () => {
   const {dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
     posting: [getClaim({component: 'posting', dirtyWorkId: 'posting-1'})],
   })
@@ -342,8 +347,8 @@ test('wake releases exhausted failures with diagnostics for later bounded retry'
       status: 'failed',
     },
   ])
-  expect(failedClaimIds).toEqual([])
-  expect(releasedClaimIds).toEqual(['posting-1'])
+  expect(failedClaimIds).toEqual(['posting-1'])
+  expect(releasedClaimIds).toEqual([])
 })
 
 test('wake releases claimed work when the duration budget is exhausted after claim', async () => {
