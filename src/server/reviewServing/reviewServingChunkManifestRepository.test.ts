@@ -594,10 +594,11 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).not.toContain("prerequisite.status IN ('failed', 'blocked_over_budget', 'quarantined')")
   expect(statements.join('\n')).not.toContain('prerequisite.updated_at < candidate.updated_at')
   expect(statements.join('\n')).toContain("project_id IS NOT DISTINCT FROM 'project-1'")
-  expect(statements.join('\n')).not.toContain('MIN(candidate.updated_at)')
-  expect(statements.join('\n')).not.toContain('MIN(candidate.chunk_id)')
-  expect(statements.join('\n')).not.toContain('claimable_min_updated')
-  expect(statements.join('\n')).not.toContain('ORDER BY updated_at ASC')
+  expect(statements.join('\n')).toContain("WHEN candidate.status = 'running'")
+  expect(statements.join('\n')).toContain('candidate.lease_expires_at <=')
+  expect(statements.join('\n')).toContain('candidate.created_at ASC')
+  expect(statements.join('\n')).toContain('candidate.updated_at ASC')
+  expect(statements.join('\n')).toContain('candidate.chunk_id ASC')
 })
 
 test('over-budget chunks are parked before claim and cannot hot-loop', async () => {
@@ -833,7 +834,7 @@ test('failed rebuild chunks record retry backoff and exhaust to the request term
   expect(statements.join('\n')).toContain('retry_after')
 })
 
-test('expired running rebuild chunk leases consume retry policy attempts before reclaim', async () => {
+test('expired running rebuild chunk leases are reclaimed without retry delay', async () => {
   const retryIdentity = {
     ...baseChunkIdentity,
     requestId: 'rebuild:expired-lease-retry-policy',
@@ -857,15 +858,15 @@ test('expired running rebuild chunk leases consume retry policy attempts before 
     database,
   )
 
-  expect(claimed).toBeNull()
+  expect(claimed).toMatchObject({leaseOwner: 'worker-retry', retryAfter: null, retryCount: 0, status: 'running'})
   expect(rows.get(chunkId)).toMatchObject({
-    lastError: 'review rebuild chunk lease expired before completion',
-    leaseOwner: null,
-    retryAfter: '2026-06-16T14:02:00.000Z',
-    retryCount: 1,
-    status: 'failed',
+    lastError: null,
+    leaseOwner: 'worker-retry',
+    retryAfter: null,
+    retryCount: 0,
+    status: 'running',
   })
-  expect(statements.join('\n')).toContain('FROM app.review_rebuild_request')
+  expect(statements.join('\n')).toContain("manifest.status = 'running'")
 })
 
 test('changed maintained input digest creates a different chunk and avoids stale completed skips', async () => {
