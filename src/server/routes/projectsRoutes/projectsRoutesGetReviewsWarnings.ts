@@ -149,6 +149,7 @@ const getReviewsIndexingStatus = (params: {
 }
 
 const getReviewsIndexingProgressState = (params: {
+  claimableRefreshCount: number
   hasRecentProgress: boolean
   inFlightRefreshCount: number
   status: ReviewsIndexingStatus
@@ -163,7 +164,7 @@ const getReviewsIndexingProgressState = (params: {
           ? 'processing'
           : params.status === 'refreshing' && params.hasRecentProgress
             ? 'processing'
-            : params.status === 'refreshing'
+            : params.status === 'refreshing' && params.claimableRefreshCount > 0
               ? 'queued'
               : 'stalled'
 }
@@ -241,12 +242,13 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       servingDiagnostics.rebuildChunks.runningCount,
       servingDiagnostics.rebuildChunks.expiredLeaseCount,
     )
-    const queuedRebuildChunkCount = servingDiagnostics.rebuildChunks.pendingCount + expiredRebuildChunkLeaseCount
+    const queuedRebuildChunkCount = servingDiagnostics.rebuildChunks.claimableCount
+    const totalQueuedRebuildChunkCount = servingDiagnostics.rebuildChunks.pendingCount + expiredRebuildChunkLeaseCount
     const inFlightRebuildChunkCount = getNonNegativeDifference(
       servingDiagnostics.rebuildChunks.runningCount,
       expiredRebuildChunkLeaseCount,
     )
-    const pendingRebuildChunkCount = queuedRebuildChunkCount + inFlightRebuildChunkCount
+    const pendingRebuildChunkCount = totalQueuedRebuildChunkCount + inFlightRebuildChunkCount
     const terminalRebuildChunkCount =
       servingDiagnostics.rebuildChunks.blockedOverBudgetCount
       + servingDiagnostics.rebuildChunks.failedCount
@@ -262,7 +264,8 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const queuedRefreshCount = queuedRebuildChunkCount + servingDiagnostics.dirtyWork.pendingCount
     const inFlightRefreshCount = inFlightRebuildChunkCount + servingDiagnostics.dirtyWork.runningCount
     const pendingRefreshCount = pendingRebuildChunkCount + pendingDirtyWorkCount
-    const eligibleConsumerCount = pendingRefreshCount > 0 && !isServerMutationWorkDisabled ? 1 : 0
+    const claimableRefreshCount = queuedRebuildChunkCount + servingDiagnostics.dirtyWork.pendingCount
+    const eligibleConsumerCount = claimableRefreshCount > 0 && !isServerMutationWorkDisabled ? 1 : 0
     const indexingStatus = getReviewsIndexingStatus({
       enabledPromptCount,
       hasAnyArticlesInScope,
@@ -283,6 +286,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       && eligibleConsumerCount > 0
       && getHasRecentReviewServingProgress(lastProgressedAt)
     const progressState = getReviewsIndexingProgressState({
+      claimableRefreshCount,
       hasRecentProgress,
       inFlightRefreshCount,
       status: indexingStatus,

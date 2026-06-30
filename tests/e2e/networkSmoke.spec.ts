@@ -230,7 +230,6 @@ const isMutationDisabledCurrentDbQueuedBacklog = (indexing: ReviewsWarningsData[
     && indexing.progressState === 'blocked'
     && indexing.blockedReason === 'waiting_for_maintenance_worker'
     && indexing.pendingRefreshCount > 0
-    && indexing.queuedRefreshCount > 0
     && indexing.inFlightRefreshCount === 0
     && indexing.activeWorkCount === 0
   )

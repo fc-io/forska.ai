@@ -2,6 +2,7 @@ import {Effect} from 'effect'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getReviewServingRebuildChunkClaimPredicate} from './reviewServingChunkManifestRepository.ts'
 import {
   isReviewServingProjectionComponent,
   type ReviewServingProjectionComponent,
@@ -24,8 +25,11 @@ export type ReviewServingDiagnosticsCountState = {
 }
 
 export type ReviewServingDiagnosticsRebuildChunkState = ReviewServingDiagnosticsCountState & {
+  blockedQueuedCount: number
   blockedOverBudgetCount: number
+  claimableCount: number
   expiredLeaseCount: number
+  oldestClaimableQueuedAt: string | null
   quarantinedCount: number
 }
 
@@ -86,8 +90,11 @@ type CountStateRow = {
 }
 
 type RebuildChunkStateRow = CountStateRow & {
+  blockedQueuedCount: number
   blockedOverBudgetCount: number
+  claimableCount: number
   expiredLeaseCount: number
+  oldestClaimableQueuedAt: string | null
   quarantinedCount: number
 }
 
@@ -108,8 +115,11 @@ const emptyCountState: ReviewServingDiagnosticsCountState = {
 }
 const emptyRebuildChunkState: ReviewServingDiagnosticsRebuildChunkState = {
   ...emptyCountState,
+  blockedQueuedCount: 0,
   blockedOverBudgetCount: 0,
+  claimableCount: 0,
   expiredLeaseCount: 0,
+  oldestClaimableQueuedAt: null,
   quarantinedCount: 0,
 }
 const emptyQuarantineState = {quarantinedOutboxCount: 0, retryableOutboxCount: 0, unresolvedOutboxCount: 0}
@@ -145,6 +155,10 @@ const getOutboxTerminalStatusList = () => {
   return getSqlStringList(terminalOutboxStatuses)
 }
 
+const getDiagnosticsTimestampLiteral = (value: Date | string) => {
+  return value instanceof Date ? getSqlLiteral(value) : `TIMESTAMPTZ ${getSqlLiteral(value)}`
+}
+
 const queryEffect = <T>(database: ReviewServingDiagnosticsDatabase, statement: string) => {
   return Effect.tryPromise(() => {
     return database.queryJson<T>(statement)
@@ -169,8 +183,11 @@ const getRebuildChunkState = (row: RebuildChunkStateRow | undefined): ReviewServ
     ? emptyRebuildChunkState
     : {
         ...getCountState(row),
+        blockedQueuedCount: Number(row.blockedQueuedCount),
         blockedOverBudgetCount: Number(row.blockedOverBudgetCount),
+        claimableCount: Number(row.claimableCount),
         expiredLeaseCount: Number(row.expiredLeaseCount),
+        oldestClaimableQueuedAt: row.oldestClaimableQueuedAt,
         quarantinedCount: Number(row.quarantinedCount),
       }
 }
@@ -345,6 +362,18 @@ const getRebuildChunkRowsEffect = (
   database: ReviewServingDiagnosticsDatabase,
 ) => {
   const now = input.now ?? new Date()
+  const staleLeasePredicate = `
+    visible_chunk.status = 'running'
+    AND (
+      visible_chunk.lease_expires_at IS NULL
+      OR visible_chunk.lease_expires_at <= ${getDiagnosticsTimestampLiteral(now)}
+    )
+  `
+  const queuedPredicate = `
+    visible_chunk.status IN ('pending', 'failed')
+    OR (${staleLeasePredicate})
+  `
+  const claimablePredicate = getReviewServingRebuildChunkClaimPredicate({now}, 'visible_chunk')
 
   return queryEffect<RebuildChunkStateRow>(
     database,
@@ -366,40 +395,57 @@ const getRebuildChunkRowsEffect = (
             OR chunk.request_id IS NULL
             OR chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
           )
+      ),
+      classified_chunk AS (
+        SELECT
+          visible_chunk.*,
+          CASE WHEN (${queuedPredicate}) THEN 1 ELSE 0 END AS queued,
+          CASE WHEN (${claimablePredicate}) THEN 1 ELSE 0 END AS claimable
+        FROM visible_chunk
       )
       SELECT
-        CAST(COUNT(*) FILTER (WHERE visible_chunk.status IN ('pending', 'failed')) AS INTEGER) AS pendingCount,
-        CAST(COUNT(*) FILTER (WHERE visible_chunk.status = 'running') AS INTEGER) AS runningCount,
+        CAST(COUNT(*) FILTER (WHERE classified_chunk.status IN ('pending', 'failed')) AS INTEGER) AS pendingCount,
+        CAST(COUNT(*) FILTER (WHERE classified_chunk.status = 'running') AS INTEGER) AS runningCount,
         CAST(COALESCE(MAX(CASE WHEN latest_request.status IN ('failed', 'quarantined') THEN 1 ELSE 0 END), 0) AS INTEGER) AS failedCount,
-        CAST(COUNT(*) FILTER (WHERE visible_chunk.status = 'completed') AS INTEGER) AS completedCount,
+        CAST(COUNT(*) FILTER (WHERE classified_chunk.status = 'completed') AS INTEGER) AS completedCount,
+        CAST(COUNT(*) FILTER (WHERE classified_chunk.claimable = 1) AS INTEGER) AS claimableCount,
+        CAST(COUNT(*) FILTER (WHERE classified_chunk.queued = 1 AND classified_chunk.claimable = 0) AS INTEGER) AS blockedQueuedCount,
         CAST(COUNT(*) FILTER (
-          WHERE visible_chunk.status = 'blocked_over_budget'
+          WHERE classified_chunk.status = 'blocked_over_budget'
             AND (
               latest_request.request_id IS NULL
               OR (
-                visible_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
+                classified_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
                 AND latest_request.status IN ('blocked_over_budget', 'failed')
                 AND latest_request.admission_state = 'blocked_over_budget'
               )
             )
         ) AS INTEGER) AS blockedOverBudgetCount,
         CAST(COUNT(*) FILTER (
-          WHERE visible_chunk.status = 'quarantined'
+          WHERE classified_chunk.status = 'quarantined'
             AND (
               latest_request.request_id IS NULL
               OR (
-                visible_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
+                classified_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
                 AND latest_request.status IN ('quarantined', 'failed')
               )
             )
         ) AS INTEGER) AS quarantinedCount,
-        CAST(COUNT(*) FILTER (WHERE visible_chunk.status = 'running' AND visible_chunk.lease_expires_at <= ${getSqlLiteral(now)}) AS INTEGER) AS expiredLeaseCount,
-        MIN(visible_chunk.created_at) FILTER (
-          WHERE visible_chunk.status IN ('pending', 'failed')
-            OR (visible_chunk.status = 'running' AND visible_chunk.lease_expires_at <= ${getSqlLiteral(now)})
+        CAST(COUNT(*) FILTER (
+          WHERE classified_chunk.status = 'running'
+            AND (
+              classified_chunk.lease_expires_at IS NULL
+              OR classified_chunk.lease_expires_at <= ${getDiagnosticsTimestampLiteral(now)}
+            )
+        ) AS INTEGER) AS expiredLeaseCount,
+        MIN(classified_chunk.created_at) FILTER (
+          WHERE classified_chunk.queued = 1
         ) AS oldestQueuedAt,
-        MAX(visible_chunk.updated_at) FILTER (WHERE visible_chunk.status IN ('running', 'completed')) AS updatedAt
-      FROM visible_chunk
+        MIN(classified_chunk.created_at) FILTER (
+          WHERE classified_chunk.claimable = 1
+        ) AS oldestClaimableQueuedAt,
+        MAX(classified_chunk.updated_at) FILTER (WHERE classified_chunk.status IN ('running', 'completed')) AS updatedAt
+      FROM classified_chunk
       LEFT JOIN latest_request ON TRUE
     `,
   )

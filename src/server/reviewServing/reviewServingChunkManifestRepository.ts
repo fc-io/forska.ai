@@ -478,7 +478,7 @@ const getReviewServingRebuildChunkIdentityPredicate = (input: ReviewServingRebui
   `
 }
 
-const getReviewServingRebuildChunkClaimPredicate = (
+export const getReviewServingRebuildChunkClaimPredicate = (
   input: {now: Date | string; projectionComponent?: ReviewServingProjectionComponent},
   tableAlias?: string,
 ) => {
@@ -510,7 +510,10 @@ const getReviewServingRebuildChunkClaimPredicate = (
       )
       OR (
         ${source}status = 'running'
-        AND ${source}lease_expires_at <= ${getReviewServingChunkTimestampLiteral(input.now)}
+        AND (
+          ${source}lease_expires_at IS NULL
+          OR ${source}lease_expires_at <= ${getReviewServingChunkTimestampLiteral(input.now)}
+        )
       )
     )
     AND (
@@ -546,7 +549,7 @@ const getReviewServingRebuildChunkProjectPredicate = (input: {projectId?: string
     : `AND ${source}project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}`
 }
 
-const getReviewServingRebuildChunkClaimWhere = (
+export const getReviewServingRebuildChunkClaimWhere = (
   input: {now: Date | string; projectId?: string | null; projectionComponent?: ReviewServingProjectionComponent},
   tableAlias?: string,
 ) => {

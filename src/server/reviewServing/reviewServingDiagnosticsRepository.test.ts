@@ -58,10 +58,13 @@ const createDiagnosticsDatabase = () => {
       if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
         return [
           {
+            blockedQueuedCount: 4,
             blockedOverBudgetCount: 2,
+            claimableCount: 1,
             completedCount: 8,
             expiredLeaseCount: 1,
             failedCount: 0,
+            oldestClaimableQueuedAt: '2026-06-18T08:30:00.000Z',
             oldestQueuedAt: '2026-06-18T08:00:00.000Z',
             pendingCount: 5,
             quarantinedCount: 1,
@@ -125,9 +128,12 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
       unresolvedOutboxCount: 3,
     },
     rebuildChunks: {
+      blockedQueuedCount: 4,
       blockedOverBudgetCount: 2,
+      claimableCount: 1,
       expiredLeaseCount: 1,
       failedCount: 0,
+      oldestClaimableQueuedAt: '2026-06-18T08:30:00.000Z',
       pendingCount: 5,
       quarantinedCount: 1,
       runningCount: 2,
@@ -138,7 +144,10 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   expect(statements.join('\n')).toContain('app.review_serving_snapshot_manifest')
   expect(statements.join('\n')).toContain('app.review_serving_dirty_work')
   expect(statements.join('\n')).toContain('app.review_rebuild_chunk_manifest')
-  expect(statements.join('\n')).toContain("chunk.status IN ('pending', 'failed')")
+  expect(statements.join('\n')).toContain("visible_chunk.status IN ('pending', 'failed')")
+  expect(statements.join('\n')).toContain('AS claimableCount')
+  expect(statements.join('\n')).toContain('AS blockedQueuedCount')
+  expect(statements.join('\n')).toContain('visible_chunk.lease_expires_at IS NULL')
   expect(statements.join('\n')).toContain("latest_request.status IN ('failed', 'quarantined')")
   expect(statements.join('\n')).toContain("latest_request.status IN ('blocked_over_budget', 'failed')")
   expect(statements.join('\n')).toContain("latest_request.status IN ('quarantined', 'failed')")

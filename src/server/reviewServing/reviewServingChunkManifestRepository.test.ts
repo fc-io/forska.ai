@@ -595,6 +595,7 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).not.toContain('prerequisite.updated_at < candidate.updated_at')
   expect(statements.join('\n')).toContain("project_id IS NOT DISTINCT FROM 'project-1'")
   expect(statements.join('\n')).toContain("WHEN candidate.status = 'running'")
+  expect(statements.join('\n')).toContain('candidate.lease_expires_at IS NULL')
   expect(statements.join('\n')).toContain('candidate.lease_expires_at <=')
   expect(statements.join('\n')).toContain('candidate.created_at ASC')
   expect(statements.join('\n')).toContain('candidate.updated_at ASC')
@@ -867,6 +868,7 @@ test('expired running rebuild chunk leases are reclaimed without retry delay', a
     status: 'running',
   })
   expect(statements.join('\n')).toContain("manifest.status = 'running'")
+  expect(statements.join('\n')).toContain('manifest.lease_expires_at IS NULL')
 })
 
 test('changed maintained input digest creates a different chunk and avoids stale completed skips', async () => {
