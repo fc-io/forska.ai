@@ -343,7 +343,7 @@ const getSelectedImportPatchRows = async (
     : database.queryJson<SelectedImportPatchRow>(`
         WITH ${dirtyArticleCte},
         selected_import_candidates AS (
-          SELECT
+          SELECT DISTINCT
             dirty.article_id,
             hot.import_route_id,
             hot.selected_rank_key,

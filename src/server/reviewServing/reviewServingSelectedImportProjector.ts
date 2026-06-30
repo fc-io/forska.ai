@@ -167,7 +167,7 @@ const getSelectedImportProjectionRows = async (
     ? []
     : database.queryJson<SelectedImportProjectionRow>(`
         WITH selected_import_candidates AS (
-          SELECT
+          SELECT DISTINCT
             scope.article_id,
             hot.import_route_id,
             hot.source_record_key,
