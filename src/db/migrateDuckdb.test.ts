@@ -1208,3 +1208,43 @@ test('migrateDuckdb applies comparison serving conflict filter migration outside
     mock.restore()
   }
 })
+
+test('migrateDuckdb skips checkpoint when no migration files are applied', async () => {
+  process.env.DUCKDB_PATH = '/tmp/forska-migrate-duckdb-checkpoint-skip-test.duckdb'
+
+  const appliedNames = getDuckdbMigrationFiles()
+  const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).pathname
+  const migrationModulePath = new URL('./migrateDuckdb.ts', import.meta.url).pathname
+  const maintenanceCommands: string[] = []
+
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          close: async () => {},
+          maintenance: async (command: string) => {
+            maintenanceCommands.push(command)
+          },
+          queryJson: async <T>(statement: string): Promise<T[]> => {
+            return statement.includes('FROM app_schema_migration')
+              ? (appliedNames.map((name) => {
+                  return {name}
+                }) as T[])
+              : []
+          },
+          run: async () => {},
+        }
+      },
+    }
+  })
+
+  try {
+    const {migrateDuckdb} = (await import(`${migrationModulePath}?checkpoint-skip-test=${Date.now()}`)) as MigrateDuckdbModule
+
+    await migrateDuckdb()
+
+    expect(maintenanceCommands).toEqual([])
+  } finally {
+    mock.restore()
+  }
+})

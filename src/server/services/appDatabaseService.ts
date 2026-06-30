@@ -18,6 +18,7 @@ import {
 } from '../utils/duckdbService.ts'
 
 type AppDatabaseMaintenanceCommand = 'checkpoint' | 'force_checkpoint'
+type AppDatabaseCloseOptions = {checkpointBeforeClose?: boolean}
 type AppDatabaseSnapshot = DuckdbSnapshot
 export type JudgmentInsertRow = {
   id: string
@@ -211,8 +212,8 @@ const appDatabaseService = {
           return {attempted: rows.length, inserted, skipped}
         })
   },
-  close: async () => {
-    await closeDuckdbService()
+  close: async (options: AppDatabaseCloseOptions = {}) => {
+    await closeDuckdbService(options)
     resetAppDatabaseAppendMetricsState()
   },
   closeForReset: async () => {

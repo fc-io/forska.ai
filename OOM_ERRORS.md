@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-30 - Startup And Shutdown Checkpoints
+
+- Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)`.
+- Context: `bun run test:dev-server:current-db` starting and stopping `bun run dev:server` against the primary current DuckDB.
+- Cause: `migrateDuckdb()` ran `CHECKPOINT` on every startup even when all migrations were already applied, and signal/fatal-recovery close paths could force another checkpoint while memory was already exhausted.
+- Fix: DuckDB migrations now checkpoint only after at least one migration file is applied; no-op migration close, fatal recovery close, and signal shutdown close skip the pre-close checkpoint.
+- Verification: `bun test src/db/migrateDuckdb.test.ts src/server/utils/duckdbServiceShutdown.test.ts src/server/utils/duckdbServiceReload.test.ts`; `bun run test:dev-server:current-db`.
+
 ## 2026-06-30 - V4 Runtime OOM Chunk Split
 
 - Error: `DuckDB Out of Memory Error` while executing a claimed V4 article-range rebuild chunk.

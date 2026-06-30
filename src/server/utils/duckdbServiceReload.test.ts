@@ -396,6 +396,7 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
 
         let createCount = 0
         let firstReadInvalidated = false
+        const runStatements = []
 
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
@@ -412,7 +413,13 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
               this.instanceId = instanceId
             }
 
-            async run() {}
+            async run(statement) {
+              if (statement === 'CHECKPOINT' && this.instanceId === 1) {
+                throw new Error('recovery checkpoint should not run')
+              }
+
+              runStatements.push(this.instanceId + ':' + statement)
+            }
 
             async runAndReadAll() {
               if (!firstReadInvalidated && this.instanceId === 1) {
@@ -455,8 +462,8 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?fatal-restart-test=' + Date.now())
         const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
-        console.log(JSON.stringify({createCount, rows}))
         await duckdbService.closeDuckdbService()
+        console.log(JSON.stringify({createCount, rows, runStatements}))
       `,
     ],
     {
@@ -480,7 +487,11 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
     throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB fatal restart subprocess failed')
   }
 
-  const parsed = JSON.parse(result.stdout.toString()) as {createCount: number; rows: Array<{value: number}>}
+  const parsed = JSON.parse(result.stdout.toString()) as {
+    createCount: number
+    rows: Array<{value: number}>
+    runStatements: string[]
+  }
 
-  expect(parsed).toEqual({createCount: 2, rows: [{value: 1}]})
+  expect(parsed).toEqual({createCount: 2, rows: [{value: 1}], runStatements: ['2:CHECKPOINT']})
 })

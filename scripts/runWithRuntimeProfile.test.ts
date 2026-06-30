@@ -188,7 +188,7 @@ const fetchJson = async <T>(url: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(url, init)
 
   if (!response.ok) {
-    throw new Error(`${url} returned ${response.status}`)
+    throw new Error(`${url} returned ${response.status}: ${await response.text()}`)
   }
 
   return (await response.json()) as T
@@ -645,7 +645,11 @@ test(
 
     const devServerProcess = globalThis.Bun.spawn([bunExecutablePath, 'run', 'dev:server'], {
       cwd: process.cwd(),
-      env: {...process.env, FORSKA_DEV_SERVER_WATCH_ACTION: 'restart'},
+      env: {
+        ...process.env,
+        FORSKA_DISABLE_SERVER_MUTATIONS: 'true',
+        FORSKA_DEV_SERVER_WATCH_ACTION: 'restart',
+      },
       stderr: 'pipe',
       stdout: 'pipe',
     })

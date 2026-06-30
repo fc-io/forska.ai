@@ -128,7 +128,7 @@ type DuckdbTransactionRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run: (statement: string) => Promise<void>
 }
-type CloseDuckdbServiceOptions = {releaseOwnerLease?: boolean}
+type CloseDuckdbServiceOptions = {checkpointBeforeClose?: boolean; releaseOwnerLease?: boolean}
 type DuckdbAppendBarrier = {promise: Promise<void>; resolve: () => void}
 type DuckdbBoundValues = DuckDBValue[] | Record<string, DuckDBValue>
 type DuckdbBoundTypes = DuckDBType[] | Record<string, DuckDBType | undefined>
@@ -516,7 +516,7 @@ const recoverDuckdbRuntimeAfterFatalError = async (error: unknown) => {
     terminalArgs: [getCompactDuckdbErrorMessage(error)],
   })
 
-  duckdbFatalRecoveryPromise = closeDuckdbServiceDirect()
+  duckdbFatalRecoveryPromise = closeDuckdbServiceDirect({checkpointBeforeClose: false})
     .catch((closeError) => {
       writeRuntimeFailureLogEvent({
         attrs: {closeError},
@@ -781,14 +781,19 @@ const checkpointDuckdbBeforeClose = async (connection: DuckDBConnection | null, 
   }
 }
 
-const closeDuckdbServiceWithoutBarrier = async ({releaseOwnerLease = true}: CloseDuckdbServiceOptions = {}) => {
+const closeDuckdbServiceWithoutBarrier = async ({
+  checkpointBeforeClose = true,
+  releaseOwnerLease = true,
+}: CloseDuckdbServiceOptions = {}) => {
   const activeConnection = duckdbServiceState.controlConnection
   const activeAppendConnections = [...duckdbServiceState.appendConnections]
   const activeBackgroundConnection = duckdbServiceState.backgroundConnection
   const hasOpenControlTransaction = duckdbServiceState.controlTransactionDepth > 0
   const activeInstance = duckdbServiceState.duckdbInstance
 
-  await checkpointDuckdbBeforeClose(activeConnection, hasOpenControlTransaction)
+  if (checkpointBeforeClose) {
+    await checkpointDuckdbBeforeClose(activeConnection, hasOpenControlTransaction)
+  }
 
   resetDuckdbRuntimeState()
 
@@ -839,7 +844,7 @@ const closeDuckdbServiceDirect = async (options: CloseDuckdbServiceOptions = {})
 }
 
 const closeDuckdbServiceForSignal = async () => {
-  return closeDuckdbServiceWithoutBarrier()
+  return closeDuckdbServiceWithoutBarrier({checkpointBeforeClose: false})
 }
 
 const registerDuckdbShutdownHooks = () => {
