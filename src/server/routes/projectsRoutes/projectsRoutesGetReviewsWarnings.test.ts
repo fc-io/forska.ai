@@ -1368,7 +1368,7 @@ test('reviews warnings fail terminal V4 rebuild requests instead of reporting he
   expect(body.data.indexing.status).toBe('failed')
 })
 
-test('reviews warnings block terminal V4 rebuild backlog when server mutation work is disabled', async () => {
+test('reviews warnings fail terminal V4 rebuild backlog when server mutation work is disabled', async () => {
   const projectId = 'project-v4-terminal-request-disabled-mutations-warning'
   const requestId = 'rebuild:terminal-request-disabled-mutations-warning'
 
@@ -1416,12 +1416,12 @@ test('reviews warnings block terminal V4 rebuild backlog when server mutation wo
   })
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.blockedReason).toBe('waiting_for_maintenance_worker')
+  expect(body.data.indexing.blockedReason).toBe(null)
   expect(body.data.indexing.eligibleConsumerCount).toBe(0)
   expect(body.data.indexing.pendingRefreshCount).toBe(2)
-  expect(body.data.indexing.progressState).toBe('blocked')
+  expect(body.data.indexing.progressState).toBe('failed')
   expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({failedCount: 1, pendingCount: 2})
-  expect(body.data.indexing.status).toBe('blocked')
+  expect(body.data.indexing.status).toBe('failed')
 })
 
 test('reviews warnings ignore chunks from superseded V4 rebuild requests', async () => {
@@ -2083,6 +2083,39 @@ test('reviews warnings report blocked V4 repair without retrying terminal missin
   expect(body.data.indexing.progressState).toBe('failed')
   expect(body.data.indexing.status).toBe('failed')
   expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
+})
+
+test('reviews warnings prioritize terminal V4 request over disabled mutation backlog', async () => {
+  const projectId = 'project-terminal-v4-disabled-mutations-warning'
+  const requestId = 'request-terminal-v4-disabled-mutations-warning'
+
+  await insertProjectFixture(projectId)
+  await insertReviewRebuildRequest({
+    createdAt: '2026-04-02T12:00:00.000Z',
+    failedAt: '2026-04-02T12:05:00.000Z',
+    lastError: 'request failed after admission',
+    projectId,
+    requestId,
+    status: 'failed',
+    updatedAt: '2026-04-02T12:05:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-terminal-v4-disabled-mutations-warning',
+    createdAt: '2026-04-02T12:00:00.000Z',
+    projectId,
+    requestId,
+    status: 'pending',
+    updatedAt: '2026-04-02T12:00:00.000Z',
+  })
+
+  await withServerMutationsDisabled(async () => {
+    const {body, response} = await postWarningsRequest(projectId)
+
+    expect(response.status).toBe(200)
+    expect(body.data.indexing.pendingRefreshCount).toBe(1)
+    expect(body.data.indexing.progressState).toBe('failed')
+    expect(body.data.indexing.status).toBe('failed')
+  })
 })
 
 test('reviews warnings ignore stale terminal chunks after same request is re-admitted', async () => {
