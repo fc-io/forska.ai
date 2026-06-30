@@ -143,6 +143,8 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   })
   expect(statements.join('\n')).toContain('app.review_serving_snapshot_manifest')
   expect(statements.join('\n')).toContain('app.review_serving_dirty_work')
+  expect(statements.join('\n')).toContain("status IN ('failed', 'running')")
+  expect(statements.join('\n')).toContain("INTERVAL '900 seconds'")
   expect(statements.join('\n')).toContain('app.review_rebuild_chunk_manifest')
   expect(statements.join('\n')).toContain("visible_chunk.status IN ('pending', 'failed')")
   expect(statements.join('\n')).toContain('AS claimableCount')

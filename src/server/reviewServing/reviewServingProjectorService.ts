@@ -6,7 +6,6 @@ import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts
 import {
   claimReviewServingDirtyWork,
   type ClaimReviewServingDirtyWorkParams,
-  failReviewServingDirtyWorkClaims,
   releaseReviewServingDirtyWorkClaims,
   type ReviewServingDirtyWorkClaim,
   type ReviewServingDirtyWorkDatabase,
@@ -61,7 +60,6 @@ export type ReviewServingProjectorServiceDependencies = {
   ) => Promise<ReviewServingDirtyWorkClaim[]>
   database?: ReviewServingProjectorServiceDatabase
   ensureClaimManifests?: ReviewServingClaimManifestEnsurer
-  failDirtyWork?: typeof failReviewServingDirtyWorkClaims
   getQueueState?: () => Promise<ReviewServingProjectorQueueState>
   nowMs?: () => number
   promoteSnapshot?: typeof promoteReviewServingProjectorSnapshot
@@ -214,7 +212,7 @@ const logDirtyWorkProjectorFailure = (input: {
 }) => {
   return projectorFailureLogger.warn(
     `review-serving-projector:dirty-work-failed:${input.component}`,
-    '[reviewServingProjector] dirty work failed',
+    '[reviewServingProjector] dirty work projector failed; released claims for retry',
     {
       claimIds: input.claimIds,
       component: input.component,
@@ -403,7 +401,6 @@ export const wakeReviewServingProjectorService = async (
   const database = dependencies.database ?? getDefaultDatabase()
   const claimDirtyWork = dependencies.claimDirtyWork ?? claimReviewServingDirtyWork
   const releaseDirtyWork = dependencies.releaseDirtyWork ?? releaseReviewServingDirtyWorkClaims
-  const failDirtyWork = dependencies.failDirtyWork ?? failReviewServingDirtyWorkClaims
   const ensureClaimManifests = dependencies.ensureClaimManifests ?? ensureReviewServingClaimManifests
   const promoteSnapshot = dependencies.promoteSnapshot ?? promoteReviewServingProjectorSnapshot
   const requestRebuild = dependencies.requestRebuild ?? requestReviewServingV4RebuildEffect
@@ -513,7 +510,7 @@ export const wakeReviewServingProjectorService = async (
 
           if (rebuildResult._tag === 'Left') {
             const rebuildDiagnostic = getDiagnostic(rebuildResult.left)
-            await failDirtyWork(claimIds, database)
+            await releaseDirtyWork(claimIds, database)
             logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic: rebuildDiagnostic})
 
             return {
@@ -536,7 +533,7 @@ export const wakeReviewServingProjectorService = async (
 
           if (blockedRebuildRequests.length > 0) {
             const blockedDiagnostic = getBlockedRebuildRequestDiagnostic(blockedRebuildRequests)
-            await failDirtyWork(claimIds, database)
+            await releaseDirtyWork(claimIds, database)
             logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic: blockedDiagnostic})
 
             return {
@@ -560,7 +557,7 @@ export const wakeReviewServingProjectorService = async (
           return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
         }
 
-        await failDirtyWork(claimIds, database)
+        await releaseDirtyWork(claimIds, database)
         logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic})
 
         return {

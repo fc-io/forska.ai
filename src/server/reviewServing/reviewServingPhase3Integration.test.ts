@@ -102,7 +102,6 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   const pending: Partial<Record<ReviewServingProjectionComponent, RunningReviewServingDirtyWorkRecord[]>> = {}
   const upserts: ReviewServingDirtyWorkInput[] = []
   const promotions: PromoteReviewServingProjectorSnapshotInput[] = []
-  const failedClaimIds: string[] = []
   const deltas = [
     getScope({
       changeKind: 'judgment.llm.updated',
@@ -147,11 +146,6 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
       return claimed
     },
     database,
-    failDirtyWork: async (dirtyWorkIds) => {
-      failedClaimIds.push(...dirtyWorkIds)
-
-      return {failedCount: dirtyWorkIds.length}
-    },
     promoteSnapshot: async (input) => {
       promotions.push(input)
 
@@ -355,7 +349,6 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   const joined = statements.join('\n')
 
   expect(result.status).toBe('completed')
-  expect(failedClaimIds).toEqual([])
   expect(
     upserts.map((input) => {
       return input.projectionComponent
