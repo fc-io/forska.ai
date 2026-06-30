@@ -253,8 +253,8 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       servingDiagnostics.rebuildChunks.blockedOverBudgetCount
       + servingDiagnostics.rebuildChunks.failedCount
       + servingDiagnostics.rebuildChunks.quarantinedCount
-    const terminalDirtyWorkCount =
-      servingDiagnostics.dirtyWork.failedCount + servingDiagnostics.quarantine.quarantinedOutboxCount
+    const terminalDirtyWorkCount = servingDiagnostics.dirtyWork.failedCount
+    const terminalQuarantineCount = servingDiagnostics.quarantine.quarantinedOutboxCount
     const isServerMutationWorkDisabled = shouldDisableServerMutationWork()
     const pendingDirtyWorkCount =
       servingDiagnostics.dirtyWork.pendingCount
@@ -270,7 +270,9 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       enabledPromptCount,
       hasAnyArticlesInScope,
       hasReviewServingRows,
-      hasTerminalV4Work: terminalRebuildChunkCount + (isServerMutationWorkDisabled ? 0 : terminalDirtyWorkCount) > 0,
+      hasTerminalV4Work:
+        terminalRebuildChunkCount + terminalQuarantineCount + (isServerMutationWorkDisabled ? 0 : terminalDirtyWorkCount)
+        > 0,
       isServerMutationWorkDisabled,
       pendingRefreshCount,
       runningRefreshCount: inFlightRefreshCount,

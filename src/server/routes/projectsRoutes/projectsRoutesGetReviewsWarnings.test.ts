@@ -1532,6 +1532,56 @@ test('reviews warnings mark quarantined V4 outbox barriers as blocked', async ()
   expect(body.data.indexing.status).toBe('failed')
 })
 
+test('reviews warnings preserve quarantined V4 barriers when server mutation work is disabled', async () => {
+  const projectId = 'project-v4-outbox-barrier-mutations-disabled-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertReviewSourceChangeOutbox(projectId, 'quarantined')
+
+  const {body, response} = await withServerMutationsDisabled(() => {
+    return postWarningsRequest(projectId)
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.blockedReason).toBe('quarantine_barrier')
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.status).toBe('failed')
+})
+
+test('reviews warnings keep terminal rebuild requests visible when orphan chunks are claimable', async () => {
+  const projectId = 'project-v4-terminal-request-orphan-chunk-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertReviewRebuildRequest({
+    createdAt: '2026-04-02T12:00:00.000Z',
+    failedAt: '2026-04-02T12:01:00.000Z',
+    projectId,
+    requestId: 'request-terminal-with-orphan-chunk-warning',
+    status: 'failed',
+    updatedAt: '2026-04-02T12:01:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'orphan-rebuild-chunk-terminal-request-warning',
+    createdAt: '2026-04-02T12:02:00.000Z',
+    projectId,
+    requestId: null,
+    status: 'pending',
+    updatedAt: '2026-04-02T12:02:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({claimableCount: 1, failedCount: 1})
+  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.status).toBe('failed')
+})
+
 test('reviews warnings search diagnostic ignores active snapshots for older review configs', async () => {
   const projectId = 'project-search-diagnostic-current-config-warning'
 

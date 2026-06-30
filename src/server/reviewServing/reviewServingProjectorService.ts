@@ -5,6 +5,7 @@ import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {
   claimReviewServingDirtyWork,
+  failReviewServingDirtyWorkClaims,
   type ClaimReviewServingDirtyWorkParams,
   releaseReviewServingDirtyWorkClaims,
   type ReviewServingDirtyWorkClaim,
@@ -60,6 +61,7 @@ export type ReviewServingProjectorServiceDependencies = {
   ) => Promise<ReviewServingDirtyWorkClaim[]>
   database?: ReviewServingProjectorServiceDatabase
   ensureClaimManifests?: ReviewServingClaimManifestEnsurer
+  failDirtyWork?: typeof failReviewServingDirtyWorkClaims
   getQueueState?: () => Promise<ReviewServingProjectorQueueState>
   nowMs?: () => number
   promoteSnapshot?: typeof promoteReviewServingProjectorSnapshot
@@ -212,7 +214,7 @@ const logDirtyWorkProjectorFailure = (input: {
 }) => {
   return projectorFailureLogger.warn(
     `review-serving-projector:dirty-work-failed:${input.component}`,
-    '[reviewServingProjector] dirty work projector failed; released claims for retry',
+    '[reviewServingProjector] dirty work projector failed; recorded claim outcome',
     {
       claimIds: input.claimIds,
       component: input.component,
@@ -400,6 +402,7 @@ export const wakeReviewServingProjectorService = async (
 ): Promise<WakeReviewServingProjectorServiceResult> => {
   const database = dependencies.database ?? getDefaultDatabase()
   const claimDirtyWork = dependencies.claimDirtyWork ?? claimReviewServingDirtyWork
+  const failDirtyWork = dependencies.failDirtyWork ?? failReviewServingDirtyWorkClaims
   const releaseDirtyWork = dependencies.releaseDirtyWork ?? releaseReviewServingDirtyWorkClaims
   const ensureClaimManifests = dependencies.ensureClaimManifests ?? ensureReviewServingClaimManifests
   const promoteSnapshot = dependencies.promoteSnapshot ?? promoteReviewServingProjectorSnapshot
@@ -557,7 +560,7 @@ export const wakeReviewServingProjectorService = async (
           return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
         }
 
-        await releaseDirtyWork(claimIds, database)
+        await failDirtyWork(claimIds, database)
         logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic})
 
         return {
