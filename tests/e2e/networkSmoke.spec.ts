@@ -182,7 +182,15 @@ const getWarningsEndpointData = (body: string): WarningsEndpointParseResult => {
 }
 
 const getWarningFailureDetails = (data: ReviewsWarningsData) => {
-  const failureVariants = getWarningFailureVariants(data, 'data')
+  const failureVariants = getWarningFailureVariants(data, 'data').filter((variant) => {
+    return !(
+      isMutationDisabledCurrentDbQueuedBacklog(data.indexing)
+      && [
+        'data.indexing.serving.diagnostics.dirtyWork.failedCount',
+        'data.indexing.serving.diagnostics.rebuildChunks.failedCount',
+      ].includes(variant.path)
+    )
+  })
 
   return failureVariants.length === 0
     ? null

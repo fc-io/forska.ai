@@ -1368,7 +1368,7 @@ test('reviews warnings fail terminal V4 rebuild requests instead of reporting he
   expect(body.data.indexing.status).toBe('failed')
 })
 
-test('reviews warnings prioritize terminal V4 rebuild requests when server mutation work is disabled', async () => {
+test('reviews warnings block terminal V4 rebuild backlog when server mutation work is disabled', async () => {
   const projectId = 'project-v4-terminal-request-disabled-mutations-warning'
   const requestId = 'rebuild:terminal-request-disabled-mutations-warning'
 
@@ -1416,12 +1416,12 @@ test('reviews warnings prioritize terminal V4 rebuild requests when server mutat
   })
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.blockedReason).toBe(null)
+  expect(body.data.indexing.blockedReason).toBe('waiting_for_maintenance_worker')
   expect(body.data.indexing.eligibleConsumerCount).toBe(0)
   expect(body.data.indexing.pendingRefreshCount).toBe(2)
-  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.progressState).toBe('blocked')
   expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({failedCount: 1, pendingCount: 2})
-  expect(body.data.indexing.status).toBe('failed')
+  expect(body.data.indexing.status).toBe('blocked')
 })
 
 test('reviews warnings ignore chunks from superseded V4 rebuild requests', async () => {
