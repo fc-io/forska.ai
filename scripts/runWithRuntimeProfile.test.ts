@@ -10,11 +10,51 @@ import {getRuntimeProfileCommandEnv} from './runWithRuntimeProfile.ts'
 type SpawnedProcess = ReturnType<typeof globalThis.Bun.spawn>
 type RuntimeReadyBody = {data?: {ready?: boolean; role?: string}}
 type RuntimeStateBody = {data?: {pid?: number; role?: string}}
+type ProjectsBody = {data?: Array<{id?: string}>}
+type ReviewsWarningsBody = {
+  data?: {
+    indexing?: {
+      activeWorkCount?: number
+      blockedReason?: string | null
+      eligibleConsumerCount?: number
+      inFlightRefreshCount?: number
+      lastProgressedAt?: string | null
+      pendingRefreshCount?: number
+      progressState?: string
+      queuedRefreshCount?: number
+      serving?: {
+        diagnostics?: {
+          rebuildChunks?: {
+            expiredLeaseCount?: number
+            pendingCount?: number
+            runningCount?: number
+            updatedAt?: string | null
+          }
+        }
+      }
+      status?: string
+    }
+  }
+}
+type ReviewServingProgressSnapshot = {
+  activeWorkCount: number
+  expiredLeaseCount: number
+  inFlightRefreshCount: number
+  lastProgressedAt: string | null
+  pendingRefreshCount: number
+  progressState: string | null
+  queuedRefreshCount: number
+  rebuildPendingCount: number
+  rebuildRunningCount: number
+  rebuildUpdatedAt: string | null
+}
 type StackStartedPids = {api: number | null; judge: number | null; maintenance: number | null}
 type PipeTextCollector = {done: Promise<void>; getText: () => string}
 
 const bunExecutablePath = realpathSync(process.execPath)
 const realDevServerSmokeEnabled = process.env.FORSKA_REAL_DEV_SERVER_SMOKE === 'true'
+const reviewServingProgressProjectId =
+  process.env.FORSKA_REVIEW_SERVING_PROGRESS_PROJECT_ID ?? 'd03fe24a-cfcf-41ed-b09f-7b554a393d80'
 const forbiddenDevServerOutputPatterns = [
   {label: 'API role DuckDB ownership', pattern: /Current server role api cannot own DuckDB/},
   {label: 'DuckDB fatal runtime restart', pattern: /\[duckdb\] restarting embedded runtime after fatal invalidation/},
@@ -140,6 +180,120 @@ const waitFor = async (ms: number) => {
   await new Promise((resolve) => {
     setTimeout(resolve, ms)
   })
+}
+
+const fetchJson = async <T>(url: string, init?: RequestInit): Promise<T> => {
+  const response = await fetch(url, init)
+
+  if (!response.ok) {
+    throw new Error(`${url} returned ${response.status}`)
+  }
+
+  return (await response.json()) as T
+}
+
+const postReviewWarnings = async (apiPort: number, projectId: string) => {
+  return fetchJson<ReviewsWarningsBody>(`http://127.0.0.1:${apiPort}/api/projectsreviewswarnings`, {
+    body: JSON.stringify({projectId}),
+    headers: {'content-type': 'application/json'},
+    method: 'POST',
+  })
+}
+
+const getReviewServingProgressSnapshot = (body: ReviewsWarningsBody): ReviewServingProgressSnapshot => {
+  const indexing = body.data?.indexing
+  const rebuildChunks = indexing?.serving?.diagnostics?.rebuildChunks
+
+  return {
+    activeWorkCount: Number(indexing?.activeWorkCount ?? 0),
+    expiredLeaseCount: Number(rebuildChunks?.expiredLeaseCount ?? 0),
+    inFlightRefreshCount: Number(indexing?.inFlightRefreshCount ?? 0),
+    lastProgressedAt: indexing?.lastProgressedAt ?? null,
+    pendingRefreshCount: Number(indexing?.pendingRefreshCount ?? 0),
+    progressState: indexing?.progressState ?? null,
+    queuedRefreshCount: Number(indexing?.queuedRefreshCount ?? 0),
+    rebuildPendingCount: Number(rebuildChunks?.pendingCount ?? 0),
+    rebuildRunningCount: Number(rebuildChunks?.runningCount ?? 0),
+    rebuildUpdatedAt: rebuildChunks?.updatedAt ?? null,
+  }
+}
+
+const isQueuedReviewServingProgressCandidate = (body: ReviewsWarningsBody) => {
+  const indexing = body.data?.indexing
+
+  return (
+    indexing?.status === 'refreshing'
+    && indexing.progressState === 'queued'
+    && Number(indexing.pendingRefreshCount ?? 0) > 0
+    && Number(indexing.queuedRefreshCount ?? 0) > 0
+    && Number(indexing.eligibleConsumerCount ?? 0) > 0
+    && Number(indexing.inFlightRefreshCount ?? 0) === 0
+    && Number(indexing.activeWorkCount ?? 0) === 0
+    && indexing.blockedReason === null
+  )
+}
+
+const getReviewServingProgressCandidate = async (apiPort: number) => {
+  const projectIds = new Set([reviewServingProgressProjectId])
+
+  try {
+    const projectsBody = await fetchJson<ProjectsBody>(`http://127.0.0.1:${apiPort}/api/projects`)
+    projectsBody.data?.forEach((project) => {
+      if (project.id) {
+        projectIds.add(project.id)
+      }
+    })
+  } catch {
+    // The explicit project probe below is enough for local current-DB smoke coverage.
+  }
+
+  for (const projectId of projectIds) {
+    const body = await postReviewWarnings(apiPort, projectId).catch(() => {
+      return null
+    })
+
+    if (body !== null && isQueuedReviewServingProgressCandidate(body)) {
+      return {body, projectId}
+    }
+  }
+
+  return null
+}
+
+const didReviewServingQueuedWorkProgress = (
+  before: ReviewServingProgressSnapshot,
+  after: ReviewServingProgressSnapshot,
+) => {
+  return (
+    after.progressState !== 'queued'
+    || after.activeWorkCount > 0
+    || after.inFlightRefreshCount > 0
+    || after.pendingRefreshCount < before.pendingRefreshCount
+    || after.queuedRefreshCount < before.queuedRefreshCount
+    || after.expiredLeaseCount < before.expiredLeaseCount
+    || after.rebuildRunningCount !== before.rebuildRunningCount
+    || after.rebuildPendingCount < before.rebuildPendingCount
+    || (after.lastProgressedAt !== null && after.lastProgressedAt !== before.lastProgressedAt)
+    || (after.rebuildUpdatedAt !== null && after.rebuildUpdatedAt !== before.rebuildUpdatedAt)
+  )
+}
+
+const expectCurrentDbReviewServingQueuedWorkProgresses = async (apiPort: number) => {
+  const candidate = await getReviewServingProgressCandidate(apiPort)
+
+  if (candidate === null) {
+    return
+  }
+
+  const before = getReviewServingProgressSnapshot(candidate.body)
+  await waitFor(20_000)
+  const after = getReviewServingProgressSnapshot(await postReviewWarnings(apiPort, candidate.projectId))
+
+  expect(
+    didReviewServingQueuedWorkProgress(before, after),
+    `Review serving work for ${candidate.projectId} stayed queued without a maintenance-worker progress signal. `
+      + `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
+  ).toBe(true)
 }
 
 const getRuntimeState = async (port: number): Promise<RuntimeStateBody> => {
@@ -462,6 +616,13 @@ test(
           throw new Error(`dev:server exited during startup settle with code ${String(exitCode)}`)
         }),
       ])
+
+      await Promise.race([
+        expectCurrentDbReviewServingQueuedWorkProgresses(3001),
+        devServerProcess.exited.then((exitCode) => {
+          throw new Error(`dev:server exited during review-serving progress probe with code ${String(exitCode)}`)
+        }),
+      ])
     } finally {
       await stopProcess(devServerProcess)
     }
@@ -473,7 +634,7 @@ test(
     )
     expectNoForbiddenDevServerOutput(getCollectedProcessOutput(collectors))
   },
-  {timeout: 90_000},
+  {timeout: 120_000},
 )
 
 test(
