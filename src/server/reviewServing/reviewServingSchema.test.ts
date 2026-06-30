@@ -422,15 +422,11 @@ test('judgment detail payload-kind forward migration repairs already-applied V4 
   expect(judgmentDetailPayloadKindForwardMigrationSql).toContain('UPDATE app.review_rebuild_request AS request')
   expect(judgmentDetailPayloadKindForwardMigrationSql).toContain('UPDATE app.review_rebuild_chunk_manifest')
   expect(judgmentDetailPayloadKindForwardMigrationSql).toContain("projection_component = 'judgmentInputContent'")
-  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
-    "request.status IN ('failed', 'blocked_over_budget')",
-  )
+  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain("request.status IN ('failed', 'blocked_over_budget')")
   expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
     "chunk.status IN ('failed', 'blocked_over_budget', 'quarantined')",
   )
-  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
-    'newer_request.project_id = request.project_id',
-  )
+  expect(judgmentDetailPayloadKindForwardMigrationSql).toContain('newer_request.project_id = request.project_id')
   expect(judgmentDetailPayloadKindForwardMigrationSql).toContain(
     "status IN ('failed', 'blocked_over_budget', 'quarantined')",
   )
