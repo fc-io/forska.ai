@@ -56,6 +56,7 @@ const bunExecutablePath = realpathSync(process.execPath)
 const realDevServerSmokeEnabled = process.env.FORSKA_REAL_DEV_SERVER_SMOKE === 'true'
 const reviewServingProgressProjectId =
   process.env.FORSKA_REVIEW_SERVING_PROGRESS_PROJECT_ID ?? 'd03fe24a-cfcf-41ed-b09f-7b554a393d80'
+const staleReviewServingQueuedProgressMs = 10 * 60_000
 const forbiddenDevServerOutputPatterns = [
   {label: 'API role DuckDB ownership', pattern: /Current server role api cannot own DuckDB/},
   {label: 'DuckDB fatal runtime restart', pattern: /\[duckdb\] restarting embedded runtime after fatal invalidation/},
@@ -236,7 +237,7 @@ const isStaleReviewServingProgressSnapshot = (snapshot: ReviewServingProgressSna
     getTimestampMs(snapshot.rebuildUpdatedAt) ?? 0,
   )
 
-  return latestProgressMs === 0 || Date.now() - latestProgressMs > 60_000
+  return latestProgressMs === 0 || Date.now() - latestProgressMs > staleReviewServingQueuedProgressMs
 }
 
 const isQueuedReviewServingProgressCandidate = (body: ReviewsWarningsBody) => {
