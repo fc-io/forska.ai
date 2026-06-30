@@ -130,9 +130,9 @@ const applyDuckdbMigrationFile = async (fileName: string) => {
   }
 }
 
-const applyDuckdbMigrationFiles = async (fileNames: string[], appliedNames: Set<string>): Promise<void> => {
+const applyDuckdbMigrationFiles = async (fileNames: string[], appliedNames: Set<string>): Promise<number> => {
   if (fileNames.length === 0) {
-    return
+    return 0
   }
 
   const [currentFileName = ''] = fileNames
@@ -140,6 +140,7 @@ const applyDuckdbMigrationFiles = async (fileNames: string[], appliedNames: Set<
   if (!appliedNames.has(currentFileName)) {
     console.log(`[db:duck:mig] applying ${currentFileName}`)
     await applyDuckdbMigrationFile(currentFileName)
+    return 1 + (await applyDuckdbMigrationFiles(fileNames.slice(1), appliedNames))
   }
 
   return applyDuckdbMigrationFiles(fileNames.slice(1), appliedNames)
@@ -153,14 +154,17 @@ export const migrateDuckdb = async (): Promise<void> => {
   console.log(`[db:duck:mig] migrations folder: ${migrationsFolder}`)
 
   await ensureDuckdbMigrationsTable()
-  await applyDuckdbMigrationFiles(migrationFiles, await getAppliedDuckdbMigrationNames())
-  await getAppDatabaseService().maintenance('checkpoint', workloadContext)
+  const appliedMigrationCount = await applyDuckdbMigrationFiles(migrationFiles, await getAppliedDuckdbMigrationNames())
+
+  if (appliedMigrationCount > 0) {
+    await getAppDatabaseService().maintenance('checkpoint', workloadContext)
+  }
 
   console.log('[db:duck:mig] DuckDB migrations applied successfully')
 }
 
 const closeAppDatabaseService = async () => {
-  await getAppDatabaseService().close()
+  await getAppDatabaseService().close({checkpointBeforeClose: false})
 }
 
 const runDuckdbMigrationScript = async () => {
