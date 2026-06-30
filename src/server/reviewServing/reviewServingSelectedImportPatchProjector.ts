@@ -347,6 +347,54 @@ const selectedImportChangedColumns = [
   'scope_tombstone',
 ].join(', ')
 
+const selectedImportServingColumns = [
+  'project_id',
+  'review_config_hash',
+  'snapshot_id',
+  'base_generation',
+  'patch_watermark',
+  'display_identity',
+  'project_scope_identity',
+  'selected_import_identity',
+  'llm_status_identity',
+  'human_status_identity',
+  'posting_identity',
+  'summary_identity',
+  'payload_identity',
+  'list_mode_key',
+  'article_id',
+  'sort_key',
+  'activity_sort_at',
+  'article_title',
+  'article_external_id',
+  'journal_title',
+  'url',
+  'full_text_pdf',
+  'selected_import_route_id',
+  'selected_rank_key',
+  'publication_year',
+  'duplicate_flag',
+  'conflict_flag',
+  'llm_status_key',
+  'human_status_key',
+  'llm_judged_prompt_count',
+  'enabled_prompt_count',
+  'human_answered_prompt_count',
+  'review_opened',
+  'review_sections_completed',
+  'serving_updated_at',
+  'article_created_at',
+  'source_metadata',
+  'article_updated_at',
+  'arxiv_id',
+  'biorxiv_id',
+  'medrxiv_id',
+  'doi',
+  'pmid',
+  'full_text_fetched_at',
+  'full_text_conversion_status',
+].join(', ')
+
 const getSelectedImportChangedRowsCte = (values: string) => {
   return `changed_raw(${selectedImportChangedColumns}) AS (
            SELECT * FROM (VALUES ${values})
@@ -735,36 +783,97 @@ const getApplySelectedImportServingStatements = (input: {
                 AND existing.article_id = changed.article_id
             )
           ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING`,
-        `WITH ${changedCte}
-          UPDATE mart.review_article_serving_v4 serving
-         SET
-            article_title = COALESCE(changed.article_title, article.article_title),
-            article_external_id = COALESCE(changed.external_id, article.article_id),
-            url = COALESCE(changed.selected_source_url, article.url),
-            selected_import_route_id = changed.import_route_id,
-            selected_rank_key = changed.selected_rank_key,
-            journal_title = changed.journal_title,
-            publication_year = changed.publication_year,
-           duplicate_flag = changed.duplicate_flag,
-           conflict_flag = changed.conflict_flag,
-           patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}),
-           serving_updated_at = current_timestamp
-         FROM changed
+        `CREATE OR REPLACE TEMP TABLE review_selected_import_serving_update_v4 AS
+         WITH ${changedCte}
+         SELECT
+            serving.project_id,
+            serving.review_config_hash,
+            serving.snapshot_id,
+            serving.base_generation,
+            GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}) AS patch_watermark,
+            serving.display_identity,
+            serving.project_scope_identity,
+            serving.selected_import_identity,
+            serving.llm_status_identity,
+            serving.human_status_identity,
+            serving.posting_identity,
+            serving.summary_identity,
+            serving.payload_identity,
+            serving.list_mode_key,
+            serving.article_id,
+            serving.sort_key,
+            serving.activity_sort_at,
+            COALESCE(changed.article_title, article.article_title) AS article_title,
+            COALESCE(changed.external_id, article.article_id) AS article_external_id,
+            changed.journal_title,
+            COALESCE(changed.selected_source_url, article.url) AS url,
+            serving.full_text_pdf,
+            changed.import_route_id AS selected_import_route_id,
+            changed.selected_rank_key,
+            changed.publication_year,
+            changed.duplicate_flag,
+            changed.conflict_flag,
+            serving.llm_status_key,
+            serving.human_status_key,
+            serving.llm_judged_prompt_count,
+            serving.enabled_prompt_count,
+            serving.human_answered_prompt_count,
+            serving.review_opened,
+            serving.review_sections_completed,
+            current_timestamp AS serving_updated_at,
+            serving.article_created_at,
+            serving.source_metadata,
+            serving.article_updated_at,
+            serving.arxiv_id,
+            serving.biorxiv_id,
+            serving.medrxiv_id,
+            serving.doi,
+            serving.pmid,
+            serving.full_text_fetched_at,
+            serving.full_text_conversion_status
+         FROM mart.review_article_serving_v4 serving
+         INNER JOIN changed
+           ON changed.article_id = serving.article_id
          INNER JOIN app."article" article
            ON article.id = changed.article_id
           WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-             AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
-             AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
-             AND serving.article_id = changed.article_id
-             AND changed.scope_tombstone = FALSE
-             AND EXISTS (
-               SELECT 1
-               FROM app.review_serving_snapshot_manifest snapshot
-               WHERE snapshot.project_id = serving.project_id
-                 AND snapshot.snapshot_id = serving.snapshot_id
-                 AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-                 AND snapshot.snapshot_status IN ('candidate', 'active')
-             )`,
+            AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
+            AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+            AND changed.scope_tombstone = FALSE
+            AND EXISTS (
+              SELECT 1
+              FROM app.review_serving_snapshot_manifest snapshot
+              WHERE snapshot.project_id = serving.project_id
+                AND snapshot.snapshot_id = serving.snapshot_id
+                AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+                AND snapshot.snapshot_status IN ('candidate', 'active')
+            )
+            AND (
+              serving.article_title IS DISTINCT FROM COALESCE(changed.article_title, article.article_title)
+              OR serving.article_external_id IS DISTINCT FROM COALESCE(changed.external_id, article.article_id)
+              OR serving.url IS DISTINCT FROM COALESCE(changed.selected_source_url, article.url)
+              OR serving.selected_import_route_id IS DISTINCT FROM changed.import_route_id
+              OR serving.selected_rank_key IS DISTINCT FROM changed.selected_rank_key
+              OR serving.journal_title IS DISTINCT FROM changed.journal_title
+              OR serving.publication_year IS DISTINCT FROM changed.publication_year
+              OR serving.duplicate_flag IS DISTINCT FROM changed.duplicate_flag
+              OR serving.conflict_flag IS DISTINCT FROM changed.conflict_flag
+              OR serving.patch_watermark < ${getSqlLiteral(input.patchWatermark)}
+            )`,
+        `DELETE FROM mart.review_article_serving_v4 serving
+         WHERE EXISTS (
+           SELECT 1
+           FROM review_selected_import_serving_update_v4 updated
+           WHERE updated.project_id = serving.project_id
+             AND updated.review_config_hash = serving.review_config_hash
+             AND updated.snapshot_id = serving.snapshot_id
+             AND updated.list_mode_key = serving.list_mode_key
+             AND updated.article_id = serving.article_id
+         )`,
+        `INSERT INTO mart.review_article_serving_v4 (${selectedImportServingColumns})
+         SELECT ${selectedImportServingColumns}
+         FROM review_selected_import_serving_update_v4
+         ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING`,
       ]
 }
 

@@ -130,7 +130,8 @@ test('selected-import routine updates write component-narrow patches for only cl
   expect(insertStatement).toContain(
     'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, patch_watermark, article_id)',
   )
-  expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_selected_import_serving_update_v4 AS')
+  expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
   expect(joined).toContain('changed_raw(article_id, import_route_id, selected_rank_key')
   expect(joined).toContain('PARTITION BY raw.article_id')
@@ -139,12 +140,8 @@ test('selected-import routine updates write component-narrow patches for only cl
   expect(joined).toContain('PARTITION BY raw.project_id, raw.review_config_hash, raw.snapshot_id, raw.list_mode_key')
   expect(joined).toContain('FROM mart.review_article_serving_v4 existing')
   expect(joined).toContain('existing.article_id = changed.article_id')
-  expect(joined).toContain('selected_import_route_id = changed.import_route_id')
-  expect(joined).toContain('selected_rank_key = changed.selected_rank_key')
-  expect(joined).toContain('article_title = COALESCE(changed.article_title, article.article_title)')
-  expect(joined).toContain('article_external_id = COALESCE(changed.external_id, article.article_id)')
-  expect(joined).toContain('journal_title = changed.journal_title')
-  expect(joined).toContain('url = COALESCE(changed.selected_source_url, article.url)')
+  expect(joined).toContain('changed.import_route_id AS selected_import_route_id')
+  expect(joined).toContain('changed.selected_rank_key')
   expect(joined).toContain('COALESCE(changed.article_title, article.article_title) AS article_title')
   expect(joined).toContain('COALESCE(changed.external_id, article.article_id) AS article_external_id')
   expect(joined).toContain('COALESCE(changed.selected_source_url, article.url) AS url')
@@ -298,7 +295,7 @@ test('selected-import tombstones clear selected columns without deleting curated
 
   expect(joined).toContain('changed.scope_tombstone = TRUE')
   expect(joined).toContain('changed.scope_tombstone = FALSE')
-  expect(joined).toContain('selected_import_route_id = changed.import_route_id')
+  expect(joined).toContain('changed.import_route_id AS selected_import_route_id')
 })
 
 test('project-scoped selected-import rebuilds include previous serving articles for scope tombstones', async () => {
