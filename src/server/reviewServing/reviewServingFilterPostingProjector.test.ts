@@ -188,6 +188,7 @@ test('posting stats repair corrupted DuckDB BIGINT string cardinalities from con
     selectivity: 0.3,
   })
   expect(joined).toContain('SUM(contribution.contribution_value)')
+  expect(joined).not.toContain('AND contribution.summary_definition_version =')
   expect(joined).not.toContain('343341342341341300000')
 })
 

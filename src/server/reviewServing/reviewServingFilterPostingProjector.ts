@@ -479,7 +479,6 @@ const getExistingContributionTotalRows = async (
           AND contribution.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
           AND contribution.snapshot_id = ${getSqlLiteral(input.snapshotId)}
           AND contribution.component_kind = 'posting'
-          AND contribution.summary_definition_version = ${getSqlLiteral(input.definitionVersion)}
           AND contribution.contribution_key = filter.contribution_key
         GROUP BY filter.contribution_key
       `)

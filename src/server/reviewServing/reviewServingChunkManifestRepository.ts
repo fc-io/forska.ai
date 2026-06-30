@@ -620,16 +620,6 @@ export const getNextClaimableReviewServingRebuildChunk = async (
         : database.queryJson<ReviewServingRebuildChunkManifestRow>(`
               ${getReviewServingRebuildChunkSelect({tableAlias: 'candidate'})}
               WHERE ${getReviewServingRebuildChunkClaimWhere({...input, projectionComponent}, 'candidate')}
-              ORDER BY
-                CASE
-                  WHEN candidate.status = 'running'
-                    AND candidate.lease_expires_at <= ${getReviewServingChunkTimestampLiteral(input.now)}
-                  THEN 0
-                  ELSE 1
-                END ASC,
-                candidate.created_at ASC,
-                candidate.updated_at ASC,
-                candidate.chunk_id ASC
               LIMIT 1
             `)
     },

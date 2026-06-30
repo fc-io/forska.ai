@@ -148,6 +148,7 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   expect(statements.join('\n')).toContain('AS claimableCount')
   expect(statements.join('\n')).toContain('AS blockedQueuedCount')
   expect(statements.join('\n')).toContain('visible_chunk.lease_expires_at IS NULL')
+  expect(statements.join('\n')).toContain("CASE WHEN admission_state = 'admitted' AND status IN ('admitted', 'running')")
   expect(statements.join('\n')).toContain("latest_request.status IN ('failed', 'quarantined')")
   expect(statements.join('\n')).toContain("latest_request.status IN ('blocked_over_budget', 'failed')")
   expect(statements.join('\n')).toContain("latest_request.status IN ('quarantined', 'failed')")
