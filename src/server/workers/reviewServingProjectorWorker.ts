@@ -3443,9 +3443,9 @@ export const runReviewServingProjectorWorker = async (
       ? (options.errorBackoffMs ?? defaultReviewServingProjectorWorkerErrorBackoffMs)
       : shouldPrioritizeNextRebuildChunk(cycleResult.chunk)
         ? defaultReviewServingProjectorWorkerProgressYieldMs
-      : cycleResult.status === 'idle'
-        ? (options.pollIntervalMs ?? defaultReviewServingProjectorWorkerPollIntervalMs)
-        : 0
+        : cycleResult.status === 'idle'
+          ? (options.pollIntervalMs ?? defaultReviewServingProjectorWorkerPollIntervalMs)
+          : 0
   const nextOptions = {...options, lastCleanupAtMs: cycleResult.nextCleanupAtMs}
 
   return delayMs > 0
