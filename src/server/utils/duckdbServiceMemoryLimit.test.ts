@@ -67,7 +67,7 @@ test('duckdb service applies the configured startup tuning', () => {
           '-e',
           `
             const {closeDuckdbService, runDuckdbJsonQuery} = await import('./src/server/utils/duckdbService.ts')
-            const [row] = await runDuckdbJsonQuery("SELECT current_setting('memory_limit') AS memoryLimit, current_setting('threads') AS threads, current_setting('preserve_insertion_order') AS preserveInsertionOrder")
+            const [row] = await runDuckdbJsonQuery("SELECT current_setting('checkpoint_threshold') AS checkpointThreshold, current_setting('memory_limit') AS memoryLimit, current_setting('threads') AS threads, current_setting('preserve_insertion_order') AS preserveInsertionOrder")
             console.log(JSON.stringify(row))
             await closeDuckdbService()
           `,
@@ -84,8 +84,14 @@ test('duckdb service applies the configured startup tuning', () => {
       ),
     )
 
-    const row = JSON.parse(stdout) as {memoryLimit: string; preserveInsertionOrder: boolean; threads: string}
+    const row = JSON.parse(stdout) as {
+      checkpointThreshold: string
+      memoryLimit: string
+      preserveInsertionOrder: boolean
+      threads: string
+    }
 
+    expect(row.checkpointThreshold).toBe('7.4 GiB')
     expect(row.memoryLimit).toBe('256.0 MiB')
     expect(row.threads).toBe('1')
     expect(row.preserveInsertionOrder).toBe(false)

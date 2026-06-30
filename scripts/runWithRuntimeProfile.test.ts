@@ -647,7 +647,6 @@ test(
       cwd: process.cwd(),
       env: {
         ...process.env,
-        FORSKA_DISABLE_SERVER_MUTATIONS: 'true',
         FORSKA_DEV_SERVER_WATCH_ACTION: 'restart',
       },
       stderr: 'pipe',

@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-30 - Mutating Current-DB Auto-Checkpoint
+
+- Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)`.
+- Context: `bun run test:dev-server:current-db` running mutating maintenance/review-serving work against the primary DuckDB under the 6400MiB maintenance cap.
+- Cause: DuckDB's default low auto-checkpoint threshold could force a checkpoint inside hot background write work while the constrained runtime was already at its memory cap.
+- Fix: The embedded DuckDB runtime now sets an explicit 8GB `checkpoint_threshold`, deferring automatic checkpoints so write-heavy maintenance paths are not interrupted by low-threshold auto-checkpoints.
+- Verification: `bun test src/server/utils/duckdbServiceMemoryLimit.test.ts`; `bun run test:dev-server:current-db`.
+
 ## 2026-06-30 - Startup And Shutdown Checkpoints
 
 - Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)`.

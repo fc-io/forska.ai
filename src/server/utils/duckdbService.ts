@@ -21,6 +21,7 @@ import {
 type DuckdbRuntimeConfig = {
   appendLaneCount: number
   binary: string
+  checkpointThreshold: string
   databasePath: string
   memoryLimit: string
   preserveInsertionOrder: boolean
@@ -113,6 +114,7 @@ export type DuckdbWorkloadRuntimeMetric = {
 export type DuckdbBackgroundRuntimeDiagnostics = {
   configured: DuckdbRuntimeConfig
   effective: {
+    checkpointThreshold: string | null
     memoryLimit: string | null
     preserveInsertionOrder: boolean | null
     tempDirectory: string | null
@@ -191,6 +193,7 @@ const duckdbRestartRequiredErrorFragments = [
   'must be restarted prior to being used again',
 ]
 const duckdbWorkloadMetricsLimit = 50
+const duckdbCheckpointThreshold = '8GB'
 const enforcedForegroundDuckdbOperations = new Set<DuckdbWorkloadOperation>([
   'mainQuery',
   'mainStatement',
@@ -296,6 +299,7 @@ const getDuckdbRuntimeConfigValue = () => {
   duckdbServiceState.duckdbRuntimeConfig = {
     appendLaneCount: getDuckdbAppendLaneCountValue(),
     binary: '@duckdb/node-api',
+    checkpointThreshold: duckdbCheckpointThreshold,
     databasePath: env.DUCKDB_PATH,
     memoryLimit: env.DUCKDB_MEMORY_LIMIT,
     preserveInsertionOrder: false,
@@ -320,11 +324,13 @@ const createDuckdbTempDirectory = (runtimeConfig: DuckdbRuntimeConfig) => {
 const getDuckdbInstanceOptions = (runtimeConfig: DuckdbRuntimeConfig): Record<string, string> => {
   return runtimeConfig.tempDirectory === null
     ? {
+        checkpoint_threshold: runtimeConfig.checkpointThreshold,
         memory_limit: runtimeConfig.memoryLimit,
         preserve_insertion_order: String(runtimeConfig.preserveInsertionOrder),
         threads: runtimeConfig.threads,
       }
     : {
+        checkpoint_threshold: runtimeConfig.checkpointThreshold,
         memory_limit: runtimeConfig.memoryLimit,
         preserve_insertion_order: String(runtimeConfig.preserveInsertionOrder),
         temp_directory: runtimeConfig.tempDirectory,
@@ -337,6 +343,7 @@ export const getReadOnlyDuckdbRuntimeOptions = (input: ReadOnlyDuckdbRuntimeOpti
   const tempDirectory = input.tempDirectory ?? runtimeConfig.tempDirectory
   const baseOptions = {
     access_mode: input.accessMode ?? 'READ_ONLY',
+    checkpoint_threshold: runtimeConfig.checkpointThreshold,
     memory_limit: input.memoryLimit ?? runtimeConfig.memoryLimit,
     preserve_insertion_order: String(runtimeConfig.preserveInsertionOrder),
     threads: input.threads ?? runtimeConfig.threads,
@@ -1457,12 +1464,14 @@ export const getDuckdbTempSpillMetricsSnapshot = (): DuckdbTempSpillMetrics => {
 export const getDuckdbBackgroundRuntimeDiagnostics = async (): Promise<DuckdbBackgroundRuntimeDiagnostics> => {
   const configured = getDuckdbRuntimeConfig()
   const [settingsRow] = await runDuckdbBackgroundJsonQuery<{
+    checkpointThreshold: string | null
     memoryLimit: string | null
     preserveInsertionOrder: boolean | null
     tempDirectory: string | null
     threads: string | null
   }>(`
     SELECT
+      current_setting('checkpoint_threshold') AS checkpointThreshold,
       current_setting('memory_limit') AS memoryLimit,
       current_setting('preserve_insertion_order') AS preserveInsertionOrder,
       current_setting('threads') AS threads,
@@ -1472,6 +1481,7 @@ export const getDuckdbBackgroundRuntimeDiagnostics = async (): Promise<DuckdbBac
   return {
     configured,
     effective: {
+      checkpointThreshold: settingsRow?.checkpointThreshold ?? null,
       memoryLimit: settingsRow?.memoryLimit ?? null,
       preserveInsertionOrder: settingsRow?.preserveInsertionOrder ?? null,
       tempDirectory: settingsRow?.tempDirectory ?? null,
