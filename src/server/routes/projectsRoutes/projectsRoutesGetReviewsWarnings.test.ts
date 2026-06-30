@@ -1551,6 +1551,54 @@ test('reviews warnings preserve quarantined V4 barriers when server mutation wor
   expect(body.data.indexing.status).toBe('failed')
 })
 
+test('reviews warnings report quarantine barriers before mutation-disabled dirty backlog', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-v4-outbox-barrier-with-dirty-backlog-mutations-disabled-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertReviewSourceChangeOutbox(projectId, 'quarantined')
+  await runDatabase(`
+    INSERT INTO app.review_serving_dirty_work (
+      dirty_work_id,
+      project_id,
+      scope_kind,
+      scope_id,
+      article_id,
+      dirty_kind,
+      source_partition,
+      first_source_high_water_mark,
+      latest_source_high_water_mark,
+      status
+    ) VALUES (
+      'dirty-work-${projectId}',
+      '${projectId}',
+      'article',
+      'article-${projectId}',
+      'article-${projectId}',
+      'review-change',
+      'review-change:${projectId}',
+      1,
+      1,
+      'pending'
+    )
+  `)
+
+  const {body, response} = await withServerMutationsDisabled(() => {
+    return postWarningsRequest(projectId)
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.blockedReason).toBe('quarantine_barrier')
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.status).toBe('failed')
+})
+
 test('reviews warnings keep terminal rebuild requests visible when orphan chunks are claimable', async () => {
   const projectId = 'project-v4-terminal-request-orphan-chunk-warning'
 
