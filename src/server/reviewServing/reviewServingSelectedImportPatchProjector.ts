@@ -725,6 +725,15 @@ const getApplySelectedImportServingStatements = (input: {
             ON article.id = changed.article_id
           CROSS JOIN serving_template template
           WHERE changed.scope_tombstone = FALSE
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mart.review_article_serving_v4 existing
+              WHERE existing.project_id = template.project_id
+                AND existing.review_config_hash = template.review_config_hash
+                AND existing.snapshot_id = template.snapshot_id
+                AND existing.list_mode_key = template.list_mode_key
+                AND existing.article_id = changed.article_id
+            )
           ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING`,
         `WITH ${changedCte}
           UPDATE mart.review_article_serving_v4 serving

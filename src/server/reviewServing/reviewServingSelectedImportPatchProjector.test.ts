@@ -137,6 +137,8 @@ test('selected-import routine updates write component-narrow patches for only cl
   expect(joined).toContain('serving_template_raw AS')
   expect(joined).toContain('serving_template AS')
   expect(joined).toContain('PARTITION BY raw.project_id, raw.review_config_hash, raw.snapshot_id, raw.list_mode_key')
+  expect(joined).toContain('FROM mart.review_article_serving_v4 existing')
+  expect(joined).toContain('existing.article_id = changed.article_id')
   expect(joined).toContain('selected_import_route_id = changed.import_route_id')
   expect(joined).toContain('selected_rank_key = changed.selected_rank_key')
   expect(joined).toContain('article_title = COALESCE(changed.article_title, article.article_title)')
