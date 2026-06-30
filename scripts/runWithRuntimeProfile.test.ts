@@ -48,6 +48,7 @@ type ReviewServingProgressSnapshot = {
   rebuildRunningCount: number
   rebuildUpdatedAt: string | null
 }
+type ReviewServingProgressCandidate = {body: ReviewsWarningsBody; projectId: string}
 type StackStartedPids = {api: number | null; judge: number | null; maintenance: number | null}
 type PipeTextCollector = {done: Promise<void>; getText: () => string}
 
@@ -218,8 +219,29 @@ const getReviewServingProgressSnapshot = (body: ReviewsWarningsBody): ReviewServ
   }
 }
 
+const getTimestampMs = (value: string | null | undefined) => {
+  if (!value) {
+    return null
+  }
+
+  const normalized = value.replace(' ', 'T').replace(/([+-]\d{2})$/u, '$1:00')
+  const timestampMs = Date.parse(normalized)
+
+  return Number.isFinite(timestampMs) ? timestampMs : null
+}
+
+const isStaleReviewServingProgressSnapshot = (snapshot: ReviewServingProgressSnapshot) => {
+  const latestProgressMs = Math.max(
+    getTimestampMs(snapshot.lastProgressedAt) ?? 0,
+    getTimestampMs(snapshot.rebuildUpdatedAt) ?? 0,
+  )
+
+  return latestProgressMs === 0 || Date.now() - latestProgressMs > 60_000
+}
+
 const isQueuedReviewServingProgressCandidate = (body: ReviewsWarningsBody) => {
   const indexing = body.data?.indexing
+  const snapshot = getReviewServingProgressSnapshot(body)
 
   return (
     indexing?.status === 'refreshing'
@@ -230,11 +252,13 @@ const isQueuedReviewServingProgressCandidate = (body: ReviewsWarningsBody) => {
     && Number(indexing.inFlightRefreshCount ?? 0) === 0
     && Number(indexing.activeWorkCount ?? 0) === 0
     && indexing.blockedReason === null
+    && isStaleReviewServingProgressSnapshot(snapshot)
   )
 }
 
-const getReviewServingProgressCandidate = async (apiPort: number) => {
+const getReviewServingProgressCandidates = async (apiPort: number) => {
   const projectIds = new Set([reviewServingProgressProjectId])
+  const candidates: ReviewServingProgressCandidate[] = []
 
   try {
     const projectsBody = await fetchJson<ProjectsBody>(`http://127.0.0.1:${apiPort}/api/projects`)
@@ -253,11 +277,11 @@ const getReviewServingProgressCandidate = async (apiPort: number) => {
     })
 
     if (body !== null && isQueuedReviewServingProgressCandidate(body)) {
-      return {body, projectId}
+      candidates.push({body, projectId})
     }
   }
 
-  return null
+  return candidates
 }
 
 const didReviewServingQueuedWorkProgress = (
@@ -279,20 +303,41 @@ const didReviewServingQueuedWorkProgress = (
 }
 
 const expectCurrentDbReviewServingQueuedWorkProgresses = async (apiPort: number) => {
-  const candidate = await getReviewServingProgressCandidate(apiPort)
+  const candidates = await getReviewServingProgressCandidates(apiPort)
 
-  if (candidate === null) {
+  if (candidates.length === 0) {
     return
   }
 
-  const before = getReviewServingProgressSnapshot(candidate.body)
+  const targetCandidate = candidates.find((candidate) => {
+    return candidate.projectId === reviewServingProgressProjectId
+  })
+  const probedCandidates = targetCandidate === undefined ? candidates : [targetCandidate]
+  const beforeSnapshots = probedCandidates.map((candidate) => {
+    return {candidate, snapshot: getReviewServingProgressSnapshot(candidate.body)}
+  })
+
   await waitFor(20_000)
-  const after = getReviewServingProgressSnapshot(await postReviewWarnings(apiPort, candidate.projectId))
+  const afterSnapshots = await Promise.all(
+    beforeSnapshots.map(async ({candidate, snapshot}) => {
+      return {
+        candidate,
+        snapshot,
+        after: getReviewServingProgressSnapshot(await postReviewWarnings(apiPort, candidate.projectId)),
+      }
+    }),
+  )
+  const progressed = afterSnapshots.some(({after, snapshot}) => {
+    return didReviewServingQueuedWorkProgress(snapshot, after)
+  })
+  const details = afterSnapshots.map(({after, candidate, snapshot}) => {
+    return {after, before: snapshot, projectId: candidate.projectId}
+  })
 
   expect(
-    didReviewServingQueuedWorkProgress(before, after),
-    `Review serving work for ${candidate.projectId} stayed queued without a maintenance-worker progress signal. `
-      + `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
+    progressed,
+    'Review serving work stayed queued without a maintenance-worker progress signal. '
+      + `candidates=${JSON.stringify(details)}`,
   ).toBe(true)
 }
 
