@@ -1317,6 +1317,90 @@ test('reviews warnings prioritize terminal V4 rebuild requests when server mutat
   expect(body.data.indexing.status).toBe('failed')
 })
 
+test('reviews warnings ignore chunks from superseded V4 rebuild requests', async () => {
+  const projectId = 'project-v4-superseded-request-warning'
+  const oldRequestId = 'rebuild:superseded-request-warning-old'
+  const activeRequestId = 'rebuild:superseded-request-warning-active'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-v4-superseded-request-warning',
+  })
+  await insertReviewRebuildRequest({
+    createdAt: '2026-04-02T11:50:00.000Z',
+    failedAt: '2026-04-02T11:55:52.494Z',
+    lastError: 'superseded request failed before the current rebuild was admitted',
+    projectId,
+    requestId: oldRequestId,
+    status: 'failed',
+    updatedAt: '2026-04-02T11:55:52.494Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-superseded-request-failed-warning',
+    component: 'projectScope',
+    createdAt: '2026-04-02T11:51:00.000Z',
+    lastError: 'old failed chunk',
+    projectId,
+    requestId: oldRequestId,
+    status: 'failed',
+    updatedAt: '2026-04-02T11:55:52.494Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-superseded-request-pending-warning',
+    component: 'summary',
+    createdAt: '2026-04-02T11:52:00.000Z',
+    projectId,
+    requestId: oldRequestId,
+    status: 'pending',
+    updatedAt: '2026-04-02T11:52:00.000Z',
+  })
+  await insertReviewRebuildRequest({
+    createdAt: '2026-04-02T12:00:00.000Z',
+    projectId,
+    requestId: activeRequestId,
+    status: 'admitted',
+    updatedAt: '2026-04-02T12:05:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-superseded-request-active-expired-warning',
+    component: 'projectScope',
+    createdAt: '2026-04-02T12:01:00.000Z',
+    leaseExpiresAt: '2026-04-02T12:02:00.000Z',
+    leaseOwner: 'stale-maintenance-worker',
+    projectId,
+    requestId: activeRequestId,
+    status: 'running',
+    updatedAt: '2026-04-02T12:01:30.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-superseded-request-active-pending-warning',
+    component: 'summary',
+    createdAt: '2026-04-02T12:03:00.000Z',
+    projectId,
+    requestId: activeRequestId,
+    status: 'pending',
+    updatedAt: '2026-04-02T12:03:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBe(2)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.queuedRefreshCount).toBe(2)
+  expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({
+    expiredLeaseCount: 1,
+    failedCount: 0,
+    pendingCount: 1,
+  })
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
 test('reviews warnings mark quarantined V4 outbox barriers as blocked', async () => {
   const projectId = 'project-v4-outbox-barrier-warning'
 

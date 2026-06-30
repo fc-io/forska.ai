@@ -355,42 +355,52 @@ const getRebuildChunkRowsEffect = (
         WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
         ORDER BY updated_at DESC, created_at DESC, request_id DESC
         LIMIT 1
+      ),
+      visible_chunk AS (
+        SELECT chunk.*
+        FROM app.review_rebuild_chunk_manifest chunk
+        LEFT JOIN latest_request ON TRUE
+        WHERE chunk.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
+          AND (
+            latest_request.request_id IS NULL
+            OR chunk.request_id IS NULL
+            OR chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
+          )
       )
       SELECT
-        CAST(COUNT(*) FILTER (WHERE chunk.status IN ('pending', 'failed')) AS INTEGER) AS pendingCount,
-        CAST(COUNT(*) FILTER (WHERE chunk.status = 'running') AS INTEGER) AS runningCount,
+        CAST(COUNT(*) FILTER (WHERE visible_chunk.status IN ('pending', 'failed')) AS INTEGER) AS pendingCount,
+        CAST(COUNT(*) FILTER (WHERE visible_chunk.status = 'running') AS INTEGER) AS runningCount,
         CAST(COALESCE(MAX(CASE WHEN latest_request.status IN ('failed', 'quarantined') THEN 1 ELSE 0 END), 0) AS INTEGER) AS failedCount,
-        CAST(COUNT(*) FILTER (WHERE chunk.status = 'completed') AS INTEGER) AS completedCount,
+        CAST(COUNT(*) FILTER (WHERE visible_chunk.status = 'completed') AS INTEGER) AS completedCount,
         CAST(COUNT(*) FILTER (
-          WHERE chunk.status = 'blocked_over_budget'
+          WHERE visible_chunk.status = 'blocked_over_budget'
             AND (
               latest_request.request_id IS NULL
               OR (
-                chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
+                visible_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
                 AND latest_request.status IN ('blocked_over_budget', 'failed')
                 AND latest_request.admission_state = 'blocked_over_budget'
               )
             )
         ) AS INTEGER) AS blockedOverBudgetCount,
         CAST(COUNT(*) FILTER (
-          WHERE chunk.status = 'quarantined'
+          WHERE visible_chunk.status = 'quarantined'
             AND (
               latest_request.request_id IS NULL
               OR (
-                chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
+                visible_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
                 AND latest_request.status IN ('quarantined', 'failed')
               )
             )
         ) AS INTEGER) AS quarantinedCount,
-        CAST(COUNT(*) FILTER (WHERE chunk.status = 'running' AND chunk.lease_expires_at <= ${getSqlLiteral(now)}) AS INTEGER) AS expiredLeaseCount,
-        MIN(chunk.created_at) FILTER (
-          WHERE chunk.status IN ('pending', 'failed')
-            OR (chunk.status = 'running' AND chunk.lease_expires_at <= ${getSqlLiteral(now)})
+        CAST(COUNT(*) FILTER (WHERE visible_chunk.status = 'running' AND visible_chunk.lease_expires_at <= ${getSqlLiteral(now)}) AS INTEGER) AS expiredLeaseCount,
+        MIN(visible_chunk.created_at) FILTER (
+          WHERE visible_chunk.status IN ('pending', 'failed')
+            OR (visible_chunk.status = 'running' AND visible_chunk.lease_expires_at <= ${getSqlLiteral(now)})
         ) AS oldestQueuedAt,
-        MAX(chunk.updated_at) FILTER (WHERE chunk.status IN ('running', 'completed')) AS updatedAt
-      FROM app.review_rebuild_chunk_manifest chunk
+        MAX(visible_chunk.updated_at) FILTER (WHERE visible_chunk.status IN ('running', 'completed')) AS updatedAt
+      FROM visible_chunk
       LEFT JOIN latest_request ON TRUE
-      WHERE chunk.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
     `,
   )
 }
