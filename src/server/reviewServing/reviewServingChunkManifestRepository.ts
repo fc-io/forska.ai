@@ -584,18 +584,6 @@ const isReviewServingRebuildChunkValidationFailure = (
   )
 }
 
-const getHasExpiredRunningLease = (chunk: ReviewServingRebuildChunkManifest | null, now: Date | string) => {
-  const leaseExpiresAtMs = new Date(chunk?.leaseExpiresAt ?? Number.POSITIVE_INFINITY).getTime()
-  const nowMs = new Date(now).getTime()
-
-  return (
-    chunk?.status === 'running'
-    && Number.isFinite(leaseExpiresAtMs)
-    && Number.isFinite(nowMs)
-    && leaseExpiresAtMs <= nowMs
-  )
-}
-
 export const getReviewServingRebuildChunkManifest = async (
   input: {chunkId: string},
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
@@ -629,6 +617,16 @@ export const getNextClaimableReviewServingRebuildChunk = async (
         : database.queryJson<ReviewServingRebuildChunkManifestRow>(`
               ${getReviewServingRebuildChunkSelect({tableAlias: 'candidate'})}
               WHERE ${getReviewServingRebuildChunkClaimWhere({...input, projectionComponent}, 'candidate')}
+              ORDER BY
+                CASE
+                  WHEN candidate.status = 'running'
+                    AND candidate.lease_expires_at <= ${getReviewServingChunkTimestampLiteral(input.now)}
+                  THEN 0
+                  ELSE 1
+                END ASC,
+                candidate.created_at ASC,
+                candidate.updated_at ASC,
+                candidate.chunk_id ASC
               LIMIT 1
             `)
     },
@@ -880,23 +878,13 @@ export const claimReviewServingRebuildChunk = async (
   const chunkId = getReviewServingRebuildChunkId(input)
 
   return database.transaction(async (tx) => {
-    const existing = await getReviewServingRebuildChunkManifest({chunkId}, tx)
-
-    if (getHasExpiredRunningLease(existing, input.now)) {
-      await markReviewServingRebuildChunkFailed(
-        {chunkId, error: 'review rebuild chunk lease expired before completion', now: input.now},
-        tx,
-      )
-
-      return null
-    }
-
     await tx.run(`
       UPDATE app.review_rebuild_chunk_manifest AS manifest
       SET
         status = 'running',
         lease_owner = ${getSqlLiteral(input.leaseOwner)},
         lease_expires_at = ${getReviewServingChunkTimestampLiteral(input.leaseExpiresAt)},
+        retry_after = NULL,
         last_error = NULL,
         started_at = COALESCE(started_at, current_timestamp),
         updated_at = current_timestamp
