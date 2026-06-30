@@ -32,6 +32,7 @@ const contributionRow = (row: Record<string, unknown>) => {
 }
 
 const createPostingDatabase = (input?: {
+  contributionTotalRows?: readonly Record<string, unknown>[]
   contributionRows?: readonly Record<string, unknown>[]
   existingRows?: readonly Record<string, unknown>[]
   newRows?: readonly Record<string, unknown>[]
@@ -60,6 +61,16 @@ const createPostingDatabase = (input?: {
         && statement.includes('review_article_summary_contribution_v4')
       ) {
         return (input?.contributionRows ?? (input?.existingRows ?? []).map(contributionRow)) as T[]
+      }
+
+      if (
+        statement.includes('SUM(contribution.contribution_value)')
+        && statement.includes('GROUP BY filter.contribution_key')
+      ) {
+        return (input?.contributionTotalRows
+          ?? (input?.statsRows ?? []).map((row) => {
+            return {contributionKey: contributionKey(row), contributionValue: row.cardinality ?? 0}
+          })) as T[]
       }
 
       if (statement.includes('FROM mart.review_filter_posting_stats_v4')) {
@@ -152,6 +163,32 @@ test('answer changes update posting stats from old and new contribution diffs', 
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
+})
+
+test('posting stats repair corrupted DuckDB BIGINT string cardinalities from contribution state', async () => {
+  const row = postingRow({filterKind: 'conflictFlag', filterValue: 'false', listModeKey: 'both'})
+  const {database, statements} = createPostingDatabase({
+    contributionTotalRows: [{contributionKey: contributionKey(row), contributionValue: '2'}],
+    existingRows: [],
+    newRows: [row],
+    statsRows: [
+      {cardinality: '343341342341341300', filterKind: 'conflictFlag', filterValue: 'false', listModeKey: 'both'},
+    ],
+    totalRows: [{listModeKey: 'both', totalArticleCount: '10'}],
+  })
+
+  const result = await projectReviewServingFilterPostings(projectInput([], ['both']), database)
+  const joined = statements.join('\n')
+
+  expect(result.statsValues).toContainEqual({
+    cardinality: 3,
+    filterKind: 'conflictFlag',
+    filterValue: 'false',
+    listModeKey: 'both',
+    selectivity: 0.3,
+  })
+  expect(joined).toContain('SUM(contribution.contribution_value)')
+  expect(joined).not.toContain('343341342341341300000')
 })
 
 test('deletes write tombstones, remove serving rows, and decrement stats in the writer transaction', async () => {

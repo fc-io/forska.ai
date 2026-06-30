@@ -47,9 +47,16 @@ type PostingContributionRow = {
   tombstone: boolean
 }
 
-type PostingStatsRow = {cardinality: number | null; filterKind: string; filterValue: string; listModeKey: string}
+type PostingStatsRow = {
+  cardinality: number | string | null
+  filterKind: string
+  filterValue: string
+  listModeKey: string
+}
 
-type PostingTotalRow = {listModeKey: string; totalArticleCount: number | null}
+type PostingContributionTotalRow = {contributionKey: string; contributionValue: number | string | null}
+
+type PostingTotalRow = {listModeKey: string; totalArticleCount: number | string | null}
 
 const filterPostingProjectorName = 'filter-posting-projector'
 const stalePostingSortAt = '1970-01-01T00:00:00.000Z'
@@ -448,6 +455,36 @@ const getExistingStatsRows = async (
       `)
 }
 
+const getExistingContributionTotalRows = async (
+  input: ProjectReviewServingFilterPostingsInput,
+  database: ReviewServingFilterPostingProjectorDatabase,
+  contributionKeys: readonly string[],
+) => {
+  return contributionKeys.length === 0
+    ? []
+    : database.queryJson<PostingContributionTotalRow>(`
+        WITH contribution_key_filter(contribution_key) AS (
+          SELECT * FROM (VALUES ${contributionKeys
+            .map((contributionKey) => {
+              return `(${getSqlLiteral(contributionKey)})`
+            })
+            .join(', ')})
+        )
+        SELECT
+          filter.contribution_key AS contributionKey,
+          COALESCE(SUM(contribution.contribution_value), 0) AS contributionValue
+        FROM contribution_key_filter filter
+        LEFT JOIN mart.review_article_summary_contribution_v4 contribution
+          ON contribution.project_id = ${getSqlLiteral(input.projectId)}
+          AND contribution.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+          AND contribution.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          AND contribution.component_kind = 'posting'
+          AND contribution.summary_definition_version = ${getSqlLiteral(input.definitionVersion)}
+          AND contribution.contribution_key = filter.contribution_key
+        GROUP BY filter.contribution_key
+      `)
+}
+
 const getPostingTotalRows = async (
   input: ProjectReviewServingFilterPostingsInput,
   database: ReviewServingFilterPostingProjectorDatabase,
@@ -628,6 +665,36 @@ const getPostingManifest = (
   }
 }
 
+const getFiniteNumber = (value: number | string | null | undefined) => {
+  const numberValue = typeof value === 'string' ? Number(value) : value
+
+  return numberValue === null || numberValue === undefined || !Number.isFinite(numberValue) ? 0 : numberValue
+}
+
+const getNonNegativeFiniteNumber = (value: number | string | null | undefined) => {
+  return Math.max(0, getFiniteNumber(value))
+}
+
+const getUniqueStatsKeys = (rows: readonly PostingContributionRow[]) => {
+  return [
+    ...new Set(
+      rows.map((row) => {
+        return getContributionStatsKey(row)
+      }),
+    ),
+  ]
+}
+
+const getStatsRowIsInvalid = (row: PostingStatsRow | undefined, totalArticleCount: number) => {
+  if (row === undefined) {
+    return false
+  }
+
+  const cardinality = getFiniteNumber(row.cardinality)
+
+  return cardinality < 0 || !Number.isSafeInteger(cardinality) || cardinality > totalArticleCount
+}
+
 const getStatsRecords = async (input: {
   database: ReviewServingFilterPostingProjectorDatabase
   diffs: readonly ReviewServingContributionDiff[]
@@ -637,14 +704,9 @@ const getStatsRecords = async (input: {
   const changedDiffs = input.diffs.filter((diff) => {
     return diff.delta !== 0
   })
+  const rowKeys = getUniqueStatsKeys(input.rows)
   const [existingStatsRows, totalRows] = await Promise.all([
-    getExistingStatsRows(
-      input.projectorInput,
-      input.database,
-      changedDiffs.map((diff) => {
-        return diff.contributionKey
-      }),
-    ),
+    getExistingStatsRows(input.projectorInput, input.database, rowKeys),
     getPostingTotalRows(input.projectorInput, input.database),
   ])
   const statsRowsByKey = new Map(
@@ -654,7 +716,7 @@ const getStatsRecords = async (input: {
   )
   const totalRowsByListMode = new Map(
     totalRows.map((row) => {
-      return [row.listModeKey, row.totalArticleCount ?? 0]
+      return [row.listModeKey, getNonNegativeFiniteNumber(row.totalArticleCount)]
     }),
   )
   const rowsByKey = new Map(
@@ -662,11 +724,41 @@ const getStatsRecords = async (input: {
       return [getContributionStatsKey(row), row]
     }),
   )
+  const invalidStatsKeys = rowKeys.filter((key) => {
+    const row = rowsByKey.get(key)
 
-  return changedDiffs.flatMap((diff) => {
-    const row = rowsByKey.get(diff.contributionKey)
-    const existingCardinality = statsRowsByKey.get(diff.contributionKey)?.cardinality ?? 0
-    const cardinality = Math.max(0, existingCardinality + diff.delta)
+    return row === undefined
+      ? false
+      : getStatsRowIsInvalid(statsRowsByKey.get(key), totalRowsByListMode.get(row.listModeKey) ?? 0)
+  })
+  const statsKeysToWrite = [
+    ...new Set([
+      ...changedDiffs.map((diff) => {
+        return diff.contributionKey
+      }),
+      ...invalidStatsKeys,
+    ]),
+  ]
+  const contributionTotals = await getExistingContributionTotalRows(
+    input.projectorInput,
+    input.database,
+    statsKeysToWrite,
+  )
+  const contributionTotalsByKey = new Map(
+    contributionTotals.map((row) => {
+      return [row.contributionKey, getNonNegativeFiniteNumber(row.contributionValue)]
+    }),
+  )
+  const diffsByKey = new Map(
+    changedDiffs.map((diff) => {
+      return [diff.contributionKey, diff.delta]
+    }),
+  )
+
+  return statsKeysToWrite.flatMap((statsKey) => {
+    const row = rowsByKey.get(statsKey)
+    const existingCardinality = contributionTotalsByKey.get(statsKey) ?? 0
+    const cardinality = Math.max(0, existingCardinality + (diffsByKey.get(statsKey) ?? 0))
 
     return row === undefined
       ? []
