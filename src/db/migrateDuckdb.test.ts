@@ -1239,7 +1239,9 @@ test('migrateDuckdb skips checkpoint when no migration files are applied', async
   })
 
   try {
-    const {migrateDuckdb} = (await import(`${migrationModulePath}?checkpoint-skip-test=${Date.now()}`)) as MigrateDuckdbModule
+    const {migrateDuckdb} = (await import(
+      `${migrationModulePath}?checkpoint-skip-test=${Date.now()}`
+    )) as MigrateDuckdbModule
 
     await migrateDuckdb()
 

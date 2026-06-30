@@ -645,10 +645,7 @@ test(
 
     const devServerProcess = globalThis.Bun.spawn([bunExecutablePath, 'run', 'dev:server'], {
       cwd: process.cwd(),
-      env: {
-        ...process.env,
-        FORSKA_DEV_SERVER_WATCH_ACTION: 'restart',
-      },
+      env: {...process.env, FORSKA_DEV_SERVER_WATCH_ACTION: 'restart'},
       stderr: 'pipe',
       stdout: 'pipe',
     })
