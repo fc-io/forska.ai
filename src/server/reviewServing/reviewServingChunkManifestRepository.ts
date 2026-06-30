@@ -626,6 +626,15 @@ export const getNextClaimableReviewServingRebuildChunk = async (
     ${getReviewServingRebuildChunkSelect({tableAlias: 'candidate'})}
     WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
     ORDER BY
+      CASE
+        WHEN candidate.status = 'running'
+          AND (
+            candidate.lease_expires_at IS NULL
+            OR candidate.lease_expires_at <= ${getReviewServingChunkTimestampLiteral(input.now)}
+          )
+        THEN 0
+        ELSE 1
+      END ASC,
       (
         SELECT request.updated_at
         FROM app.review_rebuild_request request
