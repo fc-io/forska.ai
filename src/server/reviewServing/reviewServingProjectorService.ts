@@ -513,7 +513,7 @@ export const wakeReviewServingProjectorService = async (
 
           if (rebuildResult._tag === 'Left') {
             const rebuildDiagnostic = getDiagnostic(rebuildResult.left)
-            await releaseDirtyWork(claimIds, database)
+            await failDirtyWork(claimIds, database)
             logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic: rebuildDiagnostic})
 
             return {

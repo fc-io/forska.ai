@@ -445,7 +445,7 @@ test('wake fails claimed work when missing-snapshot rebuild request is blocked',
   expect(releasedClaimIds).toEqual([])
 })
 
-test('wake releases claimed work when missing-snapshot rebuild admission fails', async () => {
+test('wake fails claimed work when missing-snapshot rebuild admission fails', async () => {
   const {dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
     queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-1'})],
   })
@@ -480,8 +480,8 @@ test('wake releases claimed work when missing-snapshot rebuild admission fails',
     },
   ])
   expect(rebuildRequests).toEqual([{projectId: 'project-1', reason: 'missingReviewServingSnapshot'}])
-  expect(failedClaimIds).toEqual([])
-  expect(releasedClaimIds).toEqual(['queue-1'])
+  expect(failedClaimIds).toEqual(['queue-1'])
+  expect(releasedClaimIds).toEqual([])
 })
 
 test('wake does not claim work while queue pressure or active imports exceed configured limits', async () => {

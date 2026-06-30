@@ -138,10 +138,10 @@ const getReviewsIndexingStatus = (params: {
     ? 'not-needed'
     : params.hasQuarantineBarrier
         ? 'failed'
-        : params.isServerMutationWorkDisabled && params.pendingRefreshCount > 0 && params.runningRefreshCount === 0
-          ? 'blocked'
-          : params.hasTerminalV4Work
-            ? 'failed'
+        : params.hasTerminalV4Work
+          ? 'failed'
+          : params.isServerMutationWorkDisabled && params.pendingRefreshCount > 0 && params.runningRefreshCount === 0
+            ? 'blocked'
             : params.pendingRefreshCount > 0 && params.runningRefreshCount > 0
               ? 'refreshing'
               : params.pendingRefreshCount > 0
