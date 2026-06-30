@@ -242,7 +242,6 @@ const isStaleReviewServingProgressSnapshot = (snapshot: ReviewServingProgressSna
 
 const isQueuedReviewServingProgressCandidate = (body: ReviewsWarningsBody) => {
   const indexing = body.data?.indexing
-  const snapshot = getReviewServingProgressSnapshot(body)
 
   return (
     indexing?.status === 'refreshing'
@@ -253,7 +252,6 @@ const isQueuedReviewServingProgressCandidate = (body: ReviewsWarningsBody) => {
     && Number(indexing.inFlightRefreshCount ?? 0) === 0
     && Number(indexing.activeWorkCount ?? 0) === 0
     && indexing.blockedReason === null
-    && isStaleReviewServingProgressSnapshot(snapshot)
   )
 }
 
@@ -310,10 +308,21 @@ const expectCurrentDbReviewServingQueuedWorkProgresses = async (apiPort: number)
     return
   }
 
-  const targetCandidate = candidates.find((candidate) => {
-    return candidate.projectId === reviewServingProgressProjectId
+  const staleTargetCandidate = candidates.find((candidate) => {
+    return (
+      candidate.projectId === reviewServingProgressProjectId
+      && isStaleReviewServingProgressSnapshot(getReviewServingProgressSnapshot(candidate.body))
+    )
   })
-  const probedCandidates = targetCandidate === undefined ? candidates : [targetCandidate]
+  const hasStaleCandidate = candidates.some((candidate) => {
+    return isStaleReviewServingProgressSnapshot(getReviewServingProgressSnapshot(candidate.body))
+  })
+
+  if (!hasStaleCandidate) {
+    return
+  }
+
+  const probedCandidates = staleTargetCandidate === undefined ? candidates : [staleTargetCandidate]
   const beforeSnapshots = probedCandidates.map((candidate) => {
     return {candidate, snapshot: getReviewServingProgressSnapshot(candidate.body)}
   })
