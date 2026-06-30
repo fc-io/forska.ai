@@ -109,6 +109,7 @@ test('selected-import routine updates write component-narrow patches for only cl
 
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 9})
   expect(selectStatement).toContain("VALUES ('article-1')")
+  expect(selectStatement).toContain('SELECT DISTINCT')
   expect(selectStatement).toContain('FROM dirty_article dirty')
   expect(selectStatement).toContain('LEFT JOIN mart.project_scope_article scope')
   expect(selectStatement).toContain('INNER JOIN app.review_import_article_hot_field hot')

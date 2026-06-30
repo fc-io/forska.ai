@@ -141,6 +141,7 @@ test('selected-import projector reads project scope and hot fields in bounded de
   })
 
   expect(batchSelect).toContain('FROM mart.project_scope_article scope')
+  expect(batchSelect).toContain('SELECT DISTINCT')
   expect(batchSelect).toContain('INNER JOIN app.review_import_article_hot_field hot')
   expect(batchSelect).toContain('LEFT JOIN app.article_import_route current_link')
   expect(batchSelect).toContain("WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)")
