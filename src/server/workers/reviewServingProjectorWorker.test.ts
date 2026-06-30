@@ -1127,6 +1127,130 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   expect(joined).toContain("article_id <= 'article-099'")
 })
 
+test('posting rebuild chunk splits on runtime DuckDB OOM before blocking over budget', async () => {
+  const statements: string[] = []
+  const postingChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    chunkId: 'chunk-posting-runtime-oom',
+    estimatedInputRows: 49_000,
+    estimatedOutputRows: 49_000,
+    inputWatermark: 9,
+    outputBaseGeneration: 7,
+    projectionComponent: 'posting',
+    projectionIdentity: 'posting:project-1',
+    splitDepth: 1,
+  }
+  const componentState = {
+    optional: [],
+    required: [
+      {baseGeneration: '7', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+      {baseGeneration: '7', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+      {baseGeneration: '7', component: 'posting', projectionIdentity: 'posting:project-1'},
+    ],
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+        return [postingChunk] as T[]
+      }
+
+      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+        return [
+          {
+            baseGeneration: postingChunk.outputBaseGeneration,
+            definitionVersion: 'posting-v1',
+            inputDigest: postingChunk.inputDigest,
+            inputWatermark: postingChunk.inputWatermark,
+            inputWatermarksJson: {reviewChange: 9},
+            invalidationReason: postingChunk.inputDigest,
+            manifestId: 'manifest-posting',
+            patchRangeEnd: postingChunk.inputWatermark,
+            patchRangeStart: postingChunk.inputWatermark,
+            patchWatermark: postingChunk.inputWatermark,
+            projectId: postingChunk.projectId,
+            projectionComponent: postingChunk.projectionComponent,
+            projectionIdentity: postingChunk.projectionIdentity,
+            promptConfigHash: null,
+            reviewConfigHash: 'review-config-1',
+            status: 'candidate',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return [
+          {
+            componentStateJson: componentState,
+            reviewConfigHash: 'review-config-1',
+            selectedImportSnapshotId: 'selected-import-snapshot-1',
+            snapshotId: 'snapshot-posting-oom',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM posting_union')) {
+        return [
+          {
+            articleId: 'article-050',
+            filterKind: 'promptAnswer',
+            filterValue: 'review:promptAnswer:prompt-1:yes',
+            listModeKey: 'llm',
+            sortKey: '2026-06-16T10:00:00.000Z',
+            tombstone: false,
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('AS totalArticleCount')) {
+        return [{listModeKey: 'llm', totalArticleCount: 10}] as T[]
+      }
+
+      if (statement.includes('NTILE(2)') && statement.includes('FROM mart.project_scope_article scope')) {
+        return [
+          {articleCount: 25, chunkEndKey: 'article-050', chunkStartKey: 'article-001'},
+          {articleCount: 24, chunkEndKey: 'article-099', chunkStartKey: 'article-051'},
+        ] as T[]
+      }
+
+      if (statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('RETURNING chunk_id')) {
+        return [{chunkId: postingChunk.chunkId}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')) {
+        throw new Error('DuckDB Out of Memory Error: failed to allocate 64KiB (18.6 GiB/18.6 GiB used)')
+      }
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: postingChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+  const childInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).toContain('NTILE(2)')
+  expect(childInserts).toHaveLength(2)
+  expect(joined).toContain("oom_category = 'duckdb_oom_split'")
+  expect(joined).toContain('"splitReason":"duckdb_oom"')
+  expect(joined).not.toContain("status = 'failed'")
+  expect(joined).not.toContain("status = 'blocked_over_budget'")
+})
+
 test('judgment input content rebuild chunk presplits large ranges and completes parent container', async () => {
   const statements: string[] = []
   const judgmentChunk: ReviewServingRebuildChunkManifest = {

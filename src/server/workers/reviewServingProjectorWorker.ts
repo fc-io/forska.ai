@@ -2054,48 +2054,69 @@ export const runReviewServingProjectorWorkerClaimedRebuildChunk = async (
     }
   }
 
-  if (input.chunk.projectionComponent === 'projectScope') {
-    return runProjectScopeRebuildChunk(input, database)
-  }
+  try {
+    if (input.chunk.projectionComponent === 'projectScope') {
+      return await runProjectScopeRebuildChunk(input, database)
+    }
 
-  if (input.chunk.projectionComponent === 'selectedImport') {
-    return runSelectedImportRebuildChunk(input, database)
-  }
+    if (input.chunk.projectionComponent === 'selectedImport') {
+      return await runSelectedImportRebuildChunk(input, database)
+    }
 
-  if (input.chunk.projectionComponent === 'display') {
-    return runDisplayRebuildChunk(input, database)
-  }
+    if (input.chunk.projectionComponent === 'display') {
+      return await runDisplayRebuildChunk(input, database)
+    }
 
-  if (input.chunk.projectionComponent === 'payload') {
-    return runPayloadRebuildChunk(input, database)
-  }
+    if (input.chunk.projectionComponent === 'payload') {
+      return await runPayloadRebuildChunk(input, database)
+    }
 
-  if (input.chunk.projectionComponent === 'search') {
-    return runSearchRebuildChunk(input, database)
-  }
+    if (input.chunk.projectionComponent === 'search') {
+      return await runSearchRebuildChunk(input, database)
+    }
 
-  if (input.chunk.projectionComponent === 'llmStatus') {
-    return runLlmStatusRebuildChunk(input, database)
-  }
+    if (input.chunk.projectionComponent === 'llmStatus') {
+      return await runLlmStatusRebuildChunk(input, database)
+    }
 
-  if (input.chunk.projectionComponent === 'humanStatus') {
-    return runHumanStatusRebuildChunk(input, database)
-  }
+    if (input.chunk.projectionComponent === 'humanStatus') {
+      return await runHumanStatusRebuildChunk(input, database)
+    }
 
-  if (input.chunk.projectionComponent === 'queue') {
-    return runQueueRebuildChunk(input, database)
-  }
+    if (input.chunk.projectionComponent === 'queue') {
+      return await runQueueRebuildChunk(input, database)
+    }
 
-  if (input.chunk.projectionComponent === 'posting') {
-    return runPostingRebuildChunk(input, database)
-  }
+    if (input.chunk.projectionComponent === 'posting') {
+      return await runPostingRebuildChunk(input, database)
+    }
 
-  if (input.chunk.projectionComponent === 'summary') {
-    return runSummaryRebuildChunk(input, database)
-  }
+    if (input.chunk.projectionComponent === 'summary') {
+      return await runSummaryRebuildChunk(input, database)
+    }
 
-  if (input.chunk.projectionComponent === 'judgmentInputContent') {
-    return runJudgmentInputContentRebuildChunk(input, database)
+    if (input.chunk.projectionComponent === 'judgmentInputContent') {
+      return await runJudgmentInputContentRebuildChunk(input, database)
+    }
+  } catch (error) {
+    const split =
+      isDuckDbOutOfMemoryError(error) && splittableArticleRangeRebuildComponents.has(input.chunk.projectionComponent)
+        ? await splitClaimedArticleRangeRebuildChunk(
+            {
+              chunk: input.chunk,
+              leaseOwner: input.leaseOwner,
+              projectId: requireRebuildChunkProjectId(input.chunk),
+              splitReason: 'duckdb_oom',
+            },
+            database,
+          )
+        : false
+
+    if (split) {
+      return {status: 'completed' as const}
+    }
+
+    throw error
   }
 
   throw new Error(
