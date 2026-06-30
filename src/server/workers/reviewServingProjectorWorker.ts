@@ -83,6 +83,7 @@ import {projectReviewServingTitleSearchRows} from '../reviewServing/reviewServin
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
+import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
 type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorServiceDependencies['database']>
 
@@ -132,6 +133,8 @@ type ReviewServingProjectorWorkerDependencies = {
   sleep: typeof sleep
   wakeProjectors: typeof wakeReviewServingProjectorService
 }
+
+const reviewServingProjectorWorkerCycleLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 
 type ReviewServingProjectorWorkerCycleOptions = {
   batchSize?: number
@@ -3162,6 +3165,26 @@ const shouldRunCleanup = (input: {cleanupIntervalMs: number; lastCleanupAtMs: nu
   return input.lastCleanupAtMs === null || input.nowMs - input.lastCleanupAtMs >= input.cleanupIntervalMs
 }
 
+const logReviewServingProjectorWorkerCycle = (result: ReviewServingProjectorWorkerCycleResult) => {
+  reviewServingProjectorWorkerCycleLogger.log(
+    'review-serving-projector-worker:cycle',
+    '[reviewServingProjectorWorker] background loop cycle',
+    {
+      chunkId: result.chunk.chunkId,
+      chunkRequestId: 'requestId' in result.chunk ? result.chunk.requestId : null,
+      chunkStatus: result.chunk.status,
+      cleanupStatus: result.cleanup.status,
+      component: 'reviewServingProjectorWorker',
+      deltaIntakeStatus: result.deltaIntake.status,
+      event: 'cycle',
+      projectorStatus: result.projector.status,
+      status: result.status,
+      wakeId: result.wakeId,
+      workerId: result.workerId,
+    },
+  )
+}
+
 const runReviewServingProjectorWorkerRebuildChunk = async ({
   database,
   dependencies,
@@ -3408,6 +3431,7 @@ export const runReviewServingProjectorWorker = async (
   }
 
   const cycleResult = await runReviewServingProjectorWorkerOnce(options, dependencies)
+  logReviewServingProjectorWorkerCycle(cycleResult)
 
   if (options.signal?.aborted) {
     return

@@ -98,7 +98,13 @@ type ReviewsWarningsResponse = {
       }
       serving: {
         diagnostics: {
-          rebuildChunks: {failedCount: number; pendingCount: number}
+          rebuildChunks: {
+            blockedQueuedCount?: number
+            claimableCount?: number
+            expiredLeaseCount?: number
+            failedCount: number
+            pendingCount: number
+          }
           quarantine: {quarantinedOutboxCount: number; retryableOutboxCount: number; unresolvedOutboxCount: number}
         }
         readable: boolean
@@ -966,6 +972,8 @@ test('reviews warnings fold V4 rebuild chunks into visible progress', async () =
   await insertReviewRebuildChunk({
     chunkId: 'rebuild-chunk-running-warning',
     createdAt: '2026-04-02T12:01:00.000Z',
+    leaseExpiresAt: '2099-04-02T12:05:00.000Z',
+    leaseOwner: 'active-maintenance-worker',
     projectId,
     status: 'running',
     updatedAt: '2026-04-02T12:05:00.000Z',
@@ -1154,7 +1162,7 @@ test('reviews warnings block queued V4 rebuild work when server mutation work is
   expect(body.data.indexing.status).toBe('blocked')
 })
 
-test('reviews warnings keep retryable V4 rebuild chunk failures queued', async () => {
+test('reviews warnings keep retry-backed V4 rebuild chunk failures out of claimable queued work', async () => {
   const projectId = 'project-v4-retryable-rebuild-failed-warning'
 
   await insertProjectFixture(projectId)
@@ -1178,10 +1186,104 @@ test('reviews warnings keep retryable V4 rebuild chunk failures queued', async (
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
+  expect(body.data.indexing.eligibleConsumerCount).toBe(0)
+  expect(body.data.indexing.eligibleConsumerPresent).toBe(false)
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
-  expect(body.data.indexing.progressState).toBe('queued')
-  expect(body.data.indexing.queuedRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('stalled')
+  expect(body.data.indexing.queuedRefreshCount).toBe(0)
+  expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({
+    blockedQueuedCount: 1,
+    claimableCount: 0,
+    pendingCount: 1,
+  })
   expect(body.data.indexing.status).toBe('refreshing')
+})
+
+test('V4 chunk claim path reclaims an expired projectScope prerequisite before downstream chunks', async () => {
+  const projectId = 'project-v4-expired-project-scope-claim'
+  const requestId = 'rebuild:expired-project-scope-claim'
+  const [
+    {getAppDatabaseService},
+    {claimReviewServingRebuildChunk, getNextClaimableReviewServingRebuildChunk, getReviewServingRebuildChunkId},
+  ] = await Promise.all([
+    import('../../services/appDatabaseService.ts'),
+    import('../../reviewServing/reviewServingChunkManifestRepository.ts'),
+  ])
+  const database = getAppDatabaseService()
+  const getIdentity = (component: ReviewServingProjectionComponent) => {
+    return {
+      chunkEndKey: 'article-z',
+      chunkStartKey: 'article-a',
+      inputDigest: `${component}-digest-v1`,
+      inputWatermark: 1,
+      outputBaseGeneration: 1,
+      projectId,
+      projectionComponent: component,
+      projectionIdentity: `${component}:identity-1`,
+      requestId,
+    }
+  }
+  const projectScopeIdentity = getIdentity('projectScope')
+  const summaryIdentity = getIdentity('summary')
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-v4-expired-project-scope-claim',
+  })
+  await insertReviewRebuildRequest({
+    createdAt: '2026-04-02T12:00:00.000Z',
+    projectId,
+    requestId,
+    status: 'admitted',
+    updatedAt: '2026-04-02T12:05:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: getReviewServingRebuildChunkId(projectScopeIdentity),
+    component: 'projectScope',
+    createdAt: '2026-04-02T12:01:00.000Z',
+    leaseExpiresAt: '2026-04-02T12:02:00.000Z',
+    leaseOwner: 'stale-maintenance-worker',
+    projectId,
+    requestId,
+    status: 'running',
+    updatedAt: '2026-04-02T12:01:30.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: getReviewServingRebuildChunkId(summaryIdentity),
+    component: 'summary',
+    createdAt: '2026-04-02T12:03:00.000Z',
+    projectId,
+    requestId,
+    status: 'pending',
+    updatedAt: '2026-04-02T12:03:00.000Z',
+  })
+
+  const next = await getNextClaimableReviewServingRebuildChunk({now: '2026-04-02T12:10:00.000Z', projectId}, database)
+  const claimed =
+    next === null
+      ? null
+      : await claimReviewServingRebuildChunk(
+          {
+            ...next,
+            leaseExpiresAt: '2026-04-02T12:15:00.000Z',
+            leaseOwner: 'fresh-maintenance-worker',
+            now: '2026-04-02T12:10:00.000Z',
+          },
+          database,
+        )
+
+  expect(next).toMatchObject({projectionComponent: 'projectScope', requestId})
+  expect(claimed).toMatchObject({
+    leaseOwner: 'fresh-maintenance-worker',
+    projectionComponent: 'projectScope',
+    requestId,
+    status: 'running',
+  })
 })
 
 test('reviews warnings fail terminal V4 rebuild requests instead of reporting healthy queued chunks', async () => {
@@ -1253,11 +1355,16 @@ test('reviews warnings fail terminal V4 rebuild requests instead of reporting he
   expect(response.status).toBe(200)
   expect(body.data.indexing.activeConsumerCount).toBe(0)
   expect(body.data.indexing.activeWorkCount).toBe(0)
-  expect(body.data.indexing.eligibleConsumerCount).toBe(1)
+  expect(body.data.indexing.eligibleConsumerCount).toBe(0)
   expect(body.data.indexing.pendingRefreshCount).toBe(3)
   expect(body.data.indexing.progressState).toBe('failed')
-  expect(body.data.indexing.queuedRefreshCount).toBe(3)
-  expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({failedCount: 1, pendingCount: 3})
+  expect(body.data.indexing.queuedRefreshCount).toBe(0)
+  expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({
+    blockedQueuedCount: 3,
+    claimableCount: 0,
+    failedCount: 1,
+    pendingCount: 3,
+  })
   expect(body.data.indexing.status).toBe('failed')
 })
 
@@ -1392,8 +1499,10 @@ test('reviews warnings ignore chunks from superseded V4 rebuild requests', async
   expect(response.status).toBe(200)
   expect(body.data.indexing.pendingRefreshCount).toBe(2)
   expect(body.data.indexing.progressState).toBe('queued')
-  expect(body.data.indexing.queuedRefreshCount).toBe(2)
+  expect(body.data.indexing.queuedRefreshCount).toBe(1)
   expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({
+    blockedQueuedCount: 1,
+    claimableCount: 1,
     expiredLeaseCount: 1,
     failedCount: 0,
     pendingCount: 1,
