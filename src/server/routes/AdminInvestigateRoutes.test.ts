@@ -307,20 +307,20 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
     expect(responseBody.role).toBe('maintenance-worker')
     expect(responseBody.pid).toBeGreaterThan(0)
     expect(responseBody.duckdb.configured.appendLaneCount).toBeGreaterThan(0)
-    expect(responseBody.duckdb.configured.checkpointThreshold).toBe('8GB')
+    expect(responseBody.duckdb.configured.checkpointThreshold).toBe('64MiB')
     expect(responseBody.duckdb.configured.memoryLimit).toBe('256MiB')
     expect(responseBody.duckdb.configured.preserveInsertionOrder).toBe(false)
     expect(responseBody.duckdb.configured.serializeConcurrentWork).toBe(true)
     expect(responseBody.duckdb.configured.tempDirectory).toBe(tempDirectory)
     expect(responseBody.duckdb.configured.threads).toBe('1')
     expect(responseBody.duckdb.instanceOptions).toEqual({
-      checkpoint_threshold: '8GB',
+      checkpoint_threshold: '64MiB',
       memory_limit: '256MiB',
       preserve_insertion_order: 'false',
       temp_directory: tempDirectory,
       threads: '1',
     })
-    expect(responseBody.duckdb.effective.checkpointThreshold).toBe('7.4 GiB')
+    expect(responseBody.duckdb.effective.checkpointThreshold).toBe('64.0 MiB')
     expect(responseBody.duckdb.effective.memoryLimit).toBe('256.0 MiB')
     expect(responseBody.duckdb.effective.preserveInsertionOrder).toBe(false)
     expect(responseBody.duckdb.effective.tempDirectory).toBe(tempDirectory)
