@@ -43,6 +43,7 @@ type FakeProjectionManifestRow = {
 
 type FakeRequestDatabaseOptions = {
   activeComponentStateJson?: unknown
+  articleRangeRows?: Array<{chunkEndKey: string; chunkStartKey: string; scopedArticleCount: number}>
   componentStateJson?: unknown
   projectionManifestRows?: readonly FakeProjectionManifestRow[]
 }
@@ -173,6 +174,13 @@ const createFakeRequestDatabase = (options: FakeRequestDatabaseOptions = {}) => 
 
   const queryJson = async <T>(statement: string) => {
     statements.push(statement)
+
+    if (statement.includes('NTILE')) {
+      return (options.articleRangeRows ?? [
+        {chunkEndKey: 'article-m', chunkStartKey: 'article-a', scopedArticleCount: 2},
+        {chunkEndKey: 'article-z', chunkStartKey: 'article-m', scopedArticleCount: 1},
+      ]) as T[]
+    }
 
     if (statement.includes('FROM app.project_article')) {
       return [{chunkEndKey: 'article-z', chunkStartKey: 'article-a', scopedArticleCount: 3}] as T[]
@@ -383,6 +391,33 @@ test('default rebuild request chunks use existing projection identities and real
   expect(joined).toContain("'payload:active-identity-1'")
   expect(joined).not.toContain('component:all')
   expect(joined).not.toContain(':request:rebuild:default-identities')
+})
+
+test('search-only default rebuild presplit chunks cover gaps between scoped article buckets', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    articleRangeRows: [
+      {chunkEndKey: 'article-001', chunkStartKey: 'article-001', scopedArticleCount: 1},
+      {chunkEndKey: 'article-100', chunkStartKey: 'article-001', scopedArticleCount: 1},
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 100_001},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['search'],
+      requestId: 'rebuild:search-presplit-gaps',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('LAG(scoped_end_key) OVER (ORDER BY chunk_index) AS previous_scoped_end_key')
+  expect(joined).toContain("'article-001'")
+  expect(joined).toContain("'article-100'")
+  expect(joined).toContain('{"admissionPresplit":true}')
 })
 
 test('default rebuild request keeps same projection identity across base generations', async () => {

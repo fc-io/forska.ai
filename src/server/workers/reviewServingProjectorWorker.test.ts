@@ -274,6 +274,51 @@ test('worker yields to normal projector fairness after foreground rebuild drain 
   expect(harness.wakeInputs).toHaveLength(1)
 })
 
+test('worker measures foreground rebuild drain TTL after a critical chunk completes', async () => {
+  let nowMs = 1_000
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const foregroundChunkInput = {...chunkInput, requestId: 'rebuild:foreground'}
+  const foregroundChunk = {...chunkManifest, requestId: 'rebuild:foreground'}
+
+  harness.dependencies.nowMs = () => {
+    return nowMs
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return foregroundChunk
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return foregroundChunkInput
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+      nowMs = 12_001
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {
+      foregroundRebuildDrainChunkBudget: 2,
+      foregroundRebuildDrainCompletedCount: 1,
+      foregroundRebuildDrainStartedAtMs: 1_000,
+      foregroundRebuildDrainTtlMs: 10_000,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  expect(result.chunk).toMatchObject({requestId: 'rebuild:foreground', status: 'completed'})
+  expect(result.projector).toMatchObject({status: 'completed'})
+  expect(harness.wakeInputs).toHaveLength(1)
+})
+
 test('worker runs delta intake before waking projectors', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const intakeCalls: Array<{kind: 'import' | 'review'; params: DeltaIntakeParams}> = []

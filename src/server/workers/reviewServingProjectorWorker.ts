@@ -3782,7 +3782,6 @@ export const runReviewServingProjectorWorkerCycle = async (
   const wakeId = `${workerId}:${getWorkerNowMs(dependencies, options)}`
   const workloadContext = getReviewServingProjectorWorkerWorkloadContext(workerId)
   const database = getReviewServingProjectorWorkerDatabase(dependencies, workloadContext)
-  const nowMs = getWorkerNowMs(dependencies, options)
   const chunk = await runReviewServingProjectorWorkerRebuildChunk({
     database,
     dependencies,
@@ -3790,6 +3789,7 @@ export const runReviewServingProjectorWorkerCycle = async (
     workloadContext,
     workerId,
   })
+  const nowMs = getWorkerNowMs(dependencies, options)
   const shouldRunOnlyRebuildChunk = shouldPrioritizeNextRebuildChunk({chunk, nowMs, options})
   const deltaIntake = shouldRunOnlyRebuildChunk
     ? getIdleReviewServingProjectorWorkerDeltaIntakeResult()

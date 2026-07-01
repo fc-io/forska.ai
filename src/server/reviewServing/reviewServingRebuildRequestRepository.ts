@@ -346,14 +346,28 @@ const getDefaultRebuildArticleRanges = async (
         SELECT DISTINCT article_id
         FROM scoped_article
       ) distinct_article
+    ), bucket_range AS (
+      SELECT
+        chunk_index,
+        MIN(article_id) AS scoped_start_key,
+        MAX(article_id) AS scoped_end_key,
+        CAST(COUNT(*) AS INTEGER) AS scopedArticleCount
+      FROM chunked_article
+      GROUP BY chunk_index
+    ), bucket_range_with_neighbors AS (
+      SELECT
+        scoped_start_key,
+        scoped_end_key,
+        scopedArticleCount,
+        LAG(scoped_end_key) OVER (ORDER BY chunk_index) AS previous_scoped_end_key
+      FROM bucket_range
     )
     SELECT
-      MIN(article_id) AS chunkStartKey,
-      MAX(article_id) AS chunkEndKey,
-      CAST(COUNT(*) AS INTEGER) AS scopedArticleCount
-    FROM chunked_article
-    GROUP BY chunk_index
-    ORDER BY chunk_index
+      COALESCE(previous_scoped_end_key, scoped_start_key) AS chunkStartKey,
+      scoped_end_key AS chunkEndKey,
+      scopedArticleCount
+    FROM bucket_range_with_neighbors
+    ORDER BY scoped_start_key
   `)
 
   return rows.flatMap((row): DefaultRebuildArticleRange[] => {
