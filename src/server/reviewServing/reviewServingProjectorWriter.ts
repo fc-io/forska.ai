@@ -89,6 +89,27 @@ export type ReviewServingSelectedImportSnapshotCursorInput = {
   status: 'candidate' | 'completed'
 }
 
+export type WriteReviewServingTitleSearchRebuildRowsInput = {
+  activitySortAtSql: string
+  articleRangePredicateSql: string
+  articleTitleSql: string
+  projectId: string
+  projectScopeIdentity: string
+  searchIdentity: string
+  selectedImportJoinSql: string
+  snapshotId: string
+  titlePrefixLength: number
+}
+
+export type WriteReviewServingQueueRebuildRowsInput = {
+  projectId: string
+  queueIdentitySql: string
+  rangePredicateSql: string
+  rebuildSourceCtesSql: string
+  reviewConfigHash: string
+  snapshotId: string
+}
+
 export type WriteReviewServingProjectorComponentInput = {
   acknowledgements?: readonly ReviewServingDirtyWorkClaim[]
   candidateSnapshot?: ReviewServingSnapshotManifestInput
@@ -370,6 +391,105 @@ export const promoteReviewServingProjectorSnapshot = async (
 
     return {promoted: true, snapshotId: input.snapshotId}
   })
+}
+
+export const writeReviewServingTitleSearchRebuildRows = async (
+  input: WriteReviewServingTitleSearchRebuildRowsInput,
+  database: Pick<ReviewServingProjectorWriterDatabase, 'run'> = getAppDatabaseService(),
+) => {
+  await database.run(`
+    INSERT INTO mart.review_title_search_serving_v4 (
+      project_id,
+      search_identity,
+      project_scope_identity,
+      snapshot_id,
+      token,
+      article_id,
+      title_prefix,
+      activity_sort_at,
+      search_updated_at
+    )
+    WITH source AS (
+      SELECT
+        scope.article_id,
+        lower(strip_accents(COALESCE(${input.articleTitleSql}, ''))) AS normalized_title,
+        ${input.activitySortAtSql} AS activity_sort_at
+      FROM mart.project_scope_article scope
+      LEFT JOIN app."article" article
+        ON article.id = scope.article_id
+      ${input.selectedImportJoinSql}
+      WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
+        AND (scope.in_curated_scope OR scope.in_route_scope)
+        AND article.id IS NOT NULL
+        ${input.articleRangePredicateSql}
+    ), tokenized AS (
+      SELECT DISTINCT
+        source.article_id,
+        token_rows.token,
+        left(source.normalized_title, ${getSqlLiteral(input.titlePrefixLength)}) AS title_prefix,
+        source.activity_sort_at
+      FROM source
+      CROSS JOIN unnest(regexp_split_to_array(source.normalized_title, '[^a-z0-9]+')) AS token_rows(token)
+      WHERE token_rows.token <> ''
+    )
+    SELECT
+      ${getSqlLiteral(input.projectId)} AS project_id,
+      ${getSqlLiteral(input.searchIdentity)} AS search_identity,
+      ${getSqlLiteral(input.projectScopeIdentity)} AS project_scope_identity,
+      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+      tokenized.token,
+      tokenized.article_id,
+      tokenized.title_prefix,
+      tokenized.activity_sort_at,
+      current_timestamp AS search_updated_at
+    FROM tokenized
+    ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token, article_id) DO UPDATE SET
+      title_prefix = excluded.title_prefix,
+      activity_sort_at = excluded.activity_sort_at,
+      search_updated_at = excluded.search_updated_at
+  `)
+}
+
+export const writeReviewServingQueueRebuildRows = async (
+  input: WriteReviewServingQueueRebuildRowsInput,
+  database: Pick<ReviewServingProjectorWriterDatabase, 'run'> = getAppDatabaseService(),
+) => {
+  await database.run(`
+    DELETE FROM mart.review_unassessed_queue_serving_v4
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      ${input.rangePredicateSql}
+  `)
+
+  await database.run(`
+    INSERT INTO mart.review_unassessed_queue_serving_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      queue_identity,
+      queue_kind,
+      priority_bucket,
+      activity_sort_at,
+      article_id,
+      prompt_id,
+      queue_updated_at
+    )
+    WITH ${input.rebuildSourceCtesSql}
+    SELECT DISTINCT
+      ${getSqlLiteral(input.projectId)} AS project_id,
+      queue.review_config_hash,
+      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+      ${input.queueIdentitySql} AS queue_identity,
+      queue.queue_kind,
+      queue.priority_bucket,
+      queue.activity_sort_at,
+      queue.article_id,
+      queue.prompt_id,
+      current_timestamp AS queue_updated_at
+    FROM queue_union queue
+    WHERE NOT queue.tombstone
+  `)
 }
 
 export const writeReviewServingProjectorComponent = async (

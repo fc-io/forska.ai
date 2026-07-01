@@ -11,6 +11,7 @@ import {
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
+  writeReviewServingQueueRebuildRows,
 } from './reviewServingProjectorWriter.ts'
 
 export type ReviewServingQueueProjectorDatabase = ReviewServingProjectorWriterDatabase
@@ -692,40 +693,19 @@ export const projectReviewServingQueueRebuildRows = async (
   input: ProjectReviewServingQueueRebuildInput,
   database: Pick<ReviewServingQueueProjectorDatabase, 'run'> = getAppDatabaseService(),
 ) => {
-  await database.run(`
-    DELETE FROM mart.review_unassessed_queue_serving_v4
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      ${getQueueServingRangePredicate(input)}
-  `)
-
-  await database.run(`
-    INSERT INTO mart.review_unassessed_queue_serving_v4 (
-      project_id,
-      review_config_hash,
-      snapshot_id,
-      queue_identity,
-      queue_kind,
-      priority_bucket,
-      activity_sort_at,
-      article_id,
-      prompt_id,
-      queue_updated_at
-    )
-    WITH ${getQueueRebuildSourceCtes(input)}
-    SELECT DISTINCT
-      ${getSqlLiteral(input.projectId)} AS project_id,
-      queue.review_config_hash,
-      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-      ${getQueueIdentitySql({promptId: 'queue.prompt_id', queueKind: 'queue.queue_kind', reviewConfigHash: 'queue.review_config_hash'})} AS queue_identity,
-      queue.queue_kind,
-      queue.priority_bucket,
-      queue.activity_sort_at,
-      queue.article_id,
-      queue.prompt_id,
-      current_timestamp AS queue_updated_at
-    FROM queue_union queue
-    WHERE NOT queue.tombstone
-  `)
+  await writeReviewServingQueueRebuildRows(
+    {
+      projectId: input.projectId,
+      queueIdentitySql: getQueueIdentitySql({
+        promptId: 'queue.prompt_id',
+        queueKind: 'queue.queue_kind',
+        reviewConfigHash: 'queue.review_config_hash',
+      }),
+      rangePredicateSql: getQueueServingRangePredicate(input),
+      rebuildSourceCtesSql: getQueueRebuildSourceCtes(input),
+      reviewConfigHash: input.reviewConfigHash,
+      snapshotId: input.snapshotId,
+    },
+    database,
+  )
 }
