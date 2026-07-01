@@ -586,10 +586,7 @@ test('worker yields after completed request chunks so progress readers can run',
     controller.abort()
   })
 
-  await runReviewServingProjectorWorker(
-    {signal: controller.signal, workerId: 'worker-1'},
-    harness.dependencies,
-  )
+  await runReviewServingProjectorWorker({signal: controller.signal, workerId: 'worker-1'}, harness.dependencies)
 
   expect(sleepCalls).toEqual([defaultReviewServingProjectorWorkerProgressYieldMs])
   expect(harness.runChunkInputs).toEqual([requestChunk])
@@ -896,6 +893,83 @@ test('display rebuild chunk executor writes bounded base rows and completes the 
   expect(joined).toContain("scope.article_id <= 'article-099'")
   expect(joined).toContain('FROM mart.review_article_serving_v4 serving')
   expect(joined).toContain("checksum = 'checksum-display-1'")
+  expect(joined).not.toContain('string_agg(')
+  expect(joined).toContain('actual_output_rows = 4')
+  expect(joined).toContain('duration_ms =')
+  expect(joined).toContain('"validationMode":"cheap-count"')
+})
+
+test('expected-checksum rebuild chunk keeps strict checksum validation', async () => {
+  const statements: string[] = []
+  const displayChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    checksum: 'expected-display-checksum',
+    outputBaseGeneration: 7,
+    projectionComponent: 'display',
+    projectionIdentity: 'display:project-1',
+  }
+  const componentState = {
+    optional: [],
+    required: [
+      {baseGeneration: '7', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+      {baseGeneration: '7', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+      {baseGeneration: '7', component: 'display', projectionIdentity: 'display:project-1'},
+      {baseGeneration: '7', component: 'llmStatus', projectionIdentity: 'llmStatus:project-1'},
+      {baseGeneration: '7', component: 'humanStatus', projectionIdentity: 'humanStatus:project-1'},
+      {baseGeneration: '7', component: 'posting', projectionIdentity: 'posting:project-1'},
+      {baseGeneration: '7', component: 'summary', projectionIdentity: 'summary:project-1'},
+      {baseGeneration: '7', component: 'payload', projectionIdentity: 'payload:project-1'},
+    ],
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+        return [displayChunk] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return [
+          {
+            componentStateJson: componentState,
+            reviewConfigHash: 'review-config-1',
+            selectedImportSnapshotId: 'selected-import-snapshot-1',
+            snapshotId: 'snapshot-display-1',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM mart.project_scope_article scope')) {
+        return [] as T[]
+      }
+
+      if (statement.includes('FROM mart.review_article_serving_v4 serving')) {
+        expect(statement).toContain('string_agg(')
+
+        return [{actualChecksum: 'expected-display-checksum', actualCount: 4}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: displayChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain('string_agg(')
+  expect(joined).not.toContain("sha256('cheap-count:'")
+  expect(joined).toContain('"validationMode":"strict-checksum"')
 })
 
 test('payload and search rebuild chunk executors write bounded base rows and complete chunks', async () => {
