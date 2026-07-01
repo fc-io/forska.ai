@@ -101,6 +101,7 @@ test('title search projection writes token rows and search-only component state 
   expect(inserts).toHaveLength(2)
   expect(inserts.join('\n')).toContain("'alpha'")
   expect(inserts.join('\n')).toContain("'beta'")
+  expect(inserts.join('\n')).not.toContain('regexp_split_to_array')
   expect(joined).toContain("'search'")
   expect(joined).toContain('title-token-v1:article.searchText.updated')
   expect(joined).not.toContain("'judgmentInputContent'")
