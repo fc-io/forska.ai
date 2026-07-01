@@ -12,6 +12,7 @@ import {
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
+  writeReviewServingTitleSearchRebuildRows,
 } from './reviewServingProjectorWriter.ts'
 import {getReviewServingOptionalComponentAvailability} from './reviewServingSnapshotPromotionService.ts'
 
@@ -278,62 +279,6 @@ const getDeleteDirtyTitleSearchRowsStatements = (input: ProjectReviewServingTitl
       ]
 }
 
-const getInsertTitleSearchRebuildRowsStatement = (input: ProjectReviewServingTitleSearchRebuildInput) => {
-  const articleTitleSql = getSelectedImportTitleSql(input)
-
-  return `
-    INSERT INTO mart.review_title_search_serving_v4 (
-      project_id,
-      search_identity,
-      project_scope_identity,
-      snapshot_id,
-      token,
-      article_id,
-      title_prefix,
-      activity_sort_at,
-      search_updated_at
-    )
-    WITH source AS (
-      SELECT
-        scope.article_id,
-        lower(strip_accents(COALESCE(${articleTitleSql}, ''))) AS normalized_title,
-        COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at) AS activity_sort_at
-      FROM mart.project_scope_article scope
-      LEFT JOIN app."article" article
-        ON article.id = scope.article_id
-      ${getSelectedImportTitleJoinSql(input)}
-      WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
-        AND (scope.in_curated_scope OR scope.in_route_scope)
-        AND article.id IS NOT NULL
-        ${getArticleRangePredicate(input)}
-    ), tokenized AS (
-      SELECT DISTINCT
-        source.article_id,
-        token_rows.token,
-        left(source.normalized_title, ${getSqlLiteral(titlePrefixLength)}) AS title_prefix,
-        source.activity_sort_at
-      FROM source
-      CROSS JOIN unnest(regexp_split_to_array(source.normalized_title, '[^a-z0-9]+')) AS token_rows(token)
-      WHERE token_rows.token <> ''
-    )
-    SELECT
-      ${getSqlLiteral(input.projectId)} AS project_id,
-      ${getSqlLiteral(input.searchIdentity)} AS search_identity,
-      ${getSqlLiteral(input.projectScopeIdentity)} AS project_scope_identity,
-      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-      tokenized.token,
-      tokenized.article_id,
-      tokenized.title_prefix,
-      tokenized.activity_sort_at,
-      current_timestamp AS search_updated_at
-    FROM tokenized
-    ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token, article_id) DO UPDATE SET
-      title_prefix = excluded.title_prefix,
-      activity_sort_at = excluded.activity_sort_at,
-      search_updated_at = excluded.search_updated_at
-  `
-}
-
 export const getReviewServingSearchAvailabilityFromManifest = (input: {
   hasActiveSnapshot: boolean
   optionalComponents: readonly string[]
@@ -394,7 +339,21 @@ export const projectReviewServingTitleSearchRebuildRows = async (
   input: ProjectReviewServingTitleSearchRebuildInput,
   database: ReviewServingTitleSearchProjectorDatabase = getAppDatabaseService() as ReviewServingTitleSearchProjectorDatabase,
 ) => {
-  await database.run(getInsertTitleSearchRebuildRowsStatement(input))
+  await writeReviewServingTitleSearchRebuildRows(
+    {
+      activitySortAtSql:
+        'COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at)',
+      articleRangePredicateSql: getArticleRangePredicate(input),
+      articleTitleSql: getSelectedImportTitleSql(input),
+      projectId: input.projectId,
+      projectScopeIdentity: input.projectScopeIdentity,
+      searchIdentity: input.searchIdentity,
+      selectedImportJoinSql: getSelectedImportTitleJoinSql(input),
+      snapshotId: input.snapshotId,
+      titlePrefixLength,
+    },
+    database,
+  )
 
   return {patchWatermark: 0}
 }
