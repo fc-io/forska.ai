@@ -569,7 +569,7 @@ test('worker backs off failed wakes and stops cleanly when aborted during sleep'
   expect(harness.claimInputs).toHaveLength(1)
 })
 
-test('worker yields after completed request chunks so progress readers can run', async () => {
+test('worker yields after completed scoped request chunks so progress readers can run', async () => {
   const harness = createWorkerHarness()
   const controller = new AbortController()
   const sleepCalls: number[] = []
@@ -586,9 +586,43 @@ test('worker yields after completed request chunks so progress readers can run',
     controller.abort()
   })
 
-  await runReviewServingProjectorWorker({signal: controller.signal, workerId: 'worker-1'}, harness.dependencies)
+  await runReviewServingProjectorWorker(
+    {rebuildProjectId: 'project-1', signal: controller.signal, workerId: 'worker-1'},
+    harness.dependencies,
+  )
 
   expect(sleepCalls).toEqual([defaultReviewServingProjectorWorkerProgressYieldMs])
+  expect(harness.runChunkInputs).toEqual([requestChunk])
+})
+
+test('worker does not sleep after every background request chunk', async () => {
+  const harness = createWorkerHarness()
+  const controller = new AbortController()
+  const sleepCalls: number[] = []
+  const requestChunk = {...chunkManifest, requestId: 'rebuild-1'} satisfies ReviewServingRebuildChunkManifest
+  let claimCount = 0
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      claimCount += 1
+
+      return claimCount === 1 ? requestChunk : null
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.sleep = mock(async (delayMs: number) => {
+    sleepCalls.push(delayMs)
+    controller.abort()
+  })
+  harness.dependencies.wakeProjectors = async () => {
+    controller.abort()
+
+    return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
+  }
+
+  await runReviewServingProjectorWorker({signal: controller.signal, workerId: 'worker-1'}, harness.dependencies)
+
+  expect(sleepCalls).toEqual([])
   expect(harness.runChunkInputs).toEqual([requestChunk])
 })
 

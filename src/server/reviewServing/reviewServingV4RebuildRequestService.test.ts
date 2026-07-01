@@ -493,6 +493,19 @@ test('V4 missing snapshot rebuild requests boost active foreground work priority
   expect(statements.join('\n')).toContain('SET priority = CASE')
 })
 
+test('V4 missing snapshot rebuild requests preserve foreground priority on first create', async () => {
+  const {database} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {priority: 1_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
+  )
+
+  expect(request.priority).toBe(1_000)
+})
+
 test('V4 missing snapshot rebuild requests do not reuse running active work', async () => {
   const {database, setRequestStatus, statements} = createFakeRequestDatabase({
     ...baseStats,

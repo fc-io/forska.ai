@@ -3162,6 +3162,17 @@ const shouldPrioritizeNextRebuildChunk = (chunk: ReviewServingProjectorWorkerChu
   return chunk.status === 'completed' && chunk.requestId !== null
 }
 
+const shouldYieldToForegroundRebuildReader = (input: {
+  chunk: ReviewServingProjectorWorkerChunkResult
+  options: ReviewServingProjectorWorkerLoopOptions
+}) => {
+  return (
+    input.options.rebuildProjectId !== null
+    && input.options.rebuildProjectId !== undefined
+    && shouldPrioritizeNextRebuildChunk(input.chunk)
+  )
+}
+
 const shouldRunCleanup = (input: {cleanupIntervalMs: number; lastCleanupAtMs: number | null; nowMs: number}) => {
   return input.lastCleanupAtMs === null || input.nowMs - input.lastCleanupAtMs >= input.cleanupIntervalMs
 }
@@ -3441,7 +3452,7 @@ export const runReviewServingProjectorWorker = async (
   const delayMs =
     cycleResult.status === 'failed'
       ? (options.errorBackoffMs ?? defaultReviewServingProjectorWorkerErrorBackoffMs)
-      : shouldPrioritizeNextRebuildChunk(cycleResult.chunk)
+      : shouldYieldToForegroundRebuildReader({chunk: cycleResult.chunk, options})
         ? defaultReviewServingProjectorWorkerProgressYieldMs
         : cycleResult.status === 'idle'
           ? (options.pollIntervalMs ?? defaultReviewServingProjectorWorkerPollIntervalMs)
