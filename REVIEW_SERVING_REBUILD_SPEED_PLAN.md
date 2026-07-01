@@ -45,6 +45,15 @@ Current row volumes for this project:
 - `mart.review_article_filter_posting_patch_v4`: `176,320` rows
 - `mart.review_article_summary_contribution_v4` for `posting`: `352,640` rows
 
+Follow-up foreground repair evidence from `2026-07-01`:
+
+- Project: `4ec939b2-47bb-48dd-ad62-ad9f4b5acecf`
+- The foreground priority and chunk-age fixes made the repair live: completed rebuild chunks advanced from `207` to `597` and `lastProgressedAt` stayed current.
+- The repair was still too slow for the page: while rebuild chunks drained, the visible project refresh backlog grew to `4,686` pending / `4,676` queued and serving dirty work grew to `4,616` pending.
+- Process RSS was roughly `7.1 GB`, and the diagnostics reported temp spill unavailable.
+
+Verdict: the current path now makes progress, but it is doing too much serial and row-level work for a foreground missing-snapshot repair.
+
 ## Why It Is Slow
 
 1. The rebuild is an artificial serial waterfall.
@@ -81,6 +90,51 @@ Current row volumes for this project:
 
    Each component starts with 10 root chunks, then most root chunks are marked completed as `input_row_budget_split` and create 50 child chunks. The split overhead is smaller than row writes, but it adds extra claim/transaction cycles and hides the real work from admission-time estimates.
 
+## Parallelization Review
+
+Parallelism can help, but only after the work units are made safer for DuckDB and memory. The live process was already around `7 GB` RSS with no temp spill, so blindly adding more projector workers would likely turn a slow repair into an unstable one.
+
+### Work That Can Be Parallelized
+
+1. Independent critical components after `selectedImport`.
+
+   `display`, `judgmentInputContent`, `search`, and some status projections do not need to wait for every earlier component in a fixed array order. A DAG-aware scheduler can claim independent chunks in parallel or in alternating batches once their real prerequisites are complete.
+
+2. Source query and transform phases.
+
+   The read/transform part of heavy chunks can run concurrently if each task has a bounded row budget and the writer remains serialized. This is useful for `search`, `judgmentInputContent`, `queue`, and `posting`, but only after per-chunk diagnostics expose source-query time versus write time.
+
+3. Set-based multi-chunk writes.
+
+   The best first "parallel" shape is not multiple row-at-a-time writers. It is batching several compatible chunks into one `INSERT INTO ... SELECT ...` statement, grouped by component/table/range. DuckDB can parallelize set-based scans internally, and the app only holds one writer transaction.
+
+4. Posting/filter fanout.
+
+   `posting` is a natural partitioning candidate by filter key and article range. The safe version is per-partition staging followed by a serialized merge into serving tables. True concurrent writes to the same posting tables should wait until conflict and range-overlap tests prove it is safe.
+
+5. Summary reduction.
+
+   Summary work can be split into per-named-summary, per-prompt, or per-list-mode partial aggregates, then reduced into final count/facet rows. This avoids one giant serial summary pass and keeps per-task memory bounded.
+
+6. Validation.
+
+   Expected-checksum validation can be computed from the same staging data used for insertion, or parallelized by range and reduced. Missing-snapshot chunks with no expected checksum should usually skip the full checksum and store cheaper row-count/sample diagnostics instead.
+
+### Work That Should Stay Serialized
+
+- Snapshot promotion and manifest activation should remain one transaction.
+- Candidate snapshot compaction should remain serialized until the full-rebuild path can avoid patch replay.
+- Dirty-work acknowledgement and watermark advancement should preserve ordering/fencing.
+- Writes to the same table and overlapping key range should use a single write lane unless range-disjointness is explicit.
+
+### Parallelism Guardrails
+
+- Add a single global writer lane first; allow concurrent readers/transforms to submit staged outputs to that lane.
+- Cap parallel chunk execution by memory, not just CPU. Refuse parallel mode when temp spill is unavailable and RSS is above a configured threshold.
+- Prefer component-specific SQL-native statements over JS arrays before adding concurrency.
+- Track per-component rows/sec, memory delta, source-query ms, transform ms, write ms, and validation ms before tuning concurrency.
+- Use a foreground budget for the active project: drain critical foreground chunks for a short TTL or chunk quota, then yield back to global fairness.
+
 ## Plan
 
 ### Phase 0 - Instrument Before Optimizing
@@ -105,6 +159,10 @@ Expected result: the next slow run points at exact cost centers instead of infer
   - only claim chunks whose prerequisites are complete,
   - order by explicit critical-path priority and age,
   - do not wait for unrelated earlier components.
+- Make the critical/bulk distinction first-class:
+  - `critical`: enough rows and counts to make the current review page usable.
+  - `bulk`: expensive secondary projections such as full posting/search rebuilds and optional filter fanout.
+- Give the active foreground project a bounded drain budget so a user-opened missing-snapshot repair does not lose the worker after every chunk.
 - Initial critical-path priority:
   - `projectScope`
   - `selectedImport`
@@ -130,6 +188,7 @@ Expected result: even before query optimization, the page reaches a useful state
   - group records by table and conflict key,
   - write in `VALUES` batches or temporary tables,
   - perform one `INSERT ... SELECT ... ON CONFLICT` per batch/table instead of per record.
+- Prefer component-specific `INSERT INTO ... SELECT ...` paths for the heaviest components. A generic batch writer is useful as a fallback, but the fastest path for `search`, `judgmentInputContent`, `queue`, and `posting` is to keep the computation inside DuckDB and avoid building hundreds of thousands of JS objects.
 - Start with `search` and `judgmentInputContent`; they are straightforward record writes and dominated the observed run.
 - Move `posting` to SQL-native staging:
   - compute contribution rows in DuckDB,
@@ -142,6 +201,7 @@ Expected result: hundreds of thousands of statements collapse into tens or hundr
 ### Phase 3 - Add A Full-Rebuild Fast Path
 
 - Treat `missingReviewServingSnapshot` as a snapshot build, not as an incremental patch replay.
+- Implement this before optimizing all incremental dirty-work fanout. The live foreground repair showed thousands of serving dirty-work rows becoming visible while rebuild chunks were still moving, which is the wrong shape for a page-open repair.
 - For full rebuilds, write final candidate serving tables directly by chunk/range.
 - Avoid writing patch and contribution rows that only exist to support incremental updates when the whole snapshot is being built from scratch.
 - Recompute summary/count state from the final serving tables once per snapshot or per component-range, not per article-row mutation.
@@ -181,6 +241,9 @@ Expected result: fewer administrative cycles and chunk sizes that reflect real o
   - cap concurrency per component,
   - cap global write concurrency to what DuckDB handles safely,
   - avoid concurrent writes to the same table/range unless conflict tests prove it is safe.
+- Start with read/transform parallelism plus a serialized writer lane.
+- Then test set-based multi-chunk writes, where one transaction handles several range-disjoint chunks.
+- Only after those are stable, test multiple writer transactions against disjoint tables or disjoint key ranges.
 - Prefer "batch many chunks into one set-based write" before adding true concurrent writers.
 
 Expected result: parallelism improves CPU/query throughput without turning DuckDB into a write-lock bottleneck.
@@ -188,13 +251,15 @@ Expected result: parallelism improves CPU/query throughput without turning DuckD
 ## Recommended Implementation Order
 
 1. Instrument chunk timings and row counts.
-2. Fix claim order to use actual DAG readiness instead of fixed component order.
-3. Add bulk writer support and migrate `search`.
-4. Migrate `judgmentInputContent` and `queue` to bulk writes.
-5. Add SQL-native/full-rebuild fast path for `posting`.
-6. Skip or cheapen checksum validation for no-expected-checksum rebuild chunks.
-7. Move presplitting into admission and tune chunk sizes.
-8. Add controlled multi-chunk execution only after the set-based path is stable.
+2. Skip or cheapen checksum validation for no-expected-checksum rebuild chunks.
+3. Fix claim order to use actual DAG readiness instead of fixed component order.
+4. Split foreground critical chunks from bulk chunks and add a bounded foreground drain budget.
+5. Add the missing-snapshot full-rebuild fast path for direct candidate snapshot construction.
+6. Add SQL-native writes for `search`, `judgmentInputContent`, `queue`, and `posting`.
+7. Move presplitting into admission and tune chunk sizes from recorded actual rows.
+8. Add read/transform parallelism with a single writer lane.
+9. Add set-based multi-chunk writes.
+10. Add true controlled multi-writer execution only after range-disjointness and memory-spill tests are stable.
 
 ## Quality Gates
 
