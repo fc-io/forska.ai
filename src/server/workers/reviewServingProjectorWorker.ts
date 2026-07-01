@@ -145,6 +145,10 @@ const reviewServingProjectorWorkerCycleLogger = createRateLimitedLogger({sink: '
 type ReviewServingProjectorWorkerCycleOptions = {
   batchSize?: number
   cleanupIntervalMs?: number
+  foregroundRebuildDrainChunkBudget?: number
+  foregroundRebuildDrainCompletedCount?: number
+  foregroundRebuildDrainStartedAtMs?: number | null
+  foregroundRebuildDrainTtlMs?: number
   heartbeatMs?: number
   lastCleanupAtMs?: number | null
   leaseMs?: number
@@ -166,7 +170,12 @@ type ReviewServingProjectorWorkerLoopOptions = ReviewServingProjectorWorkerCycle
 
 type ReviewServingProjectorWorkerChunkResult =
   | {chunkId: null; status: 'idle'}
-  | {chunkId: string; requestId: string | null; status: 'completed'}
+  | {
+      chunkId: string
+      projectionComponent: ReviewServingProjectionComponent
+      requestId: string | null
+      status: 'completed'
+    }
   | {chunkId: string; requestId: string | null; status: 'failed'}
   | {chunkId: string; requestId: string | null; status: 'skipped'}
 
@@ -261,10 +270,23 @@ const defaultReviewServingProjectorWorkerMaxWakeMs = 5_000
 const defaultReviewServingProjectorWorkerPollIntervalMs = 2_000
 const defaultReviewServingProjectorWorkerProgressYieldMs = 100
 const defaultReviewServingProjectorWorkerErrorBackoffMs = 10_000
+const defaultReviewServingProjectorWorkerForegroundRebuildDrainChunkBudget = 4
+const defaultReviewServingProjectorWorkerForegroundRebuildDrainTtlMs = 5_000
 const defaultReviewServingSelectedImportBaseBatchSize = 512
 const reviewServingProjectorWorkerRouteOrJobKey = 'reviewServing.projector.worker'
 const defaultReviewServingLlmListModeKeys = ['llm', 'both'] as const
 const defaultReviewServingHumanListModeKeys = ['human', 'both'] as const
+const reviewServingCriticalRebuildComponents = [
+  'projectScope',
+  'selectedImport',
+  'display',
+  'judgmentInputContent',
+  'llmStatus',
+  'humanStatus',
+  'queue',
+  'summary',
+  'payload',
+] as const satisfies readonly ReviewServingProjectionComponent[]
 const defaultReviewFilterOptionKeys = [
   'conflictFlag',
   'duplicateFlag',
@@ -3437,12 +3459,72 @@ const getBlockedReviewServingProjectorWakeResult = (): WakeReviewServingProjecto
   return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
 }
 
-const shouldPrioritizeNextRebuildChunk = (chunk: ReviewServingProjectorWorkerChunkResult) => {
-  return chunk.status === 'completed' && chunk.requestId !== null
+const isCriticalRebuildChunkResult = (chunk: ReviewServingProjectorWorkerChunkResult) => {
+  return (
+    chunk.status === 'completed'
+    && reviewServingCriticalRebuildComponents.some((component) => {
+      return component === chunk.projectionComponent
+    })
+  )
 }
 
-const shouldYieldToForegroundRebuildReader = (chunk: ReviewServingProjectorWorkerChunkResult) => {
-  return shouldPrioritizeNextRebuildChunk(chunk)
+const getForegroundRebuildDrainStartedAtMs = (input: {
+  chunk: ReviewServingProjectorWorkerChunkResult
+  nowMs: number
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  return isCriticalRebuildChunkResult(input.chunk)
+    ? (input.options.foregroundRebuildDrainStartedAtMs ?? input.nowMs)
+    : null
+}
+
+const shouldPrioritizeNextRebuildChunk = (input: {
+  chunk: ReviewServingProjectorWorkerChunkResult
+  nowMs: number
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  const budget = getPositiveInteger(
+    input.options.foregroundRebuildDrainChunkBudget,
+    defaultReviewServingProjectorWorkerForegroundRebuildDrainChunkBudget,
+  )
+  const ttlMs = getPositiveInteger(
+    input.options.foregroundRebuildDrainTtlMs,
+    defaultReviewServingProjectorWorkerForegroundRebuildDrainTtlMs,
+  )
+  const startedAtMs = getForegroundRebuildDrainStartedAtMs(input)
+  const completedCount = (input.options.foregroundRebuildDrainCompletedCount ?? 0) + 1
+
+  return (
+    input.chunk.status === 'completed'
+    && input.chunk.requestId !== null
+    && isCriticalRebuildChunkResult(input.chunk)
+    && startedAtMs !== null
+    && completedCount <= budget
+    && input.nowMs - startedAtMs <= ttlMs
+  )
+}
+
+const shouldYieldToForegroundRebuildReader = (input: {
+  chunk: ReviewServingProjectorWorkerChunkResult
+  nowMs: number
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  return shouldPrioritizeNextRebuildChunk(input)
+}
+
+const getNextForegroundRebuildDrainOptions = (input: {
+  chunk: ReviewServingProjectorWorkerChunkResult
+  nowMs: number
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  const shouldContinue = shouldPrioritizeNextRebuildChunk(input)
+
+  return shouldContinue
+    ? {
+        foregroundRebuildDrainCompletedCount: (input.options.foregroundRebuildDrainCompletedCount ?? 0) + 1,
+        foregroundRebuildDrainStartedAtMs: getForegroundRebuildDrainStartedAtMs(input),
+      }
+    : {foregroundRebuildDrainCompletedCount: 0, foregroundRebuildDrainStartedAtMs: null}
 }
 
 const shouldRunCleanup = (input: {cleanupIntervalMs: number; lastCleanupAtMs: number | null; nowMs: number}) => {
@@ -3536,7 +3618,12 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
   try {
     await finalizeCompletedReviewServingRebuildRequest(claimedChunk, database)
 
-    return {chunkId: claimedChunk.chunkId, requestId: claimedChunk.requestId, status: 'completed'}
+    return {
+      chunkId: claimedChunk.chunkId,
+      projectionComponent: claimedChunk.projectionComponent,
+      requestId: claimedChunk.requestId,
+      status: 'completed',
+    }
   } catch (error) {
     await finalizeErroredCompletedReviewServingRebuildRequest({chunk: claimedChunk, error}, database)
 
@@ -3661,6 +3748,7 @@ export const runReviewServingProjectorWorkerCycle = async (
   const wakeId = `${workerId}:${getWorkerNowMs(dependencies, options)}`
   const workloadContext = getReviewServingProjectorWorkerWorkloadContext(workerId)
   const database = getReviewServingProjectorWorkerDatabase(dependencies, workloadContext)
+  const nowMs = getWorkerNowMs(dependencies, options)
   const chunk = await runReviewServingProjectorWorkerRebuildChunk({
     database,
     dependencies,
@@ -3668,7 +3756,7 @@ export const runReviewServingProjectorWorkerCycle = async (
     workloadContext,
     workerId,
   })
-  const shouldRunOnlyRebuildChunk = shouldPrioritizeNextRebuildChunk(chunk)
+  const shouldRunOnlyRebuildChunk = shouldPrioritizeNextRebuildChunk({chunk, nowMs, options})
   const deltaIntake = shouldRunOnlyRebuildChunk
     ? getIdleReviewServingProjectorWorkerDeltaIntakeResult()
     : await runReviewServingProjectorWorkerDeltaIntake({database, dependencies, options})
@@ -3716,6 +3804,7 @@ export const runReviewServingProjectorWorker = async (
 
   const cycleResult = await runReviewServingProjectorWorkerOnce(options, dependencies)
   logReviewServingProjectorWorkerCycle(cycleResult)
+  const nowMs = getWorkerNowMs(dependencies, options)
 
   if (options.signal?.aborted) {
     return
@@ -3724,12 +3813,16 @@ export const runReviewServingProjectorWorker = async (
   const delayMs =
     cycleResult.status === 'failed'
       ? (options.errorBackoffMs ?? defaultReviewServingProjectorWorkerErrorBackoffMs)
-      : shouldYieldToForegroundRebuildReader(cycleResult.chunk)
+      : shouldYieldToForegroundRebuildReader({chunk: cycleResult.chunk, nowMs, options})
         ? defaultReviewServingProjectorWorkerProgressYieldMs
         : cycleResult.status === 'idle'
           ? (options.pollIntervalMs ?? defaultReviewServingProjectorWorkerPollIntervalMs)
           : 0
-  const nextOptions = {...options, lastCleanupAtMs: cycleResult.nextCleanupAtMs}
+  const nextOptions = {
+    ...options,
+    ...getNextForegroundRebuildDrainOptions({chunk: cycleResult.chunk, nowMs, options}),
+    lastCleanupAtMs: cycleResult.nextCleanupAtMs,
+  }
 
   return delayMs > 0
     ? dependencies.sleep(delayMs).then(() => {
