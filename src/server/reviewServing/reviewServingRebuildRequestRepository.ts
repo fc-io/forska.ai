@@ -125,6 +125,8 @@ type DefaultRebuildArticleBoundsRow = {
   scopedArticleCount: number
 }
 
+type DefaultRebuildArticleRange = {chunkEndKey: string; chunkStartKey: string; scopedArticleCount: number}
+
 type DefaultRebuildSnapshotStateRow = {componentStateJson: unknown}
 
 type DefaultRebuildSnapshotComponentState = {
@@ -292,6 +294,114 @@ const getDefaultRebuildArticleBounds = async (
     : {chunkEndKey: row.chunkEndKey, chunkStartKey: row.chunkStartKey}
 }
 
+const defaultRebuildPresplitInputRowLimit = 50_000
+const admissionPresplittableDefaultRebuildComponents: ReadonlySet<ReviewServingProjectionComponent> = new Set([
+  'search',
+])
+
+const getDefaultRebuildPresplitBucketCount = (input: {
+  component: ReviewServingProjectionComponent
+  estimate: ReviewServingRebuildRequestEstimate | undefined
+  requestedComponents: readonly ReviewServingProjectionComponent[]
+}) => {
+  const estimatedInputRows = input.estimate?.estimatedInputRows
+
+  return input.requestedComponents.length === 1
+    && admissionPresplittableDefaultRebuildComponents.has(input.component)
+    && estimatedInputRows !== null
+    && estimatedInputRows !== undefined
+    && estimatedInputRows > defaultRebuildPresplitInputRowLimit
+    ? Math.min(16, Math.max(2, Math.ceil(estimatedInputRows / defaultRebuildPresplitInputRowLimit)))
+    : 1
+}
+
+const getDefaultRebuildArticleRanges = async (
+  input: {chunkCount: number; projectId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const rows = await database.queryJson<DefaultRebuildArticleBoundsRow>(`
+    WITH scoped_article AS (
+      SELECT project_article.article_id
+      FROM app.project_article project_article
+      INNER JOIN app.project project ON project.id = project_article.project_id
+      INNER JOIN app.article article ON article.id = project_article.article_id
+      WHERE project_article.project_id = ${getSqlLiteral(input.projectId)}
+        AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+        AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+      UNION
+      SELECT article_import_route.article_id
+      FROM app.project_import_route project_import_route
+      INNER JOIN app.project project ON project.id = project_import_route.project_id
+      INNER JOIN app.article_import_route article_import_route
+        ON article_import_route.import_route_id = project_import_route.import_route_id
+      INNER JOIN app.article article ON article.id = article_import_route.article_id
+      WHERE project_import_route.project_id = ${getSqlLiteral(input.projectId)}
+        AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+        AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+    ), chunked_article AS (
+      SELECT
+        article_id,
+        NTILE(${input.chunkCount}) OVER (ORDER BY article_id) AS chunk_index
+      FROM (
+        SELECT DISTINCT article_id
+        FROM scoped_article
+      ) distinct_article
+    )
+    SELECT
+      MIN(article_id) AS chunkStartKey,
+      MAX(article_id) AS chunkEndKey,
+      CAST(COUNT(*) AS INTEGER) AS scopedArticleCount
+    FROM chunked_article
+    GROUP BY chunk_index
+    ORDER BY chunk_index
+  `)
+
+  return rows.flatMap((row): DefaultRebuildArticleRange[] => {
+    const scopedArticleCount = Number(row.scopedArticleCount ?? 0)
+
+    return row.chunkStartKey === null || row.chunkEndKey === null || scopedArticleCount <= 0
+      ? []
+      : [{chunkEndKey: row.chunkEndKey, chunkStartKey: row.chunkStartKey, scopedArticleCount}]
+  })
+}
+
+const getChunkEstimate = (input: {
+  chunkCount: number
+  estimate: ReviewServingRebuildRequestEstimate | undefined
+}): ReviewServingRebuildRequestEstimate => {
+  return input.chunkCount <= 1
+    ? {
+        estimatedInputRows: input.estimate?.estimatedInputRows,
+        estimatedOutputBytes: input.estimate?.estimatedOutputBytes,
+        estimatedOutputRows: input.estimate?.estimatedOutputRows,
+        estimatedPayloadBytes: input.estimate?.estimatedPayloadBytes,
+        estimatedPromptCount: input.estimate?.estimatedPromptCount,
+        estimatedSnapshotCount: input.estimate?.estimatedSnapshotCount,
+        estimatedTempBytes: input.estimate?.estimatedTempBytes,
+      }
+    : {
+        estimatedInputRows:
+          input.estimate?.estimatedInputRows === null || input.estimate?.estimatedInputRows === undefined
+            ? input.estimate?.estimatedInputRows
+            : Math.ceil(input.estimate.estimatedInputRows / input.chunkCount),
+        estimatedOutputBytes:
+          input.estimate?.estimatedOutputBytes === null || input.estimate?.estimatedOutputBytes === undefined
+            ? input.estimate?.estimatedOutputBytes
+            : Math.ceil(input.estimate.estimatedOutputBytes / input.chunkCount),
+        estimatedOutputRows:
+          input.estimate?.estimatedOutputRows === null || input.estimate?.estimatedOutputRows === undefined
+            ? input.estimate?.estimatedOutputRows
+            : Math.ceil(input.estimate.estimatedOutputRows / input.chunkCount),
+        estimatedPayloadBytes:
+          input.estimate?.estimatedPayloadBytes === null || input.estimate?.estimatedPayloadBytes === undefined
+            ? input.estimate?.estimatedPayloadBytes
+            : Math.ceil(input.estimate.estimatedPayloadBytes / input.chunkCount),
+        estimatedPromptCount: input.estimate?.estimatedPromptCount,
+        estimatedSnapshotCount: input.estimate?.estimatedSnapshotCount,
+        estimatedTempBytes: input.estimate?.estimatedTempBytes,
+      }
+}
+
 const getDefaultRebuildSnapshotStates = async (
   input: {projectId: string; requestedComponents: readonly ReviewServingProjectionComponent[]},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -435,7 +545,11 @@ const assertDefaultRebuildExpansionComplete = (input: {
 }
 
 const getDefaultReviewServingRebuildChunks = async (
-  input: {projectId: string; requestedComponents: readonly ReviewServingProjectionComponent[]},
+  input: {
+    estimate: ReviewServingRebuildRequestEstimate | undefined
+    projectId: string
+    requestedComponents: readonly ReviewServingProjectionComponent[]
+  },
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
   const articleBounds = await getDefaultRebuildArticleBounds(input, database)
@@ -465,24 +579,43 @@ const getDefaultReviewServingRebuildChunks = async (
     stateByComponent,
   })
 
-  return selectedStates.map((state) => {
+  return selectedStates.reduce<Promise<ReviewServingRebuildChunkManifestInput[]>>(async (previous, state) => {
+    const chunks = await previous
     const manifest = manifestByKey[getProjectionManifestKey(state)]
 
     if (manifest === undefined) {
       throw new Error(`Review rebuild request for ${input.projectId} skipped requested rebuild manifest`)
     }
 
-    return {
-      chunkEndKey: articleBounds.chunkEndKey,
-      chunkStartKey: articleBounds.chunkStartKey,
-      inputDigest: manifest.inputDigest,
-      inputWatermark: Number(manifest.inputWatermark ?? state.inputWatermark),
-      outputBaseGeneration: state.baseGeneration,
-      projectId: input.projectId,
-      projectionComponent: state.projectionComponent,
-      projectionIdentity: state.projectionIdentity,
-    } satisfies ReviewServingRebuildChunkManifestInput
-  })
+    const chunkCount = getDefaultRebuildPresplitBucketCount({
+      component: state.projectionComponent,
+      estimate: input.estimate,
+      requestedComponents: input.requestedComponents,
+    })
+    const articleRanges =
+      chunkCount === 1
+        ? [{...articleBounds, scopedArticleCount: 0}]
+        : await getDefaultRebuildArticleRanges({chunkCount, projectId: input.projectId}, database)
+    const chunkEstimate = getChunkEstimate({chunkCount: articleRanges.length, estimate: input.estimate})
+
+    const stateChunks = articleRanges.map((articleRange) => {
+      return {
+        ...chunkEstimate,
+        chunkEndKey: articleRange.chunkEndKey,
+        chunkStartKey: articleRange.chunkStartKey,
+        diagnosticsJson: chunkCount === 1 ? undefined : {admissionPresplit: true},
+        inputDigest: manifest.inputDigest,
+        inputWatermark: Number(manifest.inputWatermark ?? state.inputWatermark),
+        outputBaseGeneration: state.baseGeneration,
+        projectId: input.projectId,
+        projectionComponent: state.projectionComponent,
+        projectionIdentity: state.projectionIdentity,
+        splitDepth: chunkCount === 1 ? undefined : 1,
+      } satisfies ReviewServingRebuildChunkManifestInput
+    })
+
+    return [...chunks, ...stateChunks]
+  }, Promise.resolve([]))
 }
 
 const getRequestFromRow = (row: ReviewServingRebuildRequestRow): ReviewServingRebuildRequest => {
@@ -651,7 +784,10 @@ export const createReviewServingRebuildRequestEffect = (
       return database.transaction(async (tx) => {
         const chunks =
           input.chunks
-          ?? (await getDefaultReviewServingRebuildChunks({projectId: input.projectId, requestedComponents}, tx))
+          ?? (await getDefaultReviewServingRebuildChunks(
+            {estimate: input.estimate, projectId: input.projectId, requestedComponents},
+            tx,
+          ))
 
         if (chunks.length === 0) {
           throw new Error(`Review rebuild request ${requestId} created no rebuild chunks`)
@@ -758,7 +894,19 @@ export const createReviewServingRebuildRequestEffect = (
 
         await upsertReviewServingRebuildChunkManifests(
           chunks.map((chunk) => {
-            return {...chunk, ...chunkBudgetFields, requestId, status: chunkStatus}
+            return {
+              ...chunk,
+              ...chunkBudgetFields,
+              diagnosticsJson: chunk.diagnosticsJson ?? chunkBudgetFields.diagnosticsJson,
+              estimatedInputRows: chunk.estimatedInputRows ?? chunkBudgetFields.estimatedInputRows,
+              estimatedOutputBytes: chunk.estimatedOutputBytes ?? chunkBudgetFields.estimatedOutputBytes,
+              estimatedOutputRows: chunk.estimatedOutputRows ?? chunkBudgetFields.estimatedOutputRows,
+              estimatedPayloadBytes: chunk.estimatedPayloadBytes ?? chunkBudgetFields.estimatedPayloadBytes,
+              estimatedPromptCount: chunk.estimatedPromptCount ?? chunkBudgetFields.estimatedPromptCount,
+              estimatedTempBytes: chunk.estimatedTempBytes ?? chunkBudgetFields.estimatedTempBytes,
+              requestId,
+              status: chunkStatus,
+            }
           }),
           tx,
         )
