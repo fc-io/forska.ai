@@ -641,6 +641,7 @@ export const getNextClaimableReviewServingRebuildChunk = async (
         WHERE request.request_id = candidate.request_id
         LIMIT 1
       ) DESC NULLS LAST,
+      ${getRebuildChunkClaimComponentOrderSql('candidate')} ASC,
       candidate.updated_at ASC,
       candidate.created_at ASC,
       (
@@ -649,7 +650,6 @@ export const getNextClaimableReviewServingRebuildChunk = async (
         WHERE request.request_id = candidate.request_id
         LIMIT 1
       ) ASC NULLS LAST,
-      ${getRebuildChunkClaimComponentOrderSql('candidate')} ASC,
       candidate.chunk_id ASC
     LIMIT 1
   `)

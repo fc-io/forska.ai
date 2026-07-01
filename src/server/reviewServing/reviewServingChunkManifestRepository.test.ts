@@ -91,6 +91,22 @@ const getFakeClaimPriority = (row: FakeChunkRow) => {
   return row.status === 'running' ? 0 : 1
 }
 
+const getFakeClaimComponentOrder = (row: FakeChunkRow) => {
+  const componentOrder = [
+    'projectScope',
+    'selectedImport',
+    'llmStatus',
+    'humanStatus',
+    'queue',
+    'posting',
+    'summary',
+    'payload',
+    'search',
+  ]
+
+  return componentOrder.indexOf(row.projectionComponent)
+}
+
 const getChunkRowFromIdentity = (
   input: ReviewServingRebuildChunkIdentity,
   statements: readonly string[],
@@ -361,6 +377,7 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
           .toSorted((left, right) => {
             return (
               getFakeClaimPriority(left) - getFakeClaimPriority(right)
+              || getFakeClaimComponentOrder(left) - getFakeClaimComponentOrder(right)
               || left.updatedAt.localeCompare(right.updatedAt)
               || left.inputWatermark - right.inputWatermark
               || left.chunkStartKey.localeCompare(right.chunkStartKey)
@@ -604,7 +621,7 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).toContain('SELECT request.updated_at')
   expect(statements.join('\n')).toContain('candidate.updated_at ASC')
   expect(statements.join('\n')).toMatch(
-    /SELECT request\.priority[\s\S]*\) DESC NULLS LAST,[\s\S]*candidate\.updated_at ASC[\s\S]*SELECT request\.updated_at/,
+    /SELECT request\.priority[\s\S]*\) DESC NULLS LAST,[\s\S]*CASE candidate\.projection_component[\s\S]*candidate\.updated_at ASC[\s\S]*SELECT request\.updated_at/,
   )
   expect(statements.join('\n')).toContain('CASE candidate.projection_component')
 })
@@ -628,7 +645,34 @@ test('next claimable chunk discovery does not favor newer pending requests over 
   )
 
   expect(next).toMatchObject({inputDigest: 'digest-older-pending', requestId: 'rebuild:older'})
-  expect(statements.join('\n')).toMatch(/candidate\.updated_at ASC[\s\S]*SELECT request\.updated_at/)
+  expect(statements.join('\n')).toMatch(
+    /CASE candidate\.projection_component[\s\S]*candidate\.updated_at ASC[\s\S]*SELECT request\.updated_at/,
+  )
+})
+
+test('next claimable chunk discovery preserves component order before chunk age', async () => {
+  const oldSearch = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-old-search', projectionComponent: 'search'},
+      [],
+    ),
+    updatedAt: '2026-06-16T14:00:00.000Z',
+  }
+  const newProjectScope = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-new-project-scope', projectionComponent: 'projectScope'},
+      [],
+    ),
+    updatedAt: '2026-06-16T14:10:00.000Z',
+  }
+  const {database} = createFakeChunkManifestDatabase([oldSearch, newProjectScope])
+
+  const next = await getNextClaimableReviewServingRebuildChunk(
+    {now: '2026-06-16T14:05:00.000Z', projectId: 'project-1'},
+    database,
+  )
+
+  expect(next).toMatchObject({inputDigest: 'digest-new-project-scope', projectionComponent: 'projectScope'})
 })
 
 test('next claimable chunk discovery reclaims expired running leases before newer pending requests', async () => {

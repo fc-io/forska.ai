@@ -788,6 +788,7 @@ const getReviewServingV4RebuildSourceWatermarks = (stats: ReviewServingV4Rebuild
 const getNoopReviewServingV4RebuildRequest = (input: {
   components: readonly ReviewServingProjectionComponent[]
   projectId: string
+  priority?: number
   reason: string
   requestEstimate: ReviewServingRebuildRequestEstimate
   sourceWatermarks: ReturnType<typeof getReviewServingV4RebuildSourceWatermarks>
@@ -815,7 +816,7 @@ const getNoopReviewServingV4RebuildRequest = (input: {
     leaseOwner: null,
     oomCategory: null,
     overBudgetReason: null,
-    priority: 100,
+    priority: input.priority ?? 100,
     projectId: input.projectId,
     reason: input.reason,
     requestedComponents: [...input.components],
@@ -1192,6 +1193,7 @@ export const requestReviewServingV4RebuildEffect = (
           },
           estimate: requestEstimate,
           identity: {componentSet: components, requestKind: 'v4-review-serving-rebuild'},
+          priority: input.priority,
           projectId: input.projectId,
           reason: input.reason,
           requestedComponents: components,
