@@ -203,6 +203,77 @@ test('worker calls projector orchestration with bounded wake budgets and reviewP
   expect(harness.workloadContexts).toContainEqual(getReviewServingProjectorWorkerWorkloadContext('worker-1'))
 })
 
+test('worker drains foreground critical rebuild chunks within a bounded chunk budget', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const foregroundChunkInput = {...chunkInput, requestId: 'rebuild:foreground'}
+  const foregroundChunk = {...chunkManifest, requestId: 'rebuild:foreground'}
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return foregroundChunk
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return foregroundChunkInput
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {
+      foregroundRebuildDrainChunkBudget: 2,
+      foregroundRebuildDrainCompletedCount: 1,
+      foregroundRebuildDrainStartedAtMs: 1_000,
+      foregroundRebuildDrainTtlMs: 10_000,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  expect(result.chunk).toMatchObject({requestId: 'rebuild:foreground', status: 'completed'})
+  expect(result.deltaIntake).toEqual({convertedPartitions: 0, dirtyWorkCount: 0, status: 'idle'})
+  expect(result.projector).toMatchObject({status: 'blocked'})
+  expect(harness.wakeInputs).toEqual([])
+})
+
+test('worker yields to normal projector fairness after foreground rebuild drain budget is exhausted', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const foregroundChunkInput = {...chunkInput, requestId: 'rebuild:foreground'}
+  const foregroundChunk = {...chunkManifest, requestId: 'rebuild:foreground'}
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return foregroundChunk
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return foregroundChunkInput
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {
+      foregroundRebuildDrainChunkBudget: 2,
+      foregroundRebuildDrainCompletedCount: 2,
+      foregroundRebuildDrainStartedAtMs: 1_000,
+      foregroundRebuildDrainTtlMs: 10_000,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  expect(result.chunk).toMatchObject({requestId: 'rebuild:foreground', status: 'completed'})
+  expect(result.projector).toMatchObject({status: 'completed'})
+  expect(harness.wakeInputs).toHaveLength(1)
+})
+
 test('worker runs delta intake before waking projectors', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const intakeCalls: Array<{kind: 'import' | 'review'; params: DeltaIntakeParams}> = []

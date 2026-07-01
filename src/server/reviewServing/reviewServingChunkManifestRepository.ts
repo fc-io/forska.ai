@@ -214,28 +214,46 @@ const rebuildChunkPrerequisitesByComponent = {
   selectedImport: ['projectScope'],
   summary: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue'],
 } as const satisfies Record<ReviewServingProjectionComponent, readonly ReviewServingProjectionComponent[]>
-const rebuildChunkClaimComponentOrder = [
+const rebuildChunkCriticalLaneComponents = [
   'projectScope',
   'selectedImport',
-  'judgmentInputContent',
   'display',
+  'judgmentInputContent',
   'llmStatus',
   'humanStatus',
   'queue',
-  'search',
-  'payload',
-  'posting',
   'summary',
+  'payload',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+const rebuildChunkClaimPriorityOrder = [
+  'projectScope',
+  'selectedImport',
+  'display',
+  'judgmentInputContent',
+  'llmStatus',
+  'humanStatus',
+  'queue',
+  'summary',
+  'payload',
+  'search',
+  'posting',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 
-const getRebuildChunkClaimComponentOrderSql = (tableAlias: string) => {
+const getRebuildChunkClaimLaneSql = (tableAlias: string) => {
+  return `CASE
+    WHEN ${tableAlias}.projection_component IN ${getComponentSqlList(rebuildChunkCriticalLaneComponents)} THEN 0
+    ELSE 1
+  END`
+}
+
+const getRebuildChunkClaimPrioritySql = (tableAlias: string) => {
   return `CASE ${tableAlias}.projection_component
-    ${rebuildChunkClaimComponentOrder
+    ${rebuildChunkClaimPriorityOrder
       .map((component, index) => {
         return `WHEN ${getSqlLiteral(component)} THEN ${index}`
       })
       .join('\n    ')}
-    ELSE ${rebuildChunkClaimComponentOrder.length}
+    ELSE ${rebuildChunkClaimPriorityOrder.length}
   END`
 }
 
@@ -641,7 +659,8 @@ export const getNextClaimableReviewServingRebuildChunk = async (
     WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
     ORDER BY
       ${getRebuildChunkClaimRequestPrioritySql('candidate')} DESC NULLS LAST,
-      ${getRebuildChunkClaimComponentOrderSql('candidate')} ASC,
+      ${getRebuildChunkClaimLaneSql('candidate')} ASC,
+      ${getRebuildChunkClaimPrioritySql('candidate')} ASC,
       CASE
         WHEN candidate.status = 'running'
           AND (
