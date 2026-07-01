@@ -1045,6 +1045,8 @@ test('expected-checksum rebuild chunk keeps strict checksum validation', async (
 
 test('payload and search rebuild chunk executors write bounded base rows and complete chunks', async () => {
   const statements: string[] = []
+  const queryStatements: string[] = []
+  const runStatements: string[] = []
   const payloadChunk: ReviewServingRebuildChunkManifest = {
     ...chunkManifest,
     chunkEndKey: 'article-099',
@@ -1078,6 +1080,7 @@ test('payload and search rebuild chunk executors write bounded base rows and com
   const database: TestDatabase = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
+      queryStatements.push(statement)
 
       if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
         return [activeChunk] as T[]
@@ -1130,6 +1133,7 @@ test('payload and search rebuild chunk executors write bounded base rows and com
     },
     run: async (statement: string) => {
       statements.push(statement)
+      runStatements.push(statement)
     },
     transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
       return operation(database)
@@ -1146,6 +1150,8 @@ test('payload and search rebuild chunk executors write bounded base rows and com
     database,
   )
   const joined = statements.join('\n')
+  const joinedQueries = queryStatements.join('\n')
+  const joinedRuns = runStatements.join('\n')
 
   expect(payloadResult).toEqual({status: 'completed'})
   expect(searchResult).toEqual({status: 'completed'})
@@ -1153,6 +1159,9 @@ test('payload and search rebuild chunk executors write bounded base rows and com
   expect(joined).toContain('INSERT INTO mart.review_title_search_serving_v4')
   expect(joined).toContain("scope.article_id >= 'article-001'")
   expect(joined).toContain("scope.article_id <= 'article-099'")
+  expect(joinedRuns).toContain('CROSS JOIN unnest(regexp_split_to_array')
+  expect(joinedRuns).toContain('INSERT INTO mart.review_title_search_serving_v4')
+  expect(joinedQueries).not.toContain('article.id IS NULL OR NOT (scope.in_curated_scope OR scope.in_route_scope)')
   expect(joined).toContain("checksum = 'checksum-payload-1'")
   expect(joined).toContain("checksum = 'checksum-search-1'")
 })

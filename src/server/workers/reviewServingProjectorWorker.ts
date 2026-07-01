@@ -80,7 +80,10 @@ import {
 } from '../reviewServing/reviewServingSelectedImportProjector.ts'
 import {composeReviewServingCandidateSnapshotManifest} from '../reviewServing/reviewServingSnapshotPromotionService.ts'
 import {projectReviewServingSummaries} from '../reviewServing/reviewServingSummaryProjector.ts'
-import {projectReviewServingTitleSearchRows} from '../reviewServing/reviewServingTitleSearchProjector.ts'
+import {
+  projectReviewServingTitleSearchRebuildRows,
+  projectReviewServingTitleSearchRows,
+} from '../reviewServing/reviewServingTitleSearchProjector.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
@@ -1260,7 +1263,7 @@ const runSearchRebuildChunk = async (
 
         await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
           await previous
-          await projectReviewServingTitleSearchRows(
+          await projectReviewServingTitleSearchRebuildRows(
             {
               baseGeneration: input.chunk.outputBaseGeneration,
               chunkEndArticleId: input.chunk.chunkEndKey,
