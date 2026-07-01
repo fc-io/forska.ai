@@ -234,6 +234,15 @@ const getRebuildChunkClaimComponentOrderSql = (tableAlias: string) => {
   END`
 }
 
+const getRebuildChunkClaimRequestPrioritySql = (tableAlias: string) => {
+  return `(
+    SELECT request.priority
+    FROM app.review_rebuild_request request
+    WHERE request.request_id = ${tableAlias}.request_id
+    LIMIT 1
+  )`
+}
+
 const getComponentSqlList = (components: readonly ReviewServingProjectionComponent[]) => {
   return `(${components.map(getSqlLiteral).join(', ')})`
 }
@@ -626,6 +635,7 @@ export const getNextClaimableReviewServingRebuildChunk = async (
     ${getReviewServingRebuildChunkSelect({tableAlias: 'candidate'})}
     WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
     ORDER BY
+      ${getRebuildChunkClaimRequestPrioritySql('candidate')} DESC NULLS LAST,
       ${getRebuildChunkClaimComponentOrderSql('candidate')} ASC,
       CASE
         WHEN candidate.status = 'running'
@@ -636,12 +646,6 @@ export const getNextClaimableReviewServingRebuildChunk = async (
         THEN 0
         ELSE 1
       END ASC,
-      (
-        SELECT request.priority
-        FROM app.review_rebuild_request request
-        WHERE request.request_id = candidate.request_id
-        LIMIT 1
-      ) DESC NULLS LAST,
       candidate.updated_at ASC,
       candidate.created_at ASC,
       (
