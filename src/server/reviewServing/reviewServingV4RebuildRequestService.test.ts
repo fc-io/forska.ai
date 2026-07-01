@@ -395,6 +395,31 @@ test('V4 rebuild request service estimates admission budget from project data', 
   expect(joined).toContain('FROM app.judgment_human_summary')
 })
 
+test('V4 rebuild request service admits large search rebuilds as executable range chunks', async () => {
+  const {database, statements} = createFakeRequestDatabase({...baseStats, scopedArticleCount: 120_000})
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['search'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
+      database,
+    ),
+  )
+  const joined = statements.join('\n')
+  const searchChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'search'")
+  })
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+  expect(joined).toContain('NTILE(3)')
+  expect(searchChunkInserts).toHaveLength(3)
+  expect(searchChunkInserts[0]).toContain('article-000-a')
+  expect(searchChunkInserts[0]).toContain('article-000-z')
+  expect(searchChunkInserts[0]).toContain('40000')
+  expect(searchChunkInserts[0]).toContain('admissionPresplit')
+  expect(searchChunkInserts[0]).not.toContain('input_row_budget_split')
+})
+
 test('V4 rebuild request service bootstraps explicit chunks when a project has no snapshot yet', async () => {
   const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
 
