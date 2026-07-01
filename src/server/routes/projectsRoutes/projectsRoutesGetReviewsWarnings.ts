@@ -232,11 +232,16 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const hasReadableReviewServingRows = warningSnapshot.status === 'accepted'
     const shouldPrioritizeMissingSnapshotRepair =
       !hasReadableReviewServingRows && enabledPromptCount > 0 && hasAnyArticlesInScope
+    const expiredRebuildChunkLeaseCount = Math.min(
+      servingDiagnostics.rebuildChunks.runningCount,
+      servingDiagnostics.rebuildChunks.expiredLeaseCount,
+    )
 
     if (
       shouldPrioritizeMissingSnapshotRepair
       && (!getHasReviewServingStateThatCanProgress(servingDiagnostics)
-        || servingDiagnostics.rebuildChunks.pendingCount > 0)
+        || servingDiagnostics.rebuildChunks.pendingCount > 0
+        || expiredRebuildChunkLeaseCount > 0)
     ) {
       requestReviewServingV4Rebuild({
         priority: foregroundReviewServingRepairPriority,
@@ -247,10 +252,6 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       })
     }
 
-    const expiredRebuildChunkLeaseCount = Math.min(
-      servingDiagnostics.rebuildChunks.runningCount,
-      servingDiagnostics.rebuildChunks.expiredLeaseCount,
-    )
     const queuedRebuildChunkCount = servingDiagnostics.rebuildChunks.claimableCount
     const totalQueuedRebuildChunkCount = servingDiagnostics.rebuildChunks.pendingCount + expiredRebuildChunkLeaseCount
     const inFlightRebuildChunkCount = getNonNegativeDifference(

@@ -376,8 +376,8 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
           })
           .toSorted((left, right) => {
             return (
-              getFakeClaimPriority(left) - getFakeClaimPriority(right)
-              || getFakeClaimComponentOrder(left) - getFakeClaimComponentOrder(right)
+              getFakeClaimComponentOrder(left) - getFakeClaimComponentOrder(right)
+              || getFakeClaimPriority(left) - getFakeClaimPriority(right)
               || left.updatedAt.localeCompare(right.updatedAt)
               || left.inputWatermark - right.inputWatermark
               || left.chunkStartKey.localeCompare(right.chunkStartKey)
@@ -621,7 +621,7 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).toContain('SELECT request.updated_at')
   expect(statements.join('\n')).toContain('candidate.updated_at ASC')
   expect(statements.join('\n')).toMatch(
-    /SELECT request\.priority[\s\S]*\) DESC NULLS LAST,[\s\S]*CASE candidate\.projection_component[\s\S]*candidate\.updated_at ASC[\s\S]*SELECT request\.updated_at/,
+    /CASE candidate\.projection_component[\s\S]*SELECT request\.priority[\s\S]*\) DESC NULLS LAST,[\s\S]*candidate\.updated_at ASC[\s\S]*SELECT request\.updated_at/,
   )
   expect(statements.join('\n')).toContain('CASE candidate.projection_component')
 })
@@ -673,6 +673,34 @@ test('next claimable chunk discovery preserves component order before chunk age'
   )
 
   expect(next).toMatchObject({inputDigest: 'digest-new-project-scope', projectionComponent: 'projectScope'})
+})
+
+test('next claimable chunk discovery preserves component order before expired lease priority', async () => {
+  const expiredSearch = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-expired-search', projectionComponent: 'search'},
+      [],
+    ),
+    leaseExpiresAt: '2026-06-16T13:59:00.000Z',
+    leaseOwner: 'worker-stale',
+    status: 'running' as const,
+    updatedAt: '2026-06-16T14:00:00.000Z',
+  }
+  const pendingProjectScope = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-pending-project-scope', projectionComponent: 'projectScope'},
+      [],
+    ),
+    updatedAt: '2026-06-16T14:10:00.000Z',
+  }
+  const {database} = createFakeChunkManifestDatabase([expiredSearch, pendingProjectScope])
+
+  const next = await getNextClaimableReviewServingRebuildChunk(
+    {now: '2026-06-16T14:05:00.000Z', projectId: 'project-1'},
+    database,
+  )
+
+  expect(next).toMatchObject({inputDigest: 'digest-pending-project-scope', projectionComponent: 'projectScope'})
 })
 
 test('next claimable chunk discovery reclaims expired running leases before newer pending requests', async () => {

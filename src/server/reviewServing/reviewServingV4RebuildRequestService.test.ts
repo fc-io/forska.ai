@@ -185,6 +185,18 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       return
     }
 
+    if (statement.includes('UPDATE app.review_rebuild_request') && statement.includes('SET priority = ')) {
+      const requestId = getSqlStrings(statement)[0] ?? ''
+      const priority = Number(statement.match(/SET priority = (\d+)/u)?.[1] ?? 100)
+      const request = requests.get(requestId)
+
+      if (request !== undefined && request.priority < priority) {
+        requests.set(requestId, {...request, priority})
+      }
+
+      return
+    }
+
     if (!statement.includes('INSERT INTO app.review_rebuild_request')) {
       return
     }
@@ -490,7 +502,7 @@ test('V4 missing snapshot rebuild requests boost active foreground work priority
   expect(boostedRequest.priority).toBe(1_000)
   expect(rebuildRequestInsertCount).toBe(1)
   expect(statements.join('\n')).toContain('UPDATE app.review_rebuild_request')
-  expect(statements.join('\n')).toContain('SET priority = CASE')
+  expect(statements.join('\n')).toContain('SET priority = 1000')
 })
 
 test('V4 missing snapshot rebuild requests preserve foreground priority on first create', async () => {
