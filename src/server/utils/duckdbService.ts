@@ -193,7 +193,8 @@ const duckdbRestartRequiredErrorFragments = [
   'must be restarted prior to being used again',
 ]
 const duckdbWorkloadMetricsLimit = 50
-const duckdbCheckpointThreshold = '8GB'
+const duckdbCheckpointThresholdMaxMiB = 1024
+const duckdbCheckpointThresholdMinMiB = 64
 const enforcedForegroundDuckdbOperations = new Set<DuckdbWorkloadOperation>([
   'mainQuery',
   'mainStatement',
@@ -289,23 +290,39 @@ const shouldSerializeDuckdbConcurrentWork = (memoryLimit: string) => {
   return memoryLimitMiB !== null && memoryLimitMiB <= 6400
 }
 
+const getDuckdbCheckpointThresholdValue = (memoryLimit: string) => {
+  const memoryLimitMiB = parseDuckdbMemoryLimitToMiB(memoryLimit)
+
+  if (memoryLimitMiB === null) {
+    return `${duckdbCheckpointThresholdMaxMiB}MiB`
+  }
+
+  const thresholdMiB = Math.max(
+    duckdbCheckpointThresholdMinMiB,
+    Math.min(duckdbCheckpointThresholdMaxMiB, Math.floor(memoryLimitMiB / 4)),
+  )
+
+  return `${thresholdMiB}MiB`
+}
+
 const getDuckdbRuntimeConfigValue = () => {
   if (duckdbServiceState.duckdbRuntimeConfig) {
     return duckdbServiceState.duckdbRuntimeConfig
   }
 
   const env = getEnv()
+  const memoryLimit = env.DUCKDB_MEMORY_LIMIT
 
   duckdbServiceState.duckdbRuntimeConfig = {
     appendLaneCount: getDuckdbAppendLaneCountValue(),
     binary: '@duckdb/node-api',
-    checkpointThreshold: duckdbCheckpointThreshold,
+    checkpointThreshold: getDuckdbCheckpointThresholdValue(memoryLimit),
     databasePath: env.DUCKDB_PATH,
-    memoryLimit: env.DUCKDB_MEMORY_LIMIT,
+    memoryLimit,
     preserveInsertionOrder: false,
-    serializeConcurrentWork: shouldSerializeDuckdbConcurrentWork(env.DUCKDB_MEMORY_LIMIT),
+    serializeConcurrentWork: shouldSerializeDuckdbConcurrentWork(memoryLimit),
     tempDirectory: getTrimmedValue(env.DUCKDB_TEMP_DIRECTORY),
-    threads: getDuckdbThreadCountValue(env.DUCKDB_MEMORY_LIMIT),
+    threads: getDuckdbThreadCountValue(memoryLimit),
   }
 
   return duckdbServiceState.duckdbRuntimeConfig
@@ -437,6 +454,7 @@ const getChainedDuckdbError = (error: unknown, nextError: unknown, context: stri
 }
 
 let duckdbFatalRecoveryPromise: Promise<void> | null = null
+let duckdbShutdownInProgress = false
 
 const isDuckdbRestartRequiredError = (error: unknown) => {
   const message = getNormalizedDuckdbError(error).message
@@ -608,6 +626,10 @@ const withNormalizedDuckdbError = async <T>(work: () => Promise<T>, canRetryAfte
   } catch (error) {
     const normalizedError = getNormalizedDuckdbError(error)
 
+    if (duckdbShutdownInProgress && isDuckdbRestartRequiredError(normalizedError)) {
+      throw normalizedError
+    }
+
     if (!canRetryAfterRestart || !isDuckdbRestartRequiredError(normalizedError)) {
       throw normalizedError
     }
@@ -770,8 +792,12 @@ const getAppendConnectionCloseErrors = (appendConnections: DuckDBConnection[]): 
   })
 }
 
+const getDuckdbActiveQueueDepth = () => {
+  return duckdbServiceState.duckdbPendingCount + duckdbServiceState.backgroundPendingCount + getDuckdbAppendQueueDepth()
+}
+
 const checkpointDuckdbBeforeClose = async (connection: DuckDBConnection | null, hasOpenTransaction: boolean) => {
-  if (connection === null || hasOpenTransaction) {
+  if (connection === null || hasOpenTransaction || (duckdbShutdownInProgress && getDuckdbActiveQueueDepth() > 0)) {
     return
   }
 
@@ -851,7 +877,8 @@ const closeDuckdbServiceDirect = async (options: CloseDuckdbServiceOptions = {})
 }
 
 const closeDuckdbServiceForSignal = async () => {
-  return closeDuckdbServiceWithoutBarrier({checkpointBeforeClose: false})
+  duckdbShutdownInProgress = true
+  return closeDuckdbServiceWithoutBarrier({checkpointBeforeClose: true})
 }
 
 const registerDuckdbShutdownHooks = () => {
