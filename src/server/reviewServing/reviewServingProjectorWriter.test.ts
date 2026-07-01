@@ -7,6 +7,7 @@ import {type ReviewServingProjectorWriterDatabase} from './reviewServingProjecto
 import {
   getReviewServingProjectorReplayKey,
   writeReviewServingProjectorComponent,
+  writeReviewServingQueueRebuildRows,
 } from './reviewServingProjectorWriter.ts'
 
 const workspaceRoot = join(import.meta.dir, '../../..')
@@ -130,6 +131,40 @@ test('projector replay keys include snapshot, generation, watermark, identity, a
 
   expect(first).toBe(replay)
   expect(first).not.toBe(nextPatch)
+})
+
+test('queue rebuild rows upsert overlapping split chunk boundary rows', async () => {
+  const {database, statements} = createWriterDatabase()
+
+  await writeReviewServingQueueRebuildRows(
+    {
+      projectId: 'project-1',
+      queueIdentitySql: "'queue:article-1:prompt-1'",
+      rangePredicateSql: "AND article_id >= 'article-1' AND article_id <= 'article-2'",
+      rebuildSourceCtesSql: `queue_union AS (
+        SELECT
+          'review-config-1' AS review_config_hash,
+          'unassessed' AS queue_kind,
+          0 AS priority_bucket,
+          current_timestamp AS activity_sort_at,
+          'article-1' AS article_id,
+          'prompt-1' AS prompt_id,
+          false AS tombstone
+      )`,
+      reviewConfigHash: 'review-config-1',
+      snapshotId: 'snapshot-1',
+    },
+    database,
+  )
+
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_unassessed_queue_serving_v4')
+  })
+
+  expect(insertStatement).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id, queue_identity) DO UPDATE SET',
+  )
+  expect(insertStatement).toContain('queue_updated_at = excluded.queue_updated_at')
 })
 
 test('projector writer updates rows, manifests, acknowledgements, watermarks, and promotion in one transaction', async () => {

@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-01 - Low-Memory Checkpoint Shutdown
+
+- Error: `Failed to create checkpoint: Out of Memory Error` during constrained DuckDB checkpoint or shutdown paths.
+- Context: Embedded DuckDB startup tuning and close/shutdown behavior for low-memory maintenance-worker profiles.
+- Cause: A fixed large checkpoint threshold and pre-close checkpoints could keep checkpoint work too large for low-memory runtimes or trigger extra checkpoint work while memory was already exhausted.
+- Fix: Checkpoint threshold now scales with the configured DuckDB memory limit, low-memory workers serialize concurrent work, and shutdown/close paths avoid forcing an additional checkpoint.
+- Verification: `bun test src/server/utils/duckdbServiceMemoryLimit.test.ts src/server/utils/duckdbServiceShutdown.test.ts src/server/utils/duckdbServiceReload.test.ts`.
+
 ## 2026-06-30 - Mutating Current-DB Auto-Checkpoint
 
 - Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)`.

@@ -499,6 +499,8 @@ export const writeReviewServingQueueRebuildRows = async (
       current_timestamp AS queue_updated_at
     FROM queue_union queue
     WHERE NOT queue.tombstone
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id, queue_identity) DO UPDATE SET
+      queue_updated_at = excluded.queue_updated_at
   `)
 }
 
