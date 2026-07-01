@@ -111,15 +111,18 @@ const getDirtyArticleCteSql = (articleIds: readonly string[]) => {
         .join(', ')}))`
 }
 
-const getArticleRangePredicate = (input: {chunkEndArticleId?: string | null; chunkStartArticleId?: string | null}) => {
+const getArticleRangePredicate = (
+  input: {chunkEndArticleId?: string | null; chunkStartArticleId?: string | null},
+  tableAlias = 'scope',
+) => {
   const startPredicate =
     input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
       ? ''
-      : `AND scope.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`
+      : `AND ${tableAlias}.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`
   const endPredicate =
     input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
       ? ''
-      : `AND scope.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+      : `AND ${tableAlias}.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
 
   return `${startPredicate}
       ${endPredicate}`
@@ -350,6 +353,7 @@ export const projectReviewServingTitleSearchRebuildRows = async (
       searchIdentity: input.searchIdentity,
       selectedImportJoinSql: getSelectedImportTitleJoinSql(input),
       snapshotId: input.snapshotId,
+      targetArticleRangePredicateSql: getArticleRangePredicate(input, 'search'),
       titlePrefixLength,
     },
     database,
