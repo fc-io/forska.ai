@@ -91,17 +91,23 @@ const getFakeClaimPriority = (row: FakeChunkRow) => {
   return row.status === 'running' ? 0 : 1
 }
 
+const getFakeRequestPriority = (row: FakeChunkRow) => {
+  return row.requestId?.includes('foreground') === true ? 1_000 : 100
+}
+
 const getFakeClaimComponentOrder = (row: FakeChunkRow) => {
   const componentOrder = [
     'projectScope',
     'selectedImport',
+    'judgmentInputContent',
+    'display',
     'llmStatus',
     'humanStatus',
     'queue',
+    'search',
+    'payload',
     'posting',
     'summary',
-    'payload',
-    'search',
   ]
 
   return componentOrder.indexOf(row.projectionComponent)
@@ -376,7 +382,8 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
           })
           .toSorted((left, right) => {
             return (
-              getFakeClaimComponentOrder(left) - getFakeClaimComponentOrder(right)
+              getFakeRequestPriority(right) - getFakeRequestPriority(left)
+              || getFakeClaimComponentOrder(left) - getFakeClaimComponentOrder(right)
               || getFakeClaimPriority(left) - getFakeClaimPriority(right)
               || left.updatedAt.localeCompare(right.updatedAt)
               || left.inputWatermark - right.inputWatermark
@@ -621,7 +628,7 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).toContain('SELECT request.updated_at')
   expect(statements.join('\n')).toContain('candidate.updated_at ASC')
   expect(statements.join('\n')).toMatch(
-    /CASE candidate\.projection_component[\s\S]*SELECT request\.priority[\s\S]*\) DESC NULLS LAST,[\s\S]*candidate\.updated_at ASC[\s\S]*SELECT request\.updated_at/,
+    /SELECT request\.priority[\s\S]*\) DESC NULLS LAST,[\s\S]*CASE candidate\.projection_component[\s\S]*candidate\.updated_at ASC[\s\S]*SELECT request\.updated_at/,
   )
   expect(statements.join('\n')).toContain('CASE candidate.projection_component')
 })
@@ -673,6 +680,59 @@ test('next claimable chunk discovery preserves component order before chunk age'
   )
 
   expect(next).toMatchObject({inputDigest: 'digest-new-project-scope', projectionComponent: 'projectScope'})
+})
+
+test('next claimable chunk discovery applies request priority before component order', async () => {
+  const normalProjectScope = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-normal-project-scope',
+        projectId: 'project-2',
+        projectionComponent: 'projectScope',
+      },
+      [],
+    ),
+    requestId: 'rebuild:normal',
+    updatedAt: '2026-06-16T14:00:00.000Z',
+  }
+  const foregroundProjectScope = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-foreground-project-scope', projectionComponent: 'projectScope'},
+      [],
+    ),
+    requestId: 'rebuild:foreground',
+    status: 'completed' as const,
+  }
+  const foregroundSelectedImport = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-foreground-selected-import', projectionComponent: 'selectedImport'},
+      [],
+    ),
+    requestId: 'rebuild:foreground',
+    status: 'completed' as const,
+  }
+  const foregroundDisplay = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-foreground-display', projectionComponent: 'display'},
+      [],
+    ),
+    requestId: 'rebuild:foreground',
+    updatedAt: '2026-06-16T14:10:00.000Z',
+  }
+  const {database} = createFakeChunkManifestDatabase([
+    normalProjectScope,
+    foregroundProjectScope,
+    foregroundSelectedImport,
+    foregroundDisplay,
+  ])
+
+  const next = await getNextClaimableReviewServingRebuildChunk(
+    {now: '2026-06-16T14:05:00.000Z'},
+    database,
+  )
+
+  expect(next).toMatchObject({inputDigest: 'digest-foreground-display', projectionComponent: 'display'})
 })
 
 test('next claimable chunk discovery preserves component order before expired lease priority', async () => {
