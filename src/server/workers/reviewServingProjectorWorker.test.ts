@@ -1157,6 +1157,76 @@ test('payload and search rebuild chunk executors write bounded base rows and com
   expect(joined).toContain("checksum = 'checksum-search-1'")
 })
 
+test('fresh project scope rebuild writes base scope without synthetic dirty patch fanout', async () => {
+  const statements: string[] = []
+  const projectScopeChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    chunkId: 'chunk-project-scope-bootstrap',
+    inputDigest: 'freshReviewServingSnapshot',
+    inputWatermark: 9,
+    outputBaseGeneration: 0,
+    projectionComponent: 'projectScope',
+    projectionIdentity: 'projectScope:project-1',
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+        return [projectScopeChunk] as T[]
+      }
+
+      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+        return [
+          {
+            baseGeneration: projectScopeChunk.outputBaseGeneration,
+            definitionVersion: 'projectScope:dirty-claim-seed-v1',
+            inputDigest: projectScopeChunk.inputDigest,
+            inputWatermark: projectScopeChunk.inputWatermark,
+            inputWatermarksJson: {reviewChange: 9},
+            invalidationReason: 'missingReviewServingSnapshot',
+            manifestId: 'manifest-project-scope-bootstrap',
+            patchRangeEnd: projectScopeChunk.inputWatermark,
+            patchRangeStart: 0,
+            patchWatermark: 0,
+            projectId: projectScopeChunk.projectId,
+            projectionComponent: projectScopeChunk.projectionComponent,
+            projectionIdentity: projectScopeChunk.projectionIdentity,
+            promptConfigHash: null,
+            reviewConfigHash: 'review-config-1',
+            status: 'candidate',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM mart.project_scope_article')) {
+        return [{actualChecksum: 'checksum-project-scope-bootstrap', actualCount: 1}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: projectScopeChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain('DELETE FROM mart.project_scope_article')
+  expect(joined).toContain('INSERT INTO mart.project_scope_article')
+  expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(joined).not.toContain('UPDATE app.review_serving_dirty_work')
+  expect(joined).toContain("checksum = 'checksum-project-scope-bootstrap'")
+})
+
 test('status queue posting summary and judgment detail rebuild chunk executors complete bounded chunks', async () => {
   const statements: string[] = []
   const components = ['llmStatus', 'humanStatus', 'queue', 'posting', 'summary', 'judgmentInputContent'] as const
@@ -2027,7 +2097,7 @@ test('base rebuild chunks regenerate project scope and selected import state bef
   expect(joined).toContain("checksum = 'checksum-selected-import'")
 })
 
-test('selected import bootstrap rebuild chunk writes only its article range', async () => {
+test('selected import bootstrap rebuild chunk writes only its article range without patch fanout', async () => {
   const statements: string[] = []
   const selectedImportChunk: ReviewServingRebuildChunkManifest = {
     ...chunkManifest,
@@ -2132,13 +2202,14 @@ test('selected import bootstrap rebuild chunk writes only its article range', as
   const joined = statements.join('\n')
 
   expect(result).toEqual({status: 'completed'})
-  expect(joined).toContain('DELETE FROM mart.review_selected_import_patch_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_selected_import_patch_v4')
+  expect(joined).not.toContain('INSERT INTO mart.review_selected_import_patch_v4')
   expect(joined).toContain('DELETE FROM app.review_selected_article_import_v4')
   expect(joined).not.toContain('DELETE FROM app.review_selected_import_snapshot')
   expect(joined).toContain("article_id >= 'article-050'")
   expect(joined).toContain("article_id <= 'article-099'")
   expect(joined).toContain("scope.article_id >= 'article-050'")
-  expect(joined).toContain("serving.article_id >= 'article-050'")
+  expect(joined).not.toContain("serving.article_id >= 'article-050'")
   expect(joined).toContain("checksum = 'checksum-selected-import-range'")
 })
 

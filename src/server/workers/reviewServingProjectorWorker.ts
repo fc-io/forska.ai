@@ -1828,6 +1828,10 @@ const getRebuildChunkProjectClaims = (input: {
       })
 }
 
+const isFreshReviewServingSnapshotRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
+  return chunk.inputDigest === 'freshReviewServingSnapshot'
+}
+
 const getSelectedImportRebuildPatchSourceWatermarks = (sourceWatermarks: Record<string, number>) => {
   const importRunArticleWatermark = sourceWatermarks.importRunArticle ?? sourceWatermarks['import-run-article']
   const selectedImportWatermark =
@@ -1974,16 +1978,19 @@ const runProjectScopeRebuildChunk = async (
       },
       writeOutput: async (tx) => {
         await writeProjectScopeRebuildChunkRows({chunk: input.chunk}, tx)
-        await projectReviewServingProjectScopePatches(
-          {
-            baseGeneration: input.chunk.outputBaseGeneration,
-            claims,
-            definitionVersion: manifest.definitionVersion,
-            projectId,
-            projectionIdentity: input.chunk.projectionIdentity,
-          },
-          getChunkProjectorDatabase(tx),
-        )
+
+        if (!isFreshReviewServingSnapshotRebuildChunk(input.chunk)) {
+          await projectReviewServingProjectScopePatches(
+            {
+              baseGeneration: input.chunk.outputBaseGeneration,
+              claims,
+              definitionVersion: manifest.definitionVersion,
+              projectId,
+              projectionIdentity: input.chunk.projectionIdentity,
+            },
+            getChunkProjectorDatabase(tx),
+          )
+        }
       },
     },
     database,
@@ -2157,6 +2164,7 @@ const resetSelectedImportSnapshotForClaimedRebuild = async (
 const resetSelectedImportArticleRangeForClaimedRebuild = async (
   input: {
     chunk: ReviewServingRebuildChunkManifest
+    includePatchRows?: boolean
     leaseOwner: string
     projectId: string
     projectScopeIdentity: string
@@ -2166,13 +2174,29 @@ const resetSelectedImportArticleRangeForClaimedRebuild = async (
 ) => {
   await database.transaction(async (tx) => {
     await requireClaimedRebuildChunk(input, tx)
-    await resetReviewServingSelectedImportPatchArticleRange(
+
+    if (input.includePatchRows !== false) {
+      await resetReviewServingSelectedImportPatchArticleRange(
+        {
+          chunkEndArticleId: input.chunk.chunkEndKey,
+          chunkStartArticleId: input.chunk.chunkStartKey,
+          projectId: input.projectId,
+          projectScopeIdentity: input.projectScopeIdentity,
+          selectedImportSnapshotId: input.selectedImportSnapshotId,
+        },
+        tx,
+      )
+    }
+
+    await deleteReviewServingProjectorRows(
       {
-        chunkEndArticleId: input.chunk.chunkEndKey,
-        chunkStartArticleId: input.chunk.chunkStartKey,
-        projectId: input.projectId,
-        projectScopeIdentity: input.projectScopeIdentity,
-        selectedImportSnapshotId: input.selectedImportSnapshotId,
+        predicates: {
+          article_id: {end: input.chunk.chunkEndKey, start: input.chunk.chunkStartKey},
+          project_id: input.projectId,
+          project_scope_identity: input.projectScopeIdentity,
+          selected_import_snapshot_id: input.selectedImportSnapshotId,
+        },
+        table: 'app.review_selected_article_import_v4',
       },
       tx,
     )
@@ -2208,7 +2232,7 @@ const projectSelectedImportArticleRangeForClaimedRebuild = async (
 
 const shouldRunFullSelectedImportRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
   return (
-    chunk.inputDigest !== 'freshReviewServingSnapshot' && chunk.parentChunkId == null && (chunk.splitDepth ?? 0) === 0
+    !isFreshReviewServingSnapshotRebuildChunk(chunk) && chunk.parentChunkId == null && (chunk.splitDepth ?? 0) === 0
   )
 }
 
@@ -2297,7 +2321,13 @@ const runSelectedImportRebuildChunk = async (
             )
           } else {
             await resetSelectedImportArticleRangeForClaimedRebuild(
-              {...input, projectId, projectScopeIdentity, selectedImportSnapshotId},
+              {
+                ...input,
+                includePatchRows: !isFreshReviewServingSnapshotRebuildChunk(input.chunk),
+                projectId,
+                projectScopeIdentity,
+                selectedImportSnapshotId,
+              },
               projectorDatabase,
             )
             await projectSelectedImportArticleRangeForClaimedRebuild(
@@ -2305,27 +2335,29 @@ const runSelectedImportRebuildChunk = async (
               projectorDatabase,
             )
           }
-          await projectSelectedImportPatchesForClaimedRebuild(
-            {
-              ...input,
-              acknowledgeClaims: false,
-              baseGeneration: input.chunk.outputBaseGeneration,
-              chunkEndArticleId: shouldRunFullSelectedImportRebuildChunk(input.chunk)
-                ? undefined
-                : input.chunk.chunkEndKey,
-              chunkStartArticleId: shouldRunFullSelectedImportRebuildChunk(input.chunk)
-                ? undefined
-                : input.chunk.chunkStartKey,
-              claims,
-              definitionVersion: manifest.definitionVersion,
-              manifestInputWatermarks: manifest.inputWatermarks,
-              projectId,
-              projectScopeIdentity,
-              projectionIdentity: input.chunk.projectionIdentity,
-              selectedImportSnapshotId,
-            },
-            projectorDatabase,
-          )
+          if (!isFreshReviewServingSnapshotRebuildChunk(input.chunk)) {
+            await projectSelectedImportPatchesForClaimedRebuild(
+              {
+                ...input,
+                acknowledgeClaims: false,
+                baseGeneration: input.chunk.outputBaseGeneration,
+                chunkEndArticleId: shouldRunFullSelectedImportRebuildChunk(input.chunk)
+                  ? undefined
+                  : input.chunk.chunkEndKey,
+                chunkStartArticleId: shouldRunFullSelectedImportRebuildChunk(input.chunk)
+                  ? undefined
+                  : input.chunk.chunkStartKey,
+                claims,
+                definitionVersion: manifest.definitionVersion,
+                manifestInputWatermarks: manifest.inputWatermarks,
+                projectId,
+                projectScopeIdentity,
+                projectionIdentity: input.chunk.projectionIdentity,
+                selectedImportSnapshotId,
+              },
+              projectorDatabase,
+            )
+          }
         }, Promise.resolve())
       },
     },
