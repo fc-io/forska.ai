@@ -98,6 +98,7 @@ export type WriteReviewServingTitleSearchRebuildRowsInput = {
   searchIdentity: string
   selectedImportJoinSql: string
   snapshotId: string
+  targetArticleRangePredicateSql: string
   titlePrefixLength: number
 }
 
@@ -397,6 +398,15 @@ export const writeReviewServingTitleSearchRebuildRows = async (
   input: WriteReviewServingTitleSearchRebuildRowsInput,
   database: Pick<ReviewServingProjectorWriterDatabase, 'run'> = getAppDatabaseService(),
 ) => {
+  await database.run(`
+    DELETE FROM mart.review_title_search_serving_v4 search
+    WHERE search.project_id = ${getSqlLiteral(input.projectId)}
+      AND search.search_identity = ${getSqlLiteral(input.searchIdentity)}
+      AND search.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND search.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      ${input.targetArticleRangePredicateSql}
+  `)
+
   await database.run(`
     INSERT INTO mart.review_title_search_serving_v4 (
       project_id,

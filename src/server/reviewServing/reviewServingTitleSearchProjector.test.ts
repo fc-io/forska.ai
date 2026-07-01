@@ -3,6 +3,7 @@ import {expect, test} from 'bun:test'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   getReviewServingSearchAvailabilityFromManifest,
+  projectReviewServingTitleSearchRebuildRows,
   projectReviewServingTitleSearchRows,
   type ReviewServingTitleSearchProjectorDatabase,
 } from './reviewServingTitleSearchProjector.ts'
@@ -155,6 +156,39 @@ test('project-scoped title search rebuilds scoped articles and clears snapshot s
   expect(deleteStatement).toContain("snapshot_id IS NOT DISTINCT FROM 'snapshot-1'")
   expect(deleteStatement).toContain('search_identity')
   expect(deleteStatement).not.toContain('article_id IN')
+})
+
+test('sql-native title search rebuild clears stale chunk tokens before inserting current tokens', async () => {
+  const {database, statements} = createTitleSearchDatabase()
+
+  await projectReviewServingTitleSearchRebuildRows(
+    {
+      baseGeneration: 2,
+      chunkEndArticleId: 'article-099',
+      chunkStartArticleId: 'article-001',
+      projectId: 'project-1',
+      projectScopeIdentity: 'projectScope:identity-1',
+      searchIdentity: 'search:identity-1',
+      selectedImportSnapshotId: 'selected-import-snapshot-1',
+      snapshotId: 'snapshot-1',
+    },
+    database,
+  )
+  const deleteStatement = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_title_search_serving_v4 search')
+  })
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
+  })
+
+  expect(statements.indexOf(deleteStatement ?? '')).toBeLessThan(statements.indexOf(insertStatement ?? ''))
+  expect(deleteStatement).toContain("search.project_id = 'project-1'")
+  expect(deleteStatement).toContain("search.search_identity = 'search:identity-1'")
+  expect(deleteStatement).toContain("search.project_scope_identity = 'projectScope:identity-1'")
+  expect(deleteStatement).toContain("search.snapshot_id = 'snapshot-1'")
+  expect(deleteStatement).toContain("search.article_id >= 'article-001'")
+  expect(deleteStatement).toContain("search.article_id <= 'article-099'")
+  expect(insertStatement).toContain('CROSS JOIN unnest(regexp_split_to_array')
 })
 
 test('search availability distinguishes ready indexing unavailable and async states', () => {
