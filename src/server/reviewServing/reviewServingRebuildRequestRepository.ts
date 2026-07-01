@@ -595,10 +595,12 @@ export const boostReviewServingRebuildRequestPriority = async (
 
   await database.run(`
     UPDATE app.review_rebuild_request
-    SET priority = CASE WHEN priority < ${getSqlLiteral(priority)} THEN ${getSqlLiteral(priority)} ELSE priority END
+    SET priority = ${getSqlLiteral(priority)},
+        updated_at = current_timestamp
     WHERE request_id = ${getSqlLiteral(input.requestId)}
       AND status IN ('admitted', 'running')
       AND admission_state = 'admitted'
+      AND priority < ${getSqlLiteral(priority)}
   `)
 
   return getReviewServingRebuildRequest({requestId: input.requestId}, database)
