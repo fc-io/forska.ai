@@ -587,6 +587,23 @@ export const getActiveReviewServingRebuildRequestForProject = async (
   return row === undefined ? null : getRequestFromRow(row)
 }
 
+export const boostReviewServingRebuildRequestPriority = async (
+  input: {priority: number; requestId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingRebuildRequestDatabase(),
+) => {
+  const priority = getNormalizedPriority(input.priority)
+
+  await database.run(`
+    UPDATE app.review_rebuild_request
+    SET priority = CASE WHEN priority < ${getSqlLiteral(priority)} THEN ${getSqlLiteral(priority)} ELSE priority END
+    WHERE request_id = ${getSqlLiteral(input.requestId)}
+      AND status IN ('admitted', 'running')
+      AND admission_state = 'admitted'
+  `)
+
+  return getReviewServingRebuildRequest({requestId: input.requestId}, database)
+}
+
 const deleteObsoleteReviewServingRebuildChunks = async (
   input: {chunks: readonly ReviewServingRebuildChunkManifestInput[]; requestId: string},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -690,6 +707,10 @@ export const createReviewServingRebuildRequestEffect = (
           ${nowSql}
         )
         ON CONFLICT(request_id) DO UPDATE SET
+          priority = CASE
+            WHEN excluded.priority > app.review_rebuild_request.priority THEN excluded.priority
+            ELSE app.review_rebuild_request.priority
+          END,
           status = excluded.status,
           admission_state = excluded.admission_state,
           retry_after = excluded.retry_after,

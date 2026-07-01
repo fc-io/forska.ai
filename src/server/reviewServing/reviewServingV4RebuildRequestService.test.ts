@@ -173,6 +173,18 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       })
     }
 
+    if (statement.includes('UPDATE app.review_rebuild_request') && statement.includes('SET priority = CASE')) {
+      const requestId = getSqlStrings(statement)[0] ?? ''
+      const priority = Number(statement.match(/THEN\s+(\d+)\s+ELSE priority/u)?.[1] ?? 100)
+      const request = requests.get(requestId)
+
+      if (request !== undefined && request.priority < priority) {
+        requests.set(requestId, {...request, priority})
+      }
+
+      return
+    }
+
     if (!statement.includes('INSERT INTO app.review_rebuild_request')) {
       return
     }
@@ -182,6 +194,7 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     const status = (strings[6] ?? 'admitted') as FakeRequestRow['status']
     const admissionState = (strings[7] ?? 'admitted') as FakeRequestRow['admissionState']
     const overBudgetReason = status === 'blocked_over_budget' ? (strings[10] ?? 'over budget') : null
+    const priority = Number(statement.match(/,\s*(\d+),\s*'(admitted|blocked_over_budget)'/u)?.[1] ?? 100)
 
     requests.set(requestId, {
       admissionState,
@@ -196,7 +209,7 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       leaseOwner: null,
       oomCategory: status === 'blocked_over_budget' ? 'request_over_budget' : null,
       overBudgetReason,
-      priority: 100,
+      priority,
       projectId: strings[1] ?? '',
       reason: strings[2] ?? '',
       requestedComponentsJson: strings[3] ?? '[]',
@@ -455,6 +468,29 @@ test('V4 missing snapshot rebuild requests reuse active admitted work', async ()
   expect(secondRequest.requestId).toBe(firstRequest.requestId)
   expect(rebuildRequestInsertCount).toBe(1)
   expect(statements.join('\n')).toContain("chunk.status IN ('blocked_over_budget', 'quarantined')")
+})
+
+test('V4 missing snapshot rebuild requests boost active foreground work priority', async () => {
+  const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
+
+  const firstRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const boostedRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {priority: 1_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
+  )
+  const rebuildRequestInsertCount = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_request')
+  }).length
+
+  expect(boostedRequest.requestId).toBe(firstRequest.requestId)
+  expect(boostedRequest.priority).toBe(1_000)
+  expect(rebuildRequestInsertCount).toBe(1)
+  expect(statements.join('\n')).toContain('UPDATE app.review_rebuild_request')
+  expect(statements.join('\n')).toContain('SET priority = CASE')
 })
 
 test('V4 missing snapshot rebuild requests do not reuse running active work', async () => {

@@ -600,9 +600,35 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).toContain('candidate.lease_expires_at <=')
   expect(statements.join('\n')).toContain('ORDER BY')
   expect(statements.join('\n')).toContain("WHEN candidate.status = 'running'")
+  expect(statements.join('\n')).toContain('SELECT request.priority')
   expect(statements.join('\n')).toContain('SELECT request.updated_at')
   expect(statements.join('\n')).toContain('candidate.updated_at ASC')
+  expect(statements.join('\n')).toMatch(
+    /SELECT request\.priority[\s\S]*\) DESC NULLS LAST,[\s\S]*candidate\.updated_at ASC[\s\S]*SELECT request\.updated_at/,
+  )
   expect(statements.join('\n')).toContain('CASE candidate.projection_component')
+})
+
+test('next claimable chunk discovery does not favor newer pending requests over older pending work', async () => {
+  const olderPending = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-older-pending'}, []),
+    requestId: 'rebuild:older',
+    updatedAt: '2026-06-16T14:00:00.000Z',
+  }
+  const newerPending = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-newer-pending'}, []),
+    requestId: 'rebuild:newer',
+    updatedAt: '2026-06-16T14:10:00.000Z',
+  }
+  const {database, statements} = createFakeChunkManifestDatabase([newerPending, olderPending])
+
+  const next = await getNextClaimableReviewServingRebuildChunk(
+    {now: '2026-06-16T14:05:00.000Z', projectId: 'project-1'},
+    database,
+  )
+
+  expect(next).toMatchObject({inputDigest: 'digest-older-pending', requestId: 'rebuild:older'})
+  expect(statements.join('\n')).toMatch(/candidate\.updated_at ASC[\s\S]*SELECT request\.updated_at/)
 })
 
 test('next claimable chunk discovery reclaims expired running leases before newer pending requests', async () => {

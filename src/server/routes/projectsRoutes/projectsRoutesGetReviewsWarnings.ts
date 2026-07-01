@@ -18,6 +18,7 @@ type ReviewsIndexingStatus = 'blocked' | 'failed' | 'not-needed' | 'ready' | 're
 
 const recentReviewServingProgressWindowMs = 120_000
 const reviewServingProgressClockSkewToleranceMs = 10_000
+const foregroundReviewServingRepairPriority = 1_000
 
 const getEnabledPromptCount = async (projectId: string): Promise<number> => {
   const rows = await getAppDatabaseService().queryJson<{count: number}>(`
@@ -137,18 +138,18 @@ const getReviewsIndexingStatus = (params: {
   return !shouldIndexReviews
     ? 'not-needed'
     : params.hasQuarantineBarrier
+      ? 'failed'
+      : params.hasTerminalV4Work
         ? 'failed'
-        : params.hasTerminalV4Work
-          ? 'failed'
-          : params.isServerMutationWorkDisabled && params.pendingRefreshCount > 0 && params.runningRefreshCount === 0
-            ? 'blocked'
-            : params.pendingRefreshCount > 0 && params.runningRefreshCount > 0
+        : params.isServerMutationWorkDisabled && params.pendingRefreshCount > 0 && params.runningRefreshCount === 0
+          ? 'blocked'
+          : params.pendingRefreshCount > 0 && params.runningRefreshCount > 0
+            ? 'refreshing'
+            : params.pendingRefreshCount > 0
               ? 'refreshing'
-              : params.pendingRefreshCount > 0
-                ? 'refreshing'
-                : params.hasReviewServingRows
-                  ? 'ready'
-                  : 'stale'
+              : params.hasReviewServingRows
+                ? 'ready'
+                : 'stale'
 }
 
 const getReviewsIndexingProgressState = (params: {
@@ -229,14 +230,19 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       warningSnapshot.status === 'accepted'
       && isUsableReviewServingWarningSnapshot(warningSnapshot.diagnostics.manifest.status)
     const hasReadableReviewServingRows = warningSnapshot.status === 'accepted'
-    const shouldRequestMissingSnapshotRepair =
-      !hasReadableReviewServingRows
-      && enabledPromptCount > 0
-      && hasAnyArticlesInScope
-      && !getHasReviewServingStateThatCanProgress(servingDiagnostics)
+    const shouldPrioritizeMissingSnapshotRepair =
+      !hasReadableReviewServingRows && enabledPromptCount > 0 && hasAnyArticlesInScope
 
-    if (shouldRequestMissingSnapshotRepair) {
-      requestReviewServingV4Rebuild({projectId, reason: 'missingReviewServingSnapshot'}).catch(() => {
+    if (
+      shouldPrioritizeMissingSnapshotRepair
+      && (!getHasReviewServingStateThatCanProgress(servingDiagnostics)
+        || servingDiagnostics.rebuildChunks.pendingCount > 0)
+    ) {
+      requestReviewServingV4Rebuild({
+        priority: foregroundReviewServingRepairPriority,
+        projectId,
+        reason: 'missingReviewServingSnapshot',
+      }).catch(() => {
         return undefined
       })
     }
@@ -275,7 +281,9 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       hasQuarantineBarrier: terminalQuarantineCount > 0,
       hasReviewServingRows,
       hasTerminalV4Work:
-        terminalRebuildChunkCount + terminalQuarantineCount + (isServerMutationWorkDisabled ? 0 : terminalDirtyWorkCount)
+        terminalRebuildChunkCount
+          + terminalQuarantineCount
+          + (isServerMutationWorkDisabled ? 0 : terminalDirtyWorkCount)
         > 0,
       isServerMutationWorkDisabled,
       pendingRefreshCount,
