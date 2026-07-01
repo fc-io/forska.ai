@@ -30,6 +30,17 @@ export type ProjectReviewServingQueueInput = {
   status?: ReviewServingProjectionManifestStatus
 }
 
+export type ProjectReviewServingQueueRebuildInput = {
+  baseGeneration: number
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
+  projectId: string
+  projectScopeIdentity: string
+  reviewConfigHash: string
+  selectedImportSnapshotId: string
+  snapshotId: string
+}
+
 type QueueSourceRow = {
   activitySortAt: Date | string | null
   articleId: string
@@ -172,6 +183,133 @@ const getQueueServingRangePredicate = (input: {
 
   return `${startPredicate}
           ${endPredicate}`
+}
+
+const getQueueIdentitySql = (input: {promptId: string; queueKind: string; reviewConfigHash: string}) => {
+  return `'{"promptId":' || CAST(to_json(${input.promptId}) AS VARCHAR) || ',"queueKind":' || CAST(to_json(${input.queueKind}) AS VARCHAR) || ',"reviewConfigHash":' || CAST(to_json(${input.reviewConfigHash}) AS VARCHAR) || '}'`
+}
+
+const getQueueRebuildSourceCtes = (input: ProjectReviewServingQueueRebuildInput) => {
+  return `scoped_article AS (
+      SELECT
+        scope.article_id,
+        COALESCE(scope.article_updated_at, scope.article_created_at, TIMESTAMPTZ ${getSqlLiteral(staleQueueSortAt)}) AS activity_sort_at,
+        scope.article_id IS NULL OR NOT (scope.in_curated_scope OR scope.in_route_scope) AS scope_tombstone
+      FROM mart.project_scope_article scope
+      WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
+        AND (scope.in_curated_scope OR scope.in_route_scope)
+        ${getArticleRangePredicate({alias: 'scope', ...input})}
+    ),
+    selected_import_state AS (
+      SELECT
+        scoped.article_id,
+        COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) AS selected_tombstone
+      FROM scoped_article scoped
+      LEFT JOIN app.review_selected_article_import_v4 selected_base
+        ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
+        AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+        AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+        AND selected_base.article_id = scoped.article_id
+      LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
+        ON selected_patch.project_id = ${getSqlLiteral(input.projectId)}
+        AND selected_patch.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+        AND selected_patch.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+        AND selected_patch.article_id = scoped.article_id
+        AND selected_patch.patch_watermark = (
+          SELECT MAX(newer.patch_watermark)
+          FROM mart.review_selected_import_patch_v4 newer
+          WHERE newer.project_id = selected_patch.project_id
+            AND newer.project_scope_identity = selected_patch.project_scope_identity
+            AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
+            AND newer.article_id = selected_patch.article_id
+        )
+    ), project_settings AS (
+      SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = ${getSqlLiteral(input.projectId)}), 'prompt') AS human_judgment_mode
+    ),
+    llm_queue AS (
+      SELECT
+        scoped.article_id,
+        llm.prompt_id,
+        llm.review_config_hash,
+        ${getSqlLiteral('unassessed')} AS queue_kind,
+        CASE WHEN llm.latest_llm_created_at IS NULL THEN 0 ELSE 1 END AS priority_bucket,
+        COALESCE(llm.latest_llm_created_at, scoped.activity_sort_at) AS activity_sort_at,
+        llm.tombstone OR llm.llm_status_key = 'answered' OR scoped.scope_tombstone AS tombstone
+      FROM scoped_article scoped
+      INNER JOIN selected_import_state selected
+        ON selected.article_id = scoped.article_id
+      INNER JOIN mart.review_llm_status_patch_v4 llm
+        ON llm.project_id = ${getSqlLiteral(input.projectId)}
+        AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+        AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
+        AND llm.article_id = scoped.article_id
+        AND llm.patch_watermark = (
+          SELECT MAX(newer.patch_watermark)
+          FROM mart.review_llm_status_patch_v4 newer
+          WHERE newer.project_id = llm.project_id
+            AND newer.review_config_hash = llm.review_config_hash
+            AND newer.prompt_config_hash = llm.prompt_config_hash
+            AND newer.base_generation = llm.base_generation
+            AND newer.article_id = llm.article_id
+            AND newer.prompt_id = llm.prompt_id
+            AND newer.list_mode_key = llm.list_mode_key
+        )
+    ),
+    human_queue AS (
+      SELECT DISTINCT
+        scoped.article_id,
+        human.prompt_id,
+        llm.review_config_hash,
+        ${getSqlLiteral('human-unreviewed')} AS queue_kind,
+        CASE WHEN human.latest_human_updated_at IS NULL THEN 0 ELSE 1 END AS priority_bucket,
+        COALESCE(human.latest_human_updated_at, scoped.activity_sort_at) AS activity_sort_at,
+        human.tombstone OR human.human_status_key = 'answered' OR scoped.scope_tombstone AS tombstone
+      FROM scoped_article scoped
+      INNER JOIN selected_import_state selected
+        ON selected.article_id = scoped.article_id
+      INNER JOIN mart.review_human_status_patch_v4 human
+        ON human.project_id = ${getSqlLiteral(input.projectId)}
+        AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
+        AND human.article_id = scoped.article_id
+      CROSS JOIN project_settings
+      INNER JOIN mart.review_llm_status_patch_v4 llm
+        ON llm.project_id = ${getSqlLiteral(input.projectId)}
+        AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+        AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
+        AND llm.article_id = human.article_id
+        AND (llm.prompt_id = human.prompt_id OR human.prompt_id = 'summary')
+        AND llm.list_mode_key = human.list_mode_key
+        AND llm.patch_watermark = (
+          SELECT MAX(newer_llm.patch_watermark)
+          FROM mart.review_llm_status_patch_v4 newer_llm
+          WHERE newer_llm.project_id = llm.project_id
+            AND newer_llm.review_config_hash = llm.review_config_hash
+            AND newer_llm.prompt_config_hash = llm.prompt_config_hash
+            AND newer_llm.base_generation = llm.base_generation
+            AND newer_llm.list_mode_key = llm.list_mode_key
+            AND newer_llm.article_id = llm.article_id
+            AND newer_llm.prompt_id = llm.prompt_id
+        )
+        AND human.patch_watermark = (
+          SELECT MAX(newer.patch_watermark)
+          FROM mart.review_human_status_patch_v4 newer
+          WHERE newer.project_id = human.project_id
+            AND newer.prompt_config_hash = human.prompt_config_hash
+            AND newer.base_generation = human.base_generation
+            AND newer.article_id = human.article_id
+            AND newer.prompt_id IS NOT DISTINCT FROM human.prompt_id
+            AND newer.list_mode_key = human.list_mode_key
+        )
+        AND (
+          (project_settings.human_judgment_mode = 'summary' AND human.prompt_id = 'summary')
+          OR (project_settings.human_judgment_mode <> 'summary' AND human.prompt_id <> 'summary')
+        )
+    ),
+    queue_union AS (
+      SELECT * FROM llm_queue
+      UNION ALL
+      SELECT * FROM human_queue
+    )`
 }
 
 const getDirtyArticleCte = (projectId: string, articleIds: readonly string[], promptIds: readonly string[]) => {
@@ -510,7 +648,7 @@ const getDeleteReplacedQueueServingStatement = (
 
 export const projectReviewServingQueuePatches = async (
   input: ProjectReviewServingQueueInput,
-  database: ReviewServingQueueProjectorDatabase = getAppDatabaseService(),
+  database: ReviewServingQueueProjectorDatabase = getAppDatabaseService() as ReviewServingQueueProjectorDatabase,
 ) => {
   const rows = await getQueueRows(input, database)
   const patchRecords = rows.map((row) => {
@@ -548,4 +686,46 @@ export const projectReviewServingQueuePatches = async (
   )
 
   return {patchRowCount: patchRecords.length, patchWatermark, servingRowCount: servingRecords.length}
+}
+
+export const projectReviewServingQueueRebuildRows = async (
+  input: ProjectReviewServingQueueRebuildInput,
+  database: Pick<ReviewServingQueueProjectorDatabase, 'run'> = getAppDatabaseService(),
+) => {
+  await database.run(`
+    DELETE FROM mart.review_unassessed_queue_serving_v4
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      ${getQueueServingRangePredicate(input)}
+  `)
+
+  await database.run(`
+    INSERT INTO mart.review_unassessed_queue_serving_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      queue_identity,
+      queue_kind,
+      priority_bucket,
+      activity_sort_at,
+      article_id,
+      prompt_id,
+      queue_updated_at
+    )
+    WITH ${getQueueRebuildSourceCtes(input)}
+    SELECT DISTINCT
+      ${getSqlLiteral(input.projectId)} AS project_id,
+      queue.review_config_hash,
+      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+      ${getQueueIdentitySql({promptId: 'queue.prompt_id', queueKind: 'queue.queue_kind', reviewConfigHash: 'queue.review_config_hash'})} AS queue_identity,
+      queue.queue_kind,
+      queue.priority_bucket,
+      queue.activity_sort_at,
+      queue.article_id,
+      queue.prompt_id,
+      current_timestamp AS queue_updated_at
+    FROM queue_union queue
+    WHERE NOT queue.tombstone
+  `)
 }

@@ -62,7 +62,10 @@ import {
   writeReviewServingProjectorComponent,
 } from '../reviewServing/reviewServingProjectorWriter.ts'
 import {projectReviewServingProjectScopePatches} from '../reviewServing/reviewServingProjectScopeProjector.ts'
-import {projectReviewServingQueuePatches} from '../reviewServing/reviewServingQueueProjector.ts'
+import {
+  projectReviewServingQueuePatches,
+  projectReviewServingQueueRebuildRows,
+} from '../reviewServing/reviewServingQueueProjector.ts'
 import {
   cleanupReviewServingRetentionState,
   getReviewServingRetentionCleanupTargets,
@@ -1381,7 +1384,6 @@ const runQueueRebuildChunk = async (
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
-  const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
   const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
   const snapshotIds = getRebuildSnapshotIds(snapshots)
 
@@ -1404,17 +1406,14 @@ const runQueueRebuildChunk = async (
 
         await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
           await previous
-          await projectReviewServingQueuePatches(
+          await projectReviewServingQueueRebuildRows(
             {
-              acknowledgeClaims: false,
               baseGeneration: input.chunk.outputBaseGeneration,
               chunkEndArticleId: input.chunk.chunkEndKey,
               chunkStartArticleId: input.chunk.chunkStartKey,
-              claims: [],
-              definitionVersion: manifest.definitionVersion,
               projectId,
               projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
-              projectionIdentity: input.chunk.projectionIdentity,
+              reviewConfigHash: requireReviewConfigHash(snapshot),
               selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
               snapshotId: snapshot.snapshotId,
             },

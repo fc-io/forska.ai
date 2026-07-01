@@ -1692,6 +1692,82 @@ test('judgment input content rebuild chunk presplits large ranges and completes 
   expect(joined).not.toContain("status = 'failed'")
 })
 
+test('queue rebuild chunk writes serving rows with SQL-native article range statements', async () => {
+  const statements: string[] = []
+  const queueChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    checksum: null,
+    chunkEndKey: 'article-099',
+    chunkId: 'chunk-queue-range',
+    chunkStartKey: 'article-050',
+    inputWatermark: 9,
+    outputBaseGeneration: 7,
+    projectionComponent: 'queue',
+    projectionIdentity: 'queue:project-1',
+    requestId: 'request-queue-range',
+  }
+  const componentState = {
+    optional: [],
+    required: [
+      {baseGeneration: '7', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+      {baseGeneration: '7', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+      {baseGeneration: '7', component: 'queue', projectionIdentity: 'queue:project-1'},
+    ],
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+        return [queueChunk] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return [
+          {
+            componentStateJson: componentState,
+            reviewConfigHash: 'review-config-1',
+            selectedImportSnapshotId: 'selected-import-snapshot-1',
+            snapshotId: 'snapshot-queue-range-1',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM mart.review_unassessed_queue_serving_v4 serving')) {
+        return [{actualChecksum: 'checksum-queue-range', actualCount: 2}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: queueChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_unassessed_queue_serving_v4')
+  expect(joined).toContain('WITH scoped_article AS')
+  expect(joined).toContain('INNER JOIN mart.review_llm_status_patch_v4 llm')
+  expect(joined).toContain('INNER JOIN mart.review_human_status_patch_v4 human')
+  expect(joined).toContain("scope.article_id >= 'article-050'")
+  expect(joined).toContain("scope.article_id <= 'article-099'")
+  expect(joined).toContain("article_id >= 'article-050'")
+  expect(joined).toContain("article_id <= 'article-099'")
+  expect(joined).toContain("checksum = 'checksum-queue-range'")
+  expect(joined).not.toContain('INSERT INTO mart.review_queue_patch_v4')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+})
+
 test('article range presplit covers gaps between sparse scoped article buckets', async () => {
   const statements: string[] = []
   const gapChunk: ReviewServingRebuildChunkManifest = {
