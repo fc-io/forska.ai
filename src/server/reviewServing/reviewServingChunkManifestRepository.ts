@@ -91,6 +91,11 @@ export type ReviewServingRebuildChunkManifestInput = ReviewServingRebuildChunkId
 export type ReviewServingRebuildChunkValidationResult = {
   actualChecksum: string
   actualCount?: number
+  actualInputRows?: number | null
+  actualOutputBytes?: number | null
+  actualOutputRows?: number | null
+  actualPayloadBytes?: number | null
+  diagnosticsJson?: unknown
   expectedChecksum: string
   expectedCount?: number
 }
@@ -1030,6 +1035,10 @@ export const markReviewServingRebuildChunkFailed = async (
 
 export const writeReviewServingRebuildChunkOutput = async (
   input: ReviewServingRebuildChunkIdentity & {
+    actualInputRows?: number | null
+    actualOutputRows?: number | null
+    diagnosticsJson?: unknown
+    estimatedInputRows?: number | null
     leaseOwner: string
     validateOutput: (
       tx: ReviewServingChunkManifestRepositoryTransaction,
@@ -1039,6 +1048,7 @@ export const writeReviewServingRebuildChunkOutput = async (
   database: ReviewServingChunkManifestRepositoryDatabase = getReviewServingChunkManifestDatabase(),
 ) => {
   const chunkId = getReviewServingRebuildChunkId(input)
+  const startedAtMs = Date.now()
 
   try {
     return await database.transaction(async (tx) => {
@@ -1053,6 +1063,18 @@ export const writeReviewServingRebuildChunkOutput = async (
 
       const validation = await input.validateOutput(tx)
       const validationError = getReviewServingRebuildChunkValidationError(validation)
+      const durationMs = Date.now() - startedAtMs
+      const actualInputRows = validation.actualInputRows ?? input.actualInputRows ?? input.estimatedInputRows ?? null
+      const actualOutputRows = validation.actualOutputRows ?? validation.actualCount ?? input.actualOutputRows ?? null
+      const inputDiagnosticsJson =
+        input.diagnosticsJson && typeof input.diagnosticsJson === 'object'
+          ? (input.diagnosticsJson as Record<string, unknown>)
+          : {}
+      const validationDiagnosticsJson =
+        validation.diagnosticsJson && typeof validation.diagnosticsJson === 'object'
+          ? (validation.diagnosticsJson as Record<string, unknown>)
+          : {}
+      const diagnosticsJson = {...inputDiagnosticsJson, ...validationDiagnosticsJson}
 
       if (validationError !== null) {
         throw getReviewServingRebuildChunkValidationFailure(validationError)
@@ -1063,6 +1085,12 @@ export const writeReviewServingRebuildChunkOutput = async (
       SET
         status = 'completed',
         checksum = ${getSqlLiteral(validation.actualChecksum)},
+        actual_input_rows = ${getOptionalNumberLiteral(actualInputRows)},
+        actual_output_rows = ${getOptionalNumberLiteral(actualOutputRows)},
+        actual_output_bytes = ${getOptionalNumberLiteral(validation.actualOutputBytes)},
+        actual_payload_bytes = ${getOptionalNumberLiteral(validation.actualPayloadBytes)},
+        duration_ms = ${getOptionalNumberLiteral(durationMs)},
+        diagnostics_json = ${getJsonSqlLiteral(diagnosticsJson)},
         lease_owner = NULL,
         lease_expires_at = NULL,
         last_error = NULL,

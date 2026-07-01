@@ -19,6 +19,7 @@ import {
   type ReviewServingChunkManifestRepositoryTransaction,
   type ReviewServingRebuildChunkIdentity,
   type ReviewServingRebuildChunkManifest,
+  type ReviewServingRebuildChunkValidationResult,
   upsertReviewServingRebuildChunkManifests,
   writeReviewServingRebuildChunkOutput,
 } from '../reviewServing/reviewServingChunkManifestRepository.ts'
@@ -92,6 +93,11 @@ type ReviewServingProjectorWorkerCleanupTarget = ReviewServingRetentionCleanupIn
 type ReviewServingProjectorWorkerChunkInput = ReviewServingRebuildChunkIdentity & {checksum?: string | null}
 
 type RebuildChunkSplitRangeRow = {articleCount: number; chunkEndKey: string; chunkStartKey: string}
+type RebuildChunkOutputValidationInput = {
+  chunk: ReviewServingRebuildChunkManifest
+  getChecksum: () => Promise<RebuildChunkOutputChecksumRow>
+  getCount: () => Promise<RebuildChunkOutputChecksumRow>
+}
 
 type DeltaIntakePartitionRow = {
   endSourceHighWaterMark: number
@@ -236,7 +242,12 @@ type ProjectReviewSnapshotSettings = ProjectReviewSettingsRow & {reviewConfigHas
 
 type SelectedImportSnapshotStatusRow = {sourceDeltaHighWater: number; status: string}
 
-type RebuildChunkOutputChecksumRow = {actualChecksum: string; actualCount: number}
+type RebuildChunkOutputChecksumRow = {
+  actualChecksum: string
+  actualCount: number
+  actualOutputBytes?: number | null
+  actualPayloadBytes?: number | null
+}
 type RebuildRequestPendingChunkCountRow = {pendingChunkCount: number}
 type RebuildRequestSnapshotPromotionRow = {projectId: string; reviewConfigHash: string | null; snapshotId: string}
 
@@ -584,6 +595,41 @@ const requireRebuildChunkProjectionManifest = async (
   return manifest
 }
 
+const getCheapRebuildChunkOutputChecksumSelect = () => {
+  return `
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256('cheap-count:' || CAST(COUNT(*) AS VARCHAR)) AS actualChecksum
+  `
+}
+
+const getRebuildChunkOutputValidation = async (
+  input: RebuildChunkOutputValidationInput,
+): Promise<ReviewServingRebuildChunkValidationResult> => {
+  if (input.chunk.checksum !== null) {
+    const checksum = await input.getChecksum()
+
+    return {
+      actualChecksum: checksum.actualChecksum,
+      actualCount: checksum.actualCount,
+      actualOutputBytes: checksum.actualOutputBytes,
+      actualPayloadBytes: checksum.actualPayloadBytes,
+      diagnosticsJson: {validationMode: 'strict-checksum'},
+      expectedChecksum: input.chunk.checksum,
+    }
+  }
+
+  const count = await input.getCount()
+
+  return {
+    actualChecksum: count.actualChecksum,
+    actualCount: count.actualCount,
+    actualOutputBytes: count.actualOutputBytes,
+    actualPayloadBytes: count.actualPayloadBytes,
+    diagnosticsJson: {validationMode: 'cheap-count'},
+    expectedChecksum: count.actualChecksum,
+  }
+}
+
 const getDisplayRebuildChunkOutputChecksum = async (
   input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -600,6 +646,25 @@ const getDisplayRebuildChunkOutputChecksum = async (
         COALESCE(article_title, ''),
         '|' ORDER BY snapshot_id, list_mode_key, article_id
       ), '')) AS actualChecksum
+    FROM mart.review_article_serving_v4 serving
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND display_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const getDisplayRebuildChunkOutputCount = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      ${getCheapRebuildChunkOutputChecksumSelect()}
     FROM mart.review_article_serving_v4 serving
     WHERE project_id = ${getSqlLiteral(projectId)}
       AND display_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
@@ -637,6 +702,25 @@ const getPayloadRebuildChunkOutputChecksum = async (
   return row ?? {actualChecksum: '', actualCount: 0}
 }
 
+const getPayloadRebuildChunkOutputCount = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      ${getCheapRebuildChunkOutputChecksumSelect()},
+      CAST(COALESCE(SUM(payload_bytes), 0) AS INTEGER) AS actualPayloadBytes
+    FROM mart.review_article_serving_payload_v4 payload
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND payload_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'payload', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
 const getSearchRebuildChunkOutputChecksum = async (
   input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -653,6 +737,24 @@ const getSearchRebuildChunkOutputChecksum = async (
         COALESCE(title_prefix, ''),
         '|' ORDER BY snapshot_id, project_scope_identity, article_id, token
       ), '')) AS actualChecksum
+    FROM mart.review_title_search_serving_v4 search
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND search_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'search', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const getSearchRebuildChunkOutputCount = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      ${getCheapRebuildChunkOutputChecksumSelect()}
     FROM mart.review_title_search_serving_v4 search
     WHERE project_id = ${getSqlLiteral(projectId)}
       AND search_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
@@ -692,6 +794,25 @@ const getLlmStatusRebuildChunkOutputChecksum = async (
   return row ?? {actualChecksum: '', actualCount: 0}
 }
 
+const getLlmStatusRebuildChunkOutputCount = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      ${getCheapRebuildChunkOutputChecksumSelect()}
+    FROM mart.review_article_serving_v4 serving
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND llm_status_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
 const getHumanStatusRebuildChunkOutputChecksum = async (
   input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -709,6 +830,25 @@ const getHumanStatusRebuildChunkOutputChecksum = async (
         COALESCE(human_status_key, ''),
         '|' ORDER BY snapshot_id, review_config_hash, list_mode_key, article_id
       ), '')) AS actualChecksum
+    FROM mart.review_article_serving_v4 serving
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND human_status_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
+      AND base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const getHumanStatusRebuildChunkOutputCount = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      ${getCheapRebuildChunkOutputChecksumSelect()}
     FROM mart.review_article_serving_v4 serving
     WHERE project_id = ${getSqlLiteral(projectId)}
       AND human_status_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
@@ -747,6 +887,23 @@ const getQueueRebuildChunkOutputChecksum = async (
   return row ?? {actualChecksum: '', actualCount: 0}
 }
 
+const getQueueRebuildChunkOutputCount = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      ${getCheapRebuildChunkOutputChecksumSelect()}
+    FROM mart.review_unassessed_queue_serving_v4 serving
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
 const getPostingRebuildChunkOutputChecksum = async (
   input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -765,6 +922,23 @@ const getPostingRebuildChunkOutputChecksum = async (
         COALESCE(CAST(sort_key AS VARCHAR), ''),
         '|' ORDER BY snapshot_id, review_config_hash, list_mode_key, filter_kind, filter_value, article_id
       ), '')) AS actualChecksum
+    FROM mart.review_article_filter_posting_serving_v4 serving
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'serving', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const getPostingRebuildChunkOutputCount = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      ${getCheapRebuildChunkOutputChecksumSelect()}
     FROM mart.review_article_filter_posting_serving_v4 serving
     WHERE project_id = ${getSqlLiteral(projectId)}
       AND ${getSnapshotIdPredicate(input.snapshotIds)}
@@ -811,6 +985,36 @@ const getSummaryRebuildChunkOutputChecksum = async (
   return row ?? {actualChecksum: '', actualCount: 0}
 }
 
+const getSummaryRebuildChunkOutputCount = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    WITH output_row(row_key) AS (
+      SELECT 'count'
+      FROM mart.review_article_count_serving_v4
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      UNION ALL
+      SELECT 'facet'
+      FROM mart.review_filter_facet_serving_v4
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      UNION ALL
+      SELECT 'option'
+      FROM mart.review_filter_option_serving_v4
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND ${getSnapshotIdPredicate(input.snapshotIds)}
+    )
+    SELECT
+      ${getCheapRebuildChunkOutputChecksumSelect()}
+    FROM output_row
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
 const getJudgmentInputContentRebuildChunkOutputChecksum = async (
   input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -833,6 +1037,23 @@ const getJudgmentInputContentRebuildChunkOutputChecksum = async (
         COALESCE(CAST(judgment_payload_json AS VARCHAR), ''),
         '|' ORDER BY snapshot_id, review_config_hash, list_mode_key, payload_kind, article_id, prompt_id
       ), '')) AS actualChecksum
+    FROM mart.review_article_judgment_detail_serving_v4 detail
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND ${getSnapshotIdPredicate(input.snapshotIds)}
+      AND ${getChunkArticleRangePredicate({alias: 'detail', chunk: input.chunk})}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const getJudgmentInputContentRebuildChunkOutputCount = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      ${getCheapRebuildChunkOutputChecksumSelect()}
     FROM mart.review_article_judgment_detail_serving_v4 detail
     WHERE project_id = ${getSqlLiteral(projectId)}
       AND ${getSnapshotIdPredicate(input.snapshotIds)}
@@ -884,13 +1105,15 @@ const runDisplayRebuildChunk = async (
       ...input.chunk,
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
-        const checksum = await getDisplayRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
-
-        return {
-          actualChecksum: checksum.actualChecksum,
-          actualCount: checksum.actualCount,
-          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
-        }
+        return getRebuildChunkOutputValidation({
+          chunk: input.chunk,
+          getChecksum: () => {
+            return getDisplayRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+          },
+          getCount: () => {
+            return getDisplayRebuildChunkOutputCount({chunk: input.chunk, snapshotIds}, tx)
+          },
+        })
       },
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
@@ -945,13 +1168,15 @@ const runPayloadRebuildChunk = async (
       ...input.chunk,
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
-        const checksum = await getPayloadRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
-
-        return {
-          actualChecksum: checksum.actualChecksum,
-          actualCount: checksum.actualCount,
-          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
-        }
+        return getRebuildChunkOutputValidation({
+          chunk: input.chunk,
+          getChecksum: () => {
+            return getPayloadRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+          },
+          getCount: () => {
+            return getPayloadRebuildChunkOutputCount({chunk: input.chunk, snapshotIds}, tx)
+          },
+        })
       },
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
@@ -998,13 +1223,15 @@ const runSearchRebuildChunk = async (
       ...input.chunk,
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
-        const checksum = await getSearchRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
-
-        return {
-          actualChecksum: checksum.actualChecksum,
-          actualCount: checksum.actualCount,
-          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
-        }
+        return getRebuildChunkOutputValidation({
+          chunk: input.chunk,
+          getChecksum: () => {
+            return getSearchRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+          },
+          getCount: () => {
+            return getSearchRebuildChunkOutputCount({chunk: input.chunk, snapshotIds}, tx)
+          },
+        })
       },
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
@@ -1050,13 +1277,15 @@ const runLlmStatusRebuildChunk = async (
     {
       ...input,
       validateOutput: async (tx) => {
-        const checksum = await getLlmStatusRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
-
-        return {
-          actualChecksum: checksum.actualChecksum,
-          actualCount: checksum.actualCount,
-          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
-        }
+        return getRebuildChunkOutputValidation({
+          chunk: input.chunk,
+          getChecksum: () => {
+            return getLlmStatusRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+          },
+          getCount: () => {
+            return getLlmStatusRebuildChunkOutputCount({chunk: input.chunk, snapshotIds}, tx)
+          },
+        })
       },
       writeOutput: async (tx) => {
         await projectReviewServingLlmStatusPatches(
@@ -1091,13 +1320,15 @@ const runHumanStatusRebuildChunk = async (
     {
       ...input,
       validateOutput: async (tx) => {
-        const checksum = await getHumanStatusRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
-
-        return {
-          actualChecksum: checksum.actualChecksum,
-          actualCount: checksum.actualCount,
-          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
-        }
+        return getRebuildChunkOutputValidation({
+          chunk: input.chunk,
+          getChecksum: () => {
+            return getHumanStatusRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+          },
+          getCount: () => {
+            return getHumanStatusRebuildChunkOutputCount({chunk: input.chunk, snapshotIds}, tx)
+          },
+        })
       },
       writeOutput: async (tx) => {
         await projectReviewServingHumanStatusPatches(
@@ -1133,13 +1364,15 @@ const runQueueRebuildChunk = async (
     {
       ...input,
       validateOutput: async (tx) => {
-        const checksum = await getQueueRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
-
-        return {
-          actualChecksum: checksum.actualChecksum,
-          actualCount: checksum.actualCount,
-          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
-        }
+        return getRebuildChunkOutputValidation({
+          chunk: input.chunk,
+          getChecksum: () => {
+            return getQueueRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+          },
+          getCount: () => {
+            return getQueueRebuildChunkOutputCount({chunk: input.chunk, snapshotIds}, tx)
+          },
+        })
       },
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
@@ -1182,13 +1415,15 @@ const runPostingRebuildChunk = async (
     {
       ...input,
       validateOutput: async (tx) => {
-        const checksum = await getPostingRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
-
-        return {
-          actualChecksum: checksum.actualChecksum,
-          actualCount: checksum.actualCount,
-          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
-        }
+        return getRebuildChunkOutputValidation({
+          chunk: input.chunk,
+          getChecksum: () => {
+            return getPostingRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+          },
+          getCount: () => {
+            return getPostingRebuildChunkOutputCount({chunk: input.chunk, snapshotIds}, tx)
+          },
+        })
       },
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
@@ -1233,13 +1468,15 @@ const runSummaryRebuildChunk = async (
     {
       ...input,
       validateOutput: async (tx) => {
-        const checksum = await getSummaryRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
-
-        return {
-          actualChecksum: checksum.actualChecksum,
-          actualCount: checksum.actualCount,
-          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
-        }
+        return getRebuildChunkOutputValidation({
+          chunk: input.chunk,
+          getChecksum: () => {
+            return getSummaryRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+          },
+          getCount: () => {
+            return getSummaryRebuildChunkOutputCount({chunk: input.chunk, snapshotIds}, tx)
+          },
+        })
       },
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
@@ -1450,16 +1687,15 @@ const runJudgmentInputContentRebuildChunk = async (
       {
         ...input,
         validateOutput: async (tx) => {
-          const checksum = await getJudgmentInputContentRebuildChunkOutputChecksum(
-            {chunk: input.chunk, snapshotIds},
-            tx,
-          )
-
-          return {
-            actualChecksum: checksum.actualChecksum,
-            actualCount: checksum.actualCount,
-            expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
-          }
+          return getRebuildChunkOutputValidation({
+            chunk: input.chunk,
+            getChecksum: () => {
+              return getJudgmentInputContentRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds}, tx)
+            },
+            getCount: () => {
+              return getJudgmentInputContentRebuildChunkOutputCount({chunk: input.chunk, snapshotIds}, tx)
+            },
+          })
         },
         writeOutput: async (tx) => {
           const chunkDatabase = getChunkProjectorDatabase(tx)
@@ -1603,6 +1839,21 @@ const getProjectScopeRebuildChunkOutputChecksum = async (
   return row ?? {actualChecksum: '', actualCount: 0}
 }
 
+const getProjectScopeRebuildChunkOutputCount = async (
+  input: {chunk: ReviewServingRebuildChunkManifest},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    SELECT
+      ${getCheapRebuildChunkOutputChecksumSelect()}
+    FROM mart.project_scope_article
+    WHERE project_id = ${getSqlLiteral(projectId)}
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
 const writeProjectScopeRebuildChunkRows = async (
   input: {chunk: ReviewServingRebuildChunkManifest},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -1689,13 +1940,15 @@ const runProjectScopeRebuildChunk = async (
     {
       ...input,
       validateOutput: async (tx) => {
-        const checksum = await getProjectScopeRebuildChunkOutputChecksum({chunk: input.chunk}, tx)
-
-        return {
-          actualChecksum: checksum.actualChecksum,
-          actualCount: checksum.actualCount,
-          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
-        }
+        return getRebuildChunkOutputValidation({
+          chunk: input.chunk,
+          getChecksum: () => {
+            return getProjectScopeRebuildChunkOutputChecksum({chunk: input.chunk}, tx)
+          },
+          getCount: () => {
+            return getProjectScopeRebuildChunkOutputCount({chunk: input.chunk}, tx)
+          },
+        })
       },
       writeOutput: async (tx) => {
         await writeProjectScopeRebuildChunkRows({chunk: input.chunk}, tx)
@@ -1757,6 +2010,33 @@ const getSelectedImportRebuildChunkOutputChecksum = async (
     SELECT
       CAST(COUNT(*) AS INTEGER) AS actualCount,
       sha256(COALESCE(string_agg(row_key || ':' || row_value, '|' ORDER BY row_key), '')) AS actualChecksum
+    FROM output_row
+  `)
+
+  return row ?? {actualChecksum: '', actualCount: 0}
+}
+
+const getSelectedImportRebuildChunkOutputCount = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; selectedImportSnapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
+    WITH output_row AS (
+      SELECT 1
+      FROM app.review_selected_article_import_v4 base
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND ${getSelectedImportSnapshotIdPredicate(input.selectedImportSnapshotIds)}
+        AND ${getChunkArticleRangePredicate({alias: 'base', chunk: input.chunk})}
+      UNION ALL
+      SELECT 1
+      FROM mart.review_selected_import_patch_v4 patch
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND ${getSelectedImportSnapshotIdPredicate(input.selectedImportSnapshotIds)}
+        AND ${getChunkArticleRangePredicate({alias: 'patch', chunk: input.chunk})}
+    )
+    SELECT
+      ${getCheapRebuildChunkOutputChecksumSelect()}
     FROM output_row
   `)
 
@@ -1964,16 +2244,15 @@ const runSelectedImportRebuildChunk = async (
       ...input.chunk,
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
-        const checksum = await getSelectedImportRebuildChunkOutputChecksum(
-          {chunk: input.chunk, selectedImportSnapshotIds},
-          tx,
-        )
-
-        return {
-          actualChecksum: checksum.actualChecksum,
-          actualCount: checksum.actualCount,
-          expectedChecksum: input.chunk.checksum ?? checksum.actualChecksum,
-        }
+        return getRebuildChunkOutputValidation({
+          chunk: input.chunk,
+          getChecksum: () => {
+            return getSelectedImportRebuildChunkOutputChecksum({chunk: input.chunk, selectedImportSnapshotIds}, tx)
+          },
+          getCount: () => {
+            return getSelectedImportRebuildChunkOutputCount({chunk: input.chunk, selectedImportSnapshotIds}, tx)
+          },
+        })
       },
       writeOutput: async (tx) => {
         const projectorDatabase = getChunkProjectorDatabase(tx)
