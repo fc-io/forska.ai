@@ -25,6 +25,7 @@ import {
 } from './reviewServingManifestRepository.ts'
 import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
+  boostReviewServingRebuildRequestPriority,
   createReviewServingRebuildRequest,
   getActiveReviewServingRebuildRequestForProject,
   getReviewServingRebuildRequestId,
@@ -114,6 +115,7 @@ type ReviewServingV4BootstrapDirtyWatermarkRow = {latestSourceHighWaterMark: num
 
 export type RequestReviewServingV4RebuildInput = {
   components?: readonly ReviewServingProjectionComponent[]
+  priority?: number
   projectId: string
   reason: string
 }
@@ -1086,6 +1088,15 @@ export const requestReviewServingV4RebuildEffect = (
         : null
 
     if (activeRequest !== null) {
+      if (input.priority !== undefined && activeRequest.priority < input.priority) {
+        return (
+          (await boostReviewServingRebuildRequestPriority(
+            {priority: input.priority, requestId: activeRequest.requestId},
+            database,
+          )) ?? activeRequest
+        )
+      }
+
       return activeRequest
     }
 
@@ -1149,6 +1160,7 @@ export const requestReviewServingV4RebuildEffect = (
         return getNoopReviewServingV4RebuildRequest({
           components,
           projectId: input.projectId,
+          priority: input.priority,
           reason: input.reason,
           requestEstimate,
           sourceWatermarks,
