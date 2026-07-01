@@ -2,6 +2,7 @@ import {expect, test} from 'bun:test'
 
 import type {ReviewServingChunkManifestRepositoryDatabase} from './reviewServingChunkManifestRepository.ts'
 import {
+  boostReviewServingRebuildRequestPriority,
   createReviewServingRebuildRequest,
   type ReviewServingRebuildRequestStatus,
 } from './reviewServingRebuildRequestRepository.ts'
@@ -312,6 +313,19 @@ test('V4 rebuild request re-admission clears terminal request metadata', async (
   expect(joined).toContain('completed_at = NULL')
   expect(joined).toContain('failed_at = NULL')
   expect(joined).toContain('last_error = NULL')
+})
+
+test('boosting rebuild request priority refreshes update time for diagnostics ordering', async () => {
+  const {database, statements} = createFakeRequestDatabase()
+
+  await boostReviewServingRebuildRequestPriority({priority: 500, requestId: 'rebuild:boosted'}, database)
+
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('UPDATE app.review_rebuild_request')
+  expect(joined).toContain('SET priority = 500')
+  expect(joined).toContain('updated_at = current_timestamp')
+  expect(joined).toContain('AND priority < 500')
 })
 
 test('over-budget V4 rebuild requests park before their chunks can be claimable', async () => {

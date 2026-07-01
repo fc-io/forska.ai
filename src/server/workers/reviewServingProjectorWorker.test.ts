@@ -569,7 +569,7 @@ test('worker backs off failed wakes and stops cleanly when aborted during sleep'
   expect(harness.claimInputs).toHaveLength(1)
 })
 
-test('worker yields after completed scoped request chunks so progress readers can run', async () => {
+test('worker yields after completed request chunks so progress readers can run', async () => {
   const harness = createWorkerHarness()
   const controller = new AbortController()
   const sleepCalls: number[] = []
@@ -587,7 +587,7 @@ test('worker yields after completed scoped request chunks so progress readers ca
   })
 
   await runReviewServingProjectorWorker(
-    {rebuildProjectId: 'project-1', signal: controller.signal, workerId: 'worker-1'},
+    {signal: controller.signal, workerId: 'worker-1'},
     harness.dependencies,
   )
 
@@ -595,7 +595,7 @@ test('worker yields after completed scoped request chunks so progress readers ca
   expect(harness.runChunkInputs).toEqual([requestChunk])
 })
 
-test('worker does not sleep after every background request chunk', async () => {
+test('worker yields after background request chunks before continuing maintenance work', async () => {
   const harness = createWorkerHarness()
   const controller = new AbortController()
   const sleepCalls: number[] = []
@@ -622,7 +622,7 @@ test('worker does not sleep after every background request chunk', async () => {
 
   await runReviewServingProjectorWorker({signal: controller.signal, workerId: 'worker-1'}, harness.dependencies)
 
-  expect(sleepCalls).toEqual([])
+  expect(sleepCalls).toEqual([defaultReviewServingProjectorWorkerProgressYieldMs])
   expect(harness.runChunkInputs).toEqual([requestChunk])
 })
 
