@@ -626,6 +626,7 @@ export const getNextClaimableReviewServingRebuildChunk = async (
     ${getReviewServingRebuildChunkSelect({tableAlias: 'candidate'})}
     WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
     ORDER BY
+      ${getRebuildChunkClaimComponentOrderSql('candidate')} ASC,
       CASE
         WHEN candidate.status = 'running'
           AND (
@@ -641,7 +642,6 @@ export const getNextClaimableReviewServingRebuildChunk = async (
         WHERE request.request_id = candidate.request_id
         LIMIT 1
       ) DESC NULLS LAST,
-      ${getRebuildChunkClaimComponentOrderSql('candidate')} ASC,
       candidate.updated_at ASC,
       candidate.created_at ASC,
       (
