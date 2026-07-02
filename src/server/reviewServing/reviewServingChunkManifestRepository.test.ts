@@ -4,6 +4,7 @@ import {
   claimReviewServingRebuildChunk,
   getNextClaimableReviewServingRebuildChunk,
   getReviewServingRebuildChunkId,
+  getReviewServingRebuildChunkWorkloadClass,
   getReviewServingRebuildTimingDiagnostics,
   heartbeatReviewServingRebuildChunkLease,
   isReviewServingRebuildChunkComplete,
@@ -540,6 +541,25 @@ test('null-request chunk ids preserve legacy identity hashes', () => {
   expect(getReviewServingRebuildChunkId({...baseChunkIdentity, requestId: 'rebuild:new'})).not.toBe(
     getReviewServingRebuildChunkId(baseChunkIdentity),
   )
+})
+
+test('rebuild chunk workload classes mark durable critical and bulk lanes', async () => {
+  const {database, statements} = createFakeChunkManifestDatabase([])
+
+  await upsertReviewServingRebuildChunkManifests(
+    [
+      {...baseChunkIdentity, projectionComponent: 'summary', projectionIdentity: 'summary:project-1'},
+      {...baseChunkIdentity, projectionComponent: 'posting', projectionIdentity: 'posting:project-1'},
+    ],
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(getReviewServingRebuildChunkWorkloadClass('summary')).toBe('critical')
+  expect(getReviewServingRebuildChunkWorkloadClass('posting')).toBe('bulk')
+  expect(joined).toContain("'critical'")
+  expect(joined).toContain("'bulk'")
+  expect(joined).toContain('workload_class')
 })
 
 test('completed chunks resume after restart and are skipped for the same maintained input digest', async () => {

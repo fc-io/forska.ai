@@ -23,6 +23,7 @@ export type ReviewServingRebuildChunkStatus =
   | 'quarantined'
 
 export type ReviewServingRebuildChunkAdmissionState = 'admitted' | 'blocked_over_budget' | 'pending'
+export type ReviewServingRebuildChunkWorkloadClass = 'bulk' | 'critical'
 
 export type ReviewServingRebuildChunkBudgetFields = {
   actualInputRows?: number | null
@@ -55,7 +56,7 @@ export type ReviewServingRebuildChunkBudgetFields = {
   snapshotCount?: number
   snapshotId?: string | null
   splitDepth?: number
-  workloadClass?: string | null
+  workloadClass?: ReviewServingRebuildChunkWorkloadClass | null
 }
 
 export type ReviewServingRebuildChunkIdentity = {
@@ -295,6 +296,10 @@ const rebuildChunkCriticalLaneComponents = [
   'summary',
   'payload',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
+const rebuildChunkWorkloadClasses = {bulk: 'bulk', critical: 'critical'} as const satisfies Record<
+  ReviewServingRebuildChunkWorkloadClass,
+  ReviewServingRebuildChunkWorkloadClass
+>
 const rebuildChunkClaimPriorityOrder = [
   'projectScope',
   'selectedImport',
@@ -310,9 +315,29 @@ const rebuildChunkClaimPriorityOrder = [
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 const stalledForegroundRebuildRequestPriority = 10_000
 
+export const getReviewServingRebuildChunkWorkloadClass = (
+  component: ReviewServingProjectionComponent,
+): ReviewServingRebuildChunkWorkloadClass => {
+  return rebuildChunkCriticalLaneComponents.includes(component as (typeof rebuildChunkCriticalLaneComponents)[number])
+    ? rebuildChunkWorkloadClasses.critical
+    : rebuildChunkWorkloadClasses.bulk
+}
+
+const getRebuildChunkEffectiveWorkloadClassSql = (tableAlias: string) => {
+  return `COALESCE(
+    ${tableAlias}.workload_class,
+    CASE
+      WHEN ${tableAlias}.projection_component IN ${getComponentSqlList(rebuildChunkCriticalLaneComponents)}
+      THEN ${getSqlLiteral(rebuildChunkWorkloadClasses.critical)}
+      ELSE ${getSqlLiteral(rebuildChunkWorkloadClasses.bulk)}
+    END
+  )`
+}
+
 const getRebuildChunkClaimLaneSql = (tableAlias: string) => {
   return `CASE
-    WHEN ${tableAlias}.projection_component IN ${getComponentSqlList(rebuildChunkCriticalLaneComponents)} THEN 0
+    WHEN ${getRebuildChunkEffectiveWorkloadClassSql(tableAlias)} = ${getSqlLiteral(rebuildChunkWorkloadClasses.critical)}
+    THEN 0
     ELSE 1
   END`
 }
@@ -1043,7 +1068,7 @@ export const upsertReviewServingRebuildChunkManifests = async (
           ${getOptionalNumberLiteral(input.maxTempBytes)},
           ${getOptionalNumberLiteral(input.actualTempBytes)},
           ${getOptionalNumberLiteral(input.durationMs)},
-          ${getSqlLiteral(input.workloadClass ?? null)},
+          ${getSqlLiteral(input.workloadClass ?? getReviewServingRebuildChunkWorkloadClass(input.projectionComponent))},
           ${getSqlLiteral(input.admissionState ?? 'admitted')},
           ${getJsonSqlLiteral(input.budgetJson)},
           ${getJsonSqlLiteral(input.diagnosticsJson)},
