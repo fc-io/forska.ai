@@ -12,6 +12,7 @@ import {
   defaultReviewServingProjectorWorkerProgressYieldMs,
   getDefaultReviewServingProjectorRunners,
   getReviewServingProjectorWorkerWorkloadContext,
+  nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
   type ReviewServingProjectorWorkerDependencies,
   runReviewServingProjectorWorker,
   runReviewServingProjectorWorkerClaimedRebuildChunk,
@@ -102,6 +103,7 @@ const createWorkerHarness = (input?: {
   const claimInputs: unknown[] = []
   const cleanupInputs: unknown[] = []
   const failedChunks: unknown[] = []
+  const garbageCollectedChunks: ReviewServingRebuildChunkManifest[] = []
   const getNextChunkInputs: unknown[] = []
   const heartbeatInputs: unknown[] = []
   const recycledChunks: ReviewServingRebuildChunkManifest[] = []
@@ -156,6 +158,9 @@ const createWorkerHarness = (input?: {
         return {status: 'completed' as const}
       },
     },
+    collectGarbageAfterCompletedRebuildChunk: (chunk) => {
+      garbageCollectedChunks.push(chunk)
+    },
     recycleDuckdbAfterCompletedRebuildChunk: async (chunk) => {
       recycledChunks.push(chunk)
     },
@@ -174,6 +179,7 @@ const createWorkerHarness = (input?: {
     database,
     dependencies,
     failedChunks,
+    garbageCollectedChunks,
     getNextChunkInputs,
     heartbeatInputs,
     recycledChunks,
@@ -459,7 +465,7 @@ test('worker marks rebuild requests completed after their final chunk completes'
   expect(joined).toContain("request_id = 'rebuild-1'")
 })
 
-test('worker recycles DuckDB after completed status rebuild chunks', async () => {
+test('worker collects garbage without recycling DuckDB after completed status rebuild chunks', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const llmChunkInput = {
     ...chunkInput,
@@ -497,32 +503,141 @@ test('worker recycles DuckDB after completed status rebuild chunks', async () =>
     requestId: 'rebuild-status',
     status: 'completed',
   })
-  expect(harness.recycledChunks).toEqual([llmChunk])
+  expect(harness.recycledChunks).toEqual([])
+  expect(harness.garbageCollectedChunks).toEqual([llmChunk])
 })
 
-test('worker does not fail completed status chunks when DuckDB recycle fails', async () => {
+test('worker recycles DuckDB after completed summary rebuild chunks', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
-  const humanChunkInput = {
+  const summaryChunkInput = {
     ...chunkInput,
-    projectionComponent: 'humanStatus' as const,
-    projectionIdentity: 'humanStatus:project-1',
+    projectionComponent: 'summary' as const,
+    projectionIdentity: 'summary:project-1',
   }
-  const humanChunk = {
+  const summaryChunk = {
     ...chunkManifest,
-    ...humanChunkInput,
-    requestId: 'rebuild-human-status',
+    ...summaryChunkInput,
+    requestId: 'rebuild-summary',
   } satisfies ReviewServingRebuildChunkManifest
 
   harness.dependencies.rebuildChunkService = {
     ...harness.dependencies.rebuildChunkService,
     claimChunk: async () => {
-      return humanChunk
+      return summaryChunk
     },
     getNextChunk: async () => {
-      return humanChunkInput
+      return summaryChunkInput
     },
     heartbeatChunk: async () => {
-      return humanChunk
+      return summaryChunk
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  expect(result.chunk).toMatchObject({
+    projectionComponent: 'summary',
+    requestId: 'rebuild-summary',
+    status: 'completed',
+  })
+  expect(harness.recycledChunks).toEqual([summaryChunk])
+  expect(harness.garbageCollectedChunks).toEqual([summaryChunk])
+})
+
+test('worker yields and collects garbage after each completed status chunk in a long loop', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const controller = new AbortController()
+  const sleepCalls: number[] = []
+  const statusChunks = [
+    {
+      ...chunkManifest,
+      chunkId: 'chunk-llm-status-loop-1',
+      projectionComponent: 'llmStatus' as const,
+      projectionIdentity: 'llmStatus:project-1',
+      requestId: 'rebuild-status-loop',
+    },
+    {
+      ...chunkManifest,
+      chunkId: 'chunk-llm-status-loop-2',
+      projectionComponent: 'llmStatus' as const,
+      projectionIdentity: 'llmStatus:project-1',
+      requestId: 'rebuild-status-loop',
+    },
+  ] satisfies ReviewServingRebuildChunkManifest[]
+  let claimIndex = 0
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return statusChunks[Math.min(claimIndex, statusChunks.length - 1)]
+    },
+    getNextChunk: async () => {
+      const chunk = statusChunks[Math.min(claimIndex, statusChunks.length - 1)]
+
+      return {
+        ...chunkInput,
+        projectionComponent: chunk.projectionComponent,
+        projectionIdentity: chunk.projectionIdentity,
+        requestId: chunk.requestId,
+      }
+    },
+    heartbeatChunk: async () => {
+      return statusChunks[Math.min(claimIndex, statusChunks.length - 1)]
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+      claimIndex += 1
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.sleep = async (delayMs: number) => {
+    sleepCalls.push(delayMs)
+
+    if (sleepCalls.length >= statusChunks.length) {
+      controller.abort()
+    }
+  }
+
+  await runReviewServingProjectorWorker({signal: controller.signal, workerId: 'worker-1'}, harness.dependencies)
+
+  expect(harness.runChunkInputs).toEqual(statusChunks)
+  expect(harness.recycledChunks).toEqual([])
+  expect(harness.garbageCollectedChunks).toEqual(statusChunks)
+  expect(sleepCalls).toEqual([
+    nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
+    nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
+  ])
+})
+
+test('worker does not fail completed summary chunks when DuckDB recycle fails', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const summaryChunkInput = {
+    ...chunkInput,
+    projectionComponent: 'summary' as const,
+    projectionIdentity: 'summary:project-1',
+  }
+  const summaryChunk = {
+    ...chunkManifest,
+    ...summaryChunkInput,
+    requestId: 'rebuild-summary',
+  } satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return summaryChunk
+    },
+    getNextChunk: async () => {
+      return summaryChunkInput
+    },
+    heartbeatChunk: async () => {
+      return summaryChunk
     },
     runClaimedChunk: async ({chunk}) => {
       harness.runChunkInputs.push(chunk)
@@ -537,8 +652,8 @@ test('worker does not fail completed status chunks when DuckDB recycle fails', a
   const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
 
   expect(result.chunk).toMatchObject({
-    projectionComponent: 'humanStatus',
-    requestId: 'rebuild-human-status',
+    projectionComponent: 'summary',
+    requestId: 'rebuild-summary',
     status: 'completed',
   })
   expect(harness.failedChunks).toEqual([])
@@ -825,6 +940,40 @@ test('worker yields after background request chunks before continuing maintenanc
 
   await runReviewServingProjectorWorker({signal: controller.signal, workerId: 'worker-1'}, harness.dependencies)
 
+  expect(sleepCalls).toEqual([defaultReviewServingProjectorWorkerProgressYieldMs])
+  expect(harness.runChunkInputs).toEqual([requestChunk])
+})
+
+test('worker keeps yielding after foreground rebuild drain budget is exhausted', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const controller = new AbortController()
+  const sleepCalls: number[] = []
+  const requestChunk = {...chunkManifest, requestId: 'rebuild-1'} satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return requestChunk
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.sleep = mock(async (delayMs: number) => {
+    sleepCalls.push(delayMs)
+    controller.abort()
+  })
+
+  await runReviewServingProjectorWorker(
+    {
+      foregroundRebuildDrainChunkBudget: 2,
+      foregroundRebuildDrainCompletedCount: 2,
+      foregroundRebuildDrainStartedAtMs: 1_000,
+      foregroundRebuildDrainTtlMs: 10_000,
+      signal: controller.signal,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  expect(harness.wakeInputs).toHaveLength(1)
   expect(sleepCalls).toEqual([defaultReviewServingProjectorWorkerProgressYieldMs])
   expect(harness.runChunkInputs).toEqual([requestChunk])
 })
@@ -1583,7 +1732,7 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   expect(joined).toContain('human_status_identity')
   expect(joined).toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
   expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
-  expect(joined).toContain('DELETE FROM mart.review_filter_option_serving_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_filter_option_serving_v4')
   expect(joined).toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain("article_id >= 'article-001'")
   expect(joined).toContain("article_id <= 'article-099'")
@@ -1592,6 +1741,126 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
       return statement === 'BEGIN judgmentInputContent'
     }).length,
   ).toBe(3)
+})
+
+test('worker refreshes summary filter options once when a rebuild request is finalized', async () => {
+  const harness = createWorkerHarness()
+  const statements: string[] = []
+  const requestId = 'rebuild-summary-finalize'
+  const summaryChunkInput = {
+    ...chunkInput,
+    outputBaseGeneration: 7,
+    projectionComponent: 'summary' as const,
+    projectionIdentity: 'summary:project-1',
+    requestId,
+  }
+  const summaryChunk = {
+    ...chunkManifest,
+    ...summaryChunkInput,
+    chunkId: 'chunk-summary-finalize',
+    requestId,
+  } satisfies ReviewServingRebuildChunkManifest
+  const componentState = {
+    optional: [{baseGeneration: '7', component: 'search', projectionIdentity: 'search:project-1'}],
+    required: [
+      {baseGeneration: '7', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+      {baseGeneration: '7', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+      {baseGeneration: '7', component: 'summary', projectionIdentity: 'summary:project-1'},
+    ],
+  }
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return summaryChunk
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return summaryChunkInput
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('COUNT(*) AS pendingChunkCount')) {
+      return [{pendingChunkCount: 0}] as T[]
+    }
+
+    if (statement.includes("projection_component = 'summary'") && statement.includes('output_base_generation')) {
+      return [
+        {
+          outputBaseGeneration: summaryChunk.outputBaseGeneration,
+          projectId: summaryChunk.projectId,
+          projectionIdentity: summaryChunk.projectionIdentity,
+        },
+      ] as T[]
+    }
+
+    if (statement.includes('FROM app.review_projection_identity_manifest')) {
+      return [
+        {
+          baseGeneration: summaryChunk.outputBaseGeneration,
+          definitionVersion: 'summary-v1',
+          inputDigest: summaryChunk.inputDigest,
+          inputWatermark: summaryChunk.inputWatermark,
+          inputWatermarksJson: {reviewChange: 9},
+          invalidationReason: summaryChunk.inputDigest,
+          manifestId: 'manifest-summary',
+          patchRangeEnd: summaryChunk.inputWatermark,
+          patchRangeStart: summaryChunk.inputWatermark,
+          patchWatermark: summaryChunk.inputWatermark,
+          projectId: summaryChunk.projectId,
+          projectionComponent: summaryChunk.projectionComponent,
+          projectionIdentity: summaryChunk.projectionIdentity,
+          promptConfigHash: null,
+          reviewConfigHash: 'review-config-1',
+          status: 'candidate',
+        },
+      ] as T[]
+    }
+
+    if (statement.includes('chunk.snapshot_id AS snapshotId')) {
+      return [] as T[]
+    }
+
+    if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+      return [
+        {
+          componentStateJson: componentState,
+          reviewConfigHash: 'review-config-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          snapshotId: 'snapshot-summary-finalize',
+        },
+      ] as T[]
+    }
+
+    if (statement.includes('FROM mart.review_article_serving_v4 serving')) {
+      return [] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+  const filterOptionDeletes = statements.filter((statement) => {
+    return statement.includes('DELETE FROM mart.review_filter_option_serving_v4')
+  })
+
+  expect(result.chunk).toMatchObject({chunkId: summaryChunk.chunkId, status: 'completed'})
+  expect(harness.runChunkInputs).toEqual([summaryChunk])
+  expect(filterOptionDeletes).toHaveLength(2)
+  expect(statements.join('\n')).toContain("status = 'completed'")
 })
 
 test('posting rebuild chunk presplits before hitting runtime DuckDB OOM', async () => {
@@ -2150,7 +2419,68 @@ test('selected import rebuild chunk presplits because rebuild output is range-sc
   expect(joined).toContain('"splitReason":"input_row_budget"')
 })
 
-test('human status rebuild chunk presplits with the high-fanout row budget', async () => {
+test('summary rebuild chunk presplits below generic high-fanout threshold', async () => {
+  const statements: string[] = []
+  const summaryChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    budgetJson: {maxInputRows: 250_000},
+    chunkEndKey: '5f5b6bd2-34f0-5c80-b0e9-61f141a2941e',
+    chunkId: 'chunk-summary-near-fanout-threshold',
+    chunkStartKey: '5ed619da-68de-1d91-b10d-a0fcbbb0b0e7',
+    diagnosticsJson: {source: 'test'},
+    estimatedInputRows: 4_914,
+    estimatedOutputBytes: 96_000_000,
+    estimatedOutputRows: 4_914,
+    inputWatermark: 9,
+    maxInputRows: 250_000,
+    maxOutputBytes: 128_000_000,
+    maxOutputRows: 250_000,
+    outputBaseGeneration: 7,
+    parentChunkId: null,
+    projectionComponent: 'summary',
+    projectionIdentity: 'summary:project-1',
+    requestId: 'request-1',
+    snapshotCount: 1,
+    splitDepth: 0,
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM mart.project_scope_article scope')) {
+        throw new Error('expected uuid summary range split to avoid DuckDB bucket scan')
+      }
+
+      if (statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('RETURNING chunk_id')) {
+        return [{chunkId: summaryChunk.chunkId}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: summaryChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+  const childInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+
+  expect(result).toEqual({status: 'completed'})
+  expect(childInserts.length).toBeGreaterThan(2)
+  expect(joined).toContain('"splitReason":"input_row_budget"')
+  expect(joined).not.toContain('summary_union')
+})
+
+test('human status rebuild chunk presplits with the status row budget', async () => {
   const statements: string[] = []
   const humanStatusChunk: ReviewServingRebuildChunkManifest = {
     ...chunkManifest,
@@ -2176,7 +2506,7 @@ test('human status rebuild chunk presplits with the high-fanout row budget', asy
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
 
-      if (statement.includes('NTILE(48)') && statement.includes('FROM mart.project_scope_article scope')) {
+      if (statement.includes('NTILE(512)') && statement.includes('FROM mart.project_scope_article scope')) {
         return [
           {articleCount: 50, chunkEndKey: 'article-050', chunkStartKey: 'article-001'},
           {articleCount: 49, chunkEndKey: 'article-099', chunkStartKey: 'article-051'},
@@ -2207,9 +2537,131 @@ test('human status rebuild chunk presplits with the high-fanout row budget', asy
   })
 
   expect(result).toEqual({status: 'completed'})
-  expect(joined).toContain('NTILE(48)')
+  expect(joined).toContain('NTILE(512)')
   expect(childInserts.length).toBeGreaterThan(1)
   expect(joined).toContain('"splitReason":"input_row_budget"')
+})
+
+test('llm status rebuild chunk presplits below generic high-fanout threshold', async () => {
+  const statements: string[] = []
+  const llmStatusChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    budgetJson: {maxInputRows: 250_000},
+    chunkEndKey: '65e43369-46f4-79e3-3ad3-5bc874220a49',
+    chunkId: 'chunk-llm-status-near-fanout-threshold',
+    chunkStartKey: '65616e55-1886-acea-f1bc-70c304694cd5',
+    diagnosticsJson: {source: 'test'},
+    estimatedInputRows: 4_961,
+    estimatedOutputBytes: 96_000_000,
+    estimatedOutputRows: 4_961,
+    inputWatermark: 9,
+    maxInputRows: 250_000,
+    maxOutputBytes: 128_000_000,
+    maxOutputRows: 250_000,
+    outputBaseGeneration: 7,
+    parentChunkId: null,
+    projectionComponent: 'llmStatus',
+    projectionIdentity: 'llmStatus:project-1',
+    requestId: 'request-1',
+    snapshotCount: 1,
+    splitDepth: 2,
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM mart.project_scope_article scope')) {
+        throw new Error('expected uuid llm status range split to avoid DuckDB bucket scan')
+      }
+
+      if (statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('RETURNING chunk_id')) {
+        return [{chunkId: llmStatusChunk.chunkId}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: llmStatusChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+  const childInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+
+  expect(result).toEqual({status: 'completed'})
+  expect(childInserts.length).toBeGreaterThan(2)
+  expect(joined).toContain('"splitReason":"input_row_budget"')
+  expect(joined).not.toContain('mart.review_llm_status_patch_v4')
+})
+
+test('llm status rebuild chunk presplits persisted string row estimates', async () => {
+  const statements: string[] = []
+  const llmStatusChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    budgetJson: {maxInputRows: 250_000},
+    chunkEndKey: '65e43369-46f4-79e3-3ad3-5bc874220a49',
+    chunkId: 'chunk-llm-status-string-estimate',
+    chunkStartKey: '65616e55-1886-acea-f1bc-70c304694cd5',
+    diagnosticsJson: {source: 'test'},
+    estimatedInputRows: '497' as unknown as number,
+    estimatedOutputBytes: 96_000_000,
+    estimatedOutputRows: '497' as unknown as number,
+    inputWatermark: 9,
+    maxInputRows: 250_000,
+    maxOutputBytes: 128_000_000,
+    maxOutputRows: 250_000,
+    outputBaseGeneration: 7,
+    parentChunkId: 'chunk-llm-status-parent',
+    projectionComponent: 'llmStatus',
+    projectionIdentity: 'llmStatus:project-1',
+    requestId: 'request-1',
+    snapshotCount: 1,
+    splitDepth: 3,
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM mart.project_scope_article scope')) {
+        throw new Error('expected uuid llm status range split to avoid DuckDB bucket scan')
+      }
+
+      if (statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('RETURNING chunk_id')) {
+        return [{chunkId: llmStatusChunk.chunkId}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: llmStatusChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+  const childInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+
+  expect(result).toEqual({status: 'completed'})
+  expect(childInserts.length).toBeGreaterThan(2)
+  expect(joined).toContain('"splitReason":"input_row_budget"')
+  expect(joined).not.toContain('mart.review_llm_status_patch_v4')
 })
 
 test('uuid article range presplit avoids DuckDB bucket scans for high fanout chunks', async () => {

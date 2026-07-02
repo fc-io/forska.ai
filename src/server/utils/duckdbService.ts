@@ -195,12 +195,15 @@ const duckdbRestartRequiredErrorFragments = [
 const duckdbWorkloadMetricsLimit = 50
 const duckdbCheckpointThresholdMaxMiB = 8192
 const duckdbCheckpointThresholdMinMiB = 64
+const duckdbProactiveStartupPreflightMinMemoryMiB = 6401
 const duckdbStartupWalPreflightDisabledEnvValue = 'false'
 type DuckdbStartupIndexedTableRepairSpec = {
   duplicateKeySelectSql: string
+  lowMemoryStartupPreflight?: boolean
   mutationProbeSql: string
   postRepairSql?: string
   postRepairSchemaRequirements?: DuckdbStartupSchemaRequirement[]
+  repairPrimaryKeyColumns?: string[]
   repairStrategy?: 'copy' | 'empty-derived'
   schemaRequirements?: DuckdbStartupSchemaRequirement[]
   schemaName: string
@@ -655,6 +658,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_rebuild_chunk_manifest;
     `,
+    lowMemoryStartupPreflight: true,
     schemaName: 'app',
     schemaRequirements: [
       {
@@ -668,6 +672,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         tableName: 'review_rebuild_request',
       },
     ],
+    repairPrimaryKeyColumns: ['chunk_id'],
     tableName: 'review_rebuild_chunk_manifest',
   },
   {
@@ -2303,6 +2308,26 @@ const getDuckdbStartupPreflightScript = () => {
       )
     }
 
+    const getTableCreateSql = async (schemaName, tableName) => {
+      const rows = await getRows(
+        "SELECT sql FROM duckdb_tables() " +
+          "WHERE schema_name = " + getSqlLiteral(schemaName) +
+          " AND table_name = " + getSqlLiteral(tableName) +
+          " LIMIT 1",
+      )
+      return typeof rows[0]?.sql === 'string' ? rows[0].sql : ''
+    }
+
+    const needsInlinePrimaryKeyRepairBeforeMutation = async (spec) => {
+      if (!Array.isArray(spec.repairPrimaryKeyColumns) || spec.repairPrimaryKeyColumns.length === 0) {
+        return false
+      }
+
+      const createSql = await getTableCreateSql(spec.schemaName, spec.tableName)
+
+      return createSql.toUpperCase().includes('PRIMARY KEY')
+    }
+
     const schemaRequirementsSatisfied = async (requirements) => {
       if (!Array.isArray(requirements) || requirements.length === 0) {
         return true
@@ -2407,6 +2432,11 @@ const getDuckdbStartupPreflightScript = () => {
 
       for (const spec of tableRepairSpecs) {
         if (await tableExists(spec.schemaName, spec.tableName)) {
+          if (await needsInlinePrimaryKeyRepairBeforeMutation(spec)) {
+            markActiveRepairSpec(spec, 'inline-primary-key-repair')
+            throw new Error('startup repair required before mutating inline primary key table ' + spec.schemaName + '.' + spec.tableName)
+          }
+
           if (await schemaRequirementsSatisfied(spec.schemaRequirements)) {
             markActiveRepairSpec(spec, 'custom-mutation-probe')
             await connection.run(spec.mutationProbeSql)
@@ -2458,11 +2488,32 @@ const getDuckdbStartupPreflightRepairSpecs = (markerPath: string) => {
   }
 }
 
-const getDuckdbStartupIndexedTableRepairSpecs = (error: unknown) => {
-  const repairSpecs =
-    error instanceof Error && Array.isArray((error as DuckdbStartupPreflightError).repairSpecs)
-      ? (error as DuckdbStartupPreflightError).repairSpecs
-      : []
+const shouldRunProactiveDuckdbStartupPreflight = (runtimeConfig: DuckdbRuntimeConfig) => {
+  const memoryLimitMiB = parseDuckdbMemoryLimitToMiB(runtimeConfig.memoryLimit)
+
+  return memoryLimitMiB === null || memoryLimitMiB >= duckdbProactiveStartupPreflightMinMemoryMiB
+}
+
+const getDuckdbStartupPreflightSpecsForRuntime = (
+  runtimeConfig: DuckdbRuntimeConfig,
+  activeRepairSpecs: DuckdbStartupIndexedTableRepairSpec[],
+) => {
+  if (activeRepairSpecs.length > 0) {
+    return activeRepairSpecs
+  }
+
+  if (shouldRunProactiveDuckdbStartupPreflight(runtimeConfig)) {
+    return duckdbStartupIndexedTableRepairSpecs
+  }
+
+  return duckdbStartupIndexedTableRepairSpecs.filter((spec) => {
+    return spec.lowMemoryStartupPreflight === true
+  })
+}
+
+const getDuckdbStartupIndexedTableRepairSpecs = (error: unknown): DuckdbStartupIndexedTableRepairSpec[] => {
+  const candidateRepairSpecs = error instanceof Error ? (error as DuckdbStartupPreflightError).repairSpecs : null
+  const repairSpecs = Array.isArray(candidateRepairSpecs) ? candidateRepairSpecs : []
 
   return repairSpecs.length === 0 ? duckdbStartupIndexedTableRepairSpecs : repairSpecs
 }
@@ -2489,6 +2540,51 @@ const getDuckdbIndexedTableRepairScript = () => {
 
     const getQualifiedName = (schemaName, tableName) => {
       return schemaName + '.' + tableName
+    }
+
+    const regexpSpecialCharacters = new Set(['\\\\', '^', '$', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|'])
+
+    const escapeRegExp = (value) => {
+      return Array.from(String(value), (character) => {
+        return regexpSpecialCharacters.has(character) ? '\\\\' + character : character
+      }).join('')
+    }
+
+    const stripInlinePrimaryKeyConstraints = (createSql, primaryKeyColumns) => {
+      if (!Array.isArray(primaryKeyColumns) || primaryKeyColumns.length === 0) {
+        return createSql
+      }
+
+      return primaryKeyColumns.reduce((sql, columnName) => {
+        if (typeof columnName !== 'string' || columnName.trim().length === 0) {
+          return sql
+        }
+
+        return sql.replace(
+          new RegExp('(\\\\b' + escapeRegExp(columnName) + '\\\\b\\\\s+[^,)]*?)\\\\s+PRIMARY\\\\s+KEY', 'i'),
+          '$1',
+        )
+      }, createSql)
+    }
+
+    const getRepairPrimaryKeyIndexSql = (spec, sourceName) => {
+      const primaryKeyColumns = Array.isArray(spec.repairPrimaryKeyColumns)
+        ? spec.repairPrimaryKeyColumns.filter((columnName) => {
+            return typeof columnName === 'string' && columnName.trim().length > 0
+          })
+        : []
+
+      if (primaryKeyColumns.length === 0) {
+        return null
+      }
+
+      return (
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_' + spec.tableName + '_repaired_pk ON ' +
+        sourceName +
+        '(' +
+        primaryKeyColumns.join(', ') +
+        ')'
+      )
     }
 
     const tableExists = async (schemaName, tableName) => {
@@ -2586,10 +2682,11 @@ const getDuckdbIndexedTableRepairScript = () => {
         const repairTableName = spec.tableName + '_startup_repair_' + repairId
         const sourceName = getQualifiedName(spec.schemaName, spec.tableName)
         const repairName = getQualifiedName(spec.schemaName, repairTableName)
-        const createRepairSql = createSql.replace(
-          'CREATE TABLE ' + sourceName + '(',
-          'CREATE TABLE ' + repairName + '(',
-        )
+	        let createRepairSql = createSql.replace(
+	          'CREATE TABLE ' + sourceName + '(',
+	          'CREATE TABLE ' + repairName + '(',
+	        )
+	        createRepairSql = stripInlinePrimaryKeyConstraints(createRepairSql, spec.repairPrimaryKeyColumns)
 
         if (createRepairSql === createSql) {
           throw new Error('could not rewrite table DDL for ' + sourceName)
@@ -2600,10 +2697,15 @@ const getDuckdbIndexedTableRepairScript = () => {
         if (spec.repairStrategy !== 'empty-derived') {
           await connection.run('INSERT INTO ' + repairName + ' BY NAME SELECT * FROM ' + sourceName)
         }
-        await connection.run('DROP TABLE ' + sourceName)
-        await connection.run('ALTER TABLE ' + repairName + ' RENAME TO ' + spec.tableName)
+	        await connection.run('DROP TABLE ' + sourceName)
+	        await connection.run('ALTER TABLE ' + repairName + ' RENAME TO ' + spec.tableName)
+	        const repairPrimaryKeyIndexSql = getRepairPrimaryKeyIndexSql(spec, sourceName)
 
-        for (const indexRow of indexRows) {
+	        if (repairPrimaryKeyIndexSql !== null) {
+	          await connection.run(repairPrimaryKeyIndexSql)
+	        }
+
+	        for (const indexRow of indexRows) {
           const indexSql = String(indexRow.sql).replace(/^CREATE INDEX /, 'CREATE INDEX IF NOT EXISTS ')
           await connection.run(indexSql)
         }
@@ -2642,6 +2744,23 @@ const getDuckdbStartupPreflightError = (runtimeConfig: DuckdbRuntimeConfig) => {
 
   const activeRepairSpecPath = getDuckdbStartupPreflightActiveRepairSpecPath(runtimeConfig)
   mkdirSync(`${runtimeConfig.databasePath}.startup-recovery`, {recursive: true})
+  const activeRepairSpecs = getDuckdbStartupPreflightRepairSpecs(activeRepairSpecPath)
+  const preflightRepairSpecs = getDuckdbStartupPreflightSpecsForRuntime(runtimeConfig, activeRepairSpecs)
+
+  if (preflightRepairSpecs.length === 0) {
+    writeRuntimeOperatorLogEvent({
+      attrs: {
+        databasePath: runtimeConfig.databasePath,
+        memoryLimit: runtimeConfig.memoryLimit,
+        minimumMemoryMiB: duckdbProactiveStartupPreflightMinMemoryMiB,
+      },
+      event: 'duckdb.startup.preflight-skip-low-memory',
+      message: '[duckdb] skipped proactive startup mutation preflight under low-memory runtime',
+      severity: 'INFO',
+    })
+    return null
+  }
+
   clearDuckdbStartupPreflightActiveRepairSpec(activeRepairSpecPath)
 
   const result = globalThis.Bun.spawnSync(
@@ -2651,7 +2770,7 @@ const getDuckdbStartupPreflightError = (runtimeConfig: DuckdbRuntimeConfig) => {
       getDuckdbStartupPreflightScript(),
       JSON.stringify(runtimeConfig.databasePath),
       JSON.stringify(getDuckdbInstanceOptions(runtimeConfig)),
-      JSON.stringify(duckdbStartupIndexedTableRepairSpecs),
+      JSON.stringify(preflightRepairSpecs),
       JSON.stringify(activeRepairSpecPath),
     ],
     {
