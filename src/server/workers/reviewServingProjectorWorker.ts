@@ -1843,34 +1843,43 @@ const runJudgmentInputContentRebuildChunk = async (
         writeOutput: async (tx) => {
           const chunkDatabase = getChunkProjectorDatabase(tx)
 
-          await payloadSnapshots.reduce<Promise<void>>(async (previous, snapshot) => {
-            await previous
-            const project = getSnapshotReviewSettings(snapshot, currentSettings)
+          const snapshotDiagnostics = await payloadSnapshots.reduce<Promise<unknown[]>>(
+            async (previous, snapshot) => {
+              const diagnostics = await previous
+              const project = getSnapshotReviewSettings(snapshot, currentSettings)
 
-            if (project !== null) {
-              await projectReviewServingJudgmentPayloadRows(
-                {
-                  acknowledgeClaims: false,
-                  baseGeneration: input.chunk.outputBaseGeneration,
-                  chunkEndArticleId: input.chunk.chunkEndKey,
-                  chunkStartArticleId: input.chunk.chunkStartKey,
-                  claims: [],
-                  definitionVersion: manifest.definitionVersion,
-                  listModeKeys: reviewServingListModes,
-                  modelId: project.modelId,
-                  projectId,
-                  projectionIdentity: input.chunk.projectionIdentity,
-                  reviewConfigHash: requireReviewConfigHash(snapshot),
-                  snapshotId: snapshot.snapshotId,
-                  useAbstract: project.useAbstract,
-                  useFulltext: project.useFulltext,
-                  useFulltextNoImages: project.useFulltextNoImages,
-                  useTitle: project.useTitle,
-                },
-                chunkDatabase,
-              )
-            }
-          }, Promise.resolve())
+              if (project !== null) {
+                const result = await projectReviewServingJudgmentPayloadRows(
+                  {
+                    acknowledgeClaims: false,
+                    baseGeneration: input.chunk.outputBaseGeneration,
+                    chunkEndArticleId: input.chunk.chunkEndKey,
+                    chunkStartArticleId: input.chunk.chunkStartKey,
+                    claims: [],
+                    definitionVersion: manifest.definitionVersion,
+                    listModeKeys: reviewServingListModes,
+                    modelId: project.modelId,
+                    projectId,
+                    projectionIdentity: input.chunk.projectionIdentity,
+                    reviewConfigHash: requireReviewConfigHash(snapshot),
+                    snapshotId: snapshot.snapshotId,
+                    useAbstract: project.useAbstract,
+                    useFulltext: project.useFulltext,
+                    useFulltextNoImages: project.useFulltextNoImages,
+                    useTitle: project.useTitle,
+                  },
+                  chunkDatabase,
+                )
+
+                return [...diagnostics, {snapshotId: snapshot.snapshotId, ...result.diagnosticsJson}]
+              }
+
+              return diagnostics
+            },
+            Promise.resolve([] as unknown[]),
+          )
+
+          return {diagnosticsJson: {judgmentPayloadProjectorSnapshots: snapshotDiagnostics}}
         },
       },
       database,

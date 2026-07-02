@@ -188,6 +188,10 @@ const getRequestedPayloadKinds = (listModeKeys: readonly ReviewServingListMode[]
   })
 }
 
+const getNonNegativeElapsedMs = (startedAtMs: number) => {
+  return Math.max(0, Date.now() - startedAtMs)
+}
+
 const getPayloadManifestInputs = (
   input: ProjectReviewServingJudgmentPayloadInput,
   claims: readonly ReviewServingDirtyWorkClaim[],
@@ -607,33 +611,62 @@ export const projectReviewServingJudgmentPayloadRows = async (
   input: ProjectReviewServingJudgmentPayloadInput,
   database: ReviewServingJudgmentPayloadProjectorDatabase = getAppDatabaseService(),
 ) => {
-  const [llmRows, humanRows] = await Promise.all([
-    getLlmJudgmentRows(input, database),
-    getHumanJudgmentRows(input, database),
-  ])
-  const llmRecords = llmRows.flatMap((row) => {
-    return getLlmListModeKeys(input.listModeKeys).map((listModeKey) => {
-      return getLlmJudgmentRecord({input, listModeKey, row})
-    })
+  const phaseTimings: Record<string, number> = {}
+  const measure = async <T>(phase: string, operation: () => Promise<T>) => {
+    const startedAtMs = Date.now()
+    const result = await operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const measureSync = <T>(phase: string, operation: () => T) => {
+    const startedAtMs = Date.now()
+    const result = operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const [llmRows, humanRows] = await measure('sourceQueryMs', async () => {
+    return Promise.all([getLlmJudgmentRows(input, database), getHumanJudgmentRows(input, database)])
   })
-  const humanRecords = humanRows.flatMap((row) => {
-    return getHumanListModeKeys(input.listModeKeys).map((listModeKey) => {
-      return getHumanJudgmentRecord({input, listModeKey, row})
+  const {humanRecords, llmRecords} = measureSync('recordTransformMs', () => {
+    const nextLlmRecords = llmRows.flatMap((row) => {
+      return getLlmListModeKeys(input.listModeKeys).map((listModeKey) => {
+        return getLlmJudgmentRecord({input, listModeKey, row})
+      })
     })
+    const nextHumanRecords = humanRows.flatMap((row) => {
+      return getHumanListModeKeys(input.listModeKeys).map((listModeKey) => {
+        return getHumanJudgmentRecord({input, listModeKey, row})
+      })
+    })
+
+    return {humanRecords: nextHumanRecords, llmRecords: nextLlmRecords}
   })
   const claims = input.claims ?? []
 
-  await writeReviewServingProjectorComponent(
-    {
-      acknowledgements: getPayloadAcknowledgements(input, claims),
-      component: 'payload',
-      projectionManifests: getPayloadProjectionManifests(input, claims),
-      records: [...llmRecords, ...humanRecords],
-      statements: getReplacementDeleteStatements(input, getRequestedPayloadKinds(input.listModeKeys)),
-      watermark: getPayloadWatermark(input, claims),
-    },
-    database,
-  )
+  const writerResult = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        acknowledgements: getPayloadAcknowledgements(input, claims),
+        component: 'payload',
+        projectionManifests: getPayloadProjectionManifests(input, claims),
+        records: [...llmRecords, ...humanRecords],
+        statements: getReplacementDeleteStatements(input, getRequestedPayloadKinds(input.listModeKeys)),
+        watermark: getPayloadWatermark(input, claims),
+      },
+      database,
+    )
+  })
 
-  return {humanRowCount: humanRecords.length, llmRowCount: llmRecords.length}
+  return {
+    diagnosticsJson: {
+      judgmentPayloadProjector: {
+        humanSourceRowCount: humanRows.length,
+        llmSourceRowCount: llmRows.length,
+        writer: writerResult.diagnostics,
+      },
+      phaseTimings,
+    },
+    humanRowCount: humanRecords.length,
+    llmRowCount: llmRecords.length,
+  }
 }

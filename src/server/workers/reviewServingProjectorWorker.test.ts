@@ -1875,6 +1875,7 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(filterOptionDeletes).toHaveLength(0)
   expect(joined).toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
+  expect(joined).toContain('"judgmentPayloadProjectorSnapshots"')
   expect(joined).toContain("article_id >= 'article-001'")
   expect(joined).toContain("article_id <= 'article-099'")
   expect(
