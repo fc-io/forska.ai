@@ -166,6 +166,7 @@ type ReviewServingProjectorWorkerCycleOptions = {
   maxRowsPerWake?: number
   maxWakeMs?: number
   now?: Date
+  rebuildChunkBatchSize?: number
   rebuildProjectId?: string | null
   workerId?: string
 }
@@ -199,6 +200,7 @@ type ReviewServingProjectorWorkerDeltaIntakeResult = {
 
 type ReviewServingProjectorWorkerCycleResult = {
   chunk: ReviewServingProjectorWorkerChunkResult
+  chunkBatchCount: number
   cleanup: ReviewServingProjectorWorkerCleanupResult
   deltaIntake: ReviewServingProjectorWorkerDeltaIntakeResult
   nextCleanupAtMs: number | null
@@ -278,6 +280,7 @@ const defaultReviewServingProjectorWorkerMaxRowsPerWake = 512
 const defaultReviewServingProjectorWorkerMaxWakeMs = 5_000
 const defaultReviewServingProjectorWorkerPollIntervalMs = 2_000
 const defaultReviewServingProjectorWorkerProgressYieldMs = 100
+const defaultReviewServingProjectorWorkerRebuildChunkBatchSize = 1
 const nativeHeavyReviewServingProjectorWorkerProgressYieldMs = 1_000
 const defaultReviewServingProjectorWorkerErrorBackoffMs = 10_000
 const defaultReviewServingProjectorWorkerForegroundRebuildDrainChunkBudget = 4
@@ -3922,6 +3925,7 @@ const logReviewServingProjectorWorkerCycle = (result: ReviewServingProjectorWork
       component: 'reviewServingProjectorWorker',
       deltaIntakeStatus: result.deltaIntake.status,
       event: 'cycle',
+      rebuildChunkBatchCount: result.chunkBatchCount,
       projectorStatus: result.projector.status,
       status: result.status,
       wakeId: result.wakeId,
@@ -4075,6 +4079,31 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
   }
 }
 
+const runReviewServingProjectorWorkerRebuildChunkBatch = async (
+  input: Parameters<typeof runReviewServingProjectorWorkerRebuildChunk>[0],
+): Promise<{chunk: ReviewServingProjectorWorkerChunkResult; completedCount: number}> => {
+  const batchSize = getPositiveInteger(
+    input.options.rebuildChunkBatchSize,
+    defaultReviewServingProjectorWorkerRebuildChunkBatchSize,
+  )
+  let completedCount = 0
+  let lastCompletedChunk: ReviewServingProjectorWorkerChunkResult | null = null
+
+  for (let index = 0; index < batchSize; index += 1) {
+    const chunk = await runReviewServingProjectorWorkerRebuildChunk(input)
+
+    if (chunk.status === 'completed') {
+      completedCount += 1
+      lastCompletedChunk = chunk
+      continue
+    }
+
+    return {chunk: lastCompletedChunk ?? chunk, completedCount}
+  }
+
+  return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
+}
+
 const runReviewServingProjectorWorkerCleanup = async ({
   database,
   dependencies,
@@ -4192,13 +4221,14 @@ export const runReviewServingProjectorWorkerCycle = async (
   const wakeId = `${workerId}:${getWorkerNowMs(dependencies, options)}`
   const workloadContext = getReviewServingProjectorWorkerWorkloadContext(workerId)
   const database = getReviewServingProjectorWorkerDatabase(dependencies, workloadContext)
-  const chunk = await runReviewServingProjectorWorkerRebuildChunk({
+  const chunkBatch = await runReviewServingProjectorWorkerRebuildChunkBatch({
     database,
     dependencies,
     options,
     workloadContext,
     workerId,
   })
+  const chunk = chunkBatch.chunk
   const nowMs = getWorkerNowMs(dependencies, options)
   const shouldRunOnlyRebuildChunk = shouldPrioritizeNextRebuildChunk({chunk, nowMs, options})
   const deltaIntake = shouldRunOnlyRebuildChunk
@@ -4221,6 +4251,7 @@ export const runReviewServingProjectorWorkerCycle = async (
 
   return {
     chunk,
+    chunkBatchCount: chunkBatch.completedCount,
     cleanup,
     deltaIntake,
     nextCleanupAtMs,
@@ -4290,6 +4321,7 @@ export {
   defaultReviewServingProjectorWorkerMaxWakeMs,
   defaultReviewServingProjectorWorkerPollIntervalMs,
   defaultReviewServingProjectorWorkerProgressYieldMs,
+  defaultReviewServingProjectorWorkerRebuildChunkBatchSize,
   nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
 }
 

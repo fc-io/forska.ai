@@ -214,6 +214,58 @@ test('worker calls projector orchestration with bounded wake budgets and reviewP
   expect(harness.workloadContexts).toContainEqual(getReviewServingProjectorWorkerWorkloadContext('worker-1'))
 })
 
+test('worker can drain multiple rebuild chunks in one opt-in batch', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const firstChunkInput = {...chunkInput, chunkEndKey: 'article-050', chunkStartKey: 'article-001'}
+  const secondChunkInput = {...chunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
+  const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-batch-1'}
+  const secondChunk = {...chunkManifest, ...secondChunkInput, chunkId: 'chunk-batch-2'}
+  const chunkInputs = [firstChunkInput, secondChunkInput]
+  const chunksByStartKey = new Map([
+    [firstChunkInput.chunkStartKey, firstChunk],
+    [secondChunkInput.chunkStartKey, secondChunk],
+  ])
+  const chunksById = new Map([
+    [firstChunk.chunkId, firstChunk],
+    [secondChunk.chunkId, secondChunk],
+  ])
+  let nextIndex = 0
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInputs[nextIndex++] ?? null
+    },
+    heartbeatChunk: async (heartbeatInput) => {
+      harness.heartbeatInputs.push(heartbeatInput)
+
+      return chunksById.get(heartbeatInput.chunkId) ?? null
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result.chunk).toMatchObject({chunkId: 'chunk-batch-2', status: 'completed'})
+  expect(result.chunkBatchCount).toBe(2)
+  expect(harness.claimInputs).toHaveLength(2)
+  expect(
+    harness.runChunkInputs.map((chunk) => {
+      return chunk.chunkId
+    }),
+  ).toEqual(['chunk-batch-1', 'chunk-batch-2'])
+  expect(harness.wakeInputs).toHaveLength(1)
+})
+
 test('worker drains foreground critical rebuild chunks within a bounded chunk budget', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const foregroundChunkInput = {...chunkInput, requestId: 'rebuild:foreground'}
