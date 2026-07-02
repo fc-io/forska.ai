@@ -2078,7 +2078,7 @@ test('reviews warnings leave recently progressing foreground V4 repair priority 
   expect(after.updatedAt).toBe(before.updatedAt)
 })
 
-test('reviews warnings boost stale foreground V4 repairs above ordinary foreground work', async () => {
+test('reviews warnings do not mutate stale foreground V4 repairs that already have progressable chunks', async () => {
   const projectId = 'project-missing-serving-stale-foreground-warning'
   const requestId = 'request-missing-serving-stale-foreground-warning'
   const oldTimestamp = '2026-04-02T12:00:00.000Z'
@@ -2114,12 +2114,15 @@ test('reviews warnings boost stale foreground V4 repairs above ordinary foregrou
   expect(response.status).toBe(200)
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
   expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
+  expect(body.data.indexing.status).toBe('refreshing')
+  expect(await getReviewRebuildRequestCount(projectId)).toBe(1)
   expect(before.priority).toBe(1_000)
-  expect(after.priority).toBe(10_000)
-  expect(after.updatedAt).not.toBe(before.updatedAt)
+  expect(after.priority).toBe(before.priority)
+  expect(after.updatedAt).toBe(before.updatedAt)
 })
 
-test('reviews warnings boost stale queued V4 repairs even when serving rows are readable', async () => {
+test('reviews warnings do not mutate stale queued V4 repairs even when serving rows are readable', async () => {
   const projectId = 'project-readable-serving-stale-queued-foreground-warning'
   const requestId = 'request-readable-serving-stale-queued-foreground-warning'
   const articleId = `article-${projectId}`
@@ -2165,8 +2168,8 @@ test('reviews warnings boost stale queued V4 repairs even when serving rows are 
   expect(body.data.indexing.progressState).toBe('queued')
   expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
   expect(before.priority).toBe(1_000)
-  expect(after.priority).toBe(10_000)
-  expect(after.updatedAt).not.toBe(before.updatedAt)
+  expect(after.priority).toBe(before.priority)
+  expect(after.updatedAt).toBe(before.updatedAt)
 })
 
 test('reviews warnings request bounded V4 repair for stale idle legacy no-work state outside the foreground response', async () => {
@@ -2855,4 +2858,12 @@ test('reviews warnings production api path remains owner-routed unless an ownerl
 
   expect(classification).toBe('owner-dependent')
   expect(shouldApiRouteProxyToDuckdbOwner(classification)).toBe(true)
+})
+
+test('reviews warnings route reuses reader diagnostics instead of duplicate current-db fanout', async () => {
+  const source = await globalThis.Bun.file(new URL('./projectsRoutesGetReviewsWarnings.ts', import.meta.url)).text()
+
+  expect(source).toContain('warningSnapshot.diagnostics.diagnostics')
+  expect(source).not.toContain('const [servingDiagnostics, warningSnapshot')
+  expect(source).not.toContain('Promise.all([\n      readReviewServingRows')
 })

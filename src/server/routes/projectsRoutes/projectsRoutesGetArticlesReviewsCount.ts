@@ -6,6 +6,11 @@ import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 const articlesReviewsCountLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const articlesReviewsCountErrorLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+const reviewServingSnapshotUnavailableError = 'Review serving snapshot is unavailable'
+
+const isReviewServingSnapshotUnavailableError = (error: unknown) => {
+  return error instanceof Error && error.message === reviewServingSnapshotUnavailableError
+}
 
 export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
   '/api/articlesreviewscount',
@@ -56,11 +61,18 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
 
       return result
     } catch (error) {
+      const isSnapshotUnavailable = isReviewServingSnapshotUnavailableError(error)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+
       articlesReviewsCountErrorLogger.force(
-        'projects.articles-reviews-count.error',
-        'Articles reviews count request failed',
-        'error',
-        {projectId: body.projectId, error: error instanceof Error ? error.message : String(error)},
+        isSnapshotUnavailable
+          ? 'projects.articles-reviews-count.snapshot-unavailable'
+          : 'projects.articles-reviews-count.error',
+        isSnapshotUnavailable
+          ? 'Articles reviews count request waiting for review serving snapshot'
+          : 'Articles reviews count request failed',
+        isSnapshotUnavailable ? 'warn' : 'error',
+        {projectId: body.projectId, error: errorMessage},
       )
       return {totalCount: 0, totalPages: 0, error: error instanceof Error ? error.message : 'Unknown error'}
     }

@@ -12,6 +12,69 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-02 - Low-Memory Startup Mutation Preflight
+
+- Error: `DuckDB startup preflight failed ... signal=SIGTRAP`, `Failed to create checkpoint ... Out of Memory Error ... (6.2 GiB/6.2 GiB used)`, followed by Bun `panic: A C++ exception occurred` in the maintenance owner.
+- Context: `bun dev:server` primary maintenance-worker startup/restart against the live DuckDB with missing review-serving snapshot work queued.
+- Cause: The startup WAL preflight proactively ran mutating indexed-table probes for all repair specs under the 6400MiB maintenance profile, which can create large WAL/checkpoint pressure on live V4 tables before normal maintenance begins.
+- Test gap: Existing startup/WAL tests covered recovery after replay/open failures and low-memory checkpoint thresholds, but did not assert that the primary maintenance-worker profile avoids the proactive all-table mutation probe before opening a large live database while still probing low-memory-safe worker-claim tables. The failure was therefore only visible in a current-DB dev stack run.
+- Fix: Low-memory runtimes now skip only the proactive all-table startup mutation preflight when no active repair marker exists, but still run the bounded `review_rebuild_chunk_manifest` claim-path probe. Targeted recovery still runs if a prior failed preflight left a marker.
+- Verification: `bun test src/server/utils/duckdbServiceReload.test.ts src/server/utils/duckdbServiceShutdown.test.ts src/server/utils/duckdbServiceMemoryLimit.test.ts`.
+
+## 2026-07-02 - Repaired Chunk Manifest Primary Index
+
+- Error: Maintenance owner reached `Elysia is running at 0.0.0.0:3002` and then exited with Bun `panic: A C++ exception occurred` as soon as the projector worker tried to claim a rebuild chunk.
+- Context: `app.review_rebuild_chunk_manifest` on the primary DuckDB after an earlier startup indexed-table repair. A direct no-op `UPDATE ... SET status = status WHERE chunk_id = ...` crashed, while updating non-indexed `last_error` did not.
+- Cause: The indexed-table repair script copied DuckDB table DDL including inline `PRIMARY KEY`, so the repaired table kept an internal primary index identity derived from the temporary `_startup_repair_...` table. Later indexed `status` updates hit an internal duplicate-key error on that stale primary-index structure.
+- Test gap: Existing repair tests asserted that a failed mutation preflight could trigger repair and reopen the DB, but did not inspect the generated repair DDL or prove that a repaired inline primary key table would be safe for subsequent indexed-column worker mutations. Synthetic worker tests also used freshly-created schemas, not a table lineage that had passed through startup repair.
+- Fix: The repair script now strips inline primary-key constraints for tables that opt into `repairPrimaryKeyColumns`, then recreates a normal unique index after renaming the repair table. Low-memory startup runs the bounded chunk-manifest mutation probe so this worker-claim failure is caught before background loops begin.
+- Verification: `bun test src/server/utils/duckdbServiceReload.test.ts src/server/utils/duckdbServiceShutdown.test.ts src/server/utils/duckdbServiceMemoryLimit.test.ts`; current-DB clone reproduction before live repair.
+
+## 2026-07-02 - Summary Rebuild Chunk Fanout
+
+- Error: Maintenance owner repeatedly claimed `summary` rebuild chunks for project `4ec939b2-47bb-48dd-ad62-ad9f4b5acecf` and then exited before marking the chunk failed; live chunks were around 4,914 input articles, below the generic high-fanout presplit threshold.
+- Context: Missing-snapshot review-serving rebuild on the primary DB. Summary chunk execution recomputed global filter-option rows while also processing an article range, so many range chunks multiplied a full-snapshot option refresh.
+- Cause: `summary` used the generic 5,000-row high-fanout runtime presplit threshold even though its per-article path also fans out through summary counts/facets/options. The global filter-option refresh was also attached to every summary chunk instead of the completed rebuild request.
+- Test gap: Existing rebuild tests covered large generic article-range presplitting and bounded summary admission, but not the observed near-threshold summary chunk size or the invariant that summary article-range chunks must not refresh global option tables per chunk.
+- Fix: Summary chunks now presplit at a lower component-specific threshold, and summary filter options refresh once during completed request finalization.
+- Verification: `bun test src/server/workers/reviewServingProjectorWorker.test.ts`.
+
+## 2026-07-02 - Summary Rebuild Burst Memory
+
+- Error: After startup and chunk-claim repair succeeded, the maintenance owner completed hundreds of `summary` rebuild chunks for project `4ec939b2-47bb-48dd-ad62-ad9f4b5acecf`, grew to roughly 11-14GB RSS, then exited with Bun `panic: A C++ exception occurred`.
+- Context: Live current-DB progress check against the primary review-serving backlog. Recent manifest rows showed `summary` chunks completing rapidly up to `2026-07-02 19:47:13+02` immediately before the maintenance restart loop.
+- Cause: The worker already recycled DuckDB after completed `llmStatus` and `humanStatus` chunks, but not after `summary` chunks. The recursive background loop could therefore run a long burst of summary chunks with no runtime recycle while native DuckDB/Bun memory accumulated.
+- Test gap: Existing worker tests checked recycling for status chunks and functional summary chunk completion, but not the memory-control invariant that completed summary chunks also recycle the embedded DuckDB runtime during long rebuild backlogs. The gap only appeared under the live primary backlog with thousands of pending summary chunks.
+- Fix: Completed `summary` rebuild chunks now trigger the same no-checkpoint DuckDB runtime recycle as status-heavy rebuild chunks.
+- Verification: `bun test src/server/workers/reviewServingProjectorWorker.test.ts`; live current-DB progress gate.
+
+## 2026-07-02 - LLM Status Rebuild Estimate Strings
+
+- Error: Live full-rebuild `llmStatus` chunks around 4,961 estimated rows were claimed as single chunks, then repeatedly pushed the maintenance owner into high native memory and Bun `panic: A C++ exception occurred`.
+- Context: `app.review_rebuild_chunk_manifest` rows persisted `estimated_input_rows` from DuckDB, and the worker pre-split path only accepted numeric JavaScript values.
+- Cause: DuckDB returned some persisted numeric estimates as strings, so `Number.isFinite(chunk.estimatedInputRows)` failed and near-threshold `llmStatus` chunks skipped the component-specific pre-split budget.
+- Test gap: Worker tests used in-memory numeric estimates, not rows hydrated from DuckDB-style string values, so they exercised the intended status split budget but missed the live serialization boundary.
+- Fix: Article-range pre-split now coerces positive finite numeric strings before comparing component-specific budgets, and status chunks pre-split to 16-row child ranges for native-heavy live rebuilds.
+- Verification: `bun test src/server/workers/reviewServingProjectorWorker.test.ts src/server/reviewServing/reviewServingChunkManifestRepository.test.ts`.
+
+## 2026-07-02 - LLM Status Full-Rebuild Prompt Fanout
+
+- Error: After chunk sizing was corrected, repeated small `llmStatus` full-rebuild chunks for project `d03fe24a-cfcf-41ed-b09f-7b554a393d80` still drove high RSS and maintenance restarts; warning/count routes then intermittently returned 502 because the owner died mid-request.
+- Context: Full rebuild chunks call `projectReviewServingLlmStatusPatches` with no dirty claims and a bounded article range.
+- Cause: The project-scoped LLM status query used both current project prompts and every prompt already present in the old `review_llm_status_patch_v4` base generation. The per-chunk serving-status update also re-read old patch rows for the changed articles. That legacy patch state is needed for dirty delta/project-review-config claims, but it is unnecessary and explosive during full rebuild chunks that delete/rewrite the scoped range at patch watermark 0.
+- Test gap: Existing projector tests asserted the dirty project-review-config claim query included old patch prompts, but there was no full-rebuild chunk test asserting that empty-claim rebuilds only fan out over current enabled prompts and do not re-scan old patch rows while updating serving status. The live-only shape combined a no-claims rebuild range, a large old patch table, and real prompt history.
+- Fix: Full rebuild chunks now use only current enabled, non-archived project prompts and compute serving status from the rebuilt rows only; dirty delta/project-review-config claims still union the previous patch state for tombstone and incremental coverage.
+- Verification: `bun test src/server/reviewServing/reviewServingLlmStatusProjector.test.ts`.
+
+## 2026-07-02 - Warnings Route Foreground Rebuild Mutation
+
+- Error: `POST /api/projectsreviewswarnings` for project `4ec939b2-47bb-48dd-ad62-ad9f4b5acecf` returned 502 and the maintenance owner restarted with Bun `panic: A C++ exception occurred` when server mutations were enabled, while the same request survived with `FORSKA_DISABLE_SERVER_MUTATIONS=true`.
+- Context: Missing-snapshot warnings response while the primary DB already had pending V4 rebuild chunks and the maintenance worker was active.
+- Cause: The warnings route treated pending or expired rebuild chunks as a reason to boost or enqueue foreground missing-snapshot repair. That made a status/diagnostics request perform indexed writes against rebuild-request state while the owner was already processing rebuild chunks. The read-only diagnostics path was not the crash trigger.
+- Test gap: Route tests covered disabled mutations and synthetic missing-snapshot bootstrap, but did not assert the current-DB invariant that a warnings request must not mutate rebuild priority/request state when diagnostics already show progressable V4 chunks. The current-DB gate had startup coverage, but not a mutation-enabled missing-snapshot warning probe during active maintenance work.
+- Fix: The warnings route now requests foreground missing-snapshot repair only when diagnostics show no V4 state that can progress. Existing pending/running/claimable rebuild chunks are reported to the caller and left to the maintenance worker.
+- Verification: `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts`; live current-DB warning-route repro.
+
 ## 2026-07-02 - Low-Memory Maintenance Auto-Checkpoint Regression
 
 - Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` followed by DuckDB fatal invalidation during `importJudgmentsCron`.

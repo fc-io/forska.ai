@@ -142,6 +142,7 @@ type ReviewServingProjectorWorkerDependencies = {
   nowMs?: () => number
   projectorServiceDependencies?: Omit<ReviewServingProjectorServiceDependencies, 'database' | 'nowMs'>
   rebuildChunkService?: ReviewServingProjectorWorkerRebuildChunkService
+  collectGarbageAfterCompletedRebuildChunk?: (chunk: ReviewServingRebuildChunkManifest) => Promise<void> | void
   recycleDuckdbAfterCompletedRebuildChunk?: (chunk: ReviewServingRebuildChunkManifest) => Promise<void>
   sleep: typeof sleep
   wakeProjectors: typeof wakeReviewServingProjectorService
@@ -265,6 +266,7 @@ type RebuildChunkOutputChecksumRow = {
   actualPayloadBytes?: number | null
 }
 type RebuildRequestPendingChunkCountRow = {pendingChunkCount: number}
+type RebuildRequestSummaryProjectionRow = {outputBaseGeneration: number; projectId: string; projectionIdentity: string}
 type RebuildRequestSnapshotPromotionRow = {projectId: string; reviewConfigHash: string | null; snapshotId: string}
 
 const defaultReviewServingProjectorWorkerBatchSize = 64
@@ -276,6 +278,7 @@ const defaultReviewServingProjectorWorkerMaxRowsPerWake = 512
 const defaultReviewServingProjectorWorkerMaxWakeMs = 5_000
 const defaultReviewServingProjectorWorkerPollIntervalMs = 2_000
 const defaultReviewServingProjectorWorkerProgressYieldMs = 100
+const nativeHeavyReviewServingProjectorWorkerProgressYieldMs = 1_000
 const defaultReviewServingProjectorWorkerErrorBackoffMs = 10_000
 const defaultReviewServingProjectorWorkerForegroundRebuildDrainChunkBudget = 4
 const defaultReviewServingProjectorWorkerForegroundRebuildDrainTtlMs = 5_000
@@ -294,10 +297,12 @@ const reviewServingCriticalRebuildComponents = [
   'summary',
   'payload',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
-const reviewServingRuntimeRecycleAfterRebuildComponents = new Set<ReviewServingProjectionComponent>([
+const reviewServingNativeHeavyRebuildComponents = new Set<ReviewServingProjectionComponent>([
   'llmStatus',
   'humanStatus',
+  'summary',
 ])
+const reviewServingDuckdbRecycleAfterRebuildComponents = new Set<ReviewServingProjectionComponent>(['summary'])
 const defaultReviewFilterOptionKeys = [
   'conflictFlag',
   'duplicateFlag',
@@ -460,8 +465,12 @@ const canSplitRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
 
 const articleRangeRebuildChunkPresplitInputRowLimit = 50_000
 const highFanoutArticleRangeRebuildChunkPresplitRowLimit = 5_000
+const summaryArticleRangeRebuildChunkPresplitRowLimit = 512
+const statusArticleRangeRebuildChunkPresplitRowLimit = 16
 const articleRangeRebuildChunkPresplitMaxBucketCount = 16
 const highFanoutArticleRangeRebuildChunkPresplitMaxBucketCount = 64
+const summaryArticleRangeRebuildChunkPresplitMaxBucketCount = 512
+const statusArticleRangeRebuildChunkPresplitMaxBucketCount = 512
 const splittableArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjectionComponent> = new Set([
   'projectScope',
   'display',
@@ -486,16 +495,37 @@ const highFanoutArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjecti
   'selectedImport',
   'summary',
 ])
+const statusArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjectionComponent> = new Set([
+  'humanStatus',
+  'llmStatus',
+])
 
 const getArticleRangeRebuildChunkPresplitRowLimit = (chunk: ReviewServingRebuildChunkManifest) => {
+  if (chunk.projectionComponent === 'summary') {
+    return summaryArticleRangeRebuildChunkPresplitRowLimit
+  }
+
+  if (statusArticleRangeRebuildComponents.has(chunk.projectionComponent)) {
+    return statusArticleRangeRebuildChunkPresplitRowLimit
+  }
+
   return highFanoutArticleRangeRebuildComponents.has(chunk.projectionComponent)
     ? highFanoutArticleRangeRebuildChunkPresplitRowLimit
     : articleRangeRebuildChunkPresplitInputRowLimit
 }
 
+const getPositiveFiniteNumber = (value: unknown) => {
+  const numericValue =
+    typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN
+
+  return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : null
+}
+
 const getArticleRangeRebuildChunkEstimatedRows = (chunk: ReviewServingRebuildChunkManifest) => {
-  const estimates = [chunk.estimatedInputRows, chunk.estimatedOutputRows].filter((estimate): estimate is number => {
-    return typeof estimate === 'number' && Number.isFinite(estimate) && estimate > 0
+  const estimates = [chunk.estimatedInputRows, chunk.estimatedOutputRows].flatMap((estimate) => {
+    const numericEstimate = getPositiveFiniteNumber(estimate)
+
+    return numericEstimate === null ? [] : [numericEstimate]
   })
 
   return estimates.length === 0 ? null : Math.max(...estimates)
@@ -504,9 +534,14 @@ const getArticleRangeRebuildChunkEstimatedRows = (chunk: ReviewServingRebuildChu
 const getArticleRangeRebuildChunkSplitBucketCount = (chunk: ReviewServingRebuildChunkManifest) => {
   const estimatedRows = getArticleRangeRebuildChunkEstimatedRows(chunk)
   const presplitRowLimit = getArticleRangeRebuildChunkPresplitRowLimit(chunk)
-  const maxBucketCount = highFanoutArticleRangeRebuildComponents.has(chunk.projectionComponent)
-    ? highFanoutArticleRangeRebuildChunkPresplitMaxBucketCount
-    : articleRangeRebuildChunkPresplitMaxBucketCount
+  const maxBucketCount =
+    chunk.projectionComponent === 'summary'
+      ? summaryArticleRangeRebuildChunkPresplitMaxBucketCount
+      : statusArticleRangeRebuildComponents.has(chunk.projectionComponent)
+        ? statusArticleRangeRebuildChunkPresplitMaxBucketCount
+        : highFanoutArticleRangeRebuildComponents.has(chunk.projectionComponent)
+          ? highFanoutArticleRangeRebuildChunkPresplitMaxBucketCount
+          : articleRangeRebuildChunkPresplitMaxBucketCount
 
   if (estimatedRows === null) {
     return 2
@@ -1582,7 +1617,6 @@ const runSummaryRebuildChunk = async (
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
-  const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
   const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
   const snapshotIds = getRebuildSnapshotIds(snapshots)
 
@@ -1606,7 +1640,6 @@ const runSummaryRebuildChunk = async (
 
         await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
           await previous
-          const searchIdentity = getSnapshotComponentState(snapshot, 'search')?.projectionIdentity ?? ''
 
           await projectReviewServingSummaries(
             {
@@ -1621,50 +1654,6 @@ const runSummaryRebuildChunk = async (
               projectionIdentity: input.chunk.projectionIdentity,
               reviewConfigHash: requireReviewConfigHash(snapshot),
               selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-              snapshotId: snapshot.snapshotId,
-            },
-            chunkDatabase,
-          )
-          await projectReviewServingFilterOptions(
-            {
-              acknowledgeClaims: false,
-              baseGeneration: input.chunk.outputBaseGeneration,
-              claims: [],
-              definitionVersion: manifest.definitionVersion,
-              filterOptionIdentity: getReviewServingFilterOptionIdentity({
-                filterKeys: defaultReviewFilterOptionKeys,
-                listModeKeys: reviewServingListModes,
-                optionMode: 'review',
-                searchIdentity,
-              }),
-              listModeKeys: reviewServingListModes,
-              optionMode: 'review',
-              projectId,
-              projectionIdentity: input.chunk.projectionIdentity,
-              reviewConfigHash: requireReviewConfigHash(snapshot),
-              searchIdentity,
-              snapshotId: snapshot.snapshotId,
-            },
-            chunkDatabase,
-          )
-          await projectReviewServingFilterOptions(
-            {
-              acknowledgeClaims: false,
-              baseGeneration: input.chunk.outputBaseGeneration,
-              claims: [],
-              definitionVersion: manifest.definitionVersion,
-              filterOptionIdentity: getReviewServingFilterOptionIdentity({
-                filterKeys: defaultHumanFilterOptionKeys,
-                listModeKeys: defaultReviewServingHumanListModeKeys,
-                optionMode: 'human',
-                searchIdentity,
-              }),
-              listModeKeys: defaultReviewServingHumanListModeKeys,
-              optionMode: 'human',
-              projectId,
-              projectionIdentity: input.chunk.projectionIdentity,
-              reviewConfigHash: requireReviewConfigHash(snapshot),
-              searchIdentity,
               snapshotId: snapshot.snapshotId,
             },
             chunkDatabase,
@@ -3214,14 +3203,23 @@ export const getDefaultReviewServingProjectorRunners = (
 }
 
 const shouldRecycleDuckdbAfterCompletedRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
-  return reviewServingRuntimeRecycleAfterRebuildComponents.has(chunk.projectionComponent)
+  return reviewServingDuckdbRecycleAfterRebuildComponents.has(chunk.projectionComponent)
+}
+
+const shouldCollectGarbageAfterCompletedRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
+  return reviewServingNativeHeavyRebuildComponents.has(chunk.projectionComponent)
 }
 
 const closeDuckdbAfterCompletedRebuildChunk = async () => {
   await closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
 }
 
+const collectGarbageAfterCompletedRebuildChunk = () => {
+  globalThis.Bun.gc(true)
+}
+
 const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWorkerDependencies = {
+  collectGarbageAfterCompletedRebuildChunk,
   cleanupRetentionState: cleanupReviewServingRetentionState,
   getDatabase: getAppDatabaseService as ReviewServingProjectorWorkerDependencies['getDatabase'],
   getCleanupTargets: (database) => {
@@ -3351,6 +3349,111 @@ const getRebuildRequestPendingChunkCount = async (
   `)
 
   return Number(row?.pendingChunkCount ?? 0)
+}
+
+const getRebuildRequestSummaryProjections = async (
+  requestId: string,
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  return database.queryJson<RebuildRequestSummaryProjectionRow>(`
+    SELECT DISTINCT
+      output_base_generation AS outputBaseGeneration,
+      project_id AS projectId,
+      projection_identity AS projectionIdentity
+    FROM app.review_rebuild_chunk_manifest
+    WHERE request_id = ${getSqlLiteral(requestId)}
+      AND projection_component = 'summary'
+      AND project_id IS NOT NULL
+    ORDER BY project_id ASC, projection_identity ASC, output_base_generation ASC
+  `)
+}
+
+const refreshCompletedRebuildRequestSummaryFilterOptions = async (
+  input: {requestId: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  const summaryProjections = await getRebuildRequestSummaryProjections(input.requestId, database)
+
+  await summaryProjections.reduce<Promise<void>>(async (previous, row) => {
+    await previous
+    const manifest = await getReviewServingProjectionIdentityManifest(
+      {projectId: row.projectId, projectionComponent: 'summary', projectionIdentity: row.projectionIdentity},
+      database,
+    )
+
+    if (manifest === null) {
+      throw new Error(`cannot refresh summary filter options without an identity manifest for ${row.projectId}`)
+    }
+
+    const snapshots = await requireSnapshotContexts(
+      {
+        component: 'summary',
+        projectId: row.projectId,
+        projectionIdentity: row.projectionIdentity,
+        reviewConfigHash: null,
+      },
+      database,
+    )
+    const matchingSnapshots = snapshots.filter((snapshot) => {
+      return getSnapshotComponentBaseGeneration(snapshot, 'summary') === Number(row.outputBaseGeneration)
+    })
+
+    if (matchingSnapshots.length === 0) {
+      throw new Error(
+        `cannot refresh summary filter options without snapshot state for base generation ${row.outputBaseGeneration}`,
+      )
+    }
+
+    await matchingSnapshots.reduce<Promise<void>>(async (previousSnapshot, snapshot) => {
+      await previousSnapshot
+      const searchIdentity = getSnapshotComponentState(snapshot, 'search')?.projectionIdentity ?? ''
+
+      await projectReviewServingFilterOptions(
+        {
+          acknowledgeClaims: false,
+          baseGeneration: Number(row.outputBaseGeneration),
+          claims: [],
+          definitionVersion: manifest.definitionVersion,
+          filterOptionIdentity: getReviewServingFilterOptionIdentity({
+            filterKeys: defaultReviewFilterOptionKeys,
+            listModeKeys: reviewServingListModes,
+            optionMode: 'review',
+            searchIdentity,
+          }),
+          listModeKeys: reviewServingListModes,
+          optionMode: 'review',
+          projectId: row.projectId,
+          projectionIdentity: row.projectionIdentity,
+          reviewConfigHash: requireReviewConfigHash(snapshot),
+          searchIdentity,
+          snapshotId: snapshot.snapshotId,
+        },
+        database,
+      )
+      await projectReviewServingFilterOptions(
+        {
+          acknowledgeClaims: false,
+          baseGeneration: Number(row.outputBaseGeneration),
+          claims: [],
+          definitionVersion: manifest.definitionVersion,
+          filterOptionIdentity: getReviewServingFilterOptionIdentity({
+            filterKeys: defaultHumanFilterOptionKeys,
+            listModeKeys: defaultReviewServingHumanListModeKeys,
+            optionMode: 'human',
+            searchIdentity,
+          }),
+          listModeKeys: defaultReviewServingHumanListModeKeys,
+          optionMode: 'human',
+          projectId: row.projectId,
+          projectionIdentity: row.projectionIdentity,
+          reviewConfigHash: requireReviewConfigHash(snapshot),
+          searchIdentity,
+          snapshotId: snapshot.snapshotId,
+        },
+        database,
+      )
+    }, Promise.resolve())
+  }, Promise.resolve())
 }
 
 const getRebuildRequestSnapshotPromotions = async (
@@ -3511,6 +3614,8 @@ const finalizeCompletedReviewServingRebuildRequest = async (
     return
   }
 
+  await refreshCompletedRebuildRequestSummaryFilterOptions({requestId: chunk.requestId}, database)
+
   const promotionRows = await getRebuildRequestSnapshotPromotions(chunk.requestId, database)
   const promotions = await promotionRows.reduce<
     Promise<Awaited<ReturnType<typeof promoteReviewServingProjectorSnapshot>>[]>
@@ -3661,7 +3766,15 @@ const shouldYieldToForegroundRebuildReader = (input: {
   nowMs: number
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
-  return shouldPrioritizeNextRebuildChunk(input)
+  return input.chunk.status === 'completed' && input.chunk.requestId !== null
+}
+
+const getReviewServingProjectorWorkerProgressYieldMs = (chunk: ReviewServingProjectorWorkerChunkResult) => {
+  return chunk.status === 'completed'
+    && chunk.requestId !== null
+    && reviewServingNativeHeavyRebuildComponents.has(chunk.projectionComponent)
+    ? nativeHeavyReviewServingProjectorWorkerProgressYieldMs
+    : defaultReviewServingProjectorWorkerProgressYieldMs
 }
 
 const getNextForegroundRebuildDrainOptions = (input: {
@@ -3769,9 +3882,15 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
 
   try {
     await finalizeCompletedReviewServingRebuildRequest(claimedChunk, database)
-    if (shouldRecycleDuckdbAfterCompletedRebuildChunk(claimedChunk)) {
+    if (
+      shouldRecycleDuckdbAfterCompletedRebuildChunk(claimedChunk)
+      || shouldCollectGarbageAfterCompletedRebuildChunk(claimedChunk)
+    ) {
       try {
-        await dependencies.recycleDuckdbAfterCompletedRebuildChunk?.(claimedChunk)
+        if (shouldRecycleDuckdbAfterCompletedRebuildChunk(claimedChunk)) {
+          await dependencies.recycleDuckdbAfterCompletedRebuildChunk?.(claimedChunk)
+        }
+        await dependencies.collectGarbageAfterCompletedRebuildChunk?.(claimedChunk)
       } catch (error) {
         reviewServingProjectorWorkerCycleLogger.warn(
           'review-serving-projector-worker:duckdb-recycle-failed',
@@ -3982,7 +4101,7 @@ export const runReviewServingProjectorWorker = async (
     cycleResult.status === 'failed'
       ? (options.errorBackoffMs ?? defaultReviewServingProjectorWorkerErrorBackoffMs)
       : shouldYieldToForegroundRebuildReader({chunk: cycleResult.chunk, nowMs, options})
-        ? defaultReviewServingProjectorWorkerProgressYieldMs
+        ? getReviewServingProjectorWorkerProgressYieldMs(cycleResult.chunk)
         : cycleResult.status === 'idle'
           ? (options.pollIntervalMs ?? defaultReviewServingProjectorWorkerPollIntervalMs)
           : 0
@@ -4014,6 +4133,7 @@ export {
   defaultReviewServingProjectorWorkerMaxWakeMs,
   defaultReviewServingProjectorWorkerPollIntervalMs,
   defaultReviewServingProjectorWorkerProgressYieldMs,
+  nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
 }
 
 export type {

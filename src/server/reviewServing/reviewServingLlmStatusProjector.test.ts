@@ -133,6 +133,9 @@ test('LLM judgment deltas write component-narrow status patches from persisted b
   const insertStatement = statements.find((statement) => {
     return statement.includes('INSERT INTO mart.review_llm_status_patch_v4')
   })
+  const applyStatement = statements.find((statement) => {
+    return statement.includes('UPDATE mart.review_article_serving_v4 serving')
+  })
 
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
   expect(selectStatement).toContain('delta.model_id AS modelId')
@@ -161,6 +164,7 @@ test('LLM judgment deltas write component-narrow status patches from persisted b
   expect(insertStatement).toContain(
     'ON CONFLICT(project_id, review_config_hash, prompt_config_hash, base_generation, patch_watermark, list_mode_key, article_id, prompt_id)',
   )
+  expect(applyStatement).toContain('FROM mart.review_llm_status_patch_v4 llm')
   expect(statements.join('\n')).toContain('UPDATE mart.review_article_serving_v4 serving')
 })
 
@@ -259,6 +263,31 @@ test('project review config claims rebuild project-scoped LLM status rows', asyn
     'COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone',
   )
   expect(projectSelect).toContain('WHERE llm.project_id =')
+})
+
+test('LLM full rebuild chunks fan out only over current enabled prompts', async () => {
+  const {database, statements} = createLlmStatusDatabase({projectRows: [llmStatusRow({articleId: 'article-3'})]})
+
+  const result = await projectReviewServingLlmStatusPatches(
+    {...projectInput([]), chunkEndArticleId: 'article-3', chunkStartArticleId: 'article-3'},
+    database,
+  )
+  const projectSelect = statements.find((statement) => {
+    return statement.includes('WITH prompt_id_filter(prompt_id) AS') && statement.includes('scoped_article AS')
+  })
+  const applyStatement = statements.find((statement) => {
+    return statement.includes('UPDATE mart.review_article_serving_v4 serving')
+  })
+
+  expect(result).toEqual({patchRowCount: 1, patchWatermark: 0})
+  expect(projectSelect).toContain('FROM app.project_prompt project_prompt')
+  expect(projectSelect).toContain('INNER JOIN app.prompt prompt')
+  expect(projectSelect).toContain('project_prompt.enabled')
+  expect(projectSelect).toContain('NOT project_prompt.archived')
+  expect(projectSelect).toContain('COALESCE(prompt.archived, FALSE) = FALSE')
+  expect(projectSelect).not.toContain('UNION')
+  expect(projectSelect).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
+  expect(applyStatement).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
 })
 
 test('LLM rebuild chunks replace scoped patch rows before bounded inserts', async () => {

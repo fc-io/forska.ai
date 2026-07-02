@@ -395,6 +395,28 @@ const getPromptScopedRows = async (
       `)
 }
 
+const getProjectScopedPromptFilterSql = (input: ProjectReviewServingLlmStatusInput) => {
+  const currentEnabledPromptSql = `
+    SELECT project_prompt.prompt_id
+    FROM app.project_prompt project_prompt
+    INNER JOIN app.prompt prompt
+      ON prompt.id = project_prompt.prompt_id
+    WHERE project_prompt.project_id = ${getSqlLiteral(input.projectId)}
+      AND project_prompt.enabled
+      AND NOT project_prompt.archived
+      AND COALESCE(prompt.archived, FALSE) = FALSE
+  `
+
+  return input.claims.length === 0
+    ? currentEnabledPromptSql
+    : `${currentEnabledPromptSql}
+      UNION
+      SELECT llm.prompt_id
+      FROM mart.review_llm_status_patch_v4 llm
+      WHERE llm.project_id = ${getSqlLiteral(input.projectId)}
+        AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}`
+}
+
 const getProjectScopedRows = async (
   input: ProjectReviewServingLlmStatusInput,
   database: ReviewServingLlmStatusProjectorDatabase,
@@ -403,14 +425,7 @@ const getProjectScopedRows = async (
     ? []
     : database.queryJson<LlmStatusSourceRow>(`
         WITH prompt_id_filter(prompt_id) AS (
-          SELECT project_prompt.prompt_id
-          FROM app.project_prompt project_prompt
-          WHERE project_prompt.project_id = ${getSqlLiteral(input.projectId)}
-          UNION
-          SELECT llm.prompt_id
-          FROM mart.review_llm_status_patch_v4 llm
-          WHERE llm.project_id = ${getSqlLiteral(input.projectId)}
-            AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
+          ${getProjectScopedPromptFilterSql(input)}
         ), scoped_article AS (
           SELECT scope.article_id
           FROM mart.project_scope_article scope
@@ -648,6 +663,7 @@ const getLlmStatusPatchManifest = (
 
 const getApplyLlmStatusServingStatement = (input: {
   baseGeneration: number
+  includeExistingPatchRows: boolean
   patchWatermark: number
   projectId: string
   projectionIdentity: string
@@ -686,24 +702,7 @@ const getApplyLlmStatusServingStatement = (input: {
           ${getSqlLiteral(input.patchWatermark)} AS patch_watermark
         FROM changed
         GROUP BY changed.review_config_hash, changed.list_mode_key, changed.article_id, changed.prompt_config_hash, changed.prompt_id, changed.llm_status_key, changed.tombstone
-        UNION ALL
-        SELECT
-          llm.review_config_hash,
-          llm.list_mode_key,
-          llm.article_id,
-          llm.prompt_config_hash,
-          llm.prompt_id,
-          llm.llm_status_key,
-          llm.tombstone,
-          llm.patch_watermark
-        FROM mart.review_llm_status_patch_v4 llm
-        INNER JOIN changed_article changed
-          ON changed.review_config_hash = llm.review_config_hash
-          AND changed.list_mode_key = llm.list_mode_key
-          AND changed.article_id = llm.article_id
-        WHERE llm.project_id = ${getSqlLiteral(input.projectId)}
-          AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
-          AND llm.patch_watermark <= ${getSqlLiteral(input.patchWatermark)}
+        ${input.includeExistingPatchRows ? getExistingLlmStatusPatchRowsSql(input) : ''}
       ), latest_prompt AS (
         SELECT candidate.*
         FROM candidate_prompt candidate
@@ -751,6 +750,31 @@ const getApplyLlmStatusServingStatement = (input: {
             AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
             AND snapshot.snapshot_status IN ('candidate', 'active')
         )`
+}
+
+const getExistingLlmStatusPatchRowsSql = (input: {
+  baseGeneration: number
+  patchWatermark: number
+  projectId: string
+}) => {
+  return `UNION ALL
+    SELECT
+      llm.review_config_hash,
+      llm.list_mode_key,
+      llm.article_id,
+      llm.prompt_config_hash,
+      llm.prompt_id,
+      llm.llm_status_key,
+      llm.tombstone,
+      llm.patch_watermark
+    FROM mart.review_llm_status_patch_v4 llm
+    INNER JOIN changed_article changed
+      ON changed.review_config_hash = llm.review_config_hash
+      AND changed.list_mode_key = llm.list_mode_key
+      AND changed.article_id = llm.article_id
+    WHERE llm.project_id = ${getSqlLiteral(input.projectId)}
+      AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
+      AND llm.patch_watermark <= ${getSqlLiteral(input.patchWatermark)}`
 }
 
 const getDeleteRebuiltLlmStatusPatchRowsStatement = (input: {
@@ -837,6 +861,7 @@ export const projectReviewServingLlmStatusPatches = async (
           : null,
         getApplyLlmStatusServingStatement({
           baseGeneration: input.baseGeneration,
+          includeExistingPatchRows: input.claims.length > 0,
           patchWatermark,
           projectId: input.projectId,
           projectionIdentity: input.projectionIdentity,

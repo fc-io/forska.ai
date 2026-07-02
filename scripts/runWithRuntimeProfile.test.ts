@@ -56,6 +56,8 @@ const bunExecutablePath = realpathSync(process.execPath)
 const realDevServerSmokeEnabled = process.env.FORSKA_REAL_DEV_SERVER_SMOKE === 'true'
 const reviewServingProgressProjectId =
   process.env.FORSKA_REVIEW_SERVING_PROGRESS_PROJECT_ID ?? 'd03fe24a-cfcf-41ed-b09f-7b554a393d80'
+const reviewServingWarningRouteProbeProjectId =
+  process.env.FORSKA_REVIEW_SERVING_WARNING_ROUTE_PROBE_PROJECT_ID ?? '4ec939b2-47bb-48dd-ad62-ad9f4b5acecf'
 const staleReviewServingQueuedProgressMs = 10 * 60_000
 const reviewServingWarningFetchTimeoutMs = 60_000
 const forbiddenDevServerOutputPatterns = [
@@ -408,6 +410,19 @@ const getRequiredRuntimePids = async (ports: [number, number, number]) => {
   return pids as [number, number, number]
 }
 
+const expectCurrentDbReviewServingWarningRouteSurvives = async (
+  apiPort: number,
+  runtimePorts: [number, number, number],
+) => {
+  const pidsBefore = await getRequiredRuntimePids(runtimePorts)
+  const body = await postReviewWarnings(apiPort, reviewServingWarningRouteProbeProjectId)
+
+  expect(body.data?.indexing?.status).toBeDefined()
+
+  await waitFor(3_000)
+  expect(await getRequiredRuntimePids(runtimePorts)).toEqual(pidsBefore)
+}
+
 const readPipeText = async (pipe: SpawnedProcess['stdout']) => {
   return pipe instanceof ReadableStream ? await new Response(pipe).text() : ''
 }
@@ -694,6 +709,13 @@ test(
         waitFor(17_000),
         devServerProcess.exited.then((exitCode) => {
           throw new Error(`dev:server exited during startup settle with code ${String(exitCode)}`)
+        }),
+      ])
+
+      await Promise.race([
+        expectCurrentDbReviewServingWarningRouteSurvives(3001, [3001, 3002, 3003]),
+        devServerProcess.exited.then((exitCode) => {
+          throw new Error(`dev:server exited during review-serving warning route probe with code ${String(exitCode)}`)
         }),
       ])
 

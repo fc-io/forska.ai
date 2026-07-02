@@ -215,19 +215,18 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const projectId = body.projectId
     await assertProjectIsActive(projectId)
     const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
-    const [servingDiagnostics, warningSnapshot, enabledPromptCount, hasAnyArticlesInScope] = await Promise.all([
-      getReviewServingDiagnostics({projectId, reviewConfigHash}),
-      readReviewServingRows({
-        allowStale: true,
-        contractKey: 'review.warning.snapshot',
-        estimatedResultRows: 1,
-        limit: 1,
-        projectId,
-        reviewConfigHash,
-      }),
-      getEnabledPromptCount(projectId),
-      getHasArticlesInScope(projectId),
-    ])
+    const warningSnapshot = await readReviewServingRows({
+      allowStale: true,
+      contractKey: 'review.warning.snapshot',
+      estimatedResultRows: 1,
+      limit: 1,
+      projectId,
+      reviewConfigHash,
+    })
+    const enabledPromptCount = await getEnabledPromptCount(projectId)
+    const hasAnyArticlesInScope = await getHasArticlesInScope(projectId)
+    const servingDiagnostics =
+      warningSnapshot.diagnostics.diagnostics ?? (await getReviewServingDiagnostics({projectId, reviewConfigHash}))
     const hasReviewServingRows =
       warningSnapshot.status === 'accepted'
       && isUsableReviewServingWarningSnapshot(warningSnapshot.diagnostics.manifest.status)
@@ -252,17 +251,12 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     )
 
     const hasRecentProgress = getHasRecentReviewServingProgress(lastProgressedAt)
-    const hasStaleQueuedRebuildWork =
-      !hasRecentProgress && inFlightRebuildChunkCount === 0 && totalQueuedRebuildChunkCount > 0
+    const hasReviewServingStateThatCanProgress = getHasReviewServingStateThatCanProgress(servingDiagnostics)
     const shouldRequestForegroundRepair =
       !isServerMutationWorkDisabled
-      && (shouldPrioritizeMissingSnapshotRepair || hasStaleQueuedRebuildWork)
-      && (hasStaleQueuedRebuildWork
-        || !hasRecentProgress
-        || !getHasReviewServingStateThatCanProgress(servingDiagnostics))
-      && (!getHasReviewServingStateThatCanProgress(servingDiagnostics)
-        || servingDiagnostics.rebuildChunks.pendingCount > 0
-        || expiredRebuildChunkLeaseCount > 0)
+      && shouldPrioritizeMissingSnapshotRepair
+      && !hasRecentProgress
+      && !hasReviewServingStateThatCanProgress
 
     if (shouldRequestForegroundRepair) {
       const priority = hasRecentProgress

@@ -534,23 +534,13 @@ export const getReviewServingDiagnosticsEffect = (
   database: ReviewServingDiagnosticsDatabase = getDiagnosticsDatabase(),
 ) => {
   return Effect.gen(function* () {
-    const [
-      activeSnapshots,
-      snapshotStatusCounts,
-      dirtyWorkRows,
-      rebuildChunkRows,
-      quarantineRows,
-      barrierRows,
-      cursorRows,
-    ] = yield* Effect.all([
-      getActiveSnapshotRowsEffect(input, database),
-      getSnapshotStatusCountRowsEffect(input, database),
-      getDirtyWorkRowsEffect(input, database),
-      getRebuildChunkRowsEffect(input, database),
-      getQuarantineRowsEffect(input, database),
-      getOldestBarrierRowsEffect(input, database),
-      getQuarantinedCursorRowsEffect(input, database),
-    ])
+    const activeSnapshots = yield* getActiveSnapshotRowsEffect(input, database)
+    const snapshotStatusCounts = yield* getSnapshotStatusCountRowsEffect(input, database)
+    const dirtyWorkRows = yield* getDirtyWorkRowsEffect(input, database)
+    const rebuildChunkRows = yield* getRebuildChunkRowsEffect(input, database)
+    const quarantineRows = yield* getQuarantineRowsEffect(input, database)
+    const barrierRows = yield* getOldestBarrierRowsEffect(input, database)
+    const cursorRows = yield* getQuarantinedCursorRowsEffect(input, database)
     const activeSnapshot = activeSnapshots[0]
     const dirtyWork = getCountState(dirtyWorkRows[0])
     const rebuildChunks = getRebuildChunkState(rebuildChunkRows[0])

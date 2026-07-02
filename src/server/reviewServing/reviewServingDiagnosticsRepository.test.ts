@@ -161,3 +161,32 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   expect(statements.join('\n')).toContain('app.review_source_change_outbox')
   expect(statements.join('\n')).toContain('app.review_delta_reconciliation_cursor')
 })
+
+test('review serving diagnostics query sequentially instead of fanning out owner reads', async () => {
+  const {database} = createDiagnosticsDatabase()
+  let activeQueryCount = 0
+  let maxActiveQueryCount = 0
+  const guardedDatabase: ReviewServingDiagnosticsDatabase = {
+    queryJson: async <T>(statement: string) => {
+      activeQueryCount += 1
+      maxActiveQueryCount = Math.max(maxActiveQueryCount, activeQueryCount)
+
+      try {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0)
+        })
+
+        return database.queryJson<T>(statement)
+      } finally {
+        activeQueryCount -= 1
+      }
+    },
+  }
+
+  await getReviewServingDiagnostics(
+    {now: '2026-06-18T10:05:00.000Z', projectId: 'project-1', reviewConfigHash: 'review-config-1'},
+    guardedDatabase,
+  )
+
+  expect(maxActiveQueryCount).toBe(1)
+})
