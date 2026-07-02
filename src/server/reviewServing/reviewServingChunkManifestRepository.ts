@@ -88,6 +88,52 @@ export type ReviewServingRebuildChunkManifest = ReviewServingRebuildChunkIdentit
 export type ReviewServingRebuildChunkManifestInput = ReviewServingRebuildChunkIdentity
   & ReviewServingRebuildChunkBudgetFields & {checksum?: string | null; status?: ReviewServingRebuildChunkStatus}
 
+export type ReviewServingRebuildTimingDiagnosticsInput = {
+  limit?: number
+  projectId?: string | null
+  requestId?: string | null
+}
+
+export type ReviewServingRebuildTimingSummaryRow = {
+  avgDurationMs: number | null
+  avgValidationMs: number | null
+  avgWriteOutputMs: number | null
+  chunkCount: number
+  completedCount: number
+  failedCount: number
+  maxDurationMs: number | null
+  maxValidationMs: number | null
+  maxWriteOutputMs: number | null
+  pendingCount: number
+  projectId: string | null
+  projectionComponent: ReviewServingProjectionComponent
+  requestId: string | null
+  runningCount: number
+  status: ReviewServingRebuildChunkStatus
+  totalActualOutputRows: number | null
+}
+
+export type ReviewServingRebuildClaimableChunkRow = {
+  chunkEndKey: string
+  chunkId: string
+  chunkStartKey: string
+  durationMs: number | null
+  estimatedInputRows: number | null
+  estimatedOutputRows: number | null
+  projectId: string | null
+  projectionComponent: ReviewServingProjectionComponent
+  requestId: string | null
+  splitDepth: number | null
+  status: ReviewServingRebuildChunkStatus
+  updatedAt: string
+}
+
+export type ReviewServingRebuildTimingDiagnostics = {
+  claimablePendingChunks: ReviewServingRebuildClaimableChunkRow[]
+  filters: {limit: number; projectId: string | null; requestId: string | null}
+  phaseTimings: ReviewServingRebuildTimingSummaryRow[]
+}
+
 export type ReviewServingRebuildChunkValidationResult = {
   actualChecksum: string
   actualCount?: number
@@ -194,6 +240,30 @@ const getOptionalRowNumber = (value: number | string | null | undefined) => {
 
 const getJsonSqlLiteral = (value: unknown) => {
   return getSqlLiteral(getStableReviewServingJson(value ?? {}))
+}
+
+const getObjectValue = (value: unknown): Record<string, unknown> => {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+const getNonNegativeElapsedMs = (startedAtMs: number) => {
+  return Math.max(0, Date.now() - startedAtMs)
+}
+
+const getMergedRebuildChunkDiagnosticsJson = (input: {
+  diagnosticsJson?: unknown
+  phaseTimings: Record<string, number>
+  validationDiagnosticsJson?: unknown
+}) => {
+  const inputDiagnosticsJson = getObjectValue(input.diagnosticsJson)
+  const validationDiagnosticsJson = getObjectValue(input.validationDiagnosticsJson)
+  const phaseTimings = {
+    ...getObjectValue(inputDiagnosticsJson.phaseTimings),
+    ...getObjectValue(validationDiagnosticsJson.phaseTimings),
+    ...input.phaseTimings,
+  }
+
+  return {...inputDiagnosticsJson, ...validationDiagnosticsJson, phaseTimings}
 }
 
 const releasableRebuildChunkStatusSql = "('completed', 'running', 'failed', 'blocked_over_budget', 'quarantined')"
@@ -369,6 +439,104 @@ const getRebuildChunkSingleComponentPrerequisitePredicate = (
           AND prerequisite.status <> 'completed'
       )
     `
+}
+
+const getReviewServingRebuildTimingDiagnosticsLimit = (limit: number | undefined) => {
+  return Number.isInteger(limit) && limit !== undefined && limit > 0 ? Math.min(limit, 500) : 50
+}
+
+const getReviewServingRebuildTimingDiagnosticsPredicate = (input: ReviewServingRebuildTimingDiagnosticsInput) => {
+  const filters = [
+    input.requestId ? `chunk.request_id = ${getSqlLiteral(input.requestId)}` : null,
+    input.projectId ? `chunk.project_id = ${getSqlLiteral(input.projectId)}` : null,
+  ].filter((filter): filter is string => {
+    return filter !== null
+  })
+
+  if (filters.length > 0) {
+    return filters.join('\n      AND ')
+  }
+
+  return `
+      chunk.request_id IN (
+        SELECT request.request_id
+        FROM app.review_rebuild_request request
+        ORDER BY request.updated_at DESC, request.request_id DESC
+        LIMIT 5
+      )
+  `
+}
+
+export const getReviewServingRebuildTimingDiagnostics = async (
+  input: ReviewServingRebuildTimingDiagnosticsInput = {},
+  database: ReviewServingChunkManifestRepositoryDatabase = getReviewServingChunkManifestDatabase(),
+): Promise<ReviewServingRebuildTimingDiagnostics> => {
+  const limit = getReviewServingRebuildTimingDiagnosticsLimit(input.limit)
+  const scopePredicate = getReviewServingRebuildTimingDiagnosticsPredicate(input)
+  const phaseTimings = await database.queryJson<ReviewServingRebuildTimingSummaryRow>(`
+    SELECT
+      chunk.request_id AS requestId,
+      chunk.project_id AS projectId,
+      chunk.projection_component AS projectionComponent,
+      chunk.status AS status,
+      CAST(COUNT(*) AS INTEGER) AS chunkCount,
+      CAST(SUM(CASE WHEN chunk.status = 'completed' THEN 1 ELSE 0 END) AS INTEGER) AS completedCount,
+      CAST(SUM(CASE WHEN chunk.status = 'running' THEN 1 ELSE 0 END) AS INTEGER) AS runningCount,
+      CAST(SUM(CASE WHEN chunk.status = 'pending' THEN 1 ELSE 0 END) AS INTEGER) AS pendingCount,
+      CAST(SUM(CASE WHEN chunk.status = 'failed' THEN 1 ELSE 0 END) AS INTEGER) AS failedCount,
+      AVG(chunk.duration_ms) AS avgDurationMs,
+      MAX(chunk.duration_ms) AS maxDurationMs,
+      AVG(TRY_CAST(json_extract_string(chunk.diagnostics_json, '$.phaseTimings.writeOutputMs') AS DOUBLE)) AS avgWriteOutputMs,
+      MAX(TRY_CAST(json_extract_string(chunk.diagnostics_json, '$.phaseTimings.writeOutputMs') AS DOUBLE)) AS maxWriteOutputMs,
+      AVG(TRY_CAST(json_extract_string(chunk.diagnostics_json, '$.phaseTimings.validationMs') AS DOUBLE)) AS avgValidationMs,
+      MAX(TRY_CAST(json_extract_string(chunk.diagnostics_json, '$.phaseTimings.validationMs') AS DOUBLE)) AS maxValidationMs,
+      SUM(chunk.actual_output_rows) AS totalActualOutputRows
+    FROM app.review_rebuild_chunk_manifest chunk
+    WHERE ${scopePredicate}
+    GROUP BY
+      chunk.request_id,
+      chunk.project_id,
+      chunk.projection_component,
+      chunk.status
+    ORDER BY
+      chunk.request_id DESC NULLS LAST,
+      chunk.project_id ASC NULLS LAST,
+      ${getRebuildChunkClaimPrioritySql('chunk')} ASC,
+      chunk.status ASC
+  `)
+  const claimablePendingChunks = await database.queryJson<ReviewServingRebuildClaimableChunkRow>(`
+    SELECT
+      chunk.chunk_id AS chunkId,
+      chunk.request_id AS requestId,
+      chunk.project_id AS projectId,
+      chunk.projection_component AS projectionComponent,
+      chunk.status AS status,
+      chunk.chunk_start_key AS chunkStartKey,
+      chunk.chunk_end_key AS chunkEndKey,
+      chunk.split_depth AS splitDepth,
+      chunk.estimated_input_rows AS estimatedInputRows,
+      chunk.estimated_output_rows AS estimatedOutputRows,
+      chunk.duration_ms AS durationMs,
+      chunk.updated_at AS updatedAt
+    FROM app.review_rebuild_chunk_manifest chunk
+    WHERE ${scopePredicate}
+      AND chunk.admission_state = 'admitted'
+      AND chunk.status IN ('pending', 'failed')
+      AND (${getRebuildChunkComponentPrerequisitePredicate('chunk')})
+    ORDER BY
+      ${getRebuildChunkClaimRequestPrioritySql('chunk')} DESC NULLS LAST,
+      ${getRebuildChunkClaimLaneSql('chunk')} ASC,
+      ${getRebuildChunkClaimPrioritySql('chunk')} ASC,
+      chunk.updated_at ASC,
+      chunk.chunk_id ASC
+    LIMIT ${limit}
+  `)
+
+  return {
+    claimablePendingChunks,
+    filters: {limit, projectId: input.projectId ?? null, requestId: input.requestId ?? null},
+    phaseTimings,
+  }
 }
 
 const getChunkRequestId = (input: ReviewServingRebuildChunkIdentity) => {
@@ -1142,21 +1310,21 @@ export const writeReviewServingRebuildChunkOutput = async (
 ) => {
   const chunkId = getReviewServingRebuildChunkId(input)
   const startedAtMs = Date.now()
+  const phaseTimings: Record<string, number> = {}
   const completeChunk = async (tx: ReviewServingChunkManifestRepositoryTransaction) => {
+    const validationStartedAtMs = Date.now()
     const validation = await input.validateOutput(tx)
+    phaseTimings.validationMs = getNonNegativeElapsedMs(validationStartedAtMs)
     const validationError = getReviewServingRebuildChunkValidationError(validation)
-    const durationMs = Date.now() - startedAtMs
+    phaseTimings.totalBeforeCompletionMs = getNonNegativeElapsedMs(startedAtMs)
+    const durationMs = phaseTimings.totalBeforeCompletionMs
     const actualInputRows = validation.actualInputRows ?? input.actualInputRows ?? input.estimatedInputRows ?? null
     const actualOutputRows = validation.actualOutputRows ?? validation.actualCount ?? input.actualOutputRows ?? null
-    const inputDiagnosticsJson =
-      input.diagnosticsJson && typeof input.diagnosticsJson === 'object'
-        ? (input.diagnosticsJson as Record<string, unknown>)
-        : {}
-    const validationDiagnosticsJson =
-      validation.diagnosticsJson && typeof validation.diagnosticsJson === 'object'
-        ? (validation.diagnosticsJson as Record<string, unknown>)
-        : {}
-    const diagnosticsJson = {...inputDiagnosticsJson, ...validationDiagnosticsJson}
+    const diagnosticsJson = getMergedRebuildChunkDiagnosticsJson({
+      diagnosticsJson: input.diagnosticsJson,
+      phaseTimings,
+      validationDiagnosticsJson: validation.diagnosticsJson,
+    })
 
     if (validationError !== null) {
       throw getReviewServingRebuildChunkValidationFailure(validationError)
@@ -1197,7 +1365,9 @@ export const writeReviewServingRebuildChunkOutput = async (
         return null
       }
 
+      const writeOutputStartedAtMs = Date.now()
       await input.writeOutput(database)
+      phaseTimings.writeOutputMs = getNonNegativeElapsedMs(writeOutputStartedAtMs)
 
       return await database.transaction(async (tx) => {
         const claimed = await getReviewServingRebuildChunkManifest({chunkId}, tx)
@@ -1215,7 +1385,9 @@ export const writeReviewServingRebuildChunkOutput = async (
         return null
       }
 
+      const writeOutputStartedAtMs = Date.now()
       await input.writeOutput(tx)
+      phaseTimings.writeOutputMs = getNonNegativeElapsedMs(writeOutputStartedAtMs)
       return completeChunk(tx)
     })
   } catch (error) {

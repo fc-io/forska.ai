@@ -12,7 +12,7 @@ Current implementation status, based on source inspection against this plan:
 
 | Phase | Status | Current Evidence |
 | --- | --- | --- |
-| Phase 0 - Instrument Before Optimizing | Partially implemented | Chunk completion now writes `duration_ms`, actual output rows/bytes/payload bytes, and `diagnostics_json`; cheap validation records `validationMode`. Fine-grained phase timings, source/query/transform/write timing splits, and an operator timing query are not implemented. |
+| Phase 0 - Instrument Before Optimizing | Mostly implemented | Chunk completion now writes `duration_ms`, actual output rows/bytes/payload bytes, and `diagnostics_json`; cheap validation records `validationMode`; chunk diagnostics include write/validation timing splits; worker progress logs include claim/heartbeat/execute/finalize/recycle/GC timings; `db:duck:inspect-review-serving-rebuild-timings` summarizes per-request timings and claimable pending chunks. Fine-grained source-query/JS-transform/per-table writer timing is still pending for components that do not use SQL-native writers. |
 | Phase 1 - Fix The Scheduler | Partially implemented | Claiming now uses component prerequisites and critical-lane/priority ordering instead of the old fixed waterfall; tests cover independent claimability. Foreground rebuild drain budget/TTL exists. A separate critical/bulk queue model is not implemented, and the worker still claims/runs one rebuild chunk per cycle. |
 | Phase 2 - Batch Or SQL-Native Writes | Partially implemented | Generic record writes are batched by table/key/shape in `writeReviewServingProjectorRecords`; `search` and `queue` rebuilds have SQL-native `INSERT INTO ... SELECT` paths. `judgmentInputContent` still calls projector SQL but validation/looping remains component-specific, and `posting` still materializes rows/contribution diffs in JS before batched writes. |
 | Phase 3 - Add A Full-Rebuild Fast Path | Partially implemented | Missing-snapshot requests can create a bootstrap candidate snapshot and explicit bootstrap chunks. Several rebuild chunk executors write base/candidate rows directly, but full rebuild still uses posting patch/contribution state and candidate compaction/promotion rather than a complete direct final-table snapshot build. |
@@ -158,7 +158,8 @@ Parallelism can help, but only after the work units are made safer for DuckDB an
 Status: partially implemented.
 
 - Implemented: chunk completion populates `duration_ms`, `actual_output_rows`, `actual_output_bytes`, `actual_payload_bytes`, and `diagnostics_json` from validation output in `writeReviewServingRebuildChunkOutput`; no-expected-checksum chunks record `validationMode: 'cheap-count'`.
-- Still pending: fine-grained timing splits for claim/heartbeat, source query, JS transform, delete/reset, per-table writes, validation/checksum, and finalize/promote; rate-limited per-chunk progress logs with rows by table; operator timing/pending-claim query.
+- Implemented: chunk diagnostics now include `phaseTimings.writeOutputMs`, `phaseTimings.validationMs`, and `phaseTimings.totalBeforeCompletionMs`; worker progress logs include claim selection/update, heartbeat, execution, request finalization, DuckDB recycle, and Bun GC timings; `db:duck:inspect-review-serving-rebuild-timings` prints per-request phase timing summaries plus claimable pending chunks.
+- Still pending: source-query, JS-transform, delete/reset, and per-table writer timing splits inside the remaining JS-heavy component executors.
 
 - Populate chunk `started_at`, `completed_at`, `duration_ms`, `actual_input_rows`, `actual_output_rows`, `actual_output_bytes`, `actual_payload_bytes`, and `diagnostics_json`.
 - Split timing inside rebuild chunk execution into:

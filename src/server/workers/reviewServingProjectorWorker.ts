@@ -3869,6 +3869,20 @@ const getNextForegroundRebuildDrainOptions = (input: {
     : {foregroundRebuildDrainCompletedCount: 0, foregroundRebuildDrainStartedAtMs: null}
 }
 
+const measureReviewServingProjectorWorkerPhase = async <T>(
+  timings: Record<string, number>,
+  phase: string,
+  operation: () => Promise<T>,
+) => {
+  const startedAtMs = Date.now()
+
+  try {
+    return await operation()
+  } finally {
+    timings[phase] = Math.max(0, Date.now() - startedAtMs)
+  }
+}
+
 const shouldRunCleanup = (input: {cleanupIntervalMs: number; lastCleanupAtMs: number | null; nowMs: number}) => {
   return input.lastCleanupAtMs === null || input.nowMs - input.lastCleanupAtMs >= input.cleanupIntervalMs
 }
@@ -3893,6 +3907,30 @@ const logReviewServingProjectorWorkerCycle = (result: ReviewServingProjectorWork
   )
 }
 
+const logReviewServingProjectorWorkerRebuildChunkProgress = (input: {
+  chunk: ReviewServingRebuildChunkManifest
+  status: 'completed' | 'failed'
+  timings: Record<string, number>
+  workerId: string
+}) => {
+  reviewServingProjectorWorkerCycleLogger.log(
+    `review-serving-projector-worker:rebuild-chunk:${input.chunk.requestId ?? 'no-request'}:${input.chunk.projectionComponent}`,
+    '[reviewServingProjectorWorker] rebuild chunk progress',
+    {
+      chunkId: input.chunk.chunkId,
+      component: input.chunk.projectionComponent,
+      estimatedInputRows: input.chunk.estimatedInputRows,
+      estimatedOutputRows: input.chunk.estimatedOutputRows,
+      event: 'rebuildChunkProgress',
+      requestId: input.chunk.requestId,
+      splitDepth: input.chunk.splitDepth,
+      status: input.status,
+      timings: input.timings,
+      workerId: input.workerId,
+    },
+  )
+}
+
 const runReviewServingProjectorWorkerRebuildChunk = async ({
   database,
   dependencies,
@@ -3907,23 +3945,26 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
   workerId: string
 }): Promise<ReviewServingProjectorWorkerChunkResult> => {
   const service = dependencies.rebuildChunkService
-  const chunkInput = await service?.getNextChunk({
-    database,
-    now: getWorkerNow(options),
-    projectId: options.rebuildProjectId,
+  const timings: Record<string, number> = {}
+  const chunkInput = await measureReviewServingProjectorWorkerPhase(timings, 'claimSelectMs', async () => {
+    return service?.getNextChunk({database, now: getWorkerNow(options), projectId: options.rebuildProjectId})
   })
 
   if (!service || chunkInput === null || chunkInput === undefined) {
     return {chunkId: null, status: 'idle'}
   }
 
-  const completed = await service.isChunkComplete(chunkInput, database)
+  const completed = await measureReviewServingProjectorWorkerPhase(timings, 'claimCompletionCheckMs', async () => {
+    return service.isChunkComplete(chunkInput, database)
+  })
   const claimedChunk = completed
     ? null
-    : await service.claimChunk(
-        {...chunkInput, leaseExpiresAt: getLeaseExpiresAt(options), leaseOwner: workerId, now: getWorkerNow(options)},
-        database,
-      )
+    : await measureReviewServingProjectorWorkerPhase(timings, 'claimUpdateMs', async () => {
+        return service.claimChunk(
+          {...chunkInput, leaseExpiresAt: getLeaseExpiresAt(options), leaseOwner: workerId, now: getWorkerNow(options)},
+          database,
+        )
+      })
 
   if (completed) {
     return {chunkId: 'completed-manifest', requestId: chunkInput.requestId ?? null, status: 'skipped'}
@@ -3943,31 +3984,46 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
   })
 
   try {
-    await heartbeatClaimedRebuildChunkLease({chunk: claimedChunk, database, dependencies, options, service, workerId})
-    await service.runClaimedChunk({chunk: claimedChunk, database, leaseOwner: workerId, workloadContext})
+    await measureReviewServingProjectorWorkerPhase(timings, 'heartbeatMs', async () => {
+      await heartbeatClaimedRebuildChunkLease({chunk: claimedChunk, database, dependencies, options, service, workerId})
+    })
+    await measureReviewServingProjectorWorkerPhase(timings, 'executeMs', async () => {
+      await service.runClaimedChunk({chunk: claimedChunk, database, leaseOwner: workerId, workloadContext})
+    })
     stopHeartbeat()
   } catch (error) {
     stopHeartbeat()
-    const failedChunk = await service.failChunk(
-      {chunkId: claimedChunk.chunkId, error: getErrorText(error), leaseOwner: workerId},
-      database,
-    )
-    await finalizeFailedReviewServingRebuildRequest(failedChunk, database)
+    const failedChunk = await measureReviewServingProjectorWorkerPhase(timings, 'failUpdateMs', async () => {
+      return service.failChunk(
+        {chunkId: claimedChunk.chunkId, error: getErrorText(error), leaseOwner: workerId},
+        database,
+      )
+    })
+    await measureReviewServingProjectorWorkerPhase(timings, 'finalizeFailedRequestMs', async () => {
+      await finalizeFailedReviewServingRebuildRequest(failedChunk, database)
+    })
+    logReviewServingProjectorWorkerRebuildChunkProgress({chunk: claimedChunk, status: 'failed', timings, workerId})
 
     return {chunkId: claimedChunk.chunkId, requestId: claimedChunk.requestId, status: 'failed'}
   }
 
   try {
-    await finalizeCompletedReviewServingRebuildRequest(claimedChunk, database)
+    await measureReviewServingProjectorWorkerPhase(timings, 'finalizeRequestMs', async () => {
+      await finalizeCompletedReviewServingRebuildRequest(claimedChunk, database)
+    })
     if (
       shouldRecycleDuckdbAfterCompletedRebuildChunk(claimedChunk)
       || shouldCollectGarbageAfterCompletedRebuildChunk(claimedChunk)
     ) {
       try {
         if (shouldRecycleDuckdbAfterCompletedRebuildChunk(claimedChunk)) {
-          await dependencies.recycleDuckdbAfterCompletedRebuildChunk?.(claimedChunk)
+          await measureReviewServingProjectorWorkerPhase(timings, 'duckdbRecycleMs', async () => {
+            await dependencies.recycleDuckdbAfterCompletedRebuildChunk?.(claimedChunk)
+          })
         }
-        await dependencies.collectGarbageAfterCompletedRebuildChunk?.(claimedChunk)
+        await measureReviewServingProjectorWorkerPhase(timings, 'garbageCollectionMs', async () => {
+          await dependencies.collectGarbageAfterCompletedRebuildChunk?.(claimedChunk)
+        })
       } catch (error) {
         reviewServingProjectorWorkerCycleLogger.warn(
           'review-serving-projector-worker:duckdb-recycle-failed',
@@ -3981,6 +4037,7 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
         )
       }
     }
+    logReviewServingProjectorWorkerRebuildChunkProgress({chunk: claimedChunk, status: 'completed', timings, workerId})
 
     return {
       chunkId: claimedChunk.chunkId,

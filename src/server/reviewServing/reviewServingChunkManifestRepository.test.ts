@@ -4,6 +4,7 @@ import {
   claimReviewServingRebuildChunk,
   getNextClaimableReviewServingRebuildChunk,
   getReviewServingRebuildChunkId,
+  getReviewServingRebuildTimingDiagnostics,
   heartbeatReviewServingRebuildChunkLease,
   isReviewServingRebuildChunkComplete,
   markReviewServingRebuildChunkFailed,
@@ -1347,6 +1348,115 @@ test('failed chunks can be claimed again and completed transactionally with outp
   expect(outputWrites).toHaveLength(1)
   expect(completed).toMatchObject({checksum: 'checksum-v2', status: 'completed'})
   expect(rows.get(getReviewServingRebuildChunkId(baseChunkIdentity))?.lastError).toBeNull()
+})
+
+test('completed rebuild chunks persist write and validation timing diagnostics', async () => {
+  const running = {
+    ...getChunkRowFromIdentity(baseChunkIdentity, []),
+    leaseExpiresAt: '2026-06-16T14:05:00.000Z',
+    leaseOwner: 'worker-timing',
+    status: 'running' as const,
+  }
+  const {database, statements} = createFakeChunkManifestDatabase([running])
+
+  const completed = await writeReviewServingRebuildChunkOutput(
+    {
+      ...baseChunkIdentity,
+      diagnosticsJson: {source: 'test'},
+      leaseOwner: 'worker-timing',
+      validateOutput: async () => {
+        return {
+          actualChecksum: 'checksum-timing',
+          actualCount: 25,
+          diagnosticsJson: {validationMode: 'cheap-count'},
+          expectedChecksum: 'checksum-timing',
+          expectedCount: 25,
+        }
+      },
+      writeOutput: async (tx) => {
+        await tx.run('INSERT INTO mart.fake_chunk_output VALUES (25)')
+      },
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(completed).toMatchObject({checksum: 'checksum-timing', status: 'completed'})
+  expect(joined).toContain('"source":"test"')
+  expect(joined).toContain('"validationMode":"cheap-count"')
+  expect(joined).toContain('"phaseTimings"')
+  expect(joined).toContain('"writeOutputMs"')
+  expect(joined).toContain('"validationMs"')
+  expect(joined).toContain('"totalBeforeCompletionMs"')
+})
+
+test('rebuild timing diagnostics summarize phase timings and claimable pending chunks', async () => {
+  const statements: string[] = []
+  const database: ReviewServingChunkManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('GROUP BY')) {
+        return [
+          {
+            avgDurationMs: 42,
+            avgValidationMs: 3,
+            avgWriteOutputMs: 30,
+            chunkCount: 2,
+            completedCount: 1,
+            failedCount: 0,
+            maxDurationMs: 50,
+            maxValidationMs: 4,
+            maxWriteOutputMs: 34,
+            pendingCount: 1,
+            projectId: 'project-1',
+            projectionComponent: 'summary',
+            requestId: 'rebuild:timing',
+            runningCount: 0,
+            status: 'completed',
+            totalActualOutputRows: 25,
+          },
+        ] as T[]
+      }
+
+      return [
+        {
+          chunkEndKey: 'article:099',
+          chunkId: 'chunk:summary:claimable',
+          chunkStartKey: 'article:001',
+          durationMs: null,
+          estimatedInputRows: 25,
+          estimatedOutputRows: 25,
+          projectId: 'project-1',
+          projectionComponent: 'summary',
+          requestId: 'rebuild:timing',
+          splitDepth: 1,
+          status: 'pending',
+          updatedAt: '2026-06-16T14:00:00.000Z',
+        },
+      ] as T[]
+    },
+    run: async () => {},
+    transaction: async <T>(operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  const diagnostics = await getReviewServingRebuildTimingDiagnostics(
+    {limit: 7, projectId: 'project-1', requestId: 'rebuild:timing'},
+    database,
+  )
+
+  expect(diagnostics.filters).toEqual({limit: 7, projectId: 'project-1', requestId: 'rebuild:timing'})
+  expect(diagnostics.phaseTimings).toHaveLength(1)
+  expect(diagnostics.claimablePendingChunks).toHaveLength(1)
+  expect(statements[0]).toContain("chunk.request_id = 'rebuild:timing'")
+  expect(statements[0]).toContain("chunk.project_id = 'project-1'")
+  expect(statements[0]).toContain("json_extract_string(chunk.diagnostics_json, '$.phaseTimings.writeOutputMs')")
+  expect(statements[0]).toContain("json_extract_string(chunk.diagnostics_json, '$.phaseTimings.validationMs')")
+  expect(statements[1]).toContain("chunk.admission_state = 'admitted'")
+  expect(statements[1]).toContain('prerequisite.request_id = chunk.request_id')
+  expect(statements[1]).toContain('LIMIT 7')
 })
 
 test('rebuild chunk heartbeat extends only the current owner lease', async () => {
