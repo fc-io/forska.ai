@@ -1244,7 +1244,9 @@ const runValidatedRebuildChunkOutput = async (
       tx: ReviewServingChunkManifestRepositoryTransaction,
     ) => Promise<{actualChecksum: string; actualCount?: number; expectedChecksum: string; expectedCount?: number}>
     writeMode?: 'atomic' | 'idempotent-output'
-    writeOutput: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<void>
+    writeOutput: (
+      tx: ReviewServingChunkManifestRepositoryTransaction,
+    ) => Promise<{diagnosticsJson?: unknown} | undefined>
   },
   database: ReviewServingChunkManifestRepositoryDatabase,
 ) => {
@@ -1606,9 +1608,9 @@ const runPostingRebuildChunk = async (
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
 
-        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
-          await previous
-          await projectReviewServingFilterPostings(
+        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(async (previous, snapshot) => {
+          const diagnostics = await previous
+          const result = await projectReviewServingFilterPostings(
             {
               acknowledgeClaims: false,
               baseGeneration: input.chunk.outputBaseGeneration,
@@ -1626,7 +1628,11 @@ const runPostingRebuildChunk = async (
             },
             chunkDatabase,
           )
-        }, Promise.resolve())
+
+          return [...diagnostics, {snapshotId: snapshot.snapshotId, ...result.diagnosticsJson}]
+        }, Promise.resolve([]))
+
+        return {diagnosticsJson: {postingProjectorSnapshots: snapshotDiagnostics}}
       },
     },
     database,

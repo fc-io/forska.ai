@@ -145,6 +145,12 @@ test('answer changes update posting stats from old and new contribution diffs', 
 
   expect(result.patchRowCount).toBe(2)
   expect(result.servingRowCount).toBe(1)
+  expect(result.diagnosticsJson.phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.postingProjector.writer.records.inputRecordsByTable).toMatchObject({
+    'mart.review_article_filter_posting_patch_v4': 2,
+    'mart.review_article_filter_posting_serving_v4': 1,
+  })
   expect(joined).not.toContain('scope.source_updated_at')
   expect(result.statsValues).toContainEqual({
     cardinality: 2,

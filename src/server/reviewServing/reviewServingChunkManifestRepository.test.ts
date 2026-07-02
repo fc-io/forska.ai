@@ -1395,6 +1395,9 @@ test('completed rebuild chunks persist write and validation timing diagnostics',
       },
       writeOutput: async (tx) => {
         await tx.run('INSERT INTO mart.fake_chunk_output VALUES (25)')
+        return {
+          diagnosticsJson: {phaseTimings: {sourceQueryMs: 7, writerMs: 11}, writer: {records: {inputRecordCount: 25}}},
+        }
       },
     },
     database,
@@ -1404,6 +1407,9 @@ test('completed rebuild chunks persist write and validation timing diagnostics',
   expect(completed).toMatchObject({checksum: 'checksum-timing', status: 'completed'})
   expect(joined).toContain('"source":"test"')
   expect(joined).toContain('"validationMode":"cheap-count"')
+  expect(joined).toContain('"sourceQueryMs":7')
+  expect(joined).toContain('"writerMs":11')
+  expect(joined).toContain('"inputRecordCount":25')
   expect(joined).toContain('"phaseTimings"')
   expect(joined).toContain('"writeOutputMs"')
   expect(joined).toContain('"validationMs"')
