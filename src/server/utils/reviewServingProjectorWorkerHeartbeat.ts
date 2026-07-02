@@ -1,8 +1,9 @@
 import {runReviewServingProjectorWorker} from '../workers/reviewServingProjectorWorker.ts'
+import {env} from './env.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
-type ReviewServingProjectorWorkerHeartbeatOptions = {pollIntervalMs?: number}
+type ReviewServingProjectorWorkerHeartbeatOptions = {pollIntervalMs?: number; rebuildChunkBatchSize?: number}
 
 const reviewServingProjectorWorkerLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const reviewServingProjectorWorkerWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
@@ -38,23 +39,26 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       component: reviewServingProjectorWorkerComponent,
       event: 'loopStart',
       pollIntervalMs: options.pollIntervalMs ?? null,
+      rebuildChunkBatchSize: options.rebuildChunkBatchSize ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE,
       startCount: 1,
     },
   )
 
   const startLoop = () => {
-    void runReviewServingProjectorWorker({pollIntervalMs: options.pollIntervalMs, signal: controller.signal}).catch(
-      (error) => {
-        logReviewServingProjectorWorkerError(error)
+    void runReviewServingProjectorWorker({
+      pollIntervalMs: options.pollIntervalMs,
+      rebuildChunkBatchSize: options.rebuildChunkBatchSize ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE,
+      signal: controller.signal,
+    }).catch((error) => {
+      logReviewServingProjectorWorkerError(error)
 
-        if (stopped || controller.signal.aborted) {
-          return
-        }
+      if (stopped || controller.signal.aborted) {
+        return
+      }
 
-        restartTimer = setTimeout(startLoop, options.pollIntervalMs ?? 0)
-        restartTimer.unref()
-      },
-    )
+      restartTimer = setTimeout(startLoop, options.pollIntervalMs ?? 0)
+      restartTimer.unref()
+    })
   }
 
   startLoop()
