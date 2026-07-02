@@ -4,7 +4,23 @@
 
 Make the V4 review-serving rebuild path fast enough for the review page's normal "missing snapshot" path. This plan is intentionally investigation and implementation planning only; no code changes are included here.
 
-Status: investigation and implementation plan.
+Status: implementation plan with current audit annotations.
+
+## Implementation Audit - 2026-07-02
+
+Current implementation status, based on source inspection against this plan:
+
+| Phase | Status | Current Evidence |
+| --- | --- | --- |
+| Phase 0 - Instrument Before Optimizing | Partially implemented | Chunk completion now writes `duration_ms`, actual output rows/bytes/payload bytes, and `diagnostics_json`; cheap validation records `validationMode`. Fine-grained phase timings, source/query/transform/write timing splits, and an operator timing query are not implemented. |
+| Phase 1 - Fix The Scheduler | Partially implemented | Claiming now uses component prerequisites and critical-lane/priority ordering instead of the old fixed waterfall; tests cover independent claimability. Foreground rebuild drain budget/TTL exists. A separate critical/bulk queue model is not implemented, and the worker still claims/runs one rebuild chunk per cycle. |
+| Phase 2 - Batch Or SQL-Native Writes | Partially implemented | Generic record writes are batched by table/key/shape in `writeReviewServingProjectorRecords`; `search` and `queue` rebuilds have SQL-native `INSERT INTO ... SELECT` paths. `judgmentInputContent` still calls projector SQL but validation/looping remains component-specific, and `posting` still materializes rows/contribution diffs in JS before batched writes. |
+| Phase 3 - Add A Full-Rebuild Fast Path | Partially implemented | Missing-snapshot requests can create a bootstrap candidate snapshot and explicit bootstrap chunks. Several rebuild chunk executors write base/candidate rows directly, but full rebuild still uses posting patch/contribution state and candidate compaction/promotion rather than a complete direct final-table snapshot build. |
+| Phase 4 - Make Validation Proportional | Implemented for no-expected-checksum chunks | `getRebuildChunkOutputValidation` keeps strict checksum validation when `chunk.checksum` is present and uses cheap count validation with `validationMode: 'cheap-count'` when it is null. Tests cover both modes. |
+| Phase 5 - Rework Chunk Admission | Partially implemented | Default rebuilds and missing-snapshot bootstrap can presplit at admission using estimate/budget-derived article ranges; tests cover admission presplitting. Runtime presplitting still exists for large article-range chunks, and admission splitting is not fully component-specific for all target row types. |
+| Phase 6 - Controlled Parallelism | Pending | The worker still claims and executes at most one rebuild chunk per cycle. No multi-chunk claim, read/transform parallelism, writer lane, set-based multi-chunk write, or controlled multi-writer execution was found. |
+
+Summary: the plan is no longer a pure future plan. Scheduler ordering, foreground priority/drain, cheap validation, generic batched writes, SQL-native search/queue rebuild writes, bootstrap missing-snapshot admission, and admission presplitting have landed. The remaining largest gaps are fine-grained instrumentation, full direct snapshot-build semantics for posting/summary/final tables, SQL-native posting/judgment-heavy paths, and controlled parallelism.
 
 ## Current Evidence
 
@@ -139,6 +155,11 @@ Parallelism can help, but only after the work units are made safer for DuckDB an
 
 ### Phase 0 - Instrument Before Optimizing
 
+Status: partially implemented.
+
+- Implemented: chunk completion populates `duration_ms`, `actual_output_rows`, `actual_output_bytes`, `actual_payload_bytes`, and `diagnostics_json` from validation output in `writeReviewServingRebuildChunkOutput`; no-expected-checksum chunks record `validationMode: 'cheap-count'`.
+- Still pending: fine-grained timing splits for claim/heartbeat, source query, JS transform, delete/reset, per-table writes, validation/checksum, and finalize/promote; rate-limited per-chunk progress logs with rows by table; operator timing/pending-claim query.
+
 - Populate chunk `started_at`, `completed_at`, `duration_ms`, `actual_input_rows`, `actual_output_rows`, `actual_output_bytes`, `actual_payload_bytes`, and `diagnostics_json`.
 - Split timing inside rebuild chunk execution into:
   - claim/heartbeat
@@ -154,6 +175,12 @@ Parallelism can help, but only after the work units are made safer for DuckDB an
 Expected result: the next slow run points at exact cost centers instead of inferred timings.
 
 ### Phase 1 - Fix The Scheduler
+
+Status: partially implemented.
+
+- Implemented: `rebuildChunkPrerequisitesByComponent`, critical-lane ordering, and `getRebuildChunkComponentPrerequisitePredicate` allow DAG-style claim readiness; tests cover `search` claimability after `projectScope`/`selectedImport`, posting prerequisites before queue/search/payload, and `summary` before `posting`.
+- Implemented: foreground priority/age ordering and bounded foreground rebuild drain options (`foregroundRebuildDrainChunkBudget`, `foregroundRebuildDrainTtlMs`) keep critical foreground rebuild chunks moving without permanently starving other work.
+- Still pending: separate durable critical/bulk queues or first-class work classes for rebuild chunks. The worker still claims and executes one rebuild chunk per cycle.
 
 - Replace fixed `rebuildChunkClaimComponentOrder` selection with a DAG-aware claim query:
   - only claim chunks whose prerequisites are complete,
@@ -184,6 +211,12 @@ Expected result: even before query optimization, the page reaches a useful state
 
 ### Phase 2 - Batch Or SQL-Native Writes
 
+Status: partially implemented.
+
+- Implemented: the generic writer groups records by table/key/shape, dedupes by primary key, and writes `VALUES` batches of 250 instead of one upsert per record.
+- Implemented: `search` rebuild uses `writeReviewServingTitleSearchRebuildRows` with SQL-native delete plus `INSERT INTO ... SELECT ... ON CONFLICT`; `queue` rebuild uses `writeReviewServingQueueRebuildRows` similarly.
+- Still pending: fully SQL-native rebuild paths for `posting`; complete removal of large JS record arrays for the remaining high-fanout components; broader tests for component-specific SQL-native rebuild writers.
+
 - Add a bulk writer path to `writeReviewServingProjectorComponent`:
   - group records by table and conflict key,
   - write in `VALUES` batches or temporary tables,
@@ -200,6 +233,12 @@ Expected result: hundreds of thousands of statements collapse into tens or hundr
 
 ### Phase 3 - Add A Full-Rebuild Fast Path
 
+Status: partially implemented.
+
+- Implemented: `missingReviewServingSnapshot` requests can bootstrap a candidate snapshot, projection identity manifests, and explicit rebuild chunks rather than only replaying dirty work.
+- Implemented: several rebuild executors write bounded base/candidate rows directly by article range.
+- Still pending: a complete direct final-table snapshot build that avoids posting patch rows, summary contribution rows, and candidate patch compaction for full rebuilds. Posting still writes patch, serving, stats, and contribution records through the projector writer.
+
 - Treat `missingReviewServingSnapshot` as a snapshot build, not as an incremental patch replay.
 - Implement this before optimizing all incremental dirty-work fanout. The live foreground repair showed thousands of serving dirty-work rows becoming visible while rebuild chunks were still moving, which is the wrong shape for a page-open repair.
 - For full rebuilds, write final candidate serving tables directly by chunk/range.
@@ -210,6 +249,11 @@ Expected result: hundreds of thousands of statements collapse into tens or hundr
 Expected result: a full missing-snapshot rebuild does less total work than an incremental projector replay over every article.
 
 ### Phase 4 - Make Validation Proportional
+
+Status: implemented for no-expected-checksum rebuild chunks.
+
+- Implemented: chunks with `checksum !== null` keep strict `string_agg` checksum validation; chunks with `checksum === null` use cheap count validation and store `validationMode: 'cheap-count'`.
+- Still pending or not found: explicit debug/CI mode for full checksums on targeted parity runs, and reuse of staging-query checksums where strict validation remains necessary.
 
 - If a chunk has an expected checksum, keep strict checksum validation.
 - If a chunk has no expected checksum, skip full `string_agg` checksum by default and store cheaper diagnostics:
@@ -223,6 +267,12 @@ Expected result: rebuild validation no longer duplicates the most expensive comp
 
 ### Phase 5 - Rework Chunk Admission
 
+Status: partially implemented.
+
+- Implemented: default rebuild admission can presplit supported single-component rebuilds by estimated input rows; missing-snapshot bootstrap can compute article ranges and admit explicit bootstrap chunks up front.
+- Implemented: admitted chunks carry estimate/budget fields and admission diagnostics such as `admissionPresplit`.
+- Still pending: removal of runtime root/container chunks entirely. Runtime presplitting still exists for oversized article-range chunks, and chunk sizing is not fully component-specific for token/detail/posting/queue output row targets.
+
 - Presplit at admission time using component-specific target rows:
   - `search`: target token rows
   - `judgmentInputContent`: target detail rows
@@ -235,6 +285,10 @@ Expected result: rebuild validation no longer duplicates the most expensive comp
 Expected result: fewer administrative cycles and chunk sizes that reflect real output cost.
 
 ### Phase 6 - Controlled Parallelism
+
+Status: pending.
+
+- Pending: no multi-chunk claim per wake, reader/transform worker pool, serialized writer lane, set-based multi-chunk writer, or controlled multi-writer execution was found. `runReviewServingProjectorWorkerCycle` still starts by claiming/running a single rebuild chunk.
 
 - After bulk writes and scheduler fixes, test controlled parallelism:
   - claim multiple independent chunks per wake,
