@@ -100,7 +100,7 @@ test('duckdb service applies the configured startup tuning', () => {
   }
 })
 
-test('duckdb service uses one thread and bounded checkpoints for the 6400MiB worker profile', () => {
+test('duckdb service uses one thread and deferred checkpoints for the 6400MiB worker profile', () => {
   const duckdbPath = `/tmp/f1-duckdb-service-6400mib-threads-${Date.now()}.duckdb`
 
   try {
@@ -132,7 +132,7 @@ test('duckdb service uses one thread and bounded checkpoints for the 6400MiB wor
       threads: string
     }
 
-    expect(runtimeConfig.checkpointThreshold).toBe('1024MiB')
+    expect(runtimeConfig.checkpointThreshold).toBe('8192MiB')
     expect(runtimeConfig.threads).toBe('1')
     expect(runtimeConfig.serializeConcurrentWork).toBe(true)
   } finally {

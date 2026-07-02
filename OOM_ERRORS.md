@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-02 - Low-Memory Maintenance Auto-Checkpoint Regression
+
+- Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` followed by DuckDB fatal invalidation during `importJudgmentsCron`.
+- Context: Live current-DB progress gate with the primary split-runtime maintenance owner under the 6400MiB memory cap.
+- Cause: The 6400MiB maintenance profile regressed to `checkpoint_threshold=1024MiB`, allowing DuckDB auto-checkpoint work to start while write-heavy maintenance was already at the memory cap.
+- Fix: Low-memory serialized maintenance profiles at 4096-6400MiB now defer automatic checkpoints with an 8192MiB threshold again.
+- Verification: `bun test src/server/utils/duckdbServiceMemoryLimit.test.ts`; live current-DB progress gate.
+
 ## 2026-07-01 - Low-Memory Checkpoint Shutdown
 
 - Error: `Failed to create checkpoint: Out of Memory Error` during constrained DuckDB checkpoint or shutdown paths.

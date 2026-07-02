@@ -41,17 +41,6 @@ export type ClaimReviewServingDirtyWorkParams = {
 }
 
 export const defaultReviewServingDirtyWorkStaleClaimSeconds = 15 * 60
-const dirtyWorkClaimStatusUpdateBatchSize = 1
-
-const chunkArray = <T>(values: readonly T[], size: number) => {
-  const chunks: T[][] = []
-
-  for (let index = 0; index < values.length; index += size) {
-    chunks.push(values.slice(index, index + size))
-  }
-
-  return chunks
-}
 
 export type CompactReviewServingDirtyWorkAcknowledgementsParams = {
   completedSourceHighWaterMark: number
@@ -436,39 +425,50 @@ export const claimReviewServingDirtyWork = async (
   }
 
   const rows = await database.queryJson<DirtyWorkRow>(`
-    ${getDirtyWorkSelect()}
-    WHERE ${eligiblePredicate}
-      AND ${laneBlockerPredicate}
-      AND source_partition = (
-        SELECT source_partition
-        FROM app.review_serving_dirty_work oldest
-        WHERE ${eligiblePredicate}
-        ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
-        LIMIT 1
-      )
-      AND projection_key = (
-        SELECT projection_key
-        FROM app.review_serving_dirty_work oldest
-        WHERE ${eligiblePredicate}
-        ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
-        LIMIT 1
-      )
-    ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
-    LIMIT ${limit}
+    UPDATE app.review_serving_dirty_work
+    SET status = 'running', updated_at = current_timestamp
+    WHERE dirty_work_id IN (
+      SELECT dirty_work_id
+      FROM app.review_serving_dirty_work
+      WHERE ${eligiblePredicate}
+        AND ${laneBlockerPredicate}
+        AND source_partition = (
+          SELECT source_partition
+          FROM app.review_serving_dirty_work oldest
+          WHERE ${eligiblePredicate}
+          ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
+          LIMIT 1
+        )
+        AND projection_key = (
+          SELECT projection_key
+          FROM app.review_serving_dirty_work oldest
+          WHERE ${eligiblePredicate}
+          ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
+          LIMIT 1
+        )
+      ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
+      LIMIT ${limit}
+    )
+      AND ${eligiblePredicate}
+    RETURNING
+      dirty_work_id AS dirtyWorkId,
+      project_id AS projectId,
+      scope_kind AS scopeKind,
+      scope_id AS scopeId,
+      article_id AS articleId,
+      projection_key AS projectionKey,
+      dirty_kind AS dirtyKind,
+      source_partition AS sourcePartition,
+      first_source_high_water_mark AS firstSourceHighWaterMark,
+      latest_source_high_water_mark AS latestSourceHighWaterMark,
+      latest_delta_id AS latestDeltaId,
+      dirty_range_start AS dirtyRangeStart,
+      dirty_range_end AS dirtyRangeEnd,
+      status,
+      created_at AS createdAt,
+      updated_at AS updatedAt
   `)
   const claims = rows.map(getDirtyWorkRecordFromRow)
-  const dirtyWorkIds = claims.map((claim) => {
-    return claim.dirtyWorkId
-  })
-
-  for (const dirtyWorkIdBatch of chunkArray(dirtyWorkIds, dirtyWorkClaimStatusUpdateBatchSize)) {
-    await database.run(`
-      UPDATE app.review_serving_dirty_work
-      SET status = 'running', updated_at = current_timestamp
-      WHERE dirty_work_id IN (${dirtyWorkIdBatch.map(getSqlLiteral).join(', ')})
-        AND ${eligiblePredicate}
-    `)
-  }
 
   return claims.map((claim) => {
     return {...claim, status: 'running' as const}

@@ -193,7 +193,7 @@ const duckdbRestartRequiredErrorFragments = [
   'must be restarted prior to being used again',
 ]
 const duckdbWorkloadMetricsLimit = 50
-const duckdbCheckpointThresholdMaxMiB = 1024
+const duckdbCheckpointThresholdMaxMiB = 8192
 const duckdbCheckpointThresholdMinMiB = 64
 const duckdbStartupWalPreflightDisabledEnvValue = 'false'
 type DuckdbStartupIndexedTableRepairSpec = {
@@ -1873,6 +1873,10 @@ const getDuckdbCheckpointThresholdValue = (memoryLimit: string) => {
   const memoryLimitMiB = parseDuckdbMemoryLimitToMiB(memoryLimit)
 
   if (memoryLimitMiB === null) {
+    return `${duckdbCheckpointThresholdMaxMiB}MiB`
+  }
+
+  if (memoryLimitMiB >= 4096 && memoryLimitMiB <= 6400) {
     return `${duckdbCheckpointThresholdMaxMiB}MiB`
   }
 

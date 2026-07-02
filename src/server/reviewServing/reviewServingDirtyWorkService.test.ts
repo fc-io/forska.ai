@@ -97,7 +97,7 @@ const getBaseScope = (sourceHighWaterMark: number, dirtyRangeStart = '1', dirtyR
   return scope
 }
 
-const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier} = {}) => {
+const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; beforeClaimUpdate?: () => void} = {}) => {
   const dirtyWork = new Map<string, FakeDirtyWorkRow>()
   const acks = new Map<string, FakeAckRow>()
   const watermarks = new Map<string, number>()
@@ -298,7 +298,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier} = {}
       const sourcePartition = statement.includes('source_partition = (') ? eligibleRows[0]?.sourcePartition : null
       const projectionKey = statement.includes('projection_key = (') ? eligibleRows[0]?.projectionKey : null
 
-      return eligibleRows
+      const rows = eligibleRows
         .filter((row) => {
           return (
             (sourcePartition === null || row.sourcePartition === sourcePartition)
@@ -306,7 +306,25 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier} = {}
           )
         })
         .slice(0, getLimit(statement))
-        .map(getQueryRow) as T[]
+
+      if (statement.includes('UPDATE app.review_serving_dirty_work') && statement.includes('RETURNING')) {
+        options.beforeClaimUpdate?.()
+
+        return rows.flatMap((row) => {
+          const existing = dirtyWork.get(row.dirtyWorkId)
+
+          if (existing?.status !== 'pending' && existing?.status !== 'running') {
+            return []
+          }
+
+          const updated = {...existing, status: 'running' as const, updatedAt: getClock(statements)}
+          dirtyWork.set(row.dirtyWorkId, updated)
+
+          return [getQueryRow(updated)]
+        }) as T[]
+      }
+
+      return rows.map(getQueryRow) as T[]
     }
 
     return []
@@ -487,7 +505,7 @@ test('claim query blocks newer lane work behind lower running or backoff waterma
   )
 })
 
-test('claim status updates are split into single-row writes', async () => {
+test('claims dirty work with one atomic update returning statement', async () => {
   const {database, statements} = createFakeDirtyWorkDatabase()
 
   await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
@@ -495,16 +513,38 @@ test('claim status updates are split into single-row writes', async () => {
 
   const claims = await claimReviewServingDirtyWork({limit: 2, projectionComponent: 'display'}, database)
   const claimUpdates = statements.filter((statement) => {
-    return statement.includes('UPDATE app.review_serving_dirty_work') && statement.includes("SET status = 'running'")
+    return (
+      statement.includes('UPDATE app.review_serving_dirty_work')
+      && statement.includes("SET status = 'running'")
+      && statement.includes('RETURNING')
+    )
   })
 
   expect(claims).toHaveLength(2)
-  expect(claimUpdates).toHaveLength(2)
-  expect(
-    claimUpdates.every((statement) => {
-      return getInLiterals(statement, 'dirty_work_id').length === 1
-    }),
-  ).toBe(true)
+  expect(claimUpdates).toHaveLength(1)
+  expect(claimUpdates[0]).toContain('AND source_partition = (')
+  expect(claimUpdates[0]).toContain('AND projection_key = (')
+})
+
+test('claims only return rows whose atomic update succeeded', async () => {
+  let setup: ReturnType<typeof createFakeDirtyWorkDatabase>
+
+  setup = createFakeDirtyWorkDatabase({
+    beforeClaimUpdate: () => {
+      const row = [...setup.dirtyWork.values()][0]
+
+      if (row !== undefined) {
+        setup.dirtyWork.set(row.dirtyWorkId, {...row, status: 'completed'})
+      }
+    },
+  })
+  const {database} = setup
+
+  await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
+
+  const claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+
+  expect(claims).toHaveLength(0)
 })
 
 test('release returns running claims to pending for the next wake', async () => {
