@@ -17,7 +17,7 @@ Current implementation status, based on source inspection against this plan:
 | Phase 2 - Batch Or SQL-Native Writes | Partially implemented | Generic record writes are batched by table/key/shape in `writeReviewServingProjectorRecords`; `search` and `queue` rebuilds have SQL-native `INSERT INTO ... SELECT` paths. `judgmentInputContent` still calls projector SQL but validation/looping remains component-specific, and `posting` still materializes rows/contribution diffs in JS before batched writes. |
 | Phase 3 - Add A Full-Rebuild Fast Path | Partially implemented | Missing-snapshot requests can create a bootstrap candidate snapshot and explicit bootstrap chunks. Several rebuild chunk executors write base/candidate rows directly, but full rebuild still uses posting patch/contribution state and candidate compaction/promotion rather than a complete direct final-table snapshot build. |
 | Phase 4 - Make Validation Proportional | Mostly implemented | `getRebuildChunkOutputValidation` keeps strict checksum validation when `chunk.checksum` is present and uses cheap count validation with `validationMode: 'cheap-count'` when it is null. `FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION=true` forces full checksum diagnostics for targeted parity/debug runs. Tests cover all three modes. Reusing staging-query checksums where strict validation remains necessary is still pending. |
-| Phase 5 - Rework Chunk Admission | Partially implemented | Default rebuilds and missing-snapshot bootstrap can presplit at admission using estimate/budget-derived article ranges; tests cover admission presplitting. Runtime presplitting still exists for large article-range chunks, and admission splitting is not fully component-specific for all target row types. |
+| Phase 5 - Rework Chunk Admission | Mostly implemented | Default rebuilds and missing-snapshot bootstrap can presplit at admission using estimate/budget-derived article ranges; default single-component rebuilds now use component-specific input-row budgets for high-fanout components. Runtime presplitting still exists as a safety net for old or misestimated chunks. |
 | Phase 6 - Controlled Parallelism | Pending | The worker still claims and executes at most one rebuild chunk per cycle. No multi-chunk claim, read/transform parallelism, writer lane, set-based multi-chunk write, or controlled multi-writer execution was found. |
 
 Summary: the plan is no longer a pure future plan. Scheduler ordering, foreground priority/drain, cheap validation, generic batched writes, SQL-native search/queue rebuild writes, bootstrap missing-snapshot admission, and admission presplitting have landed. The remaining largest gaps are fine-grained instrumentation, full direct snapshot-build semantics for posting/summary/final tables, SQL-native posting/judgment-heavy paths, and controlled parallelism.
@@ -270,11 +270,12 @@ Expected result: rebuild validation no longer duplicates the most expensive comp
 
 ### Phase 5 - Rework Chunk Admission
 
-Status: partially implemented.
+Status: mostly implemented.
 
 - Implemented: default rebuild admission can presplit supported single-component rebuilds by estimated input rows; missing-snapshot bootstrap can compute article ranges and admit explicit bootstrap chunks up front.
+- Implemented: default single-component rebuild admission now uses per-component input-row budgets for high-fanout components such as status, posting, summary, queue, payload, display, selected import, project scope, and search instead of the old search-only rule.
 - Implemented: admitted chunks carry estimate/budget fields and admission diagnostics such as `admissionPresplit`.
-- Still pending: removal of runtime root/container chunks entirely. Runtime presplitting still exists for oversized article-range chunks, and chunk sizing is not fully component-specific for token/detail/posting/queue output row targets.
+- Still pending: removal of runtime presplitting entirely. Runtime presplitting still exists as a safety net for old rows, unexpected DuckDB OOMs, and misestimated chunks.
 
 - Presplit at admission time using component-specific target rows:
   - `search`: target token rows

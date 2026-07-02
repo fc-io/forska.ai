@@ -473,6 +473,66 @@ test('search-only default rebuild presplit chunks cover gaps between scoped arti
   expect(joined).toContain('{"admissionPresplit":true}')
 })
 
+test('high-fanout single-component default rebuilds use component admission budgets', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    activeComponentStateJson: {
+      optional: [],
+      required: [
+        {baseGeneration: 4, component: 'posting', patchWatermark: 12, projectionIdentity: 'posting:active-identity-1'},
+      ],
+    },
+    articleRangeRows: [
+      {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
+      {chunkEndKey: 'article-128', chunkStartKey: 'article-064', scopedArticleCount: 64},
+      {chunkEndKey: 'article-192', chunkStartKey: 'article-128', scopedArticleCount: 64},
+      {chunkEndKey: 'article-256', chunkStartKey: 'article-192', scopedArticleCount: 64},
+    ],
+    componentStateJson: {
+      optional: [],
+      required: [
+        {baseGeneration: 2, component: 'posting', patchWatermark: 10, projectionIdentity: 'posting:identity-1'},
+      ],
+    },
+    projectionManifestRows: [
+      {
+        baseGeneration: 2,
+        inputDigest: 'posting-digest-v1',
+        inputWatermark: 10,
+        projectionComponent: 'posting',
+        projectionIdentity: 'posting:identity-1',
+      },
+      {
+        baseGeneration: 4,
+        inputDigest: 'posting-active-digest-v1',
+        inputWatermark: 12,
+        projectionComponent: 'posting',
+        projectionIdentity: 'posting:active-identity-1',
+      },
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 2_048},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['posting'],
+      requestId: 'rebuild:posting-presplit',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const postingChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'posting'")
+  })
+
+  expect(joined).toContain('NTILE(4)')
+  expect(postingChunkInserts).toHaveLength(8)
+  expect(postingChunkInserts[0]).toContain('512')
+  expect(joined).toContain('{"admissionPresplit":true}')
+})
+
 test('default rebuild request keeps same projection identity across base generations', async () => {
   const {database, statements} = createFakeRequestDatabase({
     activeComponentStateJson: {
