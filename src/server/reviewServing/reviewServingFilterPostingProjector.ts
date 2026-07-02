@@ -74,6 +74,10 @@ const getPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   )
 }
 
+const isFullPostingRebuildInput = (input: Pick<ProjectReviewServingFilterPostingsInput, 'claims'>) => {
+  return input.claims.length === 0
+}
+
 const getPatchRangeStart = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return Math.min(
     ...claims.map((claim) => {
@@ -902,14 +906,16 @@ export const projectReviewServingFilterPostings = async (
     )
   })
   const {patchRecords, servingRecords} = measureSync('recordTransformMs', () => {
-    const nextPatchRecords = contributionRows.map((row) => {
-      return getPostingPatchRecord({
-        baseGeneration: input.baseGeneration,
-        patchWatermark,
-        projectId: input.projectId,
-        row,
-      })
-    })
+    const nextPatchRecords = isFullPostingRebuildInput(input)
+      ? []
+      : contributionRows.map((row) => {
+          return getPostingPatchRecord({
+            baseGeneration: input.baseGeneration,
+            patchWatermark,
+            projectId: input.projectId,
+            row,
+          })
+        })
     const nextServingRecords = liveRows.map((row) => {
       return getPostingServingRecord({
         projectId: input.projectId,
