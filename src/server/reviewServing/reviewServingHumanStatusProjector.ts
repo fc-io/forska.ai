@@ -750,27 +750,6 @@ export const projectReviewServingHumanStatusPatches = async (
     })
   })
 
-  if (input.claims.length === 0) {
-    await writeReviewServingProjectorComponent(
-      {
-        component: 'humanStatus',
-        records,
-        statements: [
-          getDeleteRebuiltHumanStatusPatchRowsStatement({
-            baseGeneration: input.baseGeneration,
-            chunkEndArticleId: input.chunkEndArticleId,
-            chunkStartArticleId: input.chunkStartArticleId,
-            patchWatermark,
-            projectId: input.projectId,
-          }),
-        ],
-      },
-      database,
-    )
-
-    return {patchRowCount: records.length, patchWatermark}
-  }
-
   await writeReviewServingProjectorComponent(
     {
       acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
@@ -778,6 +757,15 @@ export const projectReviewServingHumanStatusPatches = async (
       projectionManifests: input.claims.length === 0 ? [] : [getHumanStatusPatchManifest(input)],
       records,
       statements: [
+        input.claims.length === 0
+          ? getDeleteRebuiltHumanStatusPatchRowsStatement({
+              baseGeneration: input.baseGeneration,
+              chunkEndArticleId: input.chunkEndArticleId,
+              chunkStartArticleId: input.chunkStartArticleId,
+              patchWatermark,
+              projectId: input.projectId,
+            })
+          : null,
         getApplyHumanStatusServingStatement({
           baseGeneration: input.baseGeneration,
           currentSummaryReviewConfigHash,

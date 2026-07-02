@@ -200,10 +200,13 @@ type DuckdbStartupIndexedTableRepairSpec = {
   duplicateKeySelectSql: string
   mutationProbeSql: string
   postRepairSql?: string
+  postRepairSchemaRequirements?: DuckdbStartupSchemaRequirement[]
   repairStrategy?: 'copy' | 'empty-derived'
+  schemaRequirements?: DuckdbStartupSchemaRequirement[]
   schemaName: string
   tableName: string
 }
+type DuckdbStartupSchemaRequirement = {columnNames?: string[]; schemaName: string; tableName: string}
 type DuckdbStartupPreflightError = Error & {repairSpecs?: DuckdbStartupIndexedTableRepairSpec[]}
 const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[] = [
   {
@@ -653,6 +656,18 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       DROP TABLE IF EXISTS startup_probe_review_rebuild_chunk_manifest;
     `,
     schemaName: 'app',
+    schemaRequirements: [
+      {
+        columnNames: ['admission_state', 'request_id', 'retry_after'],
+        schemaName: 'app',
+        tableName: 'review_rebuild_chunk_manifest',
+      },
+      {
+        columnNames: ['admission_state', 'priority', 'request_id', 'status'],
+        schemaName: 'app',
+        tableName: 'review_rebuild_request',
+      },
+    ],
     tableName: 'review_rebuild_chunk_manifest',
   },
   {
@@ -789,6 +804,18 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           )
         );
     `,
+    postRepairSchemaRequirements: [
+      {
+        columnNames: ['admission_state', 'request_id', 'retry_after'],
+        schemaName: 'app',
+        tableName: 'review_rebuild_chunk_manifest',
+      },
+      {
+        columnNames: ['admission_state', 'request_id', 'status'],
+        schemaName: 'app',
+        tableName: 'review_rebuild_request',
+      },
+    ],
     repairStrategy: 'empty-derived',
     schemaName: 'mart',
     tableName: 'review_llm_status_patch_v4',
@@ -922,6 +949,18 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           )
         );
     `,
+    postRepairSchemaRequirements: [
+      {
+        columnNames: ['admission_state', 'request_id', 'retry_after'],
+        schemaName: 'app',
+        tableName: 'review_rebuild_chunk_manifest',
+      },
+      {
+        columnNames: ['admission_state', 'request_id', 'status'],
+        schemaName: 'app',
+        tableName: 'review_rebuild_request',
+      },
+    ],
     repairStrategy: 'empty-derived',
     schemaName: 'mart',
     tableName: 'review_human_status_patch_v4',
@@ -2243,6 +2282,51 @@ const getDuckdbStartupPreflightScript = () => {
       return Number(rows[0]?.tableCount ?? 0) > 0
     }
 
+    const getTableColumnNames = async (schemaName, tableName) => {
+      const rows = await getRows(
+        "SELECT column_name AS columnName FROM information_schema.columns " +
+          "WHERE table_schema = " + getSqlLiteral(schemaName) +
+          " AND table_name = " + getSqlLiteral(tableName),
+      )
+      return new Set(
+        rows
+          .map((row) => {
+            return typeof row.columnName === 'string' ? row.columnName : null
+          })
+          .filter((columnName) => {
+            return columnName !== null
+          }),
+      )
+    }
+
+    const schemaRequirementsSatisfied = async (requirements) => {
+      if (!Array.isArray(requirements) || requirements.length === 0) {
+        return true
+      }
+
+      for (const requirement of requirements) {
+        if (typeof requirement?.schemaName !== 'string' || typeof requirement?.tableName !== 'string') {
+          return false
+        }
+
+        if (!(await tableExists(requirement.schemaName, requirement.tableName))) {
+          return false
+        }
+
+        const columnNames = Array.isArray(requirement.columnNames) ? requirement.columnNames : []
+        const actualColumnNames = await getTableColumnNames(requirement.schemaName, requirement.tableName)
+        const missingColumnName = columnNames.find((columnName) => {
+          return typeof columnName !== 'string' || !actualColumnNames.has(columnName)
+        })
+
+        if (missingColumnName !== undefined) {
+          return false
+        }
+      }
+
+      return true
+    }
+
     const getPrimaryKeyColumns = async (schemaName, tableName) => {
       const rows = await getRows(
         "SELECT constraint_column_names AS primaryKeyColumns FROM duckdb_constraints() " +
@@ -2319,8 +2403,10 @@ const getDuckdbStartupPreflightScript = () => {
 
       for (const spec of tableRepairSpecs) {
         if (await tableExists(spec.schemaName, spec.tableName)) {
-          markActiveRepairSpec(spec, 'custom-mutation-probe')
-          await connection.run(spec.mutationProbeSql)
+          if (await schemaRequirementsSatisfied(spec.schemaRequirements)) {
+            markActiveRepairSpec(spec, 'custom-mutation-probe')
+            await connection.run(spec.mutationProbeSql)
+          }
           markActiveRepairSpec(spec, 'generic-delete-insert-probe')
           await runDeleteInsertMutationProbe(spec.schemaName, spec.tableName)
         }
@@ -2410,6 +2496,51 @@ const getDuckdbIndexedTableRepairScript = () => {
       return Number(rows[0]?.tableCount ?? 0) > 0
     }
 
+    const getTableColumnNames = async (schemaName, tableName) => {
+      const rows = await getRows(
+        "SELECT column_name AS columnName FROM information_schema.columns " +
+          "WHERE table_schema = " + getSqlLiteral(schemaName) +
+          " AND table_name = " + getSqlLiteral(tableName),
+      )
+      return new Set(
+        rows
+          .map((row) => {
+            return typeof row.columnName === 'string' ? row.columnName : null
+          })
+          .filter((columnName) => {
+            return columnName !== null
+          }),
+      )
+    }
+
+    const schemaRequirementsSatisfied = async (requirements) => {
+      if (!Array.isArray(requirements) || requirements.length === 0) {
+        return true
+      }
+
+      for (const requirement of requirements) {
+        if (typeof requirement?.schemaName !== 'string' || typeof requirement?.tableName !== 'string') {
+          return false
+        }
+
+        if (!(await tableExists(requirement.schemaName, requirement.tableName))) {
+          return false
+        }
+
+        const columnNames = Array.isArray(requirement.columnNames) ? requirement.columnNames : []
+        const actualColumnNames = await getTableColumnNames(requirement.schemaName, requirement.tableName)
+        const missingColumnName = columnNames.find((columnName) => {
+          return typeof columnName !== 'string' || !actualColumnNames.has(columnName)
+        })
+
+        if (missingColumnName !== undefined) {
+          return false
+        }
+      }
+
+      return true
+    }
+
     try {
       instance = await DuckDBInstance.create(databasePath, options)
       connection = await instance.connect()
@@ -2473,7 +2604,11 @@ const getDuckdbIndexedTableRepairScript = () => {
           await connection.run(indexSql)
         }
 
-        if (typeof spec.postRepairSql === 'string' && spec.postRepairSql.trim().length > 0) {
+        if (
+          typeof spec.postRepairSql === 'string'
+          && spec.postRepairSql.trim().length > 0
+          && (await schemaRequirementsSatisfied(spec.postRepairSchemaRequirements))
+        ) {
           await connection.run(spec.postRepairSql)
         }
       }

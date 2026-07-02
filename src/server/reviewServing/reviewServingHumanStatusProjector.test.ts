@@ -346,7 +346,10 @@ test('human rebuild chunks replace scoped patch rows before bounded inserts', as
   expect(joined.indexOf('DELETE FROM mart.review_human_status_patch_v4')).toBeLessThan(
     joined.indexOf('INSERT INTO mart.review_human_status_patch_v4'),
   )
-  expect(joined).not.toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined.indexOf('DELETE FROM mart.review_human_status_patch_v4')).toBeLessThan(
+    joined.indexOf('UPDATE mart.review_article_serving_v4 serving'),
+  )
 })
 
 test('human rebuild chunks use one range delete and bounded insert batches', async () => {

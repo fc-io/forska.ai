@@ -565,6 +565,7 @@ test('duckdb service repairs indexed tables when startup mutation preflight cras
 
         let createCount = 0
         let preflightCount = 0
+        let preflightScript = ''
         let preflightSpecs = []
         let repairSpecs = []
         let repairOptions = null
@@ -594,6 +595,7 @@ test('duckdb service repairs indexed tables when startup mutation preflight cras
           }
 
           preflightCount += 1
+          preflightScript = script
           preflightSpecs = JSON.parse(String(command[5] ?? '[]'))
           const activeRepairSpecPath = JSON.parse(String(command[6] ?? '""'))
 
@@ -671,6 +673,7 @@ test('duckdb service repairs indexed tables when startup mutation preflight cras
         console.log(JSON.stringify({
           createCount,
           preflightCount,
+          preflightScript,
           preflightSpecs,
           preflightWalManifest,
           recoveryFiles,
@@ -713,10 +716,13 @@ test('duckdb service repairs indexed tables when startup mutation preflight cras
       createCount: number
       preflightWalManifest: {error?: string; recovery?: string; walQuarantinePath?: string} | null
       preflightCount: number
+      preflightScript: string
       preflightSpecs: Array<{
         mutationProbeSql?: string
         postRepairSql?: string
+        postRepairSchemaRequirements?: Array<{columnNames?: string[]; schemaName: string; tableName: string}>
         repairStrategy?: string
+        schemaRequirements?: Array<{columnNames?: string[]; schemaName: string; tableName: string}>
         schemaName: string
         tableName: string
       }>
@@ -772,6 +778,17 @@ test('duckdb service repairs indexed tables when startup mutation preflight cras
     expect(chunkManifestProbe?.mutationProbeSql).toContain('LIMIT 64')
     expect(chunkManifestProbe?.mutationProbeSql).toContain("WHEN 'llmStatus' THEN 4")
     expect(chunkManifestProbe?.mutationProbeSql).not.toContain("chunk.projection_component = 'projectScope'")
+    expect(chunkManifestProbe?.schemaRequirements).toContainEqual({
+      columnNames: ['admission_state', 'request_id', 'retry_after'],
+      schemaName: 'app',
+      tableName: 'review_rebuild_chunk_manifest',
+    })
+    expect(chunkManifestProbe?.schemaRequirements).toContainEqual({
+      columnNames: ['admission_state', 'priority', 'request_id', 'status'],
+      schemaName: 'app',
+      tableName: 'review_rebuild_request',
+    })
+    expect(parsed.preflightScript).toContain('schemaRequirementsSatisfied(spec.schemaRequirements)')
     const judgmentDetailProbe = parsed.preflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_article_judgment_detail_serving_v4'
     })
@@ -789,6 +806,11 @@ test('duckdb service repairs indexed tables when startup mutation preflight cras
     expect(llmStatusProbe?.repairStrategy).toBe('empty-derived')
     expect(llmStatusProbe?.postRepairSql).toContain("projection_component = 'llmStatus'")
     expect(llmStatusProbe?.postRepairSql).toContain("status IN ('completed', 'running')")
+    expect(llmStatusProbe?.postRepairSchemaRequirements).toContainEqual({
+      columnNames: ['admission_state', 'request_id', 'retry_after'],
+      schemaName: 'app',
+      tableName: 'review_rebuild_chunk_manifest',
+    })
     const humanStatusProbe = parsed.preflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_human_status_patch_v4'
     })
@@ -798,6 +820,11 @@ test('duckdb service repairs indexed tables when startup mutation preflight cras
     expect(humanStatusProbe?.repairStrategy).toBe('empty-derived')
     expect(humanStatusProbe?.postRepairSql).toContain("projection_component = 'humanStatus'")
     expect(humanStatusProbe?.postRepairSql).toContain("status IN ('completed', 'running')")
+    expect(humanStatusProbe?.postRepairSchemaRequirements).toContainEqual({
+      columnNames: ['admission_state', 'request_id', 'retry_after'],
+      schemaName: 'app',
+      tableName: 'review_rebuild_chunk_manifest',
+    })
     expect(
       parsed.recoveryFiles.filter((fileName) => {
         return fileName.endsWith('.pre-repair.duckdb')

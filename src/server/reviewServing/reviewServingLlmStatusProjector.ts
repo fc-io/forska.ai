@@ -819,27 +819,6 @@ export const projectReviewServingLlmStatusPatches = async (
     })
   })
 
-  if (input.claims.length === 0) {
-    await writeReviewServingProjectorComponent(
-      {
-        component: 'llmStatus',
-        records,
-        statements: [
-          getDeleteRebuiltLlmStatusPatchRowsStatement({
-            baseGeneration: input.baseGeneration,
-            chunkEndArticleId: input.chunkEndArticleId,
-            chunkStartArticleId: input.chunkStartArticleId,
-            patchWatermark,
-            projectId: input.projectId,
-          }),
-        ],
-      },
-      database,
-    )
-
-    return {patchRowCount: records.length, patchWatermark}
-  }
-
   await writeReviewServingProjectorComponent(
     {
       acknowledgements: input.claims,
@@ -847,6 +826,15 @@ export const projectReviewServingLlmStatusPatches = async (
       projectionManifests: input.claims.length === 0 ? [] : [getLlmStatusPatchManifest(input)],
       records,
       statements: [
+        input.claims.length === 0
+          ? getDeleteRebuiltLlmStatusPatchRowsStatement({
+              baseGeneration: input.baseGeneration,
+              chunkEndArticleId: input.chunkEndArticleId,
+              chunkStartArticleId: input.chunkStartArticleId,
+              patchWatermark,
+              projectId: input.projectId,
+            })
+          : null,
         getApplyLlmStatusServingStatement({
           baseGeneration: input.baseGeneration,
           patchWatermark,
