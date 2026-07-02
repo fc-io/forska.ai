@@ -2332,7 +2332,7 @@ const projectSelectedImportArticleRangeForClaimedRebuild = async (
         replaceExistingRows: !isFreshReviewServingSnapshotRebuildChunk(input.chunk),
         selectedImportSnapshotId: input.selectedImportSnapshotId,
         sourceDeltaHighWater: input.sourceDeltaHighWater,
-        writeProjectionState: !isFreshReviewServingSnapshotRebuildChunk(input.chunk),
+        writeProjectionState: true,
       },
       getChunkProjectorDatabase(tx),
     )

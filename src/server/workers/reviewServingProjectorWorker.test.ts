@@ -2501,7 +2501,7 @@ test('base rebuild chunks regenerate project scope and selected import state bef
   expect(joined).toContain("checksum = 'checksum-selected-import'")
 })
 
-test('selected import bootstrap rebuild chunk writes only its article range without patch fanout', async () => {
+test('selected import bootstrap rebuild chunk writes article range and completed snapshot state without patch fanout', async () => {
   const statements: string[] = []
   const selectedImportChunk: ReviewServingRebuildChunkManifest = {
     ...chunkManifest,
@@ -2611,8 +2611,9 @@ test('selected import bootstrap rebuild chunk writes only its article range with
   expect(joined).not.toContain('DELETE FROM app.review_selected_article_import_v4')
   expect(joined).not.toContain('article_id IS NOT DISTINCT FROM')
   expect(joined).not.toContain('DELETE FROM app.review_selected_import_snapshot')
-  expect(joined).not.toContain('INSERT INTO app.review_selected_import_snapshot')
-  expect(joined).not.toContain('UPDATE app.review_projection_identity_manifest')
+  expect(joined).toContain('INSERT INTO app.review_selected_import_snapshot')
+  expect(joined).toContain("'completed'")
+  expect(joined).toContain('UPDATE app.review_projection_identity_manifest')
   expect(joined).toContain("article_id >= 'article-050'")
   expect(joined).toContain("article_id <= 'article-099'")
   expect(joined).toContain("scope.article_id >= 'article-050'")
