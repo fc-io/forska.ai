@@ -302,7 +302,11 @@ const reviewServingNativeHeavyRebuildComponents = new Set<ReviewServingProjectio
   'humanStatus',
   'summary',
 ])
-const reviewServingDuckdbRecycleAfterRebuildComponents = new Set<ReviewServingProjectionComponent>(['summary'])
+const reviewServingDuckdbRecycleAfterRebuildComponents = new Set<ReviewServingProjectionComponent>([
+  'llmStatus',
+  'humanStatus',
+  'summary',
+])
 const defaultReviewFilterOptionKeys = [
   'conflictFlag',
   'duplicateFlag',

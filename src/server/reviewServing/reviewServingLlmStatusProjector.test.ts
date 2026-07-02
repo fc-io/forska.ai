@@ -290,6 +290,35 @@ test('LLM full rebuild chunks fan out only over current enabled prompts', async 
   expect(applyStatement).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
 })
 
+test('LLM full rebuild chunks reset serving status when the project has no enabled prompts', async () => {
+  const {database, statements} = createLlmStatusDatabase({promptConfigRows: [], projectRows: []})
+
+  const result = await projectReviewServingLlmStatusPatches(
+    {...projectInput([]), chunkEndArticleId: 'article-9', chunkStartArticleId: 'article-1'},
+    database,
+  )
+  const resetStatement = statements.find((statement) => {
+    return statement.includes('SET\n      enabled_prompt_count = 0')
+  })
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_llm_status_patch_v4')
+  })
+  const joined = statements.join('\n')
+
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
+  expect(insertStatement).toBeUndefined()
+  expect(resetStatement).toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(resetStatement).toContain('llm_judged_prompt_count = 0')
+  expect(resetStatement).toContain('llm_status_key = NULL')
+  expect(resetStatement).toContain("serving.list_mode_key IN ('global')")
+  expect(resetStatement).toContain("AND serving.article_id >= 'article-1'")
+  expect(resetStatement).toContain("AND serving.article_id <= 'article-9'")
+  expect(resetStatement).toContain("snapshot.snapshot_status IN ('candidate', 'active')")
+  expect(joined.indexOf('DELETE FROM mart.review_llm_status_patch_v4')).toBeLessThan(
+    joined.indexOf('SET\n      enabled_prompt_count = 0'),
+  )
+})
+
 test('LLM rebuild chunks replace scoped patch rows before bounded inserts', async () => {
   const {database, statements} = createLlmStatusDatabase({projectRows: [llmStatusRow({articleId: 'article-3'})]})
 

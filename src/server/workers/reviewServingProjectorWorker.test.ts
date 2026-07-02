@@ -465,7 +465,7 @@ test('worker marks rebuild requests completed after their final chunk completes'
   expect(joined).toContain("request_id = 'rebuild-1'")
 })
 
-test('worker collects garbage without recycling DuckDB after completed status rebuild chunks', async () => {
+test('worker recycles DuckDB and collects garbage after completed status rebuild chunks', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const llmChunkInput = {
     ...chunkInput,
@@ -503,7 +503,7 @@ test('worker collects garbage without recycling DuckDB after completed status re
     requestId: 'rebuild-status',
     status: 'completed',
   })
-  expect(harness.recycledChunks).toEqual([])
+  expect(harness.recycledChunks).toEqual([llmChunk])
   expect(harness.garbageCollectedChunks).toEqual([llmChunk])
 })
 
@@ -607,7 +607,7 @@ test('worker yields and collects garbage after each completed status chunk in a 
   await runReviewServingProjectorWorker({signal: controller.signal, workerId: 'worker-1'}, harness.dependencies)
 
   expect(harness.runChunkInputs).toEqual(statusChunks)
-  expect(harness.recycledChunks).toEqual([])
+  expect(harness.recycledChunks).toEqual(statusChunks)
   expect(harness.garbageCollectedChunks).toEqual(statusChunks)
   expect(sleepCalls).toEqual([
     nativeHeavyReviewServingProjectorWorkerProgressYieldMs,

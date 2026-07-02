@@ -752,6 +752,42 @@ const getApplyLlmStatusServingStatement = (input: {
         )`
 }
 
+const getResetEmptyLlmStatusServingStatement = (input: {
+  baseGeneration: number
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
+  listModeKeys: readonly string[]
+  patchWatermark: number
+  projectId: string
+  projectionIdentity: string
+}) => {
+  const listModePredicate =
+    input.listModeKeys.length === 0
+      ? ''
+      : `AND serving.list_mode_key IN (${input.listModeKeys.map(getSqlLiteral).join(', ')})`
+
+  return `UPDATE mart.review_article_serving_v4 serving
+    SET
+      enabled_prompt_count = 0,
+      llm_judged_prompt_count = 0,
+      llm_status_key = NULL,
+      patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}),
+      serving_updated_at = current_timestamp
+    WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+      AND serving.llm_status_identity = ${getSqlLiteral(input.projectionIdentity)}
+      AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+      ${listModePredicate}
+      ${getArticleRangePredicate({alias: 'serving', ...input})}
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_serving_snapshot_manifest snapshot
+        WHERE snapshot.project_id = serving.project_id
+          AND snapshot.snapshot_id = serving.snapshot_id
+          AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+          AND snapshot.snapshot_status IN ('candidate', 'active')
+      )`
+}
+
 const getExistingLlmStatusPatchRowsSql = (input: {
   baseGeneration: number
   patchWatermark: number
@@ -867,6 +903,17 @@ export const projectReviewServingLlmStatusPatches = async (
           projectionIdentity: input.projectionIdentity,
           recordRows,
         }),
+        input.claims.length === 0 && recordRows.length === 0 && promptConfigRows.length === 0
+          ? getResetEmptyLlmStatusServingStatement({
+              baseGeneration: input.baseGeneration,
+              chunkEndArticleId: input.chunkEndArticleId,
+              chunkStartArticleId: input.chunkStartArticleId,
+              listModeKeys: input.listModeKeys,
+              patchWatermark,
+              projectId: input.projectId,
+              projectionIdentity: input.projectionIdentity,
+            })
+          : null,
       ].flatMap((statement) => {
         return statement === null ? [] : [statement]
       }),
