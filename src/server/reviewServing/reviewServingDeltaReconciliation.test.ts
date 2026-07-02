@@ -61,7 +61,11 @@ const validReviewOutboxRow: FakeOutboxRow = {
 }
 
 const createFakeReconciliationTransaction = (
-  options: {barrier?: ReviewServingOutboxBarrier | null; outboxRow?: FakeOutboxRow | null} = {},
+  options: {
+    barrier?: ReviewServingOutboxBarrier | null
+    currentWatermark?: number | null
+    outboxRow?: FakeOutboxRow | null
+  } = {},
 ) => {
   const statements: string[] = []
   const tx: ReviewServingDeltaLedgerTransaction = {
@@ -77,6 +81,12 @@ const createFakeReconciliationTransaction = (
         && statement.includes('source_high_water_mark <=')
       ) {
         return options.barrier ? ([options.barrier] as T[]) : []
+      }
+
+      if (statement.includes('FROM app.review_serving_projector_watermark')) {
+        return options.currentWatermark === undefined || options.currentWatermark === null
+          ? []
+          : ([{sourceHighWaterMark: options.currentWatermark}] as T[])
       }
 
       return []
@@ -204,7 +214,7 @@ test('unreconciled outbox rows block projector watermark advancement', async () 
 })
 
 test('projector watermark advancement proceeds only after reconciliation or operator terminal status', async () => {
-  const {statements, tx} = createFakeReconciliationTransaction({barrier: null})
+  const {statements, tx} = createFakeReconciliationTransaction({barrier: null, currentWatermark: null})
 
   await advanceReviewServingProjectorWatermark(tx, {
     projectionComponent: 'llmStatus',
@@ -215,8 +225,35 @@ test('projector watermark advancement proceeds only after reconciliation or oper
 
   expect(statements.join('\n')).toContain("status NOT IN ('operator_terminal', 'reconciled')")
   expect(statements.join('\n')).toContain('INSERT INTO app.review_serving_projector_watermark')
-  expect(statements.join('\n')).toContain('ON CONFLICT(watermark_id) DO UPDATE SET')
-  expect(statements.join('\n')).toContain('GREATEST(')
-  expect(statements.join('\n')).toContain('app.review_serving_projector_watermark.source_high_water_mark')
-  expect(statements.join('\n')).toContain('excluded.source_high_water_mark')
+  expect(statements.join('\n')).not.toContain('ON CONFLICT(watermark_id) DO UPDATE SET')
+})
+
+test('projector watermark advancement skips no-op writes', async () => {
+  const {statements, tx} = createFakeReconciliationTransaction({barrier: null, currentWatermark: 10})
+
+  await advanceReviewServingProjectorWatermark(tx, {
+    projectionComponent: 'llmStatus',
+    projectorName: 'review-serving-v4-llm',
+    sourceHighWaterMark: 10,
+    sourcePartition: 'judgment:project-1',
+  })
+
+  expect(statements.join('\n')).toContain('FROM app.review_serving_projector_watermark')
+  expect(statements.join('\n')).not.toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(statements.join('\n')).not.toContain('UPDATE app.review_serving_projector_watermark')
+})
+
+test('projector watermark advancement updates only when the source high-water mark increases', async () => {
+  const {statements, tx} = createFakeReconciliationTransaction({barrier: null, currentWatermark: 7})
+
+  await advanceReviewServingProjectorWatermark(tx, {
+    projectionComponent: 'llmStatus',
+    projectorName: 'review-serving-v4-llm',
+    sourceHighWaterMark: 10,
+    sourcePartition: 'judgment:project-1',
+  })
+
+  expect(statements.join('\n')).toContain('UPDATE app.review_serving_projector_watermark')
+  expect(statements.join('\n')).toContain('source_high_water_mark < 10')
+  expect(statements.join('\n')).not.toContain('ON CONFLICT(watermark_id) DO UPDATE SET')
 })

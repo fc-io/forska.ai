@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto'
-import {mkdirSync, readdirSync, statSync} from 'node:fs'
-import {access, copyFile, mkdir, rename, rm} from 'node:fs/promises'
+import {constants as fsConstants, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync} from 'node:fs'
+import {access, copyFile, mkdir, rename, rm, writeFile} from 'node:fs/promises'
 import {availableParallelism, tmpdir} from 'node:os'
 import {basename, join} from 'node:path'
 
@@ -195,6 +195,1546 @@ const duckdbRestartRequiredErrorFragments = [
 const duckdbWorkloadMetricsLimit = 50
 const duckdbCheckpointThresholdMaxMiB = 1024
 const duckdbCheckpointThresholdMinMiB = 64
+const duckdbStartupWalPreflightDisabledEnvValue = 'false'
+type DuckdbStartupIndexedTableRepairSpec = {
+  duplicateKeySelectSql: string
+  mutationProbeSql: string
+  postRepairSql?: string
+  repairStrategy?: 'copy' | 'empty-derived'
+  schemaName: string
+  tableName: string
+}
+type DuckdbStartupPreflightError = Error & {repairSpecs?: DuckdbStartupIndexedTableRepairSpec[]}
+const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[] = [
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT watermark_id
+        FROM app.review_serving_projector_watermark
+        GROUP BY watermark_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_serving_projector_watermark;
+      CREATE TEMP TABLE startup_probe_review_serving_projector_watermark AS
+      SELECT
+        watermark_id,
+        updated_at
+      FROM app.review_serving_projector_watermark
+      ORDER BY updated_at DESC, watermark_id ASC
+      LIMIT 1;
+      BEGIN;
+      UPDATE app.review_serving_projector_watermark
+      SET updated_at = current_timestamp
+      WHERE watermark_id = (
+        SELECT watermark_id
+        FROM startup_probe_review_serving_projector_watermark
+        LIMIT 1
+      );
+      COMMIT;
+      BEGIN;
+      UPDATE app.review_serving_projector_watermark
+      SET updated_at = (
+        SELECT updated_at
+        FROM startup_probe_review_serving_projector_watermark
+        LIMIT 1
+      )
+      WHERE watermark_id = (
+        SELECT watermark_id
+        FROM startup_probe_review_serving_projector_watermark
+        LIMIT 1
+      );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_serving_projector_watermark;
+    `,
+    schemaName: 'app',
+    tableName: 'review_serving_projector_watermark',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT dirty_work_id
+        FROM app.review_serving_dirty_work
+        GROUP BY dirty_work_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_serving_dirty_work;
+      CREATE TEMP TABLE startup_probe_review_serving_dirty_work AS
+      SELECT
+        dirty_work_id,
+        status,
+        updated_at
+      FROM app.review_serving_dirty_work
+      WHERE
+        status = 'pending'
+        OR status = 'failed'
+        OR status = 'running'
+      ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
+      LIMIT 64;
+      BEGIN;
+      UPDATE app.review_serving_dirty_work
+      SET
+        status = 'running',
+        updated_at = current_timestamp
+      WHERE dirty_work_id IN (
+        SELECT dirty_work_id
+        FROM startup_probe_review_serving_dirty_work
+      );
+      COMMIT;
+      BEGIN;
+      UPDATE app.review_serving_dirty_work
+      SET
+        status = (
+          SELECT status
+          FROM startup_probe_review_serving_dirty_work
+          WHERE startup_probe_review_serving_dirty_work.dirty_work_id = app.review_serving_dirty_work.dirty_work_id
+          LIMIT 1
+        ),
+        updated_at = (
+          SELECT updated_at
+          FROM startup_probe_review_serving_dirty_work
+          WHERE startup_probe_review_serving_dirty_work.dirty_work_id = app.review_serving_dirty_work.dirty_work_id
+          LIMIT 1
+        )
+      WHERE dirty_work_id IN (
+        SELECT dirty_work_id
+        FROM startup_probe_review_serving_dirty_work
+      );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_serving_dirty_work;
+    `,
+    schemaName: 'app',
+    tableName: 'review_serving_dirty_work',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT dirty_ack_id
+        FROM app.review_serving_dirty_work_ack
+        GROUP BY dirty_ack_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_serving_dirty_work_ack;
+      CREATE TEMP TABLE startup_probe_review_serving_dirty_work_ack AS
+      SELECT
+        dirty_ack_id,
+        status,
+        completed_at
+      FROM app.review_serving_dirty_work_ack
+      ORDER BY completed_at DESC, dirty_ack_id ASC
+      LIMIT 1;
+      BEGIN;
+      UPDATE app.review_serving_dirty_work_ack
+      SET
+        status = 'completed',
+        completed_at = current_timestamp
+      WHERE dirty_ack_id = (
+        SELECT dirty_ack_id
+        FROM startup_probe_review_serving_dirty_work_ack
+        LIMIT 1
+      );
+      COMMIT;
+      BEGIN;
+      UPDATE app.review_serving_dirty_work_ack
+      SET
+        status = (
+          SELECT status
+          FROM startup_probe_review_serving_dirty_work_ack
+          LIMIT 1
+        ),
+        completed_at = (
+          SELECT completed_at
+          FROM startup_probe_review_serving_dirty_work_ack
+          LIMIT 1
+        )
+      WHERE dirty_ack_id = (
+        SELECT dirty_ack_id
+        FROM startup_probe_review_serving_dirty_work_ack
+        LIMIT 1
+      );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_serving_dirty_work_ack;
+    `,
+    schemaName: 'app',
+    tableName: 'review_serving_dirty_work_ack',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT selected_import_snapshot_id
+        FROM app.review_selected_import_snapshot
+        GROUP BY selected_import_snapshot_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_selected_import_snapshot;
+      CREATE TEMP TABLE startup_probe_review_selected_import_snapshot AS
+      SELECT
+        selected_import_snapshot_id,
+        status,
+        completed_at,
+        updated_at
+      FROM app.review_selected_import_snapshot
+      ORDER BY updated_at DESC, selected_import_snapshot_id ASC
+      LIMIT 1;
+      BEGIN;
+      UPDATE app.review_selected_import_snapshot
+      SET
+        status = status,
+        updated_at = current_timestamp
+      WHERE selected_import_snapshot_id = (
+        SELECT selected_import_snapshot_id
+        FROM startup_probe_review_selected_import_snapshot
+        LIMIT 1
+      );
+      COMMIT;
+      BEGIN;
+      UPDATE app.review_selected_import_snapshot
+      SET
+        status = (
+          SELECT status
+          FROM startup_probe_review_selected_import_snapshot
+          LIMIT 1
+        ),
+        completed_at = (
+          SELECT completed_at
+          FROM startup_probe_review_selected_import_snapshot
+          LIMIT 1
+        ),
+        updated_at = (
+          SELECT updated_at
+          FROM startup_probe_review_selected_import_snapshot
+          LIMIT 1
+        )
+      WHERE selected_import_snapshot_id = (
+        SELECT selected_import_snapshot_id
+        FROM startup_probe_review_selected_import_snapshot
+        LIMIT 1
+      );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_selected_import_snapshot;
+    `,
+    schemaName: 'app',
+    tableName: 'review_selected_import_snapshot',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT project_id, project_scope_identity, selected_import_snapshot_id, article_id
+        FROM app.review_selected_article_import_v4
+        GROUP BY project_id, project_scope_identity, selected_import_snapshot_id, article_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_selected_article_import_v4;
+      CREATE TEMP TABLE startup_probe_review_selected_article_import_v4 AS
+      WITH running_selected_import_ranges AS (
+        SELECT
+          project_id,
+          chunk_start_key,
+          chunk_end_key
+        FROM app.review_rebuild_chunk_manifest
+        WHERE projection_component = 'selectedImport'
+          AND (
+            status = 'running'
+            OR COALESCE(last_error, '') LIKE '%Failed to delete all rows from index%'
+            OR COALESCE(last_error, '') LIKE '%DuckDB%'
+          )
+        ORDER BY updated_at DESC, chunk_id ASC
+        LIMIT 8
+      ),
+      running_selected_import_rows AS (
+        SELECT selected_import.*
+        FROM app.review_selected_article_import_v4 selected_import
+        INNER JOIN running_selected_import_ranges running_range
+          ON running_range.project_id = selected_import.project_id
+         AND (
+              running_range.chunk_start_key IS NULL
+              OR selected_import.article_id >= running_range.chunk_start_key
+            )
+         AND (
+              running_range.chunk_end_key IS NULL
+              OR selected_import.article_id <= running_range.chunk_end_key
+            )
+        ORDER BY
+          selected_import.project_id,
+          selected_import.project_scope_identity,
+          selected_import.selected_import_snapshot_id,
+          selected_import.article_id
+        LIMIT 64
+      ),
+      fallback_row AS (
+        SELECT selected_import.*
+        FROM app.review_selected_article_import_v4 selected_import
+        WHERE NOT EXISTS (SELECT 1 FROM running_selected_import_rows)
+        ORDER BY
+          selected_import.project_id,
+          selected_import.project_scope_identity,
+          selected_import.selected_import_snapshot_id,
+          selected_import.article_id
+        LIMIT 1
+      )
+      SELECT *
+      FROM running_selected_import_rows
+      UNION ALL
+      SELECT *
+      FROM fallback_row;
+      BEGIN;
+      UPDATE app.review_selected_article_import_v4
+      SET selected_import_updated_at = current_timestamp
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_review_selected_article_import_v4 probe
+        WHERE app.review_selected_article_import_v4.project_id IS NOT DISTINCT FROM probe.project_id
+          AND app.review_selected_article_import_v4.project_scope_identity IS NOT DISTINCT FROM probe.project_scope_identity
+          AND app.review_selected_article_import_v4.selected_import_snapshot_id IS NOT DISTINCT FROM probe.selected_import_snapshot_id
+          AND app.review_selected_article_import_v4.article_id IS NOT DISTINCT FROM probe.article_id
+      );
+      DELETE FROM app.review_selected_article_import_v4
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_review_selected_article_import_v4 probe
+        WHERE app.review_selected_article_import_v4.project_id IS NOT DISTINCT FROM probe.project_id
+          AND app.review_selected_article_import_v4.project_scope_identity IS NOT DISTINCT FROM probe.project_scope_identity
+          AND app.review_selected_article_import_v4.selected_import_snapshot_id IS NOT DISTINCT FROM probe.selected_import_snapshot_id
+          AND app.review_selected_article_import_v4.article_id IS NOT DISTINCT FROM probe.article_id
+      );
+      INSERT INTO app.review_selected_article_import_v4 BY NAME
+      SELECT *
+      FROM startup_probe_review_selected_article_import_v4;
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_selected_article_import_v4;
+    `,
+    schemaName: 'app',
+    tableName: 'review_selected_article_import_v4',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT chunk_id
+        FROM app.review_rebuild_chunk_manifest
+        GROUP BY chunk_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_rebuild_chunk_manifest;
+      CREATE TEMP TABLE startup_probe_review_rebuild_chunk_manifest AS
+      SELECT
+        chunk.chunk_id,
+        chunk.status,
+        chunk.lease_owner,
+        chunk.lease_expires_at,
+        chunk.retry_after,
+        chunk.last_error
+      FROM app.review_rebuild_chunk_manifest chunk
+      WHERE chunk.admission_state = 'admitted'
+        AND chunk.status IN ('pending', 'failed', 'running')
+        AND (
+          chunk.request_id IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM app.review_rebuild_request request
+            WHERE request.request_id = chunk.request_id
+              AND request.status IN ('admitted', 'running')
+              AND request.admission_state = 'admitted'
+          )
+        )
+      ORDER BY
+        (
+          SELECT request.priority
+          FROM app.review_rebuild_request request
+          WHERE request.request_id = chunk.request_id
+          LIMIT 1
+        ) DESC NULLS LAST,
+        CASE
+          WHEN chunk.projection_component IN (
+            'projectScope',
+            'selectedImport',
+            'display',
+            'judgmentInputContent',
+            'llmStatus',
+            'humanStatus',
+            'queue',
+            'summary',
+            'payload'
+          )
+          THEN 0
+          ELSE 1
+        END ASC,
+        CASE chunk.projection_component
+          WHEN 'projectScope' THEN 0
+          WHEN 'selectedImport' THEN 1
+          WHEN 'display' THEN 2
+          WHEN 'judgmentInputContent' THEN 3
+          WHEN 'llmStatus' THEN 4
+          WHEN 'humanStatus' THEN 5
+          WHEN 'queue' THEN 6
+          WHEN 'summary' THEN 7
+          WHEN 'payload' THEN 8
+          WHEN 'search' THEN 9
+          WHEN 'posting' THEN 10
+          ELSE 11
+        END ASC,
+        CASE
+          WHEN chunk.status = 'running'
+            AND (chunk.lease_expires_at IS NULL OR chunk.lease_expires_at <= current_timestamp)
+          THEN 0
+          ELSE 1
+        END ASC,
+        chunk.updated_at ASC,
+        chunk.created_at ASC,
+        chunk.chunk_id ASC
+      LIMIT 64;
+      BEGIN;
+      UPDATE app.review_rebuild_chunk_manifest
+      SET
+        status = 'running',
+        lease_owner = 'startup-preflight',
+        lease_expires_at = current_timestamp,
+        retry_after = NULL,
+        last_error = NULL
+      WHERE chunk_id IN (
+        SELECT chunk_id
+        FROM startup_probe_review_rebuild_chunk_manifest
+      );
+      COMMIT;
+      BEGIN;
+      UPDATE app.review_rebuild_chunk_manifest
+      SET
+        status = (
+          SELECT status
+          FROM startup_probe_review_rebuild_chunk_manifest
+          WHERE startup_probe_review_rebuild_chunk_manifest.chunk_id = app.review_rebuild_chunk_manifest.chunk_id
+          LIMIT 1
+        ),
+        lease_owner = (
+          SELECT lease_owner
+          FROM startup_probe_review_rebuild_chunk_manifest
+          WHERE startup_probe_review_rebuild_chunk_manifest.chunk_id = app.review_rebuild_chunk_manifest.chunk_id
+          LIMIT 1
+        ),
+        lease_expires_at = (
+          SELECT lease_expires_at
+          FROM startup_probe_review_rebuild_chunk_manifest
+          WHERE startup_probe_review_rebuild_chunk_manifest.chunk_id = app.review_rebuild_chunk_manifest.chunk_id
+          LIMIT 1
+        ),
+        retry_after = (
+          SELECT retry_after
+          FROM startup_probe_review_rebuild_chunk_manifest
+          WHERE startup_probe_review_rebuild_chunk_manifest.chunk_id = app.review_rebuild_chunk_manifest.chunk_id
+          LIMIT 1
+        ),
+        last_error = (
+          SELECT last_error
+          FROM startup_probe_review_rebuild_chunk_manifest
+          WHERE startup_probe_review_rebuild_chunk_manifest.chunk_id = app.review_rebuild_chunk_manifest.chunk_id
+          LIMIT 1
+        )
+      WHERE chunk_id IN (
+        SELECT chunk_id
+        FROM startup_probe_review_rebuild_chunk_manifest
+      );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_rebuild_chunk_manifest;
+    `,
+    schemaName: 'app',
+    tableName: 'review_rebuild_chunk_manifest',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT
+          project_id,
+          review_config_hash,
+          prompt_config_hash,
+          base_generation,
+          patch_watermark,
+          list_mode_key,
+          article_id,
+          prompt_id
+        FROM mart.review_llm_status_patch_v4
+        GROUP BY
+          project_id,
+          review_config_hash,
+          prompt_config_hash,
+          base_generation,
+          patch_watermark,
+          list_mode_key,
+          article_id,
+          prompt_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_llm_status_patch_v4;
+      CREATE TEMP TABLE startup_probe_review_llm_status_patch_v4 AS
+      WITH failed_status_ranges AS (
+        SELECT
+          project_id,
+          chunk_start_key,
+          chunk_end_key
+        FROM app.review_rebuild_chunk_manifest
+        WHERE projection_component = 'llmStatus'
+          AND (
+            status = 'running'
+            OR COALESCE(last_error, '') LIKE '%Failed to delete all rows from index%'
+            OR COALESCE(last_error, '') LIKE '%DuckDB%'
+            OR COALESCE(last_error, '') LIKE '%C++ exception%'
+          )
+        ORDER BY updated_at DESC, chunk_id ASC
+        LIMIT 8
+      ),
+      failed_status_rows AS (
+        SELECT llm.*
+        FROM mart.review_llm_status_patch_v4 llm
+        INNER JOIN failed_status_ranges failed_range
+          ON failed_range.project_id = llm.project_id
+         AND (
+              failed_range.chunk_start_key IS NULL
+              OR llm.article_id >= failed_range.chunk_start_key
+            )
+         AND (
+              failed_range.chunk_end_key IS NULL
+              OR llm.article_id <= failed_range.chunk_end_key
+            )
+        ORDER BY
+          llm.project_id,
+          llm.review_config_hash,
+          llm.prompt_config_hash,
+          llm.base_generation,
+          llm.patch_watermark,
+          llm.list_mode_key,
+          llm.article_id,
+          llm.prompt_id
+        LIMIT 64
+      ),
+      fallback_row AS (
+        SELECT llm.*
+        FROM mart.review_llm_status_patch_v4 llm
+        WHERE NOT EXISTS (SELECT 1 FROM failed_status_rows)
+        ORDER BY
+          llm.project_id,
+          llm.review_config_hash,
+          llm.prompt_config_hash,
+          llm.base_generation,
+          llm.patch_watermark,
+          llm.list_mode_key,
+          llm.article_id,
+          llm.prompt_id
+        LIMIT 1
+      )
+      SELECT *
+      FROM failed_status_rows
+      UNION ALL
+      SELECT *
+      FROM fallback_row;
+      BEGIN;
+      DELETE FROM mart.review_llm_status_patch_v4
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_review_llm_status_patch_v4 probe
+        WHERE mart.review_llm_status_patch_v4.project_id IS NOT DISTINCT FROM probe.project_id
+          AND mart.review_llm_status_patch_v4.review_config_hash IS NOT DISTINCT FROM probe.review_config_hash
+          AND mart.review_llm_status_patch_v4.prompt_config_hash IS NOT DISTINCT FROM probe.prompt_config_hash
+          AND mart.review_llm_status_patch_v4.base_generation IS NOT DISTINCT FROM probe.base_generation
+          AND mart.review_llm_status_patch_v4.patch_watermark IS NOT DISTINCT FROM probe.patch_watermark
+          AND mart.review_llm_status_patch_v4.list_mode_key IS NOT DISTINCT FROM probe.list_mode_key
+          AND mart.review_llm_status_patch_v4.article_id IS NOT DISTINCT FROM probe.article_id
+          AND mart.review_llm_status_patch_v4.prompt_id IS NOT DISTINCT FROM probe.prompt_id
+      );
+      INSERT INTO mart.review_llm_status_patch_v4 BY NAME
+      SELECT *
+      FROM startup_probe_review_llm_status_patch_v4;
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_llm_status_patch_v4;
+    `,
+    postRepairSql: `
+      UPDATE app.review_rebuild_chunk_manifest
+      SET
+        status = 'pending',
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        retry_after = NULL,
+        last_error = NULL,
+        started_at = NULL,
+        completed_at = NULL,
+        updated_at = current_timestamp
+      WHERE projection_component = 'llmStatus'
+        AND admission_state = 'admitted'
+        AND status IN ('completed', 'running')
+        AND (
+          request_id IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM app.review_rebuild_request request
+            WHERE request.request_id = app.review_rebuild_chunk_manifest.request_id
+              AND request.status IN ('admitted', 'running')
+              AND request.admission_state = 'admitted'
+          )
+        );
+    `,
+    repairStrategy: 'empty-derived',
+    schemaName: 'mart',
+    tableName: 'review_llm_status_patch_v4',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT
+          project_id,
+          prompt_config_hash,
+          base_generation,
+          patch_watermark,
+          list_mode_key,
+          article_id,
+          prompt_id
+        FROM mart.review_human_status_patch_v4
+        GROUP BY
+          project_id,
+          prompt_config_hash,
+          base_generation,
+          patch_watermark,
+          list_mode_key,
+          article_id,
+          prompt_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_human_status_patch_v4;
+      CREATE TEMP TABLE startup_probe_review_human_status_patch_v4 AS
+      WITH failed_status_ranges AS (
+        SELECT
+          project_id,
+          chunk_start_key,
+          chunk_end_key
+        FROM app.review_rebuild_chunk_manifest
+        WHERE projection_component = 'humanStatus'
+          AND (
+            status = 'running'
+            OR COALESCE(last_error, '') LIKE '%Failed to delete all rows from index%'
+            OR COALESCE(last_error, '') LIKE '%DuckDB%'
+            OR COALESCE(last_error, '') LIKE '%C++ exception%'
+          )
+        ORDER BY updated_at DESC, chunk_id ASC
+        LIMIT 8
+      ),
+      failed_status_rows AS (
+        SELECT human.*
+        FROM mart.review_human_status_patch_v4 human
+        INNER JOIN failed_status_ranges failed_range
+          ON failed_range.project_id = human.project_id
+         AND (
+              failed_range.chunk_start_key IS NULL
+              OR human.article_id >= failed_range.chunk_start_key
+            )
+         AND (
+              failed_range.chunk_end_key IS NULL
+              OR human.article_id <= failed_range.chunk_end_key
+            )
+        ORDER BY
+          human.project_id,
+          human.prompt_config_hash,
+          human.base_generation,
+          human.patch_watermark,
+          human.list_mode_key,
+          human.article_id,
+          human.prompt_id
+        LIMIT 64
+      ),
+      fallback_row AS (
+        SELECT human.*
+        FROM mart.review_human_status_patch_v4 human
+        WHERE NOT EXISTS (SELECT 1 FROM failed_status_rows)
+        ORDER BY
+          human.project_id,
+          human.prompt_config_hash,
+          human.base_generation,
+          human.patch_watermark,
+          human.list_mode_key,
+          human.article_id,
+          human.prompt_id
+        LIMIT 1
+      )
+      SELECT *
+      FROM failed_status_rows
+      UNION ALL
+      SELECT *
+      FROM fallback_row;
+      BEGIN;
+      DELETE FROM mart.review_human_status_patch_v4
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_review_human_status_patch_v4 probe
+        WHERE mart.review_human_status_patch_v4.project_id IS NOT DISTINCT FROM probe.project_id
+          AND mart.review_human_status_patch_v4.prompt_config_hash IS NOT DISTINCT FROM probe.prompt_config_hash
+          AND mart.review_human_status_patch_v4.base_generation IS NOT DISTINCT FROM probe.base_generation
+          AND mart.review_human_status_patch_v4.patch_watermark IS NOT DISTINCT FROM probe.patch_watermark
+          AND mart.review_human_status_patch_v4.list_mode_key IS NOT DISTINCT FROM probe.list_mode_key
+          AND mart.review_human_status_patch_v4.article_id IS NOT DISTINCT FROM probe.article_id
+          AND mart.review_human_status_patch_v4.prompt_id IS NOT DISTINCT FROM probe.prompt_id
+      );
+      INSERT INTO mart.review_human_status_patch_v4 BY NAME
+      SELECT *
+      FROM startup_probe_review_human_status_patch_v4;
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_human_status_patch_v4;
+    `,
+    postRepairSql: `
+      UPDATE app.review_rebuild_chunk_manifest
+      SET
+        status = 'pending',
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        retry_after = NULL,
+        last_error = NULL,
+        started_at = NULL,
+        completed_at = NULL,
+        updated_at = current_timestamp
+      WHERE projection_component = 'humanStatus'
+        AND admission_state = 'admitted'
+        AND status IN ('completed', 'running')
+        AND (
+          request_id IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM app.review_rebuild_request request
+            WHERE request.request_id = app.review_rebuild_chunk_manifest.request_id
+              AND request.status IN ('admitted', 'running')
+              AND request.admission_state = 'admitted'
+          )
+        );
+    `,
+    repairStrategy: 'empty-derived',
+    schemaName: 'mart',
+    tableName: 'review_human_status_patch_v4',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT project_id, article_id
+        FROM mart.project_scope_article
+        GROUP BY project_id, article_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_project_scope_article;
+      CREATE TEMP TABLE startup_probe_project_scope_article AS
+      SELECT project_id, article_id, article_updated_at
+      FROM mart.project_scope_article
+      ORDER BY project_id, article_id
+      LIMIT 1;
+      BEGIN;
+      UPDATE mart.project_scope_article
+      SET article_updated_at = current_timestamp
+      WHERE project_id = (
+          SELECT project_id
+          FROM startup_probe_project_scope_article
+          LIMIT 1
+        )
+        AND article_id = (
+          SELECT article_id
+          FROM startup_probe_project_scope_article
+          LIMIT 1
+        );
+      COMMIT;
+      BEGIN;
+      UPDATE mart.project_scope_article
+      SET article_updated_at = (
+        SELECT article_updated_at
+        FROM startup_probe_project_scope_article
+        LIMIT 1
+      )
+      WHERE project_id = (
+          SELECT project_id
+          FROM startup_probe_project_scope_article
+          LIMIT 1
+        )
+        AND article_id = (
+          SELECT article_id
+          FROM startup_probe_project_scope_article
+          LIMIT 1
+        );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_project_scope_article;
+    `,
+    schemaName: 'mart',
+    tableName: 'project_scope_article',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          list_mode_key,
+          article_id
+        FROM mart.review_article_serving_v4
+        GROUP BY
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          list_mode_key,
+          article_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_article_serving_v4;
+      CREATE TEMP TABLE startup_probe_review_article_serving_v4 AS
+      WITH failed_delete_ranges AS (
+        SELECT
+          project_id,
+          chunk_start_key,
+          chunk_end_key
+        FROM app.review_rebuild_chunk_manifest
+        WHERE projection_component = 'display'
+          AND last_error LIKE '%Failed to delete all rows from index%'
+        ORDER BY updated_at DESC, chunk_id ASC
+        LIMIT 8
+      ),
+      failed_delete_rows AS (
+        SELECT serving.*
+        FROM mart.review_article_serving_v4 serving
+        INNER JOIN failed_delete_ranges failed_range
+          ON failed_range.project_id = serving.project_id
+         AND (
+              failed_range.chunk_start_key IS NULL
+              OR serving.article_id >= failed_range.chunk_start_key
+            )
+         AND (
+              failed_range.chunk_end_key IS NULL
+              OR serving.article_id <= failed_range.chunk_end_key
+            )
+        ORDER BY
+          serving.project_id,
+          serving.review_config_hash,
+          serving.snapshot_id,
+          serving.list_mode_key,
+          serving.article_id
+        LIMIT 64
+      ),
+      fallback_row AS (
+        SELECT serving.*
+        FROM mart.review_article_serving_v4 serving
+        WHERE NOT EXISTS (SELECT 1 FROM failed_delete_rows)
+        ORDER BY
+          serving.project_id,
+          serving.review_config_hash,
+          serving.snapshot_id,
+          serving.list_mode_key,
+          serving.article_id
+        LIMIT 1
+      )
+      SELECT *
+      FROM failed_delete_rows
+      UNION ALL
+      SELECT *
+      FROM fallback_row;
+      BEGIN;
+      UPDATE mart.review_article_serving_v4
+      SET serving_updated_at = current_timestamp
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_review_article_serving_v4 probe
+        WHERE mart.review_article_serving_v4.project_id IS NOT DISTINCT FROM probe.project_id
+          AND mart.review_article_serving_v4.review_config_hash IS NOT DISTINCT FROM probe.review_config_hash
+          AND mart.review_article_serving_v4.snapshot_id IS NOT DISTINCT FROM probe.snapshot_id
+          AND mart.review_article_serving_v4.list_mode_key IS NOT DISTINCT FROM probe.list_mode_key
+          AND mart.review_article_serving_v4.article_id IS NOT DISTINCT FROM probe.article_id
+      );
+      DELETE FROM mart.review_article_serving_v4
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_review_article_serving_v4 probe
+        WHERE mart.review_article_serving_v4.project_id IS NOT DISTINCT FROM probe.project_id
+          AND mart.review_article_serving_v4.review_config_hash IS NOT DISTINCT FROM probe.review_config_hash
+          AND mart.review_article_serving_v4.snapshot_id IS NOT DISTINCT FROM probe.snapshot_id
+          AND mart.review_article_serving_v4.list_mode_key IS NOT DISTINCT FROM probe.list_mode_key
+          AND mart.review_article_serving_v4.article_id IS NOT DISTINCT FROM probe.article_id
+      );
+      INSERT INTO mart.review_article_serving_v4 BY NAME
+      SELECT *
+      FROM startup_probe_review_article_serving_v4;
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_article_serving_v4;
+    `,
+    schemaName: 'mart',
+    tableName: 'review_article_serving_v4',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          list_mode_key,
+          payload_kind,
+          article_id,
+          prompt_id
+        FROM mart.review_article_judgment_detail_serving_v4
+        GROUP BY
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          list_mode_key,
+          payload_kind,
+          article_id,
+          prompt_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_article_judgment_detail_serving_v4;
+      CREATE TEMP TABLE startup_probe_review_article_judgment_detail_serving_v4 AS
+      WITH failed_delete_ranges AS (
+        SELECT
+          project_id,
+          chunk_start_key,
+          chunk_end_key
+        FROM app.review_rebuild_chunk_manifest
+        WHERE projection_component = 'judgmentInputContent'
+          AND (
+            status = 'running'
+            OR COALESCE(last_error, '') LIKE '%Failed to delete all rows from index%'
+            OR COALESCE(last_error, '') LIKE '%DuckDB%'
+          )
+        ORDER BY updated_at DESC, chunk_id ASC
+        LIMIT 8
+      ),
+      failed_delete_rows AS (
+        SELECT detail.*
+        FROM mart.review_article_judgment_detail_serving_v4 detail
+        INNER JOIN failed_delete_ranges failed_range
+          ON failed_range.project_id = detail.project_id
+         AND (
+              failed_range.chunk_start_key IS NULL
+              OR detail.article_id >= failed_range.chunk_start_key
+            )
+         AND (
+              failed_range.chunk_end_key IS NULL
+              OR detail.article_id <= failed_range.chunk_end_key
+            )
+        ORDER BY
+          detail.project_id,
+          detail.review_config_hash,
+          detail.snapshot_id,
+          detail.list_mode_key,
+          detail.payload_kind,
+          detail.article_id,
+          detail.prompt_id
+        LIMIT 64
+      ),
+      fallback_row AS (
+        SELECT detail.*
+        FROM mart.review_article_judgment_detail_serving_v4 detail
+        WHERE NOT EXISTS (SELECT 1 FROM failed_delete_rows)
+        ORDER BY
+          detail.project_id,
+          detail.review_config_hash,
+          detail.snapshot_id,
+          detail.list_mode_key,
+          detail.payload_kind,
+          detail.article_id,
+          detail.prompt_id
+        LIMIT 1
+      )
+      SELECT *
+      FROM failed_delete_rows
+      UNION ALL
+      SELECT *
+      FROM fallback_row;
+      BEGIN;
+      UPDATE mart.review_article_judgment_detail_serving_v4
+      SET detail_updated_at = current_timestamp
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_review_article_judgment_detail_serving_v4 probe
+        WHERE mart.review_article_judgment_detail_serving_v4.project_id IS NOT DISTINCT FROM probe.project_id
+          AND mart.review_article_judgment_detail_serving_v4.review_config_hash IS NOT DISTINCT FROM probe.review_config_hash
+          AND mart.review_article_judgment_detail_serving_v4.snapshot_id IS NOT DISTINCT FROM probe.snapshot_id
+          AND mart.review_article_judgment_detail_serving_v4.list_mode_key IS NOT DISTINCT FROM probe.list_mode_key
+          AND mart.review_article_judgment_detail_serving_v4.payload_kind IS NOT DISTINCT FROM probe.payload_kind
+          AND mart.review_article_judgment_detail_serving_v4.article_id IS NOT DISTINCT FROM probe.article_id
+          AND mart.review_article_judgment_detail_serving_v4.prompt_id IS NOT DISTINCT FROM probe.prompt_id
+      );
+      DELETE FROM mart.review_article_judgment_detail_serving_v4
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_review_article_judgment_detail_serving_v4 probe
+        WHERE mart.review_article_judgment_detail_serving_v4.project_id IS NOT DISTINCT FROM probe.project_id
+          AND mart.review_article_judgment_detail_serving_v4.review_config_hash IS NOT DISTINCT FROM probe.review_config_hash
+          AND mart.review_article_judgment_detail_serving_v4.snapshot_id IS NOT DISTINCT FROM probe.snapshot_id
+          AND mart.review_article_judgment_detail_serving_v4.list_mode_key IS NOT DISTINCT FROM probe.list_mode_key
+          AND mart.review_article_judgment_detail_serving_v4.payload_kind IS NOT DISTINCT FROM probe.payload_kind
+          AND mart.review_article_judgment_detail_serving_v4.article_id IS NOT DISTINCT FROM probe.article_id
+          AND mart.review_article_judgment_detail_serving_v4.prompt_id IS NOT DISTINCT FROM probe.prompt_id
+      );
+      INSERT INTO mart.review_article_judgment_detail_serving_v4 BY NAME
+      SELECT *
+      FROM startup_probe_review_article_judgment_detail_serving_v4;
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_article_judgment_detail_serving_v4;
+    `,
+    schemaName: 'mart',
+    tableName: 'review_article_judgment_detail_serving_v4',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT
+          project_id,
+          posting_identity,
+          base_generation,
+          patch_watermark,
+          filter_kind,
+          filter_value,
+          list_mode_key,
+          article_id
+        FROM mart.review_article_filter_posting_patch_v4
+        GROUP BY
+          project_id,
+          posting_identity,
+          base_generation,
+          patch_watermark,
+          filter_kind,
+          filter_value,
+          list_mode_key,
+          article_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_article_filter_posting_patch_v4;
+      CREATE TEMP TABLE startup_probe_review_article_filter_posting_patch_v4 AS
+      SELECT
+        project_id,
+        posting_identity,
+        base_generation,
+        patch_watermark,
+        filter_kind,
+        filter_value,
+        list_mode_key,
+        article_id,
+        patch_updated_at
+      FROM mart.review_article_filter_posting_patch_v4
+      ORDER BY
+        project_id,
+        posting_identity,
+        base_generation,
+        patch_watermark,
+        filter_kind,
+        filter_value,
+        list_mode_key,
+        article_id
+      LIMIT 1;
+      BEGIN;
+      UPDATE mart.review_article_filter_posting_patch_v4
+      SET patch_updated_at = current_timestamp
+      WHERE project_id = (
+          SELECT project_id
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        )
+        AND posting_identity = (
+          SELECT posting_identity
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        )
+        AND base_generation = (
+          SELECT base_generation
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        )
+        AND patch_watermark = (
+          SELECT patch_watermark
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        )
+        AND filter_kind = (
+          SELECT filter_kind
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        )
+        AND filter_value = (
+          SELECT filter_value
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        )
+        AND list_mode_key = (
+          SELECT list_mode_key
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        )
+        AND article_id = (
+          SELECT article_id
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        );
+      COMMIT;
+      BEGIN;
+      UPDATE mart.review_article_filter_posting_patch_v4
+      SET patch_updated_at = (
+        SELECT patch_updated_at
+        FROM startup_probe_review_article_filter_posting_patch_v4
+        LIMIT 1
+      )
+      WHERE project_id = (
+          SELECT project_id
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        )
+        AND posting_identity = (
+          SELECT posting_identity
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        )
+        AND base_generation = (
+          SELECT base_generation
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        )
+        AND patch_watermark = (
+          SELECT patch_watermark
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        )
+        AND filter_kind = (
+          SELECT filter_kind
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        )
+        AND filter_value = (
+          SELECT filter_value
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        )
+        AND list_mode_key = (
+          SELECT list_mode_key
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        )
+        AND article_id = (
+          SELECT article_id
+          FROM startup_probe_review_article_filter_posting_patch_v4
+          LIMIT 1
+        );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_article_filter_posting_patch_v4;
+    `,
+    schemaName: 'mart',
+    tableName: 'review_article_filter_posting_patch_v4',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          filter_kind,
+          filter_value,
+          list_mode_key,
+          article_id
+        FROM mart.review_article_filter_posting_serving_v4
+        GROUP BY
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          filter_kind,
+          filter_value,
+          list_mode_key,
+          article_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_article_filter_posting_serving_v4;
+      CREATE TEMP TABLE startup_probe_review_article_filter_posting_serving_v4 AS
+      SELECT
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        filter_kind,
+        filter_value,
+        list_mode_key,
+        article_id,
+        posting_updated_at
+      FROM mart.review_article_filter_posting_serving_v4
+      ORDER BY
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        filter_kind,
+        filter_value,
+        list_mode_key,
+        article_id
+      LIMIT 1;
+      BEGIN;
+      UPDATE mart.review_article_filter_posting_serving_v4
+      SET posting_updated_at = current_timestamp
+      WHERE project_id = (
+          SELECT project_id
+          FROM startup_probe_review_article_filter_posting_serving_v4
+          LIMIT 1
+        )
+        AND review_config_hash = (
+          SELECT review_config_hash
+          FROM startup_probe_review_article_filter_posting_serving_v4
+          LIMIT 1
+        )
+        AND snapshot_id = (
+          SELECT snapshot_id
+          FROM startup_probe_review_article_filter_posting_serving_v4
+          LIMIT 1
+        )
+        AND filter_kind = (
+          SELECT filter_kind
+          FROM startup_probe_review_article_filter_posting_serving_v4
+          LIMIT 1
+        )
+        AND filter_value = (
+          SELECT filter_value
+          FROM startup_probe_review_article_filter_posting_serving_v4
+          LIMIT 1
+        )
+        AND list_mode_key = (
+          SELECT list_mode_key
+          FROM startup_probe_review_article_filter_posting_serving_v4
+          LIMIT 1
+        )
+        AND article_id = (
+          SELECT article_id
+          FROM startup_probe_review_article_filter_posting_serving_v4
+          LIMIT 1
+        );
+      COMMIT;
+      BEGIN;
+      UPDATE mart.review_article_filter_posting_serving_v4
+      SET posting_updated_at = (
+        SELECT posting_updated_at
+        FROM startup_probe_review_article_filter_posting_serving_v4
+        LIMIT 1
+      )
+      WHERE project_id = (
+          SELECT project_id
+          FROM startup_probe_review_article_filter_posting_serving_v4
+          LIMIT 1
+        )
+        AND review_config_hash = (
+          SELECT review_config_hash
+          FROM startup_probe_review_article_filter_posting_serving_v4
+          LIMIT 1
+        )
+        AND snapshot_id = (
+          SELECT snapshot_id
+          FROM startup_probe_review_article_filter_posting_serving_v4
+          LIMIT 1
+        )
+        AND filter_kind = (
+          SELECT filter_kind
+          FROM startup_probe_review_article_filter_posting_serving_v4
+          LIMIT 1
+        )
+        AND filter_value = (
+          SELECT filter_value
+          FROM startup_probe_review_article_filter_posting_serving_v4
+          LIMIT 1
+        )
+        AND list_mode_key = (
+          SELECT list_mode_key
+          FROM startup_probe_review_article_filter_posting_serving_v4
+          LIMIT 1
+        )
+        AND article_id = (
+          SELECT article_id
+          FROM startup_probe_review_article_filter_posting_serving_v4
+          LIMIT 1
+        );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_article_filter_posting_serving_v4;
+    `,
+    schemaName: 'mart',
+    tableName: 'review_article_filter_posting_serving_v4',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          filter_kind,
+          filter_value,
+          list_mode_key
+        FROM mart.review_filter_posting_stats_v4
+        GROUP BY
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          filter_kind,
+          filter_value,
+          list_mode_key
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_filter_posting_stats_v4;
+      CREATE TEMP TABLE startup_probe_review_filter_posting_stats_v4 AS
+      SELECT
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        filter_kind,
+        filter_value,
+        list_mode_key,
+        stats_updated_at
+      FROM mart.review_filter_posting_stats_v4
+      ORDER BY
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        filter_kind,
+        filter_value,
+        list_mode_key
+      LIMIT 1;
+      BEGIN;
+      UPDATE mart.review_filter_posting_stats_v4
+      SET stats_updated_at = current_timestamp
+      WHERE project_id = (
+          SELECT project_id
+          FROM startup_probe_review_filter_posting_stats_v4
+          LIMIT 1
+        )
+        AND review_config_hash = (
+          SELECT review_config_hash
+          FROM startup_probe_review_filter_posting_stats_v4
+          LIMIT 1
+        )
+        AND snapshot_id = (
+          SELECT snapshot_id
+          FROM startup_probe_review_filter_posting_stats_v4
+          LIMIT 1
+        )
+        AND filter_kind = (
+          SELECT filter_kind
+          FROM startup_probe_review_filter_posting_stats_v4
+          LIMIT 1
+        )
+        AND filter_value = (
+          SELECT filter_value
+          FROM startup_probe_review_filter_posting_stats_v4
+          LIMIT 1
+        )
+        AND list_mode_key = (
+          SELECT list_mode_key
+          FROM startup_probe_review_filter_posting_stats_v4
+          LIMIT 1
+        );
+      COMMIT;
+      BEGIN;
+      UPDATE mart.review_filter_posting_stats_v4
+      SET stats_updated_at = (
+        SELECT stats_updated_at
+        FROM startup_probe_review_filter_posting_stats_v4
+        LIMIT 1
+      )
+      WHERE project_id = (
+          SELECT project_id
+          FROM startup_probe_review_filter_posting_stats_v4
+          LIMIT 1
+        )
+        AND review_config_hash = (
+          SELECT review_config_hash
+          FROM startup_probe_review_filter_posting_stats_v4
+          LIMIT 1
+        )
+        AND snapshot_id = (
+          SELECT snapshot_id
+          FROM startup_probe_review_filter_posting_stats_v4
+          LIMIT 1
+        )
+        AND filter_kind = (
+          SELECT filter_kind
+          FROM startup_probe_review_filter_posting_stats_v4
+          LIMIT 1
+        )
+        AND filter_value = (
+          SELECT filter_value
+          FROM startup_probe_review_filter_posting_stats_v4
+          LIMIT 1
+        )
+        AND list_mode_key = (
+          SELECT list_mode_key
+          FROM startup_probe_review_filter_posting_stats_v4
+          LIMIT 1
+        );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_filter_posting_stats_v4;
+    `,
+    schemaName: 'mart',
+    tableName: 'review_filter_posting_stats_v4',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          article_id,
+          component_kind,
+          summary_definition_version,
+          contribution_key
+        FROM mart.review_article_summary_contribution_v4
+        GROUP BY
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          article_id,
+          component_kind,
+          summary_definition_version,
+          contribution_key
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_article_summary_contribution_v4;
+      CREATE TEMP TABLE startup_probe_review_article_summary_contribution_v4 AS
+      SELECT
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        article_id,
+        component_kind,
+        summary_definition_version,
+        contribution_key,
+        contribution_value
+      FROM mart.review_article_summary_contribution_v4
+      ORDER BY
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        article_id,
+        component_kind,
+        summary_definition_version,
+        contribution_key
+      LIMIT 1;
+      BEGIN;
+      UPDATE mart.review_article_summary_contribution_v4
+      SET contribution_value = contribution_value + 1
+      WHERE project_id = (
+          SELECT project_id
+          FROM startup_probe_review_article_summary_contribution_v4
+          LIMIT 1
+        )
+        AND review_config_hash = (
+          SELECT review_config_hash
+          FROM startup_probe_review_article_summary_contribution_v4
+          LIMIT 1
+        )
+        AND snapshot_id = (
+          SELECT snapshot_id
+          FROM startup_probe_review_article_summary_contribution_v4
+          LIMIT 1
+        )
+        AND article_id = (
+          SELECT article_id
+          FROM startup_probe_review_article_summary_contribution_v4
+          LIMIT 1
+        )
+        AND component_kind = (
+          SELECT component_kind
+          FROM startup_probe_review_article_summary_contribution_v4
+          LIMIT 1
+        )
+        AND summary_definition_version = (
+          SELECT summary_definition_version
+          FROM startup_probe_review_article_summary_contribution_v4
+          LIMIT 1
+        )
+        AND contribution_key = (
+          SELECT contribution_key
+          FROM startup_probe_review_article_summary_contribution_v4
+          LIMIT 1
+        );
+      COMMIT;
+      BEGIN;
+      UPDATE mart.review_article_summary_contribution_v4
+      SET contribution_value = (
+        SELECT contribution_value
+        FROM startup_probe_review_article_summary_contribution_v4
+        LIMIT 1
+      )
+      WHERE project_id = (
+          SELECT project_id
+          FROM startup_probe_review_article_summary_contribution_v4
+          LIMIT 1
+        )
+        AND review_config_hash = (
+          SELECT review_config_hash
+          FROM startup_probe_review_article_summary_contribution_v4
+          LIMIT 1
+        )
+        AND snapshot_id = (
+          SELECT snapshot_id
+          FROM startup_probe_review_article_summary_contribution_v4
+          LIMIT 1
+        )
+        AND article_id = (
+          SELECT article_id
+          FROM startup_probe_review_article_summary_contribution_v4
+          LIMIT 1
+        )
+        AND component_kind = (
+          SELECT component_kind
+          FROM startup_probe_review_article_summary_contribution_v4
+          LIMIT 1
+        )
+        AND summary_definition_version = (
+          SELECT summary_definition_version
+          FROM startup_probe_review_article_summary_contribution_v4
+          LIMIT 1
+        )
+        AND contribution_key = (
+          SELECT contribution_key
+          FROM startup_probe_review_article_summary_contribution_v4
+          LIMIT 1
+        );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_article_summary_contribution_v4;
+    `,
+    schemaName: 'mart',
+    tableName: 'review_article_summary_contribution_v4',
+  },
+] as const
 const enforcedForegroundDuckdbOperations = new Set<DuckdbWorkloadOperation>([
   'mainQuery',
   'mainStatement',
@@ -353,6 +1893,10 @@ const getDuckdbInstanceOptions = (runtimeConfig: DuckdbRuntimeConfig): Record<st
         temp_directory: runtimeConfig.tempDirectory,
         threads: runtimeConfig.threads,
       }
+}
+
+const getDuckdbIndexedTableRepairInstanceOptions = (runtimeConfig: DuckdbRuntimeConfig): Record<string, string> => {
+  return {...getDuckdbInstanceOptions(runtimeConfig), checkpoint_threshold: '8GB'}
 }
 
 export const getReadOnlyDuckdbRuntimeOptions = (input: ReadOnlyDuckdbRuntimeOptionsInput = {}) => {
@@ -585,11 +2129,25 @@ const copyDuckdbDatabaseBeforeWalRecovery = async ({
     return null
   }
 
-  await copyFile(databasePath, databaseBackupPath)
+  try {
+    await copyFile(databasePath, databaseBackupPath, fsConstants.COPYFILE_FICLONE)
+  } catch {
+    await copyFile(databasePath, databaseBackupPath)
+  }
+
   return databaseBackupPath
 }
 
-const quarantineFailedDuckdbWalReplay = async (runtimeConfig: DuckdbRuntimeConfig, error: unknown) => {
+const quarantineFailedDuckdbWalReplay = async (
+  runtimeConfig: DuckdbRuntimeConfig,
+  error: unknown,
+  {
+    event = 'duckdb.startup.wal-quarantine',
+    message = '[duckdb] quarantined failed startup WAL replay; retrying from last checkpoint',
+    recovery = 'wal-quarantine-retry-from-last-checkpoint',
+    walFileSuffix = 'failed-replay',
+  }: {event?: string; message?: string; recovery?: string; walFileSuffix?: string} = {},
+) => {
   if (runtimeConfig.databasePath === ':memory:') {
     throw new Error('DuckDB WAL replay recovery is unavailable for :memory: databases')
   }
@@ -603,7 +2161,8 @@ const quarantineFailedDuckdbWalReplay = async (runtimeConfig: DuckdbRuntimeConfi
   const recoveryPathPart = getDuckdbRecoveryPathPart()
   const recoveryDirectory = `${runtimeConfig.databasePath}.startup-recovery`
   const databaseBackupPath = join(recoveryDirectory, `${recoveryPathPart}.duckdb`)
-  const walQuarantinePath = join(recoveryDirectory, `${recoveryPathPart}.failed-replay.wal`)
+  const walQuarantinePath = join(recoveryDirectory, `${recoveryPathPart}.${walFileSuffix}.wal`)
+  const manifestPath = join(recoveryDirectory, `${recoveryPathPart}.recovery.json`)
 
   await mkdir(recoveryDirectory, {recursive: true})
   const preservedDatabasePath = await copyDuckdbDatabaseBeforeWalRecovery({
@@ -611,13 +2170,515 @@ const quarantineFailedDuckdbWalReplay = async (runtimeConfig: DuckdbRuntimeConfi
     databasePath: runtimeConfig.databasePath,
   })
   await rename(walPath, walQuarantinePath)
+  await writeFile(
+    manifestPath,
+    JSON.stringify(
+      {
+        checkpointSourcePath: runtimeConfig.databasePath,
+        error: getCompactDuckdbErrorMessage(error),
+        preservedDatabasePath,
+        recoveredAt: new Date().toISOString(),
+        recovery,
+        walPath,
+        walQuarantinePath,
+      },
+      null,
+      2,
+    ),
+  )
   writeRuntimeFailureLogEvent({
-    attrs: {databasePath: runtimeConfig.databasePath, error, preservedDatabasePath, walPath, walQuarantinePath},
-    event: 'duckdb.startup.wal-quarantine',
-    message: '[duckdb] quarantined failed startup WAL replay; retrying from last checkpoint',
+    attrs: {
+      databasePath: runtimeConfig.databasePath,
+      error,
+      manifestPath,
+      preservedDatabasePath,
+      walPath,
+      walQuarantinePath,
+    },
+    event,
+    message,
     severity: 'WARN',
-    terminalArgs: [`database_backup=${preservedDatabasePath ?? 'none'}`, `wal=${walQuarantinePath}`],
+    terminalArgs: [
+      `database_backup=${preservedDatabasePath ?? 'none'}`,
+      `wal=${walQuarantinePath}`,
+      `manifest=${manifestPath}`,
+    ],
   })
+}
+
+const hasNonEmptyDuckdbWal = (databasePath: string) => {
+  const walPath = `${databasePath}.wal`
+  const walStat = statSync(walPath, {throwIfNoEntry: false})
+
+  return walStat?.isFile() === true && walStat.size > 0
+}
+
+const getDuckdbStartupPreflightScript = () => {
+  return `
+    const databasePath = JSON.parse(process.argv[1])
+    const options = JSON.parse(process.argv[2])
+    const tableRepairSpecs = JSON.parse(process.argv[3])
+    const activeRepairSpecPath = JSON.parse(process.argv[4])
+    const {writeFileSync} = await import('node:fs')
+    const {DuckDBInstance} = await import('@duckdb/node-api')
+
+    let connection = null
+    let instance = null
+
+    const getRows = async (statement) => {
+      const reader = await connection.runAndReadAll(statement)
+      return reader.getRowObjectsJson()
+    }
+
+    const getSqlLiteral = (value) => {
+      return "'" + String(value).replaceAll("'", "''") + "'"
+    }
+
+    const tableExists = async (schemaName, tableName) => {
+      const rows = await getRows(
+        "SELECT COUNT(*) AS tableCount FROM information_schema.tables " +
+          "WHERE table_schema = " + getSqlLiteral(schemaName) +
+          " AND table_name = " + getSqlLiteral(tableName),
+      )
+      return Number(rows[0]?.tableCount ?? 0) > 0
+    }
+
+    const getPrimaryKeyColumns = async (schemaName, tableName) => {
+      const rows = await getRows(
+        "SELECT constraint_column_names AS primaryKeyColumns FROM duckdb_constraints() " +
+          "WHERE schema_name = " + getSqlLiteral(schemaName) +
+          " AND table_name = " + getSqlLiteral(tableName) +
+          " AND constraint_type = 'PRIMARY KEY' " +
+          "LIMIT 1",
+      )
+      return Array.isArray(rows[0]?.primaryKeyColumns) ? rows[0].primaryKeyColumns : []
+    }
+
+    const quoteIdentifier = (identifier) => {
+      return '"' + String(identifier).replaceAll('"', '""') + '"'
+    }
+
+    const runDeleteInsertMutationProbe = async (schemaName, tableName) => {
+      const primaryKeyColumns = await getPrimaryKeyColumns(schemaName, tableName)
+
+      if (primaryKeyColumns.length === 0) {
+        return
+      }
+
+      const probeTableName = 'startup_probe_delete_insert_' + schemaName + '_' + tableName
+      const qualifiedName = schemaName + '.' + tableName
+
+      await connection.run('DROP TABLE IF EXISTS ' + probeTableName)
+      await connection.run('CREATE TEMP TABLE ' + probeTableName + ' AS SELECT * FROM ' + qualifiedName + ' LIMIT 1')
+
+      const probeRows = await getRows('SELECT COUNT(*) AS rowCount FROM ' + probeTableName)
+      if (Number(probeRows[0]?.rowCount ?? 0) === 0) {
+        await connection.run('DROP TABLE IF EXISTS ' + probeTableName)
+        return
+      }
+
+      const predicate = primaryKeyColumns
+        .map((column) => {
+          return (
+            quoteIdentifier(column)
+            + ' IS NOT DISTINCT FROM (SELECT '
+            + quoteIdentifier(column)
+            + ' FROM '
+            + probeTableName
+            + ' LIMIT 1)'
+          )
+        })
+        .join(' AND ')
+
+      await connection.run('BEGIN')
+      await connection.run('DELETE FROM ' + qualifiedName + ' WHERE ' + predicate)
+      await connection.run('INSERT INTO ' + qualifiedName + ' BY NAME SELECT * FROM ' + probeTableName)
+      await connection.run('COMMIT')
+      await connection.run('DROP TABLE IF EXISTS ' + probeTableName)
+    }
+
+    const markActiveRepairSpec = (spec, phase) => {
+      if (typeof activeRepairSpecPath !== 'string' || activeRepairSpecPath.length === 0) {
+        return
+      }
+
+      writeFileSync(
+        activeRepairSpecPath,
+        JSON.stringify({
+          phase,
+          schemaName: spec.schemaName,
+          tableName: spec.tableName,
+        }),
+      )
+    }
+
+    try {
+      instance = await DuckDBInstance.create(databasePath, options)
+      connection = await instance.connect()
+      await connection.run('SELECT 1')
+
+      for (const spec of tableRepairSpecs) {
+        if (await tableExists(spec.schemaName, spec.tableName)) {
+          markActiveRepairSpec(spec, 'custom-mutation-probe')
+          await connection.run(spec.mutationProbeSql)
+          markActiveRepairSpec(spec, 'generic-delete-insert-probe')
+          await runDeleteInsertMutationProbe(spec.schemaName, spec.tableName)
+        }
+      }
+    } finally {
+      try {
+        connection?.closeSync()
+      } catch {}
+      try {
+        instance?.closeSync()
+      } catch {}
+    }
+  `
+}
+
+const getDuckdbStartupPreflightActiveRepairSpecPath = (runtimeConfig: DuckdbRuntimeConfig) => {
+  return join(`${runtimeConfig.databasePath}.startup-recovery`, 'startup-preflight-active-table.json')
+}
+
+const clearDuckdbStartupPreflightActiveRepairSpec = (markerPath: string) => {
+  try {
+    unlinkSync(markerPath)
+  } catch {
+    return
+  }
+}
+
+const getDuckdbStartupPreflightRepairSpecs = (markerPath: string) => {
+  try {
+    const marker = JSON.parse(readFileSync(markerPath, 'utf8')) as {schemaName?: unknown; tableName?: unknown}
+    const schemaName = typeof marker.schemaName === 'string' ? marker.schemaName : null
+    const tableName = typeof marker.tableName === 'string' ? marker.tableName : null
+
+    if (schemaName === null || tableName === null) {
+      return []
+    }
+
+    const spec = duckdbStartupIndexedTableRepairSpecs.find((candidate) => {
+      return candidate.schemaName === schemaName && candidate.tableName === tableName
+    })
+
+    return spec === undefined ? [] : [spec]
+  } catch {
+    return []
+  }
+}
+
+const getDuckdbStartupIndexedTableRepairSpecs = (error: unknown) => {
+  const repairSpecs =
+    error instanceof Error && Array.isArray((error as DuckdbStartupPreflightError).repairSpecs)
+      ? (error as DuckdbStartupPreflightError).repairSpecs
+      : []
+
+  return repairSpecs.length === 0 ? duckdbStartupIndexedTableRepairSpecs : repairSpecs
+}
+
+const getDuckdbIndexedTableRepairScript = () => {
+  return `
+    const databasePath = JSON.parse(process.argv[1])
+    const options = JSON.parse(process.argv[2])
+    const tableRepairSpecs = JSON.parse(process.argv[3])
+    const repairId = JSON.parse(process.argv[4])
+    const {DuckDBInstance} = await import('@duckdb/node-api')
+
+    let connection = null
+    let instance = null
+
+    const getRows = async (statement) => {
+      const reader = await connection.runAndReadAll(statement)
+      return reader.getRowObjectsJson()
+    }
+
+    const getSqlLiteral = (value) => {
+      return "'" + String(value).replaceAll("'", "''") + "'"
+    }
+
+    const getQualifiedName = (schemaName, tableName) => {
+      return schemaName + '.' + tableName
+    }
+
+    const tableExists = async (schemaName, tableName) => {
+      const rows = await getRows(
+        "SELECT COUNT(*) AS tableCount FROM information_schema.tables " +
+          "WHERE table_schema = " + getSqlLiteral(schemaName) +
+          " AND table_name = " + getSqlLiteral(tableName),
+      )
+      return Number(rows[0]?.tableCount ?? 0) > 0
+    }
+
+    try {
+      instance = await DuckDBInstance.create(databasePath, options)
+      connection = await instance.connect()
+
+      for (const spec of tableRepairSpecs) {
+        if (!(await tableExists(spec.schemaName, spec.tableName))) {
+          continue
+        }
+
+        const duplicateRows = await getRows(spec.duplicateKeySelectSql)
+        const duplicateCount = Number(duplicateRows[0]?.duplicateCount ?? 0)
+
+        if (duplicateCount > 0) {
+          throw new Error(
+            'cannot rebuild ' + getQualifiedName(spec.schemaName, spec.tableName)
+              + ' because table data contains ' + duplicateCount + ' duplicate primary keys',
+          )
+        }
+
+        const tableRows = await getRows(
+          "SELECT sql FROM duckdb_tables() " +
+            "WHERE schema_name = " + getSqlLiteral(spec.schemaName) +
+            " AND table_name = " + getSqlLiteral(spec.tableName) +
+            " LIMIT 1",
+        )
+        const createSql = tableRows[0]?.sql
+
+        if (typeof createSql !== 'string' || createSql.length === 0) {
+          throw new Error('missing table DDL for ' + getQualifiedName(spec.schemaName, spec.tableName))
+        }
+
+        const indexRows = await getRows(
+          "SELECT sql FROM duckdb_indexes() " +
+            "WHERE schema_name = " + getSqlLiteral(spec.schemaName) +
+            " AND table_name = " + getSqlLiteral(spec.tableName) +
+            " AND sql IS NOT NULL " +
+            "ORDER BY index_name",
+        )
+        const repairTableName = spec.tableName + '_startup_repair_' + repairId
+        const sourceName = getQualifiedName(spec.schemaName, spec.tableName)
+        const repairName = getQualifiedName(spec.schemaName, repairTableName)
+        const createRepairSql = createSql.replace(
+          'CREATE TABLE ' + sourceName + '(',
+          'CREATE TABLE ' + repairName + '(',
+        )
+
+        if (createRepairSql === createSql) {
+          throw new Error('could not rewrite table DDL for ' + sourceName)
+        }
+
+        await connection.run('DROP TABLE IF EXISTS ' + repairName)
+        await connection.run(createRepairSql)
+        if (spec.repairStrategy !== 'empty-derived') {
+          await connection.run('INSERT INTO ' + repairName + ' BY NAME SELECT * FROM ' + sourceName)
+        }
+        await connection.run('DROP TABLE ' + sourceName)
+        await connection.run('ALTER TABLE ' + repairName + ' RENAME TO ' + spec.tableName)
+
+        for (const indexRow of indexRows) {
+          const indexSql = String(indexRow.sql).replace(/^CREATE INDEX /, 'CREATE INDEX IF NOT EXISTS ')
+          await connection.run(indexSql)
+        }
+
+        if (typeof spec.postRepairSql === 'string' && spec.postRepairSql.trim().length > 0) {
+          await connection.run(spec.postRepairSql)
+        }
+      }
+
+    } finally {
+      try {
+        connection?.closeSync()
+      } catch {}
+      try {
+        instance?.closeSync()
+      } catch {}
+    }
+  `
+}
+
+const getDuckdbStartupPreflightError = (runtimeConfig: DuckdbRuntimeConfig) => {
+  if (
+    runtimeConfig.databasePath === ':memory:'
+    || process.env.FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT === duckdbStartupWalPreflightDisabledEnvValue
+  ) {
+    return null
+  }
+
+  if (!statSync(runtimeConfig.databasePath, {throwIfNoEntry: false})?.isFile()) {
+    return null
+  }
+
+  const activeRepairSpecPath = getDuckdbStartupPreflightActiveRepairSpecPath(runtimeConfig)
+  mkdirSync(`${runtimeConfig.databasePath}.startup-recovery`, {recursive: true})
+  clearDuckdbStartupPreflightActiveRepairSpec(activeRepairSpecPath)
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      process.execPath,
+      '-e',
+      getDuckdbStartupPreflightScript(),
+      JSON.stringify(runtimeConfig.databasePath),
+      JSON.stringify(getDuckdbInstanceOptions(runtimeConfig)),
+      JSON.stringify(duckdbStartupIndexedTableRepairSpecs),
+      JSON.stringify(activeRepairSpecPath),
+    ],
+    {
+      cwd: process.cwd(),
+      env: {...process.env, FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT_CHILD: 'true'},
+      stderr: 'pipe',
+      stdin: 'ignore',
+      stdout: 'pipe',
+    },
+  )
+
+  if (result.exitCode === 0) {
+    clearDuckdbStartupPreflightActiveRepairSpec(activeRepairSpecPath)
+    return null
+  }
+
+  const stderr = result.stderr.toString().trim()
+  const stdout = result.stdout.toString().trim()
+  const signalText = result.signalCode === null ? null : `signal=${result.signalCode}`
+  const outputText = [stderr, stdout, signalText]
+    .filter((value) => {
+      return value !== null && value !== ''
+    })
+    .join(' -- ')
+  const failureText = outputText === '' ? `exitCode=${result.exitCode ?? 'unknown'}` : outputText
+
+  const error = new Error(
+    `DuckDB startup preflight failed for ${runtimeConfig.databasePath}: ${failureText}`,
+  ) as DuckdbStartupPreflightError
+  const repairSpecs = getDuckdbStartupPreflightRepairSpecs(activeRepairSpecPath)
+
+  if (repairSpecs.length > 0) {
+    error.repairSpecs = repairSpecs
+  }
+
+  return error
+}
+
+const repairDuckdbStartupIndexedTables = async (runtimeConfig: DuckdbRuntimeConfig, error: unknown) => {
+  if (runtimeConfig.databasePath === ':memory:') {
+    throw new Error('DuckDB indexed-table repair is unavailable for :memory: databases')
+  }
+
+  const recoveryPathPart = getDuckdbRecoveryPathPart()
+  const repairId = recoveryPathPart.replace(/[^a-zA-Z0-9_]/g, '_')
+  const recoveryDirectory = `${runtimeConfig.databasePath}.startup-recovery`
+  const databaseBackupPath = join(recoveryDirectory, `${recoveryPathPart}.pre-repair.duckdb`)
+  const manifestPath = join(recoveryDirectory, `${recoveryPathPart}.recovery.json`)
+  const repairSpecs = getDuckdbStartupIndexedTableRepairSpecs(error)
+
+  await mkdir(recoveryDirectory, {recursive: true})
+  const preservedDatabasePath = await copyDuckdbDatabaseBeforeWalRecovery({
+    databaseBackupPath,
+    databasePath: runtimeConfig.databasePath,
+  })
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      process.execPath,
+      '-e',
+      getDuckdbIndexedTableRepairScript(),
+      JSON.stringify(runtimeConfig.databasePath),
+      JSON.stringify(getDuckdbIndexedTableRepairInstanceOptions(runtimeConfig)),
+      JSON.stringify(repairSpecs),
+      JSON.stringify(repairId),
+    ],
+    {
+      cwd: process.cwd(),
+      env: {...process.env, FORSKA_DUCKDB_STARTUP_INDEX_REPAIR_CHILD: 'true'},
+      stderr: 'pipe',
+      stdin: 'ignore',
+      stdout: 'pipe',
+    },
+  )
+
+  const stderr = result.stderr.toString().trim()
+  const stdout = result.stdout.toString().trim()
+  const signalText = result.signalCode === null ? null : `signal=${result.signalCode}`
+  const outputText = [stderr, stdout, signalText]
+    .filter((value) => {
+      return value !== null && value !== ''
+    })
+    .join(' -- ')
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `DuckDB startup indexed-table repair failed for ${runtimeConfig.databasePath}: ${
+        outputText === '' ? `exitCode=${result.exitCode ?? 'unknown'}` : outputText
+      }`,
+    )
+  }
+
+  await writeFile(
+    manifestPath,
+    JSON.stringify(
+      {
+        checkpointSourcePath: runtimeConfig.databasePath,
+        error: getCompactDuckdbErrorMessage(error),
+        preservedDatabasePath,
+        recoveredAt: new Date().toISOString(),
+        recovery: 'indexed-table-rebuild',
+        repairStrategies: Object.fromEntries(
+          repairSpecs.map((spec) => {
+            return [`${spec.schemaName}.${spec.tableName}`, spec.repairStrategy ?? 'copy']
+          }),
+        ),
+        repairedTables: repairSpecs.map((spec) => {
+          return `${spec.schemaName}.${spec.tableName}`
+        }),
+      },
+      null,
+      2,
+    ),
+  )
+  writeRuntimeFailureLogEvent({
+    attrs: {
+      databasePath: runtimeConfig.databasePath,
+      error,
+      manifestPath,
+      preservedDatabasePath,
+      repairedTables: repairSpecs.map((spec) => {
+        return `${spec.schemaName}.${spec.tableName}`
+      }),
+    },
+    event: 'duckdb.startup.indexed-table-repair',
+    message: '[duckdb] rebuilt indexed tables after startup mutation preflight failure',
+    severity: 'WARN',
+    terminalArgs: [`database_backup=${preservedDatabasePath ?? 'none'}`, `manifest=${manifestPath}`],
+  })
+}
+
+const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) => {
+  let attemptedIndexedTableRepair = false
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const hadWalBeforePreflight = hasNonEmptyDuckdbWal(runtimeConfig.databasePath)
+    const error = getDuckdbStartupPreflightError(runtimeConfig)
+
+    if (error === null) {
+      return
+    }
+
+    if (hadWalBeforePreflight && hasNonEmptyDuckdbWal(runtimeConfig.databasePath)) {
+      await quarantineFailedDuckdbWalReplay(runtimeConfig, error)
+      continue
+    }
+
+    if (!hadWalBeforePreflight && hasNonEmptyDuckdbWal(runtimeConfig.databasePath)) {
+      await quarantineFailedDuckdbWalReplay(runtimeConfig, error, {
+        event: 'duckdb.startup.preflight-mutation-wal-quarantine',
+        message: '[duckdb] quarantined WAL left by failed startup mutation preflight',
+        recovery: 'startup-preflight-mutation-wal-quarantine',
+        walFileSuffix: 'failed-startup-probe',
+      })
+    }
+
+    if (!attemptedIndexedTableRepair) {
+      attemptedIndexedTableRepair = true
+      await repairDuckdbStartupIndexedTables(runtimeConfig, error)
+      continue
+    }
+
+    throw error
+  }
+
+  throw new Error(`DuckDB startup preflight did not recover ${runtimeConfig.databasePath}`)
 }
 
 const withNormalizedDuckdbError = async <T>(work: () => Promise<T>, canRetryAfterRestart = true): Promise<T> => {
@@ -1016,6 +3077,7 @@ const startDuckdbProcess = async (): Promise<DuckDBConnection> => {
   await ensureCurrentDuckdbOwnerLease()
 
   try {
+    await runDuckdbStartupWalPreflight(runtimeConfig)
     duckdbInstance = await createDuckdbInstance(runtimeConfig)
     controlConnection = await duckdbInstance.connect()
     await createAppendConnections(appendLaneCount)

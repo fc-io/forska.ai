@@ -99,7 +99,7 @@ test('title search projection writes token rows and search-only component state 
   expect(selectStatement).toContain('ELSE COALESCE(selected_base.article_title, article.article_title)')
   expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
   expect(deleteStatement).toContain('search_identity')
-  expect(inserts).toHaveLength(2)
+  expect(inserts).toHaveLength(1)
   expect(inserts.join('\n')).toContain("'alpha'")
   expect(inserts.join('\n')).toContain("'beta'")
   expect(inserts.join('\n')).not.toContain('regexp_split_to_array')

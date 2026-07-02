@@ -238,6 +238,7 @@ const rebuildChunkClaimPriorityOrder = [
   'search',
   'posting',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
+const stalledForegroundRebuildRequestPriority = 10_000
 
 const getRebuildChunkClaimLaneSql = (tableAlias: string) => {
   return `CASE
@@ -260,6 +261,15 @@ const getRebuildChunkClaimPrioritySql = (tableAlias: string) => {
 const getRebuildChunkClaimRequestPrioritySql = (tableAlias: string) => {
   return `(
     SELECT request.priority
+    FROM app.review_rebuild_request request
+    WHERE request.request_id = ${tableAlias}.request_id
+    LIMIT 1
+  )`
+}
+
+const getRebuildChunkClaimRequestUpdatedAtSql = (tableAlias: string) => {
+  return `(
+    SELECT request.updated_at
     FROM app.review_rebuild_request request
     WHERE request.request_id = ${tableAlias}.request_id
     LIMIT 1
@@ -445,14 +455,8 @@ const getReviewServingRebuildChunkManifestFromRow = (
   }
 }
 
-const getReviewServingRebuildChunkSelect = (input: {tableAlias?: string} = {}) => {
-  const source = input.tableAlias ?? 'app.review_rebuild_chunk_manifest'
-  const from = input.tableAlias
-    ? `FROM app.review_rebuild_chunk_manifest AS ${input.tableAlias}`
-    : 'FROM app.review_rebuild_chunk_manifest'
-
+const getReviewServingRebuildChunkSelectColumns = (source: string) => {
   return `
-    SELECT
       ${source}.chunk_id AS chunkId,
       ${source}.request_id AS requestId,
       ${source}.project_id AS projectId,
@@ -503,6 +507,18 @@ const getReviewServingRebuildChunkSelect = (input: {tableAlias?: string} = {}) =
       ${source}.completed_at AS completedAt,
       ${source}.created_at AS createdAt,
       ${source}.updated_at AS updatedAt
+  `
+}
+
+const getReviewServingRebuildChunkSelect = (input: {tableAlias?: string} = {}) => {
+  const source = input.tableAlias ?? 'app.review_rebuild_chunk_manifest'
+  const from = input.tableAlias
+    ? `FROM app.review_rebuild_chunk_manifest AS ${input.tableAlias}`
+    : 'FROM app.review_rebuild_chunk_manifest'
+
+  return `
+    SELECT
+      ${getReviewServingRebuildChunkSelectColumns(source)}
     ${from}
   `
 }
@@ -602,6 +618,61 @@ export const getReviewServingRebuildChunkClaimWhere = (
   `
 }
 
+const getReviewServingRebuildChunkLeaseClaimPredicate = (
+  input: {now: Date | string; projectionComponent: ReviewServingProjectionComponent},
+  tableAlias: string,
+) => {
+  const source = `${tableAlias}.`
+
+  return `
+    ${source}admission_state = 'admitted'
+    AND ${source}projection_component = ${getSqlLiteral(input.projectionComponent)}
+    AND (
+      ${source}status = 'pending'
+      OR (
+        ${source}status = 'failed'
+        AND COALESCE(${source}retry_count, 0) < CASE
+          WHEN ${source}request_id IS NULL THEN ${getSqlLiteral(defaultReviewServingRebuildChunkRetryPolicy.maxAttempts)}
+          ELSE COALESCE((
+            SELECT GREATEST(
+              1,
+              TRY_CAST(json_extract_string(policy.retry_policy_json, '$.maxAttempts') AS INTEGER)
+            )
+            FROM app.review_rebuild_request policy
+            WHERE policy.request_id = ${source}request_id
+            LIMIT 1
+          ), ${getSqlLiteral(defaultReviewServingRebuildChunkRetryPolicy.maxAttempts)})
+        END
+        AND (
+          ${source}retry_after IS NULL
+          OR ${source}retry_after <= ${getReviewServingChunkTimestampLiteral(input.now)}
+        )
+      )
+      OR (
+        ${source}status = 'running'
+        AND (
+          ${source}lease_expires_at IS NULL
+          OR ${source}lease_expires_at <= ${getReviewServingChunkTimestampLiteral(input.now)}
+        )
+      )
+    )
+    AND (
+      ${source}request_id IS NULL
+      OR EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_request request
+        WHERE request.request_id = ${source}request_id
+          AND request.status IN ('admitted', 'running')
+          AND request.admission_state = 'admitted'
+          AND (
+            request.retry_after IS NULL
+            OR request.retry_after <= ${getReviewServingChunkTimestampLiteral(input.now)}
+          )
+      )
+    )
+  `
+}
+
 const getReviewServingRebuildChunkValidationError = (input: ReviewServingRebuildChunkValidationResult) => {
   const checksumValid = input.actualChecksum === input.expectedChecksum
   const countValid = input.expectedCount === undefined || input.actualCount === input.expectedCount
@@ -659,6 +730,16 @@ export const getNextClaimableReviewServingRebuildChunk = async (
     WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
     ORDER BY
       ${getRebuildChunkClaimRequestPrioritySql('candidate')} DESC NULLS LAST,
+      CASE
+        WHEN ${getRebuildChunkClaimRequestPrioritySql('candidate')} >= ${getSqlLiteral(stalledForegroundRebuildRequestPriority)}
+        THEN ${getRebuildChunkClaimRequestUpdatedAtSql('candidate')}
+        ELSE NULL
+      END DESC NULLS LAST,
+      CASE
+        WHEN ${getRebuildChunkClaimRequestPrioritySql('candidate')} >= ${getSqlLiteral(stalledForegroundRebuildRequestPriority)}
+        THEN candidate.updated_at
+        ELSE NULL
+      END ASC NULLS LAST,
       ${getRebuildChunkClaimLaneSql('candidate')} ASC,
       ${getRebuildChunkClaimPrioritySql('candidate')} ASC,
       CASE
@@ -670,14 +751,9 @@ export const getNextClaimableReviewServingRebuildChunk = async (
         THEN 0
         ELSE 1
       END ASC,
+      ${getRebuildChunkClaimRequestUpdatedAtSql('candidate')} ASC NULLS LAST,
       candidate.updated_at ASC,
       candidate.created_at ASC,
-      (
-        SELECT request.updated_at
-        FROM app.review_rebuild_request request
-        WHERE request.request_id = candidate.request_id
-        LIMIT 1
-      ) ASC NULLS LAST,
       candidate.chunk_id ASC
     LIMIT 1
   `)
@@ -710,12 +786,11 @@ export const upsertReviewServingRebuildChunkManifests = async (
     database,
   )
 
-  await Promise.all(
-    inputs.map(async (input) => {
-      const chunkId = getReviewServingRebuildChunkId(input)
-      const nowSql = getSqlLiteral(new Date())
+  for (const input of inputs) {
+    const chunkId = getReviewServingRebuildChunkId(input)
+    const nowSql = getSqlLiteral(new Date())
 
-      await database.run(`
+    await database.run(`
         INSERT INTO app.review_rebuild_chunk_manifest (
           chunk_id,
           request_id,
@@ -898,8 +973,7 @@ export const upsertReviewServingRebuildChunkManifests = async (
           END,
           updated_at = ${nowSql}
       `)
-    }),
-  )
+  }
 }
 
 export const isReviewServingRebuildChunkComplete = async (
@@ -922,29 +996,26 @@ export const isReviewServingRebuildChunkComplete = async (
 
 export const claimReviewServingRebuildChunk = async (
   input: ReviewServingRebuildChunkIdentity & {leaseExpiresAt: Date | string; leaseOwner: string; now: Date | string},
-  database: ReviewServingChunkManifestRepositoryDatabase = getReviewServingChunkManifestDatabase(),
+  database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
 ) => {
   const chunkId = getReviewServingRebuildChunkId(input)
 
-  return database.transaction(async (tx) => {
-    await tx.run(`
-      UPDATE app.review_rebuild_chunk_manifest AS manifest
-      SET
-        status = 'running',
-        lease_owner = ${getSqlLiteral(input.leaseOwner)},
-        lease_expires_at = ${getReviewServingChunkTimestampLiteral(input.leaseExpiresAt)},
-        retry_after = NULL,
-        last_error = NULL,
-        started_at = COALESCE(started_at, current_timestamp),
-        updated_at = current_timestamp
-      WHERE manifest.chunk_id = ${getSqlLiteral(chunkId)}
-        AND (${getReviewServingRebuildChunkClaimPredicate(input, 'manifest')})
-    `)
+  await database.run(`
+    UPDATE app.review_rebuild_chunk_manifest AS manifest
+    SET
+      status = 'running',
+      lease_owner = ${getSqlLiteral(input.leaseOwner)},
+      lease_expires_at = ${getReviewServingChunkTimestampLiteral(input.leaseExpiresAt)},
+      retry_after = NULL,
+      last_error = NULL,
+      started_at = COALESCE(started_at, current_timestamp),
+      updated_at = current_timestamp
+    WHERE manifest.chunk_id = ${getSqlLiteral(chunkId)}
+      AND (${getReviewServingRebuildChunkLeaseClaimPredicate(input, 'manifest')})
+  `)
+  const claimed = await getReviewServingRebuildChunkManifest({chunkId}, database)
 
-    const claimed = await getReviewServingRebuildChunkManifest({chunkId}, tx)
-
-    return claimed?.status === 'running' && claimed.leaseOwner === input.leaseOwner ? claimed : null
-  })
+  return claimed?.status === 'running' && claimed.leaseOwner === input.leaseOwner ? claimed : null
 }
 
 export const heartbeatReviewServingRebuildChunkLease = async (
@@ -1059,47 +1130,39 @@ export const writeReviewServingRebuildChunkOutput = async (
     diagnosticsJson?: unknown
     estimatedInputRows?: number | null
     leaseOwner: string
+    writeMode?: 'atomic' | 'idempotent-output'
     validateOutput: (
       tx: ReviewServingChunkManifestRepositoryTransaction,
     ) => Promise<ReviewServingRebuildChunkValidationResult>
-    writeOutput: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<void>
+    writeOutput: (
+      database: ReviewServingChunkManifestRepositoryDatabase | ReviewServingChunkManifestRepositoryTransaction,
+    ) => Promise<void>
   },
   database: ReviewServingChunkManifestRepositoryDatabase = getReviewServingChunkManifestDatabase(),
 ) => {
   const chunkId = getReviewServingRebuildChunkId(input)
   const startedAtMs = Date.now()
+  const completeChunk = async (tx: ReviewServingChunkManifestRepositoryTransaction) => {
+    const validation = await input.validateOutput(tx)
+    const validationError = getReviewServingRebuildChunkValidationError(validation)
+    const durationMs = Date.now() - startedAtMs
+    const actualInputRows = validation.actualInputRows ?? input.actualInputRows ?? input.estimatedInputRows ?? null
+    const actualOutputRows = validation.actualOutputRows ?? validation.actualCount ?? input.actualOutputRows ?? null
+    const inputDiagnosticsJson =
+      input.diagnosticsJson && typeof input.diagnosticsJson === 'object'
+        ? (input.diagnosticsJson as Record<string, unknown>)
+        : {}
+    const validationDiagnosticsJson =
+      validation.diagnosticsJson && typeof validation.diagnosticsJson === 'object'
+        ? (validation.diagnosticsJson as Record<string, unknown>)
+        : {}
+    const diagnosticsJson = {...inputDiagnosticsJson, ...validationDiagnosticsJson}
 
-  try {
-    return await database.transaction(async (tx) => {
-      const claimed = await getReviewServingRebuildChunkManifest({chunkId}, tx)
-      const canWrite = claimed?.status === 'running' && claimed.leaseOwner === input.leaseOwner
+    if (validationError !== null) {
+      throw getReviewServingRebuildChunkValidationFailure(validationError)
+    }
 
-      if (!canWrite) {
-        return null
-      }
-
-      await input.writeOutput(tx)
-
-      const validation = await input.validateOutput(tx)
-      const validationError = getReviewServingRebuildChunkValidationError(validation)
-      const durationMs = Date.now() - startedAtMs
-      const actualInputRows = validation.actualInputRows ?? input.actualInputRows ?? input.estimatedInputRows ?? null
-      const actualOutputRows = validation.actualOutputRows ?? validation.actualCount ?? input.actualOutputRows ?? null
-      const inputDiagnosticsJson =
-        input.diagnosticsJson && typeof input.diagnosticsJson === 'object'
-          ? (input.diagnosticsJson as Record<string, unknown>)
-          : {}
-      const validationDiagnosticsJson =
-        validation.diagnosticsJson && typeof validation.diagnosticsJson === 'object'
-          ? (validation.diagnosticsJson as Record<string, unknown>)
-          : {}
-      const diagnosticsJson = {...inputDiagnosticsJson, ...validationDiagnosticsJson}
-
-      if (validationError !== null) {
-        throw getReviewServingRebuildChunkValidationFailure(validationError)
-      }
-
-      await tx.run(`
+    await tx.run(`
       UPDATE app.review_rebuild_chunk_manifest
       SET
         status = 'completed',
@@ -1120,7 +1183,40 @@ export const writeReviewServingRebuildChunkOutput = async (
         AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
     `)
 
-      return getReviewServingRebuildChunkManifest({chunkId}, tx)
+    return getReviewServingRebuildChunkManifest({chunkId}, tx)
+  }
+
+  try {
+    if (input.writeMode === 'idempotent-output') {
+      const canWrite = await database.transaction(async (tx) => {
+        const claimed = await getReviewServingRebuildChunkManifest({chunkId}, tx)
+        return claimed?.status === 'running' && claimed.leaseOwner === input.leaseOwner
+      })
+
+      if (!canWrite) {
+        return null
+      }
+
+      await input.writeOutput(database)
+
+      return await database.transaction(async (tx) => {
+        const claimed = await getReviewServingRebuildChunkManifest({chunkId}, tx)
+        const canComplete = claimed?.status === 'running' && claimed.leaseOwner === input.leaseOwner
+
+        return canComplete ? completeChunk(tx) : null
+      })
+    }
+
+    return await database.transaction(async (tx) => {
+      const claimed = await getReviewServingRebuildChunkManifest({chunkId}, tx)
+      const canWrite = claimed?.status === 'running' && claimed.leaseOwner === input.leaseOwner
+
+      if (!canWrite) {
+        return null
+      }
+
+      await input.writeOutput(tx)
+      return completeChunk(tx)
     })
   } catch (error) {
     if (isReviewServingRebuildChunkValidationFailure(error)) {

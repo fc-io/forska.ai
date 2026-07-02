@@ -8,6 +8,7 @@ import {
   isReviewServingRebuildChunkComplete,
   markReviewServingRebuildChunkFailed,
   type ReviewServingChunkManifestRepositoryDatabase,
+  type ReviewServingChunkManifestRepositoryTransaction,
   type ReviewServingRebuildChunkIdentity,
   type ReviewServingRebuildChunkManifest,
   upsertReviewServingRebuildChunkManifests,
@@ -92,7 +93,23 @@ const getFakeLeasePriority = (row: FakeChunkRow) => {
 }
 
 const getFakeRequestPriority = (row: FakeChunkRow) => {
-  return row.requestId?.includes('foreground') === true ? 1_000 : 100
+  return row.requestId?.includes('stalled-foreground') === true
+    ? 10_000
+    : row.requestId?.includes('foreground') === true
+      ? 1_000
+      : 100
+}
+
+const getFakeRequestUpdatedAt = (row: FakeChunkRow) => {
+  if (row.requestId?.includes('freshly-requested') === true) {
+    return '2026-06-16T14:20:00.000Z'
+  }
+
+  if (row.requestId?.includes('stale-requested') === true) {
+    return '2026-06-16T14:00:00.000Z'
+  }
+
+  return row.requestId?.includes('stalled-foreground') === true ? '2026-06-16T14:05:00.000Z' : row.updatedAt
 }
 
 const fakeCriticalComponents = [
@@ -381,7 +398,9 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
     if (
       statement.includes('UPDATE app.review_rebuild_chunk_manifest')
       && (statement.includes("SET\n        status = 'running'")
-        || statement.includes("SET\r\n        status = 'running'"))
+        || statement.includes("SET\r\n        status = 'running'")
+        || statement.includes("SET\n      status = 'running'")
+        || statement.includes("SET\r\n      status = 'running'"))
     ) {
       claimChunk(statement)
     }
@@ -411,12 +430,27 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       completeChunk(statement)
     }
 
-    if (statement.includes('INSERT INTO mart.fake_chunk_output')) {
+    if (
+      statement.includes('INSERT INTO mart.fake_chunk_output')
+      || statement.includes('DELETE FROM mart.fake_chunk_output')
+    ) {
       outputWrites.push(statement)
     }
   }
   const queryJson = async <T>(statement: string) => {
     statements.push(statement)
+
+    if (
+      statement.includes('UPDATE app.review_rebuild_chunk_manifest')
+      && statement.includes('RETURNING')
+      && (statement.includes("SET\n      status = 'running'") || statement.includes("SET\r\n      status = 'running'"))
+    ) {
+      claimChunk(statement)
+
+      const chunkId = getChunkIdLiteral(statement)
+      const row = claimedRows.get(chunkId) ?? rows.get(chunkId)
+      return (row === undefined ? [] : [row]) as T[]
+    }
 
     if (statement.includes('FROM app.review_rebuild_chunk_manifest') && hasChunkIdLiteralPredicate(statement)) {
       const chunkId = getChunkIdLiteral(statement)
@@ -437,6 +471,12 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
           .toSorted((left, right) => {
             return (
               getFakeRequestPriority(right) - getFakeRequestPriority(left)
+              || (getFakeRequestPriority(left) >= 10_000 && getFakeRequestPriority(right) >= 10_000
+                ? getFakeRequestUpdatedAt(right).localeCompare(getFakeRequestUpdatedAt(left))
+                : 0)
+              || (getFakeRequestPriority(left) >= 10_000 && getFakeRequestPriority(right) >= 10_000
+                ? left.updatedAt.localeCompare(right.updatedAt)
+                : 0)
               || getFakeClaimLane(left) - getFakeClaimLane(right)
               || getFakeClaimPriority(left) - getFakeClaimPriority(right)
               || getFakeLeasePriority(left) - getFakeLeasePriority(right)
@@ -581,6 +621,54 @@ test('idempotent rebuild chunk upserts preserve active retry and lease state', a
   expect(joined).toContain("status IN ('completed', 'running', 'failed')")
 })
 
+test('rebuild chunk upserts serialize manifest writes on one DuckDB connection', async () => {
+  let inFlightInsertCount = 0
+  let maxInFlightInsertCount = 0
+  const insertOrder: string[] = []
+  const transactionContext: ReviewServingChunkManifestRepositoryTransaction = {
+    queryJson: async <T>() => {
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      if (!statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')) {
+        return
+      }
+
+      if (inFlightInsertCount > 0) {
+        throw new Error('concurrent manifest insert on one connection')
+      }
+
+      inFlightInsertCount += 1
+      maxInFlightInsertCount = Math.max(maxInFlightInsertCount, inFlightInsertCount)
+      insertOrder.push(getSqlStrings(statement)[0] ?? '')
+      await new Promise((resolve) => {
+        setTimeout(resolve, 5)
+      })
+      inFlightInsertCount -= 1
+    },
+  }
+  const database: ReviewServingChunkManifestRepositoryDatabase = {
+    ...transactionContext,
+    transaction: async <T>(operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>) => {
+      return operation(transactionContext)
+    },
+  }
+
+  await upsertReviewServingRebuildChunkManifests(
+    [
+      {...baseChunkIdentity, inputDigest: 'digest-sequential-a'},
+      {...baseChunkIdentity, inputDigest: 'digest-sequential-b'},
+    ],
+    database,
+  )
+
+  expect(maxInFlightInsertCount).toBe(1)
+  expect(insertOrder).toEqual([
+    getReviewServingRebuildChunkId({...baseChunkIdentity, inputDigest: 'digest-sequential-a'}),
+    getReviewServingRebuildChunkId({...baseChunkIdentity, inputDigest: 'digest-sequential-b'}),
+  ])
+})
+
 test('rebuild chunk upserts replace terminal chunks so fresh V4 plans can repair obsolete budget blocks', async () => {
   const blocked = {
     ...getChunkRowFromIdentity(baseChunkIdentity, []),
@@ -683,7 +771,7 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).toContain('SELECT request.updated_at')
   expect(statements.join('\n')).toContain('candidate.updated_at ASC')
   expect(statements.join('\n')).toMatch(
-    /SELECT request\.priority[\s\S]*\) DESC NULLS LAST,[\s\S]*candidate\.projection_component IN \('projectScope', 'selectedImport', 'display'[\s\S]*CASE candidate\.projection_component[\s\S]*candidate\.updated_at ASC[\s\S]*SELECT request\.updated_at/,
+    /SELECT request\.priority[\s\S]*\) DESC NULLS LAST,[\s\S]*SELECT request\.updated_at[\s\S]*candidate\.updated_at[\s\S]*candidate\.projection_component IN \('projectScope', 'selectedImport', 'display'[\s\S]*CASE candidate\.projection_component/,
   )
   expect(statements.join('\n')).toContain('CASE candidate.projection_component')
 })
@@ -708,7 +796,7 @@ test('next claimable chunk discovery does not favor newer pending requests over 
 
   expect(next).toMatchObject({inputDigest: 'digest-older-pending', requestId: 'rebuild:older'})
   expect(statements.join('\n')).toMatch(
-    /candidate\.projection_component IN \('projectScope', 'selectedImport', 'display'[\s\S]*CASE candidate\.projection_component[\s\S]*candidate\.updated_at ASC[\s\S]*SELECT request\.updated_at/,
+    /candidate\.projection_component IN \('projectScope', 'selectedImport', 'display'[\s\S]*CASE candidate\.projection_component[\s\S]*SELECT request\.updated_at[\s\S]*candidate\.updated_at ASC/,
   )
 })
 
@@ -947,6 +1035,199 @@ test('next claimable chunk discovery applies request priority before component o
   expect(next).toMatchObject({inputDigest: 'digest-foreground-display', projectionComponent: 'display'})
 })
 
+test('next claimable chunk discovery keeps foreground fairness ahead of route touch order', async () => {
+  const oldProjectScope = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-old-project-scope',
+        projectId: 'project-old',
+        projectionComponent: 'projectScope',
+      },
+      [],
+    ),
+    requestId: 'rebuild:foreground-old',
+    updatedAt: '2026-06-16T14:00:00.000Z',
+  }
+  const freshProjectScope = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-fresh-project-scope',
+        projectId: 'project-fresh',
+        projectionComponent: 'projectScope',
+      },
+      [],
+    ),
+    requestId: 'rebuild:fresh-foreground',
+    status: 'completed' as const,
+  }
+  const freshSelectedImport = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-fresh-selected-import',
+        projectId: 'project-fresh',
+        projectionComponent: 'selectedImport',
+      },
+      [],
+    ),
+    requestId: 'rebuild:fresh-foreground',
+    updatedAt: '2026-06-16T14:10:00.000Z',
+  }
+  const {database} = createFakeChunkManifestDatabase([oldProjectScope, freshProjectScope, freshSelectedImport])
+
+  const next = await getNextClaimableReviewServingRebuildChunk({now: '2026-06-16T14:15:00.000Z'}, database)
+
+  expect(next).toMatchObject({inputDigest: 'digest-old-project-scope', projectionComponent: 'projectScope'})
+})
+
+test('next claimable chunk discovery lets stalled foreground age break same-priority component ties', async () => {
+  const oldProjectScope = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-old-project-scope',
+        projectId: 'project-old',
+        projectionComponent: 'projectScope',
+      },
+      [],
+    ),
+    requestId: 'rebuild:stalled-foreground-old',
+    status: 'completed' as const,
+  }
+  const oldSelectedImport = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-old-selected-import',
+        projectId: 'project-old',
+        projectionComponent: 'selectedImport',
+      },
+      [],
+    ),
+    requestId: 'rebuild:stalled-foreground-old',
+    status: 'completed' as const,
+  }
+  const oldSearch = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-old-search', projectId: 'project-old', projectionComponent: 'search'},
+      [],
+    ),
+    requestId: 'rebuild:stalled-foreground-old',
+    updatedAt: '2026-06-16T14:00:00.000Z',
+  }
+  const freshProjectScope = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-fresh-project-scope',
+        projectId: 'project-fresh',
+        projectionComponent: 'projectScope',
+      },
+      [],
+    ),
+    requestId: 'rebuild:stalled-foreground-fresh',
+    status: 'completed' as const,
+  }
+  const freshJudgmentInput = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-fresh-judgment-input',
+        projectId: 'project-fresh',
+        projectionComponent: 'judgmentInputContent',
+      },
+      [],
+    ),
+    requestId: 'rebuild:stalled-foreground-fresh',
+    updatedAt: '2026-06-16T14:10:00.000Z',
+  }
+  const {database, statements} = createFakeChunkManifestDatabase([
+    oldProjectScope,
+    oldSelectedImport,
+    oldSearch,
+    freshProjectScope,
+    freshJudgmentInput,
+  ])
+
+  const next = await getNextClaimableReviewServingRebuildChunk({now: '2026-06-16T14:15:00.000Z'}, database)
+
+  expect(next).toMatchObject({inputDigest: 'digest-old-search', projectionComponent: 'search'})
+  expect(statements.join('\n')).toMatch(
+    /request\.priority[\s\S]*request\.updated_at[\s\S]*candidate\.updated_at[\s\S]*candidate\.projection_component/,
+  )
+})
+
+test('next claimable chunk discovery lets freshly requested stalled foreground work preempt stale stalled foreground work', async () => {
+  const staleProjectScope = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-stale-project-scope',
+        projectId: 'project-stale',
+        projectionComponent: 'projectScope',
+      },
+      [],
+    ),
+    requestId: 'rebuild:stalled-foreground-stale-requested',
+    status: 'completed' as const,
+  }
+  const staleSearch = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-stale-search',
+        projectId: 'project-stale',
+        projectionComponent: 'search',
+      },
+      [],
+    ),
+    requestId: 'rebuild:stalled-foreground-stale-requested',
+    updatedAt: '2026-06-16T13:45:00.000Z',
+  }
+  const freshProjectScope = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-fresh-project-scope',
+        projectId: 'project-fresh',
+        projectionComponent: 'projectScope',
+      },
+      [],
+    ),
+    requestId: 'rebuild:stalled-foreground-freshly-requested',
+    status: 'completed' as const,
+  }
+  const freshJudgmentInput = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-fresh-judgment-input',
+        projectId: 'project-fresh',
+        projectionComponent: 'judgmentInputContent',
+      },
+      [],
+    ),
+    requestId: 'rebuild:stalled-foreground-freshly-requested',
+    updatedAt: '2026-06-16T14:10:00.000Z',
+  }
+  const {database} = createFakeChunkManifestDatabase([
+    staleProjectScope,
+    staleSearch,
+    freshProjectScope,
+    freshJudgmentInput,
+  ])
+
+  const next = await getNextClaimableReviewServingRebuildChunk({now: '2026-06-16T14:15:00.000Z'}, database)
+
+  expect(next).toMatchObject({
+    inputDigest: 'digest-fresh-judgment-input',
+    projectionComponent: 'judgmentInputContent',
+    requestId: 'rebuild:stalled-foreground-freshly-requested',
+  })
+})
+
 test('next claimable chunk discovery preserves component order before expired lease priority', async () => {
   const expiredSearch = {
     ...getChunkRowFromIdentity(
@@ -1161,6 +1442,92 @@ test('validation mismatch rolls back chunk output before marking the chunk faile
   expect(failedRow?.status).toBe('failed')
 })
 
+test('idempotent rebuild output writes outside the completion transaction for safe lease retries', async () => {
+  const running = {
+    ...getChunkRowFromIdentity(baseChunkIdentity, []),
+    leaseExpiresAt: '2026-06-16T14:05:00.000Z',
+    leaseOwner: 'worker-idempotent',
+    status: 'running' as const,
+  }
+  const {database, outputWrites, rows} = createFakeChunkManifestDatabase([running])
+  const rejection = await getPromiseRejection(
+    writeReviewServingRebuildChunkOutput(
+      {
+        ...baseChunkIdentity,
+        leaseOwner: 'worker-idempotent',
+        validateOutput: async () => {
+          return {actualChecksum: 'bad-checksum', actualCount: 24, expectedChecksum: 'checksum-v3', expectedCount: 25}
+        },
+        writeMode: 'idempotent-output',
+        writeOutput: async (tx) => {
+          await tx.run('DELETE FROM mart.fake_chunk_output WHERE article_id BETWEEN 1 AND 25')
+          await tx.run('INSERT INTO mart.fake_chunk_output VALUES (24)')
+        },
+      },
+      database,
+    ),
+  )
+  const failedRow = rows.get(getReviewServingRebuildChunkId(baseChunkIdentity))
+
+  expect(getErrorMessage(rejection)).toContain('chunk validation failed')
+  expect(outputWrites).toEqual([
+    'DELETE FROM mart.fake_chunk_output WHERE article_id BETWEEN 1 AND 25',
+    'INSERT INTO mart.fake_chunk_output VALUES (24)',
+  ])
+  expect(failedRow?.lastError).toContain('chunk validation failed')
+  expect(failedRow?.status).toBe('failed')
+})
+
+test('idempotent rebuild output can split writes into independent transactions', async () => {
+  const running = {
+    ...getChunkRowFromIdentity(baseChunkIdentity, []),
+    leaseExpiresAt: '2026-06-16T14:05:00.000Z',
+    leaseOwner: 'worker-idempotent-batches',
+    status: 'running' as const,
+  }
+  const {database, outputWrites, rows} = createFakeChunkManifestDatabase([running])
+
+  const completed = await writeReviewServingRebuildChunkOutput(
+    {
+      ...baseChunkIdentity,
+      leaseOwner: 'worker-idempotent-batches',
+      validateOutput: async () => {
+        return {
+          actualChecksum: 'checksum-batched',
+          actualCount: 2,
+          expectedChecksum: 'checksum-batched',
+          expectedCount: 2,
+        }
+      },
+      writeMode: 'idempotent-output',
+      writeOutput: async (outputDatabase) => {
+        if (!('transaction' in outputDatabase)) {
+          throw new Error('idempotent output writer did not receive a transaction-capable database')
+        }
+
+        await outputDatabase.transaction(async (tx) => {
+          await tx.run('DELETE FROM mart.fake_chunk_output WHERE article_id BETWEEN 1 AND 1')
+          await tx.run('INSERT INTO mart.fake_chunk_output VALUES (1)')
+        })
+        await outputDatabase.transaction(async (tx) => {
+          await tx.run('DELETE FROM mart.fake_chunk_output WHERE article_id BETWEEN 2 AND 2')
+          await tx.run('INSERT INTO mart.fake_chunk_output VALUES (2)')
+        })
+      },
+    },
+    database,
+  )
+
+  expect(outputWrites).toEqual([
+    'DELETE FROM mart.fake_chunk_output WHERE article_id BETWEEN 1 AND 1',
+    'INSERT INTO mart.fake_chunk_output VALUES (1)',
+    'DELETE FROM mart.fake_chunk_output WHERE article_id BETWEEN 2 AND 2',
+    'INSERT INTO mart.fake_chunk_output VALUES (2)',
+  ])
+  expect(completed).toMatchObject({checksum: 'checksum-batched', status: 'completed'})
+  expect(rows.get(getReviewServingRebuildChunkId(baseChunkIdentity))?.status).toBe('completed')
+})
+
 test('validation mismatch rejects after exhausting retries to a request terminal state', async () => {
   const retryIdentity = {
     ...baseChunkIdentity,
@@ -1264,8 +1631,13 @@ test('expired running rebuild chunk leases are reclaimed without retry delay', a
     retryCount: 0,
     status: 'running',
   })
-  expect(statements.join('\n')).toContain("manifest.status = 'running'")
-  expect(statements.join('\n')).toContain('manifest.lease_expires_at IS NULL')
+  const claimStatement = statements.find((statement) => {
+    return statement.includes('UPDATE app.review_rebuild_chunk_manifest AS manifest')
+  })
+
+  expect(claimStatement).toContain("manifest.status = 'running'")
+  expect(claimStatement).toContain('manifest.lease_expires_at IS NULL')
+  expect(claimStatement).not.toContain('FROM app.review_rebuild_chunk_manifest prerequisite')
 })
 
 test('changed maintained input digest creates a different chunk and avoids stale completed skips', async () => {

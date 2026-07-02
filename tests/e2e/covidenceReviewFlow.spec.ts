@@ -129,7 +129,7 @@ const waitForReviewServingReadiness = async (projectId: string, deadlineMs: numb
   })
   const payload = await assertOk<ReviewsWarningsResponse>(response, 'Failed to load review serving readiness')
 
-  if (payload.data.indexing.serving.readable) {
+  if (payload.data.indexing.serving.readable && payload.data.indexing.progressState === 'completed') {
     return
   }
 

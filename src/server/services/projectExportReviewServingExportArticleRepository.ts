@@ -20,9 +20,7 @@ export type ReviewServingExportArticleRow = {
 
 export type ReviewServingExportSnapshotScope = {projectId: string; reviewConfigHash: string | null; snapshotId: string}
 
-export type ReviewServingExportArticleRepositoryDatabase = {
-  queryJson: <T>(statement: string) => Promise<T[]>
-}
+export type ReviewServingExportArticleRepositoryDatabase = {queryJson: <T>(statement: string) => Promise<T[]>}
 
 export const readReviewServingExportArticles = async (input: {
   articleIds: string[]

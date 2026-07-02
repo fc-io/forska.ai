@@ -104,6 +104,7 @@ const createWorkerHarness = (input?: {
   const failedChunks: unknown[] = []
   const getNextChunkInputs: unknown[] = []
   const heartbeatInputs: unknown[] = []
+  const recycledChunks: ReviewServingRebuildChunkManifest[] = []
   const runChunkInputs: ReviewServingRebuildChunkManifest[] = []
   const wakeStatus = input?.wakeStatus ?? 'blocked'
   const dependencies: ReviewServingProjectorWorkerDependencies = {
@@ -155,6 +156,9 @@ const createWorkerHarness = (input?: {
         return {status: 'completed' as const}
       },
     },
+    recycleDuckdbAfterCompletedRebuildChunk: async (chunk) => {
+      recycledChunks.push(chunk)
+    },
     sleep: async (_delayMs: number) => {},
     wakeProjectors: async (wakeInput, serviceDependencies) => {
       wakeInputs.push(wakeInput)
@@ -172,6 +176,7 @@ const createWorkerHarness = (input?: {
     failedChunks,
     getNextChunkInputs,
     heartbeatInputs,
+    recycledChunks,
     runChunkInputs,
     runStatements,
     wakeInputs,
@@ -452,6 +457,91 @@ test('worker marks rebuild requests completed after their final chunk completes'
   expect(joined).toContain('UPDATE app.review_rebuild_request')
   expect(joined).toContain("status = 'completed'")
   expect(joined).toContain("request_id = 'rebuild-1'")
+})
+
+test('worker recycles DuckDB after completed status rebuild chunks', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const llmChunkInput = {
+    ...chunkInput,
+    projectionComponent: 'llmStatus' as const,
+    projectionIdentity: 'llmStatus:project-1',
+  }
+  const llmChunk = {
+    ...chunkManifest,
+    ...llmChunkInput,
+    requestId: 'rebuild-status',
+  } satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return llmChunk
+    },
+    getNextChunk: async () => {
+      return llmChunkInput
+    },
+    heartbeatChunk: async () => {
+      return llmChunk
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  expect(result.chunk).toMatchObject({
+    projectionComponent: 'llmStatus',
+    requestId: 'rebuild-status',
+    status: 'completed',
+  })
+  expect(harness.recycledChunks).toEqual([llmChunk])
+})
+
+test('worker does not fail completed status chunks when DuckDB recycle fails', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const humanChunkInput = {
+    ...chunkInput,
+    projectionComponent: 'humanStatus' as const,
+    projectionIdentity: 'humanStatus:project-1',
+  }
+  const humanChunk = {
+    ...chunkManifest,
+    ...humanChunkInput,
+    requestId: 'rebuild-human-status',
+  } satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return humanChunk
+    },
+    getNextChunk: async () => {
+      return humanChunkInput
+    },
+    heartbeatChunk: async () => {
+      return humanChunk
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.recycleDuckdbAfterCompletedRebuildChunk = async () => {
+    throw new Error('recycle failed')
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  expect(result.chunk).toMatchObject({
+    projectionComponent: 'humanStatus',
+    requestId: 'rebuild-human-status',
+    status: 'completed',
+  })
+  expect(harness.failedChunks).toEqual([])
 })
 
 test('worker marks rebuild requests failed after terminal chunk failure', async () => {
@@ -777,6 +867,28 @@ test('worker default dependencies wire real projector runners instead of an empt
   expect(source).toContain("component: 'judgmentInputContent'")
 })
 
+test('high-fanout rebuild chunks commit idempotent output separately from completion', () => {
+  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const getFunctionSource = (functionName: string) => {
+    const start = source.indexOf(`const ${functionName} = async`)
+    const end = source.indexOf('\nconst ', start + 1)
+
+    expect(start).toBeGreaterThanOrEqual(0)
+
+    return source.slice(start, end === -1 ? undefined : end)
+  }
+
+  for (const functionName of [
+    'runLlmStatusRebuildChunk',
+    'runHumanStatusRebuildChunk',
+    'runQueueRebuildChunk',
+    'runPostingRebuildChunk',
+    'runSummaryRebuildChunk',
+  ]) {
+    expect(getFunctionSource(functionName)).toContain("writeMode: 'idempotent-output'")
+  }
+})
+
 test('selected import runner releases dirty work while base projection is still batching', async () => {
   const runStatements: string[] = []
   const selectedImportRows = new Array(512).fill(null).map((_, index) => {
@@ -896,7 +1008,10 @@ test('selected import runner releases dirty work while base projection is still 
   ).toBe(true)
   expect(
     runStatements.some((statement) => {
-      return statement.includes('INSERT INTO app.review_selected_import_snapshot')
+      return (
+        statement.includes('INSERT INTO app.review_selected_import_snapshot')
+        || statement.includes('UPDATE app.review_selected_import_snapshot')
+      )
     }),
   ).toBe(true)
   expect(
@@ -1272,10 +1387,28 @@ test('fresh project scope rebuild writes base scope without synthetic dirty patc
     database,
   )
   const joined = statements.join('\n')
+  const projectScopeWriteStatement =
+    statements.find((statement) => {
+      return statement.includes('DELETE FROM mart.project_scope_article')
+    }) ?? ''
+  const projectScopeValidationStatement =
+    statements.find((statement) => {
+      return statement.includes('FROM mart.project_scope_article scope')
+    }) ?? ''
 
   expect(result).toEqual({status: 'completed'})
   expect(joined).toContain('DELETE FROM mart.project_scope_article')
   expect(joined).toContain('INSERT INTO mart.project_scope_article')
+  expect(projectScopeWriteStatement).toContain("scope.article_id >= 'article-001'")
+  expect(projectScopeWriteStatement).toContain("scope.article_id <= 'article-099'")
+  expect(projectScopeWriteStatement).toContain("article_import_route.article_id >= 'article-001'")
+  expect(projectScopeWriteStatement).toContain("article_import_route.article_id <= 'article-099'")
+  expect(projectScopeWriteStatement).toContain("project_article.article_id >= 'article-001'")
+  expect(projectScopeWriteStatement).toContain("project_article.article_id <= 'article-099'")
+  expect(projectScopeWriteStatement).toContain("aggregated_scope.article_id >= 'article-001'")
+  expect(projectScopeWriteStatement).toContain("aggregated_scope.article_id <= 'article-099'")
+  expect(projectScopeValidationStatement).toContain("scope.article_id >= 'article-001'")
+  expect(projectScopeValidationStatement).toContain("scope.article_id <= 'article-099'")
   expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).not.toContain('UPDATE app.review_serving_dirty_work')
   expect(joined).toContain("checksum = 'checksum-project-scope-bootstrap'")
@@ -1426,6 +1559,8 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
       statements.push(statement)
     },
     transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      statements.push(`BEGIN ${activeChunk.projectionComponent}`)
+
       return operation(database)
     },
   }
@@ -1452,9 +1587,14 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   expect(joined).toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain("article_id >= 'article-001'")
   expect(joined).toContain("article_id <= 'article-099'")
+  expect(
+    statements.filter((statement) => {
+      return statement === 'BEGIN judgmentInputContent'
+    }).length,
+  ).toBe(3)
 })
 
-test('posting rebuild chunk splits on runtime DuckDB OOM before blocking over budget', async () => {
+test('posting rebuild chunk presplits before hitting runtime DuckDB OOM', async () => {
   const statements: string[] = []
   const postingChunk: ReviewServingRebuildChunkManifest = {
     ...chunkManifest,
@@ -1534,7 +1674,7 @@ test('posting rebuild chunk splits on runtime DuckDB OOM before blocking over bu
         return [{listModeKey: 'llm', totalArticleCount: 10}] as T[]
       }
 
-      if (statement.includes('NTILE(2)') && statement.includes('FROM mart.project_scope_article scope')) {
+      if (statement.includes('NTILE(10)') && statement.includes('FROM mart.project_scope_article scope')) {
         return [
           {articleCount: 25, chunkEndKey: 'article-050', chunkStartKey: 'article-001'},
           {articleCount: 24, chunkEndKey: 'article-099', chunkStartKey: 'article-051'},
@@ -1569,11 +1709,11 @@ test('posting rebuild chunk splits on runtime DuckDB OOM before blocking over bu
   })
 
   expect(result).toEqual({status: 'completed'})
-  expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
-  expect(joined).toContain('NTILE(2)')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).toContain('NTILE(10)')
   expect(childInserts).toHaveLength(2)
-  expect(joined).toContain("oom_category = 'duckdb_oom_split'")
-  expect(joined).toContain('"splitReason":"duckdb_oom"')
+  expect(joined).toContain("oom_category = 'input_row_budget_split'")
+  expect(joined).toContain('"splitReason":"input_row_budget"')
   expect(joined).not.toContain("status = 'failed'")
   expect(joined).not.toContain("status = 'blocked_over_budget'")
 })
@@ -1686,7 +1826,7 @@ test('judgment input content rebuild chunk presplits large ranges and completes 
         ] as T[]
       }
 
-      if (statement.includes('NTILE(5)') && statement.includes('FROM mart.project_scope_article scope')) {
+      if (statement.includes('NTILE(48)') && statement.includes('FROM mart.project_scope_article scope')) {
         return [
           {articleCount: 50, chunkEndKey: 'article-060', chunkStartKey: 'article-001'},
           {articleCount: 49, chunkEndKey: 'article-099', chunkStartKey: 'article-050'},
@@ -1721,7 +1861,7 @@ test('judgment input content rebuild chunk presplits large ranges and completes 
   })
 
   expect(result).toEqual({status: 'completed'})
-  expect(joined).toContain('NTILE(5)')
+  expect(joined).toContain('NTILE(48)')
   expect(joined).not.toContain('scope.project_scope_identity')
   expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('lease_expires_at > current_timestamp')
@@ -1974,7 +2114,7 @@ test('selected import rebuild chunk presplits because rebuild output is range-sc
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
 
-      if (statement.includes('NTILE(5)') && statement.includes('FROM mart.project_scope_article scope')) {
+      if (statement.includes('NTILE(48)') && statement.includes('FROM mart.project_scope_article scope')) {
         return [
           {articleCount: 50, chunkEndKey: 'article-050', chunkStartKey: 'article-001'},
           {articleCount: 49, chunkEndKey: 'article-099', chunkStartKey: 'article-051'},
@@ -2005,9 +2145,135 @@ test('selected import rebuild chunk presplits because rebuild output is range-sc
   })
 
   expect(result).toEqual({status: 'completed'})
-  expect(joined).toContain('NTILE(5)')
+  expect(joined).toContain('NTILE(48)')
   expect(childInserts.length).toBeGreaterThan(1)
   expect(joined).toContain('"splitReason":"input_row_budget"')
+})
+
+test('human status rebuild chunk presplits with the high-fanout row budget', async () => {
+  const statements: string[] = []
+  const humanStatusChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    budgetJson: {maxInputRows: 250_000},
+    chunkId: 'chunk-human-status-high-fanout',
+    diagnosticsJson: {source: 'test'},
+    estimatedInputRows: 240_000,
+    estimatedOutputBytes: 96_000_000,
+    estimatedOutputRows: 240_000,
+    inputWatermark: 9,
+    maxInputRows: 250_000,
+    maxOutputBytes: 128_000_000,
+    maxOutputRows: 250_000,
+    outputBaseGeneration: 7,
+    parentChunkId: null,
+    projectionComponent: 'humanStatus',
+    projectionIdentity: 'humanStatus:project-1',
+    requestId: 'request-1',
+    snapshotCount: 1,
+    splitDepth: 0,
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('NTILE(48)') && statement.includes('FROM mart.project_scope_article scope')) {
+        return [
+          {articleCount: 50, chunkEndKey: 'article-050', chunkStartKey: 'article-001'},
+          {articleCount: 49, chunkEndKey: 'article-099', chunkStartKey: 'article-051'},
+        ] as T[]
+      }
+
+      if (statement.includes('RETURNING chunk_id AS chunkId')) {
+        return [{chunkId: humanStatusChunk.chunkId}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: humanStatusChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+  const childInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain('NTILE(48)')
+  expect(childInserts.length).toBeGreaterThan(1)
+  expect(joined).toContain('"splitReason":"input_row_budget"')
+})
+
+test('uuid article range presplit avoids DuckDB bucket scans for high fanout chunks', async () => {
+  const statements: string[] = []
+  const selectedImportChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    budgetJson: {maxInputRows: 250_000},
+    chunkEndKey: 'ffffffff-ffff-ffff-ffff-ffffffffffff',
+    chunkId: 'chunk-selected-import-uuid-high-fanout',
+    chunkStartKey: '00000000-0000-0000-0000-000000000000',
+    diagnosticsJson: {source: 'test'},
+    estimatedInputRows: 6_000,
+    estimatedOutputBytes: 3_000_000,
+    estimatedOutputRows: 6_000,
+    inputWatermark: 9,
+    maxInputRows: 250_000,
+    maxOutputBytes: 128_000_000,
+    maxOutputRows: 250_000,
+    outputBaseGeneration: 7,
+    parentChunkId: null,
+    projectionComponent: 'selectedImport',
+    projectionIdentity: 'selectedImport:project-1',
+    requestId: 'request-1',
+    snapshotCount: 1,
+    splitDepth: 0,
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM mart.project_scope_article scope')) {
+        throw new Error('expected uuid range split to avoid DuckDB bucket scan')
+      }
+
+      if (statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('RETURNING chunk_id')) {
+        return [{chunkId: selectedImportChunk.chunkId}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: selectedImportChunk, leaseOwner: 'worker-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+  const childInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).not.toContain('NTILE(')
+  expect(joined).not.toContain('FROM mart.project_scope_article scope')
+  expect(childInserts).toHaveLength(2)
+  expect(joined).toContain("'00000000-0000-0000-0000-000000000000'")
+  expect(joined).toContain("'7fffffff-ffff-ffff-ffff-ffffffffffff'")
+  expect(joined).toContain("'ffffffff-ffff-ffff-ffff-ffffffffffff'")
 })
 
 test('project scope rebuild chunk presplits before running oversized ranges', async () => {
@@ -2198,7 +2464,8 @@ test('base rebuild chunks regenerate project scope and selected import state bef
   const selectedImportPatchManifestStatement =
     statements.find((statement) => {
       return (
-        statement.includes('INSERT INTO app.review_projection_identity_manifest')
+        (statement.includes('INSERT INTO app.review_projection_identity_manifest')
+          || statement.includes('UPDATE app.review_projection_identity_manifest'))
         && statement.includes("'selectedImport.rebuild'")
       )
     }) ?? ''
@@ -2209,20 +2476,27 @@ test('base rebuild chunks regenerate project scope and selected import state bef
     statements.filter((statement) => {
       return statement === 'BEGIN selectedImport'
     }).length,
-  ).toBe(1)
+  ).toBe(6)
   expect(joined).toContain('DELETE FROM mart.project_scope_article')
+  expect(joined).toContain("scope.article_id >= 'article-001'")
+  expect(joined).toContain("scope.article_id <= 'article-099'")
   expect(joined).toContain('INSERT INTO mart.project_scope_article')
   expect(joined).toContain('projectScope.rebuild')
   expect(joined).toContain('reviewChange')
   expect(joined).toContain('DELETE FROM app.review_selected_article_import_v4')
+  expect(joined).not.toContain('article_id IS NOT DISTINCT FROM')
+  expect(joined).toContain("article_id >= 'article-001'")
+  expect(joined).toContain("article_id <= 'article-099'")
   expect(joined).toContain('DELETE FROM app.review_selected_import_snapshot')
   expect(joined).toContain('WITH selected_import_candidates')
   expect(joined).toContain('selectedImport.rebuild')
   expect(selectedImportPatchManifestStatement).not.toHaveLength(0)
   expect(selectedImportPatchManifestStatement).toContain('\'{"importRunArticle":7,"reviewChange":9}\'::JSON')
-  expect(selectedImportPatchManifestStatement).toMatch(
-    /7,\s+7,\s+7,\s+7,\s+'\{"importRunArticle":7,"reviewChange":9}'::JSON/,
-  )
+  expect(selectedImportPatchManifestStatement).toContain('base_generation = 7')
+  expect(selectedImportPatchManifestStatement).toContain('patch_watermark = 7')
+  expect(selectedImportPatchManifestStatement).toContain('patch_range_start = 7')
+  expect(selectedImportPatchManifestStatement).toContain('patch_range_end = 7')
+  expect(selectedImportPatchManifestStatement).toContain('input_watermark = 7')
   expect(joined).toContain("checksum = 'checksum-project-scope'")
   expect(joined).toContain("checksum = 'checksum-selected-import'")
 })
@@ -2334,8 +2608,11 @@ test('selected import bootstrap rebuild chunk writes only its article range with
   expect(result).toEqual({status: 'completed'})
   expect(joined).not.toContain('DELETE FROM mart.review_selected_import_patch_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_selected_import_patch_v4')
-  expect(joined).toContain('DELETE FROM app.review_selected_article_import_v4')
+  expect(joined).not.toContain('DELETE FROM app.review_selected_article_import_v4')
+  expect(joined).not.toContain('article_id IS NOT DISTINCT FROM')
   expect(joined).not.toContain('DELETE FROM app.review_selected_import_snapshot')
+  expect(joined).not.toContain('INSERT INTO app.review_selected_import_snapshot')
+  expect(joined).not.toContain('UPDATE app.review_projection_identity_manifest')
   expect(joined).toContain("article_id >= 'article-050'")
   expect(joined).toContain("article_id <= 'article-099'")
   expect(joined).toContain("scope.article_id >= 'article-050'")
@@ -2447,7 +2724,8 @@ test('selected import rebuild uses import scoped zero watermark when manifest ha
   const selectedImportPatchManifestStatement =
     statements.find((statement) => {
       return (
-        statement.includes('INSERT INTO app.review_projection_identity_manifest')
+        (statement.includes('INSERT INTO app.review_projection_identity_manifest')
+          || statement.includes('UPDATE app.review_projection_identity_manifest'))
         && statement.includes("'selectedImport.rebuild'")
       )
     }) ?? ''
@@ -2455,5 +2733,9 @@ test('selected import rebuild uses import scoped zero watermark when manifest ha
   expect(selectedImportResult).toEqual({status: 'completed'})
   expect(selectedImportPatchManifestStatement).not.toHaveLength(0)
   expect(selectedImportPatchManifestStatement).toContain('\'{"reviewChange":9}\'::JSON')
-  expect(selectedImportPatchManifestStatement).toMatch(/7,\s+0,\s+0,\s+0,\s+0,\s+'\{"reviewChange":9}'::JSON/)
+  expect(selectedImportPatchManifestStatement).toContain('base_generation = 7')
+  expect(selectedImportPatchManifestStatement).toContain('patch_watermark = 0')
+  expect(selectedImportPatchManifestStatement).toContain('patch_range_start = 0')
+  expect(selectedImportPatchManifestStatement).toContain('patch_range_end = 0')
+  expect(selectedImportPatchManifestStatement).toContain('input_watermark = 0')
 })

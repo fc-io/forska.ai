@@ -155,3 +155,17 @@ test('missing or incompatible contribution state enqueues bounded repair', async
   expect(incompatibleState.diffs).toContainEqual({contributionKey: 'old', delta: -1})
   expect(incompatibleState.diffs).toContainEqual({contributionKey: 'new', delta: 1})
 })
+
+test('contribution repair claims do not re-enqueue themselves', async () => {
+  const result = await prepareReviewServingContributionDiff(
+    {
+      ...prepareInput({requireExistingState: true}),
+      claims: [claim({sourcePartition: 'review-serving-contribution-repair'})],
+    },
+    createDatabase([]).database,
+  )
+
+  expect(result.repairRequired).toBe(true)
+  expect(result.contributionRecords).toHaveLength(1)
+  expect(result.repairDirtyWork).toEqual([])
+})

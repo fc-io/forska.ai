@@ -69,6 +69,14 @@ const forbiddenDevServerOutputPatterns = [
   {label: 'judge unexpected SIGTERM exit', pattern: /\[server:stack\] judge pid=\d+ exited with code 143/},
 ] as const
 
+test('stacked server allows DuckDB startup recovery to finish before maintenance restart', () => {
+  const source = readFileSync(new URL('./startServerStack.ts', import.meta.url), 'utf8')
+
+  expect(source).toContain('const maintenanceStartupTimeoutMs = 180_000')
+  expect(source).toContain('deadlineMs = Date.now() + maintenanceStartupTimeoutMs')
+  expect(source).not.toContain('deadlineMs = Date.now() + startupTimeoutMs')
+})
+
 const removePathIfExists = (path: string) => {
   if (existsSync(path)) {
     rmSync(path, {force: true, recursive: true})

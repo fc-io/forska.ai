@@ -619,7 +619,31 @@ const getApplyHumanStatusServingStatement = (input: {
           WHERE snapshot.project_id = serving.project_id
             AND snapshot.snapshot_id = serving.snapshot_id
             AND snapshot.snapshot_status IN ('candidate', 'active')
-        )`
+      )`
+}
+
+const getDeleteRebuiltHumanStatusPatchRowsStatement = (input: {
+  baseGeneration: number
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
+  patchWatermark: number
+  projectId: string
+}) => {
+  const startPredicate =
+    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
+      ? ''
+      : `AND article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`
+  const endPredicate =
+    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
+      ? ''
+      : `AND article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+
+  return `DELETE FROM mart.review_human_status_patch_v4
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND base_generation = ${getSqlLiteral(input.baseGeneration)}
+      AND patch_watermark = ${getSqlLiteral(input.patchWatermark)}
+      ${startPredicate}
+      ${endPredicate}`
 }
 
 const getHumanStatusPatchRecord = (input: {
@@ -725,6 +749,27 @@ export const projectReviewServingHumanStatusPatches = async (
       })
     })
   })
+
+  if (input.claims.length === 0) {
+    await writeReviewServingProjectorComponent(
+      {
+        component: 'humanStatus',
+        records,
+        statements: [
+          getDeleteRebuiltHumanStatusPatchRowsStatement({
+            baseGeneration: input.baseGeneration,
+            chunkEndArticleId: input.chunkEndArticleId,
+            chunkStartArticleId: input.chunkStartArticleId,
+            patchWatermark,
+            projectId: input.projectId,
+          }),
+        ],
+      },
+      database,
+    )
+
+    return {patchRowCount: records.length, patchWatermark}
+  }
 
   await writeReviewServingProjectorComponent(
     {

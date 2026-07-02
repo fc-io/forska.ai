@@ -345,6 +345,7 @@ test('duckdb service quarantines a WAL that repeatedly fails replay during start
         DUCKDB_MEMORY_LIMIT: '20GB',
         DUCKDB_PATH: duckdbPath,
         DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT: 'false',
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
         RUN_SERVER_FULL_TEXT_FETCHING: 'false',
         SERVER_ROLE: 'maintenance-worker',
@@ -379,6 +380,439 @@ test('duckdb service quarantines a WAL that repeatedly fails replay during start
         return fileName.endsWith('.failed-replay.wal')
       }),
     ).toHaveLength(1)
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
+test('duckdb service preflights startup WAL replay in a child before opening in-process', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-wal-preflight-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+
+  mkdirSync(dataRoot, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+  writeFileSync(`${duckdbPath}.wal`, 'wal')
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {existsSync, readdirSync, readFileSync, writeFileSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const duckdbPath = ${JSON.stringify(duckdbPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        let createCount = 0
+        let preflightCount = 0
+        const originalSpawnSync = globalThis.Bun.spawnSync
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          preflightCount += 1
+
+          return preflightCount === 1
+            ? {
+                exitCode: 5,
+                signalCode: 'SIGTRAP',
+                stdout: Buffer.from(''),
+                stderr: Buffer.from('native WAL replay crash'),
+              }
+            : {
+                exitCode: 0,
+                signalCode: null,
+                stdout: Buffer.from(''),
+                stderr: Buffer.from(''),
+              }
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run() {}
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              createCount += 1
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?wal-preflight-test=' + Date.now())
+        const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+        const recoveryDirectory = duckdbPath + '.startup-recovery'
+        const recoveryFiles = existsSync(recoveryDirectory) ? readdirSync(recoveryDirectory).sort() : []
+        const manifestName = recoveryFiles.find((fileName) => fileName.endsWith('.recovery.json'))
+        const manifest = manifestName ? JSON.parse(readFileSync(recoveryDirectory + '/' + manifestName, 'utf8')) : null
+        console.log(JSON.stringify({
+          createCount,
+          manifest,
+          preflightCount,
+          recoveryFiles,
+          rows,
+          walExists: existsSync(duckdbPath + '.wal'),
+        }))
+        await duckdbService.closeDuckdbService()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB WAL preflight subprocess failed')
+    }
+
+    const parsed = JSON.parse(result.stdout.toString()) as {
+      createCount: number
+      manifest: {error?: string; preservedDatabasePath?: string; recovery?: string; walQuarantinePath?: string} | null
+      preflightCount: number
+      recoveryFiles: string[]
+      rows: Array<{value: number}>
+      walExists: boolean
+    }
+
+    expect(parsed.preflightCount).toBe(2)
+    expect(parsed.createCount).toBe(1)
+    expect(parsed.rows).toEqual([{value: 1}])
+    expect(parsed.walExists).toBe(false)
+    expect(parsed.manifest?.recovery).toBe('wal-quarantine-retry-from-last-checkpoint')
+    expect(parsed.manifest?.error).toContain('native WAL replay crash')
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.duckdb')
+      }),
+    ).toHaveLength(1)
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.failed-replay.wal')
+      }),
+    ).toHaveLength(1)
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.recovery.json')
+      }),
+    ).toHaveLength(1)
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
+test('duckdb service repairs indexed tables when startup mutation preflight crashes without an active WAL', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-index-repair-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+
+  mkdirSync(dataRoot, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {existsSync, readdirSync, readFileSync, writeFileSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const duckdbPath = ${JSON.stringify(duckdbPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        let createCount = 0
+        let preflightCount = 0
+        let preflightSpecs = []
+        let repairSpecs = []
+        let repairOptions = null
+        let repairCount = 0
+        let repairScript = ''
+        const originalSpawnSync = globalThis.Bun.spawnSync
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          const script = String(command[2] ?? '')
+
+          if (script.includes('const repairId')) {
+            repairCount += 1
+            repairScript = script
+            repairOptions = JSON.parse(String(command[4] ?? '{}'))
+            repairSpecs = JSON.parse(String(command[5] ?? '[]'))
+
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
+          }
+
+          preflightCount += 1
+          preflightSpecs = JSON.parse(String(command[5] ?? '[]'))
+          const activeRepairSpecPath = JSON.parse(String(command[6] ?? '""'))
+
+          return preflightCount === 1
+            ? {
+                exitCode: 5,
+                signalCode: 'SIGTRAP',
+                stdout: Buffer.from(''),
+                stderr: Buffer.from((
+                  writeFileSync(activeRepairSpecPath, JSON.stringify({
+                    schemaName: 'mart',
+                    tableName: 'review_article_judgment_detail_serving_v4',
+                  })),
+                  writeFileSync(duckdbPath + '.wal', 'probe wal'),
+                  'PRIMARY_review_article_judgment_detail_serving_v4 duplicate key'
+                )),
+              }
+            : {
+                exitCode: 0,
+                signalCode: null,
+                stdout: Buffer.from(''),
+                stderr: Buffer.from(''),
+              }
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run() {}
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              createCount += 1
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?index-repair-test=' + Date.now())
+        const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+        const recoveryDirectory = duckdbPath + '.startup-recovery'
+        const recoveryFiles = existsSync(recoveryDirectory) ? readdirSync(recoveryDirectory).sort() : []
+        const manifests = recoveryFiles
+          .filter((fileName) => fileName.endsWith('.recovery.json'))
+          .map((fileName) => JSON.parse(readFileSync(recoveryDirectory + '/' + fileName, 'utf8')))
+        const repairManifest = manifests.find((manifest) => manifest.recovery === 'indexed-table-rebuild') ?? null
+        const preflightWalManifest =
+          manifests.find((manifest) => manifest.recovery === 'startup-preflight-mutation-wal-quarantine') ?? null
+        console.log(JSON.stringify({
+          createCount,
+          preflightCount,
+          preflightSpecs,
+          preflightWalManifest,
+          recoveryFiles,
+          repairCount,
+          repairManifest,
+          repairOptions,
+          repairScript,
+          repairSpecs,
+          rows,
+          walExists: existsSync(duckdbPath + '.wal'),
+        }))
+        await duckdbService.closeDuckdbService()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB indexed-table repair subprocess failed',
+      )
+    }
+
+    const parsed = JSON.parse(result.stdout.toString()) as {
+      createCount: number
+      preflightWalManifest: {error?: string; recovery?: string; walQuarantinePath?: string} | null
+      preflightCount: number
+      preflightSpecs: Array<{
+        mutationProbeSql?: string
+        postRepairSql?: string
+        repairStrategy?: string
+        schemaName: string
+        tableName: string
+      }>
+      recoveryFiles: string[]
+      repairCount: number
+      repairManifest: {
+        error?: string
+        preservedDatabasePath?: string
+        recovery?: string
+        repairedTables?: string[]
+      } | null
+      repairOptions: {checkpoint_threshold?: string} | null
+      repairScript: string
+      repairSpecs: Array<{schemaName: string; tableName: string}>
+      rows: Array<{value: number}>
+      walExists: boolean
+    }
+
+    expect(parsed.preflightCount).toBe(2)
+    expect(parsed.repairCount).toBe(1)
+    expect(parsed.createCount).toBe(1)
+    expect(parsed.rows).toEqual([{value: 1}])
+    expect(parsed.walExists).toBe(false)
+    expect(parsed.preflightWalManifest?.recovery).toBe('startup-preflight-mutation-wal-quarantine')
+    expect(parsed.preflightWalManifest?.error).toContain('PRIMARY_review_article_judgment_detail_serving_v4')
+    expect(parsed.repairManifest?.recovery).toBe('indexed-table-rebuild')
+    expect(parsed.repairManifest?.error).toContain('PRIMARY_review_article_judgment_detail_serving_v4')
+    expect(parsed.repairManifest?.repairedTables).toEqual(['mart.review_article_judgment_detail_serving_v4'])
+    expect(parsed.repairOptions?.checkpoint_threshold).toBe('8GB')
+    expect(parsed.repairScript).not.toContain("await connection.run('CHECKPOINT')")
+    expect(parsed.repairScript).toContain("spec.repairStrategy !== 'empty-derived'")
+    expect(parsed.repairScript).toContain('spec.postRepairSql')
+    expect(
+      parsed.repairSpecs.map((spec) => {
+        return {schemaName: spec.schemaName, tableName: spec.tableName}
+      }),
+    ).toEqual([{schemaName: 'mart', tableName: 'review_article_judgment_detail_serving_v4'}])
+    const articleServingProbe = parsed.preflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_article_serving_v4'
+    })
+    expect(articleServingProbe?.mutationProbeSql).toContain('Failed to delete all rows from index')
+    expect(articleServingProbe?.mutationProbeSql).toContain('app.review_rebuild_chunk_manifest')
+    expect(articleServingProbe?.mutationProbeSql).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
+    const selectedImportProbe = parsed.preflightSpecs.find((spec) => {
+      return spec.schemaName === 'app' && spec.tableName === 'review_selected_article_import_v4'
+    })
+    expect(selectedImportProbe?.mutationProbeSql).toContain("projection_component = 'selectedImport'")
+    expect(selectedImportProbe?.mutationProbeSql).toContain('INSERT INTO app.review_selected_article_import_v4 BY NAME')
+    const chunkManifestProbe = parsed.preflightSpecs.find((spec) => {
+      return spec.schemaName === 'app' && spec.tableName === 'review_rebuild_chunk_manifest'
+    })
+    expect(chunkManifestProbe?.mutationProbeSql).toContain("chunk.status IN ('pending', 'failed', 'running')")
+    expect(chunkManifestProbe?.mutationProbeSql).toContain('LIMIT 64')
+    expect(chunkManifestProbe?.mutationProbeSql).toContain("WHEN 'llmStatus' THEN 4")
+    expect(chunkManifestProbe?.mutationProbeSql).not.toContain("chunk.projection_component = 'projectScope'")
+    const judgmentDetailProbe = parsed.preflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_article_judgment_detail_serving_v4'
+    })
+    expect(judgmentDetailProbe?.mutationProbeSql).toContain("projection_component = 'judgmentInputContent'")
+    expect(judgmentDetailProbe?.mutationProbeSql).toContain('Failed to delete all rows from index')
+    expect(judgmentDetailProbe?.mutationProbeSql).toContain(
+      'INSERT INTO mart.review_article_judgment_detail_serving_v4 BY NAME',
+    )
+    const llmStatusProbe = parsed.preflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_llm_status_patch_v4'
+    })
+    expect(llmStatusProbe?.mutationProbeSql).toContain("projection_component = 'llmStatus'")
+    expect(llmStatusProbe?.mutationProbeSql).toContain('C++ exception')
+    expect(llmStatusProbe?.mutationProbeSql).toContain('INSERT INTO mart.review_llm_status_patch_v4 BY NAME')
+    expect(llmStatusProbe?.repairStrategy).toBe('empty-derived')
+    expect(llmStatusProbe?.postRepairSql).toContain("projection_component = 'llmStatus'")
+    expect(llmStatusProbe?.postRepairSql).toContain("status IN ('completed', 'running')")
+    const humanStatusProbe = parsed.preflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_human_status_patch_v4'
+    })
+    expect(humanStatusProbe?.mutationProbeSql).toContain("projection_component = 'humanStatus'")
+    expect(humanStatusProbe?.mutationProbeSql).toContain('C++ exception')
+    expect(humanStatusProbe?.mutationProbeSql).toContain('INSERT INTO mart.review_human_status_patch_v4 BY NAME')
+    expect(humanStatusProbe?.repairStrategy).toBe('empty-derived')
+    expect(humanStatusProbe?.postRepairSql).toContain("projection_component = 'humanStatus'")
+    expect(humanStatusProbe?.postRepairSql).toContain("status IN ('completed', 'running')")
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.pre-repair.duckdb')
+      }),
+    ).toHaveLength(1)
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.failed-startup-probe.wal')
+      }),
+    ).toHaveLength(1)
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.recovery.json')
+      }),
+    ).toHaveLength(2)
   } finally {
     removePathIfExists(dataRoot)
   }

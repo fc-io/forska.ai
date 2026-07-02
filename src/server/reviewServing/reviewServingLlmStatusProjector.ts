@@ -753,6 +753,30 @@ const getApplyLlmStatusServingStatement = (input: {
         )`
 }
 
+const getDeleteRebuiltLlmStatusPatchRowsStatement = (input: {
+  baseGeneration: number
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
+  patchWatermark: number
+  projectId: string
+}) => {
+  const startPredicate =
+    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
+      ? ''
+      : `AND article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`
+  const endPredicate =
+    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
+      ? ''
+      : `AND article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
+
+  return `DELETE FROM mart.review_llm_status_patch_v4
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND base_generation = ${getSqlLiteral(input.baseGeneration)}
+      AND patch_watermark = ${getSqlLiteral(input.patchWatermark)}
+      ${startPredicate}
+      ${endPredicate}`
+}
+
 export const projectReviewServingLlmStatusPatches = async (
   input: ProjectReviewServingLlmStatusInput,
   database: ReviewServingLlmStatusProjectorDatabase = getAppDatabaseService(),
@@ -794,6 +818,27 @@ export const projectReviewServingLlmStatusPatches = async (
       })
     })
   })
+
+  if (input.claims.length === 0) {
+    await writeReviewServingProjectorComponent(
+      {
+        component: 'llmStatus',
+        records,
+        statements: [
+          getDeleteRebuiltLlmStatusPatchRowsStatement({
+            baseGeneration: input.baseGeneration,
+            chunkEndArticleId: input.chunkEndArticleId,
+            chunkStartArticleId: input.chunkStartArticleId,
+            patchWatermark,
+            projectId: input.projectId,
+          }),
+        ],
+      },
+      database,
+    )
+
+    return {patchRowCount: records.length, patchWatermark}
+  }
 
   await writeReviewServingProjectorComponent(
     {

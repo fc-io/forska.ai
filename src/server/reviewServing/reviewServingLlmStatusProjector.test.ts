@@ -22,6 +22,10 @@ const createLlmStatusDatabase = (input?: {
         return [] as T[]
       }
 
+      if (statement.includes('scoped_article AS')) {
+        return (input?.projectRows ?? []) as T[]
+      }
+
       if (statement.includes('FROM app.project_prompt project_prompt')) {
         return (input?.promptConfigRows ?? [promptConfigRow()]) as T[]
       }
@@ -32,10 +36,6 @@ const createLlmStatusDatabase = (input?: {
 
       if (statement.includes('FROM prompt_id_filter dirty_prompt')) {
         return (input?.promptRows ?? []) as T[]
-      }
-
-      if (statement.includes('FROM app.project project')) {
-        return (input?.projectRows ?? []) as T[]
       }
 
       if (statement.includes('FROM article_id_filter dirty')) {
@@ -259,6 +259,58 @@ test('project review config claims rebuild project-scoped LLM status rows', asyn
     'COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone',
   )
   expect(projectSelect).toContain('WHERE llm.project_id =')
+})
+
+test('LLM rebuild chunks replace scoped patch rows before bounded inserts', async () => {
+  const {database, statements} = createLlmStatusDatabase({projectRows: [llmStatusRow({articleId: 'article-3'})]})
+
+  const result = await projectReviewServingLlmStatusPatches(
+    {...projectInput([]), chunkEndArticleId: 'article-3', chunkStartArticleId: 'article-3'},
+    database,
+  )
+  const deleteStatement = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_llm_status_patch_v4')
+  })
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_llm_status_patch_v4')
+  })
+  const joined = statements.join('\n')
+
+  expect(result).toEqual({patchRowCount: 1, patchWatermark: 0})
+  expect(deleteStatement).toContain('patch_watermark = 0')
+  expect(deleteStatement).toContain("article_id >= 'article-3'")
+  expect(deleteStatement).toContain("article_id <= 'article-3'")
+  expect(insertStatement).not.toContain('ON CONFLICT')
+  expect(joined.indexOf('DELETE FROM mart.review_llm_status_patch_v4')).toBeLessThan(
+    joined.indexOf('INSERT INTO mart.review_llm_status_patch_v4'),
+  )
+  expect(joined).not.toContain('UPDATE mart.review_article_serving_v4 serving')
+})
+
+test('LLM rebuild chunks use one range delete and bounded insert batches', async () => {
+  const {database, statements} = createLlmStatusDatabase({
+    projectRows: Array.from({length: 251}, (_, index) => {
+      return llmStatusRow({articleId: `article-${String(index).padStart(3, '0')}`})
+    }),
+  })
+
+  const result = await projectReviewServingLlmStatusPatches(
+    {...projectInput([]), chunkEndArticleId: 'article-250', chunkStartArticleId: 'article-000'},
+    database,
+  )
+  const deleteStatements = statements.filter((statement) => {
+    return statement.includes('DELETE FROM mart.review_llm_status_patch_v4')
+  })
+  const insertStatements = statements.filter((statement) => {
+    return statement.includes('INSERT INTO mart.review_llm_status_patch_v4')
+  })
+
+  expect(result).toEqual({patchRowCount: 251, patchWatermark: 0})
+  expect(deleteStatements).toHaveLength(1)
+  expect(deleteStatements[0]).toContain("article_id >= 'article-000'")
+  expect(deleteStatements[0]).toContain("article_id <= 'article-250'")
+  expect(insertStatements).toHaveLength(2)
+  expect(insertStatements.join('\n')).not.toContain('ON CONFLICT')
 })
 
 test('article judgment-input claims rebuild article-scoped LLM status rows', async () => {

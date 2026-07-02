@@ -347,8 +347,9 @@ test('llama.cpp cli provider connection stores cli mode and uses the local defau
     WHERE id = '${connectionId}'
     LIMIT 1
   `)
+  const storedConfigJson = (storedConnection?.configJson ? JSON.parse(storedConnection.configJson) : null) as unknown
 
-  expect({...storedConnection, configJson: storedConnection?.configJson ? JSON.parse(storedConnection.configJson) : null}).toEqual({
+  expect({...storedConnection, configJson: storedConfigJson}).toEqual({
     authMode: 'none',
     baseURL: 'http://127.0.0.1:8080',
     configJson: {

@@ -39,6 +39,18 @@ test('DuckDB migrations drop the obsolete review article filter row mart without
   expect(dropMigrationSql).toBe('DROP TABLE IF EXISTS mart.review_article_filter_row;')
 })
 
+test('DuckDB migrations rebuild review rebuild request indexes instead of updating corrupt rows', () => {
+  const migrationSql = readFileSync(resolve(migrationsFolder, '0111_rebuildReviewRebuildRequestIndex.sql'), 'utf8')
+
+  expect(migrationSql).toContain('CREATE TABLE app.review_rebuild_request_index_repair')
+  expect(migrationSql).toContain('INSERT INTO app.review_rebuild_request_index_repair')
+  expect(migrationSql).toContain('SELECT * FROM app.review_rebuild_request')
+  expect(migrationSql).toContain('DROP TABLE app.review_rebuild_request')
+  expect(migrationSql).toContain('ALTER TABLE app.review_rebuild_request_index_repair RENAME TO review_rebuild_request')
+  expect(migrationSql).toContain('CREATE INDEX idx_review_rebuild_request_status')
+  expect(migrationSql).not.toContain('UPDATE app.review_rebuild_request')
+})
+
 test('DuckDB migrations repair legacy review serving judgment detail payload-kind schema drift', async () => {
   const duckdbPath = `/tmp/forska-review-serving-judgment-detail-payload-kind-${Date.now()}.duckdb`
   const targetMigrationFile = '0109_reviewServingJudgmentDetailPayloadKindForwardMigration.sql'

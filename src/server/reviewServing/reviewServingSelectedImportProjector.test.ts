@@ -4,6 +4,7 @@ import {join} from 'node:path'
 import {expect, test} from 'bun:test'
 
 import {
+  projectReviewServingSelectedImportArticleRange,
   projectReviewServingSelectedImportBatch,
   type ReviewServingSelectedImportProjectorDatabase,
 } from './reviewServingSelectedImportProjector.ts'
@@ -19,6 +20,10 @@ const createSelectedImportProjectorDatabase = (input?: {
 
       if (statement.includes('FROM app.review_selected_import_snapshot')) {
         return input?.cursorJson === undefined ? [] : ([{cursorJson: input.cursorJson, status: 'candidate'}] as T[])
+      }
+
+      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+        return [] as T[]
       }
 
       return (input?.batchRows ?? []) as T[]
@@ -152,6 +157,40 @@ test('selected-import projector reads project scope and hot fields in bounded de
     'ORDER BY candidate.rank_numeric_sort ASC, candidate.rank_key_sort ASC, candidate.article_id ASC',
   )
   expect(batchSelect).toContain('LIMIT 3')
+})
+
+test('selected-import article range rebuild deletes the range before insert-only rows', async () => {
+  const {database, statements} = createSelectedImportProjectorDatabase({
+    batchRows: [
+      selectedImportRow({articleId: 'article-1', rankKeySort: '0000:article-1:source-1', rankNumericSort: 0}),
+    ],
+  })
+
+  await projectReviewServingSelectedImportArticleRange(
+    {
+      chunkEndArticleId: 'article-9',
+      chunkStartArticleId: 'article-1',
+      projectId: 'project-1',
+      projectScopeIdentity: 'projectScope:identity-1',
+      selectedImportSnapshotId: 'selected-import-snapshot-1',
+      sourceDeltaHighWater: 9,
+    },
+    database,
+  )
+
+  const deleteStatement = statements.find((statement) => {
+    return statement.includes('DELETE FROM app.review_selected_article_import_v4')
+  })
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_selected_article_import_v4')
+  })
+
+  expect(deleteStatement).toContain("project_id = 'project-1'")
+  expect(deleteStatement).toContain("project_scope_identity = 'projectScope:identity-1'")
+  expect(deleteStatement).toContain("selected_import_snapshot_id = 'selected-import-snapshot-1'")
+  expect(deleteStatement).toContain("article_id >= 'article-1'")
+  expect(deleteStatement).toContain("article_id <= 'article-9'")
+  expect(insertStatement).not.toContain('ON CONFLICT')
 })
 
 test('selected-import V4 projector does not use the runtime selected scoped import CTE', () => {

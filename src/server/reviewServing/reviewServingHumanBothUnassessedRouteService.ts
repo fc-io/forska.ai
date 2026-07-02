@@ -124,6 +124,9 @@ const maxJudgmentHydrationRows = 10_000
 const defaultJudgmentHydrationPromptCount = 128
 const queueReadyFilterKey = 'queue:ready'
 const reviewServingSnapshotUnavailableError = 'Review serving snapshot is unavailable'
+const routeReadMaxAttempts = 4
+const routeReadRetryDelaysMs = [100, 250, 500] as const
+type ReviewServingRouteReadContext = Parameters<ReviewServingReaderDatabase['queryJson']>[1]
 
 const getDateValue = (value: unknown) => {
   if (value instanceof Date) {
@@ -418,6 +421,49 @@ const getUnassessedQueuePredicate = (mode: ReviewServingReviewMode) => {
     : ''
 }
 
+const sleep = (delayMs: number) => {
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs)
+  })
+}
+
+const isTransientRouteReadError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error)
+
+  return message.includes('An unknown error occurred in Effect.tryPromise')
+}
+
+const queryRouteRowsWithRetry = async <T>(
+  database: ReviewServingReaderDatabase,
+  statement: string,
+  workloadContext?: ReviewServingRouteReadContext,
+  attempt = 0,
+): Promise<T[]> => {
+  try {
+    return await database.queryJson<T>(statement, workloadContext)
+  } catch (error) {
+    if (!isTransientRouteReadError(error) || attempt >= routeReadMaxAttempts - 1) {
+      throw error
+    }
+
+    await sleep(routeReadRetryDelaysMs[attempt] ?? routeReadRetryDelaysMs[routeReadRetryDelaysMs.length - 1])
+
+    return queryRouteRowsWithRetry<T>(database, statement, workloadContext, attempt + 1)
+  }
+}
+
+const createRetryingRouteDatabase = (database: ReviewServingReaderDatabase): ReviewServingReaderDatabase => {
+  return {
+    queryJson: async <T>(statement: string, workloadContext?: ReviewServingRouteReadContext) => {
+      return queryRouteRowsWithRetry<T>(database, statement, workloadContext)
+    },
+  }
+}
+
+const getRouteDatabase = (dependencies?: ReviewServingRouteDependencies) => {
+  return createRetryingRouteDatabase(dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase))
+}
+
 const getFilteredCountValue = async (
   params: ArticlesReviewsBothParams | ArticlesReviewsParams,
   manifest: ReviewServingSnapshotManifest,
@@ -427,7 +473,9 @@ const getFilteredCountValue = async (
   const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
   const filters = getRouteFilters(params, mode)
   const llmStatusValue = filters.llmStatus === 'complete' ? 'answered' : null
-  const [row] = await database.queryJson<{totalCount: number}>(`
+  const [row] = await queryRouteRowsWithRetry<{totalCount: number}>(
+    database,
+    `
     SELECT COUNT(DISTINCT serving.article_id) AS totalCount
     FROM mart.review_article_serving_v4 serving
     WHERE serving.project_id = ${getSqlLiteral(params.projectId)}
@@ -443,7 +491,8 @@ const getFilteredCountValue = async (
       ${typeof filters.humanStatus === 'string' ? `AND serving.human_status_key = ${getSqlLiteral(filters.humanStatus)}` : ''}
       ${getPromptAnswerPredicates(params, mode).join('\n')}
       ${getSearchPredicate(params, filters, manifest)}
-  `)
+  `,
+  )
 
   return Number(row?.totalCount ?? 0)
 }
@@ -662,9 +711,10 @@ export const getHumanReviewArticlesFromServing = async (
   params: ArticlesReviewsParams,
   dependencies?: ReviewServingRouteDependencies,
 ): Promise<HumanReviewArticlesResponse> => {
-  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const database = getRouteDatabase(dependencies)
+  const routeDependencies = {...dependencies, database}
   const effectiveParams = await getParamsWithEffectiveDateFilters(params, database)
-  const manifest = await getManifest(params.projectId, dependencies)
+  const manifest = await getManifest(params.projectId, routeDependencies)
   const page = getResponsePage(effectiveParams)
   const limit = getLimit(effectiveParams.limit)
 
@@ -673,7 +723,7 @@ export const getHumanReviewArticlesFromServing = async (
   }
 
   const pageResult = await readRowsPage<ReviewServingArticleRow>({
-    dependencies,
+    dependencies: routeDependencies,
     label: 'human review rows',
     limit,
     request: {
@@ -684,9 +734,9 @@ export const getHumanReviewArticlesFromServing = async (
   })
   const pageRows = pageResult.rows
 
-  const humanRows = await readJudgments(effectiveParams, manifest, 'human', pageRows, 'human', dependencies)
+  const humanRows = await readJudgments(effectiveParams, manifest, 'human', pageRows, 'human', routeDependencies)
   const judgmentsByArticleId = getHumanJudgmentsByArticleId(humanRows)
-  const totalCount = await getCountValue(effectiveParams, manifest, 'human', {...dependencies, database})
+  const totalCount = await getCountValue(effectiveParams, manifest, 'human', routeDependencies)
   const data = pageRows.map((row) => {
     const judgments = judgmentsByArticleId.get(getArticleId(row)) ?? []
     const summaryJudgment = judgments.find((judgment) => {
@@ -720,9 +770,10 @@ export const getBothReviewArticlesFromServing = async (
   params: ArticlesReviewsBothParams,
   dependencies?: ReviewServingRouteDependencies,
 ): Promise<ArticlesReviewsBothResponse> => {
-  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const database = getRouteDatabase(dependencies)
+  const routeDependencies = {...dependencies, database}
   const effectiveParams = await getParamsWithEffectiveDateFilters(params, database)
-  const manifest = await getManifest(params.projectId, dependencies)
+  const manifest = await getManifest(params.projectId, routeDependencies)
   const page = getResponsePage(effectiveParams)
   const limit = getLimit(effectiveParams.limit)
 
@@ -731,7 +782,7 @@ export const getBothReviewArticlesFromServing = async (
   }
 
   const pageResult = await readRowsPage<ReviewServingArticleRow>({
-    dependencies,
+    dependencies: routeDependencies,
     label: 'both review rows',
     limit,
     request: {
@@ -743,12 +794,12 @@ export const getBothReviewArticlesFromServing = async (
   const pageRows = pageResult.rows
 
   const [llmRows, humanRows] = await Promise.all([
-    readJudgments(effectiveParams, manifest, 'both', pageRows, 'llm', dependencies),
-    readJudgments(effectiveParams, manifest, 'both', pageRows, 'human', dependencies),
+    readJudgments(effectiveParams, manifest, 'both', pageRows, 'llm', routeDependencies),
+    readJudgments(effectiveParams, manifest, 'both', pageRows, 'human', routeDependencies),
   ])
   const llmJudgmentsByArticleId = getLlmJudgmentsByArticleId(llmRows)
   const humanJudgmentsByArticleId = getHumanJudgmentsByArticleId(humanRows)
-  const totalCount = await getCountValue(effectiveParams, manifest, 'both', {...dependencies, database})
+  const totalCount = await getCountValue(effectiveParams, manifest, 'both', routeDependencies)
   const data = pageRows.map((row) => {
     const articleId = getArticleId(row)
     const humanJudgments = humanJudgmentsByArticleId.get(articleId) ?? []
@@ -774,9 +825,10 @@ export const getUnassessedReviewArticlesFromServing = async (
   params: ArticlesReviewsParams,
   dependencies?: ReviewServingRouteDependencies,
 ): Promise<UnassessedReviewArticlesResponse> => {
-  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const database = getRouteDatabase(dependencies)
+  const routeDependencies = {...dependencies, database}
   const effectiveParams = await getParamsWithEffectiveDateFilters(params, database)
-  const manifest = await getManifest(params.projectId, dependencies)
+  const manifest = await getManifest(params.projectId, routeDependencies)
   const page = getResponsePage(effectiveParams)
   const limit = getLimit(effectiveParams.limit)
 
@@ -785,7 +837,7 @@ export const getUnassessedReviewArticlesFromServing = async (
   }
 
   const pageResult = await readRowsPage<ReviewServingArticleRow>({
-    dependencies,
+    dependencies: routeDependencies,
     label: 'unassessed article rows',
     limit,
     request: {
@@ -795,7 +847,7 @@ export const getUnassessedReviewArticlesFromServing = async (
     },
   })
   const pageRows = pageResult.rows
-  const totalCount = await getCountValue(effectiveParams, manifest, 'unassessed', {...dependencies, database})
+  const totalCount = await getCountValue(effectiveParams, manifest, 'unassessed', routeDependencies)
   const data = pageRows.map((row) => {
     return {...getArticleResponseBase(row), judgments: [], judgedPromptIds: [], isFullyJudged: false}
   })

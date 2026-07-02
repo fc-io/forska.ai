@@ -37,7 +37,7 @@ type ManagedServerState = {
 type ManagedProcessExitRecord = {exitedAtMs: number; pid: number}
 
 const restartDelayMs = 1_000
-const startupTimeoutMs = 20_000
+const maintenanceStartupTimeoutMs = 180_000
 const judgeStartupTimeoutMs = 90_000
 const shutdownTimeoutMs = 20_000
 const forcedKillTimeoutMs = 5_000
@@ -249,7 +249,7 @@ const isDuckdbOwnerReady = async (duckdbOwnerUrl: string) => {
 
 const waitForDuckdbOwner = async (
   duckdbOwnerUrl: string,
-  deadlineMs = Date.now() + startupTimeoutMs,
+  deadlineMs = Date.now() + maintenanceStartupTimeoutMs,
 ): Promise<void> => {
   return Date.now() >= deadlineMs
     ? Promise.reject(new Error(`Timed out waiting for maintenance DuckDB owner at ${duckdbOwnerUrl}`))

@@ -51,6 +51,80 @@ const getSqlStrings = (statement: string) => {
   })
 }
 
+const getAssignmentValue = (statement: string, columnName: string) => {
+  return (
+    statement.match(
+      new RegExp(`(?<![A-Za-z0-9_])${columnName}\\s*=\\s*(NULL|'(?:''|[^'])*'(?:\\s*::JSON)?|\\d+)`, 'u'),
+    )?.[1] ?? null
+  )
+}
+
+const decodeSqlValue = (value: string | null) => {
+  if (value === null || value === 'NULL') {
+    return null
+  }
+
+  return value
+    .replace(/^'/u, '')
+    .replace(/'(?:\s*::JSON)?$/u, '')
+    .replaceAll("''", "'")
+}
+
+const getSqlValueList = (statement: string) => {
+  const valueList = statement.match(/VALUES\s*\(([\s\S]*?)\)\s*$/u)?.[1] ?? ''
+  const values: string[] = []
+  let current = ''
+  let inString = false
+
+  for (let index = 0; index < valueList.length; index += 1) {
+    const char = valueList[index]
+
+    if (char === "'") {
+      const next = valueList[index + 1]
+
+      if (inString && next === "'") {
+        current += "''"
+        index += 1
+        continue
+      }
+
+      inString = !inString
+      current += char
+      continue
+    }
+
+    if (char === ',' && !inString) {
+      values.push(current.trim())
+      current = ''
+      continue
+    }
+
+    current += char
+  }
+
+  if (current.trim() !== '') {
+    values.push(current.trim())
+  }
+
+  return values
+}
+
+const getAssignmentLiteral = (statement: string, columnName: string) => {
+  return decodeSqlValue(getAssignmentValue(statement, columnName))
+}
+
+const getAssignmentNumber = (statement: string, columnName: string) => {
+  const value = getAssignmentValue(statement, columnName)
+
+  return value === null || value === 'NULL' ? null : Number(value)
+}
+
+const getAssignmentJson = <T>(statement: string, columnName: string, fallback: T) => {
+  const value = getAssignmentLiteral(statement, columnName)
+
+  return value === null ? fallback : (JSON.parse(value) as T)
+}
+
 const getWhereLiteral = (statement: string, columnName: string) => {
   return (
     statement
@@ -77,41 +151,57 @@ const createFakeManifestDatabase = (initialSnapshots: FakeSnapshotRow[] = []) =>
   const getClock = () => {
     return new Date(2026, 5, 16, 12, statements.length).toISOString()
   }
-  const getProjectionStatus = (strings: string[]) => {
-    return (
-      strings.find((value) => {
-        return value === 'candidate' || value === 'active' || value === 'failed' || value === 'retired'
-      }) ?? 'candidate'
-    )
-  }
   const upsertProjection = (statement: string) => {
-    const strings = getSqlStrings(statement)
-    const manifestId = strings[0] ?? ''
+    const values = getSqlValueList(statement)
+    const manifestId = decodeSqlValue(values[0] ?? null) ?? ''
     const existing = projections.get(manifestId)
+    const getNullableNumberValue = (value: string | undefined) => {
+      return value === undefined || value === 'NULL' ? null : Number(value)
+    }
     const row = {
-      baseGeneration: Number(statement.match(/'[^']*',\s*'[^']*',\s*'[^']*',\s*'[^']*',\s*(\d+)/u)?.[1] ?? 0),
-      definitionVersion: strings[6] ?? '',
-      inputDigest: strings[5] ?? null,
-      inputWatermark: Number(
-        statement.match(
-          /'[^']*',\s*'[^']*',\s*'[^']*',\s*'[^']*',\s*\d+,\s*\d+,\s*(?:NULL|\d+),\s*(?:NULL|\d+),\s*(\d+)/u,
-        )?.[1] ?? 0,
-      ),
-      inputWatermarks: JSON.parse(strings[4] ?? '{}') as FakeProjectionRow['inputWatermarks'],
-      invalidationReason: strings[10] ?? null,
+      baseGeneration: Number(values[4] ?? 0),
+      definitionVersion: decodeSqlValue(values[11] ?? null) ?? '',
+      inputDigest: decodeSqlValue(values[10] ?? null),
+      inputWatermark: Number(values[8] ?? 0),
+      inputWatermarks: JSON.parse(decodeSqlValue(values[9] ?? null) ?? '{}') as FakeProjectionRow['inputWatermarks'],
+      invalidationReason: decodeSqlValue(values[15] ?? null),
       manifestId,
-      patchRangeEnd: null,
-      patchRangeStart: null,
-      patchWatermark: Number(statement.match(/'[^']*',\s*'[^']*',\s*'[^']*',\s*'[^']*',\s*\d+,\s*(\d+)/u)?.[1] ?? 0),
-      projectId: strings[1] ?? null,
-      projectionComponent: (strings[2] ?? 'display') as FakeProjectionRow['projectionComponent'],
-      projectionIdentity: strings[3] ?? '',
-      promptConfigHash: strings[8] ?? null,
-      reviewConfigHash: strings[7] ?? null,
-      status: getProjectionStatus(strings),
+      patchRangeEnd: getNullableNumberValue(values[7]),
+      patchRangeStart: getNullableNumberValue(values[6]),
+      patchWatermark: Number(values[5] ?? 0),
+      projectId: decodeSqlValue(values[1] ?? null),
+      projectionComponent: (decodeSqlValue(values[2] ?? null) ?? 'display') as FakeProjectionRow['projectionComponent'],
+      projectionIdentity: decodeSqlValue(values[3] ?? null) ?? '',
+      promptConfigHash: decodeSqlValue(values[13] ?? null),
+      reviewConfigHash: decodeSqlValue(values[12] ?? null),
+      status: (decodeSqlValue(values[14] ?? null) ?? 'candidate') as FakeProjectionRow['status'],
     }
 
     projections.set(manifestId, {...existing, ...row})
+  }
+  const updateProjection = (statement: string) => {
+    const manifestId = getWhereLiteral(statement, 'manifest_id') ?? ''
+    const existing = projections.get(manifestId)
+
+    if (existing === undefined) {
+      return
+    }
+
+    projections.set(manifestId, {
+      ...existing,
+      baseGeneration: getAssignmentNumber(statement, 'base_generation') ?? existing.baseGeneration,
+      definitionVersion: getAssignmentLiteral(statement, 'definition_version') ?? existing.definitionVersion,
+      inputDigest: getAssignmentLiteral(statement, 'input_digest'),
+      inputWatermark: getAssignmentNumber(statement, 'input_watermark') ?? existing.inputWatermark,
+      inputWatermarks: getAssignmentJson(statement, 'input_watermarks_json', existing.inputWatermarks),
+      invalidationReason: getAssignmentLiteral(statement, 'invalidation_reason'),
+      patchRangeEnd: getAssignmentNumber(statement, 'patch_range_end'),
+      patchRangeStart: getAssignmentNumber(statement, 'patch_range_start'),
+      patchWatermark: getAssignmentNumber(statement, 'patch_watermark') ?? existing.patchWatermark,
+      promptConfigHash: getAssignmentLiteral(statement, 'prompt_config_hash'),
+      reviewConfigHash: getAssignmentLiteral(statement, 'review_config_hash'),
+      status: (getAssignmentLiteral(statement, 'status') ?? existing.status) as FakeProjectionRow['status'],
+    })
   }
   const upsertCandidate = (statement: string) => {
     const strings = getSqlStrings(statement)
@@ -253,6 +343,10 @@ const createFakeManifestDatabase = (initialSnapshots: FakeSnapshotRow[] = []) =>
       upsertProjection(statement)
     }
 
+    if (statement.includes('UPDATE app.review_projection_identity_manifest')) {
+      updateProjection(statement)
+    }
+
     if (statement.includes('INSERT INTO app.review_serving_snapshot_manifest')) {
       upsertCandidate(statement)
     }
@@ -307,7 +401,7 @@ const getSnapshotQueryRow = (snapshot: FakeSnapshotRow) => {
 }
 
 test('projection identity manifest upsert is idempotent for project component identity', async () => {
-  const {database, projections} = createFakeManifestDatabase()
+  const {database, projections, statements} = createFakeManifestDatabase()
   const input = {
     baseGeneration: 2,
     definitionVersion: 'display-v1',
@@ -332,6 +426,50 @@ test('projection identity manifest upsert is idempotent for project component id
   expect(projections.size).toBe(1)
   expect(manifest?.manifestId).toBe(first.manifestId)
   expect(manifest?.status).toBe('active')
+
+  const manifestWrites = statements.filter((statement) => {
+    return (
+      statement.includes('INSERT INTO app.review_projection_identity_manifest')
+      || statement.includes('UPDATE app.review_projection_identity_manifest')
+    )
+  })
+  expect(manifestWrites).toHaveLength(2)
+  expect(manifestWrites[0]).toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(manifestWrites[1]).toContain('UPDATE app.review_projection_identity_manifest')
+  expect(manifestWrites.join('\n')).not.toContain('ON CONFLICT(manifest_id)')
+})
+
+test('projection identity manifest skips unchanged writes', async () => {
+  const {database, statements} = createFakeManifestDatabase()
+  const input = {
+    baseGeneration: 2,
+    definitionVersion: 'display-v1',
+    inputDigest: 'input-digest-1',
+    inputWatermark: 42,
+    inputWatermarks: {reviewChange: 42},
+    patchRangeEnd: 5,
+    patchRangeStart: 3,
+    patchWatermark: 7,
+    projectId: 'project-1',
+    projectionComponent: 'display',
+    projectionIdentity: 'display:identity-1',
+    promptConfigHash: null,
+    reviewConfigHash: 'review-config-1',
+    status: 'candidate',
+  } as const
+
+  await upsertReviewServingProjectionIdentityManifest(input, database)
+  await upsertReviewServingProjectionIdentityManifest(input, database)
+
+  const manifestWrites = statements.filter((statement) => {
+    return (
+      statement.includes('INSERT INTO app.review_projection_identity_manifest')
+      || statement.includes('UPDATE app.review_projection_identity_manifest')
+    )
+  })
+
+  expect(manifestWrites).toHaveLength(1)
+  expect(manifestWrites[0]).toContain('INSERT INTO app.review_projection_identity_manifest')
 })
 
 test('failed candidate snapshot preserves active and last-known-good manifests', async () => {

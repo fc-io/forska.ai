@@ -487,6 +487,26 @@ test('claim query blocks newer lane work behind lower running or backoff waterma
   )
 })
 
+test('claim status updates are split into single-row writes', async () => {
+  const {database, statements} = createFakeDirtyWorkDatabase()
+
+  await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
+  await upsertDisplayWork(database, {...getBaseScope(2, '2', '2'), scopeId: 'project-1:article-2'}, 'delta-2')
+
+  const claims = await claimReviewServingDirtyWork({limit: 2, projectionComponent: 'display'}, database)
+  const claimUpdates = statements.filter((statement) => {
+    return statement.includes('UPDATE app.review_serving_dirty_work') && statement.includes("SET status = 'running'")
+  })
+
+  expect(claims).toHaveLength(2)
+  expect(claimUpdates).toHaveLength(2)
+  expect(
+    claimUpdates.every((statement) => {
+      return getInLiterals(statement, 'dirty_work_id').length === 1
+    }),
+  ).toBe(true)
+})
+
 test('release returns running claims to pending for the next wake', async () => {
   const {database} = createFakeDirtyWorkDatabase()
 

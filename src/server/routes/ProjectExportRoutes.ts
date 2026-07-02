@@ -334,10 +334,7 @@ const getExportHeaders = (input: {
   return headers
 }
 
-const getExportArticles = async (input: {
-  articleIds: string[]
-  snapshotScopes: ExportServingSnapshotScope[]
-}) => {
+const getExportArticles = async (input: {articleIds: string[]; snapshotScopes: ExportServingSnapshotScope[]}) => {
   return readReviewServingExportArticles({...input, database: appDatabaseService})
 }
 

@@ -22,6 +22,7 @@ export type ReviewServingOutboxReconciliationResult =
 export type ReviewServingOutboxReconciliationOptions = {maxRetries?: number; outboxId: string}
 
 export type ReviewServingOutboxBarrier = {outboxId: string; sourceHighWaterMark: number; status: string}
+type ReviewServingProjectorWatermarkRow = {sourceHighWaterMark: number}
 
 export type ReviewServingProjectorWatermarkAdvanceInput = {
   importRouteId?: string | null
@@ -305,6 +306,29 @@ export const advanceReviewServingProjectorWatermark = async (
 ) => {
   await assertReviewServingProjectorWatermarkCanAdvance(tx, input)
   const watermarkId = getProjectorWatermarkId(input)
+  const currentRows = await tx.queryJson<ReviewServingProjectorWatermarkRow>(`
+    SELECT source_high_water_mark AS sourceHighWaterMark
+    FROM app.review_serving_projector_watermark
+    WHERE watermark_id = ${getSqlLiteral(watermarkId)}
+    LIMIT 1
+  `)
+  const currentHighWaterMark = currentRows[0]?.sourceHighWaterMark
+
+  if (currentHighWaterMark !== undefined && currentHighWaterMark >= input.sourceHighWaterMark) {
+    return
+  }
+
+  if (currentHighWaterMark !== undefined) {
+    await tx.run(`
+      UPDATE app.review_serving_projector_watermark
+      SET
+        source_high_water_mark = ${input.sourceHighWaterMark},
+        updated_at = current_timestamp
+      WHERE watermark_id = ${getSqlLiteral(watermarkId)}
+        AND source_high_water_mark < ${input.sourceHighWaterMark}
+    `)
+    return
+  }
 
   await tx.run(`
     INSERT INTO app.review_serving_projector_watermark (
@@ -324,11 +348,5 @@ export const advanceReviewServingProjectorWatermark = async (
       ${getSqlLiteral(input.sourcePartition)},
       ${input.sourceHighWaterMark}
     )
-    ON CONFLICT(watermark_id) DO UPDATE SET
-      source_high_water_mark = GREATEST(
-        app.review_serving_projector_watermark.source_high_water_mark,
-        excluded.source_high_water_mark
-      ),
-      updated_at = excluded.updated_at
   `)
 }

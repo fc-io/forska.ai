@@ -15,7 +15,10 @@ import {
   validateProjectTransferRuntimeAssetPath,
   validateProjectTransferRuntimeAssetPaths,
 } from './projectTransferPaths.ts'
-import {projectTransferCurrentManifestSchemaVersion, projectTransferSchemaVNextManifestSchemaVersion} from './projectTransferSchemas.ts'
+import {
+  projectTransferCurrentManifestSchemaVersion,
+  projectTransferSchemaVNextManifestSchemaVersion,
+} from './projectTransferSchemas.ts'
 
 const expectInvalidPath = <TValue>(
   result: ProjectTransferPathValidationResult<TValue>,
