@@ -1668,27 +1668,34 @@ const runSummaryRebuildChunk = async (
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
 
-        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
-          await previous
+        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(
+          async (previous, snapshot) => {
+            const diagnostics = await previous
 
-          await projectReviewServingSummaries(
-            {
-              acknowledgeClaims: false,
-              baseGeneration: input.chunk.outputBaseGeneration,
-              chunkEndArticleId: input.chunk.chunkEndKey,
-              chunkStartArticleId: input.chunk.chunkStartKey,
-              claims: [],
-              listModeKeys: reviewServingListModes,
-              projectId,
-              projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
-              projectionIdentity: input.chunk.projectionIdentity,
-              reviewConfigHash: requireReviewConfigHash(snapshot),
-              selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-              snapshotId: snapshot.snapshotId,
-            },
-            chunkDatabase,
-          )
-        }, Promise.resolve())
+            const result = await projectReviewServingSummaries(
+              {
+                acknowledgeClaims: false,
+                baseGeneration: input.chunk.outputBaseGeneration,
+                chunkEndArticleId: input.chunk.chunkEndKey,
+                chunkStartArticleId: input.chunk.chunkStartKey,
+                claims: [],
+                listModeKeys: reviewServingListModes,
+                projectId,
+                projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+                projectionIdentity: input.chunk.projectionIdentity,
+                reviewConfigHash: requireReviewConfigHash(snapshot),
+                selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+                snapshotId: snapshot.snapshotId,
+              },
+              chunkDatabase,
+            )
+
+            return [...diagnostics, {snapshotId: snapshot.snapshotId, ...result.diagnosticsJson}]
+          },
+          Promise.resolve([] as unknown[]),
+        )
+
+        return {diagnosticsJson: {summaryProjectorSnapshots: snapshotDiagnostics}}
       },
     },
     database,
