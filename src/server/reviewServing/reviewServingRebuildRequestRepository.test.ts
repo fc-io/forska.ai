@@ -1,7 +1,11 @@
 import {expect, test} from 'bun:test'
 
-import type {ReviewServingChunkManifestRepositoryDatabase} from './reviewServingChunkManifestRepository.ts'
+import type {
+  ReviewServingChunkManifestRepositoryDatabase,
+  ReviewServingChunkManifestRepositoryTransaction,
+} from './reviewServingChunkManifestRepository.ts'
 import {
+  boostActiveReviewServingRebuildRequestForProject,
   boostReviewServingRebuildRequestPriority,
   createReviewServingRebuildRequest,
   type ReviewServingRebuildRequestStatus,
@@ -331,9 +335,58 @@ test('boosting rebuild request priority refreshes update time for diagnostics or
   const joined = statements.join('\n')
 
   expect(joined).toContain('UPDATE app.review_rebuild_request')
-  expect(joined).toContain('SET priority = 500')
+  expect(joined).toContain('WHEN priority < 500 THEN 500')
   expect(joined).toContain('updated_at = current_timestamp')
-  expect(joined).toContain('AND priority < 500')
+  expect(joined).toContain('AND priority <= 500')
+})
+
+test('boosting an active project rebuild request uses a lightweight foreground update', async () => {
+  const statements: string[] = []
+  const database: ReviewServingChunkManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_request')) {
+        return [{requestId: 'rebuild:active-project'}] as T[]
+      }
+
+      return statement.includes('FROM app.review_rebuild_chunk_manifest') ? ([{blockedCount: 0}] as T[]) : ([] as T[])
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(
+      operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>,
+    ): Promise<T> => {
+      return operation(database)
+    },
+  }
+
+  const boosted = await boostActiveReviewServingRebuildRequestForProject(
+    {priority: 10_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(boosted).toBe(true)
+  expect(statements).toHaveLength(3)
+  expect(statements[0]).toContain('SELECT request_id AS requestId')
+  expect(statements[0]).toContain('FROM app.review_rebuild_request')
+  expect(statements[0]).toContain("project_id = 'project-v4'")
+  expect(statements[0]).toContain("AND reason = 'missingReviewServingSnapshot'")
+  expect(statements[0]).not.toContain('review_rebuild_chunk_manifest')
+  expect(statements[0]).not.toContain('UPDATE app.review_rebuild_request')
+  expect(statements[1]).toContain('SELECT CAST(COUNT(*) AS INTEGER) AS blockedCount')
+  expect(statements[1]).toContain('FROM app.review_rebuild_chunk_manifest')
+  expect(statements[1]).toContain("request_id = 'rebuild:active-project'")
+  expect(statements[1]).toContain("status IN ('blocked_over_budget', 'quarantined')")
+  expect(statements[2]).toContain('UPDATE app.review_rebuild_request')
+  expect(statements[2]).toContain("WHERE request_id = 'rebuild:active-project'")
+  expect(joined).toContain('UPDATE app.review_rebuild_request')
+  expect(joined).toContain('WHEN priority < 10000 THEN 10000')
+  expect(joined).toContain('updated_at = current_timestamp')
+  expect(joined).not.toContain('RETURNING request_id AS requestId')
+  expect(joined).not.toContain('WHERE request_id = (')
 })
 
 test('over-budget V4 rebuild requests park before their chunks can be claimable', async () => {

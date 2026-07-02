@@ -262,6 +262,70 @@ test('human review route service uses serving rows, human payload hydration, and
   })
 })
 
+test('human review route service retries transient filtered count read failures', async () => {
+  const reader = createReaderDatabase()
+  let countAttempts = 0
+  const countStatements: string[] = []
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string, workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
+      if (statement.includes('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')) {
+        countAttempts += 1
+        countStatements.push(statement)
+
+        if (countAttempts === 1) {
+          throw new Error('An unknown error occurred in Effect.tryPromise')
+        }
+
+        return [{totalCount: 1}] as T[]
+      }
+
+      return reader.database.queryJson<T>(statement, workloadContext)
+    },
+  }
+
+  const result = await getHumanReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 100, hasDuplicateStudyRecords: true, prompts: {}},
+    {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
+  )
+
+  expect(result.totalCount).toBe(1)
+  expect(countAttempts).toBe(2)
+  expect(countStatements.join('\n')).toContain('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
+})
+
+test('human review route service retries transient filtered row read failures', async () => {
+  const reader = createReaderDatabase()
+  let rowAttempts = 0
+  const rowStatements: string[] = []
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string, workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
+      if (
+        statement.includes('FROM mart.review_article_serving_v4')
+        && statement.includes('duplicate_flag = TRUE')
+        && !statement.includes('COUNT(DISTINCT serving.article_id)')
+      ) {
+        rowAttempts += 1
+        rowStatements.push(statement)
+
+        if (rowAttempts === 1) {
+          throw new Error('An unknown error occurred in Effect.tryPromise')
+        }
+      }
+
+      return reader.database.queryJson<T>(statement, workloadContext)
+    },
+  }
+
+  const result = await getHumanReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 100, hasDuplicateStudyRecords: true, prompts: {}},
+    {currentReviewConfigHash: 'config-1', database, manifestDatabase: createManifestDatabase('active')},
+  )
+
+  expect(result.data).toHaveLength(1)
+  expect(rowAttempts).toBe(2)
+  expect(rowStatements.join('\n')).toContain('duplicate_flag = TRUE')
+})
+
 test('human review route service allows the 500-row page cursor probe within the reader contract', async () => {
   const reader = createChunkedHydrationReaderDatabase(501)
 

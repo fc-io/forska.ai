@@ -390,12 +390,7 @@ const insertJudgments = async (runner: DirtyWorkRunner, entries: JudgmentJobSqli
   await Array.from(deltaRanges.entries()).reduce<Promise<void>>(async (previousRun, [sourcePartition, range]) => {
     await previousRun
     await intakeReviewChangeDeltaRangeToDirtyWork(
-      {
-        endSourceHighWaterMark: range.end,
-        limit: range.count,
-        sourcePartition,
-        startSourceHighWaterMark: range.start,
-      },
+      {endSourceHighWaterMark: range.end, limit: range.count, sourcePartition, startSourceHighWaterMark: range.start},
       runner,
     )
   }, Promise.resolve())
@@ -549,7 +544,7 @@ export const commitJudgmentSqliteOutboxImportDirtyWork = async ({
   discardedEntries,
   importableEntries,
   now,
-  requestedBy,
+  requestedBy: _requestedBy,
 }: CommitJudgmentSqliteOutboxImportDirtyWorkParams): Promise<JudgmentSqliteOutboxDirtyWorkResult> => {
   return getAppDatabaseService().transaction(async (runner) => {
     const currentNow = now ?? new Date()

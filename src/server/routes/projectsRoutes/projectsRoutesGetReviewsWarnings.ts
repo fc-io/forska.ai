@@ -5,6 +5,7 @@ import {
   type ReviewServingDiagnostics,
 } from '../../reviewServing/reviewServingDiagnosticsRepository.ts'
 import {readReviewServingRows} from '../../reviewServing/reviewServingReader.ts'
+import {boostActiveReviewServingRebuildRequestForProject} from '../../reviewServing/reviewServingRebuildRequestRepository.ts'
 import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
@@ -19,6 +20,7 @@ type ReviewsIndexingStatus = 'blocked' | 'failed' | 'not-needed' | 'ready' | 're
 const recentReviewServingProgressWindowMs = 120_000
 const reviewServingProgressClockSkewToleranceMs = 10_000
 const foregroundReviewServingRepairPriority = 1_000
+const stalledForegroundReviewServingRepairPriority = 10_000
 
 const getEnabledPromptCount = async (projectId: string): Promise<number> => {
   const rows = await getAppDatabaseService().queryJson<{count: number}>(`
@@ -229,35 +231,58 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const hasReviewServingRows =
       warningSnapshot.status === 'accepted'
       && isUsableReviewServingWarningSnapshot(warningSnapshot.diagnostics.manifest.status)
-    const hasReadableReviewServingRows = warningSnapshot.status === 'accepted'
+    const hasReadableReviewServingRows = hasReviewServingRows
     const shouldPrioritizeMissingSnapshotRepair =
       !hasReadableReviewServingRows && enabledPromptCount > 0 && hasAnyArticlesInScope
     const expiredRebuildChunkLeaseCount = Math.min(
       servingDiagnostics.rebuildChunks.runningCount,
       servingDiagnostics.rebuildChunks.expiredLeaseCount,
     )
-
-    if (
-      shouldPrioritizeMissingSnapshotRepair
-      && (!getHasReviewServingStateThatCanProgress(servingDiagnostics)
-        || servingDiagnostics.rebuildChunks.pendingCount > 0
-        || expiredRebuildChunkLeaseCount > 0)
-    ) {
-      requestReviewServingV4Rebuild({
-        priority: foregroundReviewServingRepairPriority,
-        projectId,
-        reason: 'missingReviewServingSnapshot',
-      }).catch(() => {
-        return undefined
-      })
-    }
-
+    const lastProgressedAt = getLatestTimestamp(
+      servingDiagnostics.dirtyWork.updatedAt,
+      servingDiagnostics.rebuildChunks.updatedAt,
+      servingDiagnostics.snapshot.activeUpdatedAt,
+    )
+    const isServerMutationWorkDisabled = shouldDisableServerMutationWork()
     const queuedRebuildChunkCount = servingDiagnostics.rebuildChunks.claimableCount
     const totalQueuedRebuildChunkCount = servingDiagnostics.rebuildChunks.pendingCount + expiredRebuildChunkLeaseCount
     const inFlightRebuildChunkCount = getNonNegativeDifference(
       servingDiagnostics.rebuildChunks.runningCount,
       expiredRebuildChunkLeaseCount,
     )
+
+    const hasRecentProgress = getHasRecentReviewServingProgress(lastProgressedAt)
+    const hasStaleQueuedRebuildWork =
+      !hasRecentProgress && inFlightRebuildChunkCount === 0 && totalQueuedRebuildChunkCount > 0
+    const shouldRequestForegroundRepair =
+      !isServerMutationWorkDisabled
+      && (shouldPrioritizeMissingSnapshotRepair || hasStaleQueuedRebuildWork)
+      && (hasStaleQueuedRebuildWork
+        || !hasRecentProgress
+        || !getHasReviewServingStateThatCanProgress(servingDiagnostics))
+      && (!getHasReviewServingStateThatCanProgress(servingDiagnostics)
+        || servingDiagnostics.rebuildChunks.pendingCount > 0
+        || expiredRebuildChunkLeaseCount > 0)
+
+    if (shouldRequestForegroundRepair) {
+      const priority = hasRecentProgress
+        ? foregroundReviewServingRepairPriority
+        : stalledForegroundReviewServingRepairPriority
+      const boostedActiveRequest = await boostActiveReviewServingRebuildRequestForProject({
+        priority,
+        projectId,
+        reason: 'missingReviewServingSnapshot',
+      }).catch(() => {
+        return false
+      })
+
+      if (!boostedActiveRequest) {
+        await requestReviewServingV4Rebuild({priority, projectId, reason: 'missingReviewServingSnapshot'}).catch(() => {
+          return undefined
+        })
+      }
+    }
+
     const pendingRebuildChunkCount = totalQueuedRebuildChunkCount + inFlightRebuildChunkCount
     const terminalRebuildChunkCount =
       servingDiagnostics.rebuildChunks.blockedOverBudgetCount
@@ -265,7 +290,6 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       + servingDiagnostics.rebuildChunks.quarantinedCount
     const terminalDirtyWorkCount = servingDiagnostics.dirtyWork.failedCount
     const terminalQuarantineCount = servingDiagnostics.quarantine.quarantinedOutboxCount
-    const isServerMutationWorkDisabled = shouldDisableServerMutationWork()
     const pendingDirtyWorkCount =
       servingDiagnostics.dirtyWork.pendingCount
       + servingDiagnostics.dirtyWork.failedCount
@@ -290,19 +314,11 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       pendingRefreshCount,
       runningRefreshCount: inFlightRefreshCount,
     })
-    const lastProgressedAt = getLatestTimestamp(
-      servingDiagnostics.dirtyWork.updatedAt,
-      servingDiagnostics.rebuildChunks.updatedAt,
-      servingDiagnostics.snapshot.activeUpdatedAt,
-    )
-    const hasRecentProgress =
-      pendingRefreshCount > 0
-      && inFlightRefreshCount === 0
-      && eligibleConsumerCount > 0
-      && getHasRecentReviewServingProgress(lastProgressedAt)
+    const hasRecentVisibleProgress =
+      pendingRefreshCount > 0 && inFlightRefreshCount === 0 && eligibleConsumerCount > 0 && hasRecentProgress
     const progressState = getReviewsIndexingProgressState({
       claimableRefreshCount,
-      hasRecentProgress,
+      hasRecentProgress: hasRecentVisibleProgress,
       inFlightRefreshCount,
       status: indexingStatus,
     })
@@ -318,7 +334,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
         enabledPromptCount,
         scope: {hasAnyArticlesInScope},
         indexing: {
-          activeConsumerCount: inFlightRefreshCount > 0 || hasRecentProgress ? 1 : 0,
+          activeConsumerCount: inFlightRefreshCount > 0 || hasRecentVisibleProgress ? 1 : 0,
           activeWorkCount: inFlightRefreshCount,
           articleRefreshesPerMinute: null,
           blockedReason,

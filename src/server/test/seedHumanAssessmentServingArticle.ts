@@ -1,6 +1,4 @@
-type TestDatabase = {
-  run: (statement: string) => Promise<void>
-}
+type TestDatabase = {run: (statement: string) => Promise<void>}
 
 const escapeSqlString = (value: string) => {
   return value.replaceAll("'", "''")
@@ -33,12 +31,7 @@ export const seedHumanAssessmentServingArticle = async (params: {
   const componentState = {
     optional: [],
     required: requiredComponents.map((component) => {
-      return {
-        baseGeneration: 1,
-        component,
-        patchWatermark: 0,
-        projectionIdentity: `${params.snapshotId}-${component}`,
-      }
+      return {baseGeneration: 1, component, patchWatermark: 0, projectionIdentity: `${params.snapshotId}-${component}`}
     }),
   }
 

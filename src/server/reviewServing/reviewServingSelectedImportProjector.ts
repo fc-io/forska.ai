@@ -56,8 +56,10 @@ type ProjectReviewServingSelectedImportArticleRangeInput = {
   chunkStartArticleId: string
   projectId: string
   projectScopeIdentity: string
+  replaceExistingRows?: boolean
   selectedImportSnapshotId: string
   sourceDeltaHighWater: number
+  writeProjectionState?: boolean
 }
 
 const selectedImportProjectorDefinitionVersion = 'review-serving-selected-import-v2'
@@ -244,18 +246,17 @@ const getSelectedImportProjectionRows = async (
       `)
 }
 
-const deleteSelectedImportArticleRangeRows = async (
+const getDeleteSelectedImportArticleRangeRowsStatement = (
   input: ProjectReviewServingSelectedImportArticleRangeInput,
-  database: ReviewServingSelectedImportProjectorDatabase,
 ) => {
-  await database.run(`
+  return `
     DELETE FROM app.review_selected_article_import_v4
     WHERE project_id = ${getSqlLiteral(input.projectId)}
       AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
       AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
       AND article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
       AND article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
-  `)
+  `
 }
 
 const getSelectedImportCursorFromRows = (
@@ -386,22 +387,26 @@ export const projectReviewServingSelectedImportArticleRange = async (
     null,
   )
 
-  await deleteSelectedImportArticleRangeRows(params, database)
   await writeReviewServingProjectorComponent(
     {
       component: 'selectedImport',
-      projectionManifests: [getSelectedImportProjectionManifest(params)],
+      projectionManifests: params.writeProjectionState === false ? [] : [getSelectedImportProjectionManifest(params)],
       records: rows.map((row) => {
         return getSelectedImportProjectorRecord(params, row)
       }),
-      selectedImportSnapshotCursor: {
-        cursorJson: null,
-        projectId: params.projectId,
-        projectScopeIdentity: params.projectScopeIdentity,
-        selectedImportSnapshotId: params.selectedImportSnapshotId,
-        sourceDeltaHighWater: params.sourceDeltaHighWater,
-        status: 'completed',
-      },
+      statements:
+        params.replaceExistingRows === false ? [] : [getDeleteSelectedImportArticleRangeRowsStatement(params)],
+      selectedImportSnapshotCursor:
+        params.writeProjectionState === false
+          ? undefined
+          : {
+              cursorJson: null,
+              projectId: params.projectId,
+              projectScopeIdentity: params.projectScopeIdentity,
+              selectedImportSnapshotId: params.selectedImportSnapshotId,
+              sourceDeltaHighWater: params.sourceDeltaHighWater,
+              status: 'completed',
+            },
     },
     database,
   )

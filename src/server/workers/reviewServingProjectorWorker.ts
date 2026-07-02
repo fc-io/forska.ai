@@ -89,7 +89,7 @@ import {
 } from '../reviewServing/reviewServingTitleSearchProjector.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
-import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
+import {closeDuckdbService, type DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
 type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorServiceDependencies['database']>
@@ -142,6 +142,7 @@ type ReviewServingProjectorWorkerDependencies = {
   nowMs?: () => number
   projectorServiceDependencies?: Omit<ReviewServingProjectorServiceDependencies, 'database' | 'nowMs'>
   rebuildChunkService?: ReviewServingProjectorWorkerRebuildChunkService
+  recycleDuckdbAfterCompletedRebuildChunk?: (chunk: ReviewServingRebuildChunkManifest) => Promise<void>
   sleep: typeof sleep
   wakeProjectors: typeof wakeReviewServingProjectorService
 }
@@ -293,6 +294,10 @@ const reviewServingCriticalRebuildComponents = [
   'summary',
   'payload',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
+const reviewServingRuntimeRecycleAfterRebuildComponents = new Set<ReviewServingProjectionComponent>([
+  'llmStatus',
+  'humanStatus',
+])
 const defaultReviewFilterOptionKeys = [
   'conflictFlag',
   'duplicateFlag',
@@ -454,6 +459,9 @@ const canSplitRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
 }
 
 const articleRangeRebuildChunkPresplitInputRowLimit = 50_000
+const highFanoutArticleRangeRebuildChunkPresplitRowLimit = 5_000
+const articleRangeRebuildChunkPresplitMaxBucketCount = 16
+const highFanoutArticleRangeRebuildChunkPresplitMaxBucketCount = 64
 const splittableArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjectionComponent> = new Set([
   'projectScope',
   'display',
@@ -467,28 +475,100 @@ const splittableArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjecti
   'selectedImport',
   'summary',
 ])
+const highFanoutArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjectionComponent> = new Set([
+  'humanStatus',
+  'judgmentInputContent',
+  'llmStatus',
+  'payload',
+  'posting',
+  'queue',
+  'search',
+  'selectedImport',
+  'summary',
+])
 
-const getArticleRangeRebuildChunkEstimatedInputRows = (chunk: ReviewServingRebuildChunkManifest) => {
-  return chunk.estimatedInputRows ?? chunk.estimatedOutputRows ?? null
+const getArticleRangeRebuildChunkPresplitRowLimit = (chunk: ReviewServingRebuildChunkManifest) => {
+  return highFanoutArticleRangeRebuildComponents.has(chunk.projectionComponent)
+    ? highFanoutArticleRangeRebuildChunkPresplitRowLimit
+    : articleRangeRebuildChunkPresplitInputRowLimit
+}
+
+const getArticleRangeRebuildChunkEstimatedRows = (chunk: ReviewServingRebuildChunkManifest) => {
+  const estimates = [chunk.estimatedInputRows, chunk.estimatedOutputRows].filter((estimate): estimate is number => {
+    return typeof estimate === 'number' && Number.isFinite(estimate) && estimate > 0
+  })
+
+  return estimates.length === 0 ? null : Math.max(...estimates)
 }
 
 const getArticleRangeRebuildChunkSplitBucketCount = (chunk: ReviewServingRebuildChunkManifest) => {
-  const estimatedInputRows = getArticleRangeRebuildChunkEstimatedInputRows(chunk)
+  const estimatedRows = getArticleRangeRebuildChunkEstimatedRows(chunk)
+  const presplitRowLimit = getArticleRangeRebuildChunkPresplitRowLimit(chunk)
+  const maxBucketCount = highFanoutArticleRangeRebuildComponents.has(chunk.projectionComponent)
+    ? highFanoutArticleRangeRebuildChunkPresplitMaxBucketCount
+    : articleRangeRebuildChunkPresplitMaxBucketCount
 
-  if (estimatedInputRows === null) {
+  if (estimatedRows === null) {
     return 2
   }
 
-  return Math.min(16, Math.max(2, Math.ceil(estimatedInputRows / articleRangeRebuildChunkPresplitInputRowLimit)))
+  return Math.min(maxBucketCount, Math.max(2, Math.ceil(estimatedRows / presplitRowLimit)))
+}
+
+const uuidArticleIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
+
+const parseUuidArticleId = (articleId: string) => {
+  return uuidArticleIdPattern.test(articleId) ? BigInt(`0x${articleId.replaceAll('-', '').toLowerCase()}`) : null
+}
+
+const formatUuidArticleId = (value: bigint) => {
+  const hex = value.toString(16).padStart(32, '0')
+
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+const getUuidArticleRangeRebuildChunkSplitRanges = (
+  chunk: ReviewServingRebuildChunkManifest,
+): RebuildChunkSplitRangeRow[] | null => {
+  const splitBucketCount = getArticleRangeRebuildChunkSplitBucketCount(chunk)
+  const start = parseUuidArticleId(chunk.chunkStartKey)
+  const end = parseUuidArticleId(chunk.chunkEndKey)
+
+  if (start === null || end === null || start >= end) {
+    return null
+  }
+
+  const span = end - start
+  const bucketCount = BigInt(splitBucketCount)
+  const estimatedRows = getArticleRangeRebuildChunkEstimatedRows(chunk) ?? splitBucketCount
+  const ranges: RebuildChunkSplitRangeRow[] = []
+  let previousEnd = start
+
+  for (let index = 0; index < splitBucketCount; index += 1) {
+    const rangeEnd = index === splitBucketCount - 1 ? end : start + (span * BigInt(index + 1)) / bucketCount
+
+    if (rangeEnd <= previousEnd) {
+      return null
+    }
+
+    ranges.push({
+      articleCount: Math.ceil(estimatedRows / splitBucketCount),
+      chunkEndKey: formatUuidArticleId(rangeEnd),
+      chunkStartKey: formatUuidArticleId(index === 0 ? start : previousEnd),
+    })
+    previousEnd = rangeEnd
+  }
+
+  return ranges.length < 2 ? null : ranges
 }
 
 const shouldPresplitArticleRangeRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
-  const estimatedInputRows = getArticleRangeRebuildChunkEstimatedInputRows(chunk)
+  const estimatedRows = getArticleRangeRebuildChunkEstimatedRows(chunk)
 
   return (
     splittableArticleRangeRebuildComponents.has(chunk.projectionComponent)
-    && estimatedInputRows !== null
-    && estimatedInputRows > articleRangeRebuildChunkPresplitInputRowLimit
+    && estimatedRows !== null
+    && estimatedRows > getArticleRangeRebuildChunkPresplitRowLimit(chunk)
   )
 }
 
@@ -497,6 +577,12 @@ const getArticleRangeRebuildChunkSplitRanges = async (
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
   const splitBucketCount = getArticleRangeRebuildChunkSplitBucketCount(input.chunk)
+  const uuidRanges = getUuidArticleRangeRebuildChunkSplitRanges(input.chunk)
+
+  if (uuidRanges !== null) {
+    return uuidRanges
+  }
+
   const rows = await database.queryJson<RebuildChunkSplitRangeRow>(`
     WITH scoped_article AS (
       SELECT
@@ -560,13 +646,16 @@ const getSelectedImportSnapshotIdPredicate = (snapshotIds: readonly string[]) =>
 }
 
 const getChunkProjectorDatabase = (
-  tx: ReviewServingChunkManifestRepositoryTransaction,
+  database: ReviewServingChunkManifestRepositoryDatabase | ReviewServingChunkManifestRepositoryTransaction,
 ): ReviewServingProjectorWorkerDatabase => {
   return {
-    ...tx,
-    transaction: async (operation) => {
-      return operation(tx)
-    },
+    ...database,
+    transaction:
+      'transaction' in database
+        ? database.transaction.bind(database)
+        : async (operation) => {
+            return operation(database)
+          },
   } as ReviewServingProjectorWorkerDatabase
 }
 
@@ -1098,6 +1187,7 @@ const runValidatedRebuildChunkOutput = async (
     validateOutput: (
       tx: ReviewServingChunkManifestRepositoryTransaction,
     ) => Promise<{actualChecksum: string; actualCount?: number; expectedChecksum: string; expectedCount?: number}>
+    writeMode?: 'atomic' | 'idempotent-output'
     writeOutput: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<void>
   },
   database: ReviewServingChunkManifestRepositoryDatabase,
@@ -1107,6 +1197,7 @@ const runValidatedRebuildChunkOutput = async (
       ...input.chunk,
       leaseOwner: input.leaseOwner,
       validateOutput: input.validateOutput,
+      writeMode: input.writeMode,
       writeOutput: input.writeOutput,
     },
     database,
@@ -1132,6 +1223,7 @@ const runDisplayRebuildChunk = async (
     {
       ...input.chunk,
       leaseOwner: input.leaseOwner,
+      writeMode: 'idempotent-output',
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -1195,6 +1287,7 @@ const runPayloadRebuildChunk = async (
     {
       ...input.chunk,
       leaseOwner: input.leaseOwner,
+      writeMode: 'idempotent-output',
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -1250,6 +1343,7 @@ const runSearchRebuildChunk = async (
     {
       ...input.chunk,
       leaseOwner: input.leaseOwner,
+      writeMode: 'idempotent-output',
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -1304,6 +1398,7 @@ const runLlmStatusRebuildChunk = async (
   return runValidatedRebuildChunkOutput(
     {
       ...input,
+      writeMode: 'idempotent-output',
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -1347,6 +1442,7 @@ const runHumanStatusRebuildChunk = async (
   return runValidatedRebuildChunkOutput(
     {
       ...input,
+      writeMode: 'idempotent-output',
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -1390,6 +1486,7 @@ const runQueueRebuildChunk = async (
   return runValidatedRebuildChunkOutput(
     {
       ...input,
+      writeMode: 'idempotent-output',
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -1438,6 +1535,7 @@ const runPostingRebuildChunk = async (
   return runValidatedRebuildChunkOutput(
     {
       ...input,
+      writeMode: 'idempotent-output',
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -1491,6 +1589,7 @@ const runSummaryRebuildChunk = async (
   return runValidatedRebuildChunkOutput(
     {
       ...input,
+      writeMode: 'idempotent-output',
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -1710,6 +1809,7 @@ const runJudgmentInputContentRebuildChunk = async (
     return await runValidatedRebuildChunkOutput(
       {
         ...input,
+        writeMode: 'idempotent-output',
         validateOutput: async (tx) => {
           return getRebuildChunkOutputValidation({
             chunk: input.chunk,
@@ -1853,15 +1953,16 @@ const getProjectScopeRebuildChunkOutputChecksum = async (
     SELECT
       CAST(COUNT(*) AS INTEGER) AS actualCount,
       sha256(COALESCE(string_agg(
-        CAST(article_id AS VARCHAR) || ':' ||
-        CAST(in_curated_scope AS VARCHAR) || ':' ||
-        CAST(in_route_scope AS VARCHAR) || ':' ||
-        COALESCE(CAST(article_created_at AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(article_updated_at AS VARCHAR), ''),
-        '|' ORDER BY article_id
+        CAST(scope.article_id AS VARCHAR) || ':' ||
+        CAST(scope.in_curated_scope AS VARCHAR) || ':' ||
+        CAST(scope.in_route_scope AS VARCHAR) || ':' ||
+        COALESCE(CAST(scope.article_created_at AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(scope.article_updated_at AS VARCHAR), ''),
+        '|' ORDER BY scope.article_id
       ), '')) AS actualChecksum
-    FROM mart.project_scope_article
-    WHERE project_id = ${getSqlLiteral(projectId)}
+    FROM mart.project_scope_article scope
+    WHERE scope.project_id = ${getSqlLiteral(projectId)}
+      AND ${getChunkArticleRangePredicate({alias: 'scope', chunk: input.chunk})}
   `)
 
   return row ?? {actualChecksum: '', actualCount: 0}
@@ -1875,8 +1976,9 @@ const getProjectScopeRebuildChunkOutputCount = async (
   const [row] = await database.queryJson<RebuildChunkOutputChecksumRow>(`
     SELECT
       ${getCheapRebuildChunkOutputChecksumSelect()}
-    FROM mart.project_scope_article
-    WHERE project_id = ${getSqlLiteral(projectId)}
+    FROM mart.project_scope_article scope
+    WHERE scope.project_id = ${getSqlLiteral(projectId)}
+      AND ${getChunkArticleRangePredicate({alias: 'scope', chunk: input.chunk})}
   `)
 
   return row ?? {actualChecksum: '', actualCount: 0}
@@ -1889,8 +1991,9 @@ const writeProjectScopeRebuildChunkRows = async (
   const projectId = requireRebuildChunkProjectId(input.chunk)
 
   await database.run(`
-    DELETE FROM mart.project_scope_article
-    WHERE project_id = ${getSqlLiteral(projectId)};
+    DELETE FROM mart.project_scope_article scope
+    WHERE scope.project_id = ${getSqlLiteral(projectId)}
+      AND ${getChunkArticleRangePredicate({alias: 'scope', chunk: input.chunk})};
     INSERT INTO mart.project_scope_article (
       project_id,
       article_id,
@@ -1909,6 +2012,7 @@ const writeProjectScopeRebuildChunkRows = async (
       INNER JOIN app.article_import_route article_import_route
         ON article_import_route.import_route_id = project_import_route.import_route_id
       WHERE project_import_route.project_id = ${getSqlLiteral(projectId)}
+        AND ${getChunkArticleRangePredicate({alias: 'article_import_route', chunk: input.chunk})}
     ),
     curated_scope AS (
       SELECT
@@ -1918,6 +2022,7 @@ const writeProjectScopeRebuildChunkRows = async (
         TRUE AS in_curated_scope
       FROM app.project_article project_article
       WHERE project_article.project_id = ${getSqlLiteral(projectId)}
+        AND ${getChunkArticleRangePredicate({alias: 'project_article', chunk: input.chunk})}
     ),
     combined_scope AS (
       SELECT * FROM route_scope
@@ -1946,6 +2051,7 @@ const writeProjectScopeRebuildChunkRows = async (
       AND project.archived = FALSE
     INNER JOIN app.article article ON article.id = aggregated_scope.article_id
     WHERE aggregated_scope.project_id = ${getSqlLiteral(projectId)}
+      AND ${getChunkArticleRangePredicate({alias: 'aggregated_scope', chunk: input.chunk})}
       AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
       AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
   `)
@@ -2165,6 +2271,7 @@ const resetSelectedImportSnapshotForClaimedRebuild = async (
 
 const resetSelectedImportArticleRangeForClaimedRebuild = async (
   input: {
+    includeBaseRows?: boolean
     chunk: ReviewServingRebuildChunkManifest
     includePatchRows?: boolean
     leaseOwner: string
@@ -2190,18 +2297,16 @@ const resetSelectedImportArticleRangeForClaimedRebuild = async (
       )
     }
 
-    await deleteReviewServingProjectorRows(
-      {
-        predicates: {
-          article_id: {end: input.chunk.chunkEndKey, start: input.chunk.chunkStartKey},
-          project_id: input.projectId,
-          project_scope_identity: input.projectScopeIdentity,
-          selected_import_snapshot_id: input.selectedImportSnapshotId,
-        },
-        table: 'app.review_selected_article_import_v4',
-      },
-      tx,
-    )
+    if (input.includeBaseRows !== false) {
+      await tx.run(`
+        DELETE FROM app.review_selected_article_import_v4
+        WHERE project_id = ${getSqlLiteral(input.projectId)}
+          AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+          AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+          AND article_id >= ${getSqlLiteral(input.chunk.chunkStartKey)}
+          AND article_id <= ${getSqlLiteral(input.chunk.chunkEndKey)}
+      `)
+    }
   })
 }
 
@@ -2224,8 +2329,10 @@ const projectSelectedImportArticleRangeForClaimedRebuild = async (
         chunkStartArticleId: input.chunk.chunkStartKey,
         projectId: input.projectId,
         projectScopeIdentity: input.projectScopeIdentity,
+        replaceExistingRows: !isFreshReviewServingSnapshotRebuildChunk(input.chunk),
         selectedImportSnapshotId: input.selectedImportSnapshotId,
         sourceDeltaHighWater: input.sourceDeltaHighWater,
+        writeProjectionState: !isFreshReviewServingSnapshotRebuildChunk(input.chunk),
       },
       getChunkProjectorDatabase(tx),
     )
@@ -2291,6 +2398,7 @@ const runSelectedImportRebuildChunk = async (
     {
       ...input.chunk,
       leaseOwner: input.leaseOwner,
+      writeMode: 'idempotent-output',
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -2325,6 +2433,7 @@ const runSelectedImportRebuildChunk = async (
             await resetSelectedImportArticleRangeForClaimedRebuild(
               {
                 ...input,
+                includeBaseRows: !isFreshReviewServingSnapshotRebuildChunk(input.chunk),
                 includePatchRows: !isFreshReviewServingSnapshotRebuildChunk(input.chunk),
                 projectId,
                 projectScopeIdentity,
@@ -3104,6 +3213,14 @@ export const getDefaultReviewServingProjectorRunners = (
   }
 }
 
+const shouldRecycleDuckdbAfterCompletedRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
+  return reviewServingRuntimeRecycleAfterRebuildComponents.has(chunk.projectionComponent)
+}
+
+const closeDuckdbAfterCompletedRebuildChunk = async () => {
+  await closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
+}
+
 const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWorkerDependencies = {
   cleanupRetentionState: cleanupReviewServingRetentionState,
   getDatabase: getAppDatabaseService as ReviewServingProjectorWorkerDependencies['getDatabase'],
@@ -3122,6 +3239,7 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
       return runReviewServingProjectorWorkerClaimedRebuildChunk({chunk, leaseOwner}, database)
     },
   },
+  recycleDuckdbAfterCompletedRebuildChunk: closeDuckdbAfterCompletedRebuildChunk,
   sleep,
   wakeProjectors: wakeReviewServingProjectorService,
 }
@@ -3651,6 +3769,22 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
 
   try {
     await finalizeCompletedReviewServingRebuildRequest(claimedChunk, database)
+    if (shouldRecycleDuckdbAfterCompletedRebuildChunk(claimedChunk)) {
+      try {
+        await dependencies.recycleDuckdbAfterCompletedRebuildChunk?.(claimedChunk)
+      } catch (error) {
+        reviewServingProjectorWorkerCycleLogger.warn(
+          'review-serving-projector-worker:duckdb-recycle-failed',
+          '[reviewServingProjectorWorker] failed to recycle DuckDB after rebuild chunk',
+          {
+            chunkId: claimedChunk.chunkId,
+            component: claimedChunk.projectionComponent,
+            error,
+            requestId: claimedChunk.requestId,
+          },
+        )
+      }
+    }
 
     return {
       chunkId: claimedChunk.chunkId,

@@ -384,6 +384,9 @@ test('display base rows flow through writer with display fields and selected imp
   const inserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO mart.review_article_serving_v4')
   })
+  const deletes = statements.filter((statement) => {
+    return statement.includes('DELETE FROM mart.review_article_serving_v4')
+  })
 
   expect(result).toEqual({rowCount: 2})
   expect(selectStatement).toContain('FROM mart.project_scope_article scope')
@@ -402,7 +405,18 @@ test('display base rows flow through writer with display fields and selected imp
     'WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key',
   )
   expect(selectStatement).toContain('json_merge_patch')
-  expect(inserts).toHaveLength(2)
+  expect(deletes).toHaveLength(1)
+  expect(deletes[0]).toContain("project_id = 'project-1'")
+  expect(deletes[0]).toContain("review_config_hash = 'review-config-1'")
+  expect(deletes[0]).toContain("snapshot_id = 'snapshot-1'")
+  expect(deletes[0]).toContain("list_mode_key IN ('llm', 'human')")
+  expect(deletes[0]).not.toContain('display_identity')
+  expect(deletes[0]).not.toContain('base_generation')
+  expect(inserts).toHaveLength(1)
+  expect(inserts[0]).not.toContain('ON CONFLICT')
+  expect(inserts[0]).toContain('WITH display_base AS')
+  expect(inserts[0]).toContain('CROSS JOIN list_mode')
+  expect(inserts[0]).not.toContain(') VALUES (\n      ')
   expect(inserts.join('\n')).toContain('article_title')
   expect(inserts.join('\n')).toContain('article_updated_at')
   expect(inserts.join('\n')).toContain('doi')

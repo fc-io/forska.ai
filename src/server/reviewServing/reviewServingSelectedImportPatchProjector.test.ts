@@ -218,7 +218,10 @@ test('selected-import projector keeps explicit manifest watermarks separate from
     return statement.includes('INSERT INTO mart.review_selected_import_patch_v4')
   })
   const manifestStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO app.review_projection_identity_manifest')
+    return (
+      statement.includes('INSERT INTO app.review_projection_identity_manifest')
+      || statement.includes('UPDATE app.review_projection_identity_manifest')
+    )
   })
 
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 7})

@@ -178,8 +178,12 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       const priority = Number(statement.match(/THEN\s+(\d+)\s+ELSE priority/u)?.[1] ?? 100)
       const request = requests.get(requestId)
 
-      if (request !== undefined && request.priority < priority) {
-        requests.set(requestId, {...request, priority})
+      if (request !== undefined && request.priority <= priority) {
+        requests.set(requestId, {
+          ...request,
+          priority: Math.max(request.priority, priority),
+          updatedAt: '2026-06-20T10:05:00.000Z',
+        })
       }
 
       return
@@ -527,7 +531,33 @@ test('V4 missing snapshot rebuild requests boost active foreground work priority
   expect(boostedRequest.priority).toBe(1_000)
   expect(rebuildRequestInsertCount).toBe(1)
   expect(statements.join('\n')).toContain('UPDATE app.review_rebuild_request')
-  expect(statements.join('\n')).toContain('SET priority = 1000')
+  expect(statements.join('\n')).toContain('WHEN priority < 1000 THEN 1000')
+})
+
+test('V4 missing snapshot rebuild requests retouch equal foreground priority on repeated foreground access', async () => {
+  const {database, statements} = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
+
+  const firstRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {priority: 1_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
+  )
+  const touchedRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {priority: 1_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
+  )
+  const updateCount = statements.filter((statement) => {
+    return (
+      statement.includes('UPDATE app.review_rebuild_request') && statement.includes('updated_at = current_timestamp')
+    )
+  }).length
+
+  expect(touchedRequest.requestId).toBe(firstRequest.requestId)
+  expect(touchedRequest.priority).toBe(1_000)
+  expect(updateCount).toBe(1)
 })
 
 test('V4 missing snapshot rebuild requests preserve foreground priority on first create', async () => {

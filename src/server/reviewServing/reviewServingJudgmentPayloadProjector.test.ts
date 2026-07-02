@@ -192,7 +192,10 @@ test('judgment payload projection separates llm and human payload kinds across o
   })
 
   expect(result).toEqual({humanRowCount: 4, llmRowCount: 4})
-  expect(inserts).toHaveLength(8)
+  expect(inserts).toHaveLength(1)
+  expect(inserts[0]).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO UPDATE SET',
+  )
   expect(joined).toContain("'llm'")
   expect(joined).toContain("'human'")
   expect(joined).toContain("'both'")

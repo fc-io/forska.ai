@@ -5,8 +5,8 @@ import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {
   claimReviewServingDirtyWork,
-  failReviewServingDirtyWorkClaims,
   type ClaimReviewServingDirtyWorkParams,
+  failReviewServingDirtyWorkClaims,
   releaseReviewServingDirtyWorkClaims,
   type ReviewServingDirtyWorkClaim,
   type ReviewServingDirtyWorkDatabase,

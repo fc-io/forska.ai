@@ -742,15 +742,71 @@ export const boostReviewServingRebuildRequestPriority = async (
 
   await database.run(`
     UPDATE app.review_rebuild_request
-    SET priority = ${getSqlLiteral(priority)},
+    SET priority = CASE
+          WHEN priority < ${getSqlLiteral(priority)} THEN ${getSqlLiteral(priority)}
+          ELSE priority
+        END,
         updated_at = current_timestamp
     WHERE request_id = ${getSqlLiteral(input.requestId)}
       AND status IN ('admitted', 'running')
       AND admission_state = 'admitted'
-      AND priority < ${getSqlLiteral(priority)}
+      AND priority <= ${getSqlLiteral(priority)}
   `)
 
   return getReviewServingRebuildRequest({requestId: input.requestId}, database)
+}
+
+export const boostActiveReviewServingRebuildRequestForProject = async (
+  input: {priority: number; projectId: string; reason?: string},
+  database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingRebuildRequestDatabase(),
+) => {
+  const priority = getNormalizedPriority(input.priority)
+  const reasonFilter = input.reason === undefined ? '' : `\n        AND reason = ${getSqlLiteral(input.reason)}`
+  const activeRequests = await database.queryJson<{requestId: string}>(`
+    SELECT request_id AS requestId
+    FROM app.review_rebuild_request
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      ${reasonFilter}
+      AND status = 'admitted'
+      AND admission_state = 'admitted'
+      AND priority <= ${getSqlLiteral(priority)}
+    ORDER BY priority DESC, updated_at ASC, request_id ASC
+    LIMIT 10
+  `)
+  let activeRequest: {requestId: string} | undefined
+
+  for (const request of activeRequests) {
+    const [blockedRow] = await database.queryJson<{blockedCount: number | string}>(`
+      SELECT CAST(COUNT(*) AS INTEGER) AS blockedCount
+      FROM app.review_rebuild_chunk_manifest
+      WHERE request_id = ${getSqlLiteral(request.requestId)}
+        AND status IN ('blocked_over_budget', 'quarantined')
+    `)
+
+    if (Number(blockedRow?.blockedCount ?? 0) === 0) {
+      activeRequest = request
+      break
+    }
+  }
+
+  if (activeRequest === undefined) {
+    return false
+  }
+
+  await database.run(`
+    UPDATE app.review_rebuild_request
+    SET priority = CASE
+          WHEN priority < ${getSqlLiteral(priority)} THEN ${getSqlLiteral(priority)}
+          ELSE priority
+        END,
+        updated_at = current_timestamp
+    WHERE request_id = ${getSqlLiteral(activeRequest.requestId)}
+      AND status IN ('admitted', 'running')
+      AND admission_state = 'admitted'
+      AND priority <= ${getSqlLiteral(priority)}
+  `)
+
+  return true
 }
 
 const deleteObsoleteReviewServingRebuildChunks = async (

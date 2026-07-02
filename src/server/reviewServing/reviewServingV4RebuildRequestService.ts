@@ -1089,7 +1089,7 @@ export const requestReviewServingV4RebuildEffect = (
         : null
 
     if (activeRequest !== null) {
-      if (input.priority !== undefined && activeRequest.priority < input.priority) {
+      if (input.priority !== undefined && activeRequest.priority <= input.priority) {
         return (
           (await boostReviewServingRebuildRequestPriority(
             {priority: input.priority, requestId: activeRequest.requestId},

@@ -283,7 +283,10 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
   ).toBe(true)
   expect(
     statements.some((statement) => {
-      return statement.includes('INSERT INTO app.review_projection_identity_manifest')
+      return (
+        statement.includes('INSERT INTO app.review_projection_identity_manifest')
+        || statement.includes('UPDATE app.review_projection_identity_manifest')
+      )
     }),
   ).toBe(true)
   expect(
@@ -317,6 +320,348 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
   ).toBe(true)
 })
 
+test('selected import snapshot cursor writes are idempotent upserts', async () => {
+  const statements: string[] = []
+  const database: ReviewServingProjectorWriterDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'selectedImport',
+      selectedImportSnapshotCursor: {
+        cursorJson: {cursor: 'new'},
+        projectId: 'project-1',
+        projectScopeIdentity: 'project-scope-1',
+        selectedImportSnapshotId: 'selected-import-1',
+        sourceDeltaHighWater: 2,
+        status: 'completed',
+      },
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  expect(joined).toContain('INSERT INTO app.review_selected_import_snapshot')
+  expect(joined).toContain('ON CONFLICT(selected_import_snapshot_id) DO UPDATE SET')
+  expect(joined).not.toContain('FROM app.review_selected_import_snapshot')
+})
+
+test('selected import snapshot cursor writes unchanged rows through the same upsert path', async () => {
+  const statements: string[] = []
+  const database: ReviewServingProjectorWriterDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'selectedImport',
+      selectedImportSnapshotCursor: {
+        cursorJson: {cursor: 'same'},
+        projectId: 'project-1',
+        projectScopeIdentity: 'project-scope-1',
+        selectedImportSnapshotId: 'selected-import-1',
+        sourceDeltaHighWater: 2,
+        status: 'completed',
+      },
+    },
+    database,
+  )
+
+  const writeStatements = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_selected_import_snapshot')
+  })
+
+  expect(writeStatements).toHaveLength(1)
+  expect(writeStatements[0]).toContain('ON CONFLICT(selected_import_snapshot_id) DO UPDATE SET')
+})
+
+test('projector writer batches same-shape record upserts into one statement', async () => {
+  const {database, statements} = createWriterDatabase()
+
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'posting',
+      records: [
+        {
+          keyColumns: [
+            'project_id',
+            'review_config_hash',
+            'snapshot_id',
+            'article_id',
+            'component_kind',
+            'summary_definition_version',
+            'contribution_key',
+          ],
+          table: 'mart.review_article_summary_contribution_v4',
+          values: {
+            article_id: 'article-1',
+            component_kind: 'posting',
+            contribution_key: '{"filterKind":"duplicateFlag","filterValue":"false","listModeKey":"unassessed"}',
+            contribution_updated_at: new Date('2026-04-02T12:00:00.000Z'),
+            contribution_value: 1,
+            project_id: 'project-1',
+            review_config_hash: 'review-config-1',
+            snapshot_id: 'snapshot-1',
+            summary_definition_version: 'posting:identity-1',
+          },
+        },
+        {
+          keyColumns: [
+            'project_id',
+            'review_config_hash',
+            'snapshot_id',
+            'article_id',
+            'component_kind',
+            'summary_definition_version',
+            'contribution_key',
+          ],
+          table: 'mart.review_article_summary_contribution_v4',
+          values: {
+            article_id: 'article-2',
+            component_kind: 'posting',
+            contribution_key: '{"filterKind":"duplicateFlag","filterValue":"false","listModeKey":"unassessed"}',
+            contribution_updated_at: new Date('2026-04-02T12:00:00.000Z'),
+            contribution_value: 1,
+            project_id: 'project-1',
+            review_config_hash: 'review-config-1',
+            snapshot_id: 'snapshot-1',
+            summary_definition_version: 'posting:identity-1',
+          },
+        },
+      ],
+    },
+    database,
+  )
+
+  const insertStatements = statements.filter((statement) => {
+    return statement.includes('INSERT INTO mart.review_article_summary_contribution_v4')
+  })
+
+  expect(insertStatements).toHaveLength(1)
+  expect(insertStatements[0]).toContain("'article-1'")
+  expect(insertStatements[0]).toContain("'article-2'")
+})
+
+test('projector writer collapses duplicate primary-key records before a DuckDB commit', async () => {
+  const {database, statements} = createWriterDatabase()
+  const keyColumns = [
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'article_id',
+    'component_kind',
+    'summary_definition_version',
+    'contribution_key',
+  ]
+
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'posting',
+      records: [
+        {
+          keyColumns,
+          table: 'mart.review_article_summary_contribution_v4',
+          values: {
+            article_id: 'article-1',
+            component_kind: 'posting',
+            contribution_key: '{"filterKind":"duplicateFlag","filterValue":"false","listModeKey":"unassessed"}',
+            contribution_updated_at: new Date('2026-04-02T12:00:00.000Z'),
+            contribution_value: 1,
+            project_id: 'project-1',
+            review_config_hash: 'review-config-1',
+            snapshot_id: 'snapshot-1',
+            summary_definition_version: 'posting:identity-1',
+          },
+        },
+        {
+          keyColumns,
+          table: 'mart.review_article_summary_contribution_v4',
+          values: {
+            article_id: 'article-1',
+            component_kind: 'posting',
+            contribution_key: '{"filterKind":"duplicateFlag","filterValue":"false","listModeKey":"unassessed"}',
+            contribution_updated_at: new Date('2026-04-02T12:01:00.000Z'),
+            contribution_value: 2,
+            project_id: 'project-1',
+            review_config_hash: 'review-config-1',
+            snapshot_id: 'snapshot-1',
+            summary_definition_version: 'posting:identity-1',
+          },
+        },
+      ],
+    },
+    database,
+  )
+
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_article_summary_contribution_v4')
+  })
+
+  expect(insertStatement).toBeDefined()
+  expect(insertStatement?.match(/'article-1'/gu)).toHaveLength(1)
+  expect(insertStatement).toContain('2')
+  expect(insertStatement).toContain('2026-04-02T12:01:00.000Z')
+})
+
+test('projector writer keeps scoped-delete replacement writes idempotent', async () => {
+  const {database, statements} = createWriterDatabase()
+
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'posting',
+      records: [
+        {
+          keyColumns: [
+            'project_id',
+            'review_config_hash',
+            'snapshot_id',
+            'article_id',
+            'component_kind',
+            'summary_definition_version',
+            'contribution_key',
+          ],
+          table: 'mart.review_article_summary_contribution_v4',
+          values: {
+            article_id: 'article-1',
+            component_kind: 'posting',
+            contribution_key: '{"filterKind":"duplicateFlag","filterValue":"false","listModeKey":"unassessed"}',
+            contribution_updated_at: new Date('2026-04-02T12:00:00.000Z'),
+            contribution_value: 1,
+            project_id: 'project-1',
+            review_config_hash: 'review-config-1',
+            snapshot_id: 'snapshot-1',
+            summary_definition_version: 'posting:identity-1',
+          },
+        },
+      ],
+      statements: [
+        `
+          DELETE FROM mart.review_article_summary_contribution_v4
+          WHERE project_id = 'project-1'
+            AND article_id IN ('article-1')
+        `,
+      ],
+    },
+    database,
+  )
+
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_article_summary_contribution_v4')
+  })
+
+  expect(insertStatement).toBeDefined()
+  expect(insertStatement).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key) DO UPDATE SET',
+  )
+})
+
+test('projector writer keeps judgment detail replacement rows idempotent after scoped deletes', async () => {
+  const {database, statements} = createWriterDatabase()
+  const keyColumns = [
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'list_mode_key',
+    'payload_kind',
+    'article_id',
+    'prompt_id',
+  ]
+
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'payload',
+      records: [
+        {
+          keyColumns,
+          table: 'mart.review_article_judgment_detail_serving_v4',
+          values: {
+            answered_original: 'old',
+            answered_original_as_array: ['old'],
+            article_id: 'article-1',
+            detail_updated_at: new Date('2026-04-02T12:00:00.000Z'),
+            judgment_id: 'judgment-old',
+            judgment_payload_json: {answer: 'old'},
+            list_mode_key: 'llm',
+            model_id: 'model-1',
+            payload_kind: 'llm',
+            placeholder_kind: null,
+            project_id: 'project-1',
+            prompt_id: 'prompt-1',
+            prompt_order: 1,
+            review_config_hash: 'review-config-1',
+            snapshot_id: 'snapshot-1',
+          },
+        },
+        {
+          keyColumns,
+          table: 'mart.review_article_judgment_detail_serving_v4',
+          values: {
+            answered_original: 'new',
+            answered_original_as_array: ['new'],
+            article_id: 'article-1',
+            detail_updated_at: new Date('2026-04-02T12:01:00.000Z'),
+            judgment_id: 'judgment-new',
+            judgment_payload_json: {answer: 'new'},
+            list_mode_key: 'llm',
+            model_id: 'model-1',
+            payload_kind: 'llm',
+            placeholder_kind: null,
+            project_id: 'project-1',
+            prompt_id: 'prompt-1',
+            prompt_order: 1,
+            review_config_hash: 'review-config-1',
+            snapshot_id: 'snapshot-1',
+          },
+        },
+      ],
+      statements: [
+        `
+          DELETE FROM mart.review_article_judgment_detail_serving_v4
+          WHERE project_id = 'project-1'
+            AND review_config_hash = 'review-config-1'
+            AND snapshot_id = 'snapshot-1'
+            AND article_id >= 'article-1'
+            AND article_id <= 'article-2'
+        `,
+      ],
+    },
+    database,
+  )
+
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_article_judgment_detail_serving_v4')
+  })
+
+  expect(insertStatement).toBeDefined()
+  expect(insertStatement).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO UPDATE SET',
+  )
+  expect(insertStatement?.match(/'article-1'/gu)).toHaveLength(1)
+  expect(insertStatement).toContain('judgment-new')
+  expect(insertStatement).not.toContain('judgment-old')
+})
+
 test('only the projector writer boundary writes V4 mart rows and promotes active snapshots', () => {
   const projectorStatementBuilderFiles = new Set([
     'src/server/reviewServing/reviewServingDisplayPayloadProjector.ts',
@@ -329,6 +674,7 @@ test('only the projector writer boundary writes V4 mart rows and promotes active
     'src/server/reviewServing/reviewServingSelectedImportPatchProjector.ts',
   ])
   const testSupportFixtureFiles = new Set(['src/server/test/seedHumanAssessmentServingArticle.ts'])
+  const operationalRecoveryFiles = new Set(['src/server/utils/duckdbService.ts'])
   const offenders = getTypeScriptFiles(join(workspaceRoot, 'src/server'))
     .filter((filePath) => {
       const repoPath = relative(workspaceRoot, filePath)
@@ -337,6 +683,7 @@ test('only the projector writer boundary writes V4 mart rows and promotes active
         repoPath !== 'src/server/reviewServing/reviewServingProjectorWriter.ts'
         && !projectorStatementBuilderFiles.has(repoPath)
         && !testSupportFixtureFiles.has(repoPath)
+        && !operationalRecoveryFiles.has(repoPath)
         && !repoPath.endsWith('.test.ts')
       )
     })

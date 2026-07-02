@@ -454,7 +454,9 @@ void mock.module(appDatabaseServiceModulePath, () => {
         run: async (statement: string) => {
           routeState.queryStatements.push(statement)
         },
-        transaction: async <T>(callback: (tx: {queryJson: typeof queryJsonMock; run: (statement: string) => Promise<void>}) => Promise<T>) => {
+        transaction: async <T>(
+          callback: (tx: {queryJson: typeof queryJsonMock; run: (statement: string) => Promise<void>}) => Promise<T>,
+        ) => {
           return callback({
             queryJson: queryJsonMock,
             run: async (statement: string) => {

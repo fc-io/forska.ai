@@ -239,12 +239,15 @@ test('claim manifest ensure refreshes stale review config hashes before reuse', 
 
   await ensureReviewServingClaimManifests([getClaim({component: 'posting', dirtyWorkId: 'posting-1'})], database)
 
-  const upsert = statements.find((statement) => {
-    return statement.includes('INSERT INTO app.review_projection_identity_manifest')
+  const manifestWrite = statements.find((statement) => {
+    return (
+      statement.includes('INSERT INTO app.review_projection_identity_manifest')
+      || statement.includes('UPDATE app.review_projection_identity_manifest')
+    )
   })
 
-  expect(upsert).toContain(expectedHash)
-  expect(upsert).not.toContain('review:stale')
+  expect(manifestWrite).toContain(expectedHash)
+  expect(manifestWrite).not.toContain('review:stale')
 })
 
 test('wake runs claimed component batches in dependency order under row budgets', async () => {

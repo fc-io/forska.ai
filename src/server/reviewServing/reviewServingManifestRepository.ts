@@ -154,6 +154,31 @@ const getProjectionManifestFromRow = (row: ProjectionIdentityManifestRow): Revie
   }
 }
 
+const getProjectionManifestInputWatermarks = (input: ReviewServingProjectionIdentityManifestInput) => {
+  return input.inputWatermarks ?? {}
+}
+
+const isProjectionIdentityManifestUnchanged = (
+  current: ReviewServingProjectionIdentityManifest,
+  input: ReviewServingProjectionIdentityManifestInput,
+) => {
+  return (
+    current.baseGeneration === input.baseGeneration
+    && current.patchWatermark === input.patchWatermark
+    && current.patchRangeStart === (input.patchRangeStart ?? null)
+    && current.patchRangeEnd === (input.patchRangeEnd ?? null)
+    && current.inputWatermark === input.inputWatermark
+    && getStableReviewServingJson(current.inputWatermarks)
+      === getStableReviewServingJson(getProjectionManifestInputWatermarks(input))
+    && current.inputDigest === (input.inputDigest ?? null)
+    && current.definitionVersion === input.definitionVersion
+    && current.reviewConfigHash === (input.reviewConfigHash ?? null)
+    && current.promptConfigHash === (input.promptConfigHash ?? null)
+    && current.status === input.status
+    && current.invalidationReason === (input.invalidationReason ?? null)
+  )
+}
+
 const getSnapshotManifestFromRow = (row: SnapshotManifestRow): ReviewServingSnapshotManifest => {
   return {
     componentState: getJsonValue(row.componentStateJson) as ReviewServingSnapshotComponentStates,
@@ -201,6 +226,34 @@ export const upsertReviewServingProjectionIdentityManifest = async (
   database: ReviewServingManifestRepositoryTransaction = getAppDatabaseService(),
 ) => {
   const manifestId = getProjectionManifestId(input)
+  const current = await getReviewServingProjectionIdentityManifest(input, database)
+
+  if (current !== null && isProjectionIdentityManifestUnchanged(current, input)) {
+    return {manifestId}
+  }
+
+  if (current !== null) {
+    await database.run(`
+      UPDATE app.review_projection_identity_manifest
+      SET
+        base_generation = ${getSqlLiteral(input.baseGeneration)},
+        patch_watermark = ${getSqlLiteral(input.patchWatermark)},
+        patch_range_start = ${getSqlLiteral(input.patchRangeStart ?? null)},
+        patch_range_end = ${getSqlLiteral(input.patchRangeEnd ?? null)},
+        input_watermark = ${getSqlLiteral(input.inputWatermark)},
+        input_watermarks_json = ${getReviewServingJsonLiteral(getProjectionManifestInputWatermarks(input))},
+        input_digest = ${getSqlLiteral(input.inputDigest ?? null)},
+        definition_version = ${getSqlLiteral(input.definitionVersion)},
+        review_config_hash = ${getSqlLiteral(input.reviewConfigHash ?? null)},
+        prompt_config_hash = ${getSqlLiteral(input.promptConfigHash ?? null)},
+        status = ${getSqlLiteral(input.status)},
+        invalidation_reason = ${getSqlLiteral(input.invalidationReason ?? null)},
+        updated_at = current_timestamp
+      WHERE manifest_id = ${getSqlLiteral(manifestId)}
+    `)
+
+    return {manifestId}
+  }
 
   await database.run(`
     INSERT INTO app.review_projection_identity_manifest (
@@ -231,7 +284,7 @@ export const upsertReviewServingProjectionIdentityManifest = async (
       ${getSqlLiteral(input.patchRangeStart ?? null)},
       ${getSqlLiteral(input.patchRangeEnd ?? null)},
       ${getSqlLiteral(input.inputWatermark)},
-      ${getReviewServingJsonLiteral(input.inputWatermarks ?? {})},
+      ${getReviewServingJsonLiteral(getProjectionManifestInputWatermarks(input))},
       ${getSqlLiteral(input.inputDigest ?? null)},
       ${getSqlLiteral(input.definitionVersion)},
       ${getSqlLiteral(input.reviewConfigHash ?? null)},
@@ -240,20 +293,6 @@ export const upsertReviewServingProjectionIdentityManifest = async (
       ${getSqlLiteral(input.invalidationReason ?? null)},
       current_timestamp
     )
-    ON CONFLICT(manifest_id) DO UPDATE SET
-      base_generation = excluded.base_generation,
-      patch_watermark = excluded.patch_watermark,
-      patch_range_start = excluded.patch_range_start,
-      patch_range_end = excluded.patch_range_end,
-      input_watermark = excluded.input_watermark,
-      input_watermarks_json = excluded.input_watermarks_json,
-      input_digest = excluded.input_digest,
-      definition_version = excluded.definition_version,
-      review_config_hash = excluded.review_config_hash,
-      prompt_config_hash = excluded.prompt_config_hash,
-      status = excluded.status,
-      invalidation_reason = excluded.invalidation_reason,
-      updated_at = excluded.updated_at
   `)
 
   return {manifestId}

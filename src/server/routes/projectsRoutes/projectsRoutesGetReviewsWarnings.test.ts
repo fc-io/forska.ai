@@ -568,8 +568,11 @@ const insertReviewRebuildRequest = async (input: {
   createdAt: string
   failedAt?: string | null
   lastError?: string | null
+  priority?: number
   projectId: string
+  reason?: string
   requestId: string
+  requestedComponents?: readonly ReviewServingProjectionComponent[]
   status: ReviewRebuildRequestStatus
   updatedAt: string
 }) => {
@@ -585,6 +588,7 @@ const insertReviewRebuildRequest = async (input: {
       requested_components_json,
       source_watermarks_json,
       identity_json,
+      priority,
       status,
       admission_state,
       retry_policy_json,
@@ -599,10 +603,11 @@ const insertReviewRebuildRequest = async (input: {
     ) VALUES (
       '${input.requestId}',
       '${input.projectId}',
-      'test',
-      '["summary"]'::JSON,
+      '${input.reason ?? 'test'}',
+      '${JSON.stringify(input.requestedComponents ?? ['summary']).replaceAll("'", "''")}'::JSON,
       '{}'::JSON,
       '{}'::JSON,
+      ${input.priority ?? 100},
       '${input.status}',
       ${input.status === 'blocked_over_budget' ? "'blocked_over_budget'" : "'admitted'"},
       '{}'::JSON,
@@ -616,6 +621,21 @@ const insertReviewRebuildRequest = async (input: {
       TIMESTAMPTZ '${input.updatedAt}'
     )
   `)
+}
+
+const getReviewRebuildRequestMetadata = async (requestId: string) => {
+  const {getAppDatabaseService} = await import('../../services/appDatabaseService.ts')
+  const [row] = await getAppDatabaseService().queryJson<{priority: number; updatedAt: string}>(`
+    SELECT priority, updated_at AS updatedAt
+    FROM app.review_rebuild_request
+    WHERE request_id = '${requestId}'
+  `)
+
+  if (row === undefined) {
+    throw new Error(`Missing review rebuild request ${requestId}`)
+  }
+
+  return {priority: Number(row.priority), updatedAt: row.updatedAt}
 }
 
 const getReviewRebuildRequestCount = async (projectId: string) => {
@@ -827,6 +847,27 @@ test('reviews warnings report ready when serving rows are fresh', async () => {
   expect(body.data.indexing.progressState).toBe('completed')
   expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
   expect(body.data.indexing.status).toBe('ready')
+})
+
+test('reviews warnings do not expose candidate snapshots as readable review pages', async () => {
+  const projectId = 'project-candidate-serving-snapshot-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-candidate-serving-warning',
+    status: 'candidate',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
+  expect(body.data.indexing.status).toBe('stale')
 })
 
 test.skip('retired legacy mart diagnostics: stale snapshots usable during refresh without hiding pending work', async () => {
@@ -1963,6 +2004,169 @@ test('reviews warnings request bounded V4 repair when fresh idle serving is miss
   expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
   expect(body.data.indexing.status).toBe('stale')
+})
+
+test('reviews warnings do not enqueue foreground V4 repair when server mutation work is disabled', async () => {
+  const projectId = 'project-missing-serving-disabled-mutation-bootstrap-warning'
+
+  await insertProjectFixture(projectId)
+
+  const {body, response} = await withServerMutationsDisabled(() => {
+    return postWarningsRequest(projectId)
+  })
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 50)
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('stalled')
+  expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
+  expect(body.data.indexing.status).toBe('stale')
+  expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
+})
+
+test('reviews warnings leave recently progressing foreground V4 repair priority untouched', async () => {
+  const projectId = 'project-missing-serving-recent-v4-progress-warning'
+  const requestId = 'request-missing-serving-recent-v4-progress-warning'
+  const oldTimestamp = '2026-04-02T12:00:00.000Z'
+  const recentTimestamp = new Date().toISOString()
+
+  await insertProjectFixture(projectId)
+  await insertReviewRebuildRequest({
+    createdAt: oldTimestamp,
+    priority: 1_000,
+    projectId,
+    reason: 'missingReviewServingSnapshot',
+    requestId,
+    requestedComponents: ['projectScope', 'selectedImport', 'display', 'summary'],
+    status: 'admitted',
+    updatedAt: oldTimestamp,
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-missing-serving-recent-v4-progress-completed-warning',
+    component: 'projectScope',
+    createdAt: oldTimestamp,
+    projectId,
+    requestId,
+    status: 'completed',
+    updatedAt: recentTimestamp,
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-missing-serving-recent-v4-progress-pending-warning',
+    component: 'summary',
+    createdAt: oldTimestamp,
+    projectId,
+    requestId,
+    status: 'pending',
+    updatedAt: oldTimestamp,
+  })
+
+  const before = await getReviewRebuildRequestMetadata(requestId)
+  const {body, response} = await postWarningsRequest(projectId)
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 50)
+  })
+  const after = await getReviewRebuildRequestMetadata(requestId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('processing')
+  expect(body.data.indexing.lastProgressedAt).not.toBeNull()
+  expect(after.priority).toBe(before.priority)
+  expect(after.updatedAt).toBe(before.updatedAt)
+})
+
+test('reviews warnings boost stale foreground V4 repairs above ordinary foreground work', async () => {
+  const projectId = 'project-missing-serving-stale-foreground-warning'
+  const requestId = 'request-missing-serving-stale-foreground-warning'
+  const oldTimestamp = '2026-04-02T12:00:00.000Z'
+
+  await insertProjectFixture(projectId)
+  await insertReviewRebuildRequest({
+    createdAt: oldTimestamp,
+    priority: 1_000,
+    projectId,
+    reason: 'missingReviewServingSnapshot',
+    requestId,
+    requestedComponents: ['projectScope', 'selectedImport', 'display', 'summary'],
+    status: 'admitted',
+    updatedAt: oldTimestamp,
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-missing-serving-stale-foreground-pending-warning',
+    component: 'summary',
+    createdAt: oldTimestamp,
+    projectId,
+    requestId,
+    status: 'pending',
+    updatedAt: oldTimestamp,
+  })
+
+  const before = await getReviewRebuildRequestMetadata(requestId)
+  const {body, response} = await postWarningsRequest(projectId)
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 50)
+  })
+  const after = await getReviewRebuildRequestMetadata(requestId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(before.priority).toBe(1_000)
+  expect(after.priority).toBe(10_000)
+  expect(after.updatedAt).not.toBe(before.updatedAt)
+})
+
+test('reviews warnings boost stale queued V4 repairs even when serving rows are readable', async () => {
+  const projectId = 'project-readable-serving-stale-queued-foreground-warning'
+  const requestId = 'request-readable-serving-stale-queued-foreground-warning'
+  const articleId = `article-${projectId}`
+  const oldTimestamp = '2026-04-02T12:00:00.000Z'
+
+  await insertProjectFixture(projectId)
+  await insertReviewServingRow(projectId, articleId)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-readable-serving-stale-queued-foreground-warning',
+  })
+  await insertReviewRebuildRequest({
+    createdAt: oldTimestamp,
+    priority: 1_000,
+    projectId,
+    reason: 'missingReviewServingSnapshot',
+    requestId,
+    requestedComponents: ['llmStatus'],
+    status: 'admitted',
+    updatedAt: oldTimestamp,
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-readable-serving-stale-queued-foreground-warning',
+    component: 'llmStatus',
+    createdAt: oldTimestamp,
+    projectId,
+    requestId,
+    status: 'pending',
+    updatedAt: oldTimestamp,
+  })
+
+  const before = await getReviewRebuildRequestMetadata(requestId)
+  const {body, response} = await postWarningsRequest(projectId)
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 50)
+  })
+  const after = await getReviewRebuildRequestMetadata(requestId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
+  expect(before.priority).toBe(1_000)
+  expect(after.priority).toBe(10_000)
+  expect(after.updatedAt).not.toBe(before.updatedAt)
 })
 
 test('reviews warnings request bounded V4 repair for stale idle legacy no-work state outside the foreground response', async () => {

@@ -208,11 +208,37 @@ const getArticleRangePredicate = (input: {chunkEndArticleId?: string | null; chu
       ${endPredicate}`
 }
 
-const getDisplayBaseRows = async (
-  input: ProjectReviewServingDisplayBaseInput,
-  database: ReviewServingDisplayPayloadProjectorDatabase,
+const getServingArticleRangePredicate = (
+  input: {chunkEndArticleId?: string | null; chunkStartArticleId?: string | null},
+  column = 'article_id',
 ) => {
-  return database.queryJson<DisplayProjectionRow>(`
+  const startPredicate =
+    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
+      ? ''
+      : `AND ${column} >= ${getSqlLiteral(input.chunkStartArticleId)}`
+  const endPredicate =
+    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
+      ? ''
+      : `AND ${column} <= ${getSqlLiteral(input.chunkEndArticleId)}`
+
+  return `${startPredicate}
+      ${endPredicate}`
+}
+
+const getListModeKeyPredicate = (listModeKeys: readonly string[]) => {
+  return listModeKeys.length === 0
+    ? 'FALSE'
+    : `list_mode_key IN (${listModeKeys
+        .map((listModeKey) => {
+          return getSqlLiteral(listModeKey)
+        })
+        .join(', ')})`
+}
+
+const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, options: {orderBy?: boolean} = {}) => {
+  const orderBy = options.orderBy === false ? '' : 'ORDER BY scope.article_id ASC'
+
+  return `
     SELECT
       scope.article_id AS articleId,
       article.article_created_at AS articleCreatedAt,
@@ -318,8 +344,124 @@ const getDisplayBaseRows = async (
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope)
       ${getArticleRangePredicate(input)}
-    ORDER BY scope.article_id ASC
-  `)
+    ${orderBy}
+  `
+}
+
+const getDisplayBaseRows = async (
+  input: ProjectReviewServingDisplayBaseInput,
+  database: ReviewServingDisplayPayloadProjectorDatabase,
+) => {
+  return database.queryJson<DisplayProjectionRow>(getDisplayBaseRowsSql(input))
+}
+
+const getDisplayBaseListModeRowsSql = (listModeKeys: readonly string[]) => {
+  return listModeKeys
+    .map((listModeKey) => {
+      return `(${getSqlLiteral(listModeKey)})`
+    })
+    .join(', ')
+}
+
+const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBaseInput) => {
+  return `
+    INSERT INTO mart.review_article_serving_v4 (
+      activity_sort_at,
+      article_created_at,
+      article_external_id,
+      article_id,
+      article_title,
+      article_updated_at,
+      arxiv_id,
+      biorxiv_id,
+      base_generation,
+      conflict_flag,
+      display_identity,
+      doi,
+      duplicate_flag,
+      full_text_conversion_status,
+      full_text_fetched_at,
+      enabled_prompt_count,
+      full_text_pdf,
+      human_answered_prompt_count,
+      human_status_identity,
+      journal_title,
+      list_mode_key,
+      llm_judged_prompt_count,
+      llm_status_identity,
+      medrxiv_id,
+      patch_watermark,
+      payload_identity,
+      pmid,
+      posting_identity,
+      project_id,
+      project_scope_identity,
+      publication_year,
+      review_config_hash,
+      review_opened,
+      review_sections_completed,
+      selected_import_identity,
+      selected_import_route_id,
+      selected_rank_key,
+      serving_updated_at,
+      snapshot_id,
+      sort_key,
+      summary_identity,
+      url
+    )
+    WITH display_base AS (
+      ${getDisplayBaseRowsSql(input, {orderBy: false})}
+    ),
+    list_mode(list_mode_key) AS (
+      SELECT * FROM (VALUES ${getDisplayBaseListModeRowsSql(input.listModeKeys)})
+    )
+    SELECT
+      display_base.activitySortAt AS activity_sort_at,
+      display_base.articleCreatedAt AS article_created_at,
+      display_base.articleExternalId AS article_external_id,
+      display_base.articleId AS article_id,
+      display_base.articleTitle AS article_title,
+      display_base.articleUpdatedAt AS article_updated_at,
+      display_base.arxivId AS arxiv_id,
+      display_base.biorxivId AS biorxiv_id,
+      ${getSqlLiteral(input.baseGeneration)} AS base_generation,
+      COALESCE(display_base.conflictFlag, FALSE) AS conflict_flag,
+      ${getSqlLiteral(input.displayIdentity)} AS display_identity,
+      display_base.doi,
+      COALESCE(display_base.duplicateFlag, FALSE) AS duplicate_flag,
+      display_base.fullTextConversionStatus AS full_text_conversion_status,
+      display_base.fullTextFetchedAt AS full_text_fetched_at,
+      0 AS enabled_prompt_count,
+      display_base.fullTextPdf AS full_text_pdf,
+      0 AS human_answered_prompt_count,
+      ${getSqlLiteral(input.humanStatusIdentity)} AS human_status_identity,
+      display_base.journalTitle AS journal_title,
+      list_mode.list_mode_key,
+      0 AS llm_judged_prompt_count,
+      ${getSqlLiteral(input.llmStatusIdentity)} AS llm_status_identity,
+      display_base.medrxivId AS medrxiv_id,
+      0 AS patch_watermark,
+      ${getSqlLiteral(input.payloadIdentity)} AS payload_identity,
+      display_base.pmid,
+      ${getSqlLiteral(input.postingIdentity)} AS posting_identity,
+      ${getSqlLiteral(input.projectId)} AS project_id,
+      ${getSqlLiteral(input.projectScopeIdentity)} AS project_scope_identity,
+      display_base.publicationYear AS publication_year,
+      ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
+      FALSE AS review_opened,
+      0 AS review_sections_completed,
+      ${getSqlLiteral(input.selectedImportIdentity)} AS selected_import_identity,
+      display_base.selectedImportRouteId AS selected_import_route_id,
+      display_base.selectedRankKey AS selected_rank_key,
+      current_timestamp AS serving_updated_at,
+      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+      display_base.sortKey AS sort_key,
+      ${getSqlLiteral(input.summaryIdentity)} AS summary_identity,
+      display_base.url
+    FROM display_base
+    CROSS JOIN list_mode
+    ORDER BY display_base.articleId ASC, list_mode.list_mode_key ASC
+  `
 }
 
 const getDisplayPatchRows = async (
@@ -493,61 +635,6 @@ const getPayloadRows = async (
   `)
 }
 
-const getDisplayBaseRecord = (
-  input: ProjectReviewServingDisplayBaseInput,
-  row: DisplayProjectionRow,
-  listModeKey: string,
-): ReviewServingProjectorRecord => {
-  return {
-    keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'list_mode_key', 'article_id'],
-    table: 'mart.review_article_serving_v4',
-    values: {
-      activity_sort_at: row.activitySortAt,
-      article_created_at: row.articleCreatedAt,
-      article_external_id: row.articleExternalId,
-      article_id: row.articleId,
-      article_title: row.articleTitle,
-      article_updated_at: row.articleUpdatedAt,
-      arxiv_id: row.arxivId,
-      biorxiv_id: row.biorxivId,
-      base_generation: input.baseGeneration,
-      conflict_flag: row.conflictFlag ?? false,
-      display_identity: input.displayIdentity,
-      doi: row.doi,
-      duplicate_flag: row.duplicateFlag ?? false,
-      full_text_conversion_status: row.fullTextConversionStatus,
-      full_text_fetched_at: row.fullTextFetchedAt,
-      enabled_prompt_count: 0,
-      full_text_pdf: row.fullTextPdf,
-      human_answered_prompt_count: 0,
-      human_status_identity: input.humanStatusIdentity,
-      journal_title: row.journalTitle,
-      list_mode_key: listModeKey,
-      llm_judged_prompt_count: 0,
-      llm_status_identity: input.llmStatusIdentity,
-      medrxiv_id: row.medrxivId,
-      patch_watermark: 0,
-      payload_identity: input.payloadIdentity,
-      pmid: row.pmid,
-      posting_identity: input.postingIdentity,
-      project_id: input.projectId,
-      project_scope_identity: input.projectScopeIdentity,
-      publication_year: row.publicationYear,
-      review_config_hash: input.reviewConfigHash,
-      review_opened: false,
-      review_sections_completed: 0,
-      selected_import_identity: input.selectedImportIdentity,
-      selected_import_route_id: row.selectedImportRouteId,
-      selected_rank_key: row.selectedRankKey,
-      serving_updated_at: new Date(),
-      snapshot_id: input.snapshotId,
-      sort_key: row.sortKey,
-      summary_identity: input.summaryIdentity,
-      url: row.url,
-    },
-  }
-}
-
 const getDisplayPatchRecord = (
   input: ProjectReviewServingDisplayPatchInput,
   row: DisplayPatchRow,
@@ -709,15 +796,27 @@ export const projectReviewServingDisplayBaseRows = async (
   database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService(),
 ) => {
   const rows = await getDisplayBaseRows(input, database)
-  const records = rows.flatMap((row) => {
-    return input.listModeKeys.map((listModeKey) => {
-      return getDisplayBaseRecord(input, row, listModeKey)
-    })
-  })
+  const rowCount = rows.length * input.listModeKeys.length
 
-  await writeReviewServingProjectorComponent({component: 'display', records}, database)
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'display',
+      statements: [
+        `DELETE FROM mart.review_article_serving_v4
+          WHERE project_id = ${getSqlLiteral(input.projectId)}
+            AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+            AND ${getListModeKeyPredicate(input.listModeKeys)}
+            ${getServingArticleRangePredicate(input)}`,
+        input.listModeKeys.length === 0 ? null : getInsertDisplayBaseRowsStatement(input),
+      ].flatMap((statement) => {
+        return statement === null ? [] : [statement]
+      }),
+    },
+    database,
+  )
 
-  return {rowCount: records.length}
+  return {rowCount}
 }
 
 export const projectReviewServingDisplayPatches = async (

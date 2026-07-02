@@ -641,6 +641,53 @@ const getDeleteServingRowsStatement = (
           AND serving.list_mode_key = deleted.list_mode_key`
 }
 
+const getDeletePatchRowsStatement = (input: ProjectReviewServingFilterPostingsInput, patchWatermark: number) => {
+  const articleIds = getClaimArticleIds(input.claims)
+
+  return articleIds.length === 0
+    ? null
+    : getDeleteReviewServingProjectorRowsStatement({
+        predicates: {
+          article_id: articleIds,
+          base_generation: input.baseGeneration,
+          patch_watermark: patchWatermark,
+          project_id: input.projectId,
+        },
+        table: 'mart.review_article_filter_posting_patch_v4',
+      })
+}
+
+const getDeleteStatsRowsStatement = (
+  input: ProjectReviewServingFilterPostingsInput,
+  statsRecords: readonly ReviewServingProjectorRecord[],
+) => {
+  const statsValues = [
+    ...new Set(
+      statsRecords.map((record) => {
+        return [
+          getSqlLiteral(record.values.filter_kind ?? null),
+          getSqlLiteral(record.values.filter_value ?? null),
+          getSqlLiteral(record.values.list_mode_key ?? null),
+        ].join(', ')
+      }),
+    ),
+  ]
+
+  return statsValues.length === 0
+    ? null
+    : `WITH deleted(filter_kind, filter_value, list_mode_key) AS (
+      SELECT * FROM (VALUES (${statsValues.join('), (')}))
+    )
+    DELETE FROM mart.review_filter_posting_stats_v4 stats
+    USING deleted
+    WHERE stats.project_id = ${getSqlLiteral(input.projectId)}
+      AND stats.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND stats.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      AND stats.filter_kind = deleted.filter_kind
+      AND stats.filter_value = deleted.filter_value
+      AND stats.list_mode_key = deleted.list_mode_key`
+}
+
 const getPostingManifest = (
   input: ProjectReviewServingFilterPostingsInput,
 ): ReviewServingProjectionIdentityManifestInput => {
@@ -860,6 +907,8 @@ export const projectReviewServingFilterPostings = async (
       return row.tombstone
     }),
   )
+  const deletePatchRowsStatement = getDeletePatchRowsStatement(input, patchWatermark)
+  const deleteStatsRowsStatement = getDeleteStatsRowsStatement(input, statsRecords)
 
   await writeReviewServingProjectorComponent(
     {
@@ -868,11 +917,14 @@ export const projectReviewServingFilterPostings = async (
       projectionManifests: input.claims.length === 0 ? [] : [getPostingManifest(input)],
       records: [...patchRecords, ...servingRecords, ...statsRecords, ...contributionDiff.contributionRecords],
       repairDirtyWork: contributionDiff.repairDirtyWork,
-      statements: [deleteServingRowsStatement, contributionDiff.deleteContributionStateStatement].flatMap(
-        (statement) => {
-          return statement === null ? [] : [statement]
-        },
-      ),
+      statements: [
+        deleteServingRowsStatement,
+        deletePatchRowsStatement,
+        deleteStatsRowsStatement,
+        contributionDiff.deleteContributionStateStatement,
+      ].flatMap((statement) => {
+        return statement === null ? [] : [statement]
+      }),
       watermark:
         input.claims.length === 0
           ? undefined

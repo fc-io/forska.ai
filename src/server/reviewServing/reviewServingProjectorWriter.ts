@@ -102,6 +102,13 @@ export type WriteReviewServingTitleSearchRebuildRowsInput = {
   titlePrefixLength: number
 }
 
+const projectorRecordBatchSize = 250
+const reviewServingProjectorDeleteScopedInsertOnlyTables = new Set<string>([
+  'app.review_selected_article_import_v4',
+  'mart.review_human_status_patch_v4',
+  'mart.review_llm_status_patch_v4',
+])
+
 export type WriteReviewServingQueueRebuildRowsInput = {
   projectId: string
   queueIdentitySql: string
@@ -196,32 +203,117 @@ export const getReviewServingProjectorReplayKey = (input: {
   }).slice(0, 32)}`
 }
 
-const writeReviewServingProjectorRecord = async (
-  record: ReviewServingProjectorRecord,
+const writeReviewServingProjectorRecordBatch = async (
+  records: readonly ReviewServingProjectorRecord[],
   tx: ReviewServingProjectorWriterTransaction,
+  options: {insertOnly: boolean} = {insertOnly: false},
 ) => {
-  const columns = Object.keys(record.values)
+  const firstRecord = records[0]
+  if (firstRecord === undefined) {
+    return
+  }
+
+  const columns = Object.keys(firstRecord.values)
+  const keyColumns = firstRecord.keyColumns
+  const table = firstRecord.table
   const assignments = columns
     .filter((column) => {
-      return !record.keyColumns.includes(column)
+      return !keyColumns.includes(column)
     })
     .map((column) => {
       return `${column} = excluded.${column}`
     })
   const conflictUpdate = assignments.length === 0 ? 'DO NOTHING' : `DO UPDATE SET ${assignments.join(', ')}`
+  const conflictClause = options.insertOnly
+    ? ''
+    : `
+    ON CONFLICT(${keyColumns.join(', ')}) ${conflictUpdate}`
 
   await tx.run(`
-    INSERT INTO ${record.table} (
+    INSERT INTO ${table} (
       ${columns.join(',\n      ')}
     ) VALUES (
-      ${columns
-        .map((column) => {
-          return getSqlRecordValue(record.values[column] ?? null)
+      ${records
+        .map((record) => {
+          return columns
+            .map((column) => {
+              return getSqlRecordValue(record.values[column] ?? null)
+            })
+            .join(',\n      ')
         })
-        .join(',\n      ')}
+        .join('\n    ),\n    (')}
     )
-    ON CONFLICT(${record.keyColumns.join(', ')}) ${conflictUpdate}
+    ${conflictClause}
   `)
+}
+
+const getReviewServingProjectorRecordShapeKey = (record: ReviewServingProjectorRecord) => {
+  return `${record.table}\n${record.keyColumns.join('\t')}\n${Object.keys(record.values).join('\t')}`
+}
+
+const getReviewServingProjectorRecordPrimaryKey = (record: ReviewServingProjectorRecord) => {
+  return record.keyColumns
+    .map((column) => {
+      return `${column}=${getSqlRecordValue(record.values[column] ?? null)}`
+    })
+    .join('\t')
+}
+
+const getDedupedReviewServingProjectorRecords = (records: readonly ReviewServingProjectorRecord[]) => {
+  const dedupedRecords = new Map<string, ReviewServingProjectorRecord>()
+
+  records.forEach((record) => {
+    dedupedRecords.set(getReviewServingProjectorRecordPrimaryKey(record), record)
+  })
+
+  return [...dedupedRecords.values()]
+}
+
+const writeReviewServingProjectorRecords = async (
+  records: readonly ReviewServingProjectorRecord[],
+  tx: ReviewServingProjectorWriterTransaction,
+  options: {insertOnlyTables?: ReadonlySet<string>} = {},
+) => {
+  const recordGroups = new Map<string, ReviewServingProjectorRecord[]>()
+
+  records.forEach((record) => {
+    const key = getReviewServingProjectorRecordShapeKey(record)
+    const group = recordGroups.get(key)
+
+    if (group === undefined) {
+      recordGroups.set(key, [record])
+      return
+    }
+
+    group.push(record)
+  })
+
+  for (const group of recordGroups.values()) {
+    const dedupedGroup = getDedupedReviewServingProjectorRecords(group)
+    const insertOnly = options.insertOnlyTables?.has(group[0]?.table ?? '') ?? false
+
+    for (let index = 0; index < dedupedGroup.length; index += projectorRecordBatchSize) {
+      await writeReviewServingProjectorRecordBatch(dedupedGroup.slice(index, index + projectorRecordBatchSize), tx, {
+        insertOnly,
+      })
+    }
+  }
+}
+
+const getReviewServingProjectorDeleteScopedTables = (statements: readonly string[]) => {
+  const tables = new Set<string>()
+
+  statements.forEach((statement) => {
+    for (const match of statement.matchAll(/\bDELETE\s+FROM\s+([a-zA-Z_]\w*\.[a-zA-Z_]\w*)\b/giu)) {
+      const table = match[1]
+
+      if (table !== undefined && reviewServingProjectorDeleteScopedInsertOnlyTables.has(table)) {
+        tables.add(table)
+      }
+    }
+  })
+
+  return tables
 }
 
 const createCandidateReviewServingSnapshotManifestFromWriter = async (
@@ -509,6 +601,9 @@ export const writeReviewServingProjectorComponent = async (
   database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
 ) => {
   return database.transaction(async (tx) => {
+    const statements = input.statements ?? []
+    const insertOnlyTables = getReviewServingProjectorDeleteScopedTables(statements)
+
     if (input.watermark !== undefined) {
       await assertReviewServingProjectorWatermarkCanAdvance(tx, input.watermark)
     }
@@ -523,17 +618,13 @@ export const writeReviewServingProjectorComponent = async (
       })
     }, Promise.resolve())
 
-    await (input.statements ?? []).reduce<Promise<void>>((previous, statement) => {
+    await statements.reduce<Promise<void>>((previous, statement) => {
       return previous.then(async () => {
         await tx.run(statement)
       })
     }, Promise.resolve())
 
-    await (input.records ?? []).reduce<Promise<void>>((previous, record) => {
-      return previous.then(async () => {
-        await writeReviewServingProjectorRecord(record, tx)
-      })
-    }, Promise.resolve())
+    await writeReviewServingProjectorRecords(input.records ?? [], tx, {insertOnlyTables})
 
     if (input.selectedImportSnapshotCursor !== undefined) {
       await writeReviewServingSelectedImportSnapshotCursor(input.selectedImportSnapshotCursor, tx)

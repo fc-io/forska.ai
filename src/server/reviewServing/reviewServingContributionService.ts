@@ -122,29 +122,47 @@ const getRepairDirtyWork = (input: {
   )
   const firstClaim = input.claims[0]
   const sourcePartition = 'review-serving-contribution-repair' as const
+  const activeRepairArticleIds = new Set(
+    input.claims
+      .filter((claim) => {
+        return (
+          claim.sourcePartition === sourcePartition
+          && claim.projectionComponent === input.projectionComponent
+          && claim.projectionIdentity === input.projectionIdentity
+          && claim.articleId !== null
+        )
+      })
+      .map((claim) => {
+        return claim.articleId as string
+      }),
+  )
   const dirtyKind =
     input.repairDirtyKind ?? ((firstClaim?.dirtyKind ?? 'project.reviewConfig.updated') as ReviewServingChangeKind)
 
-  return getUniqueValues(input.articleIds).map((articleId) => {
-    return {
-      articleId,
-      projectionComponent: input.projectionComponent,
-      projectionIdentity: input.projectionIdentity,
-      scope: {
-        affectedComponents: [input.projectionComponent],
-        dirtyKind,
-        dirtyRangeEnd: articleId,
-        dirtyRangeStart: articleId,
-        firstAffectedComponent: input.projectionComponent,
-        projectId: input.projectId,
-        projectionKey: null,
-        scopeId: `${input.projectId}:${articleId}`,
-        scopeKind: 'article' as const,
-        sourceHighWaterMark: highWaterMark,
-        sourcePartition,
-      },
-    }
-  })
+  return getUniqueValues(input.articleIds)
+    .filter((articleId) => {
+      return !activeRepairArticleIds.has(articleId)
+    })
+    .map((articleId) => {
+      return {
+        articleId,
+        projectionComponent: input.projectionComponent,
+        projectionIdentity: input.projectionIdentity,
+        scope: {
+          affectedComponents: [input.projectionComponent],
+          dirtyKind,
+          dirtyRangeEnd: articleId,
+          dirtyRangeStart: articleId,
+          firstAffectedComponent: input.projectionComponent,
+          projectId: input.projectId,
+          projectionKey: null,
+          scopeId: `${input.projectId}:${articleId}`,
+          scopeKind: 'article' as const,
+          sourceHighWaterMark: highWaterMark,
+          sourcePartition,
+        },
+      }
+    })
 }
 
 const getContributionRecord = (input: {
