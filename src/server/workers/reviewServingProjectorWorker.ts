@@ -1616,11 +1616,73 @@ const runPostingRebuildChunk = async (
   )
 }
 
+const refreshSummaryRebuildFilterOptions = async (
+  input: {
+    baseGeneration: number
+    definitionVersion: string
+    projectId: string
+    projectionIdentity: string
+    snapshots: readonly ReviewServingSnapshotContext[]
+  },
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  await input.snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+    await previous
+    const searchIdentity = getSnapshotComponentState(snapshot, 'search')?.projectionIdentity ?? ''
+
+    await projectReviewServingFilterOptions(
+      {
+        acknowledgeClaims: false,
+        baseGeneration: input.baseGeneration,
+        claims: [],
+        definitionVersion: input.definitionVersion,
+        filterOptionIdentity: getReviewServingFilterOptionIdentity({
+          filterKeys: defaultReviewFilterOptionKeys,
+          listModeKeys: reviewServingListModes,
+          optionMode: 'review',
+          searchIdentity,
+        }),
+        listModeKeys: reviewServingListModes,
+        optionMode: 'review',
+        projectId: input.projectId,
+        projectionIdentity: input.projectionIdentity,
+        reviewConfigHash: requireReviewConfigHash(snapshot),
+        searchIdentity,
+        snapshotId: snapshot.snapshotId,
+      },
+      database,
+    )
+    await projectReviewServingFilterOptions(
+      {
+        acknowledgeClaims: false,
+        baseGeneration: input.baseGeneration,
+        claims: [],
+        definitionVersion: input.definitionVersion,
+        filterOptionIdentity: getReviewServingFilterOptionIdentity({
+          filterKeys: defaultHumanFilterOptionKeys,
+          listModeKeys: defaultReviewServingHumanListModeKeys,
+          optionMode: 'human',
+          searchIdentity,
+        }),
+        listModeKeys: defaultReviewServingHumanListModeKeys,
+        optionMode: 'human',
+        projectId: input.projectId,
+        projectionIdentity: input.projectionIdentity,
+        reviewConfigHash: requireReviewConfigHash(snapshot),
+        searchIdentity,
+        snapshotId: snapshot.snapshotId,
+      },
+      database,
+    )
+  }, Promise.resolve())
+}
+
 const runSummaryRebuildChunk = async (
   input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
+  const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
   const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
   const snapshotIds = getRebuildSnapshotIds(snapshots)
 
@@ -1663,6 +1725,17 @@ const runSummaryRebuildChunk = async (
             chunkDatabase,
           )
         }, Promise.resolve())
+
+        await refreshSummaryRebuildFilterOptions(
+          {
+            baseGeneration: input.chunk.outputBaseGeneration,
+            definitionVersion: manifest.definitionVersion,
+            projectId,
+            projectionIdentity: input.chunk.projectionIdentity,
+            snapshots,
+          },
+          chunkDatabase,
+        )
       },
     },
     database,
