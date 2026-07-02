@@ -16,7 +16,7 @@ Current implementation status, based on source inspection against this plan:
 | Phase 1 - Fix The Scheduler | Partially implemented | Claiming now uses component prerequisites and critical-lane/priority ordering instead of the old fixed waterfall; tests cover independent claimability. Foreground rebuild drain budget/TTL exists. A separate critical/bulk queue model is not implemented, and the worker still claims/runs one rebuild chunk per cycle. |
 | Phase 2 - Batch Or SQL-Native Writes | Partially implemented | Generic record writes are batched by table/key/shape in `writeReviewServingProjectorRecords`; `search` and `queue` rebuilds have SQL-native `INSERT INTO ... SELECT` paths. `judgmentInputContent` still calls projector SQL but validation/looping remains component-specific, and `posting` still materializes rows/contribution diffs in JS before batched writes. |
 | Phase 3 - Add A Full-Rebuild Fast Path | Partially implemented | Missing-snapshot requests can create a bootstrap candidate snapshot and explicit bootstrap chunks. Several rebuild chunk executors write base/candidate rows directly, but full rebuild still uses posting patch/contribution state and candidate compaction/promotion rather than a complete direct final-table snapshot build. |
-| Phase 4 - Make Validation Proportional | Implemented for no-expected-checksum chunks | `getRebuildChunkOutputValidation` keeps strict checksum validation when `chunk.checksum` is present and uses cheap count validation with `validationMode: 'cheap-count'` when it is null. Tests cover both modes. |
+| Phase 4 - Make Validation Proportional | Mostly implemented | `getRebuildChunkOutputValidation` keeps strict checksum validation when `chunk.checksum` is present and uses cheap count validation with `validationMode: 'cheap-count'` when it is null. `FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION=true` forces full checksum diagnostics for targeted parity/debug runs. Tests cover all three modes. Reusing staging-query checksums where strict validation remains necessary is still pending. |
 | Phase 5 - Rework Chunk Admission | Partially implemented | Default rebuilds and missing-snapshot bootstrap can presplit at admission using estimate/budget-derived article ranges; tests cover admission presplitting. Runtime presplitting still exists for large article-range chunks, and admission splitting is not fully component-specific for all target row types. |
 | Phase 6 - Controlled Parallelism | Pending | The worker still claims and executes at most one rebuild chunk per cycle. No multi-chunk claim, read/transform parallelism, writer lane, set-based multi-chunk write, or controlled multi-writer execution was found. |
 
@@ -251,10 +251,11 @@ Expected result: a full missing-snapshot rebuild does less total work than an in
 
 ### Phase 4 - Make Validation Proportional
 
-Status: implemented for no-expected-checksum rebuild chunks.
+Status: mostly implemented.
 
 - Implemented: chunks with `checksum !== null` keep strict `string_agg` checksum validation; chunks with `checksum === null` use cheap count validation and store `validationMode: 'cheap-count'`.
-- Still pending or not found: explicit debug/CI mode for full checksums on targeted parity runs, and reuse of staging-query checksums where strict validation remains necessary.
+- Implemented: `FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION=true` forces full checksum diagnostics for chunks without expected checksums and records `validationMode: 'debug-strict-checksum'`.
+- Still pending or not found: reuse of staging-query checksums where strict validation remains necessary.
 
 - If a chunk has an expected checksum, keep strict checksum validation.
 - If a chunk has no expected checksum, skip full `string_agg` checksum by default and store cheaper diagnostics:

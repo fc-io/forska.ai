@@ -758,6 +758,10 @@ const getCheapRebuildChunkOutputChecksumSelect = () => {
   `
 }
 
+const shouldUseStrictRebuildValidationWithoutExpectedChecksum = () => {
+  return process.env.FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION === 'true'
+}
+
 const getRebuildChunkOutputValidation = async (
   input: RebuildChunkOutputValidationInput,
 ): Promise<ReviewServingRebuildChunkValidationResult> => {
@@ -771,6 +775,19 @@ const getRebuildChunkOutputValidation = async (
       actualPayloadBytes: checksum.actualPayloadBytes,
       diagnosticsJson: {validationMode: 'strict-checksum'},
       expectedChecksum: input.chunk.checksum,
+    }
+  }
+
+  if (shouldUseStrictRebuildValidationWithoutExpectedChecksum()) {
+    const checksum = await input.getChecksum()
+
+    return {
+      actualChecksum: checksum.actualChecksum,
+      actualCount: checksum.actualCount,
+      actualOutputBytes: checksum.actualOutputBytes,
+      actualPayloadBytes: checksum.actualPayloadBytes,
+      diagnosticsJson: {validationMode: 'debug-strict-checksum'},
+      expectedChecksum: checksum.actualChecksum,
     }
   }
 

@@ -1279,6 +1279,92 @@ test('display rebuild chunk executor writes bounded base rows and completes the 
   expect(joined).toContain('"validationMode":"cheap-count"')
 })
 
+test('debug rebuild validation mode forces full checksum for chunks without expected checksums', async () => {
+  const previousValue = process.env.FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION
+  const statements: string[] = []
+  const displayChunk = {
+    ...chunkManifest,
+    chunkEndKey: 'article-099',
+    chunkStartKey: 'article-001',
+    outputBaseGeneration: 7,
+    projectionComponent: 'display' as const,
+    projectionIdentity: 'display:project-1',
+  }
+  const componentState = {
+    optional: [],
+    required: [
+      {baseGeneration: '7', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+      {baseGeneration: '7', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+      {baseGeneration: '7', component: 'display', projectionIdentity: 'display:project-1'},
+      {baseGeneration: '7', component: 'llmStatus', projectionIdentity: 'llmStatus:project-1'},
+      {baseGeneration: '7', component: 'humanStatus', projectionIdentity: 'humanStatus:project-1'},
+      {baseGeneration: '7', component: 'posting', projectionIdentity: 'posting:project-1'},
+      {baseGeneration: '7', component: 'summary', projectionIdentity: 'summary:project-1'},
+      {baseGeneration: '7', component: 'payload', projectionIdentity: 'payload:project-1'},
+    ],
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+        return [displayChunk] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return [
+          {
+            componentStateJson: componentState,
+            reviewConfigHash: 'review-config-1',
+            selectedImportSnapshotId: 'selected-import-snapshot-1',
+            snapshotId: 'snapshot-display-1',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM mart.project_scope_article scope')) {
+        return [] as T[]
+      }
+
+      if (statement.includes('FROM mart.review_article_serving_v4 serving')) {
+        expect(statement).toContain('string_agg(')
+
+        return [{actualChecksum: 'checksum-display-debug', actualCount: 4}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  try {
+    process.env.FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION = 'true'
+
+    const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+      {chunk: displayChunk, leaseOwner: 'worker-1'},
+      database,
+    )
+    const joined = statements.join('\n')
+
+    expect(result).toEqual({status: 'completed'})
+    expect(joined).toContain('string_agg(')
+    expect(joined).not.toContain("sha256('cheap-count:'")
+    expect(joined).toContain("checksum = 'checksum-display-debug'")
+    expect(joined).toContain('"validationMode":"debug-strict-checksum"')
+  } finally {
+    if (previousValue === undefined) {
+      delete process.env.FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION
+    } else {
+      process.env.FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION = previousValue
+    }
+  }
+})
+
 test('expected-checksum rebuild chunk keeps strict checksum validation', async () => {
   const statements: string[] = []
   const displayChunk: ReviewServingRebuildChunkManifest = {
