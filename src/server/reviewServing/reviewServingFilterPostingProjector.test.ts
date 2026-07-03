@@ -31,6 +31,27 @@ const contributionRow = (row: Record<string, unknown>) => {
   }
 }
 
+const servingRowKey = (row: Record<string, unknown>) => {
+  return JSON.stringify({
+    articleId: row.articleId,
+    filterKind: row.filterKind,
+    filterValue: row.filterValue,
+    listModeKey: row.listModeKey,
+  })
+}
+
+const liveServingRowCount = (rows: readonly Record<string, unknown>[]) => {
+  return new Set(
+    rows
+      .filter((row) => {
+        return row.tombstone !== true
+      })
+      .map((row) => {
+        return servingRowKey(row)
+      }),
+  ).size
+}
+
 const createPostingDatabase = (input?: {
   contributionTotalRows?: readonly Record<string, unknown>[]
   contributionRows?: readonly Record<string, unknown>[]
@@ -50,6 +71,15 @@ const createPostingDatabase = (input?: {
 
       if (statement.includes('FROM posting_union')) {
         return (input?.newRows ?? []) as T[]
+      }
+
+      if (
+        statement.includes("sha256('cheap-count:'")
+        && statement.includes('FROM mart.review_article_filter_posting_serving_v4 serving')
+      ) {
+        const actualCount = liveServingRowCount(input?.newRows ?? [])
+
+        return [{actualChecksum: `cheap-count:${actualCount}`, actualCount}] as T[]
       }
 
       if (statement.includes('FROM mart.review_article_filter_posting_serving_v4 serving')) {
@@ -172,7 +202,7 @@ test('answer changes update posting stats from old and new contribution diffs', 
   expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
 })
 
-test('posting stats repair corrupted DuckDB BIGINT string cardinalities from contribution state', async () => {
+test('full posting rebuilds refresh stats from serving state without JS contribution totals', async () => {
   const row = postingRow({filterKind: 'conflictFlag', filterValue: 'false', listModeKey: 'both'})
   const {database, statements} = createPostingDatabase({
     contributionTotalRows: [{contributionKey: contributionKey(row), contributionValue: '2'}],
@@ -186,19 +216,13 @@ test('posting stats repair corrupted DuckDB BIGINT string cardinalities from con
 
   const result = await projectReviewServingFilterPostings(projectInput([], ['both']), database)
   const joined = statements.join('\n')
-  const contributionTotalStatement = statements.find((statement) => {
-    return statement.includes('SUM(contribution.contribution_value)')
-  })
 
-  expect(result.statsValues).toContainEqual({
-    cardinality: 3,
-    filterKind: 'conflictFlag',
-    filterValue: 'false',
-    listModeKey: 'both',
-    selectivity: 0.3,
-  })
-  expect(joined).toContain('SUM(contribution.contribution_value)')
-  expect(contributionTotalStatement).not.toContain('AND contribution.summary_definition_version =')
+  expect(result.statsValues).toEqual([])
+  expect(joined).toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
+  expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
+  expect(joined).toContain('COUNT(*) AS cardinality')
+  expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).not.toContain('SUM(contribution.contribution_value)')
   expect(joined).not.toContain('343341342341341300000')
 })
 
@@ -216,9 +240,10 @@ test('full posting rebuilds write serving state without incremental patch fanout
 
   expect(result.patchRowCount).toBe(0)
   expect(result.servingRowCount).toBe(1)
+  expect(result.diagnosticsJson.postingProjector).toMatchObject({fullRebuildMode: 'set-based'})
   expect(result.validationResult).toMatchObject({
     actualCount: 1,
-    diagnosticsJson: {validationMode: 'reused-source-posting-checksum'},
+    diagnosticsJson: {validationMode: 'post-write-serving-count'},
     expectedCount: 1,
   })
   expect(result.validationResult?.actualChecksum).toBe(result.validationResult?.expectedChecksum)
@@ -234,6 +259,8 @@ test('full posting rebuilds write serving state without incremental patch fanout
   expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+  expect(joined).toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
+  expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
   expect(joined).toContain('WITH posting_source AS')
   expect(joined).toContain('serving_source AS')
   expect(joined).toContain('GROUP BY posting.filterKind, posting.filterValue, posting.listModeKey, posting.articleId')
