@@ -338,17 +338,63 @@ const getSnapshotStatusCountRowsEffect = (
   return queryEffect<SnapshotStatusCountRow>(
     database,
     `
+      WITH snapshot_candidates AS (
+        SELECT *
+        FROM app.review_serving_snapshot_manifest
+        WHERE project_id = ${getSqlLiteral(input.projectId)}
+          ${getReviewConfigPredicate(input.reviewConfigHash)}
+          AND snapshot_status = 'candidate'
+      ), missing_required_candidate AS (
+        SELECT DISTINCT snapshot.snapshot_id
+        FROM snapshot_candidates snapshot,
+          app.review_selected_import_snapshot selected_import,
+          json_each(snapshot.required_components_json) required_component
+        WHERE selected_import.selected_import_snapshot_id = snapshot.selected_import_snapshot_id
+          AND selected_import.status = 'completed'
+          AND NOT EXISTS (
+          SELECT 1
+          FROM json_each(json_extract(snapshot.component_state_json, '$.required')) required_state
+          WHERE json_extract_string(required_state.value, '$.component') = json_extract_string(required_component.value, '$')
+        )
+      ), invalid_required_state_candidate AS (
+        SELECT DISTINCT snapshot.snapshot_id
+        FROM snapshot_candidates snapshot,
+          app.review_selected_import_snapshot selected_import,
+          json_each(json_extract(snapshot.component_state_json, '$.required')) required_state
+        WHERE selected_import.selected_import_snapshot_id = snapshot.selected_import_snapshot_id
+          AND selected_import.status = 'completed'
+          AND NOT EXISTS (
+          SELECT 1
+          FROM app.review_projection_identity_manifest manifest
+          WHERE manifest.project_id = snapshot.project_id
+            AND manifest.projection_component = json_extract_string(required_state.value, '$.component')
+            AND manifest.projection_identity = json_extract_string(required_state.value, '$.projectionIdentity')
+            AND manifest.status IN ('active', 'candidate')
+            AND (manifest.review_config_hash IS NULL OR manifest.review_config_hash = snapshot.review_config_hash)
+            AND manifest.base_generation = TRY_CAST(json_extract_string(required_state.value, '$.baseGeneration') AS BIGINT)
+            AND manifest.patch_watermark = TRY_CAST(json_extract_string(required_state.value, '$.patchWatermark') AS BIGINT)
+            AND manifest.input_watermark >= TRY_CAST(json_extract_string(required_state.value, '$.patchWatermark') AS BIGINT)
+        )
+      ), invalid_candidate AS (
+        SELECT snapshot.snapshot_id
+        FROM snapshot_candidates snapshot
+        LEFT JOIN app.review_selected_import_snapshot selected_import
+          ON selected_import.selected_import_snapshot_id = snapshot.selected_import_snapshot_id
+        WHERE snapshot.selected_import_snapshot_id IS NOT NULL
+          AND COALESCE(selected_import.status, 'missing') <> 'completed'
+        UNION
+        SELECT snapshot_id FROM missing_required_candidate
+        UNION
+        SELECT snapshot_id FROM invalid_required_state_candidate
+      )
       SELECT
         snapshot_status AS snapshotStatus,
         CAST(COUNT(*) AS INTEGER) AS snapshotCount,
         CAST(COUNT(*) FILTER (
           WHERE snapshot_status = 'candidate'
-            AND snapshot.selected_import_snapshot_id IS NOT NULL
-            AND COALESCE(selected_import.status, 'missing') <> 'completed'
+            AND snapshot.snapshot_id IN (SELECT snapshot_id FROM invalid_candidate)
         ) AS INTEGER) AS invalidCandidateCount
       FROM app.review_serving_snapshot_manifest snapshot
-      LEFT JOIN app.review_selected_import_snapshot selected_import
-        ON selected_import.selected_import_snapshot_id = snapshot.selected_import_snapshot_id
       WHERE snapshot.project_id = ${getSqlLiteral(input.projectId)}
         ${getReviewConfigPredicate(input.reviewConfigHash)}
       GROUP BY snapshot_status

@@ -599,6 +599,75 @@ test('summary-only default rebuilds avoid admission presplit boundary overlap', 
   expect(joined).not.toContain('{"admissionPresplit":true}')
 })
 
+test('selected-import-only default rebuilds avoid admission presplit boundary overlap', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    activeComponentStateJson: {
+      optional: [],
+      required: [
+        {
+          baseGeneration: 4,
+          component: 'selectedImport',
+          patchWatermark: 12,
+          projectionIdentity: 'selectedImport:active-identity-1',
+        },
+      ],
+    },
+    articleRangeRows: [
+      {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
+      {chunkEndKey: 'article-128', chunkStartKey: 'article-064', scopedArticleCount: 64},
+      {chunkEndKey: 'article-192', chunkStartKey: 'article-128', scopedArticleCount: 64},
+      {chunkEndKey: 'article-256', chunkStartKey: 'article-192', scopedArticleCount: 64},
+    ],
+    componentStateJson: {
+      optional: [],
+      required: [
+        {
+          baseGeneration: 2,
+          component: 'selectedImport',
+          patchWatermark: 10,
+          projectionIdentity: 'selectedImport:identity-1',
+        },
+      ],
+    },
+    projectionManifestRows: [
+      {
+        baseGeneration: 2,
+        inputDigest: 'selected-import-digest-v1',
+        inputWatermark: 10,
+        projectionComponent: 'selectedImport',
+        projectionIdentity: 'selectedImport:identity-1',
+      },
+      {
+        baseGeneration: 4,
+        inputDigest: 'selected-import-active-digest-v1',
+        inputWatermark: 12,
+        projectionComponent: 'selectedImport',
+        projectionIdentity: 'selectedImport:active-identity-1',
+      },
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 100_001},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['selectedImport'],
+      requestId: 'rebuild:selected-import-presplit',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const selectedImportChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'selectedImport'")
+  })
+
+  expect(joined).not.toContain('NTILE(')
+  expect(selectedImportChunkInserts).toHaveLength(2)
+  expect(joined).not.toContain('{"admissionPresplit":true}')
+})
+
 test('default rebuild request keeps same projection identity across base generations', async () => {
   const {database, statements} = createFakeRequestDatabase({
     activeComponentStateJson: {

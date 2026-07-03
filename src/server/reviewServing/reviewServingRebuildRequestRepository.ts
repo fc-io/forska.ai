@@ -299,6 +299,7 @@ const defaultRebuildNonPresplittableComponents = new Set<ReviewServingProjection
   'humanStatus',
   'llmStatus',
   'posting',
+  'selectedImport',
   'summary',
 ])
 const defaultRebuildPresplitInputRowLimits = {

@@ -1695,6 +1695,20 @@ const runSummaryRebuildChunk = async (
           Promise.resolve([] as unknown[]),
         )
 
+        if (input.chunk.requestId === null) {
+          await refreshSummaryFilterOptionsForProjections(
+            [
+              {
+                outputBaseGeneration: input.chunk.outputBaseGeneration,
+                projectId,
+                projectionIdentity: input.chunk.projectionIdentity,
+              },
+            ],
+            getChunkProjectorDatabase(tx) as ReviewServingChunkManifestRepositoryDatabase
+              & ReviewServingProjectorWorkerDatabase,
+          )
+        }
+
         return {diagnosticsJson: {summaryProjectorSnapshots: snapshotDiagnostics}}
       },
     },
@@ -3658,19 +3672,6 @@ const finalizeCompletedReviewServingRebuildRequest = async (
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
   if (chunk.requestId === null) {
-    if (chunk.projectionComponent === 'summary' && chunk.projectId !== null) {
-      await refreshSummaryFilterOptionsForProjections(
-        [
-          {
-            outputBaseGeneration: chunk.outputBaseGeneration,
-            projectId: chunk.projectId,
-            projectionIdentity: chunk.projectionIdentity,
-          },
-        ],
-        database,
-      )
-    }
-
     return
   }
 
