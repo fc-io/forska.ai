@@ -193,6 +193,36 @@ test('patch compaction writes a new major base generation before activation', as
   expect(joined).toContain('reviewServingCompact:project-1:snapshot-candidate:selectedImport:selectedImport:identity-1')
 })
 
+test('fresh direct candidate snapshots skip incremental patch compaction scans', async () => {
+  const {database, statements} = createRetentionDatabase({
+    budgetRows: {'mart.review_selected_import_patch_v4': {patchRows: 101, patchWatermarks: 2}},
+  })
+
+  const result = await compactReviewServingCandidateSnapshotPatches(
+    {
+      budget: {maxPatchRows: 100, maxPatchWatermarks: 10},
+      candidate: candidateManifest({
+        componentState: {
+          optional: [],
+          required: [
+            {
+              baseGeneration: '4',
+              component: 'selectedImport',
+              patchWatermark: '0',
+              projectionIdentity: 'selectedImport:identity-1',
+              requirement: 'required',
+            },
+          ],
+        },
+      }),
+    },
+    database,
+  )
+
+  expect(result.compactedComponents).toEqual([])
+  expect(statements.join('\n')).not.toContain('mart.review_selected_import_patch_v4')
+})
+
 test('retention cleanup advances a bounded cursor and protects active, last-known-good, and pinned snapshots', async () => {
   const {database, statements} = createRetentionDatabase()
 
