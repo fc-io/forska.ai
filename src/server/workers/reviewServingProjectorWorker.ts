@@ -1633,7 +1633,7 @@ const runPostingRebuildChunk = async (
               projectId,
               projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
               projectionIdentity: input.chunk.projectionIdentity,
-              refreshFullRebuildStats: false,
+              refreshFullRebuildStats: input.chunk.requestId === null,
               reviewConfigHash: requireReviewConfigHash(snapshot),
               selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
               snapshotId: snapshot.snapshotId,

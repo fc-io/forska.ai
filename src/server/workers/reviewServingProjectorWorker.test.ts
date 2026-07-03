@@ -1731,7 +1731,10 @@ test('strict posting rebuild validation rescans output instead of reusing projec
     const joined = statements.join('\n')
 
     expect(result).toEqual({status: 'completed'})
+    expect(postingChunk.requestId).toBeNull()
     expect(joined).toContain('string_agg(')
+    expect(joined).toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
+    expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
     expect(joined).toContain('"validationMode":"debug-strict-checksum"')
     expect(joined).not.toContain('"validationMode":"reused-source-posting-checksum"')
   } finally {
