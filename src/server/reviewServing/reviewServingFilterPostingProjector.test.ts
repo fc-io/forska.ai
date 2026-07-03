@@ -185,6 +185,9 @@ test('posting stats repair corrupted DuckDB BIGINT string cardinalities from con
 
   const result = await projectReviewServingFilterPostings(projectInput([], ['both']), database)
   const joined = statements.join('\n')
+  const contributionTotalStatement = statements.find((statement) => {
+    return statement.includes('SUM(contribution.contribution_value)')
+  })
 
   expect(result.statsValues).toContainEqual({
     cardinality: 3,
@@ -194,7 +197,7 @@ test('posting stats repair corrupted DuckDB BIGINT string cardinalities from con
     selectivity: 0.3,
   })
   expect(joined).toContain('SUM(contribution.contribution_value)')
-  expect(joined).not.toContain('AND contribution.summary_definition_version =')
+  expect(contributionTotalStatement).not.toContain('AND contribution.summary_definition_version =')
   expect(joined).not.toContain('343341342341341300000')
 })
 
@@ -212,9 +215,39 @@ test('full posting rebuilds write serving state without incremental patch fanout
   expect(result.diagnosticsJson.postingProjector.writer.records.inputRecordsByTable).not.toHaveProperty(
     'mart.review_article_filter_posting_patch_v4',
   )
+  expect(result.diagnosticsJson.postingProjector.writer.records.inputRecordsByTable).not.toHaveProperty(
+    'mart.review_article_filter_posting_serving_v4',
+  )
+  expect(result.diagnosticsJson.postingProjector.writer.records.inputRecordsByTable).not.toHaveProperty(
+    'mart.review_article_summary_contribution_v4',
+  )
   expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+  expect(joined).toContain('WITH posting_source AS')
+  expect(joined).toContain('SELECT DISTINCT')
+  expect(joined).toContain('CAST(to_json(posting.filterKind) AS VARCHAR)')
+})
+
+test('full posting rebuilds scope set-based deletes to article ranges', async () => {
+  const {database, statements} = createPostingDatabase({
+    existingRows: [],
+    newRows: [postingRow({articleId: 'article-2', filterKind: 'importRoute', filterValue: 'route-1'})],
+  })
+
+  await projectReviewServingFilterPostings(
+    {...projectInput([]), chunkEndArticleId: 'article-9', chunkStartArticleId: 'article-2'},
+    database,
+  )
+
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).toContain('serving.article_id >=')
+  expect(joined).toContain('serving.article_id <=')
+  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
+  expect(joined).toContain('contribution.article_id >=')
+  expect(joined).toContain('contribution.article_id <=')
 })
 
 test('deletes write tombstones, remove serving rows, and decrement stats in the writer transaction', async () => {
