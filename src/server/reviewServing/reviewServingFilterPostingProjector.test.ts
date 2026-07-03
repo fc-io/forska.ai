@@ -145,6 +145,7 @@ test('answer changes update posting stats from old and new contribution diffs', 
 
   expect(result.patchRowCount).toBe(2)
   expect(result.servingRowCount).toBe(1)
+  expect(result.validationResult).toBeUndefined()
   expect(result.diagnosticsJson.phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
   expect(result.diagnosticsJson.phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
   expect(result.diagnosticsJson.postingProjector.writer.records.inputRecordsByTable).toMatchObject({
@@ -212,6 +213,12 @@ test('full posting rebuilds write serving state without incremental patch fanout
 
   expect(result.patchRowCount).toBe(0)
   expect(result.servingRowCount).toBe(1)
+  expect(result.validationResult).toMatchObject({
+    actualCount: 1,
+    diagnosticsJson: {validationMode: 'reused-source-posting-checksum'},
+    expectedCount: 1,
+  })
+  expect(result.validationResult?.actualChecksum).toBe(result.validationResult?.expectedChecksum)
   expect(result.diagnosticsJson.postingProjector.writer.records.inputRecordsByTable).not.toHaveProperty(
     'mart.review_article_filter_posting_patch_v4',
   )

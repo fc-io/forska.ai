@@ -1247,9 +1247,7 @@ const runValidatedRebuildChunkOutput = async (
       tx: ReviewServingChunkManifestRepositoryTransaction,
     ) => Promise<{actualChecksum: string; actualCount?: number; expectedChecksum: string; expectedCount?: number}>
     writeMode?: 'atomic' | 'idempotent-output'
-    writeOutput: (
-      tx: ReviewServingChunkManifestRepositoryTransaction,
-    ) => Promise<{diagnosticsJson?: unknown} | undefined>
+    writeOutput: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<unknown>
   },
   database: ReviewServingChunkManifestRepositoryDatabase,
 ) => {
@@ -1611,8 +1609,10 @@ const runPostingRebuildChunk = async (
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
 
-        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(async (previous, snapshot) => {
-          const diagnostics = await previous
+        const snapshotResults = await snapshots.reduce<
+          Promise<Array<{diagnosticsJson?: unknown; validationResult?: ReviewServingRebuildChunkValidationResult}>>
+        >(async (previous, snapshot) => {
+          const results = await previous
           const result = await projectReviewServingFilterPostings(
             {
               acknowledgeClaims: false,
@@ -1632,10 +1632,27 @@ const runPostingRebuildChunk = async (
             chunkDatabase,
           )
 
-          return [...diagnostics, {snapshotId: snapshot.snapshotId, ...result.diagnosticsJson}]
+          return [
+            ...results,
+            {
+              diagnosticsJson: {snapshotId: snapshot.snapshotId, ...result.diagnosticsJson},
+              validationResult: input.chunk.checksum === null ? result.validationResult : undefined,
+            },
+          ]
         }, Promise.resolve([]))
+        const reusableValidationResults = snapshotResults.flatMap((result) => {
+          return result.validationResult === undefined ? [] : [result.validationResult]
+        })
+        const [reusableValidationResult] = reusableValidationResults
 
-        return {diagnosticsJson: {postingProjectorSnapshots: snapshotDiagnostics}}
+        return {
+          diagnosticsJson: {
+            postingProjectorSnapshots: snapshotResults.map((result) => {
+              return result.diagnosticsJson
+            }),
+          },
+          validationResult: reusableValidationResults.length === 1 ? reusableValidationResult : undefined,
+        }
       },
     },
     database,
