@@ -445,6 +445,12 @@ const getSupportedPatchCompactions = (assessments: readonly ReviewServingPatchBu
   })
 }
 
+const hasCandidatePatchCompactionWork = (candidate: ReviewServingSnapshotManifest) => {
+  return getAllComponentStates(candidate.componentState).some((state) => {
+    return state.component === 'selectedImport' && Number(state.patchWatermark) > 0
+  })
+}
+
 const getSelectedImportProtectedPredicate = (spec: CleanupTableSpec, now: Date | string) => {
   return spec.protectedPredicate !== 'selected_import_snapshot_id'
     ? 'FALSE'
@@ -589,6 +595,10 @@ export const compactReviewServingCandidateSnapshotPatches = async (
   input: {budget?: ReviewServingPatchBudget; candidate: ReviewServingSnapshotManifest},
   database: ReviewServingRetentionServiceDatabase = getReviewServingRetentionDatabase(),
 ): Promise<ReviewServingCompactionResult> => {
+  if (!hasCandidatePatchCompactionWork(input.candidate)) {
+    return {compactedComponents: []}
+  }
+
   return database.transaction(async (tx) => {
     const assessments = await assessReviewServingCandidatePatchBudgets(input, tx)
     const compactedComponents = getSupportedPatchCompactions(assessments)
