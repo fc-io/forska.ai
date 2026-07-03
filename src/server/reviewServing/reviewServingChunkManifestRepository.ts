@@ -219,8 +219,6 @@ type ReviewServingRebuildChunkValidationFailure = {
   validationError: string
 }
 
-type ReviewServingRebuildChunkWriteOutputResult = {diagnosticsJson?: unknown} | undefined
-
 const getReviewServingChunkManifestDatabase = () => {
   return getAppDatabaseService() as ReviewServingChunkManifestRepositoryDatabase
 }
@@ -272,9 +270,15 @@ const getMergedRebuildChunkDiagnosticsJson = (input: {
   return {...inputDiagnosticsJson, ...writeOutputDiagnosticsJson, ...validationDiagnosticsJson, phaseTimings}
 }
 
-const getWriteOutputDiagnosticsJson = (value: ReviewServingRebuildChunkWriteOutputResult) => {
+const getWriteOutputDiagnosticsJson = (value: unknown) => {
   return value !== undefined && value !== null && typeof value === 'object' && 'diagnosticsJson' in value
     ? value.diagnosticsJson
+    : undefined
+}
+
+const getWriteOutputValidationResult = (value: unknown) => {
+  return value !== undefined && value !== null && typeof value === 'object' && 'validationResult' in value
+    ? (value.validationResult as ReviewServingRebuildChunkValidationResult | undefined)
     : undefined
 }
 
@@ -1340,7 +1344,7 @@ export const writeReviewServingRebuildChunkOutput = async (
     ) => Promise<ReviewServingRebuildChunkValidationResult>
     writeOutput: (
       database: ReviewServingChunkManifestRepositoryDatabase | ReviewServingChunkManifestRepositoryTransaction,
-    ) => Promise<ReviewServingRebuildChunkWriteOutputResult>
+    ) => Promise<unknown>
   },
   database: ReviewServingChunkManifestRepositoryDatabase = getReviewServingChunkManifestDatabase(),
 ) => {
@@ -1348,9 +1352,10 @@ export const writeReviewServingRebuildChunkOutput = async (
   const startedAtMs = Date.now()
   const phaseTimings: Record<string, number> = {}
   let writeOutputDiagnosticsJson: unknown
+  let writeOutputValidationResult: ReviewServingRebuildChunkValidationResult | undefined
   const completeChunk = async (tx: ReviewServingChunkManifestRepositoryTransaction) => {
     const validationStartedAtMs = Date.now()
-    const validation = await input.validateOutput(tx)
+    const validation = writeOutputValidationResult ?? (await input.validateOutput(tx))
     phaseTimings.validationMs = getNonNegativeElapsedMs(validationStartedAtMs)
     const validationError = getReviewServingRebuildChunkValidationError(validation)
     phaseTimings.totalBeforeCompletionMs = getNonNegativeElapsedMs(startedAtMs)
@@ -1404,7 +1409,9 @@ export const writeReviewServingRebuildChunkOutput = async (
       }
 
       const writeOutputStartedAtMs = Date.now()
-      writeOutputDiagnosticsJson = getWriteOutputDiagnosticsJson(await input.writeOutput(database))
+      const writeOutputResult = await input.writeOutput(database)
+      writeOutputDiagnosticsJson = getWriteOutputDiagnosticsJson(writeOutputResult)
+      writeOutputValidationResult = getWriteOutputValidationResult(writeOutputResult)
       phaseTimings.writeOutputMs = getNonNegativeElapsedMs(writeOutputStartedAtMs)
 
       return await database.transaction(async (tx) => {
@@ -1424,7 +1431,9 @@ export const writeReviewServingRebuildChunkOutput = async (
       }
 
       const writeOutputStartedAtMs = Date.now()
-      writeOutputDiagnosticsJson = getWriteOutputDiagnosticsJson(await input.writeOutput(tx))
+      const writeOutputResult = await input.writeOutput(tx)
+      writeOutputDiagnosticsJson = getWriteOutputDiagnosticsJson(writeOutputResult)
+      writeOutputValidationResult = getWriteOutputValidationResult(writeOutputResult)
       phaseTimings.writeOutputMs = getNonNegativeElapsedMs(writeOutputStartedAtMs)
       return completeChunk(tx)
     })

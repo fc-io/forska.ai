@@ -1416,6 +1416,48 @@ test('completed rebuild chunks persist write and validation timing diagnostics',
   expect(joined).toContain('"totalBeforeCompletionMs"')
 })
 
+test('completed rebuild chunks can reuse writer validation results without rescanning output', async () => {
+  const running = {
+    ...getChunkRowFromIdentity(baseChunkIdentity, []),
+    leaseExpiresAt: '2026-06-16T14:05:00.000Z',
+    leaseOwner: 'worker-reused-validation',
+    status: 'running' as const,
+  }
+  const {database, statements} = createFakeChunkManifestDatabase([running])
+  let validationScans = 0
+
+  const completed = await writeReviewServingRebuildChunkOutput(
+    {
+      ...baseChunkIdentity,
+      leaseOwner: 'worker-reused-validation',
+      validateOutput: async () => {
+        validationScans += 1
+
+        return {actualChecksum: 'rescanned-checksum', actualCount: 99, expectedChecksum: 'rescanned-checksum'}
+      },
+      writeOutput: async (tx) => {
+        await tx.run('INSERT INTO mart.fake_chunk_output VALUES (25)')
+
+        return {
+          validationResult: {
+            actualChecksum: 'reused-checksum',
+            actualCount: 25,
+            diagnosticsJson: {validationMode: 'reused-source-posting-checksum'},
+            expectedChecksum: 'reused-checksum',
+            expectedCount: 25,
+          },
+        }
+      },
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(validationScans).toBe(0)
+  expect(completed).toMatchObject({checksum: 'reused-checksum', status: 'completed'})
+  expect(joined).toContain('"validationMode":"reused-source-posting-checksum"')
+})
+
 test('rebuild timing diagnostics summarize phase timings and claimable pending chunks', async () => {
   const statements: string[] = []
   const database: ReviewServingChunkManifestRepositoryDatabase = {

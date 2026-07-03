@@ -1,3 +1,5 @@
+import {createHash} from 'node:crypto'
+
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
@@ -918,6 +920,49 @@ const getRecordValue = (record: ReviewServingProjectorRecord, column: string) =>
   return record.values[column]
 }
 
+const getPostingValidationValue = (value: Date | string) => {
+  return value instanceof Date ? value.toISOString() : value
+}
+
+const getFullPostingRebuildValidationResult = (input: {
+  liveRows: readonly PostingContributionRow[]
+  projectInput: ProjectReviewServingFilterPostingsInput
+}) => {
+  const checksumInput = [...input.liveRows]
+    .sort((left, right) => {
+      return (
+        [
+          left.listModeKey.localeCompare(right.listModeKey),
+          left.filterKind.localeCompare(right.filterKind),
+          left.filterValue.localeCompare(right.filterValue),
+          left.articleId.localeCompare(right.articleId),
+        ].find((comparison) => {
+          return comparison !== 0
+        }) ?? 0
+      )
+    })
+    .map((row) => {
+      return `${input.projectInput.snapshotId}:${input.projectInput.reviewConfigHash}:${row.listModeKey}:${row.filterKind}:${row.filterValue}:${row.articleId}:${getPostingValidationValue(row.sortKey)}`
+    })
+    .join('|')
+  const actualChecksum = createHash('sha256').update(checksumInput).digest('hex')
+
+  return {
+    actualChecksum,
+    actualCount: input.liveRows.length,
+    diagnosticsJson: {validationMode: 'reused-source-posting-checksum'},
+    expectedChecksum: actualChecksum,
+    expectedCount: input.liveRows.length,
+  }
+}
+
+const getFullPostingRebuildValidationResultOrUndefined = (input: {
+  liveRows: readonly PostingContributionRow[]
+  projectInput: ProjectReviewServingFilterPostingsInput
+}) => {
+  return isFullPostingRebuildInput(input.projectInput) ? getFullPostingRebuildValidationResult(input) : undefined
+}
+
 const getTombstoneRows = (input: {
   existingRows: readonly PostingContributionRow[]
   newRows: readonly PostingContributionRow[]
@@ -1103,5 +1148,6 @@ export const projectReviewServingFilterPostings = async (
         selectivity: getRecordValue(record, 'selectivity'),
       }
     }),
+    validationResult: getFullPostingRebuildValidationResultOrUndefined({liveRows, projectInput: input}),
   }
 }
