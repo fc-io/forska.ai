@@ -153,6 +153,8 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   expect(statements.join('\n')).toContain('app.review_selected_import_snapshot')
   expect(statements.join('\n')).toContain('missing_required_candidate')
   expect(statements.join('\n')).toContain('invalid_required_state_candidate')
+  expect(statements.join('\n')).toContain('invalid_optional_state_candidate')
+  expect(statements.join('\n')).toContain("json_extract(snapshot.component_state_json, '$.optional')")
   expect(statements.join('\n')).toContain('app.review_projection_identity_manifest')
   expect(statements.join('\n')).toContain("manifest.status IN ('active', 'candidate')")
   expect(statements.join('\n')).toContain('app.review_serving_dirty_work')

@@ -375,6 +375,25 @@ const getSnapshotStatusCountRowsEffect = (
             AND manifest.patch_watermark = TRY_CAST(json_extract_string(required_state.value, '$.patchWatermark') AS BIGINT)
             AND manifest.input_watermark >= TRY_CAST(json_extract_string(required_state.value, '$.patchWatermark') AS BIGINT)
         )
+      ), invalid_optional_state_candidate AS (
+        SELECT DISTINCT snapshot.snapshot_id
+        FROM snapshot_candidates snapshot,
+          app.review_selected_import_snapshot selected_import,
+          json_each(json_extract(snapshot.component_state_json, '$.optional')) optional_state
+        WHERE selected_import.selected_import_snapshot_id = snapshot.selected_import_snapshot_id
+          AND selected_import.status = 'completed'
+          AND NOT EXISTS (
+          SELECT 1
+          FROM app.review_projection_identity_manifest manifest
+          WHERE manifest.project_id = snapshot.project_id
+            AND manifest.projection_component = json_extract_string(optional_state.value, '$.component')
+            AND manifest.projection_identity = json_extract_string(optional_state.value, '$.projectionIdentity')
+            AND manifest.status IN ('active', 'candidate')
+            AND (manifest.review_config_hash IS NULL OR manifest.review_config_hash = snapshot.review_config_hash)
+            AND manifest.base_generation = TRY_CAST(json_extract_string(optional_state.value, '$.baseGeneration') AS BIGINT)
+            AND manifest.patch_watermark = TRY_CAST(json_extract_string(optional_state.value, '$.patchWatermark') AS BIGINT)
+            AND manifest.input_watermark >= TRY_CAST(json_extract_string(optional_state.value, '$.patchWatermark') AS BIGINT)
+        )
       ), invalid_candidate AS (
         SELECT snapshot.snapshot_id
         FROM snapshot_candidates snapshot
@@ -386,6 +405,8 @@ const getSnapshotStatusCountRowsEffect = (
         SELECT snapshot_id FROM missing_required_candidate
         UNION
         SELECT snapshot_id FROM invalid_required_state_candidate
+        UNION
+        SELECT snapshot_id FROM invalid_optional_state_candidate
       )
       SELECT
         snapshot_status AS snapshotStatus,

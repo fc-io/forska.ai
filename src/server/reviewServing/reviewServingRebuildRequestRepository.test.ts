@@ -568,6 +568,135 @@ test('posting default rebuilds avoid admission presplit boundary overlap', async
   expect(joined).not.toContain('{"admissionPresplit":true}')
 })
 
+test('judgment input content default rebuilds avoid admission presplit boundary overlap', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    activeComponentStateJson: {
+      optional: [],
+      required: [
+        {
+          baseGeneration: 4,
+          component: 'judgmentInputContent',
+          patchWatermark: 12,
+          projectionIdentity: 'judgmentInputContent:active-identity-1',
+        },
+      ],
+    },
+    articleRangeRows: [
+      {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
+      {chunkEndKey: 'article-128', chunkStartKey: 'article-064', scopedArticleCount: 64},
+      {chunkEndKey: 'article-192', chunkStartKey: 'article-128', scopedArticleCount: 64},
+      {chunkEndKey: 'article-256', chunkStartKey: 'article-192', scopedArticleCount: 64},
+    ],
+    componentStateJson: {
+      optional: [],
+      required: [
+        {
+          baseGeneration: 2,
+          component: 'judgmentInputContent',
+          patchWatermark: 10,
+          projectionIdentity: 'judgmentInputContent:identity-1',
+        },
+      ],
+    },
+    projectionManifestRows: [
+      {
+        baseGeneration: 2,
+        inputDigest: 'judgment-input-content-digest-v1',
+        inputWatermark: 10,
+        projectionComponent: 'judgmentInputContent',
+        projectionIdentity: 'judgmentInputContent:identity-1',
+      },
+      {
+        baseGeneration: 4,
+        inputDigest: 'judgment-input-content-active-digest-v1',
+        inputWatermark: 12,
+        projectionComponent: 'judgmentInputContent',
+        projectionIdentity: 'judgmentInputContent:active-identity-1',
+      },
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 20_001},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['judgmentInputContent'],
+      requestId: 'rebuild:judgment-input-content-presplit',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const chunkInserts = statements.filter((statement) => {
+    return (
+      statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+      && statement.includes("'judgmentInputContent'")
+    )
+  })
+
+  expect(joined).not.toContain('NTILE(')
+  expect(chunkInserts).toHaveLength(2)
+  expect(joined).not.toContain('{"admissionPresplit":true}')
+})
+
+test('queue default rebuilds avoid admission presplit boundary overlap', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    activeComponentStateJson: {
+      optional: [],
+      required: [
+        {baseGeneration: 4, component: 'queue', patchWatermark: 12, projectionIdentity: 'queue:active-identity-1'},
+      ],
+    },
+    articleRangeRows: [
+      {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
+      {chunkEndKey: 'article-128', chunkStartKey: 'article-064', scopedArticleCount: 64},
+      {chunkEndKey: 'article-192', chunkStartKey: 'article-128', scopedArticleCount: 64},
+      {chunkEndKey: 'article-256', chunkStartKey: 'article-192', scopedArticleCount: 64},
+    ],
+    componentStateJson: {
+      optional: [],
+      required: [{baseGeneration: 2, component: 'queue', patchWatermark: 10, projectionIdentity: 'queue:identity-1'}],
+    },
+    projectionManifestRows: [
+      {
+        baseGeneration: 2,
+        inputDigest: 'queue-digest-v1',
+        inputWatermark: 10,
+        projectionComponent: 'queue',
+        projectionIdentity: 'queue:identity-1',
+      },
+      {
+        baseGeneration: 4,
+        inputDigest: 'queue-active-digest-v1',
+        inputWatermark: 12,
+        projectionComponent: 'queue',
+        projectionIdentity: 'queue:active-identity-1',
+      },
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 20_001},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['queue'],
+      requestId: 'rebuild:queue-presplit',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const chunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'queue'")
+  })
+
+  expect(joined).not.toContain('NTILE(')
+  expect(chunkInserts).toHaveLength(2)
+  expect(joined).not.toContain('{"admissionPresplit":true}')
+})
+
 test('display-only default rebuilds avoid admission presplit boundary overlap', async () => {
   const {database, statements} = createFakeRequestDatabase({
     articleRangeRows: [
