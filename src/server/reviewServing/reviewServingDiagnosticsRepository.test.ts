@@ -199,3 +199,16 @@ test('review serving diagnostics query sequentially instead of fanning out owner
 
   expect(maxActiveQueryCount).toBe(1)
 })
+
+test('review serving diagnostics preserve project-wide snapshot status counts when review config is omitted', async () => {
+  const {database, statements} = createDiagnosticsDatabase()
+
+  await getReviewServingDiagnostics({now: '2026-06-18T10:05:00.000Z', projectId: 'project-1'}, database)
+
+  const snapshotStatusStatement = statements.find((statement) => {
+    return statement.includes('GROUP BY snapshot_status')
+  })
+
+  expect(snapshotStatusStatement).toBeDefined()
+  expect(snapshotStatusStatement).not.toContain('review_config_hash IS NOT DISTINCT FROM')
+})

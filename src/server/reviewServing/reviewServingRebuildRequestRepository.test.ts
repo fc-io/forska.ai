@@ -568,6 +568,37 @@ test('posting default rebuilds avoid admission presplit boundary overlap', async
   expect(joined).not.toContain('{"admissionPresplit":true}')
 })
 
+test('summary-only default rebuilds avoid admission presplit boundary overlap', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    articleRangeRows: [
+      {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
+      {chunkEndKey: 'article-128', chunkStartKey: 'article-064', scopedArticleCount: 64},
+      {chunkEndKey: 'article-192', chunkStartKey: 'article-128', scopedArticleCount: 64},
+      {chunkEndKey: 'article-256', chunkStartKey: 'article-192', scopedArticleCount: 64},
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 2_048},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['summary'],
+      requestId: 'rebuild:summary-presplit',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const summaryChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'summary'")
+  })
+
+  expect(joined).not.toContain('NTILE(4)')
+  expect(summaryChunkInserts).toHaveLength(2)
+  expect(joined).not.toContain('{"admissionPresplit":true}')
+})
+
 test('default rebuild request keeps same projection identity across base generations', async () => {
   const {database, statements} = createFakeRequestDatabase({
     activeComponentStateJson: {

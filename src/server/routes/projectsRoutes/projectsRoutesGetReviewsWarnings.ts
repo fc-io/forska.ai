@@ -312,10 +312,12 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       pendingRebuildChunkCount + pendingDirtyWorkCount + pendingCandidateSnapshotActivationCount
     const claimableRefreshCount = queuedRebuildChunkCount + servingDiagnostics.dirtyWork.pendingCount
     const eligibleConsumerCount = claimableRefreshCount > 0 && !isServerMutationWorkDisabled ? 1 : 0
+    const hasBlockedCandidateSnapshot =
+      servingDiagnostics.snapshot.invalidCandidateCount > 0 && pendingRebuildChunkCount === 0
     const indexingStatus = getReviewsIndexingStatus({
       enabledPromptCount,
       hasAnyArticlesInScope,
-      hasBlockedCandidateSnapshot: servingDiagnostics.snapshot.invalidCandidateCount > 0,
+      hasBlockedCandidateSnapshot,
       hasQuarantineBarrier: terminalQuarantineCount > 0,
       hasReviewServingRows,
       hasTerminalV4Work:
@@ -338,7 +340,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const blockedReason: ReviewsIndexingBlockedReason =
       indexingStatus === 'failed' && servingDiagnostics.quarantine.quarantinedOutboxCount > 0
         ? 'quarantine_barrier'
-        : indexingStatus === 'blocked' && servingDiagnostics.snapshot.invalidCandidateCount > 0
+        : indexingStatus === 'blocked' && hasBlockedCandidateSnapshot
           ? 'operator_intervention_required'
           : indexingStatus === 'blocked' && isServerMutationWorkDisabled
             ? 'waiting_for_maintenance_worker'

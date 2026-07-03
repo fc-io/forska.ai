@@ -865,6 +865,55 @@ test('reviews warnings block invalid candidate snapshots that cannot be activate
   expect(body.data.indexing.status).toBe('blocked')
 })
 
+test('reviews warnings keep invalid bootstrap candidates refreshing while rebuild chunks can progress', async () => {
+  const projectId = 'project-candidate-invalid-selected-import-progressing-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    selectedImportSnapshotId: 'selected-import-candidate-progressing-warning',
+    snapshotId: 'snapshot-candidate-invalid-selected-import-progressing-warning',
+    status: 'candidate',
+  })
+  await runDatabase?.(`
+    INSERT INTO app.review_selected_import_snapshot (
+      selected_import_snapshot_id,
+      project_id,
+      project_scope_identity,
+      source_delta_high_water,
+      status,
+      updated_at
+    ) VALUES (
+      'selected-import-candidate-progressing-warning',
+      '${projectId}',
+      'projectScope:identity-1',
+      1,
+      'candidate',
+      current_timestamp
+    )
+  `)
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-candidate-invalid-selected-import-progressing-warning',
+    component: 'selectedImport',
+    createdAt: '2026-06-23T10:00:00.000Z',
+    projectId,
+    status: 'pending',
+    updatedAt: '2026-06-23T10:00:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.blockedReason).toBe(null)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
 afterEach(() => {
   resetProgressSnapshotForTests?.()
 })

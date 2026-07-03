@@ -350,7 +350,7 @@ const getSnapshotStatusCountRowsEffect = (
       LEFT JOIN app.review_selected_import_snapshot selected_import
         ON selected_import.selected_import_snapshot_id = snapshot.selected_import_snapshot_id
       WHERE snapshot.project_id = ${getSqlLiteral(input.projectId)}
-        AND snapshot.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(input.reviewConfigHash ?? null)}
+        ${getReviewConfigPredicate(input.reviewConfigHash)}
       GROUP BY snapshot_status
     `,
   )
