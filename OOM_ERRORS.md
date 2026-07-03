@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-03 - Full Posting Rebuild JS Fanout
+
+- Error: Full posting rebuild chunks could still drive RSS/OOM spikes while materializing one JS serving record per live posting row.
+- Context: `projectReviewServingFilterPostings` during full posting rebuild chunks using set-based serving/contribution writes.
+- Cause: The full rebuild path skipped writing generic serving records but still built the discarded `servingRecords` array before the writer call.
+- Fix: Full posting rebuilds now skip serving-record object creation and report the set-based row count from deduped live posting keys.
+- Verification: `bun test src/server/reviewServing/reviewServingFilterPostingProjector.test.ts src/server/reviewServing/reviewServingProjectorWriter.test.ts`; live current-DB progress gate.
+
 ## 2026-07-03 - Snapshot Checkpoint OOM
 
 - Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` while `POST /__duckdb-owner-rpc/api/duckdbStudioSnapshots` served a current-DB snapshot.

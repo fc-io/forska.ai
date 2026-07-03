@@ -205,7 +205,10 @@ test('posting stats repair corrupted DuckDB BIGINT string cardinalities from con
 test('full posting rebuilds write serving state without incremental patch fanout', async () => {
   const {database, statements} = createPostingDatabase({
     existingRows: [],
-    newRows: [postingRow({filterKind: 'importRoute', filterValue: 'route-1'})],
+    newRows: [
+      postingRow({filterKind: 'importRoute', filterValue: 'route-1'}),
+      postingRow({filterKind: 'importRoute', filterValue: 'route-1'}),
+    ],
   })
 
   const result = await projectReviewServingFilterPostings(projectInput([]), database)
@@ -232,6 +235,8 @@ test('full posting rebuilds write serving state without incremental patch fanout
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
   expect(joined).toContain('WITH posting_source AS')
+  expect(joined).toContain('serving_source AS')
+  expect(joined).toContain('GROUP BY posting.filterKind, posting.filterValue, posting.listModeKey, posting.articleId')
   expect(joined).toContain('SELECT DISTINCT')
   expect(joined).toContain('CAST(to_json(posting.filterKind) AS VARCHAR)')
 })
@@ -255,6 +260,11 @@ test('full posting rebuilds scope set-based deletes to article ranges', async ()
   expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
   expect(joined).toContain('contribution.article_id >=')
   expect(joined).toContain('contribution.article_id <=')
+  expect(
+    statements.find((statement) => {
+      return statement.includes('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
+    }),
+  ).not.toContain('summary_definition_version')
 })
 
 test('deletes write tombstones, remove serving rows, and decrement stats in the writer transaction', async () => {

@@ -683,7 +683,6 @@ const getDeleteContributionRowsStatement = (input: ProjectReviewServingFilterPos
       AND contribution.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
       AND contribution.snapshot_id = ${getSqlLiteral(input.snapshotId)}
       AND contribution.component_kind = 'posting'
-      AND contribution.summary_definition_version = ${getSqlLiteral(input.definitionVersion)}
       ${rangePredicate}`
 }
 
@@ -700,7 +699,18 @@ const getInsertFullRebuildServingRowsStatement = (input: ProjectReviewServingFil
       sort_key,
       posting_updated_at
     )
-    WITH posting_source AS (${getPostingContributionRowsStatement(input)})
+    WITH posting_source AS (${getPostingContributionRowsStatement(input)}),
+    serving_source AS (
+      SELECT
+        posting.filterKind,
+        posting.filterValue,
+        posting.listModeKey,
+        posting.articleId,
+        MAX(posting.sortKey) AS sortKey
+      FROM posting_source posting
+      WHERE NOT posting.tombstone
+      GROUP BY posting.filterKind, posting.filterValue, posting.listModeKey, posting.articleId
+    )
     SELECT
       ${getSqlLiteral(input.projectId)} AS project_id,
       ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
@@ -712,8 +722,7 @@ const getInsertFullRebuildServingRowsStatement = (input: ProjectReviewServingFil
       posting.articleId AS article_id,
       posting.sortKey AS sort_key,
       current_timestamp AS posting_updated_at
-    FROM posting_source posting
-    WHERE NOT posting.tombstone
+    FROM serving_source posting
     ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO UPDATE SET
       posting_identity = excluded.posting_identity,
       sort_key = excluded.sort_key,
@@ -924,11 +933,41 @@ const getPostingValidationValue = (value: Date | string) => {
   return value instanceof Date ? value.toISOString() : value
 }
 
+const getPostingServingRowKey = (row: PostingContributionRow) => {
+  return JSON.stringify({
+    articleId: row.articleId,
+    filterKind: row.filterKind,
+    filterValue: row.filterValue,
+    listModeKey: row.listModeKey,
+  })
+}
+
+const getDedupedPostingServingRows = (rows: readonly PostingContributionRow[]) => {
+  return [
+    ...rows
+      .reduce((rowsByKey, row) => {
+        const key = getPostingServingRowKey(row)
+        const existing = rowsByKey.get(key)
+
+        if (
+          existing === undefined
+          || getPostingValidationValue(existing.sortKey) < getPostingValidationValue(row.sortKey)
+        ) {
+          rowsByKey.set(key, row)
+        }
+
+        return rowsByKey
+      }, new Map<string, PostingContributionRow>())
+      .values(),
+  ]
+}
+
 const getFullPostingRebuildValidationResult = (input: {
   liveRows: readonly PostingContributionRow[]
   projectInput: ProjectReviewServingFilterPostingsInput
 }) => {
-  const checksumInput = [...input.liveRows]
+  const servingRows = getDedupedPostingServingRows(input.liveRows)
+  const checksumInput = servingRows
     .sort((left, right) => {
       return (
         [
@@ -949,10 +988,10 @@ const getFullPostingRebuildValidationResult = (input: {
 
   return {
     actualChecksum,
-    actualCount: input.liveRows.length,
+    actualCount: servingRows.length,
     diagnosticsJson: {validationMode: 'reused-source-posting-checksum'},
     expectedChecksum: actualChecksum,
-    expectedCount: input.liveRows.length,
+    expectedCount: servingRows.length,
   }
 }
 
@@ -1045,17 +1084,22 @@ export const projectReviewServingFilterPostings = async (
             row,
           })
         })
-    const nextServingRecords = liveRows.map((row) => {
-      return getPostingServingRecord({
-        projectId: input.projectId,
-        reviewConfigHash: input.reviewConfigHash,
-        row,
-        snapshotId: input.snapshotId,
-      })
-    })
+    const nextServingRecords = isFullPostingRebuildInput(input)
+      ? []
+      : liveRows.map((row) => {
+          return getPostingServingRecord({
+            projectId: input.projectId,
+            reviewConfigHash: input.reviewConfigHash,
+            row,
+            snapshotId: input.snapshotId,
+          })
+        })
 
     return {patchRecords: nextPatchRecords, servingRecords: nextServingRecords}
   })
+  const servingRowCount = isFullPostingRebuildInput(input)
+    ? getDedupedPostingServingRows(liveRows).length
+    : servingRecords.length
   const statsRecords = await measure('statsQueryAndTransformMs', async () => {
     return getStatsRecords({database, diffs: contributionDiff.diffs, projectorInput: input, rows: contributionRows})
   })
@@ -1088,12 +1132,7 @@ export const projectReviewServingFilterPostings = async (
         acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
         component: 'posting',
         projectionManifests: input.claims.length === 0 ? [] : [getPostingManifest(input)],
-        records: [
-          ...patchRecords,
-          ...(isFullPostingRebuildInput(input) ? [] : servingRecords),
-          ...statsRecords,
-          ...contributionDiff.contributionRecords,
-        ],
+        records: [...patchRecords, ...servingRecords, ...statsRecords, ...contributionDiff.contributionRecords],
         repairDirtyWork: contributionDiff.repairDirtyWork,
         statements: [
           deleteServingRowsStatement,
@@ -1137,7 +1176,7 @@ export const projectReviewServingFilterPostings = async (
     patchRowCount: patchRecords.length,
     patchWatermark,
     repairRequired: contributionDiff.repairRequired,
-    servingRowCount: servingRecords.length,
+    servingRowCount,
     statsRowCount: statsRecords.length,
     statsValues: statsRecords.map((record) => {
       return {
