@@ -47,6 +47,7 @@ const createDatabase = (storedRows: readonly StoredReviewServingContributionRow[
 const prepareInput = (input?: {
   componentKind?: ReviewServingContributionComponentKind
   expectedArticleIds?: readonly string[]
+  includeContributionRecords?: boolean
   newKey?: string
   oldKey?: string
   requireExistingState?: boolean
@@ -55,6 +56,7 @@ const prepareInput = (input?: {
     claims: [claim()],
     componentKind: input?.componentKind ?? 'count',
     expectedArticleIds: input?.expectedArticleIds ?? ['article-1'],
+    includeContributionRecords: input?.includeContributionRecords,
     newRows: [{articleId: 'article-1', contributionKey: input?.newKey ?? 'new', contributionValue: 1}],
     projectId: 'project-1',
     projectionComponent: 'summary' as const,
@@ -106,6 +108,27 @@ test('answer changes produce negative old and positive new deltas and contributi
   expect(result.diffs).toContainEqual({contributionKey: 'answer:no', delta: -1})
   expect(result.diffs).toContainEqual({contributionKey: 'answer:yes', delta: 1})
   expect(result.contributionRecords).toHaveLength(1)
+  expect(result.deleteContributionStateStatement).toContain('DELETE FROM mart.review_article_summary_contribution_v4')
+})
+
+test('can compute contribution diffs without materializing contribution records', async () => {
+  const {database} = createDatabase([
+    {
+      articleId: 'article-1',
+      contributionKey: 'answer:no',
+      contributionValue: 1,
+      summaryDefinitionVersion: 'definition-v1',
+    },
+  ])
+
+  const result = await prepareReviewServingContributionDiff(
+    prepareInput({componentKind: 'posting', includeContributionRecords: false, newKey: 'answer:yes'}),
+    database,
+  )
+
+  expect(result.diffs).toContainEqual({contributionKey: 'answer:no', delta: -1})
+  expect(result.diffs).toContainEqual({contributionKey: 'answer:yes', delta: 1})
+  expect(result.contributionRecords).toEqual([])
   expect(result.deleteContributionStateStatement).toContain('DELETE FROM mart.review_article_summary_contribution_v4')
 })
 

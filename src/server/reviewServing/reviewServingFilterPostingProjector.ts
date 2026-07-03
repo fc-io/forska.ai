@@ -188,6 +188,10 @@ const getPostingIdentity = (row: Pick<PostingContributionRow, 'filterKind' | 'fi
   })
 }
 
+const getPostingIdentitySql = (alias: string) => {
+  return `'{"filterKind":' || CAST(to_json(${alias}.filterKind) AS VARCHAR) || ',"filterValue":' || CAST(to_json(${alias}.filterValue) AS VARCHAR) || ',"listModeKey":' || CAST(to_json(${alias}.listModeKey) AS VARCHAR) || '}'`
+}
+
 const getContributionKey = (
   row: Pick<PostingContributionRow, 'articleId' | 'filterKind' | 'filterValue' | 'listModeKey'>,
 ) => {
@@ -236,15 +240,10 @@ const getDirtyArticleCte = (input: ProjectReviewServingFilterPostingsInput, arti
       )`
 }
 
-const getPostingContributionRows = async (
-  input: ProjectReviewServingFilterPostingsInput,
-  database: ReviewServingFilterPostingProjectorDatabase,
-) => {
+const getPostingContributionRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
   const articleIds = getClaimArticleIds(input.claims)
 
-  return input.listModeKeys.length === 0
-    ? []
-    : database.queryJson<PostingContributionRow>(`
+  return `
         WITH ${getDirtyArticleCte(input, articleIds)},
         ${getListModeCte(input.listModeKeys)},
         scoped_article AS (
@@ -414,7 +413,16 @@ const getPostingContributionRows = async (
         FROM posting_union
         WHERE filterValue IS NOT NULL
         ORDER BY listModeKey ASC, filterKind ASC, filterValue ASC, articleId ASC
-      `)
+      `
+}
+
+const getPostingContributionRows = async (
+  input: ProjectReviewServingFilterPostingsInput,
+  database: ReviewServingFilterPostingProjectorDatabase,
+) => {
+  return input.listModeKeys.length === 0
+    ? []
+    : database.queryJson<PostingContributionRow>(getPostingContributionRowsStatement(input))
 }
 
 const getExistingPostingRows = async (
@@ -665,6 +673,81 @@ const getDeletePatchRowsStatement = (input: ProjectReviewServingFilterPostingsIn
       })
 }
 
+const getDeleteContributionRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+  const rangePredicate = hasChunkArticleRange(input) ? getArticleRangePredicate({alias: 'contribution', ...input}) : ''
+
+  return `DELETE FROM mart.review_article_summary_contribution_v4 contribution
+    WHERE contribution.project_id = ${getSqlLiteral(input.projectId)}
+      AND contribution.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND contribution.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      AND contribution.component_kind = 'posting'
+      AND contribution.summary_definition_version = ${getSqlLiteral(input.definitionVersion)}
+      ${rangePredicate}`
+}
+
+const getInsertFullRebuildServingRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+  return `INSERT INTO mart.review_article_filter_posting_serving_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      posting_identity,
+      filter_kind,
+      filter_value,
+      list_mode_key,
+      article_id,
+      sort_key,
+      posting_updated_at
+    )
+    WITH posting_source AS (${getPostingContributionRowsStatement(input)})
+    SELECT
+      ${getSqlLiteral(input.projectId)} AS project_id,
+      ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
+      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+      ${getPostingIdentitySql('posting')} AS posting_identity,
+      posting.filterKind AS filter_kind,
+      posting.filterValue AS filter_value,
+      posting.listModeKey AS list_mode_key,
+      posting.articleId AS article_id,
+      posting.sortKey AS sort_key,
+      current_timestamp AS posting_updated_at
+    FROM posting_source posting
+    WHERE NOT posting.tombstone
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO UPDATE SET
+      posting_identity = excluded.posting_identity,
+      sort_key = excluded.sort_key,
+      posting_updated_at = excluded.posting_updated_at`
+}
+
+const getInsertFullRebuildContributionRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+  return `INSERT INTO mart.review_article_summary_contribution_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      article_id,
+      component_kind,
+      summary_definition_version,
+      contribution_key,
+      contribution_value,
+      contribution_updated_at
+    )
+    WITH posting_source AS (${getPostingContributionRowsStatement(input)})
+    SELECT DISTINCT
+      ${getSqlLiteral(input.projectId)} AS project_id,
+      ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
+      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+      posting.articleId AS article_id,
+      'posting' AS component_kind,
+      ${getSqlLiteral(input.definitionVersion)} AS summary_definition_version,
+      ${getPostingIdentitySql('posting')} AS contribution_key,
+      1 AS contribution_value,
+      current_timestamp AS contribution_updated_at
+    FROM posting_source posting
+    WHERE NOT posting.tombstone
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key) DO UPDATE SET
+      contribution_value = excluded.contribution_value,
+      contribution_updated_at = excluded.contribution_updated_at`
+}
+
 const getDeleteStatsRowsStatement = (
   input: ProjectReviewServingFilterPostingsInput,
   statsRecords: readonly ReviewServingProjectorRecord[],
@@ -860,7 +943,7 @@ const getTombstoneRows = (input: {
 
 export const projectReviewServingFilterPostings = async (
   input: ProjectReviewServingFilterPostingsInput,
-  database: ReviewServingFilterPostingProjectorDatabase = getAppDatabaseService(),
+  database: ReviewServingFilterPostingProjectorDatabase = getAppDatabaseService() as ReviewServingFilterPostingProjectorDatabase,
 ) => {
   const phaseTimings: Record<string, number> = {}
   const measure = async <T>(phase: string, operation: () => Promise<T>) => {
@@ -893,6 +976,7 @@ export const projectReviewServingFilterPostings = async (
         claims: input.claims,
         componentKind: 'posting',
         expectedArticleIds: getExpectedArticleIds(input.claims, contributionRows),
+        includeContributionRecords: !isFullPostingRebuildInput(input),
         newRows: getPostingRowsAsContributionRows(liveRows),
         projectId: input.projectId,
         projectionComponent: 'posting',
@@ -949,19 +1033,31 @@ export const projectReviewServingFilterPostings = async (
       }
     },
   )
+  const fullRebuildWriteStatements =
+    isFullPostingRebuildInput(input) && input.listModeKeys.length > 0
+      ? [getInsertFullRebuildServingRowsStatement(input), getInsertFullRebuildContributionRowsStatement(input)]
+      : []
   const writerResult = await measure('writerMs', async () => {
     return writeReviewServingProjectorComponent(
       {
         acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
         component: 'posting',
         projectionManifests: input.claims.length === 0 ? [] : [getPostingManifest(input)],
-        records: [...patchRecords, ...servingRecords, ...statsRecords, ...contributionDiff.contributionRecords],
+        records: [
+          ...patchRecords,
+          ...(isFullPostingRebuildInput(input) ? [] : servingRecords),
+          ...statsRecords,
+          ...contributionDiff.contributionRecords,
+        ],
         repairDirtyWork: contributionDiff.repairDirtyWork,
         statements: [
           deleteServingRowsStatement,
           deletePatchRowsStatement,
           deleteStatsRowsStatement,
-          contributionDiff.deleteContributionStateStatement,
+          isFullPostingRebuildInput(input)
+            ? getDeleteContributionRowsStatement(input)
+            : contributionDiff.deleteContributionStateStatement,
+          ...fullRebuildWriteStatements,
         ].flatMap((statement) => {
           return statement === null ? [] : [statement]
         }),

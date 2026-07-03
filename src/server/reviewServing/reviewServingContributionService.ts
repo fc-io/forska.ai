@@ -19,6 +19,7 @@ export type PrepareReviewServingContributionDiffInput = {
   claims: readonly ReviewServingDirtyWorkClaim[]
   componentKind: ReviewServingContributionComponentKind
   expectedArticleIds: readonly string[]
+  includeContributionRecords?: boolean
   newRows: readonly ReviewServingContributionRow[]
   projectId: string
   projectionComponent: ReviewServingProjectionComponent
@@ -280,9 +281,12 @@ export const prepareReviewServingContributionDiff = async (
   })
   const repairArticleIds = getUniqueValues([...incompatibleArticleIds, ...corruptedArticleIds, ...missingArticleIds])
   const repairRequired = repairArticleIds.length > 0
-  const contributionRecords = input.newRows.map((row) => {
-    return getContributionRecord({...input, row})
-  })
+  const contributionRecords =
+    input.includeContributionRecords === false
+      ? []
+      : input.newRows.map((row) => {
+          return getContributionRecord({...input, row})
+        })
 
   return {
     contributionRecords,
