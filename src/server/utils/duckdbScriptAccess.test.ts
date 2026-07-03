@@ -2,6 +2,8 @@ import {existsSync, rmSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
+import {createRemoteSnapshotFromUrls} from './duckdbScriptAccess.ts'
+
 const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {
     rmSync(filePath, {force: true})
@@ -95,5 +97,34 @@ test('snapshot query script reads from a safe DuckDB snapshot', () => {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
+test('snapshot creation falls back when the first owner URL has no snapshot route', async () => {
+  const snapshotPath = `/tmp/f1-duckdb-query-snapshot-fallback-${Date.now()}.duckdb`
+  const staleOwner = globalThis.Bun.serve({
+    fetch: () => {
+      return new Response('NOT_FOUND', {status: 404})
+    },
+    port: 36104,
+  })
+  const snapshotOwner = globalThis.Bun.serve({
+    fetch: () => {
+      return Response.json({data: {createdAt: new Date().toISOString(), snapshotPath}})
+    },
+    port: 36105,
+  })
+
+  try {
+    const snapshot = await createRemoteSnapshotFromUrls([
+      'http://127.0.0.1:36104/__duckdb-owner-rpc/api/duckdbStudioSnapshots',
+      'http://127.0.0.1:36105/__duckdb-owner-rpc/api/duckdbStudioSnapshots',
+    ])
+
+    expect(snapshot.snapshotPath).toBe(snapshotPath)
+  } finally {
+    await staleOwner.stop(true)
+    await snapshotOwner.stop(true)
+    removeFileIfExists(snapshotPath)
   }
 })

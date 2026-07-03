@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-03 - Snapshot Checkpoint OOM
+
+- Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` while `POST /__duckdb-owner-rpc/api/duckdbStudioSnapshots` served a current-DB snapshot.
+- Context: Live primary `dev:server` maintenance owner under the 6400MiB profile during the required review-serving progress gate.
+- Cause: `createDuckdbSnapshot` forced `CHECKPOINT` before copying the database for a read-only snapshot, which could allocate more memory than the constrained maintenance owner had available and fatally invalidate DuckDB.
+- Fix: Snapshot creation now copies the database file and WAL under the existing append barrier without forcing a live checkpoint.
+- Verification: `bun test src/server/utils/duckdbServiceReload.test.ts src/server/utils/duckdbServiceShutdown.test.ts src/server/utils/duckdbServiceMemoryLimit.test.ts src/server/utils/duckdbScriptAccess.test.ts`; live current-DB progress gate.
+
 ## 2026-07-03 - Invalid Candidate Promotion Snapshot Update
 
 - Error: Live maintenance/dev-single owner crashed with Bun `panic: A C++ exception occurred`; isolated disposable-snapshot promotion crashed after `diag:beforePromote` and a minimal `UPDATE app.review_serving_snapshot_manifest ...` repro crashed at about 0.33-0.37GB RSS.

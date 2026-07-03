@@ -1,4 +1,4 @@
-import {existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync} from 'node:fs'
+import {existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -14,6 +14,18 @@ const removeFileIfExists = (filePath: string) => {
 const removePathIfExists = (path: string) => {
   rmSync(path, {force: true, recursive: true})
 }
+
+test('duckdb snapshots copy database and WAL without forcing a live checkpoint', () => {
+  const source = readFileSync('src/server/utils/duckdbService.ts', 'utf8')
+  const copySnapshotSource = source.slice(
+    source.indexOf('const copyDuckdbSnapshot'),
+    source.indexOf('export const createDuckdbSnapshot'),
+  )
+
+  expect(copySnapshotSource).toContain('copyFile(runtimeConfig.databasePath, snapshotPath)')
+  expect(copySnapshotSource).toContain('copyFile(walPath, snapshotWalPath)')
+  expect(copySnapshotSource).not.toContain('CHECKPOINT')
+})
 
 test('duckdb service reuses the same embedded runtime across module reloads', async () => {
   const duckdbPath = `/tmp/f1-duckdb-service-reload-${Date.now()}.duckdb`
