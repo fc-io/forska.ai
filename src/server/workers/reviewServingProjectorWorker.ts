@@ -3420,6 +3420,13 @@ const refreshCompletedRebuildRequestSummaryFilterOptions = async (
 ) => {
   const summaryProjections = await getRebuildRequestSummaryProjections(input.requestId, database)
 
+  await refreshSummaryFilterOptionsForProjections(summaryProjections, database)
+}
+
+const refreshSummaryFilterOptionsForProjections = async (
+  summaryProjections: readonly RebuildRequestSummaryProjectionRow[],
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
   await summaryProjections.reduce<Promise<void>>(async (previous, row) => {
     await previous
     const manifest = await getReviewServingProjectionIdentityManifest(
@@ -3651,6 +3658,19 @@ const finalizeCompletedReviewServingRebuildRequest = async (
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
   if (chunk.requestId === null) {
+    if (chunk.projectionComponent === 'summary' && chunk.projectId !== null) {
+      await refreshSummaryFilterOptionsForProjections(
+        [
+          {
+            outputBaseGeneration: chunk.outputBaseGeneration,
+            projectId: chunk.projectId,
+            projectionIdentity: chunk.projectionIdentity,
+          },
+        ],
+        database,
+      )
+    }
+
     return
   }
 
@@ -4038,10 +4058,15 @@ const runReviewServingProjectorWorkerRebuildChunkBatch = async (
     if (chunk.status === 'completed') {
       completedCount += 1
       lastCompletedChunk = chunk
+
+      if (chunk.requestId !== null) {
+        return {chunk, completedCount}
+      }
+
       continue
     }
 
-    return {chunk: lastCompletedChunk ?? chunk, completedCount}
+    return {chunk, completedCount}
   }
 
   return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}

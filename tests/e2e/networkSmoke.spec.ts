@@ -243,8 +243,19 @@ const isMutationDisabledCurrentDbQueuedBacklog = (indexing: ReviewsWarningsData[
   )
 }
 
+const isCurrentDbOperatorBlockedWarningState = (indexing: ReviewsWarningsData['indexing']) => {
+  return (
+    networkSmokeDbMode === 'current'
+    && indexing.status === 'blocked'
+    && indexing.progressState === 'blocked'
+    && indexing.blockedReason === 'operator_intervention_required'
+    && indexing.inFlightRefreshCount === 0
+    && indexing.activeWorkCount === 0
+  )
+}
+
 const getBlockingWarningDetails = (indexing: ReviewsWarningsData['indexing']) => {
-  return isMutationDisabledCurrentDbQueuedBacklog(indexing)
+  return isMutationDisabledCurrentDbQueuedBacklog(indexing) || isCurrentDbOperatorBlockedWarningState(indexing)
     ? null
     : indexing.progressState === 'blocked' || indexing.status === 'blocked'
       ? `warning response returned blocked review indexing: ${formatIndexingState(indexing)}`

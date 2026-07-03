@@ -295,6 +295,11 @@ const getDefaultRebuildArticleBounds = async (
 }
 
 const defaultRebuildMaxAdmissionSplitCount = 64
+const defaultRebuildNonPresplittableComponents = new Set<ReviewServingProjectionComponent>([
+  'humanStatus',
+  'llmStatus',
+  'posting',
+])
 const defaultRebuildPresplitInputRowLimits = {
   display: 25_000,
   humanStatus: 64,
@@ -318,6 +323,7 @@ const getDefaultRebuildPresplitBucketCount = (input: {
   const inputRowLimit = defaultRebuildPresplitInputRowLimits[input.component]
 
   return input.requestedComponents.length === 1
+    && !defaultRebuildNonPresplittableComponents.has(input.component)
     && estimatedInputRows !== null
     && estimatedInputRows !== undefined
     && estimatedInputRows > inputRowLimit
@@ -731,6 +737,12 @@ export const getActiveReviewServingRebuildRequestForProject = async (
       ${reasonFilter}
       AND status = 'admitted'
       AND admission_state = 'admitted'
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest chunk
+        WHERE chunk.request_id = app.review_rebuild_request.request_id
+          AND chunk.status IN ('pending', 'running', 'failed')
+      )
       AND NOT EXISTS (
         SELECT 1
         FROM app.review_rebuild_chunk_manifest chunk
@@ -786,14 +798,18 @@ export const boostActiveReviewServingRebuildRequestForProject = async (
   let activeRequest: {requestId: string} | undefined
 
   for (const request of activeRequests) {
-    const [blockedRow] = await database.queryJson<{blockedCount: number | string}>(`
-      SELECT CAST(COUNT(*) AS INTEGER) AS blockedCount
+    const [chunkStateRow] = await database.queryJson<{
+      blockedCount: number | string
+      progressableCount: number | string
+    }>(`
+      SELECT
+        CAST(COUNT(*) FILTER (WHERE status IN ('blocked_over_budget', 'quarantined')) AS INTEGER) AS blockedCount,
+        CAST(COUNT(*) FILTER (WHERE status IN ('pending', 'running', 'failed')) AS INTEGER) AS progressableCount
       FROM app.review_rebuild_chunk_manifest
       WHERE request_id = ${getSqlLiteral(request.requestId)}
-        AND status IN ('blocked_over_budget', 'quarantined')
     `)
 
-    if (Number(blockedRow?.blockedCount ?? 0) === 0) {
+    if (Number(chunkStateRow?.blockedCount ?? 0) === 0 && Number(chunkStateRow?.progressableCount ?? 0) > 0) {
       activeRequest = request
       break
     }

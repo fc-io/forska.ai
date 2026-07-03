@@ -13,7 +13,12 @@ import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectCon
 import {shouldDisableServerMutationWork} from '../../utils/serverMutationMode.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
-type ReviewsIndexingBlockedReason = 'paused_by_policy' | 'quarantine_barrier' | 'waiting_for_maintenance_worker' | null
+type ReviewsIndexingBlockedReason =
+  | 'operator_intervention_required'
+  | 'paused_by_policy'
+  | 'quarantine_barrier'
+  | 'waiting_for_maintenance_worker'
+  | null
 type ReviewsIndexingProgressState = 'blocked' | 'completed' | 'failed' | 'processing' | 'queued' | 'stalled'
 type ReviewsIndexingStatus = 'blocked' | 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
 
@@ -120,7 +125,6 @@ const getHasReviewServingStateThatCanProgress = (diagnostics: ReviewServingDiagn
       + diagnostics.rebuildChunks.quarantinedCount
       + diagnostics.rebuildChunks.runningCount
       + diagnostics.snapshot.activeCount
-      + diagnostics.snapshot.candidateCount
     > 0
   )
 }
@@ -128,6 +132,7 @@ const getHasReviewServingStateThatCanProgress = (diagnostics: ReviewServingDiagn
 const getReviewsIndexingStatus = (params: {
   enabledPromptCount: number
   hasAnyArticlesInScope: boolean
+  hasBlockedCandidateSnapshot: boolean
   hasQuarantineBarrier: boolean
   hasReviewServingRows: boolean
   hasTerminalV4Work: boolean
@@ -137,21 +142,26 @@ const getReviewsIndexingStatus = (params: {
 }): ReviewsIndexingStatus => {
   const shouldIndexReviews = params.enabledPromptCount > 0 && params.hasAnyArticlesInScope
 
-  return !shouldIndexReviews
-    ? 'not-needed'
-    : params.hasQuarantineBarrier
-      ? 'failed'
-      : params.hasTerminalV4Work
-        ? 'failed'
-        : params.isServerMutationWorkDisabled && params.pendingRefreshCount > 0 && params.runningRefreshCount === 0
-          ? 'blocked'
-          : params.pendingRefreshCount > 0 && params.runningRefreshCount > 0
-            ? 'refreshing'
-            : params.pendingRefreshCount > 0
-              ? 'refreshing'
-              : params.hasReviewServingRows
-                ? 'ready'
-                : 'stale'
+  if (!shouldIndexReviews) {
+    return 'not-needed'
+  }
+
+  if (params.hasQuarantineBarrier || params.hasTerminalV4Work) {
+    return 'failed'
+  }
+
+  if (
+    params.hasBlockedCandidateSnapshot
+    || (params.isServerMutationWorkDisabled && params.pendingRefreshCount > 0 && params.runningRefreshCount === 0)
+  ) {
+    return 'blocked'
+  }
+
+  if (params.pendingRefreshCount > 0) {
+    return 'refreshing'
+  }
+
+  return params.hasReviewServingRows ? 'ready' : 'stale'
 }
 
 const getReviewsIndexingProgressState = (params: {
@@ -231,6 +241,12 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       warningSnapshot.status === 'accepted'
       && isUsableReviewServingWarningSnapshot(warningSnapshot.diagnostics.manifest.status)
     const hasReadableReviewServingRows = hasReviewServingRows
+    const pendingCandidateSnapshotActivationCount = hasReadableReviewServingRows
+      ? 0
+      : getNonNegativeDifference(
+          servingDiagnostics.snapshot.candidateCount,
+          servingDiagnostics.snapshot.invalidCandidateCount,
+        )
     const shouldPrioritizeMissingSnapshotRepair =
       !hasReadableReviewServingRows && enabledPromptCount > 0 && hasAnyArticlesInScope
     const expiredRebuildChunkLeaseCount = Math.min(
@@ -255,6 +271,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const shouldRequestForegroundRepair =
       !isServerMutationWorkDisabled
       && shouldPrioritizeMissingSnapshotRepair
+      && pendingCandidateSnapshotActivationCount === 0
       && !hasRecentProgress
       && !hasReviewServingStateThatCanProgress
 
@@ -291,12 +308,14 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       + servingDiagnostics.quarantine.retryableOutboxCount
     const queuedRefreshCount = queuedRebuildChunkCount + servingDiagnostics.dirtyWork.pendingCount
     const inFlightRefreshCount = inFlightRebuildChunkCount + servingDiagnostics.dirtyWork.runningCount
-    const pendingRefreshCount = pendingRebuildChunkCount + pendingDirtyWorkCount
+    const pendingRefreshCount =
+      pendingRebuildChunkCount + pendingDirtyWorkCount + pendingCandidateSnapshotActivationCount
     const claimableRefreshCount = queuedRebuildChunkCount + servingDiagnostics.dirtyWork.pendingCount
     const eligibleConsumerCount = claimableRefreshCount > 0 && !isServerMutationWorkDisabled ? 1 : 0
     const indexingStatus = getReviewsIndexingStatus({
       enabledPromptCount,
       hasAnyArticlesInScope,
+      hasBlockedCandidateSnapshot: servingDiagnostics.snapshot.invalidCandidateCount > 0,
       hasQuarantineBarrier: terminalQuarantineCount > 0,
       hasReviewServingRows,
       hasTerminalV4Work:
@@ -319,9 +338,11 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const blockedReason: ReviewsIndexingBlockedReason =
       indexingStatus === 'failed' && servingDiagnostics.quarantine.quarantinedOutboxCount > 0
         ? 'quarantine_barrier'
-        : indexingStatus === 'blocked' && isServerMutationWorkDisabled
-          ? 'waiting_for_maintenance_worker'
-          : null
+        : indexingStatus === 'blocked' && servingDiagnostics.snapshot.invalidCandidateCount > 0
+          ? 'operator_intervention_required'
+          : indexingStatus === 'blocked' && isServerMutationWorkDisabled
+            ? 'waiting_for_maintenance_worker'
+            : null
     return {
       data: {
         projectId,

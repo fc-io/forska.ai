@@ -3,6 +3,7 @@ import {existsSync, readFileSync} from 'fs'
 import {dirname, resolve} from 'path'
 
 import {DEFAULT_API_SERVER_PORT, DEFAULT_VITE_PORT} from '../../utils/runtimePortDefaults.ts'
+import {getDefaultMaintenanceDuckdbMemoryLimit} from './duckdbMemoryDefaults.ts'
 import {getDuckdbPath} from './getDuckdbPath.ts'
 import {getRuntimeLogConfig} from './runtimeLogger.ts'
 
@@ -53,6 +54,10 @@ const getEnvWithFileFallback = (envValues: Record<string, string | undefined>): 
   return source
 }
 
+const shouldDefaultToMaintenanceDuckdbMemoryLimit = (serverRole: string | undefined) => {
+  return serverRole === 'maintenance-worker' || serverRole === 'dev-single' || serverRole === 'auto'
+}
+
 export const loadEnv = ({
   cwd = process.cwd(),
   envValues = process.env,
@@ -72,7 +77,11 @@ export const loadEnv = ({
   }
   ;(merged as Record<string, string>).DUCKDB_PATH = getDuckdbPath({duckdbPath: merged.DUCKDB_PATH})
   if (merged.DUCKDB_MEMORY_LIMIT == null || String(merged.DUCKDB_MEMORY_LIMIT).trim() === '') {
-    ;(merged as Record<string, string>).DUCKDB_MEMORY_LIMIT = '20GB'
+    ;(merged as Record<string, string>).DUCKDB_MEMORY_LIMIT = shouldDefaultToMaintenanceDuckdbMemoryLimit(
+      String(merged.SERVER_ROLE ?? ''),
+    )
+      ? getDefaultMaintenanceDuckdbMemoryLimit()
+      : '20GB'
   }
   if (merged.DUCKDB_APPEND_LANE_COUNT == null || String(merged.DUCKDB_APPEND_LANE_COUNT).trim() === '') {
     ;(merged as Record<string, string>).DUCKDB_APPEND_LANE_COUNT = '2'

@@ -65,6 +65,7 @@ export type ReviewServingDiagnostics = {
     activeSnapshotId: string | null
     activeUpdatedAt: string | null
     candidateCount: number
+    invalidCandidateCount: number
     failedCount: number
     lastKnownGoodSnapshotId: string | null
     retiredCount: number
@@ -79,7 +80,11 @@ type ActiveSnapshotRow = {
   updatedAt: string | null
 }
 
-type SnapshotStatusCountRow = {snapshotCount: number; snapshotStatus: ReviewServingSnapshotStatus}
+type SnapshotStatusCountRow = {
+  invalidCandidateCount: number | string | null
+  snapshotCount: number
+  snapshotStatus: ReviewServingSnapshotStatus
+}
 
 type CountStateRow = {
   completedCount: number
@@ -278,6 +283,9 @@ const getSnapshotDiagnostics = (
     activeSnapshotId: activeSnapshot?.snapshotId ?? null,
     activeUpdatedAt: activeSnapshot?.updatedAt ?? null,
     candidateCount: counts.candidate,
+    invalidCandidateCount: snapshotStatusCounts.reduce((count, row) => {
+      return count + Number(row.invalidCandidateCount ?? 0)
+    }, 0),
     failedCount: counts.failed,
     lastKnownGoodSnapshotId: activeSnapshot?.lastKnownGoodSnapshotId ?? null,
     retiredCount: counts.retired,
@@ -332,10 +340,17 @@ const getSnapshotStatusCountRowsEffect = (
     `
       SELECT
         snapshot_status AS snapshotStatus,
-        CAST(COUNT(*) AS INTEGER) AS snapshotCount
-      FROM app.review_serving_snapshot_manifest
-      WHERE project_id = ${getSqlLiteral(input.projectId)}
-        ${getReviewConfigPredicate(input.reviewConfigHash)}
+        CAST(COUNT(*) AS INTEGER) AS snapshotCount,
+        CAST(COUNT(*) FILTER (
+          WHERE snapshot_status = 'candidate'
+            AND snapshot.selected_import_snapshot_id IS NOT NULL
+            AND COALESCE(selected_import.status, 'missing') <> 'completed'
+        ) AS INTEGER) AS invalidCandidateCount
+      FROM app.review_serving_snapshot_manifest snapshot
+      LEFT JOIN app.review_selected_import_snapshot selected_import
+        ON selected_import.selected_import_snapshot_id = snapshot.selected_import_snapshot_id
+      WHERE snapshot.project_id = ${getSqlLiteral(input.projectId)}
+        AND snapshot.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(input.reviewConfigHash ?? null)}
       GROUP BY snapshot_status
     `,
   )

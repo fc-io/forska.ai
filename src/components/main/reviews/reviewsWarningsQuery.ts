@@ -7,7 +7,12 @@ export type ReviewsWarningsData = {
     activeConsumerCount: number
     activeWorkCount: number
     articleRefreshesPerMinute: number | null
-    blockedReason: 'paused_by_policy' | 'quarantine_barrier' | 'waiting_for_maintenance_worker' | null
+    blockedReason:
+      | 'operator_intervention_required'
+      | 'paused_by_policy'
+      | 'quarantine_barrier'
+      | 'waiting_for_maintenance_worker'
+      | null
     cleanup?: {inFlightGenerationCleanupCount: number; lastProgressedAt: string | null}
     diagnostics: {
       duckdbQueues: {

@@ -32,17 +32,21 @@ export const getReviewIndexingStalledBody = () => {
 export const getReviewIndexingBlockedTitle = (blockedReason: ReviewIndexingBlockedReason) => {
   return blockedReason === 'quarantine_barrier'
     ? 'Review indexing blocked by quarantined article'
-    : blockedReason === 'paused_by_policy'
-      ? 'Review indexing cooling down after memory pressure'
-      : 'Review indexing blocked: waiting for maintenance worker'
+    : blockedReason === 'operator_intervention_required'
+      ? 'Review indexing requires operator intervention'
+      : blockedReason === 'paused_by_policy'
+        ? 'Review indexing cooling down after memory pressure'
+        : 'Review indexing blocked: waiting for maintenance worker'
 }
 
 export const getReviewIndexingBlockedBody = (blockedReason: ReviewIndexingBlockedReason) => {
   return blockedReason === 'quarantine_barrier'
     ? 'One or more article refreshes are quarantined. Review lists keep using the current index until the quarantined work is resolved.'
-    : blockedReason === 'paused_by_policy'
-      ? 'Review index work is queued, but the maintenance worker is cooling down after memory pressure before starting more review refresh work.'
-      : 'Review index work is queued and waiting for a maintenance worker to become available.'
+    : blockedReason === 'operator_intervention_required'
+      ? 'The review index candidate is incomplete and needs operator repair before it can become readable.'
+      : blockedReason === 'paused_by_policy'
+        ? 'Review index work is queued, but the maintenance worker is cooling down after memory pressure before starting more review refresh work.'
+        : 'Review index work is queued and waiting for a maintenance worker to become available.'
 }
 
 const hasOnlyArticleRefreshWork = (indexing: ReviewsWarningsData['indexing']) => {

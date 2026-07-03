@@ -18,7 +18,6 @@ import {
 import {
   getActiveReviewServingSnapshotManifest,
   getReviewServingSnapshotManifest,
-  markCandidateReviewServingSnapshotManifestFailed,
   type ReviewServingProjectionIdentityManifestInput,
   type ReviewServingSnapshotManifestInput,
   upsertReviewServingProjectionIdentityManifest,
@@ -466,6 +465,10 @@ export const promoteReviewServingProjectorSnapshot = async (
 
     const validation = await validateReviewServingCandidateSnapshotManifest(candidate, tx)
 
+    if (!validation.ok) {
+      return {error: validation.error, promoted: false, snapshotId: input.snapshotId}
+    }
+
     await tx.run(`
       UPDATE app.review_serving_snapshot_manifest
       SET
@@ -475,15 +478,6 @@ export const promoteReviewServingProjectorSnapshot = async (
         AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
         AND snapshot_status = 'candidate'
     `)
-
-    if (!validation.ok) {
-      await markCandidateReviewServingSnapshotManifestFailed(
-        {lastError: validation.error, projectId: input.projectId, snapshotId: input.snapshotId},
-        tx,
-      )
-
-      return {error: validation.error, promoted: false, snapshotId: input.snapshotId}
-    }
 
     await compactReviewServingCandidateSnapshotPatches(
       {candidate},

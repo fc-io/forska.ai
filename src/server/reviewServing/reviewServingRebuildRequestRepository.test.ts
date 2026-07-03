@@ -350,7 +350,9 @@ test('boosting an active project rebuild request uses a lightweight foreground u
         return [{requestId: 'rebuild:active-project'}] as T[]
       }
 
-      return statement.includes('FROM app.review_rebuild_chunk_manifest') ? ([{blockedCount: 0}] as T[]) : ([] as T[])
+      return statement.includes('FROM app.review_rebuild_chunk_manifest')
+        ? ([{blockedCount: 0, progressableCount: 1}] as T[])
+        : ([] as T[])
     },
     run: async (statement: string) => {
       statements.push(statement)
@@ -376,10 +378,10 @@ test('boosting an active project rebuild request uses a lightweight foreground u
   expect(statements[0]).toContain("AND reason = 'missingReviewServingSnapshot'")
   expect(statements[0]).not.toContain('review_rebuild_chunk_manifest')
   expect(statements[0]).not.toContain('UPDATE app.review_rebuild_request')
-  expect(statements[1]).toContain('SELECT CAST(COUNT(*) AS INTEGER) AS blockedCount')
+  expect(statements[1]).toContain("FILTER (WHERE status IN ('blocked_over_budget', 'quarantined'))")
+  expect(statements[1]).toContain("FILTER (WHERE status IN ('pending', 'running', 'failed'))")
   expect(statements[1]).toContain('FROM app.review_rebuild_chunk_manifest')
   expect(statements[1]).toContain("request_id = 'rebuild:active-project'")
-  expect(statements[1]).toContain("status IN ('blocked_over_budget', 'quarantined')")
   expect(statements[2]).toContain('UPDATE app.review_rebuild_request')
   expect(statements[2]).toContain("WHERE request_id = 'rebuild:active-project'")
   expect(joined).toContain('UPDATE app.review_rebuild_request')
@@ -387,6 +389,40 @@ test('boosting an active project rebuild request uses a lightweight foreground u
   expect(joined).toContain('updated_at = current_timestamp')
   expect(joined).not.toContain('RETURNING request_id AS requestId')
   expect(joined).not.toContain('WHERE request_id = (')
+})
+
+test('boosting an active project rebuild request ignores completed-only admitted requests', async () => {
+  const statements: string[] = []
+  const database: ReviewServingChunkManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_request')) {
+        return [{requestId: 'rebuild:completed-only'}] as T[]
+      }
+
+      return statement.includes('FROM app.review_rebuild_chunk_manifest')
+        ? ([{blockedCount: 0, progressableCount: 0}] as T[])
+        : ([] as T[])
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(
+      operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>,
+    ): Promise<T> => {
+      return operation(database)
+    },
+  }
+
+  const boosted = await boostActiveReviewServingRebuildRequestForProject(
+    {priority: 10_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+    database,
+  )
+
+  expect(boosted).toBe(false)
+  expect(statements).toHaveLength(2)
+  expect(statements.join('\n')).not.toContain('UPDATE app.review_rebuild_request')
 })
 
 test('over-budget V4 rebuild requests park before their chunks can be claimable', async () => {
@@ -473,7 +509,7 @@ test('search-only default rebuild presplit chunks cover gaps between scoped arti
   expect(joined).toContain('{"admissionPresplit":true}')
 })
 
-test('high-fanout single-component default rebuilds use component admission budgets', async () => {
+test('posting default rebuilds avoid admission presplit boundary overlap', async () => {
   const {database, statements} = createFakeRequestDatabase({
     activeComponentStateJson: {
       optional: [],
@@ -527,10 +563,9 @@ test('high-fanout single-component default rebuilds use component admission budg
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'posting'")
   })
 
-  expect(joined).toContain('NTILE(4)')
-  expect(postingChunkInserts).toHaveLength(8)
-  expect(postingChunkInserts[0]).toContain('512')
-  expect(joined).toContain('{"admissionPresplit":true}')
+  expect(joined).not.toContain('NTILE(4)')
+  expect(postingChunkInserts).toHaveLength(2)
+  expect(joined).not.toContain('{"admissionPresplit":true}')
 })
 
 test('default rebuild request keeps same projection identity across base generations', async () => {

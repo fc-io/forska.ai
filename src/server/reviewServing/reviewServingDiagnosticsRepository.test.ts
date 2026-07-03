@@ -37,8 +37,9 @@ const createDiagnosticsDatabase = () => {
 
       if (statement.includes('GROUP BY snapshot_status')) {
         return [
-          {snapshotCount: 1, snapshotStatus: 'active'},
-          {snapshotCount: 2, snapshotStatus: 'failed'},
+          {invalidCandidateCount: 0, snapshotCount: 1, snapshotStatus: 'active'},
+          {invalidCandidateCount: 1, snapshotCount: 1, snapshotStatus: 'candidate'},
+          {invalidCandidateCount: 0, snapshotCount: 2, snapshotStatus: 'failed'},
         ] as T[]
       }
 
@@ -139,9 +140,17 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
       runningCount: 2,
     },
     search: {availability: 'ready', optionalComponent: true, snapshotId: 'snapshot-1'},
-    snapshot: {activeCount: 1, activeSnapshotId: 'snapshot-1', failedCount: 2, lastKnownGoodSnapshotId: 'snapshot-0'},
+    snapshot: {
+      activeCount: 1,
+      activeSnapshotId: 'snapshot-1',
+      candidateCount: 1,
+      failedCount: 2,
+      invalidCandidateCount: 1,
+      lastKnownGoodSnapshotId: 'snapshot-0',
+    },
   })
   expect(statements.join('\n')).toContain('app.review_serving_snapshot_manifest')
+  expect(statements.join('\n')).toContain('app.review_selected_import_snapshot')
   expect(statements.join('\n')).toContain('app.review_serving_dirty_work')
   expect(statements.join('\n')).toContain("status IN ('failed', 'running')")
   expect(statements.join('\n')).toContain("INTERVAL '900 seconds'")

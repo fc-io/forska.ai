@@ -2,6 +2,8 @@ import {existsSync, rmSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
+import {getDefaultMaintenanceDuckdbMemoryLimit} from './duckdbMemoryDefaults.ts'
+
 const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {
     rmSync(filePath, {force: true})
@@ -27,7 +29,7 @@ const getSpawnOutput = (result: ReturnType<typeof globalThis.Bun.spawnSync>) => 
   return stdout
 }
 
-test('duckdb service defaults the runtime memory limit to 20GB', () => {
+test('duckdb service defaults maintenance owners to the bounded maintenance memory profile', () => {
   const duckdbPath = `/tmp/f1-duckdb-service-default-memory-limit-${Date.now()}.duckdb`
 
   try {
@@ -44,6 +46,35 @@ test('duckdb service defaults the runtime memory limit to 20GB', () => {
         {
           cwd: process.cwd(),
           env: {...process.env, DUCKDB_PATH: duckdbPath, DUCKDB_MEMORY_LIMIT: '', SERVER_ROLE: 'maintenance-worker'},
+        },
+      ),
+    )
+
+    const runtimeConfig = JSON.parse(stdout) as {memoryLimit: string}
+
+    expect(runtimeConfig.memoryLimit).toBe(getDefaultMaintenanceDuckdbMemoryLimit())
+  } finally {
+    removeDuckdbFiles(duckdbPath)
+  }
+})
+
+test('duckdb service keeps the 20GB default for non-owner API processes', () => {
+  const duckdbPath = `/tmp/f1-duckdb-service-api-default-memory-limit-${Date.now()}.duckdb`
+
+  try {
+    const stdout = getSpawnOutput(
+      globalThis.Bun.spawnSync(
+        [
+          'bun',
+          '-e',
+          `
+            const {getDuckdbRuntimeConfig} = await import('./src/server/utils/duckdbService.ts')
+            console.log(JSON.stringify(getDuckdbRuntimeConfig()))
+          `,
+        ],
+        {
+          cwd: process.cwd(),
+          env: {...process.env, DUCKDB_PATH: duckdbPath, DUCKDB_MEMORY_LIMIT: '', SERVER_ROLE: 'api'},
         },
       ),
     )

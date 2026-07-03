@@ -12,6 +12,23 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-03 - Invalid Candidate Promotion Snapshot Update
+
+- Error: Live maintenance/dev-single owner crashed with Bun `panic: A C++ exception occurred`; isolated disposable-snapshot promotion crashed after `diag:beforePromote` and a minimal `UPDATE app.review_serving_snapshot_manifest ...` repro crashed at about 0.33-0.37GB RSS.
+- Context: `promoteReviewServingProjectorSnapshot` for project `e43a0bbb-703e-4701-a223-7488c5b40cd0`, candidate snapshot `snapshot:2aabd7a2e4cdbf687fd0e15e8ef5e765`.
+- Cause: The candidate was invalid because its selected-import snapshot was still `candidate`; the promotion failure path wrote validation/failed state back to `app.review_serving_snapshot_manifest`, hitting a DuckDB/Bun native crash on the current DB lineage.
+- Fix: Invalid candidate promotion now returns the validation error without mutating the snapshot manifest row; request finalization can fail the rebuild request and surface the operator-blocked state without crash-looping the owner.
+- Verification: `bun test src/server/reviewServing/reviewServingManifestRepository.test.ts`; disposable current-DB snapshot validation/promotion probes.
+
+## 2026-07-03 - LLM Status Post-Chunk Maintenance Panic
+
+- Error: The primary stacked maintenance owner completed one `llmStatus` chunk for `rebuild:06b41de63a109055af3a953938c60bb4`, then exited with Bun `panic: A C++ exception occurred` before the next useful cycle. Repro runs crashed repeatedly at about 1.4GB RSS after the chunk log; earlier runs with DuckDB recycle enabled crashed at about 7-12GB RSS.
+- Context: Live current-DB probe after the invalid-candidate fix. The request belongs to project `d03fe24a-cfcf-41ed-b09f-7b554a393d80` and still had thousands of pending 64-row `llmStatus` chunks; it preempted the warning-route project because both active requests had priority `10000`.
+- Isolation: Disabling per-small-chunk DuckDB close and forced `Bun.gc(true)` did not stop the panic. A controlled `process.exit(0)` after the chunk avoided the panic for that process but left the stacked-server supervisor stuck after `restarting maintenance`, so it was not a safe fix.
+- Cause: macOS crash reports show `EXC_BREAKPOINT/SIGTRAP` from a DuckDB task-scheduler thread terminating inside `duckdb::DuckTransaction::Commit`, not a kernel OOM kill. Stable clone runs used the bounded maintenance profile (`DUCKDB_MEMORY_LIMIT=6400MiB`, `threads=1`, serialized background work); the crashing direct owner/probe paths fell back to the generic `20GB` default, which maps to `threads=8` and leaves native commit work in DuckDB's parallel scheduler.
+- Fix: Direct maintenance/dev-single/auto owner startup now defaults to the same bounded maintenance DuckDB profile as the split maintenance worker instead of silently inheriting the generic API/default `20GB` profile. Explicit API processes keep the `20GB` default.
+- Verification: Current-DB clone probes showed direct private warning reads and API-proxied warning reads survive after `llmStatus` chunk completion under `6400MiB`; crash reports confirm the historical abort site in `libduckdb.dylib`; focused DuckDB memory-limit tests cover the new owner default.
+
 ## 2026-07-02 - Low-Memory Startup Mutation Preflight
 
 - Error: `DuckDB startup preflight failed ... signal=SIGTRAP`, `Failed to create checkpoint ... Out of Memory Error ... (6.2 GiB/6.2 GiB used)`, followed by Bun `panic: A C++ exception occurred` in the maintenance owner.

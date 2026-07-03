@@ -141,7 +141,10 @@ const getNotEqualLiteral = (statement: string, columnName: string) => {
   )
 }
 
-const createFakeManifestDatabase = (initialSnapshots: FakeSnapshotRow[] = []) => {
+const createFakeManifestDatabase = (
+  initialSnapshots: FakeSnapshotRow[] = [],
+  options: {selectedImportSnapshotStatus?: string} = {},
+) => {
   const projections = new Map<string, FakeProjectionRow>()
   const snapshots = new Map<string, FakeSnapshotRow>()
   const statements: string[] = []
@@ -288,7 +291,7 @@ const createFakeManifestDatabase = (initialSnapshots: FakeSnapshotRow[] = []) =>
     statements.push(statement)
 
     if (statement.includes('FROM app.review_selected_import_snapshot')) {
-      return [{status: 'completed'}] as T[]
+      return [{status: options.selectedImportSnapshotStatus ?? 'completed'}] as T[]
     }
 
     if (statement.includes('FROM app.review_projection_identity_manifest')) {
@@ -520,6 +523,46 @@ test('failed candidate snapshot preserves active and last-known-good manifests',
   expect(active?.status).toBe('active')
   expect(lastKnownGood?.snapshotId).toBe('snapshot-lkg')
   expect(lastKnownGood?.status).toBe('retired')
+})
+
+test('promotion reports invalid candidates without mutating snapshot manifests', async () => {
+  const activeSnapshot: FakeSnapshotRow = {
+    ...baseSnapshotInput,
+    activatedAt: '2026-06-16T10:00:00.000Z',
+    lastError: null,
+    lastKnownGoodSnapshotId: null,
+    optionalComponents: [],
+    requiredComponents: ['display'],
+    snapshotId: 'snapshot-active',
+    status: 'active',
+    updatedAt: '2026-06-16T10:00:00.000Z',
+    validationResult: null,
+  }
+  const {database, snapshots, statements} = createFakeManifestDatabase([activeSnapshot], {
+    selectedImportSnapshotStatus: 'candidate',
+  })
+
+  await createCandidateReviewServingSnapshotManifest(
+    {...baseSnapshotInput, lastKnownGoodSnapshotId: 'snapshot-active', snapshotId: 'snapshot-invalid'},
+    database,
+  )
+
+  const statementCountBeforePromotion = statements.length
+  const promotionResult = await promoteReviewServingProjectorSnapshot(
+    {projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-invalid'},
+    database,
+  )
+  const promotionStatements = statements.slice(statementCountBeforePromotion)
+  const invalidCandidate = snapshots.get('project-1:snapshot-invalid')
+
+  expect(promotionResult).toEqual({
+    error: 'selected import snapshot is not completed',
+    promoted: false,
+    snapshotId: 'snapshot-invalid',
+  })
+  expect(invalidCandidate?.status).toBe('candidate')
+  expect(invalidCandidate?.lastError).toBe(null)
+  expect(promotionStatements.join('\n')).not.toContain('UPDATE app.review_serving_snapshot_manifest')
 })
 
 test('promotion retires previous active and preserves it as last-known-good', async () => {
