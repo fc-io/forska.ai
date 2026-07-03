@@ -268,7 +268,7 @@ type RebuildChunkOutputChecksumRow = {
   actualPayloadBytes?: number | null
 }
 type RebuildRequestPendingChunkCountRow = {pendingChunkCount: number}
-type RebuildRequestSummaryProjectionRow = {outputBaseGeneration: number; projectId: string; projectionIdentity: string}
+type SummaryFilterOptionProjectionRow = {outputBaseGeneration: number; projectId: string; projectionIdentity: string}
 type RebuildRequestSnapshotPromotionRow = {projectId: string; reviewConfigHash: string | null; snapshotId: string}
 
 const defaultReviewServingProjectorWorkerBatchSize = 64
@@ -1695,19 +1695,17 @@ const runSummaryRebuildChunk = async (
           Promise.resolve([] as unknown[]),
         )
 
-        if (input.chunk.requestId === null) {
-          await refreshSummaryFilterOptionsForProjections(
-            [
-              {
-                outputBaseGeneration: input.chunk.outputBaseGeneration,
-                projectId,
-                projectionIdentity: input.chunk.projectionIdentity,
-              },
-            ],
-            getChunkProjectorDatabase(tx) as ReviewServingChunkManifestRepositoryDatabase
-              & ReviewServingProjectorWorkerDatabase,
-          )
-        }
+        await refreshSummaryFilterOptionsForProjections(
+          [
+            {
+              outputBaseGeneration: input.chunk.outputBaseGeneration,
+              projectId,
+              projectionIdentity: input.chunk.projectionIdentity,
+            },
+          ],
+          getChunkProjectorDatabase(tx) as ReviewServingChunkManifestRepositoryDatabase
+            & ReviewServingProjectorWorkerDatabase,
+        )
 
         return {diagnosticsJson: {summaryProjectorSnapshots: snapshotDiagnostics}}
       },
@@ -3411,34 +3409,8 @@ const getRebuildRequestPendingChunkCount = async (
   return Number(row?.pendingChunkCount ?? 0)
 }
 
-const getRebuildRequestSummaryProjections = async (
-  requestId: string,
-  database: ReviewServingChunkManifestRepositoryDatabase,
-) => {
-  return database.queryJson<RebuildRequestSummaryProjectionRow>(`
-    SELECT DISTINCT
-      output_base_generation AS outputBaseGeneration,
-      project_id AS projectId,
-      projection_identity AS projectionIdentity
-    FROM app.review_rebuild_chunk_manifest
-    WHERE request_id = ${getSqlLiteral(requestId)}
-      AND projection_component = 'summary'
-      AND project_id IS NOT NULL
-    ORDER BY project_id ASC, projection_identity ASC, output_base_generation ASC
-  `)
-}
-
-const refreshCompletedRebuildRequestSummaryFilterOptions = async (
-  input: {requestId: string},
-  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
-) => {
-  const summaryProjections = await getRebuildRequestSummaryProjections(input.requestId, database)
-
-  await refreshSummaryFilterOptionsForProjections(summaryProjections, database)
-}
-
 const refreshSummaryFilterOptionsForProjections = async (
-  summaryProjections: readonly RebuildRequestSummaryProjectionRow[],
+  summaryProjections: readonly SummaryFilterOptionProjectionRow[],
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
   await summaryProjections.reduce<Promise<void>>(async (previous, row) => {
@@ -3680,8 +3652,6 @@ const finalizeCompletedReviewServingRebuildRequest = async (
   if (pendingChunkCount > 0) {
     return
   }
-
-  await refreshCompletedRebuildRequestSummaryFilterOptions({requestId: chunk.requestId}, database)
 
   const promotionRows = await getRebuildRequestSnapshotPromotions(chunk.requestId, database)
   const promotions = await promotionRows.reduce<

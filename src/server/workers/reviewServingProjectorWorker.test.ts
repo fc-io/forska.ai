@@ -1993,7 +1993,7 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   ).toBe(3)
 })
 
-test('worker refreshes summary filter options once when a rebuild request is finalized', async () => {
+test('worker does not refresh summary filter options when a rebuild request is finalized', async () => {
   const harness = createWorkerHarness()
   const statements: string[] = []
   const requestId = 'rebuild-summary-finalize'
@@ -2109,7 +2109,7 @@ test('worker refreshes summary filter options once when a rebuild request is fin
 
   expect(result.chunk).toMatchObject({chunkId: summaryChunk.chunkId, status: 'completed'})
   expect(harness.runChunkInputs).toEqual([summaryChunk])
-  expect(filterOptionDeletes).toHaveLength(2)
+  expect(filterOptionDeletes).toHaveLength(0)
   expect(statements.join('\n')).toContain("status = 'completed'")
 })
 
@@ -2238,6 +2238,70 @@ test('worker retries requestless summary chunks when filter option refresh fails
   expect(harness.failedChunks).toEqual([
     {chunkId: summaryChunk.chunkId, error: 'summary filter refresh failed', leaseOwner: 'worker-1'},
   ])
+})
+
+test('request-associated summary chunk refresh failures happen before chunk completion', async () => {
+  const statements: string[] = []
+  const summaryChunk = {
+    ...chunkManifest,
+    chunkId: 'chunk-summary-request-retryable-refresh',
+    outputBaseGeneration: 7,
+    projectionComponent: 'summary' as const,
+    projectionIdentity: 'summary:project-1',
+    requestId: 'rebuild-summary-request',
+  } satisfies ReviewServingRebuildChunkManifest
+  const componentState = {
+    optional: [{baseGeneration: '7', component: 'search', projectionIdentity: 'search:project-1'}],
+    required: [
+      {baseGeneration: '7', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+      {baseGeneration: '7', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+      {baseGeneration: '7', component: 'summary', projectionIdentity: 'summary:project-1'},
+    ],
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+        return [summaryChunk] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return [
+          {
+            componentStateJson: componentState,
+            reviewConfigHash: 'review-config-1',
+            selectedImportSnapshotId: 'selected-import-snapshot-1',
+            snapshotId: 'snapshot-summary-request-refresh',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+        throw new Error('summary filter refresh failed')
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  try {
+    await runReviewServingProjectorWorkerClaimedRebuildChunk({chunk: summaryChunk, leaseOwner: 'worker-1'}, database)
+    throw new Error('expected summary filter refresh to fail')
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe('summary filter refresh failed')
+  }
+
+  expect(statements.join('\n')).toContain('FROM mart.review_article_summary_contribution_v4')
+  expect(statements.join('\n')).toContain('FROM app.review_projection_identity_manifest')
+  expect(statements.join('\n')).not.toContain("status = 'completed'")
 })
 
 test('posting rebuild chunk presplits before hitting runtime DuckDB OOM', async () => {
