@@ -2259,6 +2259,75 @@ test('worker does not refresh summary filter options when a rebuild request is f
   expect(statements.join('\n')).toContain("status = 'completed'")
 })
 
+test('worker refreshes posting stats once when a posting rebuild request is finalized', async () => {
+  const harness = createWorkerHarness()
+  const statements: string[] = []
+  const requestId = 'rebuild-posting-finalize'
+  const postingChunkInput = {
+    ...chunkInput,
+    outputBaseGeneration: 7,
+    projectionComponent: 'posting' as const,
+    projectionIdentity: 'posting:project-1',
+    requestId,
+    snapshotId: 'snapshot-posting-finalize',
+  }
+  const postingChunk = {
+    ...chunkManifest,
+    ...postingChunkInput,
+    chunkId: 'chunk-posting-finalize',
+    requestId,
+  } satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return postingChunk
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return postingChunkInput
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('COUNT(*) AS pendingChunkCount')) {
+      return [{pendingChunkCount: 0}] as T[]
+    }
+
+    if (statement.includes('postingChunkCount')) {
+      return [{postingChunkCount: 2}] as T[]
+    }
+
+    if (statement.includes('chunk.snapshot_id AS snapshotId')) {
+      return [
+        {projectId: postingChunk.projectId, reviewConfigHash: 'review-config-1', snapshotId: postingChunk.snapshotId},
+      ] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+  const joined = statements.join('\n')
+
+  expect(result.chunk).toMatchObject({chunkId: postingChunk.chunkId, status: 'completed'})
+  expect(joined).toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
+  expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
+  expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 serving')
+})
+
 test('worker does not refresh requestless summary chunks after completion finalization', async () => {
   const harness = createWorkerHarness()
   const statements: string[] = []

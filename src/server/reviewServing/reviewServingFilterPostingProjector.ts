@@ -38,6 +38,7 @@ export type ProjectReviewServingFilterPostingsInput = {
   selectedImportSnapshotId: string
   snapshotId: string
   status?: ReviewServingProjectionManifestStatus
+  refreshFullRebuildStats?: boolean
 }
 
 type PostingContributionRow = {
@@ -771,7 +772,9 @@ const getInsertFullRebuildContributionRowsStatement = (input: ProjectReviewServi
       contribution_updated_at = excluded.contribution_updated_at`
 }
 
-const getDeleteFullRebuildStatsRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+const getDeleteFullRebuildStatsRowsStatement = (
+  input: Pick<ProjectReviewServingFilterPostingsInput, 'projectId' | 'reviewConfigHash' | 'snapshotId'>,
+) => {
   return `DELETE FROM mart.review_filter_posting_stats_v4 stats
     WHERE stats.project_id = ${getSqlLiteral(input.projectId)}
       AND stats.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
@@ -782,7 +785,9 @@ const getPostingIdentityFromStatsSql = (alias: string) => {
   return `'{"filterKind":' || CAST(to_json(${alias}.filter_kind) AS VARCHAR) || ',"filterValue":' || CAST(to_json(${alias}.filter_value) AS VARCHAR) || ',"listModeKey":' || CAST(to_json(${alias}.list_mode_key) AS VARCHAR) || '}'`
 }
 
-const getInsertFullRebuildStatsRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+const getInsertFullRebuildStatsRowsStatement = (
+  input: Pick<ProjectReviewServingFilterPostingsInput, 'projectId' | 'reviewConfigHash' | 'snapshotId'>,
+) => {
   return `INSERT INTO mart.review_filter_posting_stats_v4 (
       project_id,
       review_config_hash,
@@ -835,18 +840,38 @@ const getInsertFullRebuildStatsRowsStatement = (input: ProjectReviewServingFilte
       stats_updated_at = excluded.stats_updated_at`
 }
 
+export const refreshReviewServingFilterPostingStats = async (
+  input: Pick<ProjectReviewServingFilterPostingsInput, 'projectId' | 'reviewConfigHash' | 'snapshotId'>,
+  database: ReviewServingFilterPostingProjectorDatabase = getAppDatabaseService() as ReviewServingFilterPostingProjectorDatabase,
+) => {
+  await writeReviewServingProjectorComponent(
+    {
+      acknowledgements: [],
+      component: 'posting',
+      projectionManifests: [],
+      records: [],
+      repairDirtyWork: [],
+      statements: [getDeleteFullRebuildStatsRowsStatement(input), getInsertFullRebuildStatsRowsStatement(input)],
+    },
+    database,
+  )
+}
+
 const getFullRebuildWriteStatements = (input: ProjectReviewServingFilterPostingsInput) => {
   const insertStatements =
     input.listModeKeys.length === 0
       ? []
       : [getInsertFullRebuildServingRowsStatement(input), getInsertFullRebuildContributionRowsStatement(input)]
+  const statsStatements =
+    input.refreshFullRebuildStats === false
+      ? []
+      : [getDeleteFullRebuildStatsRowsStatement(input), getInsertFullRebuildStatsRowsStatement(input)]
 
   return [
     getDeleteFullRebuildServingRowsStatement(input),
     getDeleteContributionRowsStatement(input),
     ...insertStatements,
-    getDeleteFullRebuildStatsRowsStatement(input),
-    getInsertFullRebuildStatsRowsStatement(input),
+    ...statsStatements,
   ]
 }
 

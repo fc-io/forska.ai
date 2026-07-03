@@ -20,6 +20,14 @@ Entry format:
 - Fix: Full posting rebuilds now return through a SQL-native early path for serving, contribution, stats, and count validation before source rows are materialized, and completed posting chunks recycle DuckDB/collect GC like other native-heavy chunks.
 - Verification: `bun test src/server/reviewServing/reviewServingFilterPostingProjector.test.ts src/server/workers/reviewServingProjectorWorker.test.ts`.
 
+## 2026-07-03 - Full Posting Rebuild Stats Regroup Per Chunk
+
+- Error: Chunked full posting rebuilds still risked DuckDB OOM/native memory spikes because each article-range chunk ran an unbounded stats regroup over `mart.review_article_filter_posting_serving_v4`.
+- Context: `projectReviewServingFilterPostings` set-based full rebuild chunks for the `posting` component.
+- Cause: The stats refresh ignored `chunkStartArticleId`/`chunkEndArticleId` and ran inside every chunk write transaction.
+- Fix: Posting rebuild chunks now defer stats refresh, and completed posting rebuild request finalization refreshes posting stats once per rebuilt snapshot before promotion.
+- Verification: `bun test src/server/reviewServing/reviewServingFilterPostingProjector.test.ts src/server/workers/reviewServingProjectorWorker.test.ts`.
+
 ## 2026-07-03 - Full Posting Rebuild JS Fanout
 
 - Error: Full posting rebuild chunks could still drive RSS/OOM spikes while materializing one JS serving record per live posting row.
