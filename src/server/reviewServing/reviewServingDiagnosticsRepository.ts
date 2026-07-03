@@ -111,6 +111,47 @@ type QuarantinedCursorCountRow = {quarantinedCursorCount: number}
 type SnapshotComponentStateEntry = {component: ReviewServingProjectionComponent}
 
 const terminalOutboxStatuses = ['operator_terminal', 'reconciled'] as const
+const componentSourceWatermarkKeys: Record<ReviewServingProjectionComponent, readonly string[]> = {
+  display: ['reviewChange', 'review-change'],
+  humanStatus: [
+    'reviewChange',
+    'review-change',
+    'importRunArticle',
+    'import-run-article',
+    'projectScope',
+    'project-scope',
+  ],
+  judgmentInputContent: ['reviewChange', 'review-change'],
+  llmStatus: [
+    'reviewChange',
+    'review-change',
+    'importRunArticle',
+    'import-run-article',
+    'projectScope',
+    'project-scope',
+  ],
+  payload: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
+  posting: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
+  projectScope: [
+    'reviewChange',
+    'review-change',
+    'importRunArticle',
+    'import-run-article',
+    'projectScope',
+    'project-scope',
+  ],
+  queue: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
+  search: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
+  selectedImport: [
+    'reviewChange',
+    'review-change',
+    'importRunArticle',
+    'import-run-article',
+    'projectScope',
+    'project-scope',
+  ],
+  summary: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
+}
 const emptyCountState: ReviewServingDiagnosticsCountState = {
   completedCount: 0,
   failedCount: 0,
@@ -155,6 +196,54 @@ const getProjectSourcePartitions = (projectId: string) => {
 
 const getSqlStringList = (values: readonly string[]) => {
   return values.map(getSqlLiteral).join(', ')
+}
+
+const getSourceWatermarkJsonExtract = (key: string) => {
+  return `TRY_CAST(json_extract_string(snapshot.source_watermarks_json, '$."${key}"') AS BIGINT)`
+}
+
+const getSourceWatermarkAggregateSql = (keys: readonly string[]) => {
+  return `GREATEST(0, ${keys
+    .map((key) => {
+      return `COALESCE(${getSourceWatermarkJsonExtract(key)}, 0)`
+    })
+    .join(', ')})`
+}
+
+const getComponentSourceWatermarkSql = (stateAlias: string) => {
+  const componentSql = `json_extract_string(${stateAlias}.value, '$.component')`
+  const componentSourceWatermarkSql = `TRY_CAST(json_extract_string(snapshot.source_watermarks_json, '$."' || ${componentSql} || '"') AS BIGINT)`
+  const aggregateCaseSql = Object.entries(componentSourceWatermarkKeys)
+    .map(([component, keys]) => {
+      return `WHEN ${getSqlLiteral(component)} THEN ${getSourceWatermarkAggregateSql(keys)}`
+    })
+    .join('\n')
+  const sourceKeyCaseSql = Object.entries(componentSourceWatermarkKeys)
+    .map(([component, keys]) => {
+      return `(${componentSql} = ${getSqlLiteral(component)} AND source_watermark.key IN (${getSqlStringList(keys)}))`
+    })
+    .join('\n                OR ')
+
+  return `
+            AND manifest.input_watermark >= COALESCE(
+              ${componentSourceWatermarkSql},
+              CASE ${componentSql}
+                ${aggregateCaseSql}
+                ELSE 0
+              END
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM json_each(snapshot.source_watermarks_json) source_watermark
+              WHERE (
+                (${componentSourceWatermarkSql} IS NOT NULL AND source_watermark.key = ${componentSql})
+                OR (${componentSourceWatermarkSql} IS NULL AND (${sourceKeyCaseSql}))
+              )
+                AND COALESCE(
+                  TRY_CAST(json_extract_string(manifest.input_watermarks_json, '$."' || source_watermark.key || '"') AS BIGINT),
+                  0
+                ) < COALESCE(TRY_CAST(json_extract_string(source_watermark.value, '$') AS BIGINT), 0)
+            )`
 }
 
 const getOutboxTerminalStatusList = () => {
@@ -374,6 +463,7 @@ const getSnapshotStatusCountRowsEffect = (
             AND manifest.base_generation = TRY_CAST(json_extract_string(required_state.value, '$.baseGeneration') AS BIGINT)
             AND manifest.patch_watermark = TRY_CAST(json_extract_string(required_state.value, '$.patchWatermark') AS BIGINT)
             AND manifest.input_watermark >= TRY_CAST(json_extract_string(required_state.value, '$.patchWatermark') AS BIGINT)
+            ${getComponentSourceWatermarkSql('required_state')}
         )
       ), invalid_optional_state_candidate AS (
         SELECT DISTINCT snapshot.snapshot_id
@@ -393,6 +483,7 @@ const getSnapshotStatusCountRowsEffect = (
             AND manifest.base_generation = TRY_CAST(json_extract_string(optional_state.value, '$.baseGeneration') AS BIGINT)
             AND manifest.patch_watermark = TRY_CAST(json_extract_string(optional_state.value, '$.patchWatermark') AS BIGINT)
             AND manifest.input_watermark >= TRY_CAST(json_extract_string(optional_state.value, '$.patchWatermark') AS BIGINT)
+            ${getComponentSourceWatermarkSql('optional_state')}
         )
       ), invalid_candidate AS (
         SELECT snapshot.snapshot_id

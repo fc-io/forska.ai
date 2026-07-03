@@ -157,6 +157,12 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   expect(statements.join('\n')).toContain("json_extract(snapshot.component_state_json, '$.optional')")
   expect(statements.join('\n')).toContain('app.review_projection_identity_manifest')
   expect(statements.join('\n')).toContain("manifest.status IN ('active', 'candidate')")
+  expect(statements.join('\n')).toContain('snapshot.source_watermarks_json')
+  expect(statements.join('\n')).toContain('manifest.input_watermarks_json')
+  expect(statements.join('\n')).toContain("source_watermark.key IN ('reviewChange', 'review-change')")
+  expect(statements.join('\n')).toContain(
+    "source_watermark.key IN ('reviewChange', 'review-change', 'importRunArticle'",
+  )
   expect(statements.join('\n')).toContain('app.review_serving_dirty_work')
   expect(statements.join('\n')).toContain("status IN ('failed', 'running')")
   expect(statements.join('\n')).toContain("INTERVAL '900 seconds'")
