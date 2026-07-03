@@ -4,11 +4,11 @@
 
 Make the V4 review-serving rebuild path fast enough for the review page's normal "missing snapshot" path. This plan is intentionally investigation and implementation planning only; no code changes are included here.
 
-Status: implementation plan with current audit annotations.
+Status: PR #108's safe implementation slice is merged. The overall speed plan remains in progress; this document now tracks the remaining roadmap plus archived June 30/July 1 evidence that motivated the work.
 
-## Implementation Audit - 2026-07-02
+## Implementation Audit - Post PR #108 Merge
 
-Current implementation status, based on source inspection against this plan:
+Current implementation status after PR #108 merged, based on source inspection against this plan:
 
 | Phase | Status | Current Evidence |
 | --- | --- | --- |
@@ -20,11 +20,25 @@ Current implementation status, based on source inspection against this plan:
 | Phase 5 - Rework Chunk Admission | Mostly implemented | Default rebuilds and missing-snapshot bootstrap can presplit at admission using estimate/budget-derived article ranges; default single-component rebuilds now use component-specific input-row budgets for high-fanout components. Runtime presplitting still exists as a safety net for old or misestimated chunks. |
 | Phase 6 - Controlled Parallelism | Partially implemented | The worker now supports a configurable `rebuildChunkBatchSize` that can claim and execute multiple rebuild chunks in one wake while preserving the existing serialized writer lane; the maintenance heartbeat wires this to `FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE`, defaulting to 1. True read/transform parallelism, set-based multi-chunk write, and controlled multi-writer execution are still pending. |
 
-Summary: the plan is no longer a pure future plan. Scheduler ordering, foreground priority/drain, cheap validation, generic batched writes, SQL-native search/queue rebuild writes, bootstrap missing-snapshot admission, admission presplitting, high-fanout timing diagnostics, summary finalization cleanup, and configurable serial chunk batching have landed. The remaining largest gaps are full direct snapshot-build semantics for posting/summary/final tables, SQL-native posting/judgment-heavy paths, staging-query checksum reuse, and true read/transform or writer parallelism.
+Summary: the plan is no longer a pure future plan. Scheduler ordering, foreground priority/drain, cheap validation, generic batched writes, SQL-native search/queue rebuild writes, bootstrap missing-snapshot admission, admission presplitting, high-fanout timing diagnostics, summary finalization cleanup, and configurable serial chunk batching have landed. The remaining largest gaps are full direct snapshot-build semantics for posting/summary/final tables, SQL-native posting/judgment-heavy paths, staging-query checksum reuse, runtime presplitting cleanup, and true read/transform or writer parallelism.
 
-## Current Evidence
+## Remaining Roadmap
 
-Latest observed request:
+The next implementation work should focus on these unfinished items, in this order unless new benchmark data changes the bottleneck ranking:
+
+1. SQL-native high-fanout writers: move `posting` to set-based DuckDB computation and writes; finish removing large JS row arrays from any remaining high-fanout rebuild paths where source inspection or timings still show materialization overhead.
+2. Direct final-table snapshot build: make full missing-snapshot rebuilds write final candidate serving tables directly, avoiding summary contribution rows and candidate patch compaction where they only support incremental replay semantics.
+3. Staging-query checksum reuse: where strict validation remains necessary, compute or reuse checksums from the same staging query used for insertion instead of rescanning written output tables.
+4. Runtime presplitting cleanup: keep admission-time presplitting as the normal path and remove or sharply narrow runtime presplitting once old rows, unexpected OOM handling, and misestimated chunks have safe alternatives.
+5. Reader/transform parallelism: add bounded parallel source-query/transform work with a single serialized writer lane and memory/RSS guardrails.
+6. Set-based multi-chunk writer: batch compatible range-disjoint chunks into one set-based transaction before adding more writer concurrency.
+7. Controlled multi-writer execution: only after range-disjointness, conflict behavior, and memory-spill tests are stable, allow multiple writer transactions against disjoint tables or disjoint key ranges.
+
+## Historical Evidence - Archived June 30/July 1 Observations
+
+The observations below are historical evidence from before the PR #108 safe slice merged. They are preserved to explain why the plan exists, but they should not be read as the current implementation state.
+
+Observed request from June 30:
 
 - Project: `d03fe24a-cfcf-41ed-b09f-7b554a393d80`
 - Request: `rebuild:06b41de63a109055af3a953938c60bb4`
@@ -61,16 +75,18 @@ Current row volumes for this project:
 - `mart.review_article_filter_posting_patch_v4`: `176,320` rows
 - `mart.review_article_summary_contribution_v4` for `posting`: `352,640` rows
 
-Follow-up foreground repair evidence from `2026-07-01`:
+Follow-up foreground repair evidence from July 1:
 
 - Project: `4ec939b2-47bb-48dd-ad62-ad9f4b5acecf`
 - The foreground priority and chunk-age fixes made the repair live: completed rebuild chunks advanced from `207` to `597` and `lastProgressedAt` stayed current.
 - The repair was still too slow for the page: while rebuild chunks drained, the visible project refresh backlog grew to `4,686` pending / `4,676` queued and serving dirty work grew to `4,616` pending.
 - Process RSS was roughly `7.1 GB`, and the diagnostics reported temp spill unavailable.
 
-Verdict: the current path now makes progress, but it is doing too much serial and row-level work for a foreground missing-snapshot repair.
+Historical verdict at the time: the path had started making progress, but it was doing too much serial and row-level work for a foreground missing-snapshot repair.
 
-## Why It Is Slow
+## Historical Bottlenecks From The Archived Evidence
+
+These bottlenecks describe the June 30/July 1 implementation. Some are now fixed or partially fixed by PR #108 and earlier follow-ups; the current status table and remaining roadmap above are authoritative.
 
 1. The rebuild is an artificial serial waterfall.
 
@@ -309,18 +325,15 @@ Status: partially implemented.
 
 Expected result: parallelism improves CPU/query throughput without turning DuckDB into a write-lock bottleneck.
 
-## Recommended Implementation Order
+## Recommended Remaining Implementation Order
 
-1. Instrument chunk timings and row counts.
-2. Skip or cheapen checksum validation for no-expected-checksum rebuild chunks.
-3. Fix claim order to use actual DAG readiness instead of fixed component order.
-4. Split foreground critical chunks from bulk chunks and add a bounded foreground drain budget.
-5. Add the missing-snapshot full-rebuild fast path for direct candidate snapshot construction.
-6. Add SQL-native writes for `search`, `judgmentInputContent`, `queue`, and `posting`.
-7. Move presplitting into admission and tune chunk sizes from recorded actual rows.
-8. Add read/transform parallelism with a single writer lane.
-9. Add set-based multi-chunk writes.
-10. Add true controlled multi-writer execution only after range-disjointness and memory-spill tests are stable.
+1. Finish SQL-native high-fanout rebuild writes, with `posting` as the largest known remaining gap.
+2. Build missing-snapshot snapshots directly into final candidate serving tables, including summary/final-table semantics that avoid unnecessary contribution and patch-compaction work.
+3. Reuse staging-query checksums for strict validation paths that still need checksums.
+4. Remove or sharply narrow runtime presplitting after admission-time presplitting covers normal rebuilds and safe fallback behavior is explicit.
+5. Add bounded reader/transform parallelism with a single writer lane.
+6. Add a set-based multi-chunk writer for compatible range-disjoint chunks.
+7. Add controlled multi-writer execution only after range-disjointness, write-conflict, memory-spill, and benchmark tests are stable.
 
 ## Quality Gates
 
