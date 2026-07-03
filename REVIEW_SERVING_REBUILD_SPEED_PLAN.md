@@ -14,25 +14,24 @@ Current implementation status after PR #108 merged, based on source inspection a
 | --- | --- | --- |
 | Phase 0 - Instrument Before Optimizing | Mostly implemented | Chunk completion now writes `duration_ms`, actual output rows/bytes/payload bytes, and `diagnostics_json`; cheap validation records `validationMode`; chunk diagnostics include write/validation timing splits; worker progress logs include claim/heartbeat/execute/finalize/recycle/GC timings; the generic writer reports record counts/batches/write ms per table; posting, summary, and judgment-payload rebuild chunks report source-query, transform/diff, and writer timing splits; `db:duck:inspect-review-serving-rebuild-timings` summarizes per-request timings and claimable pending chunks. Fine-grained source-query/JS-transform timing is still pending for other remaining JS-heavy components that do not use SQL-native writers. |
 | Phase 1 - Fix The Scheduler | Mostly implemented | Claiming now uses component prerequisites and critical-lane/priority ordering instead of the old fixed waterfall; tests cover independent claimability. Foreground rebuild drain budget/TTL exists. Chunks now persist a durable `workload_class` of `critical` or `bulk`, and claim ordering uses it with a component fallback for old rows. The worker can now run a bounded configurable rebuild chunk batch per wake, defaulting to one chunk until enabled. |
-| Phase 2 - Batch Or SQL-Native Writes | Partially implemented | Generic record writes are batched by table/key/shape in `writeReviewServingProjectorRecords`; `search` and `queue` rebuilds have SQL-native `INSERT INTO ... SELECT` paths. `judgmentInputContent` still calls projector SQL but validation/looping remains component-specific, and `posting` still materializes rows/contribution diffs in JS before batched writes. |
-| Phase 3 - Add A Full-Rebuild Fast Path | Partially implemented | Missing-snapshot requests can create a bootstrap candidate snapshot and explicit bootstrap chunks. Several rebuild chunk executors write base/candidate rows directly, full posting rebuilds now skip incremental posting patch rows, and summary rebuild chunks leave global filter-option refresh to request finalization. Full rebuild still writes posting contribution state and still uses candidate compaction/promotion rather than a complete direct final-table snapshot build. |
-| Phase 4 - Make Validation Proportional | Mostly implemented | `getRebuildChunkOutputValidation` keeps strict checksum validation when `chunk.checksum` is present and uses cheap count validation with `validationMode: 'cheap-count'` when it is null. `FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION=true` forces full checksum diagnostics for targeted parity/debug runs. Tests cover all three modes. Reusing staging-query checksums where strict validation remains necessary is still pending. |
+| Phase 2 - Batch Or SQL-Native Writes | Mostly implemented | Generic record writes are batched by table/key/shape in `writeReviewServingProjectorRecords`; `search` and `queue` rebuilds have SQL-native `INSERT INTO ... SELECT` paths. Full posting rebuilds now use set-based SQL statements for serving and posting contribution rows instead of sending those rows through the generic projector writer. `judgmentInputContent` still calls projector SQL but validation/looping remains component-specific, and posting still materializes source/diff/stat rows in JS before the full-rebuild set-based write. |
+| Phase 3 - Add A Full-Rebuild Fast Path | Partially implemented | Missing-snapshot requests can create a bootstrap candidate snapshot and explicit bootstrap chunks. Several rebuild chunk executors write base/candidate rows directly, full posting rebuilds now skip incremental posting patch rows, use set-based serving/contribution writes, and summary rebuild chunks leave global filter-option refresh to request finalization. Fresh candidate snapshots with no selected-import patch watermark now skip patch-compaction scans. Full rebuild still writes posting contribution state, summary contribution state, and still uses candidate compaction/promotion where patch work exists rather than a complete direct final-table snapshot build. |
+| Phase 4 - Make Validation Proportional | Mostly implemented | `getRebuildChunkOutputValidation` keeps strict checksum validation when `chunk.checksum` is present and uses cheap count validation with `validationMode: 'cheap-count'` when it is null. `FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION=true` forces full checksum diagnostics for targeted parity/debug runs. Full posting rebuild chunks can now return `validationMode: 'reused-source-posting-checksum'` from the write-side source rows and avoid rescanning the output table. Tests cover these modes. |
 | Phase 5 - Rework Chunk Admission | Mostly implemented | Default rebuilds and missing-snapshot bootstrap can presplit at admission using estimate/budget-derived article ranges; default single-component rebuilds now use component-specific input-row budgets for high-fanout components. Runtime presplitting still exists as a safety net for old or misestimated chunks. |
 | Phase 6 - Controlled Parallelism | Partially implemented | The worker now supports a configurable `rebuildChunkBatchSize` that can claim and execute multiple rebuild chunks in one wake while preserving the existing serialized writer lane; the maintenance heartbeat wires this to `FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE`, defaulting to 1. True read/transform parallelism, set-based multi-chunk write, and controlled multi-writer execution are still pending. |
 
-Summary: the plan is no longer a pure future plan. Scheduler ordering, foreground priority/drain, cheap validation, generic batched writes, SQL-native search/queue rebuild writes, bootstrap missing-snapshot admission, admission presplitting, high-fanout timing diagnostics, summary finalization cleanup, and configurable serial chunk batching have landed. The remaining largest gaps are full direct snapshot-build semantics for posting/summary/final tables, SQL-native posting/judgment-heavy paths, staging-query checksum reuse, runtime presplitting cleanup, and true read/transform or writer parallelism.
+Summary: the plan is no longer a pure future plan. Scheduler ordering, foreground priority/drain, cheap validation, generic batched writes, SQL-native search/queue rebuild writes, full-posting set-based serving/contribution writes, posting validation checksum reuse, bootstrap missing-snapshot admission, admission presplitting, high-fanout timing diagnostics, summary finalization cleanup, fresh no-patch compaction short-circuiting, and configurable serial chunk batching have landed. The remaining largest gaps are complete direct final-table snapshot semantics for posting/summary/final tables, remaining JS materialization in posting/judgment-heavy paths, runtime presplitting cleanup, and true read/transform or writer parallelism.
 
 ## Remaining Roadmap
 
 The next implementation work should focus on these unfinished items, in this order unless new benchmark data changes the bottleneck ranking:
 
-1. SQL-native high-fanout writers: move `posting` to set-based DuckDB computation and writes; finish removing large JS row arrays from any remaining high-fanout rebuild paths where source inspection or timings still show materialization overhead.
-2. Direct final-table snapshot build: make full missing-snapshot rebuilds write final candidate serving tables directly, avoiding summary contribution rows and candidate patch compaction where they only support incremental replay semantics.
-3. Staging-query checksum reuse: where strict validation remains necessary, compute or reuse checksums from the same staging query used for insertion instead of rescanning written output tables.
-4. Runtime presplitting cleanup: keep admission-time presplitting as the normal path and remove or sharply narrow runtime presplitting once old rows, unexpected OOM handling, and misestimated chunks have safe alternatives.
-5. Reader/transform parallelism: add bounded parallel source-query/transform work with a single serialized writer lane and memory/RSS guardrails.
-6. Set-based multi-chunk writer: batch compatible range-disjoint chunks into one set-based transaction before adding more writer concurrency.
-7. Controlled multi-writer execution: only after range-disjointness, conflict behavior, and memory-spill tests are stable, allow multiple writer transactions against disjoint tables or disjoint key ranges.
+1. Direct final-table snapshot build: make full missing-snapshot rebuilds write final candidate serving tables directly, avoiding remaining summary contribution rows, posting contribution rows that only support later reductions, and candidate patch compaction where patch work still exists only for incremental replay semantics.
+2. Remaining high-fanout JS materialization: finish removing large JS row arrays from `posting`, `judgmentInputContent`, or any other rebuild paths where source inspection or timings still show materialization overhead after the full-posting set-based write slice.
+3. Runtime presplitting cleanup: keep admission-time presplitting as the normal path and remove or sharply narrow runtime presplitting once old rows, unexpected OOM handling, and misestimated chunks have safe alternatives.
+4. Reader/transform parallelism: add bounded parallel source-query/transform work with a single serialized writer lane and memory/RSS guardrails.
+5. Set-based multi-chunk writer: batch compatible range-disjoint chunks into one set-based transaction before adding more writer concurrency.
+6. Controlled multi-writer execution: only after range-disjointness, conflict behavior, and memory-spill tests are stable, allow multiple writer transactions against disjoint tables or disjoint key ranges.
 
 ## Historical Evidence - Archived June 30/July 1 Observations
 
@@ -230,11 +229,12 @@ Expected result: even before query optimization, the page reaches a useful state
 
 ### Phase 2 - Batch Or SQL-Native Writes
 
-Status: partially implemented.
+Status: mostly implemented.
 
 - Implemented: the generic writer groups records by table/key/shape, dedupes by primary key, and writes `VALUES` batches of 250 instead of one upsert per record.
 - Implemented: `search` rebuild uses `writeReviewServingTitleSearchRebuildRows` with SQL-native delete plus `INSERT INTO ... SELECT ... ON CONFLICT`; `queue` rebuild uses `writeReviewServingQueueRebuildRows` similarly.
-- Still pending: fully SQL-native rebuild paths for `posting`; complete removal of large JS record arrays for the remaining high-fanout components; broader tests for component-specific SQL-native rebuild writers.
+- Implemented: full posting rebuilds now build serving rows and posting contribution rows with set-based `INSERT INTO ... SELECT ... ON CONFLICT` statements and omit those rows from generic projector record writes.
+- Still pending: complete SQL-native/source-staged rebuild paths for `posting` and other high-fanout components that still materialize source, diff, stats, or validation data in JS; broader tests for component-specific SQL-native rebuild writers.
 
 - Add a bulk writer path to `writeReviewServingProjectorComponent`:
   - group records by table and conflict key,
@@ -257,7 +257,8 @@ Status: partially implemented.
 - Implemented: `missingReviewServingSnapshot` requests can bootstrap a candidate snapshot, projection identity manifests, and explicit rebuild chunks rather than only replaying dirty work.
 - Implemented: several rebuild executors write bounded base/candidate rows directly by article range.
 - Implemented: full posting rebuild chunks skip `mart.review_article_filter_posting_patch_v4` writes and write only serving/stat/contribution state needed by the final candidate snapshot and future incremental diffs. Summary article-range chunks no longer recompute global filter options; completed-request finalization refreshes them once for each summary projection.
-- Still pending: a complete direct final-table snapshot build that avoids summary contribution rows and candidate patch compaction for full rebuilds. Posting still writes serving, stats, and contribution records through the projector writer.
+- Implemented: full posting rebuilds write serving and posting contribution rows with set-based statements instead of the generic projector record writer; fresh candidate snapshots with no selected-import patch watermark skip candidate patch-compaction scans.
+- Still pending: a complete direct final-table snapshot build that avoids remaining summary contribution rows, posting contribution rows when they only support reduction/future incremental semantics, and candidate patch compaction where patch work still exists.
 
 - Treat `missingReviewServingSnapshot` as a snapshot build, not as an incremental patch replay.
 - Implement this before optimizing all incremental dirty-work fanout. The live foreground repair showed thousands of serving dirty-work rows becoming visible while rebuild chunks were still moving, which is the wrong shape for a page-open repair.
@@ -274,7 +275,8 @@ Status: mostly implemented.
 
 - Implemented: chunks with `checksum !== null` keep strict `string_agg` checksum validation; chunks with `checksum === null` use cheap count validation and store `validationMode: 'cheap-count'`.
 - Implemented: `FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION=true` forces full checksum diagnostics for chunks without expected checksums and records `validationMode: 'debug-strict-checksum'`.
-- Still pending or not found: reuse of staging-query checksums where strict validation remains necessary.
+- Implemented: full posting rebuild chunks can return a reusable source-row checksum/count from `projectReviewServingFilterPostings`; `writeReviewServingRebuildChunkOutput` accepts that validation result and avoids a separate output-table checksum scan when exactly one posting snapshot result provides it.
+- Still pending: extend source/staging checksum reuse if future strict-validation bottlenecks appear outside the completed posting full-rebuild path.
 
 - If a chunk has an expected checksum, keep strict checksum validation.
 - If a chunk has no expected checksum, skip full `string_agg` checksum by default and store cheaper diagnostics:
@@ -327,13 +329,12 @@ Expected result: parallelism improves CPU/query throughput without turning DuckD
 
 ## Recommended Remaining Implementation Order
 
-1. Finish SQL-native high-fanout rebuild writes, with `posting` as the largest known remaining gap.
-2. Build missing-snapshot snapshots directly into final candidate serving tables, including summary/final-table semantics that avoid unnecessary contribution and patch-compaction work.
-3. Reuse staging-query checksums for strict validation paths that still need checksums.
-4. Remove or sharply narrow runtime presplitting after admission-time presplitting covers normal rebuilds and safe fallback behavior is explicit.
-5. Add bounded reader/transform parallelism with a single writer lane.
-6. Add a set-based multi-chunk writer for compatible range-disjoint chunks.
-7. Add controlled multi-writer execution only after range-disjointness, write-conflict, memory-spill, and benchmark tests are stable.
+1. Build missing-snapshot snapshots directly into final candidate serving tables, including summary/final-table semantics that avoid unnecessary contribution and patch-compaction work still left after the posting fast-path slices.
+2. Finish removing high-fanout JS materialization where timings still show source/diff/stat/validation overhead.
+3. Remove or sharply narrow runtime presplitting after admission-time presplitting covers normal rebuilds and safe fallback behavior is explicit.
+4. Add bounded reader/transform parallelism with a single writer lane.
+5. Add a set-based multi-chunk writer for compatible range-disjoint chunks.
+6. Add controlled multi-writer execution only after range-disjointness, write-conflict, memory-spill, and benchmark tests are stable.
 
 ## Quality Gates
 
