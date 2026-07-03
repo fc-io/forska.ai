@@ -294,6 +294,30 @@ test('full posting rebuilds scope set-based deletes to article ranges', async ()
   ).not.toContain('summary_definition_version')
 })
 
+test('chunked full posting rebuilds can defer stats refresh outside chunk writes', async () => {
+  const {database, statements} = createPostingDatabase({
+    existingRows: [],
+    newRows: [postingRow({articleId: 'article-2', filterKind: 'importRoute', filterValue: 'route-1'})],
+  })
+
+  await projectReviewServingFilterPostings(
+    {
+      ...projectInput([]),
+      chunkEndArticleId: 'article-9',
+      chunkStartArticleId: 'article-2',
+      refreshFullRebuildStats: false,
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
+  expect(joined).not.toContain('INSERT INTO mart.review_filter_posting_stats_v4')
+})
+
 test('deletes write tombstones, remove serving rows, and decrement stats in the writer transaction', async () => {
   const {database, statements} = createPostingDatabase({
     existingRows: [postingRow({filterKind: 'llmStatus', filterValue: 'answered'})],

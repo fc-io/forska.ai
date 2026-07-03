@@ -38,7 +38,10 @@ import {
   getReviewServingFilterOptionIdentity,
   projectReviewServingFilterOptions,
 } from '../reviewServing/reviewServingFilterOptionProjector.ts'
-import {projectReviewServingFilterPostings} from '../reviewServing/reviewServingFilterPostingProjector.ts'
+import {
+  projectReviewServingFilterPostings,
+  refreshReviewServingFilterPostingStats,
+} from '../reviewServing/reviewServingFilterPostingProjector.ts'
 import {projectReviewServingHumanStatusPatches} from '../reviewServing/reviewServingHumanStatusProjector.ts'
 import {projectReviewServingJudgmentPayloadRows} from '../reviewServing/reviewServingJudgmentPayloadProjector.ts'
 import {projectReviewServingLlmStatusPatches} from '../reviewServing/reviewServingLlmStatusProjector.ts'
@@ -268,6 +271,7 @@ type RebuildChunkOutputChecksumRow = {
   actualPayloadBytes?: number | null
 }
 type RebuildRequestPendingChunkCountRow = {pendingChunkCount: number}
+type RebuildRequestPostingChunkCountRow = {postingChunkCount: number}
 type SummaryFilterOptionProjectionRow = {outputBaseGeneration: number; projectId: string; projectionIdentity: string}
 type RebuildRequestSnapshotPromotionRow = {projectId: string; reviewConfigHash: string | null; snapshotId: string}
 
@@ -1629,6 +1633,7 @@ const runPostingRebuildChunk = async (
               projectId,
               projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
               projectionIdentity: input.chunk.projectionIdentity,
+              refreshFullRebuildStats: false,
               reviewConfigHash: requireReviewConfigHash(snapshot),
               selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
               snapshotId: snapshot.snapshotId,
@@ -3430,6 +3435,38 @@ const getRebuildRequestPendingChunkCount = async (
   return Number(row?.pendingChunkCount ?? 0)
 }
 
+const getRebuildRequestHasPostingChunks = async (
+  requestId: string,
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  const [row] = await database.queryJson<RebuildRequestPostingChunkCountRow>(`
+    SELECT CAST(COUNT(*) AS INTEGER) AS postingChunkCount
+    FROM app.review_rebuild_chunk_manifest
+    WHERE request_id = ${getSqlLiteral(requestId)}
+      AND projection_component = 'posting'
+  `)
+
+  return Number(row?.postingChunkCount ?? 0) > 0
+}
+
+const refreshPostingStatsForRebuildRequestSnapshots = async (
+  promotionRows: readonly RebuildRequestSnapshotPromotionRow[],
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  await promotionRows.reduce<Promise<void>>(async (previous, row) => {
+    await previous
+
+    if (row.reviewConfigHash === null) {
+      throw new Error(`cannot refresh posting stats without review config hash for snapshot ${row.snapshotId}`)
+    }
+
+    await refreshReviewServingFilterPostingStats(
+      {projectId: row.projectId, reviewConfigHash: row.reviewConfigHash, snapshotId: row.snapshotId},
+      database,
+    )
+  }, Promise.resolve())
+}
+
 const refreshSummaryFilterOptionsForProjections = async (
   summaryProjections: readonly SummaryFilterOptionProjectionRow[],
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
@@ -3674,7 +3711,15 @@ const finalizeCompletedReviewServingRebuildRequest = async (
     return
   }
 
-  const promotionRows = await getRebuildRequestSnapshotPromotions(chunk.requestId, database)
+  const [hasPostingChunks, promotionRows] = await Promise.all([
+    getRebuildRequestHasPostingChunks(chunk.requestId, database),
+    getRebuildRequestSnapshotPromotions(chunk.requestId, database),
+  ])
+
+  if (hasPostingChunks) {
+    await refreshPostingStatsForRebuildRequestSnapshots(promotionRows, database)
+  }
+
   const promotions = await promotionRows.reduce<
     Promise<Awaited<ReturnType<typeof promoteReviewServingProjectorSnapshot>>[]>
   >(async (previousPromotions, row) => {
