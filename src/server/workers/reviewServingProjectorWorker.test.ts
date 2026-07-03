@@ -704,6 +704,48 @@ test('worker recycles DuckDB after completed summary rebuild chunks', async () =
   expect(harness.garbageCollectedChunks).toEqual([summaryChunk])
 })
 
+test('worker recycles DuckDB after completed posting rebuild chunks', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const postingChunkInput = {
+    ...chunkInput,
+    projectionComponent: 'posting' as const,
+    projectionIdentity: 'posting:project-1',
+  }
+  const postingChunk = {
+    ...chunkManifest,
+    ...postingChunkInput,
+    requestId: 'rebuild-posting',
+  } satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return postingChunk
+    },
+    getNextChunk: async () => {
+      return postingChunkInput
+    },
+    heartbeatChunk: async () => {
+      return postingChunk
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  expect(result.chunk).toMatchObject({
+    projectionComponent: 'posting',
+    requestId: 'rebuild-posting',
+    status: 'completed',
+  })
+  expect(harness.recycledChunks).toEqual([postingChunk])
+  expect(harness.garbageCollectedChunks).toEqual([postingChunk])
+})
+
 test('worker yields and collects garbage after each completed status chunk in a long loop', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const controller = new AbortController()
@@ -1660,6 +1702,10 @@ test('strict posting rebuild validation rescans output instead of reusing projec
         statement.includes('AS actualChecksum')
         && statement.includes('FROM mart.review_article_filter_posting_serving_v4 serving')
       ) {
+        if (statement.includes("sha256('cheap-count:'")) {
+          return [{actualChecksum: 'checksum-posting-count', actualCount: 1}] as T[]
+        }
+
         expect(statement).toContain('string_agg(')
 
         return [{actualChecksum: 'checksum-posting-strict', actualCount: 1}] as T[]

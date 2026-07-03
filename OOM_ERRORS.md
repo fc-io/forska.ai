@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-03 - Full Posting Rebuild Source Materialization
+
+- Error: Primary `ds` stack maintenance worker reached about 14GB RSS, then Bun exited with `panic: A C++ exception occurred` after full posting rebuild speed changes.
+- Context: `projectReviewServingFilterPostings` inside review-serving `posting` rebuild chunks.
+- Cause: The full rebuild path skipped generic serving/contribution record writes but still queried, diffed, sorted, and validated the full posting source in JS; completed posting chunks also skipped the native-heavy DuckDB recycle/GC path.
+- Fix: Full posting rebuilds now return through a SQL-native early path for serving, contribution, stats, and count validation before source rows are materialized, and completed posting chunks recycle DuckDB/collect GC like other native-heavy chunks.
+- Verification: `bun test src/server/reviewServing/reviewServingFilterPostingProjector.test.ts src/server/workers/reviewServingProjectorWorker.test.ts`.
+
 ## 2026-07-03 - Full Posting Rebuild JS Fanout
 
 - Error: Full posting rebuild chunks could still drive RSS/OOM spikes while materializing one JS serving record per live posting row.

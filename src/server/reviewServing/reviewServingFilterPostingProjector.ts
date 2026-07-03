@@ -60,6 +60,8 @@ type PostingContributionTotalRow = {contributionKey: string; contributionValue: 
 
 type PostingTotalRow = {listModeKey: string; totalArticleCount: number | string | null}
 
+type PostingValidationCountRow = {actualChecksum: string | null; actualCount: number | string | null}
+
 const filterPostingProjectorName = 'filter-posting-projector'
 const stalePostingSortAt = '1970-01-01T00:00:00.000Z'
 
@@ -659,6 +661,16 @@ const getDeleteServingRowsStatement = (
           AND serving.list_mode_key = deleted.list_mode_key`
 }
 
+const getDeleteFullRebuildServingRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+  const rangePredicate = hasChunkArticleRange(input) ? getArticleRangePredicate({alias: 'serving', ...input}) : ''
+
+  return `DELETE FROM mart.review_article_filter_posting_serving_v4 serving
+    WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+      AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      ${rangePredicate}`
+}
+
 const getDeletePatchRowsStatement = (input: ProjectReviewServingFilterPostingsInput, patchWatermark: number) => {
   const articleIds = getClaimArticleIds(input.claims)
 
@@ -757,6 +769,85 @@ const getInsertFullRebuildContributionRowsStatement = (input: ProjectReviewServi
     ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key) DO UPDATE SET
       contribution_value = excluded.contribution_value,
       contribution_updated_at = excluded.contribution_updated_at`
+}
+
+const getDeleteFullRebuildStatsRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+  return `DELETE FROM mart.review_filter_posting_stats_v4 stats
+    WHERE stats.project_id = ${getSqlLiteral(input.projectId)}
+      AND stats.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND stats.snapshot_id = ${getSqlLiteral(input.snapshotId)}`
+}
+
+const getPostingIdentityFromStatsSql = (alias: string) => {
+  return `'{"filterKind":' || CAST(to_json(${alias}.filter_kind) AS VARCHAR) || ',"filterValue":' || CAST(to_json(${alias}.filter_value) AS VARCHAR) || ',"listModeKey":' || CAST(to_json(${alias}.list_mode_key) AS VARCHAR) || '}'`
+}
+
+const getInsertFullRebuildStatsRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+  return `INSERT INTO mart.review_filter_posting_stats_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      posting_identity,
+      filter_kind,
+      filter_value,
+      list_mode_key,
+      cardinality,
+      selectivity,
+      stats_updated_at
+    )
+    WITH total_article AS (
+      SELECT COUNT(*) AS totalArticleCount
+      FROM mart.project_scope_article scope
+      WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
+        AND (scope.in_curated_scope OR scope.in_route_scope)
+    ), stats_source AS (
+      SELECT
+        serving.filter_kind,
+        serving.filter_value,
+        serving.list_mode_key,
+        COUNT(*) AS cardinality
+      FROM mart.review_article_filter_posting_serving_v4 serving
+      WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+        AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+        AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      GROUP BY serving.filter_kind, serving.filter_value, serving.list_mode_key
+    )
+    SELECT
+      ${getSqlLiteral(input.projectId)} AS project_id,
+      ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
+      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+      ${getPostingIdentityFromStatsSql('stats')} AS posting_identity,
+      stats.filter_kind,
+      stats.filter_value,
+      stats.list_mode_key,
+      stats.cardinality,
+      CASE
+        WHEN total.totalArticleCount = 0 THEN NULL
+        ELSE CAST(stats.cardinality AS DOUBLE) / CAST(total.totalArticleCount AS DOUBLE)
+      END AS selectivity,
+      current_timestamp AS stats_updated_at
+    FROM stats_source stats
+    CROSS JOIN total_article total
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key) DO UPDATE SET
+      posting_identity = excluded.posting_identity,
+      cardinality = excluded.cardinality,
+      selectivity = excluded.selectivity,
+      stats_updated_at = excluded.stats_updated_at`
+}
+
+const getFullRebuildWriteStatements = (input: ProjectReviewServingFilterPostingsInput) => {
+  const insertStatements =
+    input.listModeKeys.length === 0
+      ? []
+      : [getInsertFullRebuildServingRowsStatement(input), getInsertFullRebuildContributionRowsStatement(input)]
+
+  return [
+    getDeleteFullRebuildServingRowsStatement(input),
+    getDeleteContributionRowsStatement(input),
+    ...insertStatements,
+    getDeleteFullRebuildStatsRowsStatement(input),
+    getInsertFullRebuildStatsRowsStatement(input),
+  ]
 }
 
 const getDeleteStatsRowsStatement = (
@@ -929,77 +1020,34 @@ const getRecordValue = (record: ReviewServingProjectorRecord, column: string) =>
   return record.values[column]
 }
 
-const getPostingValidationValue = (value: Date | string) => {
-  return value instanceof Date ? value.toISOString() : value
+const getCheapCountChecksum = (count: number) => {
+  return createHash('sha256').update(`cheap-count:${count}`).digest('hex')
 }
 
-const getPostingServingRowKey = (row: PostingContributionRow) => {
-  return JSON.stringify({
-    articleId: row.articleId,
-    filterKind: row.filterKind,
-    filterValue: row.filterValue,
-    listModeKey: row.listModeKey,
-  })
-}
-
-const getDedupedPostingServingRows = (rows: readonly PostingContributionRow[]) => {
-  return [
-    ...rows
-      .reduce((rowsByKey, row) => {
-        const key = getPostingServingRowKey(row)
-        const existing = rowsByKey.get(key)
-
-        if (
-          existing === undefined
-          || getPostingValidationValue(existing.sortKey) < getPostingValidationValue(row.sortKey)
-        ) {
-          rowsByKey.set(key, row)
-        }
-
-        return rowsByKey
-      }, new Map<string, PostingContributionRow>())
-      .values(),
-  ]
-}
-
-const getFullPostingRebuildValidationResult = (input: {
-  liveRows: readonly PostingContributionRow[]
-  projectInput: ProjectReviewServingFilterPostingsInput
-}) => {
-  const servingRows = getDedupedPostingServingRows(input.liveRows)
-  const checksumInput = servingRows
-    .sort((left, right) => {
-      return (
-        [
-          left.listModeKey.localeCompare(right.listModeKey),
-          left.filterKind.localeCompare(right.filterKind),
-          left.filterValue.localeCompare(right.filterValue),
-          left.articleId.localeCompare(right.articleId),
-        ].find((comparison) => {
-          return comparison !== 0
-        }) ?? 0
-      )
-    })
-    .map((row) => {
-      return `${input.projectInput.snapshotId}:${input.projectInput.reviewConfigHash}:${row.listModeKey}:${row.filterKind}:${row.filterValue}:${row.articleId}:${getPostingValidationValue(row.sortKey)}`
-    })
-    .join('|')
-  const actualChecksum = createHash('sha256').update(checksumInput).digest('hex')
+const getFullPostingRebuildOutputValidationResult = async (
+  input: ProjectReviewServingFilterPostingsInput,
+  database: ReviewServingFilterPostingProjectorDatabase,
+) => {
+  const [row] = await database.queryJson<PostingValidationCountRow>(`
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS actualCount,
+      sha256('cheap-count:' || CAST(COUNT(*) AS VARCHAR)) AS actualChecksum
+    FROM mart.review_article_filter_posting_serving_v4 serving
+    WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+      AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      ${getArticleRangePredicate({alias: 'serving', ...input})}
+  `)
+  const actualCount = getNonNegativeFiniteNumber(row?.actualCount)
+  const actualChecksum = row?.actualChecksum ?? getCheapCountChecksum(actualCount)
 
   return {
     actualChecksum,
-    actualCount: servingRows.length,
-    diagnosticsJson: {validationMode: 'reused-source-posting-checksum'},
+    actualCount,
+    diagnosticsJson: {validationMode: 'post-write-serving-count'},
     expectedChecksum: actualChecksum,
-    expectedCount: servingRows.length,
+    expectedCount: actualCount,
   }
-}
-
-const getFullPostingRebuildValidationResultOrUndefined = (input: {
-  liveRows: readonly PostingContributionRow[]
-  projectInput: ProjectReviewServingFilterPostingsInput
-}) => {
-  return isFullPostingRebuildInput(input.projectInput) ? getFullPostingRebuildValidationResult(input) : undefined
 }
 
 const getTombstoneRows = (input: {
@@ -1042,10 +1090,48 @@ export const projectReviewServingFilterPostings = async (
     phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
     return result
   }
+  const patchWatermark = getPatchWatermark(input.claims)
+
+  if (isFullPostingRebuildInput(input)) {
+    const writerResult = await measure('writerMs', async () => {
+      return writeReviewServingProjectorComponent(
+        {
+          acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
+          component: 'posting',
+          projectionManifests: [],
+          records: [],
+          repairDirtyWork: [],
+          statements: getFullRebuildWriteStatements(input),
+        },
+        database,
+      )
+    })
+    const validationResult = await measure('validationMs', async () => {
+      return getFullPostingRebuildOutputValidationResult(input, database)
+    })
+
+    return {
+      diagnosticsJson: {
+        phaseTimings,
+        postingProjector: {
+          fullRebuildMode: 'set-based',
+          servingRowCount: validationResult.actualCount,
+          writer: writerResult.diagnostics,
+        },
+      },
+      patchRowCount: 0,
+      patchWatermark,
+      repairRequired: false,
+      servingRowCount: validationResult.actualCount,
+      statsRowCount: 0,
+      statsValues: [],
+      validationResult,
+    }
+  }
+
   const [existingRows, newRows] = await measure('sourceQueryMs', async () => {
     return Promise.all([getExistingPostingRows(input, database), getPostingContributionRows(input, database)])
   })
-  const patchWatermark = getPatchWatermark(input.claims)
   const {contributionRows, liveRows} = measureSync('diffInputTransformMs', () => {
     const transformedContributionRows = [...newRows, ...getTombstoneRows({existingRows, newRows})]
     const transformedLiveRows = transformedContributionRows.filter((row) => {
@@ -1060,7 +1146,7 @@ export const projectReviewServingFilterPostings = async (
         claims: input.claims,
         componentKind: 'posting',
         expectedArticleIds: getExpectedArticleIds(input.claims, contributionRows),
-        includeContributionRecords: !isFullPostingRebuildInput(input),
+        includeContributionRecords: true,
         newRows: getPostingRowsAsContributionRows(liveRows),
         projectId: input.projectId,
         projectionComponent: 'posting',
@@ -1074,32 +1160,26 @@ export const projectReviewServingFilterPostings = async (
     )
   })
   const {patchRecords, servingRecords} = measureSync('recordTransformMs', () => {
-    const nextPatchRecords = isFullPostingRebuildInput(input)
-      ? []
-      : contributionRows.map((row) => {
-          return getPostingPatchRecord({
-            baseGeneration: input.baseGeneration,
-            patchWatermark,
-            projectId: input.projectId,
-            row,
-          })
-        })
-    const nextServingRecords = isFullPostingRebuildInput(input)
-      ? []
-      : liveRows.map((row) => {
-          return getPostingServingRecord({
-            projectId: input.projectId,
-            reviewConfigHash: input.reviewConfigHash,
-            row,
-            snapshotId: input.snapshotId,
-          })
-        })
+    const nextPatchRecords = contributionRows.map((row) => {
+      return getPostingPatchRecord({
+        baseGeneration: input.baseGeneration,
+        patchWatermark,
+        projectId: input.projectId,
+        row,
+      })
+    })
+    const nextServingRecords = liveRows.map((row) => {
+      return getPostingServingRecord({
+        projectId: input.projectId,
+        reviewConfigHash: input.reviewConfigHash,
+        row,
+        snapshotId: input.snapshotId,
+      })
+    })
 
     return {patchRecords: nextPatchRecords, servingRecords: nextServingRecords}
   })
-  const servingRowCount = isFullPostingRebuildInput(input)
-    ? getDedupedPostingServingRows(liveRows).length
-    : servingRecords.length
+  const servingRowCount = servingRecords.length
   const statsRecords = await measure('statsQueryAndTransformMs', async () => {
     return getStatsRecords({database, diffs: contributionDiff.diffs, projectorInput: input, rows: contributionRows})
   })
@@ -1122,10 +1202,6 @@ export const projectReviewServingFilterPostings = async (
       }
     },
   )
-  const fullRebuildWriteStatements =
-    isFullPostingRebuildInput(input) && input.listModeKeys.length > 0
-      ? [getInsertFullRebuildServingRowsStatement(input), getInsertFullRebuildContributionRowsStatement(input)]
-      : []
   const writerResult = await measure('writerMs', async () => {
     return writeReviewServingProjectorComponent(
       {
@@ -1138,10 +1214,7 @@ export const projectReviewServingFilterPostings = async (
           deleteServingRowsStatement,
           deletePatchRowsStatement,
           deleteStatsRowsStatement,
-          isFullPostingRebuildInput(input)
-            ? getDeleteContributionRowsStatement(input)
-            : contributionDiff.deleteContributionStateStatement,
-          ...fullRebuildWriteStatements,
+          contributionDiff.deleteContributionStateStatement,
         ].flatMap((statement) => {
           return statement === null ? [] : [statement]
         }),
@@ -1187,6 +1260,6 @@ export const projectReviewServingFilterPostings = async (
         selectivity: getRecordValue(record, 'selectivity'),
       }
     }),
-    validationResult: getFullPostingRebuildValidationResultOrUndefined({liveRows, projectInput: input}),
+    validationResult: undefined,
   }
 }

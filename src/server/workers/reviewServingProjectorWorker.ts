@@ -303,11 +303,13 @@ const reviewServingCriticalRebuildComponents = [
 const reviewServingNativeHeavyRebuildComponents = new Set<ReviewServingProjectionComponent>([
   'llmStatus',
   'humanStatus',
+  'posting',
   'summary',
 ])
 const reviewServingDuckdbRecycleAfterRebuildComponents = new Set<ReviewServingProjectionComponent>([
   'llmStatus',
   'humanStatus',
+  'posting',
   'summary',
 ])
 const defaultReviewFilterOptionKeys = [
