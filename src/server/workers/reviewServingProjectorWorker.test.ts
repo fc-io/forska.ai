@@ -1597,6 +1597,106 @@ test('expected-checksum rebuild chunk keeps strict checksum validation', async (
   expect(joined).toContain('"validationMode":"strict-checksum"')
 })
 
+test('strict posting rebuild validation rescans output instead of reusing projector checksum', async () => {
+  const previousValue = process.env.FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION
+  const statements: string[] = []
+  const postingChunk: ReviewServingRebuildChunkManifest = {
+    ...chunkManifest,
+    outputBaseGeneration: 7,
+    projectionComponent: 'posting',
+    projectionIdentity: 'posting:project-1',
+  }
+  const componentState = {
+    optional: [],
+    required: [
+      {baseGeneration: '7', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+      {baseGeneration: '7', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+      {baseGeneration: '7', component: 'posting', projectionIdentity: 'posting:project-1'},
+    ],
+  }
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+        return [postingChunk] as T[]
+      }
+
+      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+        return [
+          {
+            baseGeneration: postingChunk.outputBaseGeneration,
+            definitionVersion: 'posting-v1',
+            inputDigest: postingChunk.inputDigest,
+            inputWatermark: postingChunk.inputWatermark,
+            inputWatermarksJson: {reviewChange: 9},
+            invalidationReason: postingChunk.inputDigest,
+            manifestId: 'manifest-posting',
+            patchRangeEnd: postingChunk.inputWatermark,
+            patchRangeStart: postingChunk.inputWatermark,
+            patchWatermark: postingChunk.inputWatermark,
+            projectId: postingChunk.projectId,
+            projectionComponent: postingChunk.projectionComponent,
+            projectionIdentity: postingChunk.projectionIdentity,
+            promptConfigHash: null,
+            reviewConfigHash: 'review-config-1',
+            status: 'candidate',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return [
+          {
+            componentStateJson: componentState,
+            reviewConfigHash: 'review-config-1',
+            selectedImportSnapshotId: 'selected-import-snapshot-1',
+            snapshotId: 'snapshot-posting-1',
+          },
+        ] as T[]
+      }
+
+      if (
+        statement.includes('AS actualChecksum')
+        && statement.includes('FROM mart.review_article_filter_posting_serving_v4 serving')
+      ) {
+        expect(statement).toContain('string_agg(')
+
+        return [{actualChecksum: 'checksum-posting-strict', actualCount: 1}] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      return operation(database)
+    },
+  }
+
+  try {
+    process.env.FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION = 'true'
+
+    const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+      {chunk: postingChunk, leaseOwner: 'worker-1'},
+      database,
+    )
+    const joined = statements.join('\n')
+
+    expect(result).toEqual({status: 'completed'})
+    expect(joined).toContain('string_agg(')
+    expect(joined).toContain('"validationMode":"debug-strict-checksum"')
+    expect(joined).not.toContain('"validationMode":"reused-source-posting-checksum"')
+  } finally {
+    if (previousValue === undefined) {
+      delete process.env.FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION
+    } else {
+      process.env.FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION = previousValue
+    }
+  }
+})
+
 test('payload and search rebuild chunk executors write bounded base rows and complete chunks', async () => {
   const statements: string[] = []
   const queryStatements: string[] = []

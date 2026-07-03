@@ -1590,6 +1590,8 @@ const runPostingRebuildChunk = async (
   const manifest = await requireRebuildChunkProjectionManifest(input.chunk, database)
   const snapshots = await getRebuildChunkSnapshots(input.chunk, database)
   const snapshotIds = getRebuildSnapshotIds(snapshots)
+  const shouldReuseProjectorValidation =
+    input.chunk.checksum === null && !shouldUseStrictRebuildValidationWithoutExpectedChecksum()
 
   return runValidatedRebuildChunkOutput(
     {
@@ -1636,7 +1638,7 @@ const runPostingRebuildChunk = async (
             ...results,
             {
               diagnosticsJson: {snapshotId: snapshot.snapshotId, ...result.diagnosticsJson},
-              validationResult: input.chunk.checksum === null ? result.validationResult : undefined,
+              validationResult: shouldReuseProjectorValidation ? result.validationResult : undefined,
             },
           ]
         }, Promise.resolve([]))
