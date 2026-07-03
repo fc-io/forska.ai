@@ -159,6 +159,16 @@ test('projects list-mode count deltas with summary identity and definition versi
   const result = await projectReviewServingSummaries(projectInput([summaryClaim()], ['llm', 'human']), database)
   const joined = statements.join('\n')
 
+  expect(result.diagnosticsJson.summaryProjector.sourceRowCount).toBe(1)
+  expect(result.diagnosticsJson.phaseTimings.contributionDiffMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.phaseTimings.contributionTransformMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.phaseTimings.summaryRecordBuildMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toMatchObject({
+    'mart.review_article_count_serving_v4': 2,
+    'mart.review_article_summary_contribution_v4': 1,
+  })
   expect(
     hasSummaryValue(result.summaryValues, {
       count_kind: 'review.llm.assessedByPrompt',

@@ -19,7 +19,12 @@ type ReviewsWarningsResponse = {
     indexing: {
       activeConsumerCount: number
       activeWorkCount: number
-      blockedReason: 'paused_by_policy' | 'quarantine_barrier' | 'waiting_for_maintenance_worker' | null
+      blockedReason:
+        | 'operator_intervention_required'
+        | 'paused_by_policy'
+        | 'quarantine_barrier'
+        | 'waiting_for_maintenance_worker'
+        | null
       cleanup: {inFlightGenerationCleanupCount: number; lastProgressedAt: string | null}
       diagnostics: {
         duckdbQueues: {background: {queueDepth: number}; main: {queueDepth: number}}
@@ -661,6 +666,7 @@ const insertActiveReviewServingManifest = async (input: {
   optionalComponents: string[]
   projectId: string
   reviewConfigHash?: string | null
+  selectedImportSnapshotId?: string | null
   snapshotId: string
   status?: 'active' | 'candidate' | 'failed' | 'retired'
 }) => {
@@ -690,6 +696,7 @@ const insertActiveReviewServingManifest = async (input: {
       required_components_json,
       optional_components_json,
       source_watermarks_json,
+      selected_import_snapshot_id,
       activated_at,
       updated_at
     ) VALUES (
@@ -702,6 +709,7 @@ const insertActiveReviewServingManifest = async (input: {
       '${JSON.stringify(required).replaceAll("'", "''")}'::JSON,
       '${JSON.stringify(input.optionalComponents).replaceAll("'", "''")}'::JSON,
       '{}'::JSON,
+      ${input.selectedImportSnapshotId === undefined || input.selectedImportSnapshotId === null ? 'NULL' : `'${input.selectedImportSnapshotId}'`},
       TIMESTAMPTZ '2026-04-02T12:08:00.000Z',
       TIMESTAMPTZ '2026-04-02T12:08:00.000Z'
     )
@@ -815,6 +823,97 @@ beforeAll(async () => {
   app = new Elysia().use(projectsRoutesGetReviewsWarnings)
 })
 
+test('reviews warnings block invalid candidate snapshots that cannot be activated safely', async () => {
+  const projectId = 'project-candidate-invalid-selected-import-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    selectedImportSnapshotId: 'selected-import-candidate-warning',
+    snapshotId: 'snapshot-candidate-invalid-selected-import-warning',
+    status: 'candidate',
+  })
+  await runDatabase?.(`
+    INSERT INTO app.review_selected_import_snapshot (
+      selected_import_snapshot_id,
+      project_id,
+      project_scope_identity,
+      source_delta_high_water,
+      status,
+      updated_at
+    ) VALUES (
+      'selected-import-candidate-warning',
+      '${projectId}',
+      'projectScope:identity-1',
+      1,
+      'candidate',
+      current_timestamp
+    )
+  `)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.activeWorkCount).toBe(0)
+  expect(body.data.indexing.blockedReason).toBe('operator_intervention_required')
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('blocked')
+  expect(body.data.indexing.status).toBe('blocked')
+})
+
+test('reviews warnings keep invalid bootstrap candidates refreshing while rebuild chunks can progress', async () => {
+  const projectId = 'project-candidate-invalid-selected-import-progressing-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    selectedImportSnapshotId: 'selected-import-candidate-progressing-warning',
+    snapshotId: 'snapshot-candidate-invalid-selected-import-progressing-warning',
+    status: 'candidate',
+  })
+  await runDatabase?.(`
+    INSERT INTO app.review_selected_import_snapshot (
+      selected_import_snapshot_id,
+      project_id,
+      project_scope_identity,
+      source_delta_high_water,
+      status,
+      updated_at
+    ) VALUES (
+      'selected-import-candidate-progressing-warning',
+      '${projectId}',
+      'projectScope:identity-1',
+      1,
+      'candidate',
+      current_timestamp
+    )
+  `)
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-candidate-invalid-selected-import-progressing-warning',
+    component: 'selectedImport',
+    createdAt: '2026-06-23T10:00:00.000Z',
+    projectId,
+    status: 'pending',
+    updatedAt: '2026-06-23T10:00:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.blockedReason).toBe(null)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
 afterEach(() => {
   resetProgressSnapshotForTests?.()
 })
@@ -866,8 +965,39 @@ test('reviews warnings do not expose candidate snapshots as readable review page
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
-  expect(body.data.indexing.status).toBe('stale')
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
+test('reviews warnings block candidate-only snapshots when server mutation work is disabled', async () => {
+  const projectId = 'project-candidate-disabled-mutations-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-candidate-disabled-mutations-warning',
+    status: 'candidate',
+  })
+
+  const {body, response} = await withServerMutationsDisabled(() => {
+    return postWarningsRequest(projectId)
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.activeWorkCount).toBe(0)
+  expect(body.data.indexing.blockedReason).toBe('waiting_for_maintenance_worker')
+  expect(body.data.indexing.eligibleConsumerPresent).toBe(false)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('blocked')
+  expect(body.data.indexing.queuedRefreshCount).toBe(0)
+  expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
+  expect(body.data.indexing.status).toBe('blocked')
 })
 
 test.skip('retired legacy mart diagnostics: stale snapshots usable during refresh without hiding pending work', async () => {
@@ -2449,7 +2579,7 @@ test('reviews warnings do not bootstrap missing serving rows for archived prompt
   expect(body.data.indexing.status).toBe('not-needed')
 })
 
-test('reviews warnings wait for candidate serving generation before queueing bootstrap rebuild', async () => {
+test('reviews warnings report candidate serving generation as pending activation work', async () => {
   const projectId = 'project-candidate-serving-bootstrap-warning'
 
   await insertProjectFixture(projectId)
@@ -2466,9 +2596,9 @@ test('reviews warnings wait for candidate serving generation before queueing boo
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
   expect(body.data.indexing.largeRebuild).toBe(null)
-  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
   expect(body.data.indexing.progressState).toBe('stalled')
-  expect(body.data.indexing.status).toBe('stale')
+  expect(body.data.indexing.status).toBe('refreshing')
 })
 
 test('reviews warnings wait for failed serving generation before queueing bootstrap rebuild', async () => {

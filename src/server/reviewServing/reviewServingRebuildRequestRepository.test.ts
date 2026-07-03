@@ -350,7 +350,9 @@ test('boosting an active project rebuild request uses a lightweight foreground u
         return [{requestId: 'rebuild:active-project'}] as T[]
       }
 
-      return statement.includes('FROM app.review_rebuild_chunk_manifest') ? ([{blockedCount: 0}] as T[]) : ([] as T[])
+      return statement.includes('FROM app.review_rebuild_chunk_manifest')
+        ? ([{blockedCount: 0, progressableCount: 1}] as T[])
+        : ([] as T[])
     },
     run: async (statement: string) => {
       statements.push(statement)
@@ -376,10 +378,10 @@ test('boosting an active project rebuild request uses a lightweight foreground u
   expect(statements[0]).toContain("AND reason = 'missingReviewServingSnapshot'")
   expect(statements[0]).not.toContain('review_rebuild_chunk_manifest')
   expect(statements[0]).not.toContain('UPDATE app.review_rebuild_request')
-  expect(statements[1]).toContain('SELECT CAST(COUNT(*) AS INTEGER) AS blockedCount')
+  expect(statements[1]).toContain("FILTER (WHERE status IN ('blocked_over_budget', 'quarantined'))")
+  expect(statements[1]).toContain("FILTER (WHERE status IN ('pending', 'running', 'failed'))")
   expect(statements[1]).toContain('FROM app.review_rebuild_chunk_manifest')
   expect(statements[1]).toContain("request_id = 'rebuild:active-project'")
-  expect(statements[1]).toContain("status IN ('blocked_over_budget', 'quarantined')")
   expect(statements[2]).toContain('UPDATE app.review_rebuild_request')
   expect(statements[2]).toContain("WHERE request_id = 'rebuild:active-project'")
   expect(joined).toContain('UPDATE app.review_rebuild_request')
@@ -387,6 +389,40 @@ test('boosting an active project rebuild request uses a lightweight foreground u
   expect(joined).toContain('updated_at = current_timestamp')
   expect(joined).not.toContain('RETURNING request_id AS requestId')
   expect(joined).not.toContain('WHERE request_id = (')
+})
+
+test('boosting an active project rebuild request ignores completed-only admitted requests', async () => {
+  const statements: string[] = []
+  const database: ReviewServingChunkManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_request')) {
+        return [{requestId: 'rebuild:completed-only'}] as T[]
+      }
+
+      return statement.includes('FROM app.review_rebuild_chunk_manifest')
+        ? ([{blockedCount: 0, progressableCount: 0}] as T[])
+        : ([] as T[])
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(
+      operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>,
+    ): Promise<T> => {
+      return operation(database)
+    },
+  }
+
+  const boosted = await boostActiveReviewServingRebuildRequestForProject(
+    {priority: 10_000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+    database,
+  )
+
+  expect(boosted).toBe(false)
+  expect(statements).toHaveLength(2)
+  expect(statements.join('\n')).not.toContain('UPDATE app.review_rebuild_request')
 })
 
 test('over-budget V4 rebuild requests park before their chunks can be claimable', async () => {
@@ -471,6 +507,376 @@ test('search-only default rebuild presplit chunks cover gaps between scoped arti
   expect(joined).toContain("'article-001'")
   expect(joined).toContain("'article-100'")
   expect(joined).toContain('{"admissionPresplit":true}')
+})
+
+test('posting default rebuilds avoid admission presplit boundary overlap', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    activeComponentStateJson: {
+      optional: [],
+      required: [
+        {baseGeneration: 4, component: 'posting', patchWatermark: 12, projectionIdentity: 'posting:active-identity-1'},
+      ],
+    },
+    articleRangeRows: [
+      {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
+      {chunkEndKey: 'article-128', chunkStartKey: 'article-064', scopedArticleCount: 64},
+      {chunkEndKey: 'article-192', chunkStartKey: 'article-128', scopedArticleCount: 64},
+      {chunkEndKey: 'article-256', chunkStartKey: 'article-192', scopedArticleCount: 64},
+    ],
+    componentStateJson: {
+      optional: [],
+      required: [
+        {baseGeneration: 2, component: 'posting', patchWatermark: 10, projectionIdentity: 'posting:identity-1'},
+      ],
+    },
+    projectionManifestRows: [
+      {
+        baseGeneration: 2,
+        inputDigest: 'posting-digest-v1',
+        inputWatermark: 10,
+        projectionComponent: 'posting',
+        projectionIdentity: 'posting:identity-1',
+      },
+      {
+        baseGeneration: 4,
+        inputDigest: 'posting-active-digest-v1',
+        inputWatermark: 12,
+        projectionComponent: 'posting',
+        projectionIdentity: 'posting:active-identity-1',
+      },
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 2_048},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['posting'],
+      requestId: 'rebuild:posting-presplit',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const postingChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'posting'")
+  })
+
+  expect(joined).not.toContain('NTILE(4)')
+  expect(postingChunkInserts).toHaveLength(2)
+  expect(joined).not.toContain('{"admissionPresplit":true}')
+})
+
+test('judgment input content default rebuilds avoid admission presplit boundary overlap', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    activeComponentStateJson: {
+      optional: [],
+      required: [
+        {
+          baseGeneration: 4,
+          component: 'judgmentInputContent',
+          patchWatermark: 12,
+          projectionIdentity: 'judgmentInputContent:active-identity-1',
+        },
+      ],
+    },
+    articleRangeRows: [
+      {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
+      {chunkEndKey: 'article-128', chunkStartKey: 'article-064', scopedArticleCount: 64},
+      {chunkEndKey: 'article-192', chunkStartKey: 'article-128', scopedArticleCount: 64},
+      {chunkEndKey: 'article-256', chunkStartKey: 'article-192', scopedArticleCount: 64},
+    ],
+    componentStateJson: {
+      optional: [],
+      required: [
+        {
+          baseGeneration: 2,
+          component: 'judgmentInputContent',
+          patchWatermark: 10,
+          projectionIdentity: 'judgmentInputContent:identity-1',
+        },
+      ],
+    },
+    projectionManifestRows: [
+      {
+        baseGeneration: 2,
+        inputDigest: 'judgment-input-content-digest-v1',
+        inputWatermark: 10,
+        projectionComponent: 'judgmentInputContent',
+        projectionIdentity: 'judgmentInputContent:identity-1',
+      },
+      {
+        baseGeneration: 4,
+        inputDigest: 'judgment-input-content-active-digest-v1',
+        inputWatermark: 12,
+        projectionComponent: 'judgmentInputContent',
+        projectionIdentity: 'judgmentInputContent:active-identity-1',
+      },
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 20_001},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['judgmentInputContent'],
+      requestId: 'rebuild:judgment-input-content-presplit',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const chunkInserts = statements.filter((statement) => {
+    return (
+      statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+      && statement.includes("'judgmentInputContent'")
+    )
+  })
+
+  expect(joined).not.toContain('NTILE(')
+  expect(chunkInserts).toHaveLength(2)
+  expect(joined).not.toContain('{"admissionPresplit":true}')
+})
+
+test('queue default rebuilds avoid admission presplit boundary overlap', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    activeComponentStateJson: {
+      optional: [],
+      required: [
+        {baseGeneration: 4, component: 'queue', patchWatermark: 12, projectionIdentity: 'queue:active-identity-1'},
+      ],
+    },
+    articleRangeRows: [
+      {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
+      {chunkEndKey: 'article-128', chunkStartKey: 'article-064', scopedArticleCount: 64},
+      {chunkEndKey: 'article-192', chunkStartKey: 'article-128', scopedArticleCount: 64},
+      {chunkEndKey: 'article-256', chunkStartKey: 'article-192', scopedArticleCount: 64},
+    ],
+    componentStateJson: {
+      optional: [],
+      required: [{baseGeneration: 2, component: 'queue', patchWatermark: 10, projectionIdentity: 'queue:identity-1'}],
+    },
+    projectionManifestRows: [
+      {
+        baseGeneration: 2,
+        inputDigest: 'queue-digest-v1',
+        inputWatermark: 10,
+        projectionComponent: 'queue',
+        projectionIdentity: 'queue:identity-1',
+      },
+      {
+        baseGeneration: 4,
+        inputDigest: 'queue-active-digest-v1',
+        inputWatermark: 12,
+        projectionComponent: 'queue',
+        projectionIdentity: 'queue:active-identity-1',
+      },
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 20_001},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['queue'],
+      requestId: 'rebuild:queue-presplit',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const chunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'queue'")
+  })
+
+  expect(joined).not.toContain('NTILE(')
+  expect(chunkInserts).toHaveLength(2)
+  expect(joined).not.toContain('{"admissionPresplit":true}')
+})
+
+test('display-only default rebuilds avoid admission presplit boundary overlap', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    articleRangeRows: [
+      {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
+      {chunkEndKey: 'article-128', chunkStartKey: 'article-064', scopedArticleCount: 64},
+      {chunkEndKey: 'article-192', chunkStartKey: 'article-128', scopedArticleCount: 64},
+      {chunkEndKey: 'article-256', chunkStartKey: 'article-192', scopedArticleCount: 64},
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 100_001},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['display'],
+      requestId: 'rebuild:display-presplit',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const displayChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'display'")
+  })
+
+  expect(joined).not.toContain('NTILE(')
+  expect(displayChunkInserts).toHaveLength(1)
+  expect(joined).not.toContain('{"admissionPresplit":true}')
+})
+
+test('project-scope-only default rebuilds avoid admission presplit boundary overlap', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    articleRangeRows: [
+      {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
+      {chunkEndKey: 'article-128', chunkStartKey: 'article-064', scopedArticleCount: 64},
+      {chunkEndKey: 'article-192', chunkStartKey: 'article-128', scopedArticleCount: 64},
+      {chunkEndKey: 'article-256', chunkStartKey: 'article-192', scopedArticleCount: 64},
+    ],
+    componentStateJson: {
+      optional: [],
+      required: [
+        {
+          baseGeneration: 2,
+          component: 'projectScope',
+          patchWatermark: 10,
+          projectionIdentity: 'projectScope:identity-1',
+        },
+      ],
+    },
+    projectionManifestRows: [
+      {
+        baseGeneration: 2,
+        inputDigest: 'project-scope-digest-v1',
+        inputWatermark: 10,
+        projectionComponent: 'projectScope',
+        projectionIdentity: 'projectScope:identity-1',
+      },
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 100_001},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['projectScope'],
+      requestId: 'rebuild:project-scope-presplit',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const projectScopeChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'projectScope'")
+  })
+
+  expect(joined).not.toContain('NTILE(')
+  expect(projectScopeChunkInserts).toHaveLength(1)
+  expect(joined).not.toContain('{"admissionPresplit":true}')
+})
+
+test('summary-only default rebuilds avoid admission presplit boundary overlap', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    articleRangeRows: [
+      {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
+      {chunkEndKey: 'article-128', chunkStartKey: 'article-064', scopedArticleCount: 64},
+      {chunkEndKey: 'article-192', chunkStartKey: 'article-128', scopedArticleCount: 64},
+      {chunkEndKey: 'article-256', chunkStartKey: 'article-192', scopedArticleCount: 64},
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 2_048},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['summary'],
+      requestId: 'rebuild:summary-presplit',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const summaryChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'summary'")
+  })
+
+  expect(joined).not.toContain('NTILE(4)')
+  expect(summaryChunkInserts).toHaveLength(2)
+  expect(joined).not.toContain('{"admissionPresplit":true}')
+})
+
+test('selected-import-only default rebuilds avoid admission presplit boundary overlap', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    activeComponentStateJson: {
+      optional: [],
+      required: [
+        {
+          baseGeneration: 4,
+          component: 'selectedImport',
+          patchWatermark: 12,
+          projectionIdentity: 'selectedImport:active-identity-1',
+        },
+      ],
+    },
+    articleRangeRows: [
+      {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
+      {chunkEndKey: 'article-128', chunkStartKey: 'article-064', scopedArticleCount: 64},
+      {chunkEndKey: 'article-192', chunkStartKey: 'article-128', scopedArticleCount: 64},
+      {chunkEndKey: 'article-256', chunkStartKey: 'article-192', scopedArticleCount: 64},
+    ],
+    componentStateJson: {
+      optional: [],
+      required: [
+        {
+          baseGeneration: 2,
+          component: 'selectedImport',
+          patchWatermark: 10,
+          projectionIdentity: 'selectedImport:identity-1',
+        },
+      ],
+    },
+    projectionManifestRows: [
+      {
+        baseGeneration: 2,
+        inputDigest: 'selected-import-digest-v1',
+        inputWatermark: 10,
+        projectionComponent: 'selectedImport',
+        projectionIdentity: 'selectedImport:identity-1',
+      },
+      {
+        baseGeneration: 4,
+        inputDigest: 'selected-import-active-digest-v1',
+        inputWatermark: 12,
+        projectionComponent: 'selectedImport',
+        projectionIdentity: 'selectedImport:active-identity-1',
+      },
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 100_001},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['selectedImport'],
+      requestId: 'rebuild:selected-import-presplit',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const selectedImportChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'selectedImport'")
+  })
+
+  expect(joined).not.toContain('NTILE(')
+  expect(selectedImportChunkInserts).toHaveLength(2)
+  expect(joined).not.toContain('{"admissionPresplit":true}')
 })
 
 test('default rebuild request keeps same projection identity across base generations', async () => {

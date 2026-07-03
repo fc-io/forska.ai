@@ -3,6 +3,7 @@ import {existsSync, readFileSync} from 'fs'
 import {dirname, resolve} from 'path'
 
 import {DEFAULT_API_SERVER_PORT, DEFAULT_VITE_PORT} from '../../utils/runtimePortDefaults.ts'
+import {getDefaultMaintenanceDuckdbMemoryLimit} from './duckdbMemoryDefaults.ts'
 import {getDuckdbPath} from './getDuckdbPath.ts'
 import {getRuntimeLogConfig} from './runtimeLogger.ts'
 
@@ -26,6 +27,7 @@ const envShape = arktype({
   PROJECT_MART_LARGE_REBUILD_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
   PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE: 'number | string.integer.parse | null | undefined',
   PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS: 'number | string.integer.parse | null | undefined',
+  FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
   JUDGE_WORKER_ID: 'string',
   JUDGE_WORKER_JOURNAL_PATH: 'string',
   FORSKA_RUNTIME_PROFILE: arktype('"local" | "primary" | "secondary"'),
@@ -52,6 +54,10 @@ const getEnvWithFileFallback = (envValues: Record<string, string | undefined>): 
   return source
 }
 
+const shouldDefaultToMaintenanceDuckdbMemoryLimit = (serverRole: string | undefined) => {
+  return serverRole === 'maintenance-worker' || serverRole === 'dev-single' || serverRole === 'auto'
+}
+
 export const loadEnv = ({
   cwd = process.cwd(),
   envValues = process.env,
@@ -71,7 +77,11 @@ export const loadEnv = ({
   }
   ;(merged as Record<string, string>).DUCKDB_PATH = getDuckdbPath({duckdbPath: merged.DUCKDB_PATH})
   if (merged.DUCKDB_MEMORY_LIMIT == null || String(merged.DUCKDB_MEMORY_LIMIT).trim() === '') {
-    ;(merged as Record<string, string>).DUCKDB_MEMORY_LIMIT = '20GB'
+    ;(merged as Record<string, string>).DUCKDB_MEMORY_LIMIT = shouldDefaultToMaintenanceDuckdbMemoryLimit(
+      String(merged.SERVER_ROLE ?? ''),
+    )
+      ? getDefaultMaintenanceDuckdbMemoryLimit()
+      : '20GB'
   }
   if (merged.DUCKDB_APPEND_LANE_COUNT == null || String(merged.DUCKDB_APPEND_LANE_COUNT).trim() === '') {
     ;(merged as Record<string, string>).DUCKDB_APPEND_LANE_COUNT = '2'
@@ -115,6 +125,12 @@ export const loadEnv = ({
     || String(merged.PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS).trim() === ''
   ) {
     ;(merged as Record<string, string>).PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS = '1000'
+  }
+  if (
+    merged.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE == null
+    || String(merged.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE).trim() === ''
+  ) {
+    ;(merged as Record<string, string>).FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE = '1'
   }
   if (merged.JUDGE_WORKER_ID == null) {
     ;(merged as Record<string, string>).JUDGE_WORKER_ID = ''

@@ -83,6 +83,10 @@ const getClaimSourcePartition = (claims: readonly ReviewServingDirtyWorkClaim[])
   return claims[0]?.sourcePartition ?? 'review-change'
 }
 
+const getNonNegativeElapsedMs = (startedAtMs: number) => {
+  return Math.max(0, Date.now() - startedAtMs)
+}
+
 const getClaimKinds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return [
     ...new Set(
@@ -672,79 +676,112 @@ export const projectReviewServingSummaries = async (
   input: ProjectReviewServingSummariesInput,
   database: ReviewServingSummaryProjectorDatabase = getAppDatabaseService(),
 ) => {
-  const sourceRows = await getSummaryContributionRows(input, database)
-  const priorArticleRows = await getPriorContributionArticleIds(input, database)
-  const contributionDiff = await prepareReviewServingContributionDiff(
-    {
-      claims: input.claims,
-      componentKind: 'count',
-      expectedArticleIds: getExpectedArticleIds(
-        input.claims,
-        sourceRows,
-        priorArticleRows.map((row) => {
-          return row.articleId
-        }),
-      ),
-      newRows: getRowsAsContributionRows(sourceRows),
-      projectId: input.projectId,
-      projectionComponent: 'summary',
-      projectionIdentity: input.projectionIdentity,
-      repairDirtyKind: 'project.reviewConfig.updated',
-      reviewConfigHash: input.reviewConfigHash,
-      snapshotId: input.snapshotId,
-      summaryDefinitionVersion: 'review-serving-summary:v1',
-    },
-    database,
-  )
-  const summaryRecords = await getSummaryRecords({database, diffs: contributionDiff.diffs, projectorInput: input})
+  const phaseTimings: Record<string, number> = {}
+  const measure = async <T>(phase: string, operation: () => Promise<T>) => {
+    const startedAtMs = Date.now()
+    const result = await operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const measureSync = <T>(phase: string, operation: () => T) => {
+    const startedAtMs = Date.now()
+    const result = operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const [sourceRows, priorArticleRows] = await measure('sourceQueryMs', async () => {
+    return Promise.all([getSummaryContributionRows(input, database), getPriorContributionArticleIds(input, database)])
+  })
+  const newRows = measureSync('contributionTransformMs', () => {
+    return getRowsAsContributionRows(sourceRows)
+  })
+  const contributionDiff = await measure('contributionDiffMs', async () => {
+    return prepareReviewServingContributionDiff(
+      {
+        claims: input.claims,
+        componentKind: 'count',
+        expectedArticleIds: getExpectedArticleIds(
+          input.claims,
+          sourceRows,
+          priorArticleRows.map((row) => {
+            return row.articleId
+          }),
+        ),
+        newRows,
+        projectId: input.projectId,
+        projectionComponent: 'summary',
+        projectionIdentity: input.projectionIdentity,
+        repairDirtyKind: 'project.reviewConfig.updated',
+        reviewConfigHash: input.reviewConfigHash,
+        snapshotId: input.snapshotId,
+        summaryDefinitionVersion: 'review-serving-summary:v1',
+      },
+      database,
+    )
+  })
+  const summaryRecords = await measure('summaryRecordBuildMs', async () => {
+    return getSummaryRecords({database, diffs: contributionDiff.diffs, projectorInput: input})
+  })
   const patchWatermark = getPatchWatermark(input.claims)
   const shouldPublishManifest = input.acknowledgeClaims !== false && input.claims.length > 0
 
-  await writeReviewServingProjectorComponent(
-    {
-      acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
-      component: 'summary',
-      projectionManifests: !shouldPublishManifest
-        ? []
-        : [
-            {
-              baseGeneration: input.baseGeneration,
-              definitionVersion: 'review-serving-summary:v1',
-              inputDigest: getClaimKinds(input.claims),
-              inputWatermark: patchWatermark,
-              inputWatermarks: getReviewServingSourcePartitionWatermarks(input.claims),
-              invalidationReason: getClaimKinds(input.claims),
-              patchRangeEnd: patchWatermark,
-              patchRangeStart: getPatchRangeStart(input.claims),
-              patchWatermark,
+  const writerResult = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
+        component: 'summary',
+        projectionManifests: !shouldPublishManifest
+          ? []
+          : [
+              {
+                baseGeneration: input.baseGeneration,
+                definitionVersion: 'review-serving-summary:v1',
+                inputDigest: getClaimKinds(input.claims),
+                inputWatermark: patchWatermark,
+                inputWatermarks: getReviewServingSourcePartitionWatermarks(input.claims),
+                invalidationReason: getClaimKinds(input.claims),
+                patchRangeEnd: patchWatermark,
+                patchRangeStart: getPatchRangeStart(input.claims),
+                patchWatermark,
+                projectId: input.projectId,
+                projectionComponent: 'summary',
+                projectionIdentity: input.projectionIdentity,
+                reviewConfigHash: input.reviewConfigHash,
+                status: 'candidate',
+              },
+            ],
+        records: [...summaryRecords, ...contributionDiff.contributionRecords],
+        repairDirtyWork: contributionDiff.repairDirtyWork,
+        statements:
+          contributionDiff.deleteContributionStateStatement === null
+            ? []
+            : [contributionDiff.deleteContributionStateStatement],
+        watermark: !shouldPublishManifest
+          ? undefined
+          : {
               projectId: input.projectId,
               projectionComponent: 'summary',
-              projectionIdentity: input.projectionIdentity,
-              reviewConfigHash: input.reviewConfigHash,
-              status: 'candidate',
+              projectorName: summaryProjectorName,
+              sourceHighWaterMark: patchWatermark,
+              sourcePartition: getClaimSourcePartition(input.claims),
             },
-          ],
-      records: [...summaryRecords, ...contributionDiff.contributionRecords],
-      repairDirtyWork: contributionDiff.repairDirtyWork,
-      statements:
-        contributionDiff.deleteContributionStateStatement === null
-          ? []
-          : [contributionDiff.deleteContributionStateStatement],
-      watermark: !shouldPublishManifest
-        ? undefined
-        : {
-            projectId: input.projectId,
-            projectionComponent: 'summary',
-            projectorName: summaryProjectorName,
-            sourceHighWaterMark: patchWatermark,
-            sourcePartition: getClaimSourcePartition(input.claims),
-          },
-    },
-    database,
-  )
+      },
+      database,
+    )
+  })
 
   return {
     contributionRowCount: contributionDiff.contributionRecords.length,
+    diagnosticsJson: {
+      phaseTimings,
+      summaryProjector: {
+        contributionDiffCount: contributionDiff.diffs.length,
+        contributionRecordCount: contributionDiff.contributionRecords.length,
+        priorArticleRowCount: priorArticleRows.length,
+        sourceRowCount: sourceRows.length,
+        writer: writerResult.diagnostics,
+      },
+    },
     repairRequired: contributionDiff.repairRequired,
     summaryRowCount: summaryRecords.length,
     summaryValues: summaryRecords.map((record) => {

@@ -145,6 +145,12 @@ test('answer changes update posting stats from old and new contribution diffs', 
 
   expect(result.patchRowCount).toBe(2)
   expect(result.servingRowCount).toBe(1)
+  expect(result.diagnosticsJson.phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.postingProjector.writer.records.inputRecordsByTable).toMatchObject({
+    'mart.review_article_filter_posting_patch_v4': 2,
+    'mart.review_article_filter_posting_serving_v4': 1,
+  })
   expect(joined).not.toContain('scope.source_updated_at')
   expect(result.statsValues).toContainEqual({
     cardinality: 2,
@@ -190,6 +196,25 @@ test('posting stats repair corrupted DuckDB BIGINT string cardinalities from con
   expect(joined).toContain('SUM(contribution.contribution_value)')
   expect(joined).not.toContain('AND contribution.summary_definition_version =')
   expect(joined).not.toContain('343341342341341300000')
+})
+
+test('full posting rebuilds write serving state without incremental patch fanout', async () => {
+  const {database, statements} = createPostingDatabase({
+    existingRows: [],
+    newRows: [postingRow({filterKind: 'importRoute', filterValue: 'route-1'})],
+  })
+
+  const result = await projectReviewServingFilterPostings(projectInput([]), database)
+  const joined = statements.join('\n')
+
+  expect(result.patchRowCount).toBe(0)
+  expect(result.servingRowCount).toBe(1)
+  expect(result.diagnosticsJson.postingProjector.writer.records.inputRecordsByTable).not.toHaveProperty(
+    'mart.review_article_filter_posting_patch_v4',
+  )
+  expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
 })
 
 test('deletes write tombstones, remove serving rows, and decrement stats in the writer transaction', async () => {

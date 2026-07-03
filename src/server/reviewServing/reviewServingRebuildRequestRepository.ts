@@ -294,10 +294,31 @@ const getDefaultRebuildArticleBounds = async (
     : {chunkEndKey: row.chunkEndKey, chunkStartKey: row.chunkStartKey}
 }
 
-const defaultRebuildPresplitInputRowLimit = 50_000
-const admissionPresplittableDefaultRebuildComponents: ReadonlySet<ReviewServingProjectionComponent> = new Set([
-  'search',
+const defaultRebuildMaxAdmissionSplitCount = 64
+const defaultRebuildNonPresplittableComponents = new Set<ReviewServingProjectionComponent>([
+  'display',
+  'humanStatus',
+  'judgmentInputContent',
+  'llmStatus',
+  'posting',
+  'projectScope',
+  'queue',
+  'selectedImport',
+  'summary',
 ])
+const defaultRebuildPresplitInputRowLimits = {
+  display: 25_000,
+  humanStatus: 64,
+  judgmentInputContent: 5_000,
+  llmStatus: 64,
+  payload: 10_000,
+  posting: 512,
+  projectScope: 50_000,
+  queue: 5_000,
+  search: 50_000,
+  selectedImport: 25_000,
+  summary: 512,
+} as const satisfies Record<ReviewServingProjectionComponent, number>
 
 const getDefaultRebuildPresplitBucketCount = (input: {
   component: ReviewServingProjectionComponent
@@ -305,13 +326,14 @@ const getDefaultRebuildPresplitBucketCount = (input: {
   requestedComponents: readonly ReviewServingProjectionComponent[]
 }) => {
   const estimatedInputRows = input.estimate?.estimatedInputRows
+  const inputRowLimit = defaultRebuildPresplitInputRowLimits[input.component]
 
   return input.requestedComponents.length === 1
-    && admissionPresplittableDefaultRebuildComponents.has(input.component)
+    && !defaultRebuildNonPresplittableComponents.has(input.component)
     && estimatedInputRows !== null
     && estimatedInputRows !== undefined
-    && estimatedInputRows > defaultRebuildPresplitInputRowLimit
-    ? Math.min(16, Math.max(2, Math.ceil(estimatedInputRows / defaultRebuildPresplitInputRowLimit)))
+    && estimatedInputRows > inputRowLimit
+    ? Math.min(defaultRebuildMaxAdmissionSplitCount, Math.max(2, Math.ceil(estimatedInputRows / inputRowLimit)))
     : 1
 }
 
@@ -721,6 +743,12 @@ export const getActiveReviewServingRebuildRequestForProject = async (
       ${reasonFilter}
       AND status = 'admitted'
       AND admission_state = 'admitted'
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest chunk
+        WHERE chunk.request_id = app.review_rebuild_request.request_id
+          AND chunk.status IN ('pending', 'running', 'failed')
+      )
       AND NOT EXISTS (
         SELECT 1
         FROM app.review_rebuild_chunk_manifest chunk
@@ -776,14 +804,18 @@ export const boostActiveReviewServingRebuildRequestForProject = async (
   let activeRequest: {requestId: string} | undefined
 
   for (const request of activeRequests) {
-    const [blockedRow] = await database.queryJson<{blockedCount: number | string}>(`
-      SELECT CAST(COUNT(*) AS INTEGER) AS blockedCount
+    const [chunkStateRow] = await database.queryJson<{
+      blockedCount: number | string
+      progressableCount: number | string
+    }>(`
+      SELECT
+        CAST(COUNT(*) FILTER (WHERE status IN ('blocked_over_budget', 'quarantined')) AS INTEGER) AS blockedCount,
+        CAST(COUNT(*) FILTER (WHERE status IN ('pending', 'running', 'failed')) AS INTEGER) AS progressableCount
       FROM app.review_rebuild_chunk_manifest
       WHERE request_id = ${getSqlLiteral(request.requestId)}
-        AND status IN ('blocked_over_budget', 'quarantined')
     `)
 
-    if (Number(blockedRow?.blockedCount ?? 0) === 0) {
+    if (Number(chunkStateRow?.blockedCount ?? 0) === 0 && Number(chunkStateRow?.progressableCount ?? 0) > 0) {
       activeRequest = request
       break
     }

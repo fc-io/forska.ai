@@ -1,9 +1,9 @@
 import {existsSync} from 'node:fs'
-import {totalmem} from 'node:os'
 
 import {DuckDBInstance} from '@duckdb/node-api'
 
 import {DEFAULT_API_SERVER_PORT} from '../../utils/runtimePortDefaults.ts'
+import {getDefaultMaintenanceDuckdbMemoryLimit} from './duckdbMemoryDefaults.ts'
 import {getReadOnlyDuckdbRuntimeOptions} from './duckdbService.ts'
 import {getConfiguredDuckdbPath} from './getDuckdbPath.ts'
 import {type LocalAppSettings, readLocalAppSettings} from './localAppSettings.ts'
@@ -17,11 +17,6 @@ type BackgroundServerStackConfig = {
   maintenanceDuckdbMemoryLimit: string
   maintenancePort: number
 }
-
-const mebibyte = 1024 ** 2
-const darwinMaximumBackgroundMaintenanceDuckdbMemoryLimitMiB = 6400
-const defaultMaximumBackgroundMaintenanceDuckdbMemoryLimitMiB = 20 * 1024
-const minimumBackgroundMaintenanceDuckdbMemoryLimitMiB = 4 * 1024
 
 const getIntegerPort = (value: string | undefined, fallback: number) => {
   const parsed = Number.parseInt(String(value ?? '').trim(), 10)
@@ -45,24 +40,8 @@ const getBackgroundServerProcessBaseEnv = (resolvedBaseEnv: Record<string, strin
   return {...resolvedBaseEnv, JUDGE_WORKER_JOURNAL_PATH: ''}
 }
 
-export const getDefaultBackgroundMaintenanceDuckdbMemoryLimit = (
-  totalMemoryBytes = totalmem(),
-  platform = process.platform,
-) => {
-  const totalMemoryMiB = Math.floor(totalMemoryBytes / mebibyte)
-  const derivedLimitMiB = Math.floor(totalMemoryMiB / 2)
-  const maximumBackgroundMaintenanceDuckdbMemoryLimitMiB =
-    platform === 'darwin'
-      ? darwinMaximumBackgroundMaintenanceDuckdbMemoryLimitMiB
-      : defaultMaximumBackgroundMaintenanceDuckdbMemoryLimitMiB
-  const maintenanceDuckdbMemoryLimitMiB = Math.max(
-    minimumBackgroundMaintenanceDuckdbMemoryLimitMiB,
-    Math.min(maximumBackgroundMaintenanceDuckdbMemoryLimitMiB, derivedLimitMiB),
-  )
-
-  return maintenanceDuckdbMemoryLimitMiB % 1024 === 0
-    ? `${maintenanceDuckdbMemoryLimitMiB / 1024}GB`
-    : `${maintenanceDuckdbMemoryLimitMiB}MiB`
+export const getDefaultBackgroundMaintenanceDuckdbMemoryLimit = (totalMemoryBytes?: number, platform?: string) => {
+  return getDefaultMaintenanceDuckdbMemoryLimit(totalMemoryBytes, platform)
 }
 
 export const getBackgroundServerStackConfig = (

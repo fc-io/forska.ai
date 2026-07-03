@@ -18,7 +18,6 @@ import {
 import {
   getActiveReviewServingSnapshotManifest,
   getReviewServingSnapshotManifest,
-  markCandidateReviewServingSnapshotManifestFailed,
   type ReviewServingProjectionIdentityManifestInput,
   type ReviewServingSnapshotManifestInput,
   upsertReviewServingProjectionIdentityManifest,
@@ -129,6 +128,30 @@ export type WriteReviewServingProjectorComponentInput = {
   snapshotPromotion?: PromoteReviewServingProjectorSnapshotInput
   statements?: readonly string[]
   watermark?: ReviewServingProjectorWatermarkAdvanceInput
+}
+
+export type ReviewServingProjectorRecordWriteDiagnostics = {
+  batchCount: number
+  batchesByTable: Record<string, number>
+  dedupedRecordCount: number
+  dedupedRecordsByTable: Record<string, number>
+  inputRecordCount: number
+  inputRecordsByTable: Record<string, number>
+  writeMsByTable: Record<string, number>
+}
+
+export type ReviewServingProjectorWriterDiagnostics = {
+  phaseTimings: Record<string, number>
+  records: ReviewServingProjectorRecordWriteDiagnostics
+  statements: {count: number}
+}
+
+const getNonNegativeElapsedMs = (startedAtMs: number) => {
+  return Math.max(0, Date.now() - startedAtMs)
+}
+
+const incrementDiagnosticsCounter = (target: Record<string, number>, key: string, increment: number) => {
+  target[key] = (target[key] ?? 0) + increment
 }
 
 const getReviewServingProjectorHash = (label: string, value: ReviewServingIdentityValue) => {
@@ -275,8 +298,19 @@ const writeReviewServingProjectorRecords = async (
   options: {insertOnlyTables?: ReadonlySet<string>} = {},
 ) => {
   const recordGroups = new Map<string, ReviewServingProjectorRecord[]>()
+  const diagnostics: ReviewServingProjectorRecordWriteDiagnostics = {
+    batchCount: 0,
+    batchesByTable: {},
+    dedupedRecordCount: 0,
+    dedupedRecordsByTable: {},
+    inputRecordCount: records.length,
+    inputRecordsByTable: {},
+    writeMsByTable: {},
+  }
 
   records.forEach((record) => {
+    incrementDiagnosticsCounter(diagnostics.inputRecordsByTable, record.table, 1)
+
     const key = getReviewServingProjectorRecordShapeKey(record)
     const group = recordGroups.get(key)
 
@@ -290,14 +324,24 @@ const writeReviewServingProjectorRecords = async (
 
   for (const group of recordGroups.values()) {
     const dedupedGroup = getDedupedReviewServingProjectorRecords(group)
-    const insertOnly = options.insertOnlyTables?.has(group[0]?.table ?? '') ?? false
+    const table = group[0]?.table ?? 'unknown'
+    const insertOnly = options.insertOnlyTables?.has(table) ?? false
+
+    diagnostics.dedupedRecordCount += dedupedGroup.length
+    incrementDiagnosticsCounter(diagnostics.dedupedRecordsByTable, table, dedupedGroup.length)
 
     for (let index = 0; index < dedupedGroup.length; index += projectorRecordBatchSize) {
+      const batchStartedAtMs = Date.now()
       await writeReviewServingProjectorRecordBatch(dedupedGroup.slice(index, index + projectorRecordBatchSize), tx, {
         insertOnly,
       })
+      diagnostics.batchCount += 1
+      incrementDiagnosticsCounter(diagnostics.batchesByTable, table, 1)
+      incrementDiagnosticsCounter(diagnostics.writeMsByTable, table, getNonNegativeElapsedMs(batchStartedAtMs))
     }
   }
+
+  return diagnostics
 }
 
 const getReviewServingProjectorDeleteScopedTables = (statements: readonly string[]) => {
@@ -421,6 +465,10 @@ export const promoteReviewServingProjectorSnapshot = async (
 
     const validation = await validateReviewServingCandidateSnapshotManifest(candidate, tx)
 
+    if (!validation.ok) {
+      return {error: validation.error, promoted: false, snapshotId: input.snapshotId}
+    }
+
     await tx.run(`
       UPDATE app.review_serving_snapshot_manifest
       SET
@@ -430,15 +478,6 @@ export const promoteReviewServingProjectorSnapshot = async (
         AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
         AND snapshot_status = 'candidate'
     `)
-
-    if (!validation.ok) {
-      await markCandidateReviewServingSnapshotManifestFailed(
-        {lastError: validation.error, projectId: input.projectId, snapshotId: input.snapshotId},
-        tx,
-      )
-
-      return {error: validation.error, promoted: false, snapshotId: input.snapshotId}
-    }
 
     await compactReviewServingCandidateSnapshotPatches(
       {candidate},
@@ -603,57 +642,104 @@ export const writeReviewServingProjectorComponent = async (
   return database.transaction(async (tx) => {
     const statements = input.statements ?? []
     const insertOnlyTables = getReviewServingProjectorDeleteScopedTables(statements)
+    const phaseTimings: Record<string, number> = {}
+    const measure = async <T>(phase: string, operation: () => Promise<T>) => {
+      const startedAtMs = Date.now()
+      const result = await operation()
+      phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+      return result
+    }
 
     if (input.watermark !== undefined) {
-      await assertReviewServingProjectorWatermarkCanAdvance(tx, input.watermark)
+      await measure('watermarkAssertMs', async () => {
+        await assertReviewServingProjectorWatermarkCanAdvance(
+          tx,
+          input.watermark as ReviewServingProjectorWatermarkAdvanceInput,
+        )
+      })
     }
 
     if (input.candidateSnapshot !== undefined) {
-      await createCandidateReviewServingSnapshotManifestFromWriter(input.candidateSnapshot, tx)
+      await measure('candidateSnapshotMs', async () => {
+        await createCandidateReviewServingSnapshotManifestFromWriter(
+          input.candidateSnapshot as ReviewServingSnapshotManifestInput,
+          tx,
+        )
+      })
     }
 
-    await (input.projectionManifests ?? []).reduce<Promise<void>>((previous, manifest) => {
-      return previous.then(async () => {
-        await upsertReviewServingProjectionIdentityManifest(manifest, tx)
-      })
-    }, Promise.resolve())
+    await measure('projectionManifestsMs', async () => {
+      await (input.projectionManifests ?? []).reduce<Promise<void>>((previous, manifest) => {
+        return previous.then(async () => {
+          await upsertReviewServingProjectionIdentityManifest(manifest, tx)
+        })
+      }, Promise.resolve())
+    })
 
-    await statements.reduce<Promise<void>>((previous, statement) => {
-      return previous.then(async () => {
-        await tx.run(statement)
-      })
-    }, Promise.resolve())
+    await measure('statementsMs', async () => {
+      await statements.reduce<Promise<void>>((previous, statement) => {
+        return previous.then(async () => {
+          await tx.run(statement)
+        })
+      }, Promise.resolve())
+    })
 
-    await writeReviewServingProjectorRecords(input.records ?? [], tx, {insertOnlyTables})
+    const recordDiagnostics = await measure('recordsMs', async () => {
+      return writeReviewServingProjectorRecords(input.records ?? [], tx, {insertOnlyTables})
+    })
 
     if (input.selectedImportSnapshotCursor !== undefined) {
-      await writeReviewServingSelectedImportSnapshotCursor(input.selectedImportSnapshotCursor, tx)
+      await measure('selectedImportSnapshotCursorMs', async () => {
+        await writeReviewServingSelectedImportSnapshotCursor(
+          input.selectedImportSnapshotCursor as ReviewServingSelectedImportSnapshotCursorInput,
+          tx,
+        )
+      })
     }
 
-    await (input.repairDirtyWork ?? []).reduce<Promise<void>>((previous, dirtyWork) => {
-      return previous.then(async () => {
-        await upsertReviewServingDirtyWork(dirtyWork, tx)
-      })
-    }, Promise.resolve())
+    await measure('repairDirtyWorkMs', async () => {
+      await (input.repairDirtyWork ?? []).reduce<Promise<void>>((previous, dirtyWork) => {
+        return previous.then(async () => {
+          await upsertReviewServingDirtyWork(dirtyWork, tx)
+        })
+      }, Promise.resolve())
+    })
 
     if (input.acknowledgements !== undefined) {
-      await completeReviewServingDirtyWorkClaims(input.acknowledgements, tx)
+      await measure('acknowledgementsMs', async () => {
+        await completeReviewServingDirtyWorkClaims(input.acknowledgements ?? [], tx)
+      })
     }
 
     if (input.watermark !== undefined) {
-      await advanceReviewServingProjectorWatermark(tx, input.watermark)
-    }
-
-    if (input.snapshotPromotion !== undefined) {
-      await promoteReviewServingProjectorSnapshot(input.snapshotPromotion, {
-        queryJson: tx.queryJson,
-        run: tx.run,
-        transaction: async (operation) => {
-          return operation(tx)
-        },
+      await measure('watermarkAdvanceMs', async () => {
+        await advanceReviewServingProjectorWatermark(tx, input.watermark as ReviewServingProjectorWatermarkAdvanceInput)
       })
     }
 
-    return {component: input.component, promotedSnapshotId: input.snapshotPromotion?.snapshotId ?? null}
+    if (input.snapshotPromotion !== undefined) {
+      await measure('snapshotPromotionMs', async () => {
+        await promoteReviewServingProjectorSnapshot(
+          input.snapshotPromotion as PromoteReviewServingProjectorSnapshotInput,
+          {
+            queryJson: tx.queryJson,
+            run: tx.run,
+            transaction: async (operation) => {
+              return operation(tx)
+            },
+          },
+        )
+      })
+    }
+
+    return {
+      component: input.component,
+      diagnostics: {
+        phaseTimings,
+        records: recordDiagnostics,
+        statements: {count: statements.length},
+      } satisfies ReviewServingProjectorWriterDiagnostics,
+      promotedSnapshotId: input.snapshotPromotion?.snapshotId ?? null,
+    }
   })
 }

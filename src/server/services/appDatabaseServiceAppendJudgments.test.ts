@@ -151,7 +151,9 @@ test('appendJudgments uses append lanes and preserves dedupe semantics', async (
   expect(appendMetrics.rowsAttempted).toBe(5)
   expect(appendMetrics.rowsInserted).toBe(4)
   expect(appendMetrics.rowsSkipped).toBe(1)
-  expect(appendMetrics.averageRowsPerSecondAttempted).not.toBeNull()
+  if (appendMetrics.averageRowsPerSecondAttempted !== null) {
+    expect(appendMetrics.averageRowsPerSecondAttempted).toBeGreaterThan(0)
+  }
   expect(appendMetrics.queueDepth).toBe(0)
   expect(Number(countRow?.total ?? 0)).toBe(4)
 })

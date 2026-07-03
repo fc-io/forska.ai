@@ -12,6 +12,8 @@ import {ensureCurrentDuckdbOwnerLease, withCurrentServerRoleOverride} from './se
 
 type DuckdbScriptAccessSnapshotResponse = {data?: AppDatabaseSnapshot; error?: string}
 
+class DuckdbSnapshotRouteUnavailableError extends Error {}
+
 const duckdbOwnerPrivateApiPrefix = '/__duckdb-owner-rpc'
 const duckdbStudioSnapshotPath = '/api/duckdbStudioSnapshots'
 
@@ -54,7 +56,8 @@ const getErrorText = (error: unknown) => {
 const isStudioServerUnavailable = (error: unknown) => {
   const errorText = getErrorText(error)
   return (
-    errorText.includes('ECONNREFUSED')
+    error instanceof DuckdbSnapshotRouteUnavailableError
+    || errorText.includes('ECONNREFUSED')
     || errorText.includes('FailedToOpenSocket')
     || errorText.includes('fetch failed')
     || errorText.includes('connection refused')
@@ -110,7 +113,13 @@ const ensureDuckdbMaintenanceIsAvailable = async (taskName: string) => {
 }
 
 const getSnapshotFromResponse = async (response: Response): Promise<AppDatabaseSnapshot> => {
-  const body = (await response.json()) as DuckdbScriptAccessSnapshotResponse
+  const text = await response.text()
+
+  if (response.status === 404) {
+    throw new DuckdbSnapshotRouteUnavailableError('DuckDB snapshot route is unavailable')
+  }
+
+  const body = JSON.parse(text) as DuckdbScriptAccessSnapshotResponse
 
   if (!response.ok || !body.data) {
     throw new Error(body.error ?? `DuckDB snapshot request failed with status ${response.status}`)
@@ -124,7 +133,7 @@ const createRemoteSnapshot = async (url: string) => {
   return getSnapshotFromResponse(response)
 }
 
-const createRemoteSnapshotFromUrls = async (urls: string[]): Promise<AppDatabaseSnapshot> => {
+export const createRemoteSnapshotFromUrls = async (urls: string[]): Promise<AppDatabaseSnapshot> => {
   const [currentUrl, ...remainingUrls] = urls
 
   if (currentUrl === undefined) {

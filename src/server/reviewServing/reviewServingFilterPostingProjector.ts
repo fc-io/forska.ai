@@ -61,6 +61,10 @@ type PostingTotalRow = {listModeKey: string; totalArticleCount: number | string 
 const filterPostingProjectorName = 'filter-posting-projector'
 const stalePostingSortAt = '1970-01-01T00:00:00.000Z'
 
+const getNonNegativeElapsedMs = (startedAtMs: number) => {
+  return Math.max(0, Date.now() - startedAtMs)
+}
+
 const getPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return Math.max(
     0,
@@ -68,6 +72,10 @@ const getPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
       return claim.latestSourceHighWaterMark
     }),
   )
+}
+
+const isFullPostingRebuildInput = (input: Pick<ProjectReviewServingFilterPostingsInput, 'claims'>) => {
+  return input.claims.length === 0
 }
 
 const getPatchRangeStart = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
@@ -854,92 +862,137 @@ export const projectReviewServingFilterPostings = async (
   input: ProjectReviewServingFilterPostingsInput,
   database: ReviewServingFilterPostingProjectorDatabase = getAppDatabaseService(),
 ) => {
-  const [existingRows, newRows] = await Promise.all([
-    getExistingPostingRows(input, database),
-    getPostingContributionRows(input, database),
-  ])
+  const phaseTimings: Record<string, number> = {}
+  const measure = async <T>(phase: string, operation: () => Promise<T>) => {
+    const startedAtMs = Date.now()
+    const result = await operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const measureSync = <T>(phase: string, operation: () => T) => {
+    const startedAtMs = Date.now()
+    const result = operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const [existingRows, newRows] = await measure('sourceQueryMs', async () => {
+    return Promise.all([getExistingPostingRows(input, database), getPostingContributionRows(input, database)])
+  })
   const patchWatermark = getPatchWatermark(input.claims)
-  const contributionRows = [...newRows, ...getTombstoneRows({existingRows, newRows})]
-  const liveRows = contributionRows.filter((row) => {
-    return !row.tombstone
-  })
-  const contributionDiff = await prepareReviewServingContributionDiff(
-    {
-      claims: input.claims,
-      componentKind: 'posting',
-      expectedArticleIds: getExpectedArticleIds(input.claims, contributionRows),
-      newRows: getPostingRowsAsContributionRows(liveRows),
-      projectId: input.projectId,
-      projectionComponent: 'posting',
-      projectionIdentity: input.projectionIdentity,
-      requireExistingState: existingRows.length > 0,
-      reviewConfigHash: input.reviewConfigHash,
-      snapshotId: input.snapshotId,
-      summaryDefinitionVersion: input.definitionVersion,
-    },
-    database,
-  )
-  const patchRecords = contributionRows.map((row) => {
-    return getPostingPatchRecord({
-      baseGeneration: input.baseGeneration,
-      patchWatermark,
-      projectId: input.projectId,
-      row,
+  const {contributionRows, liveRows} = measureSync('diffInputTransformMs', () => {
+    const transformedContributionRows = [...newRows, ...getTombstoneRows({existingRows, newRows})]
+    const transformedLiveRows = transformedContributionRows.filter((row) => {
+      return !row.tombstone
     })
-  })
-  const servingRecords = liveRows.map((row) => {
-    return getPostingServingRecord({
-      projectId: input.projectId,
-      reviewConfigHash: input.reviewConfigHash,
-      row,
-      snapshotId: input.snapshotId,
-    })
-  })
-  const statsRecords = await getStatsRecords({
-    database,
-    diffs: contributionDiff.diffs,
-    projectorInput: input,
-    rows: contributionRows,
-  })
-  const deleteServingRowsStatement = getDeleteServingRowsStatement(
-    input,
-    contributionRows.filter((row) => {
-      return row.tombstone
-    }),
-  )
-  const deletePatchRowsStatement = getDeletePatchRowsStatement(input, patchWatermark)
-  const deleteStatsRowsStatement = getDeleteStatsRowsStatement(input, statsRecords)
 
-  await writeReviewServingProjectorComponent(
-    {
-      acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
-      component: 'posting',
-      projectionManifests: input.claims.length === 0 ? [] : [getPostingManifest(input)],
-      records: [...patchRecords, ...servingRecords, ...statsRecords, ...contributionDiff.contributionRecords],
-      repairDirtyWork: contributionDiff.repairDirtyWork,
-      statements: [
-        deleteServingRowsStatement,
-        deletePatchRowsStatement,
-        deleteStatsRowsStatement,
-        contributionDiff.deleteContributionStateStatement,
-      ].flatMap((statement) => {
-        return statement === null ? [] : [statement]
-      }),
-      watermark:
-        input.claims.length === 0
-          ? undefined
-          : {
-              projectId: input.projectId,
-              projectionComponent: 'posting',
-              projectorName: filterPostingProjectorName,
-              sourceHighWaterMark: patchWatermark,
-              sourcePartition: getClaimSourcePartition(input.claims),
-            },
+    return {contributionRows: transformedContributionRows, liveRows: transformedLiveRows}
+  })
+  const contributionDiff = await measure('contributionDiffMs', async () => {
+    return prepareReviewServingContributionDiff(
+      {
+        claims: input.claims,
+        componentKind: 'posting',
+        expectedArticleIds: getExpectedArticleIds(input.claims, contributionRows),
+        newRows: getPostingRowsAsContributionRows(liveRows),
+        projectId: input.projectId,
+        projectionComponent: 'posting',
+        projectionIdentity: input.projectionIdentity,
+        requireExistingState: existingRows.length > 0,
+        reviewConfigHash: input.reviewConfigHash,
+        snapshotId: input.snapshotId,
+        summaryDefinitionVersion: input.definitionVersion,
+      },
+      database,
+    )
+  })
+  const {patchRecords, servingRecords} = measureSync('recordTransformMs', () => {
+    const nextPatchRecords = isFullPostingRebuildInput(input)
+      ? []
+      : contributionRows.map((row) => {
+          return getPostingPatchRecord({
+            baseGeneration: input.baseGeneration,
+            patchWatermark,
+            projectId: input.projectId,
+            row,
+          })
+        })
+    const nextServingRecords = liveRows.map((row) => {
+      return getPostingServingRecord({
+        projectId: input.projectId,
+        reviewConfigHash: input.reviewConfigHash,
+        row,
+        snapshotId: input.snapshotId,
+      })
+    })
+
+    return {patchRecords: nextPatchRecords, servingRecords: nextServingRecords}
+  })
+  const statsRecords = await measure('statsQueryAndTransformMs', async () => {
+    return getStatsRecords({database, diffs: contributionDiff.diffs, projectorInput: input, rows: contributionRows})
+  })
+  const {deletePatchRowsStatement, deleteServingRowsStatement, deleteStatsRowsStatement} = measureSync(
+    'deleteStatementBuildMs',
+    () => {
+      const nextDeleteServingRowsStatement = getDeleteServingRowsStatement(
+        input,
+        contributionRows.filter((row) => {
+          return row.tombstone
+        }),
+      )
+      const nextDeletePatchRowsStatement = getDeletePatchRowsStatement(input, patchWatermark)
+      const nextDeleteStatsRowsStatement = getDeleteStatsRowsStatement(input, statsRecords)
+
+      return {
+        deletePatchRowsStatement: nextDeletePatchRowsStatement,
+        deleteServingRowsStatement: nextDeleteServingRowsStatement,
+        deleteStatsRowsStatement: nextDeleteStatsRowsStatement,
+      }
     },
-    database,
   )
+  const writerResult = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
+        component: 'posting',
+        projectionManifests: input.claims.length === 0 ? [] : [getPostingManifest(input)],
+        records: [...patchRecords, ...servingRecords, ...statsRecords, ...contributionDiff.contributionRecords],
+        repairDirtyWork: contributionDiff.repairDirtyWork,
+        statements: [
+          deleteServingRowsStatement,
+          deletePatchRowsStatement,
+          deleteStatsRowsStatement,
+          contributionDiff.deleteContributionStateStatement,
+        ].flatMap((statement) => {
+          return statement === null ? [] : [statement]
+        }),
+        watermark:
+          input.claims.length === 0
+            ? undefined
+            : {
+                projectId: input.projectId,
+                projectionComponent: 'posting',
+                projectorName: filterPostingProjectorName,
+                sourceHighWaterMark: patchWatermark,
+                sourcePartition: getClaimSourcePartition(input.claims),
+              },
+      },
+      database,
+    )
+  })
 
   return {
+    diagnosticsJson: {
+      phaseTimings,
+      postingProjector: {
+        contributionDiffCount: contributionDiff.diffs.length,
+        contributionRecordCount: contributionDiff.contributionRecords.length,
+        contributionRowCount: contributionRows.length,
+        existingRowCount: existingRows.length,
+        liveRowCount: liveRows.length,
+        newRowCount: newRows.length,
+        writer: writerResult.diagnostics,
+      },
+    },
     patchRowCount: patchRecords.length,
     patchWatermark,
     repairRequired: contributionDiff.repairRequired,

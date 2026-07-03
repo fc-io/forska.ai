@@ -4386,10 +4386,6 @@ const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<D
       yield* Effect.fail(new Error('DuckDB snapshots are not available for :memory: databases'))
     }
 
-    yield* Effect.tryPromise(() => {
-      return runDuckdbStatementDirect('CHECKPOINT')
-    })
-
     const createdAt = new Date().toISOString()
     const snapshotName = `${basename(runtimeConfig.databasePath)}.${createdAt.replaceAll(':', '-')}.${randomUUID()}.duckdb`
     const snapshotPath = join(duckdbSnapshotDirectory, snapshotName)

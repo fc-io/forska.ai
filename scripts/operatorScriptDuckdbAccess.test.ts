@@ -46,6 +46,16 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     mustContain: ['withDuckdbMaintenanceAccess', "getMaintenanceDuckdbWorkloadContext('inspectDirtyRefreshRisk')"],
     path: 'scripts/inspectDirtyRefreshRisk.ts',
   },
+  'db:duck:inspect-review-serving-rebuild-timings': {
+    commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
+    description: 'V4 rebuild timing diagnostics',
+    mustContain: [
+      'withDuckdbMaintenanceAccess',
+      "getMaintenanceDuckdbWorkloadContext('inspectReviewServingRebuildTimings')",
+      'getReviewServingRebuildTimingDiagnostics',
+    ],
+    path: 'scripts/inspectReviewServingRebuildTimings.ts',
+  },
   'db:duck:mig': {commandIncludes: ['bun run db:mig'], description: 'migration alias'},
   'db:duck:legacy-quarantine-dirty-refresh-article': {
     commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],

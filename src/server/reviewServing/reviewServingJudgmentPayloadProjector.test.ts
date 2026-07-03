@@ -191,7 +191,17 @@ test('judgment payload projection separates llm and human payload kinds across o
     return statement.includes('INSERT INTO mart.review_article_judgment_detail_serving_v4')
   })
 
-  expect(result).toEqual({humanRowCount: 4, llmRowCount: 4})
+  expect(result).toMatchObject({
+    diagnosticsJson: {judgmentPayloadProjector: {humanSourceRowCount: 2, llmSourceRowCount: 2}},
+    humanRowCount: 4,
+    llmRowCount: 4,
+  })
+  expect(result.diagnosticsJson.phaseTimings.recordTransformMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.judgmentPayloadProjector.writer.records.inputRecordsByTable).toMatchObject({
+    'mart.review_article_judgment_detail_serving_v4': 8,
+  })
   expect(inserts).toHaveLength(1)
   expect(inserts[0]).toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO UPDATE SET',

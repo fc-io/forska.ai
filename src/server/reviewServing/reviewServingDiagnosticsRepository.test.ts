@@ -37,8 +37,9 @@ const createDiagnosticsDatabase = () => {
 
       if (statement.includes('GROUP BY snapshot_status')) {
         return [
-          {snapshotCount: 1, snapshotStatus: 'active'},
-          {snapshotCount: 2, snapshotStatus: 'failed'},
+          {invalidCandidateCount: 0, snapshotCount: 1, snapshotStatus: 'active'},
+          {invalidCandidateCount: 1, snapshotCount: 1, snapshotStatus: 'candidate'},
+          {invalidCandidateCount: 0, snapshotCount: 2, snapshotStatus: 'failed'},
         ] as T[]
       }
 
@@ -139,9 +140,29 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
       runningCount: 2,
     },
     search: {availability: 'ready', optionalComponent: true, snapshotId: 'snapshot-1'},
-    snapshot: {activeCount: 1, activeSnapshotId: 'snapshot-1', failedCount: 2, lastKnownGoodSnapshotId: 'snapshot-0'},
+    snapshot: {
+      activeCount: 1,
+      activeSnapshotId: 'snapshot-1',
+      candidateCount: 1,
+      failedCount: 2,
+      invalidCandidateCount: 1,
+      lastKnownGoodSnapshotId: 'snapshot-0',
+    },
   })
   expect(statements.join('\n')).toContain('app.review_serving_snapshot_manifest')
+  expect(statements.join('\n')).toContain('app.review_selected_import_snapshot')
+  expect(statements.join('\n')).toContain('missing_required_candidate')
+  expect(statements.join('\n')).toContain('invalid_required_state_candidate')
+  expect(statements.join('\n')).toContain('invalid_optional_state_candidate')
+  expect(statements.join('\n')).toContain("json_extract(snapshot.component_state_json, '$.optional')")
+  expect(statements.join('\n')).toContain('app.review_projection_identity_manifest')
+  expect(statements.join('\n')).toContain("manifest.status IN ('active', 'candidate')")
+  expect(statements.join('\n')).toContain('snapshot.source_watermarks_json')
+  expect(statements.join('\n')).toContain('manifest.input_watermarks_json')
+  expect(statements.join('\n')).toContain("source_watermark.key IN ('reviewChange', 'review-change')")
+  expect(statements.join('\n')).toContain(
+    "source_watermark.key IN ('reviewChange', 'review-change', 'importRunArticle'",
+  )
   expect(statements.join('\n')).toContain('app.review_serving_dirty_work')
   expect(statements.join('\n')).toContain("status IN ('failed', 'running')")
   expect(statements.join('\n')).toContain("INTERVAL '900 seconds'")
@@ -189,4 +210,17 @@ test('review serving diagnostics query sequentially instead of fanning out owner
   )
 
   expect(maxActiveQueryCount).toBe(1)
+})
+
+test('review serving diagnostics preserve project-wide snapshot status counts when review config is omitted', async () => {
+  const {database, statements} = createDiagnosticsDatabase()
+
+  await getReviewServingDiagnostics({now: '2026-06-18T10:05:00.000Z', projectId: 'project-1'}, database)
+
+  const snapshotStatusStatement = statements.find((statement) => {
+    return statement.includes('GROUP BY snapshot_status')
+  })
+
+  expect(snapshotStatusStatement).toBeDefined()
+  expect(snapshotStatusStatement).not.toContain('review_config_hash IS NOT DISTINCT FROM')
 })
