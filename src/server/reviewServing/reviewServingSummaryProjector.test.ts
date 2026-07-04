@@ -605,12 +605,11 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   expect(joined).toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key) DO UPDATE SET',
   )
-  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
   expect(
     statements.filter((statement) => {
       return statement.includes('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
     }),
-  ).toHaveLength(1)
+  ).toHaveLength(0)
 })
 
 test('summary rebuild request finalization reduces conflicting partial chunks in DuckDB', async () => {
@@ -659,7 +658,7 @@ test('summary rebuild request finalization reduces conflicting partial chunks in
       `)
 
       expect(countRows).toEqual([{countValue: '5'}])
-      expect(partialRows).toEqual([{total: '0'}])
+      expect(partialRows).toEqual([{total: '1'}])
     } finally {
       close()
     }
@@ -764,7 +763,7 @@ test('summary rebuild request finalization ignores stale accumulator rows from p
       `)
 
       expect(countRows).toEqual([{countValue: '3'}])
-      expect(partialRows).toEqual([{total: '0'}])
+      expect(partialRows).toEqual([{total: '1'}])
     } finally {
       close()
     }
@@ -886,6 +885,122 @@ test('summary rebuild request finalization deduplicates overlapping contribution
       expect(contributionRows).toEqual([{contributionValue: '1', total: '6'}])
       expect(countRows).toEqual([{countValue: '3'}])
       expect(facetRows).toEqual([{countValue: '3'}])
+    } finally {
+      close()
+    }
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
+test('summary rebuild request finalization retries from retained contribution partials', async () => {
+  const duckdbPath = `/tmp/forska-summary-retained-contribution-finalize-${Date.now()}.duckdb`
+  const countContributionKey = contributionKey({
+    answerId: null,
+    answerValue: null,
+    availability: 'ready',
+    countKind: 'review.llm.assessedByPrompt',
+    facetKind: null,
+    facetKey: null,
+    facetValue: null,
+    filterKey: 'prompt:prompt-1',
+    listModeKey: 'llm',
+    promptId: 'prompt-1',
+    staleReason: null,
+    summaryIdentity: 'review.llm.assessedByPrompt',
+    summaryKind: 'count',
+  })
+
+  try {
+    const {close, database} = await createDuckdbSummaryDatabase(duckdbPath)
+
+    try {
+      await createSummaryReductionSchema(database)
+      await insertSummaryChunkManifestRows(database, {chunkIds: ['chunk-left', 'chunk-right']})
+      await database.run(`
+        INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+          request_id,
+          chunk_id,
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          serving_key,
+          summary_kind,
+          summary_identity,
+          list_mode_key,
+          count_kind,
+          summary_definition_version,
+          filter_key,
+          count_value
+        ) VALUES
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 2),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 2)
+      `)
+      await database.run(`
+        INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4 (
+          request_id,
+          chunk_id,
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          article_id,
+          component_kind,
+          summary_definition_version,
+          contribution_key,
+          contribution_value
+        ) VALUES
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-left', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-right', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1)
+      `)
+
+      await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+        {
+          requestId: 'rebuild-summary-1',
+          snapshots: [{projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'}],
+        },
+        database,
+      )
+      await database.run(`
+        DELETE FROM mart.review_article_summary_contribution_v4
+        WHERE project_id = 'project-1'
+      `)
+      await database.run(`
+        DELETE FROM mart.review_article_count_serving_v4
+        WHERE project_id = 'project-1'
+      `)
+
+      await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+        {
+          requestId: 'rebuild-summary-1',
+          snapshots: [
+            {
+              hasSummaryRebuildChunks: true,
+              projectId: 'project-1',
+              reviewConfigHash: 'review-config-1',
+              snapshotId: 'snapshot-1',
+            },
+          ],
+        },
+        database,
+      )
+      const contributionRows = await database.queryJson<{total: string}>(`
+        SELECT CAST(COUNT(*) AS VARCHAR) AS total
+        FROM mart.review_article_summary_contribution_v4
+      `)
+      const countRows = await database.queryJson<{countValue: string}>(`
+        SELECT CAST(count_value AS VARCHAR) AS countValue
+        FROM mart.review_article_count_serving_v4
+      `)
+      const retainedContributionRows = await database.queryJson<{total: string}>(`
+        SELECT CAST(COUNT(*) AS VARCHAR) AS total
+        FROM mart.review_article_summary_contribution_rebuild_partial_v4
+      `)
+
+      expect(contributionRows).toEqual([{total: '3'}])
+      expect(countRows).toEqual([{countValue: '3'}])
+      expect(retainedContributionRows).toEqual([{total: '4'}])
     } finally {
       close()
     }
