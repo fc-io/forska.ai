@@ -67,6 +67,8 @@ export type ProjectReviewServingPayloadInput = {
   status?: ReviewServingProjectionManifestStatus
 }
 
+export type ProjectReviewServingPayloadRangesInput = {ranges: readonly ProjectReviewServingPayloadInput[]}
+
 type DisplayProjectionRow = {
   activitySortAt: Date | string
   articleCreatedAt: Date | string | null
@@ -567,15 +569,14 @@ const getDisplayPatchRows = async (
       `)
 }
 
-const getPayloadRows = async (
-  input: ProjectReviewServingPayloadInput,
-  database: ReviewServingDisplayPayloadProjectorDatabase,
-) => {
+const getPayloadRowsSql = (input: ProjectReviewServingPayloadInput, options: {orderBy?: boolean} = {}) => {
   const articleIds = getClaimArticleIds(input.claims)
   const dirtyJoinSql =
     articleIds.length === 0 ? '' : 'INNER JOIN dirty_article dirty ON dirty.article_id = scope.article_id'
+  const orderBy =
+    options.orderBy === false ? '' : 'ORDER BY article.article_created_at ASC NULLS LAST, scope.article_id ASC'
 
-  return database.queryJson<PayloadProjectionRow>(`
+  return `
     ${getDirtyArticleCteSql(articleIds)}
     SELECT
       scope.article_id AS articleId,
@@ -633,8 +634,15 @@ const getPayloadRows = async (
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope)
       ${getArticleRangePredicate(input)}
-    ORDER BY article.article_created_at ASC NULLS LAST, scope.article_id ASC
-  `)
+    ${orderBy}
+  `
+}
+
+const getPayloadRows = async (
+  input: ProjectReviewServingPayloadInput,
+  database: ReviewServingDisplayPayloadProjectorDatabase,
+) => {
+  return database.queryJson<PayloadProjectionRow>(getPayloadRowsSql(input))
 }
 
 const getDisplayPatchRecord = (
@@ -712,6 +720,55 @@ const getDeletePayloadRowsStatement = (input: ProjectReviewServingPayloadInput) 
         },
         table: 'mart.review_article_serving_payload_v4',
       })
+}
+
+const getPayloadRebuildRowsStatements = (input: ProjectReviewServingPayloadInput) => {
+  return [
+    `DELETE FROM mart.review_article_serving_payload_v4
+      WHERE project_id = ${getSqlLiteral(input.projectId)}
+        AND display_identity = ${getSqlLiteral(input.displayIdentity)}
+        AND payload_identity = ${getSqlLiteral(input.payloadIdentity)}
+        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        ${getServingArticleRangePredicate(input)}`,
+    `
+    INSERT INTO mart.review_article_serving_payload_v4 (
+      abstract_text,
+      article_created_at,
+      article_id,
+      display_identity,
+      full_text_preview,
+      payload_bytes,
+      payload_identity,
+      payload_updated_at,
+      project_id,
+      snapshot_id,
+      source_metadata
+    )
+    WITH payload_source AS (
+      ${getPayloadRowsSql(input, {orderBy: false})}
+    )
+    SELECT
+      payload_source.abstractText AS abstract_text,
+      payload_source.articleCreatedAt AS article_created_at,
+      payload_source.articleId AS article_id,
+      ${getSqlLiteral(input.displayIdentity)} AS display_identity,
+      payload_source.fullTextPreview AS full_text_preview,
+      payload_source.payloadBytes AS payload_bytes,
+      ${getSqlLiteral(input.payloadIdentity)} AS payload_identity,
+      current_timestamp AS payload_updated_at,
+      ${getSqlLiteral(input.projectId)} AS project_id,
+      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+      payload_source.sourceMetadata AS source_metadata
+    FROM payload_source
+    ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id) DO UPDATE SET
+      abstract_text = excluded.abstract_text,
+      article_created_at = excluded.article_created_at,
+      full_text_preview = excluded.full_text_preview,
+      payload_bytes = excluded.payload_bytes,
+      payload_updated_at = excluded.payload_updated_at,
+      source_metadata = excluded.source_metadata
+  `,
+  ]
 }
 
 const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplayPatchInput, row: DisplayPatchRow) => {
@@ -831,6 +888,23 @@ export const projectReviewServingDisplayBaseRanges = async (
       component: 'display',
       statements: input.ranges.flatMap((range) => {
         return getDisplayBaseRowsStatements(range)
+      }),
+    },
+    database,
+  )
+
+  return {rangeCount: input.ranges.length}
+}
+
+export const projectReviewServingPayloadRanges = async (
+  input: ProjectReviewServingPayloadRangesInput,
+  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingDisplayPayloadProjectorDatabase,
+) => {
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'payload',
+      statements: input.ranges.flatMap((range) => {
+        return getPayloadRebuildRowsStatements(range)
       }),
     },
     database,
