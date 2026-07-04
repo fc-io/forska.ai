@@ -47,7 +47,7 @@ test('duckdb shutdown hook bypasses a stuck queue on SIGTERM', async () => {
     ],
     {
       cwd: process.cwd(),
-      env: {...process.env, DUCKDB_MEMORY_LIMIT: '1GB', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'},
+      env: {...process.env, DUCKDB_MEMORY_LIMIT: '20GB', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'},
       stdout: 'pipe',
       stderr: 'pipe',
     },
@@ -127,7 +127,7 @@ test('duckdb shutdown hook skips checkpoint while control transaction is active'
     ],
     {
       cwd: process.cwd(),
-      env: {...process.env, DUCKDB_MEMORY_LIMIT: '1GB', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'},
+      env: {...process.env, DUCKDB_MEMORY_LIMIT: '20GB', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'},
       stdout: 'pipe',
       stderr: 'pipe',
     },
@@ -174,7 +174,7 @@ test('duckdb shutdown hook skips checkpoint while queued work is active', async 
     ],
     {
       cwd: process.cwd(),
-      env: {...process.env, DUCKDB_MEMORY_LIMIT: '1GB', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'},
+      env: {...process.env, DUCKDB_MEMORY_LIMIT: '20GB', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'},
       stdout: 'pipe',
       stderr: 'pipe',
     },
@@ -186,6 +186,52 @@ test('duckdb shutdown hook skips checkpoint while queued work is active', async 
 
     expect(childProcess.exitCode).toBe(0)
     expect(stderr).not.toContain('checkpoint should not run while work is active')
+  } finally {
+    if (childProcess.exitCode === null) {
+      childProcess.kill('SIGKILL')
+      await childProcess.exited
+    }
+
+    removeDuckdbFiles(duckdbPath)
+  }
+})
+
+test('duckdb shutdown hook skips checkpoint under low-memory maintenance profile', async () => {
+  const duckdbPath = `/tmp/f1-duckdb-low-memory-shutdown-${Date.now()}.duckdb`
+  const childProcess = globalThis.Bun.spawn(
+    [
+      'bun',
+      '-e',
+      `
+        const {runDuckdbJsonQuery} = await import('./src/server/utils/duckdbService.ts')
+
+        await runDuckdbJsonQuery('SELECT 1 AS value')
+        globalThis.__forskaDuckdbServiceState.controlConnection.run = async (statement) => {
+          if (statement === 'CHECKPOINT') {
+            throw new Error('checkpoint should not run under low-memory runtime')
+          }
+        }
+        process.kill(process.pid, 'SIGTERM')
+        setTimeout(() => {
+          console.log('still alive')
+        }, 3_000)
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {...process.env, DUCKDB_MEMORY_LIMIT: '6400MiB', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'},
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
+
+  try {
+    expect(await waitForProcessExit(childProcess, 5_000)).toBe(true)
+    const stderr = await new Response(childProcess.stderr).text()
+
+    expect(childProcess.exitCode).toBe(0)
+    expect(stderr).not.toContain('checkpoint should not run under low-memory runtime')
+    expect(stderr).not.toContain('failed to checkpoint before shutdown')
   } finally {
     if (childProcess.exitCode === null) {
       childProcess.kill('SIGKILL')
@@ -221,7 +267,7 @@ test('duckdb shutdown hook checkpoints on SIGTERM', async () => {
     ],
     {
       cwd: process.cwd(),
-      env: {...process.env, DUCKDB_MEMORY_LIMIT: '1GB', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'},
+      env: {...process.env, DUCKDB_MEMORY_LIMIT: '20GB', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'},
       stdout: 'pipe',
       stderr: 'pipe',
     },

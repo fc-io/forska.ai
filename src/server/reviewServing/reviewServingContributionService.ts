@@ -166,7 +166,7 @@ const getRepairDirtyWork = (input: {
     })
 }
 
-const getContributionRecord = (input: {
+export const getReviewServingContributionRecord = (input: {
   componentKind: ReviewServingContributionComponentKind
   projectId: string
   reviewConfigHash: string
@@ -285,7 +285,7 @@ export const prepareReviewServingContributionDiff = async (
     input.includeContributionRecords === false
       ? []
       : input.newRows.map((row) => {
-          return getContributionRecord({...input, row})
+          return getReviewServingContributionRecord({...input, row})
         })
 
   return {

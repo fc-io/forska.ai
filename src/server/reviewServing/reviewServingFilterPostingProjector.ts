@@ -672,6 +672,18 @@ const getDeleteFullRebuildServingRowsStatement = (input: ProjectReviewServingFil
       ${rangePredicate}`
 }
 
+const getDeleteFullRebuildContributionRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+  const rangePredicate = hasChunkArticleRange(input) ? getArticleRangePredicate({alias: 'contribution', ...input}) : ''
+
+  return `DELETE FROM mart.review_article_summary_contribution_v4 contribution
+    WHERE contribution.project_id = ${getSqlLiteral(input.projectId)}
+      AND contribution.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND contribution.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      AND contribution.component_kind = 'posting'
+      AND contribution.summary_definition_version = ${getSqlLiteral(input.definitionVersion)}
+      ${rangePredicate}`
+}
+
 const getDeletePatchRowsStatement = (input: ProjectReviewServingFilterPostingsInput, patchWatermark: number) => {
   const articleIds = getClaimArticleIds(input.claims)
 
@@ -729,6 +741,40 @@ const getInsertFullRebuildServingRowsStatement = (input: ProjectReviewServingFil
       posting_identity = excluded.posting_identity,
       sort_key = excluded.sort_key,
       posting_updated_at = excluded.posting_updated_at`
+}
+
+const getInsertFullRebuildContributionRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+  const rangePredicate = hasChunkArticleRange(input) ? getArticleRangePredicate({alias: 'serving', ...input}) : ''
+
+  return `INSERT INTO mart.review_article_summary_contribution_v4 (
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      article_id,
+      component_kind,
+      summary_definition_version,
+      contribution_key,
+      contribution_value,
+      contribution_updated_at
+    )
+    SELECT
+      ${getSqlLiteral(input.projectId)} AS project_id,
+      ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
+      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+      serving.article_id,
+      'posting' AS component_kind,
+      ${getSqlLiteral(input.definitionVersion)} AS summary_definition_version,
+      ${getPostingIdentityFromStatsSql('serving')} AS contribution_key,
+      1 AS contribution_value,
+      current_timestamp AS contribution_updated_at
+    FROM mart.review_article_filter_posting_serving_v4 serving
+    WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+      AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      ${rangePredicate}
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key) DO UPDATE SET
+      contribution_value = excluded.contribution_value,
+      contribution_updated_at = excluded.contribution_updated_at`
 }
 
 const getDeleteFullRebuildStatsRowsStatement = (
@@ -818,12 +864,20 @@ export const refreshReviewServingFilterPostingStats = async (
 
 const getFullRebuildWriteStatements = (input: ProjectReviewServingFilterPostingsInput) => {
   const insertStatements = input.listModeKeys.length === 0 ? [] : [getInsertFullRebuildServingRowsStatement(input)]
+  const contributionInsertStatements =
+    input.listModeKeys.length === 0 ? [] : [getInsertFullRebuildContributionRowsStatement(input)]
   const statsStatements =
     input.refreshFullRebuildStats === false
       ? []
       : [getDeleteFullRebuildStatsRowsStatement(input), getInsertFullRebuildStatsRowsStatement(input)]
 
-  return [getDeleteFullRebuildServingRowsStatement(input), ...insertStatements, ...statsStatements]
+  return [
+    getDeleteFullRebuildServingRowsStatement(input),
+    getDeleteFullRebuildContributionRowsStatement(input),
+    ...insertStatements,
+    ...contributionInsertStatements,
+    ...statsStatements,
+  ]
 }
 
 const getDeleteStatsRowsStatement = (

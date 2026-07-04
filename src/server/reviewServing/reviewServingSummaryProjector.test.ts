@@ -299,16 +299,17 @@ test('project-scoped summary rebuilds subtract prior contribution articles missi
   expect(storedContributionSelect).toBeDefined()
 })
 
-test('unchunked full summary rebuild writes final serving rows without contribution state', async () => {
+test('unchunked full summary rebuild writes final serving rows with contribution state', async () => {
   const {database, statements} = createSummaryDatabase({sourceRows: [sourceCountRow(), sourceFacetRow()]})
 
   const result = await projectReviewServingSummaries(projectInput([]), database)
   const joined = statements.join('\n')
 
-  expect(result.contributionRowCount).toBe(0)
+  expect(result.contributionRowCount).toBe(2)
   expect(result.diagnosticsJson.summaryProjector).toMatchObject({directFullSnapshot: true})
   expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toMatchObject({
     'mart.review_article_count_serving_v4': 1,
+    'mart.review_article_summary_contribution_v4': 2,
     'mart.review_filter_facet_serving_v4': 1,
   })
   expect(hasSummaryValue(result.summaryValues, {count_kind: 'review.llm.assessedByPrompt', count_value: 1})).toBe(true)
@@ -318,7 +319,28 @@ test('unchunked full summary rebuild writes final serving rows without contribut
   expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_filter_facet_serving_v4')
   expect(joined).not.toContain('SELECT DISTINCT contribution.article_id AS articleId')
-  expect(joined).not.toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+})
+
+test('unchunked full summary rebuild aggregates shared facet serving keys', async () => {
+  const {database} = createSummaryDatabase({
+    sourceRows: [
+      sourceFacetRow({articleId: 'article-1', promptId: 'prompt-1'}),
+      sourceFacetRow({articleId: 'article-2', promptId: 'prompt-2'}),
+    ],
+  })
+
+  const result = await projectReviewServingSummaries(projectInput([]), database)
+
+  expect(
+    result.summaryValues.filter((row) => {
+      return row.facet_key === 'summaryAnswer' && row.facet_value === 'yes'
+    }),
+  ).toHaveLength(1)
+  expect(hasSummaryValue(result.summaryValues, {facet_key: 'summaryAnswer', facet_value: 'yes', count_value: 2})).toBe(
+    true,
+  )
 })
 
 test('date range and search-scope SQL stays scoped and explicit unsupported filtered counts are unavailable', async () => {

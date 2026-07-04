@@ -7,6 +7,7 @@ import {
   type ReviewServingCountAvailability,
 } from './reviewServingContracts.ts'
 import {
+  getReviewServingContributionRecord,
   prepareReviewServingContributionDiff,
   type ReviewServingContributionDiff,
   type ReviewServingContributionRow,
@@ -680,28 +681,31 @@ const getSummaryRecords = async (input: {
 const getDirectFullSummaryRecords = (input: {
   projectId: string
   reviewConfigHash: string
-  rows: readonly SummaryContributionSourceRow[]
+  rows: readonly ReviewServingContributionRow[]
   snapshotId: string
 }) => {
-  const aggregatedRows = getRowsAsContributionRows(input.rows).reduce((acc, row) => {
-    const current = acc.get(row.contributionKey)
-    acc.set(row.contributionKey, (current ?? 0) + row.contributionValue)
+  const aggregatedRows = input.rows.reduce((acc, row) => {
+    const identity = parseSummaryContributionKey(row.contributionKey)
+
+    if (identity === null) {
+      return acc
+    }
+
+    const servingKey = getIdentityExistingValueKey(identity)
+    const current = acc.get(servingKey)
+    acc.set(servingKey, {countValue: (current?.countValue ?? 0) + row.contributionValue, identity})
 
     return acc
-  }, new Map<string, number>())
+  }, new Map<string, {countValue: number; identity: SummaryContributionIdentity}>())
 
-  return Array.from(aggregatedRows.entries()).flatMap(([contributionKey, countValue]) => {
-    const identity = parseSummaryContributionKey(contributionKey)
-    const record =
-      identity === null
-        ? null
-        : getSummaryRecord({
-            countValue,
-            identity,
-            projectId: input.projectId,
-            reviewConfigHash: input.reviewConfigHash,
-            snapshotId: input.snapshotId,
-          })
+  return Array.from(aggregatedRows.values()).flatMap((row) => {
+    const record = getSummaryRecord({
+      countValue: row.countValue,
+      identity: row.identity,
+      projectId: input.projectId,
+      reviewConfigHash: input.reviewConfigHash,
+      snapshotId: input.snapshotId,
+    })
 
     return record === null ? [] : [record]
   })
@@ -717,6 +721,10 @@ const getDirectFullSummaryDeleteStatements = (input: ProjectReviewServingSummari
   return [
     getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_article_count_serving_v4'}),
     getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_filter_facet_serving_v4'}),
+    getDeleteReviewServingProjectorRowsStatement({
+      predicates: {...predicates, component_kind: 'count', summary_definition_version: 'review-serving-summary:v1'},
+      table: 'mart.review_article_summary_contribution_v4',
+    }),
   ]
 }
 
@@ -730,19 +738,34 @@ const projectDirectFullReviewServingSummaries = async (input: {
   const sourceRows = await input.measure('sourceQueryMs', async () => {
     return getSummaryContributionRows(input.projectorInput, input.database)
   })
+  const contributionRows = input.measureSync('contributionTransformMs', () => {
+    return getRowsAsContributionRows(sourceRows)
+  })
   const summaryRecords = input.measureSync('summaryRecordBuildMs', () => {
     return getDirectFullSummaryRecords({
       projectId: input.projectorInput.projectId,
       reviewConfigHash: input.projectorInput.reviewConfigHash,
-      rows: sourceRows,
+      rows: contributionRows,
       snapshotId: input.projectorInput.snapshotId,
+    })
+  })
+  const contributionRecords = input.measureSync('contributionRecordBuildMs', () => {
+    return contributionRows.map((row) => {
+      return getReviewServingContributionRecord({
+        componentKind: 'count',
+        projectId: input.projectorInput.projectId,
+        reviewConfigHash: input.projectorInput.reviewConfigHash,
+        row,
+        snapshotId: input.projectorInput.snapshotId,
+        summaryDefinitionVersion: 'review-serving-summary:v1',
+      })
     })
   })
   const writerResult = await input.measure('writerMs', async () => {
     return writeReviewServingProjectorComponent(
       {
         component: 'summary',
-        records: summaryRecords,
+        records: [...summaryRecords, ...contributionRecords],
         statements: getDirectFullSummaryDeleteStatements(input.projectorInput),
       },
       input.database,
@@ -750,12 +773,12 @@ const projectDirectFullReviewServingSummaries = async (input: {
   })
 
   return {
-    contributionRowCount: 0,
+    contributionRowCount: contributionRecords.length,
     diagnosticsJson: {
       phaseTimings: input.phaseTimings,
       summaryProjector: {
         contributionDiffCount: 0,
-        contributionRecordCount: 0,
+        contributionRecordCount: contributionRecords.length,
         directFullSnapshot: true,
         priorArticleRowCount: 0,
         sourceRowCount: sourceRows.length,

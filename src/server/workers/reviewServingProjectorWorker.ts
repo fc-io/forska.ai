@@ -544,15 +544,6 @@ const getArticleRangeRebuildChunkEstimatedRows = (chunk: ReviewServingRebuildChu
   return estimates.length === 0 ? null : Math.max(...estimates)
 }
 
-const hasAdmissionPresplitDiagnostic = (chunk: ReviewServingRebuildChunkManifest) => {
-  return (
-    chunk.diagnosticsJson !== null
-    && typeof chunk.diagnosticsJson === 'object'
-    && 'admissionPresplit' in chunk.diagnosticsJson
-    && chunk.diagnosticsJson.admissionPresplit === true
-  )
-}
-
 const getArticleRangeRebuildChunkSplitBucketCount = (chunk: ReviewServingRebuildChunkManifest) => {
   const estimatedRows = getArticleRangeRebuildChunkEstimatedRows(chunk)
   const presplitRowLimit = getArticleRangeRebuildChunkPresplitRowLimit(chunk)
@@ -624,7 +615,6 @@ const shouldPresplitArticleRangeRebuildChunk = (chunk: ReviewServingRebuildChunk
 
   return (
     splittableArticleRangeRebuildComponents.has(chunk.projectionComponent)
-    && !hasAdmissionPresplitDiagnostic(chunk)
     && estimatedRows !== null
     && estimatedRows > getArticleRangeRebuildChunkPresplitRowLimit(chunk)
   )

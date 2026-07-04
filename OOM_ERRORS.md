@@ -44,6 +44,14 @@ Entry format:
 - Fix: Snapshot creation now copies the database file and WAL under the existing append barrier without forcing a live checkpoint.
 - Verification: `bun test src/server/utils/duckdbServiceReload.test.ts src/server/utils/duckdbServiceShutdown.test.ts src/server/utils/duckdbServiceMemoryLimit.test.ts src/server/utils/duckdbScriptAccess.test.ts`; live current-DB progress gate.
 
+## 2026-07-04 - Low-Memory Shutdown Checkpoint OOM
+
+- Error: `Failed to create checkpoint: Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` during SIGTERM of the primary maintenance owner.
+- Context: Required live current-DB review-serving progress gate under the 6400MiB maintenance profile.
+- Cause: Shutdown forced `CHECKPOINT` even for serialized low-memory runtimes where the live database can already be at the memory cap.
+- Fix: Low-memory DuckDB runtimes now skip shutdown checkpoint and rely on clean close plus WAL replay instead of fatally invalidating the process during shutdown.
+- Verification: `bun test src/server/utils/duckdbServiceReload.test.ts src/server/utils/duckdbServiceShutdown.test.ts src/server/utils/duckdbServiceMemoryLimit.test.ts src/server/utils/duckdbScriptAccess.test.ts`; live current-DB progress gate.
+
 ## 2026-07-03 - Invalid Candidate Promotion Snapshot Update
 
 - Error: Live maintenance/dev-single owner crashed with Bun `panic: A C++ exception occurred`; isolated disposable-snapshot promotion crashed after `diag:beforePromote` and a minimal `UPDATE app.review_serving_snapshot_manifest ...` repro crashed at about 0.33-0.37GB RSS.

@@ -2522,7 +2522,7 @@ test('request-associated summary chunk refresh failures happen before chunk comp
   expect(statements.join('\n')).not.toContain("status = 'completed'")
 })
 
-test('admission-presplit posting rebuild chunk falls back to DuckDB OOM splitting', async () => {
+test('admission-presplit posting rebuild chunk still presplits above the runtime row budget', async () => {
   const statements: string[] = []
   const postingChunk: ReviewServingRebuildChunkManifest = {
     ...chunkManifest,
@@ -2618,10 +2618,6 @@ test('admission-presplit posting rebuild chunk falls back to DuckDB OOM splittin
     },
     run: async (statement: string) => {
       statements.push(statement)
-
-      if (statement.includes('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')) {
-        throw new Error('DuckDB Out of Memory Error: failed to allocate 64KiB (18.6 GiB/18.6 GiB used)')
-      }
     },
     transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
       return operation(database)
@@ -2638,12 +2634,12 @@ test('admission-presplit posting rebuild chunk falls back to DuckDB OOM splittin
   })
 
   expect(result).toEqual({status: 'completed'})
-  expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain('NTILE(10)')
   expect(childInserts).toHaveLength(2)
-  expect(joined).toContain("oom_category = 'duckdb_oom_split'")
   expect(joined).toContain('"admissionPresplit":true')
-  expect(joined).toContain('"splitReason":"duckdb_oom"')
+  expect(joined).toContain('"splitReason":"input_row_budget"')
+  expect(joined).not.toContain("oom_category = 'duckdb_oom_split'")
   expect(joined).not.toContain("status = 'failed'")
   expect(joined).not.toContain("status = 'blocked_over_budget'")
 })
