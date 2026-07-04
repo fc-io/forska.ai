@@ -548,6 +548,10 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
 
+      if (statement.includes('SELECT chunk.chunk_id AS chunkId')) {
+        return [{chunkId: 'chunk-001'}, {chunkId: 'chunk-002'}, {chunkId: 'chunk-003'}] as T[]
+      }
+
       if (statement.includes('partialCount')) {
         return [{partialCount: 1}] as T[]
       }
@@ -576,7 +580,7 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
     return statement.includes('GROUP BY partial.chunk_id')
   })
   const accumulatorWrites = statements.filter((statement) => {
-    return statement.includes("'__summary_rebuild_partial_accumulator__' AS chunk_id")
+    return statement.includes("'__summary_rebuild_partial_accumulator__:") && statement.includes(' AS chunk_id')
   })
 
   expect(batchSelects).toHaveLength(3)
@@ -584,17 +588,20 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   expect(batchSelects[0]).toContain('LIMIT 256')
   expect(batchSelects[0]).toContain('INNER JOIN app.review_rebuild_chunk_manifest chunk')
   expect(batchSelects[0]).toContain("chunk.status = 'completed'")
-  expect(batchSelects[0]).toContain("chunk_id <> '__summary_rebuild_partial_accumulator__'")
+  expect(batchSelects[0]).toContain("partial.chunk_id NOT LIKE '__summary_rebuild_partial_accumulator__:%'")
   expect(joined).toContain("chunk_id IN ('chunk-001', 'chunk-002')")
   expect(joined).toContain("chunk_id IN ('chunk-003')")
   expect(joined).toContain(
     'ON CONFLICT(request_id, chunk_id, project_id, review_config_hash, snapshot_id, serving_key) DO UPDATE SET',
   )
-  expect(joined).toContain("AND chunk_id = '__summary_rebuild_partial_accumulator__'")
+  expect(joined).toContain("AND chunk_id = '__summary_rebuild_partial_accumulator__:")
   expect(joined).toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
   expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
   expect(joined).toContain('FROM mart.review_article_summary_contribution_rebuild_partial_v4')
+  expect(joined).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key) DO UPDATE SET',
+  )
   expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
 })
 
@@ -695,6 +702,61 @@ test('summary rebuild request finalization ignores stale partial chunks without 
       `)
 
       expect(countRows).toEqual([{countValue: '3'}])
+    } finally {
+      close()
+    }
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
+test('summary rebuild request finalization ignores stale accumulator rows from prior chunk sets', async () => {
+  const duckdbPath = `/tmp/forska-summary-stale-accumulator-finalize-${Date.now()}.duckdb`
+
+  try {
+    const {close, database} = await createDuckdbSummaryDatabase(duckdbPath)
+
+    try {
+      await createSummaryReductionSchema(database)
+      await insertSummaryChunkManifestRows(database, {chunkIds: ['chunk-current']})
+      await database.run(`
+        INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+          request_id,
+          chunk_id,
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          serving_key,
+          summary_kind,
+          summary_identity,
+          list_mode_key,
+          count_kind,
+          summary_definition_version,
+          filter_key,
+          count_value
+        ) VALUES
+          ('rebuild-summary-1', '__summary_rebuild_partial_accumulator__:stale', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 99),
+          ('rebuild-summary-1', 'chunk-current', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 3)
+      `)
+
+      await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+        {
+          requestId: 'rebuild-summary-1',
+          snapshots: [{projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'}],
+        },
+        database,
+      )
+      const countRows = await database.queryJson<{countValue: string}>(`
+        SELECT CAST(count_value AS VARCHAR) AS countValue
+        FROM mart.review_article_count_serving_v4
+      `)
+      const partialRows = await database.queryJson<{total: string}>(`
+        SELECT CAST(COUNT(*) AS VARCHAR) AS total
+        FROM mart.review_article_summary_rebuild_partial_v4
+      `)
+
+      expect(countRows).toEqual([{countValue: '3'}])
+      expect(partialRows).toEqual([{total: '0'}])
     } finally {
       close()
     }

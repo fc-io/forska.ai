@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-04 - Summary Contribution Finalization Publication
+
+- Error: Review-serving summary finalization could still recreate unbounded DuckDB aggregation over `review_article_summary_contribution_rebuild_partial_v4` after count/facet accumulator batching.
+- Context: Request-associated chunked full-summary rebuild finalization for large current-DB requests.
+- Cause: Contribution partial publication scanned and grouped all completed summary contribution partial rows for a request/snapshot in one transaction, and stale count/facet accumulator sentinel rows were not scoped to the active chunk manifest set.
+- Fix: Contribution partials now publish and delete in the same bounded chunk batches as count/facet accumulator reduction, and accumulator chunk IDs are scoped to the active summary chunk manifest set so changed chunk sets cannot reuse old sentinel totals.
+- Verification: `bun test src/server/reviewServing/reviewServingSummaryProjector.test.ts`; live current-DB progress gate.
+
 ## 2026-07-04 - Snapshot Checkpoint Regression
 
 - Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` when creating DuckDB Studio/current-DB snapshots under the low-memory maintenance owner.
