@@ -1,4 +1,4 @@
-import {afterAll, beforeAll, expect, test} from 'bun:test'
+import {afterAll, beforeAll, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
@@ -8,6 +8,8 @@ import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 const tempRuntimeRoot = createTempRuntimeRoot('f1-projects-routes')
 const tempDbPath = tempRuntimeRoot.duckdbPath
 const articleServingFixtureTable = ['mart', 'review_article_serving_v4'].join('.')
+const appReadOnlyDatabaseServiceModulePath = new URL('../services/appReadOnlyDatabaseService.ts', import.meta.url)
+  .pathname
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -20,6 +22,25 @@ let flushMartRefreshes: (() => Promise<void>) | null = null
 let cleanupArchivedProjectMartDataBatch: ((projectId: string) => Promise<{deletedRowCount: number}>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
+let testReadOnlyDatabase: {queryJson: <T>(statement: string) => Promise<T[]>} | null = null
+
+const registerModuleMocks = () => {
+  void mock.module(appReadOnlyDatabaseServiceModulePath, () => {
+    const getTestReadOnlyDatabase = () => {
+      if (!testReadOnlyDatabase) {
+        throw new Error('Test read-only database not initialized')
+      }
+
+      return testReadOnlyDatabase
+    }
+
+    return {
+      closeAppReadOnlyDatabaseServices: async () => {},
+      getApiReadOnlyAppDatabaseService: getTestReadOnlyDatabase,
+      getJudgeWorkerReadOnlyAppDatabaseService: getTestReadOnlyDatabase,
+    }
+  })
+}
 
 const getSqlLiteral = (value: string | null) => {
   return value === null ? 'NULL' : `'${value.replaceAll("'", "''")}'`
@@ -439,6 +460,8 @@ const insertReviewArticleServingFixtureRows = async ({
 }
 
 beforeAll(async () => {
+  registerModuleMocks()
+
   const [
     {migrateDuckdb},
     {getAppDatabaseService},
@@ -459,6 +482,7 @@ beforeAll(async () => {
   await migrateDuckdb()
 
   const database = getAppDatabaseService()
+  testReadOnlyDatabase = database
 
   closeDatabase = () => {
     return database.close()
@@ -500,7 +524,9 @@ beforeAll(async () => {
 afterAll(async () => {
   await flushMartRefreshes?.()
   await closeDatabase?.()
+  testReadOnlyDatabase = null
   tempRuntimeRoot.cleanup()
+  mock.restore()
 })
 
 test('project prompt preview uses the first project article and shared prompt builders', async () => {
