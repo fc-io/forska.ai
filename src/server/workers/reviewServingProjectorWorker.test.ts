@@ -2522,11 +2522,12 @@ test('request-associated summary chunk refresh failures happen before chunk comp
   expect(statements.join('\n')).not.toContain("status = 'completed'")
 })
 
-test('posting rebuild chunk presplits before hitting runtime DuckDB OOM', async () => {
+test('admission-presplit posting rebuild chunk falls back to DuckDB OOM splitting', async () => {
   const statements: string[] = []
   const postingChunk: ReviewServingRebuildChunkManifest = {
     ...chunkManifest,
     chunkId: 'chunk-posting-runtime-oom',
+    diagnosticsJson: {admissionPresplit: true},
     estimatedInputRows: 49_000,
     estimatedOutputRows: 49_000,
     inputWatermark: 9,
@@ -2637,11 +2638,12 @@ test('posting rebuild chunk presplits before hitting runtime DuckDB OOM', async 
   })
 
   expect(result).toEqual({status: 'completed'})
-  expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain('NTILE(10)')
   expect(childInserts).toHaveLength(2)
-  expect(joined).toContain("oom_category = 'input_row_budget_split'")
-  expect(joined).toContain('"splitReason":"input_row_budget"')
+  expect(joined).toContain("oom_category = 'duckdb_oom_split'")
+  expect(joined).toContain('"admissionPresplit":true')
+  expect(joined).toContain('"splitReason":"duckdb_oom"')
   expect(joined).not.toContain("status = 'failed'")
   expect(joined).not.toContain("status = 'blocked_over_budget'")
 })
