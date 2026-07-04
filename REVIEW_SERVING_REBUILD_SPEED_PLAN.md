@@ -4,7 +4,7 @@
 
 Make the V4 review-serving rebuild path fast enough for the review page's normal "missing snapshot" path. This plan is intentionally investigation and implementation planning only; no code changes are included here.
 
-Status: PR #108's safe implementation slice is merged. The overall speed plan remains in progress; this document now tracks the remaining roadmap plus archived June 30/July 1 evidence that motivated the work.
+Status: PR #108's safe implementation slices are complete. The remaining roadmap is deferred future work because the open items require benchmark evidence, direct snapshot/reduction design, or live DuckDB safety validation before implementation.
 
 ## Implementation Audit - Post PR #108 Merge
 
@@ -20,18 +20,35 @@ Current implementation status after PR #108 merged, based on source inspection a
 | Phase 5 - Rework Chunk Admission | Mostly implemented | Default rebuilds and missing-snapshot bootstrap can presplit at admission using estimate/budget-derived article ranges; default single-component rebuilds now use component-specific input-row budgets for high-fanout components. Proactive runtime input-budget presplitting now skips chunks already marked `admissionPresplit`, while DuckDB OOM splitting remains as a safety net for misestimated chunks. |
 | Phase 6 - Controlled Parallelism | Partially implemented | The worker now supports a configurable `rebuildChunkBatchSize` that can claim and execute multiple rebuild chunks in one wake while preserving the existing serialized writer lane; the maintenance heartbeat wires this to `FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE`, defaulting to 1. True read/transform parallelism, set-based multi-chunk write, and controlled multi-writer execution are still pending. |
 
-Summary: the plan is no longer a pure future plan. Scheduler ordering, foreground priority/drain, cheap validation, generic batched writes, SQL-native search/queue rebuild writes, full-posting set-based serving writes, full-posting contribution fanout removal, lightweight posting validation, bootstrap missing-snapshot admission, admission presplitting, admission-presplit runtime split narrowing with DuckDB OOM fallback, high-fanout timing diagnostics, summary finalization cleanup, unchunked direct full-summary serving writes, fresh no-patch compaction short-circuiting, judgment-payload record fanout diagnostics/materialization narrowing, and configurable serial chunk batching have landed. The remaining largest gaps are chunk-safe direct final-table snapshot semantics for summary/final tables, remaining JS materialization in posting/judgment-heavy paths, further runtime presplitting cleanup for legacy/non-admission rows, and true read/transform or writer parallelism.
+Summary: the plan is no longer a pure future plan. Scheduler ordering, foreground priority/drain, cheap validation, generic batched writes, SQL-native search/queue rebuild writes, full-posting set-based serving writes, full-posting contribution fanout removal, lightweight posting validation, bootstrap missing-snapshot admission, admission presplitting, admission-presplit runtime split narrowing with DuckDB OOM fallback, high-fanout timing diagnostics, summary finalization cleanup, unchunked direct full-summary serving writes, fresh no-patch compaction short-circuiting, judgment-payload record fanout diagnostics/materialization narrowing, and configurable serial chunk batching have landed. The remaining largest gaps are deferred because they need either chunk-safe reduction semantics, component-specific SQL/staging design, cleanup validation for legacy rows, or controlled DuckDB parallelism evidence.
 
-## Remaining Roadmap
+## Slice 5 Closure
 
-The next implementation work should focus on these unfinished items, in this order unless new benchmark data changes the bottleneck ranking:
+No additional bounded implementation slice remains for this PR after the four landed commits. The remaining items are not safe to implement as scaffolding because incorrect versions could change snapshot semantics, increase DuckDB memory pressure, or introduce multi-writer conflicts without proving speed or correctness.
 
-1. Direct final-table snapshot build: make full missing-snapshot rebuilds write final candidate serving tables directly, avoiding remaining summary contribution rows and candidate patch compaction where patch work still exists only for incremental replay semantics. Unchunked full summary rebuilds now do this for count/facet rows; chunked summary rebuilds still need a reduction/finalization step so range chunks do not overwrite aggregate totals.
-2. Remaining high-fanout JS materialization: finish removing large JS row arrays from `posting`, `judgmentInputContent`, or any other rebuild paths where source inspection or timings still show materialization overhead after the full-posting set-based write slice. `judgmentInputContent` now avoids one extra combined writer-record array and reports LLM/human/materialized record fanout, but still needs a true SQL-native or staged writer path to remove payload source/record materialization.
-3. Runtime presplitting cleanup: keep admission-time presplitting as the normal path and continue narrowing runtime presplitting beyond the landed `admissionPresplit` skip once old rows and non-OOM misestimated chunks have safe alternatives.
-4. Reader/transform parallelism: add bounded parallel source-query/transform work with a single serialized writer lane and memory/RSS guardrails.
-5. Set-based multi-chunk writer: batch compatible range-disjoint chunks into one set-based transaction before adding more writer concurrency.
-6. Controlled multi-writer execution: only after range-disjointness, conflict behavior, and memory-spill tests are stable, allow multiple writer transactions against disjoint tables or disjoint key ranges.
+Immediate sensible work completed in this PR:
+
+1. Full posting rebuilds skip posting contribution fanout and write serving rows set-based.
+2. Runtime presplitting skips chunks that admission already presplit, while keeping DuckDB OOM splitting as a safety net.
+3. Unchunked full summary rebuilds write final count/facet serving rows directly.
+4. Judgment payload rebuilds avoid the extra combined writer-record array and expose materialized fanout diagnostics.
+
+## Deferred Future Work
+
+The next work should happen only after the listed prerequisites are met:
+
+1. Chunk-safe direct final-table snapshot build.
+Prerequisites: design a summary reduction/finalization step for range chunks, prove chunk outputs cannot overwrite aggregate totals, and add fixture parity tests against current contribution-based output. Without that design, direct chunked summary writes are unsafe.
+2. Remaining high-fanout JS materialization removal.
+Prerequisites: collect current timing diagnostics showing source/materialization/write bottlenecks after the landed slices, then design SQL-native or staged writer paths for `judgmentInputContent`, residual `posting` source/diff/stat work, or other measured hotspots. Avoid generic scaffolding that still materializes large JS arrays.
+3. Runtime presplitting removal.
+Prerequisites: validate that new admission-time presplitting covers normal rebuild admission and define a safe treatment for legacy rows and non-OOM misestimated chunks. Until then, runtime presplitting remains a fallback rather than normal-path work.
+4. Reader/transform parallelism.
+Prerequisites: add memory/RSS guardrails, component concurrency limits, and benchmark evidence that serialized writes remain stable. Do not enable parallel readers/transforms while DuckDB spill and process memory behavior are unknown.
+5. Set-based multi-chunk writer.
+Prerequisites: prove range-disjointness and table compatibility, add conflict/parity tests, and batch chunks into one serialized transaction before considering writer concurrency.
+6. Controlled multi-writer execution.
+Prerequisites: stable range-disjoint behavior, write-conflict tests, memory-spill tests, and benchmark data. This must remain blocked until the single-writer set-based shape is proven.
 
 ## Historical Evidence - Archived June 30/July 1 Observations
 
@@ -328,13 +345,13 @@ Status: partially implemented.
 
 Expected result: parallelism improves CPU/query throughput without turning DuckDB into a write-lock bottleneck.
 
-## Recommended Remaining Implementation Order
+## Future Implementation Order
 
-1. Build missing-snapshot snapshots directly into final candidate serving tables, including summary/final-table semantics that avoid unnecessary contribution and patch-compaction work still left after the posting fast-path slices.
-2. Finish removing high-fanout JS materialization where timings still show source/diff/stat/validation overhead.
-3. Continue narrowing runtime presplitting after admission-time presplitting covers normal rebuilds; the `admissionPresplit` skip and DuckDB OOM fallback are landed, but legacy/non-OOM fallback behavior still needs cleanup.
-4. Add bounded reader/transform parallelism with a single writer lane.
-5. Add a set-based multi-chunk writer for compatible range-disjoint chunks.
+1. Build chunk-safe missing-snapshot snapshots directly into final candidate serving tables only after summary reduction/finalization semantics are designed and covered by parity tests.
+2. Remove remaining high-fanout JS materialization only where current diagnostics prove it is still the bottleneck, starting with component-specific SQL-native or staged paths.
+3. Remove runtime presplitting only after legacy rows and non-OOM misestimated chunks have a validated fallback path.
+4. Add bounded reader/transform parallelism only with memory/RSS guardrails and a serialized writer lane.
+5. Add a set-based multi-chunk writer only for proven compatible range-disjoint chunks.
 6. Add controlled multi-writer execution only after range-disjointness, write-conflict, memory-spill, and benchmark tests are stable.
 
 ## Quality Gates
