@@ -44,7 +44,9 @@ Immediate sensible work completed in this PR:
 - Before/after 60s: progress timestamps advanced from `2026-07-04 10:43:40.14394+02` to `2026-07-04 10:44:40.401138+02`, but pending/rebuild counts also grew while 9 chunks remained running/expired.
 - Failure: the maintenance DuckDB owner reached about `14.45GB` RSS, peak `14.64GB`, then exited with Bun `panic: A C++ exception occurred`; the stack restarted maintenance and reported owner heartbeat failure while down.
 - Fix applied: request-associated summary partial finalization no longer runs request-wide partial aggregations. It reduces partial rows into accumulator rows by bounded `chunk_id` batches, atomically deleting reduced source chunk rows before final serving rows are written from the accumulator.
-- Remaining gate status: focused regression passed; the required live current-DB progress gate must be rerun before PR because the previous live gate exposed this blocker.
+- Follow-up failure: `bun run test:playwright` later timed out in `tests/e2e/covidenceReviewFlow.spec.ts` because completed summary chunks failed request finalization with `Binder Error: Table "review_article_summary_rebuild_partial_v4" does not have a column named "current_timestamp"` in the accumulator `ON CONFLICT` update.
+- Follow-up fix: the accumulator conflict update now uses an explicit DuckDB timestamp function, and `reviewServingSummaryProjector.test.ts` has DuckDB-backed coverage for conflicting partial chunks reducing through finalization.
+- Remaining gate status: focused regressions and the Covidence Playwright flow passed; the required live current-DB progress gate must be rerun before PR because the previous live gate exposed the RSS blocker.
 
 ## Deferred Future Work
 

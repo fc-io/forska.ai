@@ -1,3 +1,6 @@
+import {existsSync, rmSync} from 'node:fs'
+
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
@@ -135,6 +138,117 @@ const createSummaryDatabase = (input?: {
   }
 
   return {database, statements}
+}
+
+const removeFileIfExists = (filePath: string) => {
+  if (existsSync(filePath)) {
+    rmSync(filePath, {force: true})
+  }
+}
+
+const createDuckdbSummaryDatabase = async (
+  duckdbPath: string,
+): Promise<{close: () => void; database: ReviewServingSummaryProjectorDatabase}> => {
+  const duckdbInstance = await DuckDBInstance.fromCache(duckdbPath, {memory_limit: '256MiB'})
+  const connection = await duckdbInstance.connect()
+  const database: ReviewServingSummaryProjectorDatabase = {
+    queryJson: async <T>(statement: string) => {
+      const reader = await connection.runAndReadAll(statement)
+
+      return reader.getRowObjectsJson() as T[]
+    },
+    run: async (statement: string) => {
+      await connection.run(statement)
+    },
+    transaction: async (operation) => {
+      await connection.run('BEGIN')
+
+      try {
+        const result = await operation(database)
+        await connection.run('COMMIT')
+
+        return result
+      } catch (error) {
+        await connection.run('ROLLBACK')
+        throw error
+      }
+    },
+  }
+
+  return {
+    close: () => {
+      connection.closeSync()
+      duckdbInstance.closeSync()
+    },
+    database,
+  }
+}
+
+const createSummaryReductionSchema = async (database: ReviewServingSummaryProjectorDatabase) => {
+  await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+  await database.run(`
+    CREATE TABLE mart.review_article_summary_rebuild_partial_v4 (
+      request_id VARCHAR NOT NULL,
+      chunk_id VARCHAR NOT NULL,
+      project_id VARCHAR NOT NULL,
+      review_config_hash VARCHAR NOT NULL,
+      snapshot_id VARCHAR NOT NULL,
+      serving_key VARCHAR NOT NULL,
+      summary_kind VARCHAR NOT NULL,
+      summary_identity VARCHAR NOT NULL,
+      list_mode_key VARCHAR,
+      count_kind VARCHAR,
+      summary_definition_version VARCHAR NOT NULL,
+      filter_key VARCHAR,
+      facet_kind VARCHAR,
+      facet_key VARCHAR,
+      facet_value VARCHAR,
+      prompt_id VARCHAR,
+      answer_id INTEGER,
+      answer_value VARCHAR,
+      availability VARCHAR NOT NULL DEFAULT 'ready',
+      stale_reason VARCHAR,
+      count_value BIGINT,
+      partial_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      PRIMARY KEY(request_id, chunk_id, project_id, review_config_hash, snapshot_id, serving_key)
+    )
+  `)
+  await database.run(`
+    CREATE TABLE mart.review_article_count_serving_v4 (
+      project_id VARCHAR NOT NULL,
+      review_config_hash VARCHAR NOT NULL,
+      snapshot_id VARCHAR NOT NULL,
+      summary_identity VARCHAR NOT NULL,
+      list_mode_key VARCHAR NOT NULL DEFAULT 'global',
+      count_kind VARCHAR NOT NULL,
+      summary_definition_version VARCHAR NOT NULL,
+      filter_key VARCHAR NOT NULL,
+      count_value BIGINT,
+      availability VARCHAR NOT NULL DEFAULT 'ready',
+      stale_reason VARCHAR,
+      count_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, count_kind, summary_definition_version, filter_key)
+    )
+  `)
+  await database.run(`
+    CREATE TABLE mart.review_filter_facet_serving_v4 (
+      project_id VARCHAR NOT NULL,
+      review_config_hash VARCHAR NOT NULL,
+      snapshot_id VARCHAR NOT NULL,
+      summary_identity VARCHAR NOT NULL,
+      facet_kind VARCHAR NOT NULL,
+      facet_key VARCHAR NOT NULL,
+      facet_value VARCHAR NOT NULL,
+      prompt_id VARCHAR,
+      answer_id INTEGER,
+      answer_value VARCHAR,
+      summary_definition_version VARCHAR NOT NULL,
+      count_value BIGINT,
+      availability VARCHAR NOT NULL DEFAULT 'ready',
+      facet_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      PRIMARY KEY(project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version)
+    )
+  `)
 }
 
 const hasSummaryValue = (rows: readonly Record<string, unknown>[], expected: Record<string, unknown>) => {
@@ -407,6 +521,60 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   )
   expect(joined).toContain("AND chunk_id = '__summary_rebuild_partial_accumulator__'")
   expect(joined).toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
+})
+
+test('summary rebuild request finalization reduces conflicting partial chunks in DuckDB', async () => {
+  const duckdbPath = `/tmp/forska-summary-partial-finalize-${Date.now()}.duckdb`
+
+  try {
+    const {close, database} = await createDuckdbSummaryDatabase(duckdbPath)
+
+    try {
+      await createSummaryReductionSchema(database)
+      await database.run(`
+        INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+          request_id,
+          chunk_id,
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          serving_key,
+          summary_kind,
+          summary_identity,
+          list_mode_key,
+          count_kind,
+          summary_definition_version,
+          filter_key,
+          count_value
+        ) VALUES
+          ('rebuild-summary-1', 'chunk-001', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 2),
+          ('rebuild-summary-1', 'chunk-002', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 3)
+      `)
+
+      await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+        {
+          requestId: 'rebuild-summary-1',
+          snapshots: [{projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'}],
+        },
+        database,
+      )
+      const countRows = await database.queryJson<{countValue: string}>(`
+        SELECT CAST(count_value AS VARCHAR) AS countValue
+        FROM mart.review_article_count_serving_v4
+      `)
+      const partialRows = await database.queryJson<{total: string}>(`
+        SELECT CAST(COUNT(*) AS VARCHAR) AS total
+        FROM mart.review_article_summary_rebuild_partial_v4
+      `)
+
+      expect(countRows).toEqual([{countValue: '5'}])
+      expect(partialRows).toEqual([{total: '0'}])
+    } finally {
+      close()
+    }
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
 })
 
 test('unchunked full summary rebuild aggregates shared facet serving keys', async () => {
