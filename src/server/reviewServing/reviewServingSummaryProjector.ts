@@ -17,6 +17,7 @@ import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjecto
 import {
   getDeleteReviewServingProjectorRowsStatement,
   type ReviewServingProjectorRecord,
+  type ReviewServingProjectorRecordValue,
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
@@ -26,6 +27,7 @@ export type ReviewServingSummaryProjectorDatabase = ReviewServingProjectorWriter
 export type ProjectReviewServingSummariesInput = {
   acknowledgeClaims?: boolean
   baseGeneration: number
+  chunkId?: string | null
   chunkEndArticleId?: string | null
   chunkStartArticleId?: string | null
   claims: readonly ReviewServingDirtyWorkClaim[]
@@ -33,6 +35,7 @@ export type ProjectReviewServingSummariesInput = {
   projectId: string
   projectScopeIdentity: string
   projectionIdentity: string
+  requestId?: string | null
   reviewConfigHash: string
   selectedImportSnapshotId: string
   snapshotId: string
@@ -115,6 +118,17 @@ const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
 
 const isDirectFullSummarySnapshotInput = (input: ProjectReviewServingSummariesInput) => {
   return input.claims.length === 0 && input.chunkStartArticleId == null && input.chunkEndArticleId == null
+}
+
+const isPartialFullSummarySnapshotInput = (input: ProjectReviewServingSummariesInput) => {
+  return (
+    input.claims.length === 0
+    && !isDirectFullSummarySnapshotInput(input)
+    && input.requestId !== null
+    && input.requestId !== undefined
+    && input.chunkId !== null
+    && input.chunkId !== undefined
+  )
 }
 
 const getArticleRangePredicate = (input: {
@@ -728,6 +742,98 @@ const getDirectFullSummaryDeleteStatements = (input: ProjectReviewServingSummari
   ]
 }
 
+const getRequiredSummaryRebuildRequestId = (input: ProjectReviewServingSummariesInput) => {
+  if (input.requestId === null || input.requestId === undefined) {
+    throw new Error('cannot write chunked full summary partials without a rebuild request id')
+  }
+
+  return input.requestId
+}
+
+const getRequiredSummaryRebuildChunkId = (input: ProjectReviewServingSummariesInput) => {
+  if (input.chunkId === null || input.chunkId === undefined) {
+    throw new Error('cannot write chunked full summary partials without a rebuild chunk id')
+  }
+
+  return input.chunkId
+}
+
+const getNullableSummaryRecordString = (value: ReviewServingProjectorRecordValue | undefined) => {
+  return typeof value === 'string' ? value : null
+}
+
+const getDirectFullSummaryPartialRecord = (input: {
+  chunkId: string
+  record: ReviewServingProjectorRecord
+  requestId: string
+}) => {
+  const values = input.record.values
+  const summaryKind = input.record.table === 'mart.review_article_count_serving_v4' ? 'count' : 'facet'
+  const servingKey = getStableReviewServingJson({
+    countKind: getNullableSummaryRecordString(values.count_kind),
+    facetKey: getNullableSummaryRecordString(values.facet_key),
+    facetValue: getNullableSummaryRecordString(values.facet_value),
+    filterKey: getNullableSummaryRecordString(values.filter_key),
+    listModeKey: getNullableSummaryRecordString(values.list_mode_key),
+    summaryIdentity: getNullableSummaryRecordString(values.summary_identity),
+    summaryKind,
+  })
+
+  return {
+    keyColumns: ['request_id', 'chunk_id', 'project_id', 'review_config_hash', 'snapshot_id', 'serving_key'],
+    table: 'mart.review_article_summary_rebuild_partial_v4',
+    values: {
+      answer_id: values.answer_id ?? null,
+      answer_value: values.answer_value ?? null,
+      availability: values.availability ?? 'ready',
+      chunk_id: input.chunkId,
+      count_kind: values.count_kind ?? null,
+      count_value: values.count_value ?? null,
+      facet_key: values.facet_key ?? null,
+      facet_kind: values.facet_kind ?? null,
+      facet_value: values.facet_value ?? null,
+      filter_key: values.filter_key ?? null,
+      list_mode_key: values.list_mode_key ?? null,
+      partial_updated_at: new Date(),
+      project_id: values.project_id,
+      prompt_id: values.prompt_id ?? null,
+      request_id: input.requestId,
+      review_config_hash: values.review_config_hash,
+      serving_key: servingKey,
+      snapshot_id: values.snapshot_id,
+      stale_reason: values.stale_reason ?? null,
+      summary_definition_version: values.summary_definition_version,
+      summary_identity: values.summary_identity,
+      summary_kind: summaryKind,
+    },
+  } satisfies ReviewServingProjectorRecord
+}
+
+const getDirectFullSummaryPartialRecords = (input: {
+  chunkId: string
+  requestId: string
+  summaryRecords: readonly ReviewServingProjectorRecord[]
+}) => {
+  return input.summaryRecords.map((record) => {
+    return getDirectFullSummaryPartialRecord({...input, record})
+  })
+}
+
+const getDirectFullSummaryPartialDeleteStatements = (input: ProjectReviewServingSummariesInput) => {
+  return [
+    getDeleteReviewServingProjectorRowsStatement({
+      predicates: {
+        chunk_id: getRequiredSummaryRebuildChunkId(input),
+        project_id: input.projectId,
+        request_id: getRequiredSummaryRebuildRequestId(input),
+        review_config_hash: input.reviewConfigHash,
+        snapshot_id: input.snapshotId,
+      },
+      table: 'mart.review_article_summary_rebuild_partial_v4',
+    }),
+  ]
+}
+
 const projectDirectFullReviewServingSummaries = async (input: {
   database: ReviewServingSummaryProjectorDatabase
   measure: <T>(phase: string, operation: () => Promise<T>) => Promise<T>
@@ -793,6 +899,68 @@ const projectDirectFullReviewServingSummaries = async (input: {
   }
 }
 
+const projectPartialFullReviewServingSummaries = async (input: {
+  database: ReviewServingSummaryProjectorDatabase
+  measure: <T>(phase: string, operation: () => Promise<T>) => Promise<T>
+  measureSync: <T>(phase: string, operation: () => T) => T
+  phaseTimings: Record<string, number>
+  projectorInput: ProjectReviewServingSummariesInput
+}) => {
+  const sourceRows = await input.measure('sourceQueryMs', async () => {
+    return getSummaryContributionRows(input.projectorInput, input.database)
+  })
+  const contributionRows = input.measureSync('contributionTransformMs', () => {
+    return getRowsAsContributionRows(sourceRows)
+  })
+  const summaryRecords = input.measureSync('summaryRecordBuildMs', () => {
+    return getDirectFullSummaryRecords({
+      projectId: input.projectorInput.projectId,
+      reviewConfigHash: input.projectorInput.reviewConfigHash,
+      rows: contributionRows,
+      snapshotId: input.projectorInput.snapshotId,
+    })
+  })
+  const partialRecords = input.measureSync('partialRecordBuildMs', () => {
+    return getDirectFullSummaryPartialRecords({
+      chunkId: getRequiredSummaryRebuildChunkId(input.projectorInput),
+      requestId: getRequiredSummaryRebuildRequestId(input.projectorInput),
+      summaryRecords,
+    })
+  })
+  const writerResult = await input.measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        component: 'summary',
+        records: partialRecords,
+        statements: getDirectFullSummaryPartialDeleteStatements(input.projectorInput),
+      },
+      input.database,
+    )
+  })
+
+  return {
+    contributionRowCount: 0,
+    diagnosticsJson: {
+      phaseTimings: input.phaseTimings,
+      summaryProjector: {
+        contributionDiffCount: 0,
+        contributionRecordCount: 0,
+        directFullSnapshot: true,
+        partialFullSnapshot: true,
+        partialRowCount: partialRecords.length,
+        priorArticleRowCount: 0,
+        sourceRowCount: sourceRows.length,
+        writer: writerResult.diagnostics,
+      },
+    },
+    repairRequired: false,
+    summaryRowCount: partialRecords.length,
+    summaryValues: summaryRecords.map((record) => {
+      return record.values
+    }),
+  }
+}
+
 export const projectReviewServingSummaries = async (
   input: ProjectReviewServingSummariesInput,
   database: ReviewServingSummaryProjectorDatabase = getAppDatabaseService() as ReviewServingSummaryProjectorDatabase,
@@ -813,6 +981,16 @@ export const projectReviewServingSummaries = async (
 
   if (isDirectFullSummarySnapshotInput(input)) {
     return projectDirectFullReviewServingSummaries({
+      database,
+      measure,
+      measureSync,
+      phaseTimings,
+      projectorInput: input,
+    })
+  }
+
+  if (isPartialFullSummarySnapshotInput(input)) {
+    return projectPartialFullReviewServingSummaries({
       database,
       measure,
       measureSync,

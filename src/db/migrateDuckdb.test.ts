@@ -1167,6 +1167,7 @@ test('migrateDuckdb preserves the original failure when rollback is already inac
 })
 
 test('migrateDuckdb applies comparison serving conflict filter migration outside a transaction', async () => {
+  process.env.DUCKDB_MEMORY_LIMIT = '20GB'
   process.env.DUCKDB_PATH = '/tmp/forska-migrate-duckdb-nontransactional-test.duckdb'
 
   const targetMigrationFile = '0076_comparisonServingHumanLlmTrueConflictFilter.sql'
@@ -1257,6 +1258,59 @@ test('migrateDuckdb skips checkpoint when no migration files are applied', async
 
     await migrateDuckdb()
 
+    expect(maintenanceCommands).toEqual([])
+  } finally {
+    mock.restore()
+  }
+})
+
+test('migrateDuckdb skips post-migration checkpoint under low-memory DuckDB profile', async () => {
+  process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
+  process.env.DUCKDB_PATH = '/tmp/forska-migrate-duckdb-low-memory-checkpoint-skip-test.duckdb'
+  process.env.SERVER_ROLE = 'maintenance-worker'
+
+  const targetMigrationFile = '0112_reviewServingSummaryRebuildPartial.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).pathname
+  const migrationModulePath = new URL('./migrateDuckdb.ts', import.meta.url).pathname
+  const maintenanceCommands: string[] = []
+  const runStatements: string[] = []
+
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          close: async () => {},
+          maintenance: async (command: string) => {
+            maintenanceCommands.push(command)
+          },
+          queryJson: async <T>(statement: string): Promise<T[]> => {
+            return statement.includes('FROM app_schema_migration')
+              ? (appliedNames.map((name) => {
+                  return {name}
+                }) as T[])
+              : []
+          },
+          run: async (statement: string) => {
+            runStatements.push(statement)
+          },
+        }
+      },
+    }
+  })
+
+  try {
+    const {migrateDuckdb} = (await import(
+      `${migrationModulePath}?low-memory-checkpoint-skip-test=${Date.now()}`
+    )) as MigrateDuckdbModule
+
+    await migrateDuckdb()
+
+    expect(runStatements.join('\n')).toContain(
+      'CREATE TABLE IF NOT EXISTS mart.review_article_summary_rebuild_partial_v4',
+    )
     expect(maintenanceCommands).toEqual([])
   } finally {
     mock.restore()

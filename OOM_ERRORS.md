@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-04 - Low-Memory Migration Checkpoint OOM
+
+- Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` after `bun run db:mig` applied `0112_reviewServingSummaryRebuildPartial.sql`.
+- Context: Primary DuckDB migration command under the 6400MiB maintenance profile.
+- Cause: `migrateDuckdb` forced an explicit post-migration checkpoint after any applied migration, even under low-memory maintenance limits where checkpoint work can exceed the cap.
+- Fix: Low-memory migration runs now skip the explicit post-migration checkpoint and rely on committed WAL replay, matching the existing low-memory shutdown/snapshot lifecycle behavior.
+- Verification: `bun test src/db/migrateDuckdb.test.ts`; rerun `bun run db:mig`.
+
 ## 2026-07-03 - Full Posting Rebuild Source Materialization
 
 - Error: Primary `ds` stack maintenance worker reached about 14GB RSS, then Bun exited with `panic: A C++ exception occurred` after full posting rebuild speed changes.

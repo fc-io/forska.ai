@@ -2227,7 +2227,9 @@ test('worker does not refresh summary filter options when a rebuild request is f
     }
 
     if (statement.includes('chunk.snapshot_id AS snapshotId')) {
-      return [] as T[]
+      return [
+        {projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-summary-finalize'},
+      ] as T[]
     }
 
     if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
@@ -2259,7 +2261,8 @@ test('worker does not refresh summary filter options when a rebuild request is f
   expect(result.chunk).toMatchObject({chunkId: summaryChunk.chunkId, status: 'completed'})
   expect(harness.runChunkInputs).toEqual([summaryChunk])
   expect(filterOptionDeletes).toHaveLength(0)
-  expect(statements.join('\n')).toContain("status = 'completed'")
+  expect(statements.join('\n')).toContain('FROM mart.review_article_summary_rebuild_partial_v4')
+  expect(statements.join('\n')).toContain("status = 'failed'")
 })
 
 test('worker refreshes posting stats once when a posting rebuild request is finalized', async () => {
@@ -2517,7 +2520,7 @@ test('request-associated summary chunk refresh failures happen before chunk comp
     expect((error as Error).message).toBe('summary filter refresh failed')
   }
 
-  expect(statements.join('\n')).toContain('FROM mart.review_article_summary_contribution_v4')
+  expect(statements.join('\n')).toContain('mart.review_article_summary_rebuild_partial_v4')
   expect(statements.join('\n')).toContain('FROM app.review_projection_identity_manifest')
   expect(statements.join('\n')).not.toContain("status = 'completed'")
 })

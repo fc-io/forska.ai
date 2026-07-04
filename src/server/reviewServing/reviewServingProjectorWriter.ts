@@ -50,6 +50,7 @@ export type ReviewServingProjectorWritableTable =
   | 'mart.review_article_serving_payload_v4'
   | 'mart.review_article_serving_v4'
   | 'mart.review_article_summary_contribution_v4'
+  | 'mart.review_article_summary_rebuild_partial_v4'
   | 'mart.review_filter_facet_serving_v4'
   | 'mart.review_filter_option_serving_v4'
   | 'mart.review_filter_posting_stats_v4'
