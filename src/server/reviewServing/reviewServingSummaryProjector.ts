@@ -722,7 +722,7 @@ const getDirectFullSummaryDeleteStatements = (input: ProjectReviewServingSummari
     getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_article_count_serving_v4'}),
     getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_filter_facet_serving_v4'}),
     getDeleteReviewServingProjectorRowsStatement({
-      predicates: {...predicates, component_kind: 'count', summary_definition_version: 'review-serving-summary:v1'},
+      predicates: {...predicates, component_kind: 'count'},
       table: 'mart.review_article_summary_contribution_v4',
     }),
   ]

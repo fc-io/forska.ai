@@ -259,6 +259,11 @@ test('full posting rebuilds write serving and contribution state without increme
   expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
+  expect(
+    statements.find((statement) => {
+      return statement.includes('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
+    }),
+  ).not.toContain('summary_definition_version')
   expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
   expect(joined).toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
   expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
