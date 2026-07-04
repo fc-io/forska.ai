@@ -29,7 +29,6 @@ type DuckdbRuntimeConfig = {
   tempDirectory: string | null
   threads: string
 }
-type NodeErrorWithCode = Error & {code?: string}
 export type ReadOnlyDuckdbRuntimeOptionsInput = {
   accessMode?: 'READ_ONLY'
   memoryLimit?: string
@@ -4372,6 +4371,14 @@ export const runDuckdbMaintenance = async (
   })
 }
 
+const getDuckdbStringLiteral = (value: string) => {
+  return `'${value.replaceAll("'", "''")}'`
+}
+
+const getDuckdbIdentifierLiteral = (value: string) => {
+  return `"${value.replaceAll('"', '""')}"`
+}
+
 const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<DuckdbSnapshot, unknown, never> => {
   return Effect.gen(function* () {
     if (runtimeConfig.databasePath === ':memory:') {
@@ -4386,18 +4393,41 @@ const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<D
       return mkdir(duckdbSnapshotDirectory, {recursive: true})
     })
     yield* Effect.tryPromise(() => {
-      return copyFile(runtimeConfig.databasePath, snapshotPath)
+      return rm(snapshotPath, {force: true})
     })
     yield* Effect.tryPromise(async () => {
-      const sourceWalPath = `${runtimeConfig.databasePath}.wal`
-      const snapshotWalPath = `${snapshotPath}.wal`
+      const [currentDatabase] = await runDuckdbJsonQueryDirect<{databaseName: string}>(
+        'SELECT current_database() AS databaseName',
+      )
+
+      if (currentDatabase === undefined) {
+        throw new Error('DuckDB current database name is unavailable')
+      }
+
+      const {databaseName} = currentDatabase
+      const snapshotDatabaseName = `f1_snapshot_${randomUUID().replaceAll('-', '_')}`
+      const sourceDatabaseIdentifier = getDuckdbIdentifierLiteral(databaseName)
+      const snapshotDatabaseIdentifier = getDuckdbIdentifierLiteral(snapshotDatabaseName)
+      let snapshotAttached = false
 
       try {
-        await copyFile(sourceWalPath, snapshotWalPath)
+        await runDuckdbStatementDirect(
+          `ATTACH ${getDuckdbStringLiteral(snapshotPath)} AS ${snapshotDatabaseIdentifier}`,
+        )
+        snapshotAttached = true
+        await runDuckdbStatementDirect(
+          `COPY FROM DATABASE ${sourceDatabaseIdentifier} TO ${snapshotDatabaseIdentifier}`,
+        )
+        await runDuckdbStatementDirect(`DETACH ${snapshotDatabaseIdentifier}`)
+        snapshotAttached = false
       } catch (error) {
-        if ((error as NodeErrorWithCode).code !== 'ENOENT') {
-          throw error
+        if (snapshotAttached) {
+          await runDuckdbStatementDirect(`DETACH ${snapshotDatabaseIdentifier}`).catch(() => {})
         }
+
+        await rm(snapshotPath, {force: true})
+        await rm(`${snapshotPath}.wal`, {force: true})
+        throw error
       }
     })
 
