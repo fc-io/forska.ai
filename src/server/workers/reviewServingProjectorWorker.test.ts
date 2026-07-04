@@ -1982,6 +1982,7 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
       outputBaseGeneration: 7,
       projectionComponent: component,
       projectionIdentity: `${component}:project-1`,
+      requestId: component === 'summary' ? 'rebuild-summary-executor' : chunkManifest.requestId,
     } satisfies ReviewServingRebuildChunkManifest
   })
   let activeChunk: ReviewServingRebuildChunkManifest = chunks[0] ?? chunkManifest
@@ -2334,7 +2335,7 @@ test('worker refreshes posting stats once when a posting rebuild request is fina
   expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 serving')
 })
 
-test('worker does not refresh requestless summary chunks after completion finalization', async () => {
+test('worker terminally rejects requestless summary chunks before projection', async () => {
   const harness = createWorkerHarness()
   const statements: string[] = []
   const summaryChunkInput = {
@@ -2362,87 +2363,7 @@ test('worker does not refresh requestless summary chunks after completion finali
 
       return summaryChunkInput
     },
-    runClaimedChunk: harness.dependencies.rebuildChunkService?.runClaimedChunk,
   } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
-  harness.database.transaction = async (operation) => {
-    statements.push('BEGIN summary requestless')
-
-    return operation(harness.database)
-  }
-  const originalQueryJson = harness.database.queryJson
-
-  harness.database.queryJson = async <T>(statement: string) => {
-    statements.push(statement)
-
-    if (statement.includes('COUNT(*) AS pendingChunkCount')) {
-      throw new Error('requestless chunks should not query request pending chunks')
-    }
-
-    return originalQueryJson<T>(statement)
-  }
-  const originalRun = harness.database.run
-
-  harness.database.run = async (statement: string) => {
-    statements.push(statement)
-
-    return originalRun(statement)
-  }
-  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
-  const filterOptionDeletes = statements.filter((statement) => {
-    return statement.includes('DELETE FROM mart.review_filter_option_serving_v4')
-  })
-
-  expect(result.chunk).toMatchObject({chunkId: summaryChunk.chunkId, status: 'completed'})
-  expect(harness.runChunkInputs).toEqual([summaryChunk])
-  expect(filterOptionDeletes).toHaveLength(0)
-})
-
-test('worker retries requestless summary chunks when filter option refresh fails', async () => {
-  const harness = createWorkerHarness()
-  const statements: string[] = []
-  const summaryChunkInput = {
-    ...chunkInput,
-    outputBaseGeneration: 7,
-    projectionComponent: 'summary' as const,
-    projectionIdentity: 'summary:project-1',
-    requestId: null,
-  }
-  const summaryChunk = {
-    ...chunkManifest,
-    ...summaryChunkInput,
-    chunkId: 'chunk-summary-requestless-retry',
-    requestId: null,
-  } satisfies ReviewServingRebuildChunkManifest
-
-  harness.dependencies.rebuildChunkService = {
-    ...harness.dependencies.rebuildChunkService,
-    claimChunk: async (claimInput) => {
-      harness.claimInputs.push(claimInput)
-
-      return summaryChunk
-    },
-    getNextChunk: async (getNextInput) => {
-      harness.getNextChunkInputs.push(getNextInput)
-
-      return summaryChunkInput
-    },
-    runClaimedChunk: async ({chunk, database}) => {
-      harness.runChunkInputs.push(chunk)
-
-      return database.transaction(async (tx) => {
-        await tx.run("DELETE FROM mart.review_article_summary_contribution_v4 WHERE project_id = 'project-1'")
-        await tx.queryJson(
-          "SELECT * FROM app.review_projection_identity_manifest WHERE projection_component = 'summary'",
-        )
-        throw new Error('summary filter refresh failed')
-      })
-    },
-  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
-  harness.database.transaction = async (operation) => {
-    statements.push('BEGIN summary requestless retry')
-
-    return operation(harness.database)
-  }
   harness.database.queryJson = async <T>(statement: string) => {
     statements.push(statement)
 
@@ -2453,12 +2374,55 @@ test('worker retries requestless summary chunks when filter option refresh fails
   }
 
   const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+  const joined = statements.join('\n')
 
   expect(result.chunk).toMatchObject({chunkId: summaryChunk.chunkId, status: 'failed'})
-  expect(harness.runChunkInputs).toEqual([summaryChunk])
-  expect(harness.failedChunks).toEqual([
-    {chunkId: summaryChunk.chunkId, error: 'summary filter refresh failed', leaseOwner: 'worker-1'},
-  ])
+  expect(harness.runChunkInputs).toEqual([])
+  expect(harness.failedChunks).toEqual([])
+  expect(joined).toContain("status = 'quarantined'")
+  expect(joined).toContain('requestless ranged summary rebuild chunks are not supported')
+  expect(joined).toContain('request-associated review serving rebuild')
+  expect(joined).not.toContain('projectReviewServingSummaries')
+  expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
+  expect(joined).not.toContain('mart.review_filter_option_serving_v4')
+})
+
+test('claimed requestless summary chunks fail fast before the legacy path', async () => {
+  const statements: string[] = []
+  const summaryChunk = {
+    ...chunkManifest,
+    chunkId: 'chunk-summary-requestless-claimed',
+    outputBaseGeneration: 7,
+    projectionComponent: 'summary' as const,
+    projectionIdentity: 'summary:project-1',
+    requestId: null,
+  } satisfies ReviewServingRebuildChunkManifest
+  const database: TestDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
+      statements.push('BEGIN requestless summary claimed')
+
+      return operation(database)
+    },
+  }
+
+  try {
+    await runReviewServingProjectorWorkerClaimedRebuildChunk({chunk: summaryChunk, leaseOwner: 'worker-1'}, database)
+    throw new Error('expected requestless summary chunk to fail')
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain('request-associated review serving rebuild')
+  }
+
+  expect(statements.join('\n')).not.toContain('mart.review_article_summary_contribution_v4')
+  expect(statements.join('\n')).not.toContain('mart.review_article_summary_rebuild_partial_v4')
 })
 
 test('request-associated summary chunk refresh failures happen before chunk completion', async () => {
