@@ -672,6 +672,7 @@ test('only the projector writer boundary writes V4 mart rows and promotes active
     'src/server/reviewServing/reviewServingQueueProjector.ts',
     'src/server/reviewServing/reviewServingRetentionService.ts',
     'src/server/reviewServing/reviewServingSelectedImportPatchProjector.ts',
+    'src/server/reviewServing/reviewServingSelectedImportProjector.ts',
     'src/server/reviewServing/reviewServingSummaryProjector.ts',
   ])
   const testSupportFixtureFiles = new Set(['src/server/test/seedHumanAssessmentServingArticle.ts'])

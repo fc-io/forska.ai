@@ -71,10 +71,20 @@ const runSeed = (duckdbPath: string, sql: string) => {
 }
 
 const runQuery = <T>(duckdbPath: string, sql: string) => {
-  const result = globalThis.Bun.spawnSync(['bun', 'scripts/dbQuerySnapshot.ts', `--sql=${sql}`], {
-    cwd: projectRoot,
-    env: {...defaultEnv, DUCKDB_PATH: duckdbPath},
-  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const database = getAppDatabaseService()
+        const rows = await database.queryJson(${JSON.stringify(sql)})
+        console.log(JSON.stringify(rows))
+        await database.close()
+      `,
+    ],
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
+  )
 
   if (result.exitCode !== 0) {
     throw new Error(result.stderr.toString() || result.stdout.toString() || 'query failed')
