@@ -4,6 +4,7 @@ import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.
 import {
   projectReviewServingDisplayBaseRows,
   projectReviewServingDisplayPatches,
+  projectReviewServingPayloadRanges,
   projectReviewServingPayloadRows,
   type ReviewServingDisplayPayloadProjectorDatabase,
 } from './reviewServingDisplayPayloadProjector.ts'
@@ -223,6 +224,50 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
   expect(insertStatement).toContain('payload_bytes')
   expect(joined).not.toContain('selected_scoped_article_import')
   expect(joined).not.toContain('payload_json')
+})
+
+test('payload rebuild ranges write payload rows with SQL-native range statements', async () => {
+  const {database, statements} = createDisplayPayloadDatabase()
+
+  const result = await projectReviewServingPayloadRanges(
+    {
+      ranges: [
+        {
+          baseGeneration: 1,
+          chunkEndArticleId: 'article-050',
+          chunkStartArticleId: 'article-001',
+          displayIdentity: 'display:identity-1',
+          payloadIdentity: 'payload:identity-1',
+          projectId: 'project-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          snapshotId: 'snapshot-1',
+        },
+        {
+          baseGeneration: 1,
+          chunkEndArticleId: 'article-099',
+          chunkStartArticleId: 'article-051',
+          displayIdentity: 'display:identity-1',
+          payloadIdentity: 'payload:identity-1',
+          projectId: 'project-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          snapshotId: 'snapshot-1',
+        },
+      ],
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result).toEqual({rangeCount: 2})
+  expect(joined).toContain('DELETE FROM mart.review_article_serving_payload_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_payload_v4')
+  expect(joined).toContain('WITH payload_source AS')
+  expect(joined).toContain("scope.article_id >= 'article-001'")
+  expect(joined).toContain("scope.article_id <= 'article-050'")
+  expect(joined).toContain("scope.article_id >= 'article-051'")
+  expect(joined).toContain("scope.article_id <= 'article-099'")
+  expect(joined).toContain('ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id)')
+  expect(joined).not.toContain('VALUES (')
 })
 
 test('payload claimed updates delete stale rows for removed articles before inserting replacements', async () => {
