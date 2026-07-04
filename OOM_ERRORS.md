@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-04 - Review-Serving Rebuild Batch RSS Guardrail
+
+- Error: Opt-in multi-chunk review-serving rebuild batches could keep claiming additional chunks even when process RSS was already high.
+- Context: `reviewServing.projector.worker` when `FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE` is raised above 1.
+- Cause: The batch loop honored only the configured chunk count and had no process-memory admission check before draining multiple chunks in one wake.
+- Fix: Added `FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES`; when set and current RSS reaches the cap, the worker limits the effective batch size to one chunk while preserving the serialized writer lane.
+- Verification: `bun test src/server/utils/env.test.ts src/server/utils/reviewServingProjectorWorkerHeartbeat.test.ts src/server/workers/reviewServingProjectorWorker.test.ts`.
+
 ## 2026-07-04 - Summary Contribution Finalization Publication
 
 - Error: Review-serving summary finalization could still recreate unbounded DuckDB aggregation over `review_article_summary_contribution_rebuild_partial_v4` after count/facet accumulator batching.

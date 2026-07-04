@@ -3,7 +3,11 @@ import {env} from './env.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
-type ReviewServingProjectorWorkerHeartbeatOptions = {pollIntervalMs?: number; rebuildChunkBatchSize?: number}
+type ReviewServingProjectorWorkerHeartbeatOptions = {
+  pollIntervalMs?: number
+  rebuildChunkBatchMaxRssBytes?: number
+  rebuildChunkBatchSize?: number
+}
 
 const reviewServingProjectorWorkerLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const reviewServingProjectorWorkerWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
@@ -39,7 +43,9 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       component: reviewServingProjectorWorkerComponent,
       event: 'loopStart',
       pollIntervalMs: options.pollIntervalMs ?? null,
-      rebuildChunkBatchSize: options.rebuildChunkBatchSize ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE,
+      rebuildChunkBatchMaxRssBytes:
+        options.rebuildChunkBatchMaxRssBytes ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES ?? 0,
+      rebuildChunkBatchSize: options.rebuildChunkBatchSize ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE ?? 1,
       startCount: 1,
     },
   )
@@ -47,7 +53,9 @@ export const startReviewServingProjectorWorkerHeartbeat = (
   const startLoop = () => {
     void runReviewServingProjectorWorker({
       pollIntervalMs: options.pollIntervalMs,
-      rebuildChunkBatchSize: options.rebuildChunkBatchSize ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE,
+      rebuildChunkBatchMaxRssBytes:
+        options.rebuildChunkBatchMaxRssBytes ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES ?? 0,
+      rebuildChunkBatchSize: options.rebuildChunkBatchSize ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE ?? 1,
       signal: controller.signal,
     }).catch((error) => {
       logReviewServingProjectorWorkerError(error)

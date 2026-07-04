@@ -47,7 +47,12 @@ test('review serving projector worker heartbeat logs original loop failure and r
         void mock.module(workerModulePath, () => {
           return {
             runReviewServingProjectorWorker: async (options) => {
-              events.push(['run', events.length, options.rebuildChunkBatchSize])
+              events.push([
+                'run',
+                events.length,
+                options.rebuildChunkBatchSize,
+                options.rebuildChunkBatchMaxRssBytes,
+              ])
 
               if (events.length === 1) {
                 throw new Error('projector loop failed')
@@ -64,7 +69,11 @@ test('review serving projector worker heartbeat logs original loop failure and r
         })
 
         const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?restart=' + Date.now())
-        const stop = startReviewServingProjectorWorkerHeartbeat({pollIntervalMs: 1, rebuildChunkBatchSize: 3})
+        const stop = startReviewServingProjectorWorkerHeartbeat({
+          pollIntervalMs: 1,
+          rebuildChunkBatchMaxRssBytes: 100,
+          rebuildChunkBatchSize: 3,
+        })
 
         await new Promise((resolve) => {
           setTimeout(resolve, 25)
@@ -91,7 +100,7 @@ test('review serving projector worker heartbeat logs original loop failure and r
   const output = `${runScript.stdout.toString()}\n${runScript.stderr.toString()}`
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: Array<Array<number | string>>}
 
-  expect(result.events).toEqual([['run', 0, 3], ['run', 1, 3], ['abort']])
+  expect(result.events).toEqual([['run', 0, 3, 100], ['run', 1, 3, 100], ['abort']])
   expect(output).toContain('projector loop failed')
   expect(output).not.toContain('An unknown error occurred in Effect.tryPromise')
 })
