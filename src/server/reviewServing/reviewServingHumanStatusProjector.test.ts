@@ -155,7 +155,14 @@ test('human prompt answer deltas write component-narrow status patches', async (
   })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(result).toMatchObject({
+    diagnosticsJson: {
+      humanStatusProjector: {judgmentDeltaRowCount: 1, promptConfigRowCount: 1},
+      phaseTimings: {recordTransformMs: expect.any(Number)},
+    },
+    patchRowCount: 1,
+    patchWatermark: 14,
+  })
   expect(selectStatement).toContain('LEFT JOIN app."judgment_human" judgment_human')
   expect(selectStatement).toContain('LEFT JOIN app."judgment_human_summary" judgment_human_summary')
   expect(selectStatement).toContain("VALUES ('article-1')")
@@ -209,7 +216,7 @@ test('summary human answers do not require prompt IDs and write summary-key patc
   })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(result).toMatchObject({patchRowCount: 1, patchWatermark: 14})
   expect(insertStatement).toContain("'summary'")
   expect(joined).toContain("'summary', 'answered', FALSE")
   expect(joined).toContain("'humanStatus'")
@@ -236,7 +243,7 @@ test('Covidence summary conflicts count as reviewed while preserving null answer
   })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(result).toMatchObject({patchRowCount: 1, patchWatermark: 14})
   expect(insertStatement).toContain('NULL')
   expect(joined).toContain("'summary', 'answered', FALSE")
 })
@@ -260,7 +267,7 @@ test('human prompt and summary answer changes use delta payload values as contri
     return statement.includes('INSERT INTO mart.review_human_status_patch_v4')
   })
 
-  expect(result).toEqual({patchRowCount: 2, patchWatermark: 14})
+  expect(result).toMatchObject({patchRowCount: 2, patchWatermark: 14})
   expect(patchInserts[0]).toContain("'old-prompt'")
   expect(patchInserts[0]).not.toContain("'latest'")
   expect(patchInserts[0]).toContain("'new-summary'")
@@ -310,7 +317,7 @@ test('prompt config claims rebuild only prompt-scoped human status rows', async 
     return statement.includes('FROM app.review_change_delta delta')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(result).toMatchObject({patchRowCount: 1, patchWatermark: 14})
   expect(promptSelect).toContain("VALUES ('prompt-1')")
   expect(promptSelect).toContain('INNER JOIN mart.project_scope_article scope')
   expect(promptSelect).toContain('LEFT JOIN app."judgment_human" judgment_human')
@@ -338,7 +345,7 @@ test('human rebuild chunks replace scoped patch rows before bounded inserts', as
   })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 0})
+  expect(result).toMatchObject({patchRowCount: 1, patchWatermark: 0})
   expect(deleteStatement).toContain('patch_watermark = 0')
   expect(deleteStatement).toContain("article_id >= 'article-3'")
   expect(deleteStatement).toContain("article_id <= 'article-3'")
@@ -370,7 +377,7 @@ test('human rebuild chunks use one range delete and bounded insert batches', asy
     return statement.includes('INSERT INTO mart.review_human_status_patch_v4')
   })
 
-  expect(result).toEqual({patchRowCount: 251, patchWatermark: 0})
+  expect(result).toMatchObject({patchRowCount: 251, patchWatermark: 0})
   expect(deleteStatements).toHaveLength(1)
   expect(deleteStatements[0]).toContain("article_id >= 'article-000'")
   expect(deleteStatements[0]).toContain("article_id <= 'article-250'")

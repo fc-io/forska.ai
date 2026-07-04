@@ -135,6 +135,10 @@ type ReviewServingPayloadPatchManifestInput = {
 const displayProjectorName = 'display-projector'
 const payloadProjectorName = 'payload-projector'
 
+const getNonNegativeElapsedMs = (startedAtMs: number) => {
+  return Math.max(0, Date.now() - startedAtMs)
+}
+
 const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[] = []) => {
   return [
     ...new Set(
@@ -793,102 +797,164 @@ const getPayloadProjectionManifests = (
 
 export const projectReviewServingDisplayBaseRows = async (
   input: ProjectReviewServingDisplayBaseInput,
-  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService(),
+  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingDisplayPayloadProjectorDatabase,
 ) => {
-  const rows = await getDisplayBaseRows(input, database)
+  const phaseTimings: Record<string, number> = {}
+  const measure = async <T>(phase: string, operation: () => Promise<T>) => {
+    const startedAtMs = Date.now()
+    const result = await operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const rows = await measure('sourceQueryMs', async () => {
+    return getDisplayBaseRows(input, database)
+  })
   const rowCount = rows.length * input.listModeKeys.length
 
-  await writeReviewServingProjectorComponent(
-    {
-      component: 'display',
-      statements: [
-        `DELETE FROM mart.review_article_serving_v4
+  const writerResult = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        component: 'display',
+        statements: [
+          `DELETE FROM mart.review_article_serving_v4
           WHERE project_id = ${getSqlLiteral(input.projectId)}
             AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
             AND ${getListModeKeyPredicate(input.listModeKeys)}
             ${getServingArticleRangePredicate(input)}`,
-        input.listModeKeys.length === 0 ? null : getInsertDisplayBaseRowsStatement(input),
-      ].flatMap((statement) => {
-        return statement === null ? [] : [statement]
-      }),
-    },
-    database,
-  )
+          input.listModeKeys.length === 0 ? null : getInsertDisplayBaseRowsStatement(input),
+        ].flatMap((statement) => {
+          return statement === null ? [] : [statement]
+        }),
+      },
+      database,
+    )
+  })
 
-  return {rowCount}
+  return {diagnosticsJson: {displayProjector: {sourceRowCount: rows.length, writer: writerResult.diagnostics}, phaseTimings}, rowCount}
 }
 
 export const projectReviewServingDisplayPatches = async (
   input: ProjectReviewServingDisplayPatchInput,
-  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService(),
+  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingDisplayPayloadProjectorDatabase,
 ) => {
-  const rows = await getDisplayPatchRows(input, database)
+  const phaseTimings: Record<string, number> = {}
+  const measure = async <T>(phase: string, operation: () => Promise<T>) => {
+    const startedAtMs = Date.now()
+    const result = await operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const measureSync = <T>(phase: string, operation: () => T) => {
+    const startedAtMs = Date.now()
+    const result = operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const rows = await measure('sourceQueryMs', async () => {
+    return getDisplayPatchRows(input, database)
+  })
   const patchWatermark = getPatchWatermark(input.claims)
+  const records = measureSync('recordTransformMs', () => {
+    return rows.map((row) => {
+      return getDisplayPatchRecord(input, row)
+    })
+  })
+  const statements = measureSync('statementBuildMs', () => {
+    return rows.map((row) => {
+      return getApplyDisplayPatchServingStatement(input, row)
+    })
+  })
 
-  await writeReviewServingProjectorComponent(
-    {
-      acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
-      component: 'display',
-      projectionManifests: input.claims.length === 0 ? [] : [getReviewServingPayloadPatchManifest(input, 'display')],
-      records: rows.map((row) => {
-        return getDisplayPatchRecord(input, row)
-      }),
-      statements: rows.map((row) => {
-        return getApplyDisplayPatchServingStatement(input, row)
-      }),
-      watermark:
-        input.claims.length === 0
-          ? undefined
-          : {
-              projectId: input.projectId,
-              projectionComponent: 'display',
-              projectorName: displayProjectorName,
-              sourceHighWaterMark: patchWatermark,
-              sourcePartition: getClaimSourcePartition(input.claims),
-            },
-    },
-    database,
-  )
+  const writerResult = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
+        component: 'display',
+        projectionManifests: input.claims.length === 0 ? [] : [getReviewServingPayloadPatchManifest(input, 'display')],
+        records,
+        statements,
+        watermark:
+          input.claims.length === 0
+            ? undefined
+            : {
+                projectId: input.projectId,
+                projectionComponent: 'display',
+                projectorName: displayProjectorName,
+                sourceHighWaterMark: patchWatermark,
+                sourcePartition: getClaimSourcePartition(input.claims),
+              },
+      },
+      database,
+    )
+  })
 
-  return {patchRowCount: rows.length, patchWatermark}
+  return {
+    diagnosticsJson: {displayProjector: {sourceRowCount: rows.length, writer: writerResult.diagnostics}, phaseTimings},
+    patchRowCount: rows.length,
+    patchWatermark,
+  }
 }
 
 export const projectReviewServingPayloadRows = async (
   input: ProjectReviewServingPayloadInput,
-  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService(),
+  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingDisplayPayloadProjectorDatabase,
 ) => {
+  const phaseTimings: Record<string, number> = {}
+  const measure = async <T>(phase: string, operation: () => Promise<T>) => {
+    const startedAtMs = Date.now()
+    const result = await operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const measureSync = <T>(phase: string, operation: () => T) => {
+    const startedAtMs = Date.now()
+    const result = operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
   const claims = input.claims ?? []
-  const rows = await getPayloadRows(input, database)
+  const rows = await measure('sourceQueryMs', async () => {
+    return getPayloadRows(input, database)
+  })
   const hasClaimedWork =
     claims.length > 0 && input.definitionVersion !== undefined && input.projectionIdentity !== undefined
   const shouldAcknowledgeClaims = hasClaimedWork && input.acknowledgeClaims !== false
   const projectionManifests = getPayloadProjectionManifests(input, claims)
   const patchWatermark = getPatchWatermark(claims)
+  const records = measureSync('recordTransformMs', () => {
+    return rows.map((row) => {
+      return getPayloadRecord(input, row)
+    })
+  })
 
-  await writeReviewServingProjectorComponent(
-    {
-      acknowledgements: shouldAcknowledgeClaims ? claims : [],
-      component: 'payload',
-      projectionManifests,
-      records: rows.map((row) => {
-        return getPayloadRecord(input, row)
-      }),
-      statements: [getDeletePayloadRowsStatement(input)].flatMap((statement) => {
-        return statement === null ? [] : [statement]
-      }),
-      watermark: shouldAcknowledgeClaims
-        ? {
-            projectId: input.projectId,
-            projectionComponent: 'payload',
-            projectorName: payloadProjectorName,
-            sourceHighWaterMark: patchWatermark,
-            sourcePartition: getClaimSourcePartition(claims),
-          }
-        : undefined,
-    },
-    database,
-  )
+  const writerResult = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        acknowledgements: shouldAcknowledgeClaims ? claims : [],
+        component: 'payload',
+        projectionManifests,
+        records,
+        statements: [getDeletePayloadRowsStatement(input)].flatMap((statement) => {
+          return statement === null ? [] : [statement]
+        }),
+        watermark: shouldAcknowledgeClaims
+          ? {
+              projectId: input.projectId,
+              projectionComponent: 'payload',
+              projectorName: payloadProjectorName,
+              sourceHighWaterMark: patchWatermark,
+              sourcePartition: getClaimSourcePartition(claims),
+            }
+          : undefined,
+      },
+      database,
+    )
+  })
 
-  return {payloadRowCount: rows.length, patchWatermark}
+  return {
+    diagnosticsJson: {payloadProjector: {sourceRowCount: rows.length, writer: writerResult.diagnostics}, phaseTimings},
+    patchWatermark,
+    payloadRowCount: rows.length,
+  }
 }

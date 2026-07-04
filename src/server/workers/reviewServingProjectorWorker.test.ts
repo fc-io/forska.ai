@@ -1239,6 +1239,14 @@ test('high-fanout rebuild chunks commit idempotent output separately from comple
   }
 })
 
+test('rebuild chunks preserve lower-volume projector timing diagnostics', () => {
+  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+
+  expect(source).toContain('displayProjectorSnapshots')
+  expect(source).toContain('payloadProjectorSnapshots')
+  expect(source).toContain('return {diagnosticsJson: result.diagnosticsJson}')
+})
+
 test('selected import runner releases dirty work while base projection is still batching', async () => {
   const runStatements: string[] = []
   const selectedImportRows = new Array(512).fill(null).map((_, index) => {

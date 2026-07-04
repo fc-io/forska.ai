@@ -4,7 +4,7 @@
 
 Make the V4 review-serving rebuild path fast enough for the review page's normal "missing snapshot" path. This plan is intentionally investigation and implementation planning only; no code changes are included here.
 
-Status: PR #108's safe implementation slices are complete. The remaining roadmap is deferred future work because the open items require benchmark evidence, direct snapshot/reduction design, or live DuckDB safety validation before implementation.
+Status: PR #108's safe implementation slices plus the July 4 lower-volume diagnostics slice are complete. The remaining roadmap is deferred future work because the open items require benchmark evidence, direct snapshot/reduction design, or live DuckDB safety validation before implementation.
 
 ## Implementation Audit - Post PR #108 Merge
 
@@ -12,7 +12,7 @@ Current implementation status after PR #108 merged, based on source inspection a
 
 | Phase | Status | Current Evidence |
 | --- | --- | --- |
-| Phase 0 - Instrument Before Optimizing | Mostly implemented | Chunk completion now writes `duration_ms`, actual output rows/bytes/payload bytes, and `diagnostics_json`; cheap validation records `validationMode`; chunk diagnostics include write/validation timing splits; worker progress logs include claim/heartbeat/execute/finalize/recycle/GC timings; the generic writer reports record counts/batches/write ms per table; posting, summary, and judgment-payload rebuild chunks report source-query, transform/diff, and writer timing splits; `db:duck:inspect-review-serving-rebuild-timings` summarizes per-request timings and claimable pending chunks. Fine-grained source-query/JS-transform timing is still pending for other remaining JS-heavy components that do not use SQL-native writers. |
+| Phase 0 - Instrument Before Optimizing | Implemented for current rebuild executors | Chunk completion now writes `duration_ms`, actual output rows/bytes/payload bytes, and `diagnostics_json`; cheap validation records `validationMode`; chunk diagnostics include write/validation timing splits; worker progress logs include claim/heartbeat/execute/finalize/recycle/GC timings; the generic writer reports record counts/batches/write ms per table; posting, summary, judgment-payload, display, payload, LLM-status, and human-status rebuild chunks report source/config query, transform/build, and writer timing splits; `db:duck:inspect-review-serving-rebuild-timings` summarizes per-request timings and claimable pending chunks. Future SQL-native rewrites should keep adding source/staging-specific diagnostics with their new execution paths. |
 | Phase 1 - Fix The Scheduler | Mostly implemented | Claiming now uses component prerequisites and critical-lane/priority ordering instead of the old fixed waterfall; tests cover independent claimability. Foreground rebuild drain budget/TTL exists. Chunks now persist a durable `workload_class` of `critical` or `bulk`, and claim ordering uses it with a component fallback for old rows. The worker can now run a bounded configurable rebuild chunk batch per wake, defaulting to one chunk until enabled. |
 | Phase 2 - Batch Or SQL-Native Writes | Mostly implemented | Generic record writes are batched by table/key/shape in `writeReviewServingProjectorRecords`; `search` and `queue` rebuilds have SQL-native `INSERT INTO ... SELECT` paths. Full posting rebuilds now use a set-based SQL statement for serving rows instead of sending those rows through the generic projector writer, and no longer write posting contribution rows. `judgmentInputContent` now avoids the extra combined LLM+human record array and reports materialized record fanout, but it still materializes payload source rows and writer records in JS. Posting still materializes source/diff/stat rows in JS outside the full-rebuild set-based write path. |
 | Phase 3 - Add A Full-Rebuild Fast Path | Partially implemented | Missing-snapshot requests can create a bootstrap candidate snapshot and explicit bootstrap chunks. Several rebuild chunk executors write base/candidate rows directly, full posting rebuilds now skip incremental posting patch rows and posting summary contribution state, use set-based serving writes, and summary rebuild chunks leave global filter-option refresh to request finalization. Fresh candidate snapshots with no selected-import patch watermark now skip candidate patch-compaction scans. Unchunked full summary rebuilds now replace final count/facet serving rows directly and skip summary contribution state. Chunked full summary rebuilds still need a safe reduction/finalization step before they can avoid contribution deltas without range chunks overwriting each other. Full rebuild still uses candidate compaction/promotion where patch work exists rather than a complete direct final-table snapshot build. |
@@ -20,11 +20,21 @@ Current implementation status after PR #108 merged, based on source inspection a
 | Phase 5 - Rework Chunk Admission | Mostly implemented | Default rebuilds and missing-snapshot bootstrap can presplit at admission using estimate/budget-derived article ranges; default single-component rebuilds now use component-specific input-row budgets for high-fanout components. Proactive runtime input-budget presplitting now skips chunks already marked `admissionPresplit`, while DuckDB OOM splitting remains as a safety net for misestimated chunks. |
 | Phase 6 - Controlled Parallelism | Partially implemented | The worker now supports a configurable `rebuildChunkBatchSize` that can claim and execute multiple rebuild chunks in one wake while preserving the existing serialized writer lane; the maintenance heartbeat wires this to `FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE`, defaulting to 1. True read/transform parallelism, set-based multi-chunk write, and controlled multi-writer execution are still pending. |
 
-Summary: the plan is no longer a pure future plan. Scheduler ordering, foreground priority/drain, cheap validation, generic batched writes, SQL-native search/queue rebuild writes, full-posting set-based serving writes, full-posting contribution fanout removal, lightweight posting validation, bootstrap missing-snapshot admission, admission presplitting, admission-presplit runtime split narrowing with DuckDB OOM fallback, high-fanout timing diagnostics, summary finalization cleanup, unchunked direct full-summary serving writes, fresh no-patch compaction short-circuiting, judgment-payload record fanout diagnostics/materialization narrowing, and configurable serial chunk batching have landed. The remaining largest gaps are deferred because they need either chunk-safe reduction semantics, component-specific SQL/staging design, cleanup validation for legacy rows, or controlled DuckDB parallelism evidence.
+Summary: the plan is no longer a pure future plan. Scheduler ordering, foreground priority/drain, cheap validation, generic batched writes, SQL-native search/queue rebuild writes, full-posting set-based serving writes, full-posting contribution fanout removal, lightweight posting validation, bootstrap missing-snapshot admission, admission presplitting, admission-presplit runtime split narrowing with DuckDB OOM fallback, rebuild executor timing diagnostics, summary finalization cleanup, unchunked direct full-summary serving writes, fresh no-patch compaction short-circuiting, judgment-payload record fanout diagnostics/materialization narrowing, and configurable serial chunk batching have landed. The remaining largest gaps are deferred because they need either chunk-safe reduction semantics, component-specific SQL/staging design, cleanup validation for legacy rows, or controlled DuckDB parallelism evidence.
+
+## July 4 Diagnostics Slice
+
+Implemented after the PR #108 safe slices:
+
+1. Display and payload projectors now return `diagnosticsJson` with `sourceQueryMs`, `recordTransformMs` where applicable, `statementBuildMs` for display patches, `writerMs`, source row counts, and generic writer diagnostics.
+2. LLM-status and human-status projectors now return `diagnosticsJson` with config-query/source-query/record-transform/writer timings, per-source row counts, prompt-config row counts, and generic writer diagnostics.
+3. Full rebuild chunk execution now preserves those diagnostics in completed chunk `diagnostics_json` through `displayProjectorSnapshots`, `payloadProjectorSnapshots`, or direct status projector diagnostics.
+
+This closes the previously listed Phase 0 diagnostics gap without changing SQL semantics, validation policy, worker concurrency, or DuckDB lifecycle behavior.
 
 ## Slice 5 Closure
 
-No additional bounded implementation slice remains for this PR after the four landed commits. The remaining items are not safe to implement as scaffolding because incorrect versions could change snapshot semantics, increase DuckDB memory pressure, or introduce multi-writer conflicts without proving speed or correctness.
+No additional bounded speed-path implementation slice remains after the landed commits. The remaining items are not safe to implement as scaffolding because incorrect versions could change snapshot semantics, increase DuckDB memory pressure, or introduce multi-writer conflicts without proving speed or correctness. The July 4 diagnostics slice was bounded because it only records measured timings and row counts for existing executor paths.
 
 Immediate sensible work completed in this PR:
 
@@ -32,6 +42,7 @@ Immediate sensible work completed in this PR:
 2. Runtime presplitting skips chunks that admission already presplit, while keeping DuckDB OOM splitting as a safety net.
 3. Unchunked full summary rebuilds write final count/facet serving rows directly.
 4. Judgment payload rebuilds avoid the extra combined writer-record array and expose materialized fanout diagnostics.
+5. Lower-volume JS rebuild executors now expose source/config, transform/build, and writer diagnostics so future hotspot decisions do not rely on inferred timings.
 
 ## Deferred Future Work
 
@@ -187,12 +198,12 @@ Parallelism can help, but only after the work units are made safer for DuckDB an
 
 ### Phase 0 - Instrument Before Optimizing
 
-Status: mostly implemented.
+Status: implemented for current rebuild executors.
 
 - Implemented: chunk completion populates `duration_ms`, `actual_output_rows`, `actual_output_bytes`, `actual_payload_bytes`, and `diagnostics_json` from validation output in `writeReviewServingRebuildChunkOutput`; no-expected-checksum chunks record `validationMode: 'cheap-count'`.
 - Implemented: chunk diagnostics now include `phaseTimings.writeOutputMs`, `phaseTimings.validationMs`, and `phaseTimings.totalBeforeCompletionMs`; worker progress logs include claim selection/update, heartbeat, execution, request finalization, DuckDB recycle, and Bun GC timings; `db:duck:inspect-review-serving-rebuild-timings` prints per-request phase timing summaries plus claimable pending chunks.
-- Implemented: generic projector writes report input/deduped record counts, batch counts, and write ms by table. Posting rebuild chunks propagate source-query, diff-input transform, contribution-diff, record-transform, stats, delete-build, and writer timing diagnostics into chunk `diagnostics_json`. Summary rebuild chunks propagate source-query, contribution-transform, contribution-diff, summary-record-build, source/prior row counts, and writer diagnostics. Judgment-payload rebuild chunks propagate source-query, record-transform, source row counts, materialized record fanout, and writer diagnostics.
-- Still pending: source-query and JS-transform timing splits inside any remaining lower-volume JS executors that do not use SQL-native writers.
+- Implemented: generic projector writes report input/deduped record counts, batch counts, and write ms by table. Posting rebuild chunks propagate source-query, diff-input transform, contribution-diff, record-transform, stats, delete-build, and writer timing diagnostics into chunk `diagnostics_json`. Summary rebuild chunks propagate source-query, contribution-transform, contribution-diff, summary-record-build, source/prior row counts, and writer diagnostics. Judgment-payload rebuild chunks propagate source-query, record-transform, source row counts, materialized record fanout, and writer diagnostics. Display, payload, LLM-status, and human-status rebuild chunks now propagate source/config query, transform/build, source row count, and writer diagnostics.
+- Still pending: no known current rebuild executor diagnostics gap remains; future SQL-native/staged rewrites should add matching stage-specific diagnostics as part of their implementation.
 
 - Populate chunk `started_at`, `completed_at`, `duration_ms`, `actual_input_rows`, `actual_output_rows`, `actual_output_bytes`, `actual_payload_bytes`, and `diagnostics_json`.
 - Split timing inside rebuild chunk execution into:

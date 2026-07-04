@@ -137,7 +137,14 @@ test('LLM judgment deltas write component-narrow status patches from persisted b
     return statement.includes('UPDATE mart.review_article_serving_v4 serving')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(result).toMatchObject({
+    diagnosticsJson: {
+      llmStatusProjector: {judgmentDeltaRowCount: 1, promptConfigRowCount: 1},
+      phaseTimings: {recordTransformMs: expect.any(Number)},
+    },
+    patchRowCount: 1,
+    patchWatermark: 14,
+  })
   expect(selectStatement).toContain('delta.model_id AS modelId')
   expect(selectStatement).toContain('model.provider_connection_id AS modelProviderConnectionId')
   expect(selectStatement).toContain('provider_connection.base_url AS modelProviderBaseUrl')
@@ -213,7 +220,7 @@ test('prompt config claims rebuild only prompt-scoped LLM status rows', async ()
     return statement.includes('FROM app.review_change_delta delta')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(result).toMatchObject({patchRowCount: 1, patchWatermark: 14})
   expect(promptSelect).toContain("VALUES ('prompt-1')")
   expect(promptSelect).toContain('INNER JOIN app.project project')
   expect(promptSelect).toContain("COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode")
@@ -246,7 +253,7 @@ test('project review config claims rebuild project-scoped LLM status rows', asyn
     return statement.includes('FROM app.project project') && !statement.includes('FROM prompt_id_filter dirty_prompt')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(result).toMatchObject({patchRowCount: 1, patchWatermark: 14})
   expect(projectSelect).toContain('WITH prompt_id_filter(prompt_id) AS')
   expect(projectSelect).toContain('FROM mart.review_llm_status_patch_v4 llm')
   expect(projectSelect).toContain('LEFT JOIN app.project_prompt project_prompt')
@@ -279,7 +286,7 @@ test('LLM full rebuild chunks fan out only over current enabled prompts', async 
     return statement.includes('UPDATE mart.review_article_serving_v4 serving')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 0})
+  expect(result).toMatchObject({patchRowCount: 1, patchWatermark: 0})
   expect(projectSelect).toContain('FROM app.project_prompt project_prompt')
   expect(projectSelect).toContain('INNER JOIN app.prompt prompt')
   expect(projectSelect).toContain('project_prompt.enabled')
@@ -305,7 +312,7 @@ test('LLM full rebuild chunks reset serving status when the project has no enabl
   })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
+  expect(result).toMatchObject({patchRowCount: 0, patchWatermark: 0})
   expect(insertStatement).toBeUndefined()
   expect(resetStatement).toContain('UPDATE mart.review_article_serving_v4 serving')
   expect(resetStatement).toContain('llm_judged_prompt_count = 0')
@@ -334,7 +341,7 @@ test('LLM rebuild chunks replace scoped patch rows before bounded inserts', asyn
   })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 0})
+  expect(result).toMatchObject({patchRowCount: 1, patchWatermark: 0})
   expect(deleteStatement).toContain('patch_watermark = 0')
   expect(deleteStatement).toContain("article_id >= 'article-3'")
   expect(deleteStatement).toContain("article_id <= 'article-3'")
@@ -366,7 +373,7 @@ test('LLM rebuild chunks use one range delete and bounded insert batches', async
     return statement.includes('INSERT INTO mart.review_llm_status_patch_v4')
   })
 
-  expect(result).toEqual({patchRowCount: 251, patchWatermark: 0})
+  expect(result).toMatchObject({patchRowCount: 251, patchWatermark: 0})
   expect(deleteStatements).toHaveLength(1)
   expect(deleteStatements[0]).toContain("article_id >= 'article-000'")
   expect(deleteStatements[0]).toContain("article_id <= 'article-250'")
@@ -385,7 +392,7 @@ test('article judgment-input claims rebuild article-scoped LLM status rows', asy
     return statement.includes('FROM article_id_filter dirty')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(result).toMatchObject({patchRowCount: 1, patchWatermark: 14})
   expect(articleSelect).toContain("VALUES ('article-1')")
   expect(articleSelect).toContain('FROM app."judgment"')
   expect(articleSelect).toContain('judgment.judgment_rank = 1')
@@ -423,7 +430,7 @@ test('newly scoped articles emit unanswered status rows for enabled prompts', as
   })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 2, patchWatermark: 14})
+  expect(result).toMatchObject({patchRowCount: 2, patchWatermark: 14})
   expect(articleSelect).toContain('INNER JOIN app.project_prompt project_prompt')
   expect(articleSelect).toContain('FROM app."judgment"')
   expect(articleSelect).toContain('judgment.judgment_rank = 1')

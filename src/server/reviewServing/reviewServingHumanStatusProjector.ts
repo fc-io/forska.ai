@@ -73,6 +73,10 @@ const summaryPromptConfigRow: ProjectPromptConfigRow = {
   thresholdVersion: null,
 }
 
+const getNonNegativeElapsedMs = (startedAtMs: number) => {
+  return Math.max(0, Date.now() - startedAtMs)
+}
+
 const getPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return Math.max(
     0,
@@ -707,90 +711,129 @@ export const projectReviewServingHumanStatusPatches = async (
   input: ProjectReviewServingHumanStatusInput,
   database: ReviewServingHumanStatusProjectorDatabase = getAppDatabaseService() as ReviewServingHumanStatusProjectorDatabase,
 ) => {
-  const promptConfigRows = await getReviewServingProjectPromptConfigRows(input.projectId, database)
-  const projectSettings = await getReviewServingProjectReviewSettings(input.projectId, database)
+  const phaseTimings: Record<string, number> = {}
+  const measure = async <T>(phase: string, operation: () => Promise<T>) => {
+    const startedAtMs = Date.now()
+    const result = await operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const measureSync = <T>(phase: string, operation: () => T) => {
+    const startedAtMs = Date.now()
+    const result = operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const [promptConfigRows, projectSettings] = await measure('configQueryMs', async () => {
+    return Promise.all([
+      getReviewServingProjectPromptConfigRows(input.projectId, database),
+      getReviewServingProjectReviewSettings(input.projectId, database),
+    ])
+  })
   const currentSummaryReviewConfigHash =
     projectSettings === null
       ? null
       : getReviewServingReviewConfigHash({...projectSettings, humanJudgmentMode: 'summary', promptConfigRows})
   const currentReviewConfigHash =
     projectSettings === null ? null : getReviewServingReviewConfigHash({...projectSettings, promptConfigRows})
-  const [judgmentRows, promptRows, articleRows, projectRows] = await Promise.all([
-    getJudgmentDeltaRows(input, database, promptConfigRows),
-    getPromptScopedRows(input, database),
-    getArticleScopedRows(input, database, promptConfigRows),
-    getProjectScopedRows(input, database, promptConfigRows),
-  ])
+  const [judgmentRows, promptRows, articleRows, projectRows] = await measure('sourceQueryMs', async () => {
+    return Promise.all([
+      getJudgmentDeltaRows(input, database, promptConfigRows),
+      getPromptScopedRows(input, database),
+      getArticleScopedRows(input, database, promptConfigRows),
+      getProjectScopedRows(input, database, promptConfigRows),
+    ])
+  })
   const patchWatermark = getPatchWatermark(input.claims)
   const rows = [...judgmentRows, ...promptRows, ...articleRows, ...projectRows]
-  const recordRows = rows.flatMap((row) => {
-    const promptConfigHash = getPromptConfigHash({...row, promptId: getPromptOrSummaryKey(row.promptId)})
+  const {recordRows, records} = measureSync('recordTransformMs', () => {
+    const nextRecordRows = rows.flatMap((row) => {
+      const promptConfigHash = getPromptConfigHash({...row, promptId: getPromptOrSummaryKey(row.promptId)})
 
-    return input.listModeKeys.map((listModeKey) => {
-      return {
-        articleId: row.articleId,
-        humanStatusKey: row.humanStatusKey,
-        listModeKey,
-        promptConfigHash,
-        promptId: getPromptOrSummaryKey(row.promptId),
-        reviewConfigHash: currentReviewConfigHash,
-        tombstone: row.tombstone,
-      }
-    })
-  })
-  const records = rows.flatMap((row) => {
-    return input.listModeKeys.map((listModeKey) => {
-      return getHumanStatusPatchRecord({
-        baseGeneration: input.baseGeneration,
-        listModeKey,
-        patchWatermark,
-        projectId: input.projectId,
-        row,
+      return input.listModeKeys.map((listModeKey) => {
+        return {
+          articleId: row.articleId,
+          humanStatusKey: row.humanStatusKey,
+          listModeKey,
+          promptConfigHash,
+          promptId: getPromptOrSummaryKey(row.promptId),
+          reviewConfigHash: currentReviewConfigHash,
+          tombstone: row.tombstone,
+        }
       })
     })
-  })
-
-  await writeReviewServingProjectorComponent(
-    {
-      acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
-      component: 'humanStatus',
-      projectionManifests: input.claims.length === 0 ? [] : [getHumanStatusPatchManifest(input)],
-      records,
-      statements: [
-        input.claims.length === 0
-          ? getDeleteRebuiltHumanStatusPatchRowsStatement({
-              baseGeneration: input.baseGeneration,
-              chunkEndArticleId: input.chunkEndArticleId,
-              chunkStartArticleId: input.chunkStartArticleId,
-              patchWatermark,
-              projectId: input.projectId,
-            })
-          : null,
-        getApplyHumanStatusServingStatement({
+    const nextRecords = rows.flatMap((row) => {
+      return input.listModeKeys.map((listModeKey) => {
+        return getHumanStatusPatchRecord({
           baseGeneration: input.baseGeneration,
-          currentSummaryReviewConfigHash,
-          currentReviewConfigHash,
+          listModeKey,
           patchWatermark,
           projectId: input.projectId,
-          projectionIdentity: input.projectionIdentity,
-          recordRows,
-        }),
-      ].flatMap((statement) => {
-        return statement === null ? [] : [statement]
-      }),
-      watermark:
-        input.claims.length === 0
-          ? undefined
-          : {
-              projectId: input.projectId,
-              projectionComponent: 'humanStatus',
-              projectorName: humanStatusProjectorName,
-              sourceHighWaterMark: patchWatermark,
-              sourcePartition: getClaimSourcePartition(input.claims),
-            },
-    },
-    database,
-  )
+          row,
+        })
+      })
+    })
 
-  return {patchRowCount: records.length, patchWatermark}
+    return {recordRows: nextRecordRows, records: nextRecords}
+  })
+
+  const writerResult = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
+        component: 'humanStatus',
+        projectionManifests: input.claims.length === 0 ? [] : [getHumanStatusPatchManifest(input)],
+        records,
+        statements: [
+          input.claims.length === 0
+            ? getDeleteRebuiltHumanStatusPatchRowsStatement({
+                baseGeneration: input.baseGeneration,
+                chunkEndArticleId: input.chunkEndArticleId,
+                chunkStartArticleId: input.chunkStartArticleId,
+                patchWatermark,
+                projectId: input.projectId,
+              })
+            : null,
+          getApplyHumanStatusServingStatement({
+            baseGeneration: input.baseGeneration,
+            currentSummaryReviewConfigHash,
+            currentReviewConfigHash,
+            patchWatermark,
+            projectId: input.projectId,
+            projectionIdentity: input.projectionIdentity,
+            recordRows,
+          }),
+        ].flatMap((statement) => {
+          return statement === null ? [] : [statement]
+        }),
+        watermark:
+          input.claims.length === 0
+            ? undefined
+            : {
+                projectId: input.projectId,
+                projectionComponent: 'humanStatus',
+                projectorName: humanStatusProjectorName,
+                sourceHighWaterMark: patchWatermark,
+                sourcePartition: getClaimSourcePartition(input.claims),
+              },
+      },
+      database,
+    )
+  })
+
+  return {
+    diagnosticsJson: {
+      humanStatusProjector: {
+        articleScopedRowCount: articleRows.length,
+        judgmentDeltaRowCount: judgmentRows.length,
+        projectScopedRowCount: projectRows.length,
+        promptConfigRowCount: promptConfigRows.length,
+        promptScopedRowCount: promptRows.length,
+        writer: writerResult.diagnostics,
+      },
+      phaseTimings,
+    },
+    patchRowCount: records.length,
+    patchWatermark,
+  }
 }

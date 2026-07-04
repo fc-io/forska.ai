@@ -1303,9 +1303,9 @@ const runDisplayRebuildChunk = async (
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
 
-        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
-          await previous
-          await projectReviewServingDisplayBaseRows(
+        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(async (previous, snapshot) => {
+          const diagnostics = await previous
+          const result = await projectReviewServingDisplayBaseRows(
             {
               baseGeneration: input.chunk.outputBaseGeneration,
               chunkEndArticleId: input.chunk.chunkEndKey,
@@ -1326,7 +1326,11 @@ const runDisplayRebuildChunk = async (
             },
             chunkDatabase,
           )
-        }, Promise.resolve())
+
+          return [...diagnostics, {snapshotId: snapshot.snapshotId, ...result.diagnosticsJson}]
+        }, Promise.resolve([] as unknown[]))
+
+        return {diagnosticsJson: {displayProjectorSnapshots: snapshotDiagnostics}}
       },
     },
     database,
@@ -1367,9 +1371,9 @@ const runPayloadRebuildChunk = async (
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
 
-        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
-          await previous
-          await projectReviewServingPayloadRows(
+        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(async (previous, snapshot) => {
+          const diagnostics = await previous
+          const result = await projectReviewServingPayloadRows(
             {
               baseGeneration: input.chunk.outputBaseGeneration,
               chunkEndArticleId: input.chunk.chunkEndKey,
@@ -1382,7 +1386,11 @@ const runPayloadRebuildChunk = async (
             },
             chunkDatabase,
           )
-        }, Promise.resolve())
+
+          return [...diagnostics, {snapshotId: snapshot.snapshotId, ...result.diagnosticsJson}]
+        }, Promise.resolve([] as unknown[]))
+
+        return {diagnosticsJson: {payloadProjectorSnapshots: snapshotDiagnostics}}
       },
     },
     database,
@@ -1476,7 +1484,7 @@ const runLlmStatusRebuildChunk = async (
         })
       },
       writeOutput: async (tx) => {
-        await projectReviewServingLlmStatusPatches(
+        const result = await projectReviewServingLlmStatusPatches(
           {
             baseGeneration: input.chunk.outputBaseGeneration,
             chunkEndArticleId: input.chunk.chunkEndKey,
@@ -1489,6 +1497,8 @@ const runLlmStatusRebuildChunk = async (
           },
           getChunkProjectorDatabase(tx),
         )
+
+        return {diagnosticsJson: result.diagnosticsJson}
       },
     },
     database,
@@ -1520,7 +1530,7 @@ const runHumanStatusRebuildChunk = async (
         })
       },
       writeOutput: async (tx) => {
-        await projectReviewServingHumanStatusPatches(
+        const result = await projectReviewServingHumanStatusPatches(
           {
             acknowledgeClaims: false,
             baseGeneration: input.chunk.outputBaseGeneration,
@@ -1534,6 +1544,8 @@ const runHumanStatusRebuildChunk = async (
           },
           getChunkProjectorDatabase(tx),
         )
+
+        return {diagnosticsJson: result.diagnosticsJson}
       },
     },
     database,
