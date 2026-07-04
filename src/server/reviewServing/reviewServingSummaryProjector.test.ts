@@ -665,6 +665,110 @@ test('summary rebuild request finalization leaves serving summaries unchanged wh
   }
 })
 
+test('summary rebuild request finalization deletes stale serving rows when summary chunks produced no partials', async () => {
+  const duckdbPath = `/tmp/forska-summary-partial-empty-summary-${Date.now()}.duckdb`
+
+  try {
+    const {close, database} = await createDuckdbSummaryDatabase(duckdbPath)
+
+    try {
+      await createSummaryReductionSchema(database)
+      await database.run(`
+        INSERT INTO mart.review_article_count_serving_v4 (
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          summary_identity,
+          list_mode_key,
+          count_kind,
+          summary_definition_version,
+          filter_key,
+          count_value
+        ) VALUES (
+          'project-1',
+          'review-config-1',
+          'snapshot-1',
+          'review.llm.assessedByPrompt',
+          'llm',
+          'review.llm.assessedByPrompt',
+          'review-llm-assessed-by-prompt:v1',
+          'prompt:prompt-1',
+          7
+        )
+      `)
+      await database.run(`
+        INSERT INTO mart.review_filter_facet_serving_v4 (
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          summary_identity,
+          facet_kind,
+          facet_key,
+          facet_value,
+          summary_definition_version,
+          count_value
+        ) VALUES (
+          'project-1',
+          'review-config-1',
+          'snapshot-1',
+          'review.filter.promptAnswer',
+          'review',
+          'promptAnswer',
+          'old-answer',
+          'review-filter-prompt-answer:v1',
+          9
+        )
+      `)
+
+      await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+        {
+          requestId: 'rebuild-empty-summary-1',
+          snapshots: [
+            {
+              hasSummaryRebuildChunks: true,
+              projectId: 'project-1',
+              reviewConfigHash: 'review-config-1',
+              snapshotId: 'snapshot-1',
+            },
+          ],
+        },
+        database,
+      )
+      const countRows = await database.queryJson<{total: string}>(`
+        SELECT CAST(COUNT(*) AS VARCHAR) AS total
+        FROM mart.review_article_count_serving_v4
+      `)
+      const facetRows = await database.queryJson<{total: string}>(`
+        SELECT CAST(COUNT(*) AS VARCHAR) AS total
+        FROM mart.review_filter_facet_serving_v4
+      `)
+
+      expect(countRows).toEqual([{total: '0'}])
+      expect(facetRows).toEqual([{total: '0'}])
+    } finally {
+      close()
+    }
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
+test('summary rebuild request finalization skips null-hash snapshots without summary chunks', async () => {
+  const {database, statements} = createSummaryDatabase()
+
+  await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+    {
+      requestId: 'rebuild-selected-import-only-1',
+      snapshots: [
+        {hasSummaryRebuildChunks: false, projectId: 'project-1', reviewConfigHash: null, snapshotId: 'snapshot-1'},
+      ],
+    },
+    database,
+  )
+
+  expect(statements).toEqual([])
+})
+
 test('summary rebuild request finalization deletes stale facets when no facet partials remain', async () => {
   const duckdbPath = `/tmp/forska-summary-partial-empty-facet-${Date.now()}.duckdb`
 

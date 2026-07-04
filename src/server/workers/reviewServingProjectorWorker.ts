@@ -276,7 +276,12 @@ type RebuildChunkOutputChecksumRow = {
 type RebuildRequestPendingChunkCountRow = {pendingChunkCount: number}
 type RebuildRequestPostingChunkCountRow = {postingChunkCount: number}
 type SummaryFilterOptionProjectionRow = {outputBaseGeneration: number; projectId: string; projectionIdentity: string}
-type RebuildRequestSnapshotPromotionRow = {projectId: string; reviewConfigHash: string | null; snapshotId: string}
+type RebuildRequestSnapshotPromotionRow = {
+  hasSummaryRebuildChunks: boolean
+  projectId: string
+  reviewConfigHash: string | null
+  snapshotId: string
+}
 
 const defaultReviewServingProjectorWorkerBatchSize = 64
 const defaultReviewServingProjectorWorkerCleanupIntervalMs = 60_000
@@ -611,7 +616,7 @@ const getUuidArticleRangeRebuildChunkSplitRanges = (
     ranges.push({
       articleCount: Math.ceil(estimatedRows / splitBucketCount),
       chunkEndKey: formatUuidArticleId(rangeEnd),
-      chunkStartKey: formatUuidArticleId(index === 0 ? start : previousEnd),
+      chunkStartKey: formatUuidArticleId(index === 0 ? start : previousEnd + 1n),
     })
     previousEnd = rangeEnd
   }
@@ -668,7 +673,7 @@ const getArticleRangeRebuildChunkSplitRanges = async (
     )
     SELECT
       article_count AS articleCount,
-      COALESCE(previous_scoped_end_key, ${getSqlLiteral(input.chunk.chunkStartKey)}) AS chunkStartKey,
+      scoped_start_key AS chunkStartKey,
       CASE
         WHEN next_scoped_start_key IS NULL THEN ${getSqlLiteral(input.chunk.chunkEndKey)}
         ELSE scoped_end_key
@@ -3614,6 +3619,7 @@ const getRebuildRequestSnapshotTargets = async (
         AND chunk.snapshot_id IS NULL
         AND json_extract_string(state.value, '$.component') = chunk.projection_component
         AND json_extract_string(state.value, '$.projectionIdentity') = chunk.projection_identity
+        AND CAST(json_extract_string(state.value, '$.baseGeneration') AS BIGINT) = chunk.output_base_generation
       UNION
       SELECT
         chunk.project_id,
@@ -3628,8 +3634,38 @@ const getRebuildRequestSnapshotTargets = async (
         AND chunk.snapshot_id IS NULL
         AND json_extract_string(state.value, '$.component') = chunk.projection_component
         AND json_extract_string(state.value, '$.projectionIdentity') = chunk.projection_identity
+        AND CAST(json_extract_string(state.value, '$.baseGeneration') AS BIGINT) = chunk.output_base_generation
     )
     SELECT DISTINCT
+      EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest summary_chunk
+        WHERE summary_chunk.request_id = ${getSqlLiteral(input.requestId)}
+          AND summary_chunk.project_id = chunk_snapshot.project_id
+          AND summary_chunk.projection_component = 'summary'
+          AND (
+            summary_chunk.snapshot_id = chunk_snapshot.snapshot_id
+            OR (
+              summary_chunk.snapshot_id IS NULL
+              AND (
+                EXISTS (
+                  SELECT 1
+                  FROM json_each(json_extract(snapshot.component_state_json, '$.required')) summary_state
+                  WHERE json_extract_string(summary_state.value, '$.component') = summary_chunk.projection_component
+                    AND json_extract_string(summary_state.value, '$.projectionIdentity') = summary_chunk.projection_identity
+                    AND CAST(json_extract_string(summary_state.value, '$.baseGeneration') AS BIGINT) = summary_chunk.output_base_generation
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM json_each(json_extract(snapshot.component_state_json, '$.optional')) summary_state
+                  WHERE json_extract_string(summary_state.value, '$.component') = summary_chunk.projection_component
+                    AND json_extract_string(summary_state.value, '$.projectionIdentity') = summary_chunk.projection_identity
+                    AND CAST(json_extract_string(summary_state.value, '$.baseGeneration') AS BIGINT) = summary_chunk.output_base_generation
+                )
+              )
+            )
+          )
+      ) AS hasSummaryRebuildChunks,
       chunk_snapshot.project_id AS projectId,
       chunk_snapshot.snapshot_id AS snapshotId,
       snapshot.review_config_hash AS reviewConfigHash
