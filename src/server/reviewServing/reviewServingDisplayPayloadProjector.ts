@@ -35,6 +35,8 @@ export type ProjectReviewServingDisplayBaseInput = {
   summaryIdentity: string
 }
 
+export type ProjectReviewServingDisplayBaseRangesInput = {ranges: readonly ProjectReviewServingDisplayBaseInput[]}
+
 export type ProjectReviewServingDisplayPatchInput = {
   acknowledgeClaims?: boolean
   baseGeneration: number
@@ -793,35 +795,53 @@ const getPayloadProjectionManifests = (
 
 export const projectReviewServingDisplayBaseRows = async (
   input: ProjectReviewServingDisplayBaseInput,
-  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService(),
+  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingDisplayPayloadProjectorDatabase,
 ) => {
   const rows = await getDisplayBaseRows(input, database)
   const rowCount = rows.length * input.listModeKeys.length
 
   await writeReviewServingProjectorComponent(
-    {
-      component: 'display',
-      statements: [
-        `DELETE FROM mart.review_article_serving_v4
-          WHERE project_id = ${getSqlLiteral(input.projectId)}
-            AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-            AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-            AND ${getListModeKeyPredicate(input.listModeKeys)}
-            ${getServingArticleRangePredicate(input)}`,
-        input.listModeKeys.length === 0 ? null : getInsertDisplayBaseRowsStatement(input),
-      ].flatMap((statement) => {
-        return statement === null ? [] : [statement]
-      }),
-    },
+    {component: 'display', statements: getDisplayBaseRowsStatements(input)},
     database,
   )
 
   return {rowCount}
 }
 
+const getDisplayBaseRowsStatements = (input: ProjectReviewServingDisplayBaseInput) => {
+  return [
+    `DELETE FROM mart.review_article_serving_v4
+      WHERE project_id = ${getSqlLiteral(input.projectId)}
+        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        AND ${getListModeKeyPredicate(input.listModeKeys)}
+        ${getServingArticleRangePredicate(input)}`,
+    input.listModeKeys.length === 0 ? null : getInsertDisplayBaseRowsStatement(input),
+  ].flatMap((statement) => {
+    return statement === null ? [] : [statement]
+  })
+}
+
+export const projectReviewServingDisplayBaseRanges = async (
+  input: ProjectReviewServingDisplayBaseRangesInput,
+  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingDisplayPayloadProjectorDatabase,
+) => {
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'display',
+      statements: input.ranges.flatMap((range) => {
+        return getDisplayBaseRowsStatements(range)
+      }),
+    },
+    database,
+  )
+
+  return {rangeCount: input.ranges.length}
+}
+
 export const projectReviewServingDisplayPatches = async (
   input: ProjectReviewServingDisplayPatchInput,
-  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService(),
+  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingDisplayPayloadProjectorDatabase,
 ) => {
   const rows = await getDisplayPatchRows(input, database)
   const patchWatermark = getPatchWatermark(input.claims)
@@ -856,7 +876,7 @@ export const projectReviewServingDisplayPatches = async (
 
 export const projectReviewServingPayloadRows = async (
   input: ProjectReviewServingPayloadInput,
-  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService(),
+  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingDisplayPayloadProjectorDatabase,
 ) => {
   const claims = input.claims ?? []
   const rows = await getPayloadRows(input, database)
