@@ -29,12 +29,7 @@ const judgmentClaim = (input?: Partial<ReviewServingDirtyWorkClaim>): ReviewServ
   }
 }
 
-const createJudgmentPayloadDatabase = (input?: {
-  humanCount?: number
-  humanRows?: readonly Record<string, unknown>[]
-  llmCount?: number
-  llmRows?: readonly Record<string, unknown>[]
-}) => {
+const createJudgmentPayloadDatabase = (input?: {humanCount?: number; llmCount?: number}) => {
   const statements: string[] = []
   const database: ReviewServingJudgmentPayloadProjectorDatabase = {
     queryJson: async <T>(statement: string) => {
@@ -48,11 +43,7 @@ const createJudgmentPayloadDatabase = (input?: {
         return [{rowCount: input?.humanCount ?? 0}] as T[]
       }
 
-      if (statement.includes('latest_judgment AS')) {
-        return (input?.llmRows ?? []) as T[]
-      }
-
-      return (input?.humanRows ?? []) as T[]
+      return [] as T[]
     },
     run: async (statement: string) => {
       statements.push(statement)
@@ -89,111 +80,8 @@ const claimedProjectInput = (claims: readonly ReviewServingDirtyWorkClaim[] = []
   }
 }
 
-test('judgment payload projection separates llm and human payload kinds across overlapping prompts', async () => {
-  const {database, statements} = createJudgmentPayloadDatabase({
-    humanRows: [
-      {
-        answer: 'include',
-        articleId: 'article-1',
-        comment: 'human note',
-        humanJudgmentCreatedAt: '2026-01-01T00:00:00.000Z',
-        humanJudgmentId: 'human-1',
-        humanJudgmentUpdatedAt: '2026-01-03T00:00:00.000Z',
-        isAnswered: true,
-        payloadReferenceKind: 'human_prompt',
-        promptCriteriaDisposition: 'include',
-        promptHeading: 'Prompt heading',
-        promptId: 'prompt-1',
-        promptOrder: 1,
-        promptOriginalText: 'Prompt text',
-        promptType: 'string',
-      },
-      {
-        answer: 'maybe',
-        articleId: 'article-1',
-        comment: null,
-        humanJudgmentCreatedAt: '2026-01-02T00:00:00.000Z',
-        humanJudgmentId: 'human-summary-1',
-        humanJudgmentUpdatedAt: '2026-01-04T00:00:00.000Z',
-        isAnswered: true,
-        payloadReferenceKind: 'human_summary',
-        promptCriteriaDisposition: null,
-        promptHeading: null,
-        promptId: 'summary',
-        promptOrder: -1,
-        promptOriginalText: 'Overall human screening decision',
-        promptType: 'summary',
-      },
-    ],
-    llmRows: [
-      {
-        answeredOriginal: 'include',
-        answeredOriginalAsArray: ['include', 'maybe'],
-        articleId: 'article-1',
-        assessmentComment: 'correct',
-        assessmentCreatedAt: '2026-01-05T00:00:00.000Z',
-        assessmentId: 'assessment-1',
-        assessmentIsCorrect: true,
-        assessmentUpdatedAt: '2026-01-06T00:00:00.000Z',
-        chunkingStrategy: 'none',
-        confidenceOriginal: 80,
-        explanation: 'llm explanation',
-        isAnswered: true,
-        judgmentCreatedAt: '2026-01-01T00:00:00.000Z',
-        judgmentId: 'judgment-1',
-        judgmentUpdatedAt: '2026-01-02T00:00:00.000Z',
-        modelId: 'model-1',
-        modelDisplayName: 'Model One',
-        modelMetadataJson: {options: {thinking: 'high'}},
-        modelProvider: 'openai',
-        modelThinking: 'high',
-        modelVersion: 'v1',
-        placeholderKind: null,
-        promptCriteriaDisposition: 'include',
-        promptHeading: 'Prompt heading',
-        promptId: 'prompt-1',
-        promptOrder: 1,
-        promptOriginalText: 'Prompt text',
-        promptType: 'string',
-        quotes: ['quote one'],
-        snapshotProjectId: 'project-1',
-        snapshotProjectModelName: 'model name',
-      },
-      {
-        answeredOriginal: null,
-        answeredOriginalAsArray: null,
-        articleId: 'article-1',
-        assessmentComment: null,
-        assessmentCreatedAt: null,
-        assessmentId: null,
-        assessmentIsCorrect: null,
-        assessmentUpdatedAt: null,
-        chunkingStrategy: null,
-        confidenceOriginal: null,
-        explanation: null,
-        isAnswered: null,
-        judgmentCreatedAt: null,
-        judgmentId: null,
-        judgmentUpdatedAt: null,
-        modelId: null,
-        modelDisplayName: 'Model One',
-        modelMetadataJson: null,
-        modelProvider: 'openai',
-        modelThinking: null,
-        modelVersion: null,
-        placeholderKind: 'llm.unanswered',
-        promptCriteriaDisposition: 'exclude',
-        promptHeading: 'Prompt two heading',
-        promptId: 'prompt-2',
-        promptOrder: 2,
-        promptOriginalText: 'Prompt two text',
-        promptType: 'string',
-        quotes: null,
-        snapshotProjectId: null,
-        snapshotProjectModelName: null,
-      },
-    ],
-  })
+test('judgment payload projection writes llm and human payload kinds with SQL-native statements', async () => {
+  const {database, statements} = createJudgmentPayloadDatabase({humanCount: 4, llmCount: 4})
 
   const result = await projectReviewServingJudgmentPayloadRows(projectInput([judgmentClaim()]), database)
   const joined = statements.join('\n')
@@ -204,24 +92,24 @@ test('judgment payload projection separates llm and human payload kinds across o
   expect(result).toMatchObject({
     diagnosticsJson: {
       judgmentPayloadProjector: {
-        humanMaterializedRecordCount: 4,
-        humanSourceRowCount: 2,
-        llmMaterializedRecordCount: 4,
-        llmSourceRowCount: 2,
-        materializedRecordCount: 8,
+        directSqlWriter: true,
+        humanMaterializedRecordCount: 0,
+        humanSourceRowCount: 0,
+        llmMaterializedRecordCount: 0,
+        llmSourceRowCount: 0,
+        materializedRecordCount: 0,
       },
     },
     humanRowCount: 4,
     llmRowCount: 4,
   })
-  expect(result.diagnosticsJson.phaseTimings.recordTransformMs).toBeGreaterThanOrEqual(0)
-  expect(result.diagnosticsJson.phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
   expect(result.diagnosticsJson.phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
-  expect(result.diagnosticsJson.judgmentPayloadProjector.writer.records.inputRecordsByTable).toMatchObject({
-    'mart.review_article_judgment_detail_serving_v4': 8,
-  })
-  expect(inserts).toHaveLength(1)
-  expect(inserts[0]).toContain(
+  expect(result.diagnosticsJson.phaseTimings.postWriteCountMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.phaseTimings.recordTransformMs).toBeUndefined()
+  expect(result.diagnosticsJson.phaseTimings.sourceQueryMs).toBeUndefined()
+  expect(result.diagnosticsJson.judgmentPayloadProjector.writer.records.inputRecordCount).toBe(0)
+  expect(inserts).toHaveLength(2)
+  expect(inserts.join('\n')).toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO UPDATE SET',
   )
   expect(joined).toContain("'llm'")
@@ -229,54 +117,16 @@ test('judgment payload projection separates llm and human payload kinds across o
   expect(joined).toContain("'both'")
   expect(joined).toContain("'summary'")
   expect(joined).toContain("'llm.unanswered'")
-  expect(joined).toContain('llm explanation')
-  expect(joined).toContain('quote one')
-  expect(joined).toContain('assessment-1')
   expect(joined).toContain('payloadReference')
-  expect(joined).toContain('Prompt text')
-  expect(joined).toContain('Prompt heading')
-  expect(joined).toContain('Model One')
-  expect(joined).toContain('openai')
-  expect(joined).toContain('high')
   expect(joined).toContain('human_summary')
-  expect(joined).toContain('2026-01-02T00:00:00.000Z')
-  expect(joined).toContain('2026-01-04T00:00:00.000Z')
 })
 
 test('judgment payload projection replaces only dirty article detail rows', async () => {
-  const {database, statements} = createJudgmentPayloadDatabase({
-    humanRows: [],
-    llmRows: [
-      {
-        answeredOriginal: null,
-        answeredOriginalAsArray: null,
-        articleId: 'article-1',
-        assessmentComment: null,
-        assessmentCreatedAt: null,
-        assessmentId: null,
-        assessmentIsCorrect: null,
-        assessmentUpdatedAt: null,
-        chunkingStrategy: null,
-        confidenceOriginal: null,
-        explanation: null,
-        isAnswered: null,
-        judgmentCreatedAt: null,
-        judgmentId: null,
-        judgmentUpdatedAt: null,
-        modelId: null,
-        placeholderKind: 'llm.unanswered',
-        promptId: 'prompt-1',
-        promptOrder: 1,
-        quotes: null,
-        snapshotProjectId: null,
-        snapshotProjectModelName: null,
-      },
-    ],
-  })
+  const {database, statements} = createJudgmentPayloadDatabase()
 
   await projectReviewServingJudgmentPayloadRows(projectInput([judgmentClaim()]), database)
-  const llmSelect = statements.find((statement) => {
-    return statement.includes('latest_judgment AS')
+  const llmInsert = statements.find((statement) => {
+    return statement.includes('latest_judgment AS') && statement.includes("'llm' AS payload_kind")
   })
   const deleteStatements = statements.filter((statement) => {
     return statement.includes('DELETE FROM mart.review_article_judgment_detail_serving_v4')
@@ -288,13 +138,13 @@ test('judgment payload projection replaces only dirty article detail rows', asyn
     return statement.includes("payload_kind IS NOT DISTINCT FROM 'human'")
   })
 
-  expect(llmSelect).toContain("VALUES ('article-1')")
-  expect(llmSelect).toContain('COALESCE(prompt.archived, FALSE) = FALSE')
-  expect(llmSelect).toContain('ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC')
-  expect(llmSelect).toContain('prompt.original_text AS prompt_original_text')
-  expect(llmSelect).toContain('provider_connection.provider_kind AS modelProvider')
-  expect(llmSelect).toContain("json_extract_string(model.metadata_json, '$.options.thinking') AS modelThinking")
-  expect(llmSelect).toContain('INNER JOIN article_id_filter dirty ON dirty.article_id = scope.article_id')
+  expect(llmInsert).toContain("VALUES ('article-1')")
+  expect(llmInsert).toContain('COALESCE(prompt.archived, FALSE) = FALSE')
+  expect(llmInsert).toContain('ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC')
+  expect(llmInsert).toContain('prompt.original_text AS prompt_original_text')
+  expect(llmInsert).toContain('provider_connection.provider_kind AS model_provider')
+  expect(llmInsert).toContain("json_extract_string(model.metadata_json, '$.options.thinking') AS model_thinking")
+  expect(llmInsert).toContain('INNER JOIN article_id_filter dirty ON dirty.article_id = scope.article_id')
   expect(llmDeleteStatement).toContain("article_id IN ('article-1')")
   expect(llmDeleteStatement).toContain("list_mode_key IS NOT DISTINCT FROM 'llm'")
   expect(humanDeleteStatement).toContain("article_id IN ('article-1')")
@@ -303,7 +153,7 @@ test('judgment payload projection replaces only dirty article detail rows', asyn
 })
 
 test('human payload projection filters rows by active human judgment mode', async () => {
-  const {database, statements} = createJudgmentPayloadDatabase({humanRows: [], llmRows: []})
+  const {database, statements} = createJudgmentPayloadDatabase()
 
   await projectReviewServingJudgmentPayloadRows(projectInput([judgmentClaim()]), database)
   const humanSelect = statements.find((statement) => {
@@ -315,7 +165,7 @@ test('human payload projection filters rows by active human judgment mode', asyn
 })
 
 test('judgment payload projection replaces broad project detail rows', async () => {
-  const {database, statements} = createJudgmentPayloadDatabase({humanRows: [], llmRows: []})
+  const {database, statements} = createJudgmentPayloadDatabase()
 
   await projectReviewServingJudgmentPayloadRows(
     projectInput([
@@ -339,7 +189,7 @@ test('judgment payload projection replaces broad project detail rows', async () 
 })
 
 test('judgment payload projection writes payload manifest when acknowledging claims', async () => {
-  const {database, statements} = createJudgmentPayloadDatabase({humanRows: [], llmRows: []})
+  const {database, statements} = createJudgmentPayloadDatabase()
 
   await projectReviewServingJudgmentPayloadRows(claimedProjectInput([judgmentClaim()]), database)
   const joined = statements.join('\n')
@@ -396,6 +246,11 @@ test('claimless article-range judgment payload rebuild writes detail rows with S
 
 test('article-set judgment hydration reads bounded payload rows with stable ordering', () => {
   const contract = getReviewServingReadContract('review.both.list.humanJudgments')
+
+  if (contract === null) {
+    throw new Error('expected review.both.list.humanJudgments contract')
+  }
+
   const sql = buildReviewServingRowsSql({
     articleIdsParameter: '$articleIds',
     contract,
