@@ -192,7 +192,15 @@ test('judgment payload projection separates llm and human payload kinds across o
   })
 
   expect(result).toMatchObject({
-    diagnosticsJson: {judgmentPayloadProjector: {humanSourceRowCount: 2, llmSourceRowCount: 2}},
+    diagnosticsJson: {
+      judgmentPayloadProjector: {
+        humanMaterializedRecordCount: 4,
+        humanSourceRowCount: 2,
+        llmMaterializedRecordCount: 4,
+        llmSourceRowCount: 2,
+        materializedRecordCount: 8,
+      },
+    },
     humanRowCount: 4,
     llmRowCount: 4,
   })

@@ -562,6 +562,47 @@ const getHumanJudgmentRecord = (input: {
   }
 }
 
+const appendLlmJudgmentRecords = (input: {
+  input: ProjectReviewServingJudgmentPayloadInput
+  records: ReviewServingProjectorRecord[]
+  row: LlmJudgmentPayloadRow
+}) => {
+  return getLlmListModeKeys(input.input.listModeKeys).reduce((records, listModeKey) => {
+    records.push(getLlmJudgmentRecord({input: input.input, listModeKey, row: input.row}))
+
+    return records
+  }, input.records)
+}
+
+const appendHumanJudgmentRecords = (input: {
+  input: ProjectReviewServingJudgmentPayloadInput
+  records: ReviewServingProjectorRecord[]
+  row: HumanJudgmentPayloadRow
+}) => {
+  return getHumanListModeKeys(input.input.listModeKeys).reduce((records, listModeKey) => {
+    records.push(getHumanJudgmentRecord({input: input.input, listModeKey, row: input.row}))
+
+    return records
+  }, input.records)
+}
+
+const getJudgmentPayloadRecords = (input: {
+  humanRows: readonly HumanJudgmentPayloadRow[]
+  input: ProjectReviewServingJudgmentPayloadInput
+  llmRows: readonly LlmJudgmentPayloadRow[]
+}) => {
+  const llmRecordCount = input.llmRows.length * getLlmListModeKeys(input.input.listModeKeys).length
+  const humanRecordCount = input.humanRows.length * getHumanListModeKeys(input.input.listModeKeys).length
+  const records = input.llmRows.reduce((records, row) => {
+    return appendLlmJudgmentRecords({input: input.input, records, row})
+  }, new Array<ReviewServingProjectorRecord>())
+  const nextRecords = input.humanRows.reduce((records, row) => {
+    return appendHumanJudgmentRecords({input: input.input, records, row})
+  }, records)
+
+  return {humanRecordCount, llmRecordCount, records: nextRecords}
+}
+
 const getReplacementDeleteStatements = (
   input: ProjectReviewServingJudgmentPayloadInput,
   payloadKinds: readonly JudgmentPayloadKind[],
@@ -627,19 +668,8 @@ export const projectReviewServingJudgmentPayloadRows = async (
   const [llmRows, humanRows] = await measure('sourceQueryMs', async () => {
     return Promise.all([getLlmJudgmentRows(input, database), getHumanJudgmentRows(input, database)])
   })
-  const {humanRecords, llmRecords} = measureSync('recordTransformMs', () => {
-    const nextLlmRecords = llmRows.flatMap((row) => {
-      return getLlmListModeKeys(input.listModeKeys).map((listModeKey) => {
-        return getLlmJudgmentRecord({input, listModeKey, row})
-      })
-    })
-    const nextHumanRecords = humanRows.flatMap((row) => {
-      return getHumanListModeKeys(input.listModeKeys).map((listModeKey) => {
-        return getHumanJudgmentRecord({input, listModeKey, row})
-      })
-    })
-
-    return {humanRecords: nextHumanRecords, llmRecords: nextLlmRecords}
+  const {humanRecordCount, llmRecordCount, records} = measureSync('recordTransformMs', () => {
+    return getJudgmentPayloadRecords({humanRows, input, llmRows})
   })
   const claims = input.claims ?? []
 
@@ -649,7 +679,7 @@ export const projectReviewServingJudgmentPayloadRows = async (
         acknowledgements: getPayloadAcknowledgements(input, claims),
         component: 'payload',
         projectionManifests: getPayloadProjectionManifests(input, claims),
-        records: [...llmRecords, ...humanRecords],
+        records,
         statements: getReplacementDeleteStatements(input, getRequestedPayloadKinds(input.listModeKeys)),
         watermark: getPayloadWatermark(input, claims),
       },
@@ -660,13 +690,16 @@ export const projectReviewServingJudgmentPayloadRows = async (
   return {
     diagnosticsJson: {
       judgmentPayloadProjector: {
+        humanMaterializedRecordCount: humanRecordCount,
         humanSourceRowCount: humanRows.length,
+        llmMaterializedRecordCount: llmRecordCount,
         llmSourceRowCount: llmRows.length,
+        materializedRecordCount: records.length,
         writer: writerResult.diagnostics,
       },
       phaseTimings,
     },
-    humanRowCount: humanRecords.length,
-    llmRowCount: llmRecords.length,
+    humanRowCount: humanRecordCount,
+    llmRowCount: llmRecordCount,
   }
 }
