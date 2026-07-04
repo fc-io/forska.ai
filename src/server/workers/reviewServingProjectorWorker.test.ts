@@ -2242,7 +2242,13 @@ test('worker does not refresh summary filter options when a rebuild request is f
       ] as T[]
     }
 
-    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId')) {
+    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId') && statement.includes("'candidate', 'active'")) {
+      return [
+        {projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-summary-finalize'},
+      ] as T[]
+    }
+
+    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId') && statement.includes("'candidate'")) {
       return [
         {projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-summary-finalize'},
       ] as T[]
@@ -2329,7 +2335,13 @@ test('worker refreshes posting stats once when a posting rebuild request is fina
       return [{postingChunkCount: 2}] as T[]
     }
 
-    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId')) {
+    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId') && statement.includes("'candidate', 'active'")) {
+      return [
+        {projectId: postingChunk.projectId, reviewConfigHash: 'review-config-1', snapshotId: postingChunk.snapshotId},
+      ] as T[]
+    }
+
+    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId') && statement.includes("'candidate'")) {
       return [
         {projectId: postingChunk.projectId, reviewConfigHash: 'review-config-1', snapshotId: postingChunk.snapshotId},
       ] as T[]
@@ -2348,6 +2360,75 @@ test('worker refreshes posting stats once when a posting rebuild request is fina
   expect(joined).toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
   expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
   expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 serving')
+})
+
+test('worker finalizes active-snapshot rebuild requests without promoting active snapshots', async () => {
+  const harness = createWorkerHarness()
+  const statements: string[] = []
+  const requestId = 'rebuild-active-snapshot-finalize'
+  const activeChunkInput = {
+    ...chunkInput,
+    outputBaseGeneration: 7,
+    projectionComponent: 'display' as const,
+    projectionIdentity: 'display:project-1',
+    requestId,
+    snapshotId: null,
+  }
+  const activeChunk = {
+    ...chunkManifest,
+    ...activeChunkInput,
+    chunkId: 'chunk-active-snapshot-finalize',
+    requestId,
+  } satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return activeChunk
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return activeChunkInput
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('COUNT(*) AS pendingChunkCount')) {
+      return [{pendingChunkCount: 0}] as T[]
+    }
+
+    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId') && statement.includes("'candidate', 'active'")) {
+      return [
+        {projectId: activeChunk.projectId, reviewConfigHash: 'review-config-1', snapshotId: 'active-snapshot-1'},
+      ] as T[]
+    }
+
+    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId') && statement.includes("'candidate'")) {
+      return [] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+  const joined = statements.join('\n')
+
+  expect(result.chunk).toMatchObject({chunkId: activeChunk.chunkId, status: 'completed'})
+  expect(joined).toContain("status = 'completed'")
+  expect(joined).not.toContain('FROM app.review_serving_snapshot_manifest\n    WHERE project_id')
+  expect(joined).not.toContain('candidate snapshot manifest is missing')
 })
 
 test('worker terminally rejects requestless summary chunks before projection', async () => {
