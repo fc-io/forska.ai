@@ -325,6 +325,105 @@ test('worker does not preclaim incompatible rebuild chunks in one batch', async 
   expect(harness.runChunkInputs).toEqual([firstChunk])
 })
 
+test('worker writes compatible fresh project scope rebuild chunks through one batch writer', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const statements: string[] = []
+  const firstChunkInput = {
+    ...chunkInput,
+    chunkEndKey: 'article-050',
+    chunkStartKey: 'article-001',
+    inputDigest: 'freshReviewServingSnapshot',
+    projectionComponent: 'projectScope' as const,
+    projectionIdentity: 'projectScope:project-1',
+  }
+  const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
+  const firstChunk = {
+    ...chunkManifest,
+    ...firstChunkInput,
+    chunkId: 'chunk-project-scope-batch-1',
+    parentChunkId: 'chunk-project-scope-parent',
+    splitDepth: 1,
+  }
+  const secondChunk = {
+    ...chunkManifest,
+    ...secondChunkInput,
+    chunkId: 'chunk-project-scope-batch-2',
+    parentChunkId: 'chunk-project-scope-parent',
+    splitDepth: 1,
+  }
+  const chunkInputs = [firstChunkInput, secondChunkInput]
+  const chunksByStartKey = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunkInput.chunkStartKey, firstChunk],
+    [secondChunkInput.chunkStartKey, secondChunk],
+  ])
+  const chunksById = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunk.chunkId, firstChunk],
+    [secondChunk.chunkId, secondChunk],
+  ])
+  let nextIndex = 0
+
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+      const chunkId = [...chunksById.keys()].find((id) => {
+        return statement.includes(id)
+      })
+
+      return [chunksById.get(chunkId ?? firstChunk.chunkId) ?? firstChunk] as T[]
+    }
+
+    if (statement.includes('FROM mart.project_scope_article scope')) {
+      return [{actualChecksum: 'checksum-project-scope-batch', actualCount: 1}] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInputs[nextIndex++] ?? null
+    },
+    heartbeatChunk: async (heartbeatInput) => {
+      harness.heartbeatInputs.push(heartbeatInput)
+
+      return chunksById.get(heartbeatInput.chunkId) ?? null
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+  const joined = statements.join('\n')
+
+  expect(result.chunk).toMatchObject({chunkId: secondChunk.chunkId, status: 'completed'})
+  expect(result.chunkBatchCount).toBe(2)
+  expect(harness.claimInputs).toHaveLength(2)
+  expect(harness.runChunkInputs).toEqual([])
+  expect(joined).toContain("aggregated_scope.article_id >= 'article-001'")
+  expect(joined).toContain("aggregated_scope.article_id <= 'article-050'")
+  expect(joined).toContain("aggregated_scope.article_id >= 'article-051'")
+  expect(joined).toContain("aggregated_scope.article_id <= 'article-099'")
+  expect(joined).toContain('INSERT INTO mart.project_scope_article')
+  expect(joined).toContain('projectScopeBatchWriter')
+})
+
 test('worker writes compatible selected import rebuild chunks through one batch writer', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const statements: string[] = []
