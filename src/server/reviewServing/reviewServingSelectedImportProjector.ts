@@ -259,6 +259,134 @@ const getDeleteSelectedImportArticleRangeRowsStatement = (
   `
 }
 
+const getInsertSelectedImportArticleRangeRowsStatement = (
+  input: ProjectReviewServingSelectedImportArticleRangeInput,
+) => {
+  return `
+    INSERT INTO app.review_selected_article_import_v4 (
+      project_id,
+      project_scope_identity,
+      selected_import_snapshot_id,
+      article_id,
+      import_route_id,
+      source_record_key,
+      selected_rank_key,
+      selected_rank_numeric,
+      publication_year,
+      article_title,
+      journal_title,
+      external_id,
+      duplicate_flag,
+      conflict_flag,
+      tombstone,
+      selected_import_updated_at
+    )
+    WITH selected_import_candidates AS (
+      SELECT DISTINCT
+        scope.article_id,
+        hot.import_route_id,
+        hot.source_record_key,
+        hot.selected_rank_key,
+        hot.selected_rank_numeric,
+        hot.publication_year,
+        hot.article_title,
+        hot.journal_title,
+        hot.external_id,
+        hot.duplicate_flag,
+        hot.conflict_flag,
+        hot.tombstone,
+        CASE WHEN hot.selected_rank_numeric IS NULL THEN ${nullRankNumericSort} ELSE hot.selected_rank_numeric END AS rank_numeric_sort,
+        CASE
+          WHEN hot.selected_rank_key IS NULL THEN ${getSqlLiteral(nullRankKeySort)}
+          WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)
+          ELSE concat('1:', hot.selected_rank_key)
+        END AS rank_key_sort
+      FROM mart.project_scope_article scope
+      INNER JOIN app.project_import_route project_route
+        ON project_route.project_id = scope.project_id
+      INNER JOIN app.review_import_article_hot_field hot
+        ON hot.import_route_id = project_route.import_route_id
+        AND hot.article_id = scope.article_id
+      LEFT JOIN app.article_import_route current_link
+        ON current_link.import_route_id = hot.import_route_id
+        AND current_link.article_id = hot.article_id
+        AND current_link.source_record_key = hot.source_record_key
+      WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
+        AND (scope.in_curated_scope OR scope.in_route_scope)
+        AND NOT hot.tombstone
+        ${getArticleRangePredicateSql(input)}
+    ),
+    selected_import_winner AS (
+      SELECT
+        ranked.*
+      FROM (
+        SELECT
+          candidate.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY candidate.article_id
+            ORDER BY
+              candidate.rank_numeric_sort ASC,
+              candidate.rank_key_sort ASC,
+              candidate.import_route_id ASC,
+              candidate.source_record_key ASC,
+              candidate.article_title ASC NULLS LAST,
+              candidate.external_id ASC NULLS LAST
+          ) AS selected_import_row_rank
+        FROM selected_import_candidates candidate
+      ) ranked
+      WHERE ranked.selected_import_row_rank = 1
+    )
+    SELECT
+      ${getSqlLiteral(input.projectId)} AS project_id,
+      ${getSqlLiteral(input.projectScopeIdentity)} AS project_scope_identity,
+      ${getSqlLiteral(input.selectedImportSnapshotId)} AS selected_import_snapshot_id,
+      candidate.article_id,
+      candidate.import_route_id,
+      candidate.source_record_key,
+      candidate.selected_rank_key,
+      candidate.selected_rank_numeric,
+      candidate.publication_year,
+      candidate.article_title,
+      candidate.journal_title,
+      candidate.external_id,
+      candidate.duplicate_flag,
+      candidate.conflict_flag,
+      candidate.tombstone,
+      current_timestamp AS selected_import_updated_at
+    FROM selected_import_winner candidate
+    ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO UPDATE SET
+      import_route_id = excluded.import_route_id,
+      source_record_key = excluded.source_record_key,
+      selected_rank_key = excluded.selected_rank_key,
+      selected_rank_numeric = excluded.selected_rank_numeric,
+      publication_year = excluded.publication_year,
+      article_title = excluded.article_title,
+      journal_title = excluded.journal_title,
+      external_id = excluded.external_id,
+      duplicate_flag = excluded.duplicate_flag,
+      conflict_flag = excluded.conflict_flag,
+      tombstone = excluded.tombstone,
+      selected_import_updated_at = excluded.selected_import_updated_at
+  `
+}
+
+const getSelectedImportArticleRangeInsertedRowCount = async (
+  input: ProjectReviewServingSelectedImportArticleRangeInput,
+  database: ReviewServingSelectedImportProjectorDatabase,
+) => {
+  const [row] = await database.queryJson<{rowCount: number}>(`
+    SELECT CAST(COUNT(*) AS INTEGER) AS rowCount
+    FROM app.review_selected_article_import_v4 selected
+    WHERE selected.project_id = ${getSqlLiteral(input.projectId)}
+      AND selected.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND selected.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
+      AND selected.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
+  `)
+
+  return row?.rowCount ?? 0
+}
+
 const getSelectedImportCursorFromRows = (
   rows: readonly SelectedImportProjectionRow[],
   existingCursor: SelectedImportCursor | null,
@@ -373,29 +501,18 @@ export const projectReviewServingSelectedImportArticleRange = async (
   params: ProjectReviewServingSelectedImportArticleRangeInput,
   database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportProjectorDatabase,
 ) => {
-  const rows = await getSelectedImportProjectionRows(
-    database,
-    {
-      chunkEndArticleId: params.chunkEndArticleId,
-      chunkStartArticleId: params.chunkStartArticleId,
-      limit: Number.MAX_SAFE_INTEGER,
-      projectId: params.projectId,
-      projectScopeIdentity: params.projectScopeIdentity,
-      selectedImportSnapshotId: params.selectedImportSnapshotId,
-      sourceDeltaHighWater: params.sourceDeltaHighWater,
-    },
-    null,
-  )
-
   await writeReviewServingProjectorComponent(
     {
       component: 'selectedImport',
       projectionManifests: params.writeProjectionState === false ? [] : [getSelectedImportProjectionManifest(params)],
-      records: rows.map((row) => {
-        return getSelectedImportProjectorRecord(params, row)
-      }),
+      records: [],
       statements:
-        params.replaceExistingRows === false ? [] : [getDeleteSelectedImportArticleRangeRowsStatement(params)],
+        params.replaceExistingRows === false
+          ? [getInsertSelectedImportArticleRangeRowsStatement(params)]
+          : [
+              getDeleteSelectedImportArticleRangeRowsStatement(params),
+              getInsertSelectedImportArticleRangeRowsStatement(params),
+            ],
       selectedImportSnapshotCursor:
         params.writeProjectionState === false
           ? undefined
@@ -410,10 +527,7 @@ export const projectReviewServingSelectedImportArticleRange = async (
     },
     database,
   )
+  const insertedRowCount = await getSelectedImportArticleRangeInsertedRowCount(params, database)
 
-  return {
-    insertedRowCount: rows.length,
-    selectedImportSnapshotId: params.selectedImportSnapshotId,
-    status: 'completed' as const,
-  }
+  return {insertedRowCount, selectedImportSnapshotId: params.selectedImportSnapshotId, status: 'completed' as const}
 }
