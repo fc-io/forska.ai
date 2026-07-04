@@ -3,6 +3,7 @@ import {expect, test} from 'bun:test'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   projectReviewServingSummaries,
+  reduceReviewServingSummaryRebuildPartialsForRequestSnapshots,
   type ReviewServingSummaryProjectorDatabase,
 } from './reviewServingSummaryProjector.ts'
 
@@ -359,6 +360,53 @@ test('chunked full summary rebuild writes request partials without contribution 
   expect(joined).not.toContain('INSERT INTO mart.review_article_summary_contribution_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_filter_facet_serving_v4')
+})
+
+test('summary rebuild request finalization reduces partials in bounded accumulator batches', async () => {
+  const statements: string[] = []
+  const chunkBatches = [[{chunkId: 'chunk-001'}, {chunkId: 'chunk-002'}], [{chunkId: 'chunk-003'}], []]
+  const database: ReviewServingSummaryProjectorDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      return (chunkBatches.shift() ?? []) as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async (operation) => {
+      statements.push('BEGIN')
+
+      return operation(database)
+    },
+  }
+
+  await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+    {
+      requestId: 'rebuild-summary-1',
+      snapshots: [{projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'}],
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+  const batchSelects = statements.filter((statement) => {
+    return statement.includes('GROUP BY chunk_id')
+  })
+  const accumulatorWrites = statements.filter((statement) => {
+    return statement.includes("'__summary_rebuild_partial_accumulator__' AS chunk_id")
+  })
+
+  expect(batchSelects).toHaveLength(3)
+  expect(accumulatorWrites).toHaveLength(2)
+  expect(batchSelects[0]).toContain('LIMIT 256')
+  expect(batchSelects[0]).toContain("chunk_id <> '__summary_rebuild_partial_accumulator__'")
+  expect(joined).toContain("chunk_id IN ('chunk-001', 'chunk-002')")
+  expect(joined).toContain("chunk_id IN ('chunk-003')")
+  expect(joined).toContain(
+    'ON CONFLICT(request_id, chunk_id, project_id, review_config_hash, snapshot_id, serving_key) DO UPDATE SET',
+  )
+  expect(joined).toContain("AND chunk_id = '__summary_rebuild_partial_accumulator__'")
+  expect(joined).toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
 })
 
 test('unchunked full summary rebuild aggregates shared facet serving keys', async () => {
