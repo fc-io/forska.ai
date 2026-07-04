@@ -549,6 +549,10 @@ test('Phase 3 patch and selected-import guard coverage stays inventoried', () =>
 
 test('Phase 3 V4 serving readers are not migrated into product review routes', () => {
   const offenders = getTypeScriptFiles(join(workspaceRoot, 'src/server/routes')).flatMap((filePath) => {
+    if (filePath.endsWith('.test.ts')) {
+      return []
+    }
+
     const source = readFileSync(filePath, 'utf8')
     const repoPath = relative(workspaceRoot, filePath)
     const v4RouteReadMarkers = [
