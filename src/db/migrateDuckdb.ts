@@ -2,6 +2,7 @@ import {readdirSync, readFileSync} from 'fs'
 import {resolve} from 'path'
 
 import {getAppDatabaseService} from '../server/services/appDatabaseService.ts'
+import {parseDuckdbMemoryLimitToMiB} from '../server/utils/duckdbMemoryLimit.ts'
 import {withDuckdbMaintenanceAccess} from '../server/utils/duckdbScriptAccess.ts'
 import {getMaintenanceDuckdbWorkloadContext} from '../server/utils/duckdbService.ts'
 import {getEnv} from '../server/utils/env.ts'
@@ -146,6 +147,12 @@ const applyDuckdbMigrationFiles = async (fileNames: string[], appliedNames: Set<
   return applyDuckdbMigrationFiles(fileNames.slice(1), appliedNames)
 }
 
+const shouldCheckpointAfterDuckdbMigration = (duckdbMemoryLimit: string) => {
+  const memoryLimitMiB = parseDuckdbMemoryLimitToMiB(duckdbMemoryLimit)
+
+  return memoryLimitMiB === null || memoryLimitMiB > 6400
+}
+
 export const migrateDuckdb = async (): Promise<void> => {
   const migrationFiles = getDuckdbMigrationFiles(migrationsFolder)
   const env = getEnv()
@@ -156,7 +163,7 @@ export const migrateDuckdb = async (): Promise<void> => {
   await ensureDuckdbMigrationsTable()
   const appliedMigrationCount = await applyDuckdbMigrationFiles(migrationFiles, await getAppliedDuckdbMigrationNames())
 
-  if (appliedMigrationCount > 0) {
+  if (appliedMigrationCount > 0 && shouldCheckpointAfterDuckdbMigration(env.DUCKDB_MEMORY_LIMIT)) {
     await getAppDatabaseService().maintenance('checkpoint', workloadContext)
   }
 

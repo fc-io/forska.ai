@@ -328,6 +328,39 @@ test('unchunked full summary rebuild writes final serving rows with contribution
   expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
 })
 
+test('chunked full summary rebuild writes request partials without contribution or final serving rows', async () => {
+  const {database, statements} = createSummaryDatabase({sourceRows: [sourceCountRow(), sourceFacetRow()]})
+
+  const result = await projectReviewServingSummaries(
+    {
+      ...projectInput([]),
+      chunkEndArticleId: 'article-099',
+      chunkId: 'chunk-summary-1',
+      chunkStartArticleId: 'article-001',
+      requestId: 'rebuild-summary-1',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result.contributionRowCount).toBe(0)
+  expect(result.diagnosticsJson.summaryProjector).toMatchObject({
+    directFullSnapshot: true,
+    partialFullSnapshot: true,
+    partialRowCount: 2,
+  })
+  expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toMatchObject({
+    'mart.review_article_summary_rebuild_partial_v4': 2,
+  })
+  expect(joined).toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_summary_rebuild_partial_v4')
+  expect(joined).toContain("article_id >= 'article-001'")
+  expect(joined).toContain("article_id <= 'article-099'")
+  expect(joined).not.toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+  expect(joined).not.toContain('INSERT INTO mart.review_article_count_serving_v4')
+  expect(joined).not.toContain('INSERT INTO mart.review_filter_facet_serving_v4')
+})
+
 test('unchunked full summary rebuild aggregates shared facet serving keys', async () => {
   const {database} = createSummaryDatabase({
     sourceRows: [
