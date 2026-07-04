@@ -622,16 +622,6 @@ const getUuidArticleRangeRebuildChunkSplitRanges = (
   return ranges.length < 2 ? null : ranges
 }
 
-const shouldPresplitArticleRangeRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
-  const estimatedRows = getArticleRangeRebuildChunkEstimatedRows(chunk)
-
-  return (
-    splittableArticleRangeRebuildComponents.has(chunk.projectionComponent)
-    && estimatedRows !== null
-    && estimatedRows > getArticleRangeRebuildChunkPresplitRowLimit(chunk)
-  )
-}
-
 const getArticleRangeRebuildChunkSplitRanges = async (
   input: {chunk: ReviewServingRebuildChunkManifest; projectId: string},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -1755,12 +1745,7 @@ const runSummaryRebuildChunk = async (
 }
 
 const splitClaimedArticleRangeRebuildChunk = async (
-  input: {
-    chunk: ReviewServingRebuildChunkManifest
-    leaseOwner: string
-    projectId: string
-    splitReason: 'duckdb_oom' | 'input_row_budget'
-  },
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string; projectId: string; splitReason: 'duckdb_oom'},
   database: ReviewServingChunkManifestRepositoryDatabase,
 ) => {
   if (!canSplitRebuildChunk(input.chunk)) {
@@ -1782,7 +1767,7 @@ const splitClaimedArticleRangeRebuildChunk = async (
       SET
         status = 'completed',
         checksum = ${getSqlLiteral(`split:${input.chunk.chunkId}`)},
-        oom_category = ${getSqlLiteral(input.splitReason === 'duckdb_oom' ? 'duckdb_oom_split' : 'input_row_budget_split')},
+        oom_category = 'duckdb_oom_split',
         over_budget_reason = NULL,
         last_error = NULL,
         lease_owner = NULL,
@@ -1871,17 +1856,6 @@ const runJudgmentInputContentRebuildChunk = async (
   const payloadSnapshots = snapshots.filter((snapshot) => {
     return getSnapshotReviewSettings(snapshot, currentSettings) !== null
   })
-
-  if (shouldPresplitArticleRangeRebuildChunk(input.chunk)) {
-    const split = await splitClaimedArticleRangeRebuildChunk(
-      {chunk: input.chunk, leaseOwner: input.leaseOwner, projectId, splitReason: 'input_row_budget'},
-      database,
-    )
-
-    if (split) {
-      return {status: 'completed' as const}
-    }
-  }
 
   try {
     return await runValidatedRebuildChunkOutput(
@@ -2495,22 +2469,6 @@ export const runReviewServingProjectorWorkerClaimedRebuildChunk = async (
 ) => {
   if (isRequestlessSummaryRangeRebuildChunk(input.chunk)) {
     throw new Error(requestlessSummaryRangeRebuildChunkError)
-  }
-
-  if (shouldPresplitArticleRangeRebuildChunk(input.chunk)) {
-    const split = await splitClaimedArticleRangeRebuildChunk(
-      {
-        chunk: input.chunk,
-        leaseOwner: input.leaseOwner,
-        projectId: requireRebuildChunkProjectId(input.chunk),
-        splitReason: 'input_row_budget',
-      },
-      database,
-    )
-
-    if (split) {
-      return {status: 'completed' as const}
-    }
   }
 
   try {
