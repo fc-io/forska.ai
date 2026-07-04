@@ -1405,7 +1405,7 @@ test('runtime-presplit rebuild chunks do not reuse inclusive boundary starts', (
   const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
 
   expect(source).toContain('chunkStartKey: formatUuidArticleId(index === 0 ? start : previousEnd + 1n)')
-  expect(source).toContain('scoped_start_key AS chunkStartKey')
+  expect(source).toContain("previous_scoped_end_key || ' '")
   expect(source).not.toContain('COALESCE(previous_scoped_end_key')
 })
 
@@ -3012,7 +3012,7 @@ test('article range presplit covers gaps between sparse scoped article buckets',
       if (statement.includes('NTILE(2)') && statement.includes('FROM mart.project_scope_article scope')) {
         return [
           {articleCount: 1, chunkEndKey: 'article-100', chunkStartKey: 'article-001'},
-          {articleCount: 1, chunkEndKey: 'article-999', chunkStartKey: 'article-100'},
+          {articleCount: 1, chunkEndKey: 'article-999', chunkStartKey: 'article-100 '},
         ] as T[]
       }
 
@@ -3042,11 +3042,12 @@ test('article range presplit covers gaps between sparse scoped article buckets',
   expect(result).toEqual({status: 'completed'})
   expect(joined).toContain('LAG(scoped_end_key)')
   expect(joined).toContain('LEAD(scoped_start_key)')
+  expect(joined).toContain("previous_scoped_end_key || ' '")
   expect(joined).toContain('ELSE scoped_end_key')
   expect(childInserts).toHaveLength(2)
   expect(childInserts[0]).toContain("'article-001'")
   expect(childInserts[0]).toContain("'article-100'")
-  expect(childInserts[1]).toContain("'article-100'")
+  expect(childInserts[1]).toContain("'article-100 '")
   expect(childInserts[1]).toContain("'article-999'")
 })
 

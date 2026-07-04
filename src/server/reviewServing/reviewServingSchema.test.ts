@@ -18,6 +18,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0107_reviewServingRebuildRequest.sql',
   '../../db/duckdbMigrations/0109_reviewServingJudgmentDetailPayloadKindForwardMigration.sql',
   '../../db/duckdbMigrations/0112_reviewServingSummaryRebuildPartial.sql',
+  '../../db/duckdbMigrations/0113_reviewServingSummaryContributionRebuildPartial.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -93,6 +94,7 @@ const reviewServingPhase1Tables = [
   'mart.review_article_serving_payload_v4',
   'mart.review_article_judgment_detail_serving_v4',
   'mart.review_article_summary_contribution_v4',
+  'mart.review_article_summary_contribution_rebuild_partial_v4',
   'mart.review_article_summary_rebuild_partial_v4',
   'mart.review_article_count_serving_v4',
   'mart.review_filter_facet_serving_v4',

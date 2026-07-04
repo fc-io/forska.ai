@@ -4385,9 +4385,6 @@ const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<D
       return mkdir(duckdbSnapshotDirectory, {recursive: true})
     })
     yield* Effect.tryPromise(() => {
-      return runDuckdbStatementDirect('CHECKPOINT')
-    })
-    yield* Effect.tryPromise(() => {
       return copyFile(runtimeConfig.databasePath, snapshotPath)
     })
 

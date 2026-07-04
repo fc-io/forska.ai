@@ -673,7 +673,10 @@ const getArticleRangeRebuildChunkSplitRanges = async (
     )
     SELECT
       article_count AS articleCount,
-      scoped_start_key AS chunkStartKey,
+      CASE
+        WHEN previous_scoped_end_key IS NULL THEN ${getSqlLiteral(input.chunk.chunkStartKey)}
+        ELSE previous_scoped_end_key || ' '
+      END AS chunkStartKey,
       CASE
         WHEN next_scoped_start_key IS NULL THEN ${getSqlLiteral(input.chunk.chunkEndKey)}
         ELSE scoped_end_key

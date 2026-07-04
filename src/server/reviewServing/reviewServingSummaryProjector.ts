@@ -829,9 +829,44 @@ const getDirectFullSummaryPartialRecords = (input: {
   })
 }
 
-const getDirectFullSummaryPartialDeleteStatements = (input: ProjectReviewServingSummariesInput) => {
-  const articleRangePredicate = getArticleRangePredicate({alias: 'contribution', ...input})
+const getDirectFullSummaryContributionPartialRecord = (input: {
+  chunkId: string
+  record: ReviewServingProjectorRecord
+  requestId: string
+}) => {
+  return {
+    keyColumns: [
+      'request_id',
+      'chunk_id',
+      'project_id',
+      'review_config_hash',
+      'snapshot_id',
+      'article_id',
+      'component_kind',
+      'summary_definition_version',
+      'contribution_key',
+    ],
+    table: 'mart.review_article_summary_contribution_rebuild_partial_v4',
+    values: {
+      ...input.record.values,
+      chunk_id: input.chunkId,
+      contribution_updated_at: new Date(),
+      request_id: input.requestId,
+    },
+  } satisfies ReviewServingProjectorRecord
+}
 
+const getDirectFullSummaryContributionPartialRecords = (input: {
+  chunkId: string
+  contributionRecords: readonly ReviewServingProjectorRecord[]
+  requestId: string
+}) => {
+  return input.contributionRecords.map((record) => {
+    return getDirectFullSummaryContributionPartialRecord({...input, record})
+  })
+}
+
+const getDirectFullSummaryPartialDeleteStatements = (input: ProjectReviewServingSummariesInput) => {
   return [
     getDeleteReviewServingProjectorRowsStatement({
       predicates: {
@@ -843,14 +878,16 @@ const getDirectFullSummaryPartialDeleteStatements = (input: ProjectReviewServing
       },
       table: 'mart.review_article_summary_rebuild_partial_v4',
     }),
-    `
-      DELETE FROM mart.review_article_summary_contribution_v4 contribution
-      WHERE contribution.project_id = ${getSqlLiteral(input.projectId)}
-        AND contribution.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND contribution.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-        AND contribution.component_kind = 'count'
-        ${articleRangePredicate}
-    `,
+    getDeleteReviewServingProjectorRowsStatement({
+      predicates: {
+        chunk_id: getRequiredSummaryRebuildChunkId(input),
+        project_id: input.projectId,
+        request_id: getRequiredSummaryRebuildRequestId(input),
+        review_config_hash: input.reviewConfigHash,
+        snapshot_id: input.snapshotId,
+      },
+      table: 'mart.review_article_summary_contribution_rebuild_partial_v4',
+    }),
   ]
 }
 
@@ -1044,6 +1081,41 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
     `)
     await tx.run(`
+      DELETE FROM mart.review_article_summary_contribution_v4
+      WHERE project_id = ${getSqlLiteral(input.projectId)}
+        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        AND component_kind = 'count'
+    `)
+    await tx.run(`
+      INSERT INTO mart.review_article_summary_contribution_v4 (
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        article_id,
+        component_kind,
+        summary_definition_version,
+        contribution_key,
+        contribution_value,
+        contribution_updated_at
+      )
+      SELECT
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        article_id,
+        component_kind,
+        summary_definition_version,
+        contribution_key,
+        contribution_value,
+        current_timestamp AS contribution_updated_at
+      FROM mart.review_article_summary_contribution_rebuild_partial_v4
+      WHERE request_id = ${getSqlLiteral(input.requestId)}
+        AND project_id = ${getSqlLiteral(input.projectId)}
+        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+    `)
+    await tx.run(`
       INSERT INTO mart.review_article_count_serving_v4 (
         project_id,
         review_config_hash,
@@ -1118,6 +1190,13 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
     await tx.run(`
       DELETE FROM mart.review_article_summary_rebuild_partial_v4
       WHERE ${scopePredicate}
+    `)
+    await tx.run(`
+      DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4
+      WHERE request_id = ${getSqlLiteral(input.requestId)}
+        AND project_id = ${getSqlLiteral(input.projectId)}
+        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
     `)
   })
 }
@@ -1261,7 +1340,14 @@ const projectPartialFullReviewServingSummaries = async (input: {
     return writeReviewServingProjectorComponent(
       {
         component: 'summary',
-        records: [...partialRecords, ...contributionRecords],
+        records: [
+          ...partialRecords,
+          ...getDirectFullSummaryContributionPartialRecords({
+            chunkId: getRequiredSummaryRebuildChunkId(input.projectorInput),
+            contributionRecords,
+            requestId: getRequiredSummaryRebuildRequestId(input.projectorInput),
+          }),
+        ],
         statements: getDirectFullSummaryPartialDeleteStatements(input.projectorInput),
       },
       input.database,

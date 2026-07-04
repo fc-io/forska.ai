@@ -15,16 +15,15 @@ const removePathIfExists = (path: string) => {
   rmSync(path, {force: true, recursive: true})
 }
 
-test('duckdb snapshots checkpoint before copying a standalone database file', () => {
+test('duckdb snapshots copy database without forcing a checkpoint', () => {
   const source = readFileSync('src/server/utils/duckdbService.ts', 'utf8')
   const copySnapshotSource = source.slice(
     source.indexOf('const copyDuckdbSnapshot'),
     source.indexOf('export const createDuckdbSnapshot'),
   )
 
-  expect(copySnapshotSource).toContain("runDuckdbStatementDirect('CHECKPOINT')")
+  expect(copySnapshotSource).not.toContain("runDuckdbStatementDirect('CHECKPOINT')")
   expect(copySnapshotSource).toContain('copyFile(runtimeConfig.databasePath, snapshotPath)')
-  expect(copySnapshotSource).not.toContain('snapshotWalPath')
 })
 
 test('duckdb service reuses the same embedded runtime across module reloads', async () => {

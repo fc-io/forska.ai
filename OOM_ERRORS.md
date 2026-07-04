@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-04 - Snapshot Checkpoint Regression
+
+- Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` when creating DuckDB Studio/current-DB snapshots under the low-memory maintenance owner.
+- Context: `createDuckdbSnapshot` copied snapshot files after forcing `CHECKPOINT` despite the append barrier and documented checkpoint-free snapshot path.
+- Cause: A checkpoint call was reintroduced in `copyDuckdbSnapshot`, making read-only snapshot creation allocate checkpoint memory in constrained runtimes.
+- Fix: Snapshot creation now copies the database file under the append barrier without forcing a checkpoint.
+- Verification: `bun test src/server/utils/duckdbServiceReload.test.ts src/server/utils/duckdbServiceShutdown.test.ts src/server/utils/duckdbServiceMemoryLimit.test.ts src/server/utils/duckdbScriptAccess.test.ts`; live current-DB progress gate.
+
 ## 2026-07-04 - Summary Partial Finalization Reduction
 
 - Error: Live primary `dev:server` maintenance owner reached about 14.6GB RSS, then exited with Bun `panic: A C++ exception occurred` while the review-serving current-DB progress gate was advancing project `d03fe24a-cfcf-41ed-b09f-7b554a393d80`.
