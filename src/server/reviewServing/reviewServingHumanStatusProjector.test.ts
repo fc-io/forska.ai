@@ -352,6 +352,21 @@ test('human rebuild chunks replace scoped patch rows before bounded inserts', as
   )
 })
 
+test('human direct full rebuild chunks update serving without patch rows', async () => {
+  const {database, statements} = createHumanStatusDatabase({projectRows: [humanStatusRow({articleId: 'article-3'})]})
+
+  const result = await projectReviewServingHumanStatusPatches(
+    {...projectInput([]), chunkEndArticleId: 'article-3', chunkStartArticleId: 'article-3', emitPatchRows: false},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
+  expect(joined).not.toContain('DELETE FROM mart.review_human_status_patch_v4')
+  expect(joined).not.toContain('INSERT INTO mart.review_human_status_patch_v4')
+  expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
+})
+
 test('human rebuild chunks use one range delete and bounded insert batches', async () => {
   const {database, statements} = createHumanStatusDatabase({
     projectRows: Array.from({length: 251}, (_, index) => {

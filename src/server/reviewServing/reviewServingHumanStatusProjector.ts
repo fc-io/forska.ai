@@ -28,6 +28,7 @@ export type ProjectReviewServingHumanStatusInput = {
   chunkStartArticleId?: string | null
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
+  emitPatchRows?: boolean
   listModeKeys: readonly string[]
   projectId: string
   projectionIdentity: string
@@ -722,6 +723,7 @@ export const projectReviewServingHumanStatusPatches = async (
     getProjectScopedRows(input, database, promptConfigRows),
   ])
   const patchWatermark = getPatchWatermark(input.claims)
+  const emitPatchRows = input.claims.length > 0 || (input.emitPatchRows ?? true)
   const rows = [...judgmentRows, ...promptRows, ...articleRows, ...projectRows]
   const recordRows = rows.flatMap((row) => {
     const promptConfigHash = getPromptConfigHash({...row, promptId: getPromptOrSummaryKey(row.promptId)})
@@ -755,9 +757,9 @@ export const projectReviewServingHumanStatusPatches = async (
       acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
       component: 'humanStatus',
       projectionManifests: input.claims.length === 0 ? [] : [getHumanStatusPatchManifest(input)],
-      records,
+      records: emitPatchRows ? records : [],
       statements: [
-        input.claims.length === 0
+        input.claims.length === 0 && emitPatchRows
           ? getDeleteRebuiltHumanStatusPatchRowsStatement({
               baseGeneration: input.baseGeneration,
               chunkEndArticleId: input.chunkEndArticleId,
@@ -792,5 +794,5 @@ export const projectReviewServingHumanStatusPatches = async (
     database,
   )
 
-  return {patchRowCount: records.length, patchWatermark}
+  return {patchRowCount: emitPatchRows ? records.length : 0, patchWatermark}
 }

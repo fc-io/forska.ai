@@ -290,6 +290,21 @@ test('LLM full rebuild chunks fan out only over current enabled prompts', async 
   expect(applyStatement).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
 })
 
+test('LLM direct full rebuild chunks update serving without patch rows', async () => {
+  const {database, statements} = createLlmStatusDatabase({projectRows: [llmStatusRow({articleId: 'article-3'})]})
+
+  const result = await projectReviewServingLlmStatusPatches(
+    {...projectInput([]), chunkEndArticleId: 'article-3', chunkStartArticleId: 'article-3', emitPatchRows: false},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
+  expect(joined).not.toContain('DELETE FROM mart.review_llm_status_patch_v4')
+  expect(joined).not.toContain('INSERT INTO mart.review_llm_status_patch_v4')
+  expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
+})
+
 test('LLM full rebuild chunks reset serving status when the project has no enabled prompts', async () => {
   const {database, statements} = createLlmStatusDatabase({promptConfigRows: [], projectRows: []})
 
