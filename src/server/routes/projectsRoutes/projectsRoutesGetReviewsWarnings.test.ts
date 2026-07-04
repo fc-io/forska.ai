@@ -810,6 +810,8 @@ beforeAll(async () => {
 
   const database = getAppDatabaseService()
 
+  await database.maintenance('checkpoint')
+
   closeDatabase = () => {
     return database.close()
   }
@@ -912,16 +914,6 @@ test('reviews warnings keep invalid bootstrap candidates refreshing while rebuil
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
   expect(body.data.indexing.progressState).toBe('queued')
   expect(body.data.indexing.status).toBe('refreshing')
-})
-
-afterEach(() => {
-  resetProgressSnapshotForTests?.()
-})
-
-afterAll(async () => {
-  setAutoDrainEnabledForTests?.(true)
-  await closeDatabase?.()
-  tempRuntimeRoot.cleanup()
 })
 
 test('reviews warnings report ready when serving rows are fresh', async () => {
@@ -2996,4 +2988,14 @@ test('reviews warnings route reuses reader diagnostics instead of duplicate curr
   expect(source).toContain('warningSnapshot.diagnostics.diagnostics')
   expect(source).not.toContain('const [servingDiagnostics, warningSnapshot')
   expect(source).not.toContain('Promise.all([\n      readReviewServingRows')
+})
+
+afterEach(() => {
+  resetProgressSnapshotForTests?.()
+})
+
+afterAll(async () => {
+  setAutoDrainEnabledForTests?.(true)
+  await closeDatabase?.()
+  tempRuntimeRoot.cleanup()
 })
