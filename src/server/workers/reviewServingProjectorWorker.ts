@@ -1303,32 +1303,35 @@ const runDisplayRebuildChunk = async (
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
 
-        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(async (previous, snapshot) => {
-          const diagnostics = await previous
-          const result = await projectReviewServingDisplayBaseRows(
-            {
-              baseGeneration: input.chunk.outputBaseGeneration,
-              chunkEndArticleId: input.chunk.chunkEndKey,
-              chunkStartArticleId: input.chunk.chunkStartKey,
-              displayIdentity: input.chunk.projectionIdentity,
-              humanStatusIdentity: requireSnapshotComponentIdentity(snapshot, 'humanStatus'),
-              listModeKeys: reviewServingListModes,
-              llmStatusIdentity: requireSnapshotComponentIdentity(snapshot, 'llmStatus'),
-              payloadIdentity: requireSnapshotComponentIdentity(snapshot, 'payload'),
-              postingIdentity: requireSnapshotComponentIdentity(snapshot, 'posting'),
-              projectId,
-              projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
-              reviewConfigHash: requireReviewConfigHash(snapshot),
-              selectedImportIdentity: requireSnapshotComponentIdentity(snapshot, 'selectedImport'),
-              selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-              snapshotId: snapshot.snapshotId,
-              summaryIdentity: requireSnapshotComponentIdentity(snapshot, 'summary'),
-            },
-            chunkDatabase,
-          )
+        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(
+          async (previous, snapshot) => {
+            const diagnostics = await previous
+            const result = await projectReviewServingDisplayBaseRows(
+              {
+                baseGeneration: input.chunk.outputBaseGeneration,
+                chunkEndArticleId: input.chunk.chunkEndKey,
+                chunkStartArticleId: input.chunk.chunkStartKey,
+                displayIdentity: input.chunk.projectionIdentity,
+                humanStatusIdentity: requireSnapshotComponentIdentity(snapshot, 'humanStatus'),
+                listModeKeys: reviewServingListModes,
+                llmStatusIdentity: requireSnapshotComponentIdentity(snapshot, 'llmStatus'),
+                payloadIdentity: requireSnapshotComponentIdentity(snapshot, 'payload'),
+                postingIdentity: requireSnapshotComponentIdentity(snapshot, 'posting'),
+                projectId,
+                projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+                reviewConfigHash: requireReviewConfigHash(snapshot),
+                selectedImportIdentity: requireSnapshotComponentIdentity(snapshot, 'selectedImport'),
+                selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+                snapshotId: snapshot.snapshotId,
+                summaryIdentity: requireSnapshotComponentIdentity(snapshot, 'summary'),
+              },
+              chunkDatabase,
+            )
 
-          return [...diagnostics, {snapshotId: snapshot.snapshotId, ...result.diagnosticsJson}]
-        }, Promise.resolve([] as unknown[]))
+            return [...diagnostics, {snapshotId: snapshot.snapshotId, ...result.diagnosticsJson}]
+          },
+          Promise.resolve([] as unknown[]),
+        )
 
         return {diagnosticsJson: {displayProjectorSnapshots: snapshotDiagnostics}}
       },
@@ -1371,24 +1374,27 @@ const runPayloadRebuildChunk = async (
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
 
-        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(async (previous, snapshot) => {
-          const diagnostics = await previous
-          const result = await projectReviewServingPayloadRows(
-            {
-              baseGeneration: input.chunk.outputBaseGeneration,
-              chunkEndArticleId: input.chunk.chunkEndKey,
-              chunkStartArticleId: input.chunk.chunkStartKey,
-              displayIdentity: requireSnapshotComponentIdentity(snapshot, 'display'),
-              payloadIdentity: input.chunk.projectionIdentity,
-              projectId,
-              selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-              snapshotId: snapshot.snapshotId,
-            },
-            chunkDatabase,
-          )
+        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(
+          async (previous, snapshot) => {
+            const diagnostics = await previous
+            const result = await projectReviewServingPayloadRows(
+              {
+                baseGeneration: input.chunk.outputBaseGeneration,
+                chunkEndArticleId: input.chunk.chunkEndKey,
+                chunkStartArticleId: input.chunk.chunkStartKey,
+                displayIdentity: requireSnapshotComponentIdentity(snapshot, 'display'),
+                payloadIdentity: input.chunk.projectionIdentity,
+                projectId,
+                selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+                snapshotId: snapshot.snapshotId,
+              },
+              chunkDatabase,
+            )
 
-          return [...diagnostics, {snapshotId: snapshot.snapshotId, ...result.diagnosticsJson}]
-        }, Promise.resolve([] as unknown[]))
+            return [...diagnostics, {snapshotId: snapshot.snapshotId, ...result.diagnosticsJson}]
+          },
+          Promise.resolve([] as unknown[]),
+        )
 
         return {diagnosticsJson: {payloadProjectorSnapshots: snapshotDiagnostics}}
       },

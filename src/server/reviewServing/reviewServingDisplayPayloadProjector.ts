@@ -831,7 +831,10 @@ export const projectReviewServingDisplayBaseRows = async (
     )
   })
 
-  return {diagnosticsJson: {displayProjector: {sourceRowCount: rows.length, writer: writerResult.diagnostics}, phaseTimings}, rowCount}
+  return {
+    diagnosticsJson: {displayProjector: {sourceRowCount: rows.length, writer: writerResult.diagnostics}, phaseTimings},
+    rowCount,
+  }
 }
 
 export const projectReviewServingDisplayPatches = async (

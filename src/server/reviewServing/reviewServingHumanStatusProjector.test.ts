@@ -156,13 +156,11 @@ test('human prompt answer deltas write component-narrow status patches', async (
   const joined = statements.join('\n')
 
   expect(result).toMatchObject({
-    diagnosticsJson: {
-      humanStatusProjector: {judgmentDeltaRowCount: 1, promptConfigRowCount: 1},
-      phaseTimings: {recordTransformMs: expect.any(Number)},
-    },
+    diagnosticsJson: {humanStatusProjector: {judgmentDeltaRowCount: 1, promptConfigRowCount: 1}},
     patchRowCount: 1,
     patchWatermark: 14,
   })
+  expect(result.diagnosticsJson.phaseTimings.recordTransformMs).toBeGreaterThanOrEqual(0)
   expect(selectStatement).toContain('LEFT JOIN app."judgment_human" judgment_human')
   expect(selectStatement).toContain('LEFT JOIN app."judgment_human_summary" judgment_human_summary')
   expect(selectStatement).toContain("VALUES ('article-1')")

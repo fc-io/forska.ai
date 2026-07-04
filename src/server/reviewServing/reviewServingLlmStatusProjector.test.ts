@@ -138,13 +138,11 @@ test('LLM judgment deltas write component-narrow status patches from persisted b
   })
 
   expect(result).toMatchObject({
-    diagnosticsJson: {
-      llmStatusProjector: {judgmentDeltaRowCount: 1, promptConfigRowCount: 1},
-      phaseTimings: {recordTransformMs: expect.any(Number)},
-    },
+    diagnosticsJson: {llmStatusProjector: {judgmentDeltaRowCount: 1, promptConfigRowCount: 1}},
     patchRowCount: 1,
     patchWatermark: 14,
   })
+  expect(result.diagnosticsJson.phaseTimings.recordTransformMs).toBeGreaterThanOrEqual(0)
   expect(selectStatement).toContain('delta.model_id AS modelId')
   expect(selectStatement).toContain('model.provider_connection_id AS modelProviderConnectionId')
   expect(selectStatement).toContain('provider_connection.base_url AS modelProviderBaseUrl')

@@ -122,10 +122,11 @@ test('display routine updates write component-narrow patches for only claimed ar
   })
 
   expect(result).toMatchObject({
-    diagnosticsJson: {displayProjector: {sourceRowCount: 1}, phaseTimings: {recordTransformMs: expect.any(Number)}},
+    diagnosticsJson: {displayProjector: {sourceRowCount: 1}},
     patchRowCount: 1,
     patchWatermark: 6,
   })
+  expect(result.diagnosticsJson.phaseTimings.recordTransformMs).toBeGreaterThanOrEqual(0)
   expect(selectStatement).toContain("VALUES ('article-1')")
   expect(selectStatement).toContain(
     'COALESCE(article.article_created_at, scope.article_created_at, current_timestamp) AS sortKey',
@@ -208,10 +209,11 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
   const joined = statements.join('\n')
 
   expect(result).toMatchObject({
-    diagnosticsJson: {payloadProjector: {sourceRowCount: 1}, phaseTimings: {recordTransformMs: expect.any(Number)}},
+    diagnosticsJson: {payloadProjector: {sourceRowCount: 1}},
     patchWatermark: 0,
     payloadRowCount: 1,
   })
+  expect(result.diagnosticsJson.phaseTimings.recordTransformMs).toBeGreaterThanOrEqual(0)
   expect(selectStatement).toContain('article.article_created_at AS articleCreatedAt')
   expect(selectStatement).toContain('json_merge_patch')
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
@@ -396,10 +398,8 @@ test('display base rows flow through writer with display fields and selected imp
     return statement.includes('DELETE FROM mart.review_article_serving_v4')
   })
 
-  expect(result).toMatchObject({
-    diagnosticsJson: {displayProjector: {sourceRowCount: 1}, phaseTimings: {sourceQueryMs: expect.any(Number)}},
-    rowCount: 2,
-  })
+  expect(result).toMatchObject({diagnosticsJson: {displayProjector: {sourceRowCount: 1}}, rowCount: 2})
+  expect(result.diagnosticsJson.phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
   expect(selectStatement).toContain('FROM mart.project_scope_article scope')
   expect(selectStatement).not.toContain('selected_scoped_article_import')
   expect(selectStatement).toContain('article.article_updated_at AS articleUpdatedAt')
