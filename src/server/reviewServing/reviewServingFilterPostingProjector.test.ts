@@ -226,7 +226,7 @@ test('full posting rebuilds refresh stats from serving state without JS contribu
   expect(joined).not.toContain('343341342341341300000')
 })
 
-test('full posting rebuilds write serving state without incremental patch fanout', async () => {
+test('full posting rebuilds write serving state without incremental patch or contribution fanout', async () => {
   const {database, statements} = createPostingDatabase({
     existingRows: [],
     newRows: [
@@ -258,17 +258,17 @@ test('full posting rebuilds write serving state without incremental patch fanout
   )
   expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
-  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_summary_contribution_v4')
+  expect(joined).not.toContain('INSERT INTO mart.review_article_summary_contribution_v4')
   expect(joined).toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
   expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
   expect(joined).toContain('WITH posting_source AS')
   expect(joined).toContain('serving_source AS')
   expect(joined).toContain('GROUP BY posting.filterKind, posting.filterValue, posting.listModeKey, posting.articleId')
-  expect(joined).toContain('SELECT DISTINCT')
   expect(joined).toContain('CAST(to_json(posting.filterKind) AS VARCHAR)')
 })
 
-test('full posting rebuilds scope set-based deletes to article ranges', async () => {
+test('full posting rebuilds scope set-based serving deletes to article ranges', async () => {
   const {database, statements} = createPostingDatabase({
     existingRows: [],
     newRows: [postingRow({articleId: 'article-2', filterKind: 'importRoute', filterValue: 'route-1'})],
@@ -284,14 +284,7 @@ test('full posting rebuilds scope set-based deletes to article ranges', async ()
   expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain('serving.article_id >=')
   expect(joined).toContain('serving.article_id <=')
-  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
-  expect(joined).toContain('contribution.article_id >=')
-  expect(joined).toContain('contribution.article_id <=')
-  expect(
-    statements.find((statement) => {
-      return statement.includes('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
-    }),
-  ).not.toContain('summary_definition_version')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
 })
 
 test('chunked full posting rebuilds can defer stats refresh outside chunk writes', async () => {
