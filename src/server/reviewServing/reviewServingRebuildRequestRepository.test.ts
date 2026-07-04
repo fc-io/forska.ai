@@ -482,11 +482,11 @@ test('default rebuild request chunks use existing projection identities and real
   expect(joined).not.toContain(':request:rebuild:default-identities')
 })
 
-test('search-only default rebuild presplit chunks use non-overlapping scoped article buckets', async () => {
+test('search-only default rebuild presplit chunks preserve sparse article-id gap coverage', async () => {
   const {database, statements} = createFakeRequestDatabase({
     articleRangeRows: [
       {chunkEndKey: 'article-001', chunkStartKey: 'article-001', scopedArticleCount: 1},
-      {chunkEndKey: 'article-100', chunkStartKey: 'article-002', scopedArticleCount: 1},
+      {chunkEndKey: 'article-100', chunkStartKey: 'article-001', scopedArticleCount: 1},
     ],
   })
 
@@ -503,10 +503,10 @@ test('search-only default rebuild presplit chunks use non-overlapping scoped art
 
   const joined = statements.join('\n')
 
-  expect(joined).toContain('scoped_start_key AS chunkStartKey')
-  expect(joined).not.toContain('previous_scoped_end_key')
+  expect(joined).toContain('COALESCE(previous_scoped_end_key, scoped_start_key) AS chunkStartKey')
+  expect(joined).toContain('LAG(scoped_end_key) OVER (ORDER BY chunk_index) AS previous_scoped_end_key')
+  expect(joined).toContain(')\n    SELECT')
   expect(joined).toContain("'article-001'")
-  expect(joined).toContain("'article-002'")
   expect(joined).toContain("'article-100'")
   expect(joined).toContain('{"admissionPresplit":true}')
 })
