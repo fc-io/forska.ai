@@ -1419,9 +1419,14 @@ test('request snapshot targets match null-snapshot chunks by component generatio
     "CAST(json_extract_string(state.value, '$.baseGeneration') AS BIGINT) = chunk.output_base_generation",
   )
   expect(targetSource).toContain('AS hasSummaryRebuildChunks')
+  expect(targetSource).toContain('AS hasPostingRebuildChunks')
   expect(targetSource).toContain("summary_chunk.projection_component = 'summary'")
+  expect(targetSource).toContain("posting_chunk.projection_component = 'posting'")
   expect(targetSource).toContain(
     "CAST(json_extract_string(summary_state.value, '$.baseGeneration') AS BIGINT) = summary_chunk.output_base_generation",
+  )
+  expect(targetSource).toContain(
+    "CAST(json_extract_string(posting_state.value, '$.baseGeneration') AS BIGINT) = posting_chunk.output_base_generation",
   )
 })
 
@@ -2310,6 +2315,19 @@ test('worker refreshes summary filter options when an active-snapshot summary re
   expect(statements.join('\n')).toContain("status = 'completed'")
 })
 
+test('worker refreshes summary filter options before promoting request snapshots', () => {
+  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const start = source.indexOf('const finalizeCompletedReviewServingRebuildRequest = async')
+  const end = source.indexOf('\nconst getReviewServingProjectorWorkerDatabase', start)
+  const finalizerSource = source.slice(start, end)
+  const refreshIndex = finalizerSource.indexOf('await refreshSummaryFilterOptionsForProjections')
+  const promoteIndex = finalizerSource.indexOf('await promoteReviewServingProjectorSnapshot')
+
+  expect(refreshIndex).toBeGreaterThanOrEqual(0)
+  expect(promoteIndex).toBeGreaterThanOrEqual(0)
+  expect(refreshIndex).toBeLessThan(promoteIndex)
+})
+
 test('worker refreshes posting stats once when a posting rebuild request is finalized', async () => {
   const harness = createWorkerHarness()
   const statements: string[] = []
@@ -2360,13 +2378,32 @@ test('worker refreshes posting stats once when a posting rebuild request is fina
 
     if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId') && statement.includes("'candidate', 'active'")) {
       return [
-        {projectId: postingChunk.projectId, reviewConfigHash: 'review-config-1', snapshotId: postingChunk.snapshotId},
+        {
+          hasPostingRebuildChunks: true,
+          hasSummaryRebuildChunks: false,
+          projectId: postingChunk.projectId,
+          reviewConfigHash: 'review-config-1',
+          snapshotId: postingChunk.snapshotId,
+        },
+        {
+          hasPostingRebuildChunks: false,
+          hasSummaryRebuildChunks: false,
+          projectId: postingChunk.projectId,
+          reviewConfigHash: null,
+          snapshotId: 'snapshot-non-posting-null-config',
+        },
       ] as T[]
     }
 
     if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId') && statement.includes("'candidate'")) {
       return [
-        {projectId: postingChunk.projectId, reviewConfigHash: 'review-config-1', snapshotId: postingChunk.snapshotId},
+        {
+          hasPostingRebuildChunks: true,
+          hasSummaryRebuildChunks: false,
+          projectId: postingChunk.projectId,
+          reviewConfigHash: 'review-config-1',
+          snapshotId: postingChunk.snapshotId,
+        },
       ] as T[]
     }
 
@@ -2383,6 +2420,7 @@ test('worker refreshes posting stats once when a posting rebuild request is fina
   expect(joined).toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
   expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
   expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).not.toContain('snapshot-non-posting-null-config')
 })
 
 test('worker finalizes active-snapshot rebuild requests without promoting active snapshots', async () => {

@@ -192,6 +192,7 @@ const createSummaryReductionSchema = async (database: ReviewServingSummaryProjec
       request_id VARCHAR NOT NULL,
       chunk_id VARCHAR NOT NULL,
       project_id VARCHAR,
+      snapshot_id VARCHAR,
       projection_component VARCHAR NOT NULL,
       status VARCHAR NOT NULL
     )
@@ -299,7 +300,7 @@ const insertSummaryChunkManifestRows = async (
   const status = input.status ?? 'completed'
   const values = input.chunkIds
     .map((chunkId) => {
-      return `('${requestId}', '${chunkId}', 'project-1', 'summary', '${status}')`
+      return `('${requestId}', '${chunkId}', 'project-1', 'snapshot-1', 'summary', '${status}')`
     })
     .join(', ')
 
@@ -308,6 +309,7 @@ const insertSummaryChunkManifestRows = async (
       request_id,
       chunk_id,
       project_id,
+      snapshot_id,
       projection_component,
       status
     ) VALUES ${values}
@@ -585,6 +587,7 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
 
   expect(batchSelects).toHaveLength(3)
   expect(accumulatorWrites).toHaveLength(2)
+  expect(joined).toContain('chunk.snapshot_id = ')
   expect(batchSelects[0]).toContain('LIMIT 256')
   expect(batchSelects[0]).toContain('INNER JOIN app.review_rebuild_chunk_manifest chunk')
   expect(batchSelects[0]).toContain("chunk.status = 'completed'")
@@ -603,6 +606,11 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key) DO UPDATE SET',
   )
   expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
+  expect(
+    statements.filter((statement) => {
+      return statement.includes('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
+    }),
+  ).toHaveLength(1)
 })
 
 test('summary rebuild request finalization reduces conflicting partial chunks in DuckDB', async () => {

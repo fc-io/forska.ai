@@ -277,6 +277,7 @@ type RebuildRequestPendingChunkCountRow = {pendingChunkCount: number}
 type RebuildRequestPostingChunkCountRow = {postingChunkCount: number}
 type SummaryFilterOptionProjectionRow = {outputBaseGeneration: number; projectId: string; projectionIdentity: string}
 type RebuildRequestSnapshotPromotionRow = {
+  hasPostingRebuildChunks: boolean
   hasSummaryRebuildChunks: boolean
   projectId: string
   reviewConfigHash: string | null
@@ -3675,6 +3676,35 @@ const getRebuildRequestSnapshotTargets = async (
             )
           )
       ) AS hasSummaryRebuildChunks,
+      EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest posting_chunk
+        WHERE posting_chunk.request_id = ${getSqlLiteral(input.requestId)}
+          AND posting_chunk.project_id = chunk_snapshot.project_id
+          AND posting_chunk.projection_component = 'posting'
+          AND (
+            posting_chunk.snapshot_id = chunk_snapshot.snapshot_id
+            OR (
+              posting_chunk.snapshot_id IS NULL
+              AND (
+                EXISTS (
+                  SELECT 1
+                  FROM json_each(json_extract(snapshot.component_state_json, '$.required')) posting_state
+                  WHERE json_extract_string(posting_state.value, '$.component') = posting_chunk.projection_component
+                    AND json_extract_string(posting_state.value, '$.projectionIdentity') = posting_chunk.projection_identity
+                    AND CAST(json_extract_string(posting_state.value, '$.baseGeneration') AS BIGINT) = posting_chunk.output_base_generation
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM json_each(json_extract(snapshot.component_state_json, '$.optional')) posting_state
+                  WHERE json_extract_string(posting_state.value, '$.component') = posting_chunk.projection_component
+                    AND json_extract_string(posting_state.value, '$.projectionIdentity') = posting_chunk.projection_identity
+                    AND CAST(json_extract_string(posting_state.value, '$.baseGeneration') AS BIGINT) = posting_chunk.output_base_generation
+                )
+              )
+            )
+          )
+      ) AS hasPostingRebuildChunks,
       chunk_snapshot.project_id AS projectId,
       chunk_snapshot.snapshot_id AS snapshotId,
       snapshot.review_config_hash AS reviewConfigHash
@@ -3846,13 +3876,20 @@ const finalizeCompletedReviewServingRebuildRequest = async (
   ])
 
   if (hasPostingChunks) {
-    await refreshPostingStatsForRebuildRequestSnapshots(reductionRows, database)
+    await refreshPostingStatsForRebuildRequestSnapshots(
+      reductionRows.filter((row) => {
+        return row.hasPostingRebuildChunks
+      }),
+      database,
+    )
   }
 
   await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
     {requestId: chunk.requestId, snapshots: reductionRows},
     database,
   )
+
+  await refreshSummaryFilterOptionsForProjections(summaryFilterOptionProjections, database)
 
   const promotions = await promotionRows.reduce<
     Promise<Awaited<ReturnType<typeof promoteReviewServingProjectorSnapshot>>[]>
@@ -3869,10 +3906,6 @@ const finalizeCompletedReviewServingRebuildRequest = async (
   const failedPromotion = promotions.find((promotion) => {
     return !promotion.promoted
   })
-
-  if (failedPromotion === undefined) {
-    await refreshSummaryFilterOptionsForProjections(summaryFilterOptionProjections, database)
-  }
 
   await markCompletedRebuildRequestFinalized(
     {

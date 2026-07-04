@@ -933,12 +933,24 @@ const getSummaryRebuildPartialAccumulatorState = async (
   database: ReviewServingSummaryProjectorDatabase,
 ) => {
   const rows = await database.queryJson<{chunkId: string}>(`
+    SELECT partial.chunk_id AS chunkId
+    FROM mart.review_article_summary_rebuild_partial_v4 partial
+    ${getCompletedSummaryRebuildPartialChunkJoin('partial')}
+    WHERE ${getSummaryRebuildPartialScopePredicate({...input, alias: 'partial'})}
+      AND partial.chunk_id NOT LIKE ${getSqlLiteral(`${summaryRebuildPartialAccumulatorChunkIdPrefix}%`)}
+    UNION
+    SELECT partial_contribution.chunk_id AS chunkId
+    FROM mart.review_article_summary_contribution_rebuild_partial_v4 partial_contribution
+    ${getCompletedSummaryRebuildPartialChunkJoin('partial_contribution')}
+    WHERE ${getSummaryRebuildPartialScopePredicate({...input, alias: 'partial_contribution'})}
+      AND partial_contribution.chunk_id NOT LIKE ${getSqlLiteral(`${summaryRebuildPartialAccumulatorChunkIdPrefix}%`)}
+    UNION
     SELECT chunk.chunk_id AS chunkId
     FROM app.review_rebuild_chunk_manifest chunk
     WHERE chunk.request_id = ${getSqlLiteral(input.requestId)}
       AND chunk.project_id = ${getSqlLiteral(input.projectId)}
+      AND chunk.snapshot_id = ${getSqlLiteral(input.snapshotId)}
       AND chunk.projection_component = 'summary'
-    GROUP BY chunk.chunk_id
     ORDER BY chunk.chunk_id
   `)
   const digest = createHash('sha256')
@@ -1112,11 +1124,6 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
     `)
     await tx.run(`
       DELETE FROM mart.review_article_summary_rebuild_partial_v4
-      WHERE ${getSummaryRebuildPartialScopePredicate(input)}
-        AND ${chunkIdPredicate}
-    `)
-    await tx.run(`
-      DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4
       WHERE ${getSummaryRebuildPartialScopePredicate(input)}
         AND ${chunkIdPredicate}
     `)
