@@ -319,6 +319,142 @@ test('worker does not preclaim incompatible rebuild chunks in one batch', async 
   expect(harness.runChunkInputs).toEqual([firstChunk])
 })
 
+test('worker writes compatible selected import rebuild chunks through one batch writer', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const statements: string[] = []
+  const firstChunkInput = {
+    ...chunkInput,
+    chunkEndKey: 'article-050',
+    chunkStartKey: 'article-001',
+    projectionComponent: 'selectedImport' as const,
+    projectionIdentity: 'selectedImport:project-1',
+  }
+  const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
+  const firstChunk = {
+    ...chunkManifest,
+    ...firstChunkInput,
+    chunkId: 'chunk-selected-import-batch-1',
+    parentChunkId: 'chunk-selected-import-parent',
+    splitDepth: 1,
+  }
+  const secondChunk = {
+    ...chunkManifest,
+    ...secondChunkInput,
+    chunkId: 'chunk-selected-import-batch-2',
+    parentChunkId: 'chunk-selected-import-parent',
+    splitDepth: 1,
+  }
+  const chunkInputs = [firstChunkInput, secondChunkInput]
+  const chunksByStartKey = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunkInput.chunkStartKey, firstChunk],
+    [secondChunkInput.chunkStartKey, secondChunk],
+  ])
+  const chunksById = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunk.chunkId, firstChunk],
+    [secondChunk.chunkId, secondChunk],
+  ])
+  const componentState = {
+    optional: [],
+    required: [
+      {
+        baseGeneration: '7',
+        component: 'projectScope',
+        patchWatermark: '9',
+        projectionIdentity: 'projectScope:project-1',
+      },
+      {
+        baseGeneration: '2',
+        component: 'selectedImport',
+        patchWatermark: '9',
+        projectionIdentity: 'selectedImport:project-1',
+      },
+    ],
+  }
+  let nextIndex = 0
+
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+      const chunkId = [...chunksById.keys()].find((id) => {
+        return statement.includes(id)
+      })
+
+      return [chunksById.get(chunkId ?? firstChunk.chunkId) ?? firstChunk] as T[]
+    }
+
+    if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+      return [
+        {
+          componentStateJson: componentState,
+          reviewConfigHash: 'review-config-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          snapshotId: 'snapshot-selected-import-batch-1',
+        },
+      ] as T[]
+    }
+
+    if (statement.includes('FROM app.review_selected_import_snapshot')) {
+      return [{cursorJson: null, sourceDeltaHighWater: 9, status: 'completed'}] as T[]
+    }
+
+    if (statement.includes('WITH output_row')) {
+      return [{actualChecksum: 'checksum-selected-import-batch', actualCount: 1}] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInputs[nextIndex++] ?? null
+    },
+    heartbeatChunk: async (heartbeatInput) => {
+      harness.heartbeatInputs.push(heartbeatInput)
+
+      return chunksById.get(heartbeatInput.chunkId) ?? null
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+  const joined = statements.join('\n')
+
+  expect(result.chunk).toMatchObject({chunkId: secondChunk.chunkId, status: 'completed'})
+  expect(result.chunkBatchCount).toBe(2)
+  expect(harness.claimInputs).toHaveLength(2)
+  expect(
+    new Set(
+      harness.heartbeatInputs.map((input) => {
+        return (input as {chunkId: string}).chunkId
+      }),
+    ),
+  ).toEqual(new Set([firstChunk.chunkId, secondChunk.chunkId]))
+  expect(harness.runChunkInputs).toEqual([])
+  expect(joined).toContain("article_id >= 'article-001'")
+  expect(joined).toContain("article_id <= 'article-050'")
+  expect(joined).toContain("article_id >= 'article-051'")
+  expect(joined).toContain("article_id <= 'article-099'")
+  expect(joined).toContain('selectedImportBatchWriter')
+})
+
 test('worker keeps opt-in rebuild chunk batches below the RSS cap', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const firstChunkInput = {...chunkInput, chunkEndKey: 'article-050', chunkStartKey: 'article-001'}
