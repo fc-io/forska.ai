@@ -1,5 +1,5 @@
 import {runReviewServingProjectorWorker} from '../workers/reviewServingProjectorWorker.ts'
-import {env} from './env.ts'
+import {env, getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
@@ -12,6 +12,7 @@ type ReviewServingProjectorWorkerHeartbeatOptions = {
 const reviewServingProjectorWorkerLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const reviewServingProjectorWorkerWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 const reviewServingProjectorWorkerComponent = 'reviewServingProjectorWorker'
+const defaultReviewServingProjectorWorkerHeartbeatBatchSize = 2
 
 const getErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
@@ -44,8 +45,13 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       event: 'loopStart',
       pollIntervalMs: options.pollIntervalMs ?? null,
       rebuildChunkBatchMaxRssBytes:
-        options.rebuildChunkBatchMaxRssBytes ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES ?? 0,
-      rebuildChunkBatchSize: options.rebuildChunkBatchSize ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE ?? 1,
+        options.rebuildChunkBatchMaxRssBytes
+        ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES
+        ?? getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
+      rebuildChunkBatchSize:
+        options.rebuildChunkBatchSize
+        ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
+        ?? defaultReviewServingProjectorWorkerHeartbeatBatchSize,
       startCount: 1,
     },
   )
@@ -54,8 +60,13 @@ export const startReviewServingProjectorWorkerHeartbeat = (
     void runReviewServingProjectorWorker({
       pollIntervalMs: options.pollIntervalMs,
       rebuildChunkBatchMaxRssBytes:
-        options.rebuildChunkBatchMaxRssBytes ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES ?? 0,
-      rebuildChunkBatchSize: options.rebuildChunkBatchSize ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE ?? 1,
+        options.rebuildChunkBatchMaxRssBytes
+        ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES
+        ?? getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
+      rebuildChunkBatchSize:
+        options.rebuildChunkBatchSize
+        ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
+        ?? defaultReviewServingProjectorWorkerHeartbeatBatchSize,
       signal: controller.signal,
     }).catch((error) => {
       logReviewServingProjectorWorkerError(error)

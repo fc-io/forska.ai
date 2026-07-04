@@ -1,3 +1,5 @@
+import {totalmem} from 'node:os'
+
 import {type as arktype} from 'arktype'
 import {existsSync, readFileSync} from 'fs'
 import {dirname, resolve} from 'path'
@@ -36,6 +38,20 @@ const envShape = arktype({
   LOG_LEVEL: arktype('"DEBUG" | "INFO" | "WARN" | "ERROR"'),
   LOG_STDERR_LEVEL: arktype('"DEBUG" | "INFO" | "WARN" | "ERROR"'),
 })
+
+const gibibyte = 1024 ** 3
+const defaultReviewServingRebuildChunkBatchSize = 2
+const minimumReviewServingRebuildChunkBatchMaxRssBytes = 4 * gibibyte
+const maximumReviewServingRebuildChunkBatchMaxRssBytes = 12 * gibibyte
+
+export const getDefaultReviewServingRebuildChunkBatchMaxRssBytes = (totalMemoryBytes = totalmem()) => {
+  const memoryBasedCapBytes = Math.floor(totalMemoryBytes * 0.7)
+
+  return Math.max(
+    minimumReviewServingRebuildChunkBatchMaxRssBytes,
+    Math.min(maximumReviewServingRebuildChunkBatchMaxRssBytes, memoryBasedCapBytes),
+  )
+}
 
 const readFromFileVar = (envValues: Record<string, string | undefined>, key: string): string | undefined => {
   const fileVar = `${key}_FILE`
@@ -131,13 +147,17 @@ export const loadEnv = ({
     merged.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES == null
     || String(merged.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES).trim() === ''
   ) {
-    ;(merged as Record<string, string>).FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES = '0'
+    ;(merged as Record<string, string>).FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES = String(
+      getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
+    )
   }
   if (
     merged.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE == null
     || String(merged.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE).trim() === ''
   ) {
-    ;(merged as Record<string, string>).FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE = '1'
+    ;(merged as Record<string, string>).FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE = String(
+      defaultReviewServingRebuildChunkBatchSize,
+    )
   }
   if (merged.JUDGE_WORKER_ID == null) {
     ;(merged as Record<string, string>).JUDGE_WORKER_ID = ''
