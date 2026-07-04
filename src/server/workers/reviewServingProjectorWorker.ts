@@ -100,6 +100,7 @@ type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorSe
 type ReviewServingProjectorWorkerCleanupTarget = ReviewServingRetentionCleanupInput
 
 type ReviewServingProjectorWorkerChunkInput = ReviewServingRebuildChunkIdentity & {checksum?: string | null}
+type ReviewServingProjectorWorkerMemoryUsage = {rss: number}
 
 type RebuildChunkSplitRangeRow = {articleCount: number; chunkEndKey: string; chunkStartKey: string}
 type RebuildChunkOutputValidationInput = {
@@ -140,6 +141,7 @@ type ReviewServingProjectorWorkerDependencies = {
   getDatabase?: () => ReviewServingProjectorWorkerDatabase
     & ReviewServingChunkManifestRepositoryDatabase
     & ReviewServingRetentionServiceDatabase
+  getMemoryUsage?: () => ReviewServingProjectorWorkerMemoryUsage
   intakeImportDeltas?: typeof intakeReviewImportDeltasToDirtyWork
   intakeReviewChangeDeltas?: typeof intakeReviewChangeDeltasToDirtyWork
   nowMs?: () => number
@@ -169,6 +171,7 @@ type ReviewServingProjectorWorkerCycleOptions = {
   maxRowsPerWake?: number
   maxWakeMs?: number
   now?: Date
+  rebuildChunkBatchMaxRssBytes?: number
   rebuildChunkBatchSize?: number
   rebuildProjectId?: string | null
   workerId?: string
@@ -290,6 +293,7 @@ const defaultReviewServingProjectorWorkerMaxRowsPerWake = 512
 const defaultReviewServingProjectorWorkerMaxWakeMs = 5_000
 const defaultReviewServingProjectorWorkerPollIntervalMs = 2_000
 const defaultReviewServingProjectorWorkerProgressYieldMs = 100
+const defaultReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = 0
 const defaultReviewServingProjectorWorkerRebuildChunkBatchSize = 1
 const nativeHeavyReviewServingProjectorWorkerProgressYieldMs = 1_000
 const defaultReviewServingProjectorWorkerErrorBackoffMs = 10_000
@@ -3240,6 +3244,40 @@ const getPositiveInteger = (value: number | null | undefined, fallback: number) 
   return value !== null && value !== undefined && Number.isInteger(value) && value > 0 ? Math.trunc(value) : fallback
 }
 
+const getReviewServingProjectorWorkerMemoryUsage = (
+  dependencies: ReviewServingProjectorWorkerDependencies,
+): ReviewServingProjectorWorkerMemoryUsage => {
+  return dependencies.getMemoryUsage?.() ?? process.memoryUsage()
+}
+
+const getEffectiveReviewServingProjectorWorkerRebuildChunkBatchSize = (input: {
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  const batchSize = getPositiveInteger(
+    input.options.rebuildChunkBatchSize,
+    defaultReviewServingProjectorWorkerRebuildChunkBatchSize,
+  )
+  const maxRssBytes = getPositiveInteger(
+    input.options.rebuildChunkBatchMaxRssBytes,
+    defaultReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes,
+  )
+  const shouldApplyRssCap = batchSize > 1 && maxRssBytes > 0
+  const rssBytes = shouldApplyRssCap ? getReviewServingProjectorWorkerMemoryUsage(input.dependencies).rss : 0
+
+  if (shouldApplyRssCap && rssBytes >= maxRssBytes) {
+    reviewServingProjectorWorkerCycleLogger.warn(
+      'review-serving-projector-worker:rebuild-chunk-batch-rss-cap',
+      '[reviewServingProjectorWorker] limiting rebuild chunk batch size due to RSS cap',
+      {batchSize, effectiveBatchSize: 1, maxRssBytes, rssBytes},
+    )
+
+    return 1
+  }
+
+  return batchSize
+}
+
 const getLeaseExpiresAt = (options: ReviewServingProjectorWorkerCycleOptions) => {
   return new Date(
     getWorkerNow(options).getTime() + getPositiveInteger(options.leaseMs, defaultReviewServingProjectorWorkerLeaseMs),
@@ -4146,10 +4184,7 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
 const runReviewServingProjectorWorkerRebuildChunkBatch = async (
   input: Parameters<typeof runReviewServingProjectorWorkerRebuildChunk>[0],
 ): Promise<{chunk: ReviewServingProjectorWorkerChunkResult; completedCount: number}> => {
-  const batchSize = getPositiveInteger(
-    input.options.rebuildChunkBatchSize,
-    defaultReviewServingProjectorWorkerRebuildChunkBatchSize,
-  )
+  const batchSize = getEffectiveReviewServingProjectorWorkerRebuildChunkBatchSize(input)
   let completedCount = 0
   let lastCompletedChunk: ReviewServingProjectorWorkerChunkResult | null = null
 
@@ -4390,6 +4425,7 @@ export {
   defaultReviewServingProjectorWorkerMaxWakeMs,
   defaultReviewServingProjectorWorkerPollIntervalMs,
   defaultReviewServingProjectorWorkerProgressYieldMs,
+  defaultReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes,
   defaultReviewServingProjectorWorkerRebuildChunkBatchSize,
   nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
 }
