@@ -56,3 +56,47 @@ test('duckdb studio route creates a readable snapshot', async () => {
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
   }
 })
+
+test('duckdb studio route creates a readable snapshot after uncheckpointed DDL', async () => {
+  const duckdbPath = `/tmp/f1-duckdb-studio-route-ddl-${Date.now()}.duckdb`
+  const runRoute = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Elysia} = await import('elysia')
+        const {duckdbStudioRoutes, duckdbStudioSnapshotPath} = await import('./src/server/routes/DuckdbStudioRoutes.ts')
+        const {runDuckdbStatement, closeDuckdbService} = await import('./src/server/utils/duckdbService.ts')
+        await runDuckdbStatement('CREATE TABLE backup_check(value INTEGER); INSERT INTO backup_check VALUES (42); ALTER TABLE backup_check ALTER value TYPE BIGINT')
+        const app = new Elysia().use(duckdbStudioRoutes)
+        const response = await app.handle(new Request('http://localhost' + duckdbStudioSnapshotPath, {method: 'POST'}))
+        console.log(await response.text())
+        await closeDuckdbService({checkpointBeforeClose: false})
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'dev-single'}},
+  )
+
+  if (runRoute.exitCode !== 0) {
+    throw new Error(runRoute.stderr.toString() || runRoute.stdout.toString() || 'DuckDB studio DDL route test failed')
+  }
+
+  const responseBody = JSON.parse(runRoute.stdout.toString()) as {data: {snapshotPath: string; createdAt: string}}
+  const snapshotPath = responseBody.data.snapshotPath
+
+  try {
+    const duckdbInstance = await DuckDBInstance.create(snapshotPath, {access_mode: 'READ_ONLY'})
+    const connection = await duckdbInstance.connect()
+    const reader = await connection.runAndReadAll('SELECT value FROM backup_check LIMIT 1')
+
+    expect(reader.getRowObjectsJson()).toEqual([{value: '42'}])
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  } finally {
+    removeFileIfExists(snapshotPath)
+    removeFileIfExists(`${snapshotPath}.wal`)
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+  }
+})
