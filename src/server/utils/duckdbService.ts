@@ -3120,6 +3120,10 @@ const checkpointDuckdbBeforeClose = async (connection: DuckDBConnection | null, 
     return
   }
 
+  if (getDuckdbRuntimeConfigValue().serializeConcurrentWork) {
+    return
+  }
+
   try {
     await connection.run('CHECKPOINT')
   } catch (error) {
