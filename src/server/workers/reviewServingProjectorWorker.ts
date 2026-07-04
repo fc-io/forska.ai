@@ -1499,7 +1499,7 @@ const runLlmStatusRebuildChunk = async (
             chunkStartArticleId: input.chunk.chunkStartKey,
             claims: [],
             definitionVersion: manifest.definitionVersion,
-            emitPatchRows: !isFreshReviewServingSnapshotRebuildChunk(input.chunk),
+            emitPatchRows: true,
             listModeKeys: defaultReviewServingLlmListModeKeys,
             projectId,
             projectionIdentity: input.chunk.projectionIdentity,
@@ -1545,7 +1545,7 @@ const runHumanStatusRebuildChunk = async (
             chunkStartArticleId: input.chunk.chunkStartKey,
             claims: [],
             definitionVersion: manifest.definitionVersion,
-            emitPatchRows: !isFreshReviewServingSnapshotRebuildChunk(input.chunk),
+            emitPatchRows: true,
             listModeKeys: defaultReviewServingHumanListModeKeys,
             projectId,
             projectionIdentity: input.chunk.projectionIdentity,
@@ -3582,18 +3582,52 @@ const getRebuildRequestSnapshotPromotions = async (
   database: ReviewServingChunkManifestRepositoryDatabase,
 ) => {
   return database.queryJson<RebuildRequestSnapshotPromotionRow>(`
+    WITH chunk_snapshot AS (
+      SELECT
+        chunk.project_id,
+        chunk.snapshot_id
+      FROM app.review_rebuild_chunk_manifest chunk
+      WHERE chunk.request_id = ${getSqlLiteral(requestId)}
+        AND chunk.project_id IS NOT NULL
+        AND chunk.snapshot_id IS NOT NULL
+      UNION
+      SELECT
+        chunk.project_id,
+        snapshot.snapshot_id
+      FROM app.review_rebuild_chunk_manifest chunk
+      INNER JOIN app.review_serving_snapshot_manifest snapshot
+        ON snapshot.project_id = chunk.project_id
+        AND snapshot.snapshot_status IN ('candidate', 'active')
+      CROSS JOIN json_each(json_extract(snapshot.component_state_json, '$.required')) state
+      WHERE chunk.request_id = ${getSqlLiteral(requestId)}
+        AND chunk.project_id IS NOT NULL
+        AND chunk.snapshot_id IS NULL
+        AND json_extract_string(state.value, '$.component') = chunk.projection_component
+        AND json_extract_string(state.value, '$.projectionIdentity') = chunk.projection_identity
+      UNION
+      SELECT
+        chunk.project_id,
+        snapshot.snapshot_id
+      FROM app.review_rebuild_chunk_manifest chunk
+      INNER JOIN app.review_serving_snapshot_manifest snapshot
+        ON snapshot.project_id = chunk.project_id
+        AND snapshot.snapshot_status IN ('candidate', 'active')
+      CROSS JOIN json_each(json_extract(snapshot.component_state_json, '$.optional')) state
+      WHERE chunk.request_id = ${getSqlLiteral(requestId)}
+        AND chunk.project_id IS NOT NULL
+        AND chunk.snapshot_id IS NULL
+        AND json_extract_string(state.value, '$.component') = chunk.projection_component
+        AND json_extract_string(state.value, '$.projectionIdentity') = chunk.projection_identity
+    )
     SELECT DISTINCT
-      chunk.project_id AS projectId,
-      chunk.snapshot_id AS snapshotId,
+      chunk_snapshot.project_id AS projectId,
+      chunk_snapshot.snapshot_id AS snapshotId,
       snapshot.review_config_hash AS reviewConfigHash
-    FROM app.review_rebuild_chunk_manifest chunk
+    FROM chunk_snapshot
     INNER JOIN app.review_serving_snapshot_manifest snapshot
-      ON snapshot.project_id = chunk.project_id
-      AND snapshot.snapshot_id = chunk.snapshot_id
-    WHERE chunk.request_id = ${getSqlLiteral(requestId)}
-      AND chunk.project_id IS NOT NULL
-      AND chunk.snapshot_id IS NOT NULL
-    ORDER BY chunk.project_id ASC, chunk.snapshot_id ASC
+      ON snapshot.project_id = chunk_snapshot.project_id
+      AND snapshot.snapshot_id = chunk_snapshot.snapshot_id
+    ORDER BY chunk_snapshot.project_id ASC, chunk_snapshot.snapshot_id ASC
   `)
 }
 
@@ -4067,6 +4101,7 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
       await measureReviewServingProjectorWorkerPhase(timings, 'rejectRequestlessSummaryMs', async () => {
         await rejectRequestlessSummaryRangeRebuildChunk({chunk: claimedChunk, leaseOwner: workerId}, database)
       })
+      stopHeartbeat()
       logReviewServingProjectorWorkerRebuildChunkProgress({chunk: claimedChunk, status: 'failed', timings, workerId})
 
       return {chunkId: claimedChunk.chunkId, requestId: claimedChunk.requestId, status: 'failed'}

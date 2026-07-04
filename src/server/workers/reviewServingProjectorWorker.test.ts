@@ -1239,6 +1239,21 @@ test('high-fanout rebuild chunks commit idempotent output separately from comple
   }
 })
 
+test('fresh status rebuild chunks keep patch rows for downstream rebuild consumers', () => {
+  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const getFunctionSource = (functionName: string) => {
+    const start = source.indexOf(`const ${functionName} = async`)
+    const end = source.indexOf('\nconst ', start + 1)
+
+    expect(start).toBeGreaterThanOrEqual(0)
+
+    return source.slice(start, end === -1 ? undefined : end)
+  }
+
+  expect(getFunctionSource('runLlmStatusRebuildChunk')).toContain('emitPatchRows: true')
+  expect(getFunctionSource('runHumanStatusRebuildChunk')).toContain('emitPatchRows: true')
+})
+
 test('selected import runner releases dirty work while base projection is still batching', async () => {
   const runStatements: string[] = []
   const selectedImportRows = new Array(512).fill(null).map((_, index) => {
@@ -2227,7 +2242,7 @@ test('worker does not refresh summary filter options when a rebuild request is f
       ] as T[]
     }
 
-    if (statement.includes('chunk.snapshot_id AS snapshotId')) {
+    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId')) {
       return [
         {projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-summary-finalize'},
       ] as T[]
@@ -2314,7 +2329,7 @@ test('worker refreshes posting stats once when a posting rebuild request is fina
       return [{postingChunkCount: 2}] as T[]
     }
 
-    if (statement.includes('chunk.snapshot_id AS snapshotId')) {
+    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId')) {
       return [
         {projectId: postingChunk.projectId, reviewConfigHash: 'review-config-1', snapshotId: postingChunk.snapshotId},
       ] as T[]
@@ -2338,6 +2353,13 @@ test('worker refreshes posting stats once when a posting rebuild request is fina
 test('worker terminally rejects requestless summary chunks before projection', async () => {
   const harness = createWorkerHarness()
   const statements: string[] = []
+  const originalSetInterval = globalThis.setInterval
+  const originalClearInterval = globalThis.clearInterval
+  const intervalToken = {unref: mock(() => {})}
+  const setIntervalMock = mock(() => {
+    return intervalToken
+  })
+  const clearIntervalMock = mock((_token: unknown) => {})
   const summaryChunkInput = {
     ...chunkInput,
     outputBaseGeneration: 7,
@@ -2373,7 +2395,13 @@ test('worker terminally rejects requestless summary chunks before projection', a
     statements.push(statement)
   }
 
-  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+  globalThis.setInterval = setIntervalMock as unknown as typeof setInterval
+  globalThis.clearInterval = clearIntervalMock as unknown as typeof clearInterval
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies).finally(() => {
+    globalThis.setInterval = originalSetInterval
+    globalThis.clearInterval = originalClearInterval
+  })
   const joined = statements.join('\n')
 
   expect(result.chunk).toMatchObject({chunkId: summaryChunk.chunkId, status: 'failed'})
@@ -2382,6 +2410,8 @@ test('worker terminally rejects requestless summary chunks before projection', a
   expect(joined).toContain("status = 'quarantined'")
   expect(joined).toContain('requestless ranged summary rebuild chunks are not supported')
   expect(joined).toContain('request-associated review serving rebuild')
+  expect(setIntervalMock).toHaveBeenCalledTimes(1)
+  expect(clearIntervalMock).toHaveBeenCalledWith(intervalToken)
   expect(joined).not.toContain('projectReviewServingSummaries')
   expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
   expect(joined).not.toContain('mart.review_filter_option_serving_v4')
