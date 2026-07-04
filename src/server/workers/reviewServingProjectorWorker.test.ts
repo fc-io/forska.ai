@@ -1239,7 +1239,7 @@ test('high-fanout rebuild chunks commit idempotent output separately from comple
   }
 })
 
-test('fresh status rebuild chunks keep patch rows for downstream rebuild consumers', () => {
+test('status rebuild chunks update serving rows without emitting patch rows', () => {
   const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
   const getFunctionSource = (functionName: string) => {
     const start = source.indexOf(`const ${functionName} = async`)
@@ -1250,8 +1250,8 @@ test('fresh status rebuild chunks keep patch rows for downstream rebuild consume
     return source.slice(start, end === -1 ? undefined : end)
   }
 
-  expect(getFunctionSource('runLlmStatusRebuildChunk')).toContain('emitPatchRows: true')
-  expect(getFunctionSource('runHumanStatusRebuildChunk')).toContain('emitPatchRows: true')
+  expect(getFunctionSource('runLlmStatusRebuildChunk')).toContain('emitPatchRows: false')
+  expect(getFunctionSource('runHumanStatusRebuildChunk')).toContain('emitPatchRows: false')
 })
 
 test('selected import runner releases dirty work while base projection is still batching', async () => {
@@ -2991,8 +2991,11 @@ test('queue rebuild chunk writes serving rows with SQL-native article range stat
   expect(joined).toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_unassessed_queue_serving_v4')
   expect(joined).toContain('WITH scoped_article AS')
-  expect(joined).toContain('INNER JOIN mart.review_llm_status_patch_v4 llm')
-  expect(joined).toContain('INNER JOIN mart.review_human_status_patch_v4 human')
+  expect(joined).toContain('LEFT JOIN latest_judgment judgment')
+  expect(joined).toContain('LEFT JOIN app."judgment_human" judgment_human')
+  expect(joined).toContain('LEFT JOIN app."judgment_human_summary" judgment_human_summary')
+  expect(joined).not.toContain('INNER JOIN mart.review_llm_status_patch_v4 llm')
+  expect(joined).not.toContain('INNER JOIN mart.review_human_status_patch_v4 human')
   expect(joined).toContain("scope.article_id >= 'article-050'")
   expect(joined).toContain("scope.article_id <= 'article-099'")
   expect(joined).toContain("article_id >= 'article-050'")

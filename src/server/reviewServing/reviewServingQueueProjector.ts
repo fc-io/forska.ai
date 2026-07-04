@@ -224,87 +224,90 @@ const getQueueRebuildSourceCtes = (input: ProjectReviewServingQueueRebuildInput)
             AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
             AND newer.article_id = selected_patch.article_id
         )
+    ), enabled_prompt AS (
+      SELECT
+        prompt.id AS prompt_id
+      FROM app.project_prompt project_prompt
+      INNER JOIN app.prompt prompt
+        ON prompt.id = project_prompt.prompt_id
+      WHERE project_prompt.project_id = ${getSqlLiteral(input.projectId)}
+        AND project_prompt.enabled
+        AND NOT project_prompt.archived
+        AND COALESCE(prompt.archived, FALSE) = FALSE
     ), project_settings AS (
-      SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = ${getSqlLiteral(input.projectId)}), 'prompt') AS human_judgment_mode
-    ),
-    llm_queue AS (
+      SELECT
+        project.model_id,
+        project.use_title,
+        project.use_abstract,
+        project.use_fulltext,
+        project.use_fulltext_no_images,
+        COALESCE(project.human_judgment_mode, 'prompt') AS human_judgment_mode
+      FROM app.project project
+      WHERE project.id = ${getSqlLiteral(input.projectId)}
+    ), latest_judgment AS (
+      SELECT
+        judgment.*,
+        ${['row', 'number'].join('_')}() OVER (PARTITION BY judgment.article_id, judgment.prompt_id ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC) AS judgment_rank
+      FROM app."judgment" judgment
+      INNER JOIN scoped_article scoped
+        ON scoped.article_id = judgment.article_id
+      INNER JOIN project_settings project
+        ON project.model_id = judgment.model_id
+        AND project.use_title = judgment.use_title
+        AND project.use_abstract = judgment.use_abstract
+        AND project.use_fulltext = judgment.use_fulltext
+        AND project.use_fulltext_no_images = judgment.use_fulltext_no_images
+      WHERE judgment.deleted_at IS NULL
+    ), llm_queue AS (
       SELECT
         scoped.article_id,
-        llm.prompt_id,
-        llm.review_config_hash,
+        prompt.prompt_id,
+        ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
         ${getSqlLiteral('unassessed')} AS queue_kind,
-        CASE WHEN llm.latest_llm_created_at IS NULL THEN 0 ELSE 1 END AS priority_bucket,
-        COALESCE(llm.latest_llm_created_at, scoped.activity_sort_at) AS activity_sort_at,
-        llm.tombstone OR llm.llm_status_key = 'answered' OR scoped.scope_tombstone AS tombstone
+        CASE WHEN judgment.created_at IS NULL THEN 0 ELSE 1 END AS priority_bucket,
+        COALESCE(judgment.created_at, scoped.activity_sort_at) AS activity_sort_at,
+        selected.selected_tombstone
+          OR scoped.scope_tombstone
+          OR judgment.is_answered
+          OR judgment.answered_original IS NOT NULL
+          OR COALESCE(LENGTH(judgment.answered_original_as_array), 0) > 0 AS tombstone
       FROM scoped_article scoped
       INNER JOIN selected_import_state selected
         ON selected.article_id = scoped.article_id
-      INNER JOIN mart.review_llm_status_patch_v4 llm
-        ON llm.project_id = ${getSqlLiteral(input.projectId)}
-        AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
-        AND llm.article_id = scoped.article_id
-        AND llm.patch_watermark = (
-          SELECT MAX(newer.patch_watermark)
-          FROM mart.review_llm_status_patch_v4 newer
-          WHERE newer.project_id = llm.project_id
-            AND newer.review_config_hash = llm.review_config_hash
-            AND newer.prompt_config_hash = llm.prompt_config_hash
-            AND newer.base_generation = llm.base_generation
-            AND newer.article_id = llm.article_id
-            AND newer.prompt_id = llm.prompt_id
-            AND newer.list_mode_key = llm.list_mode_key
-        )
+      CROSS JOIN enabled_prompt prompt
+      LEFT JOIN latest_judgment judgment
+        ON judgment.article_id = scoped.article_id
+        AND judgment.prompt_id = prompt.prompt_id
+        AND judgment.judgment_rank = 1
     ),
     human_queue AS (
       SELECT DISTINCT
         scoped.article_id,
-        human.prompt_id,
-        llm.review_config_hash,
+        CASE WHEN project_settings.human_judgment_mode = 'summary' THEN 'summary' ELSE prompt.prompt_id END AS prompt_id,
+        ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
         ${getSqlLiteral('human-unreviewed')} AS queue_kind,
-        CASE WHEN human.latest_human_updated_at IS NULL THEN 0 ELSE 1 END AS priority_bucket,
-        COALESCE(human.latest_human_updated_at, scoped.activity_sort_at) AS activity_sort_at,
-        human.tombstone OR human.human_status_key = 'answered' OR scoped.scope_tombstone AS tombstone
+        CASE
+          WHEN COALESCE(judgment_human.updated_at, judgment_human_summary.updated_at) IS NULL THEN 0
+          ELSE 1
+        END AS priority_bucket,
+        COALESCE(judgment_human.updated_at, judgment_human_summary.updated_at, scoped.activity_sort_at) AS activity_sort_at,
+        selected.selected_tombstone
+          OR scoped.scope_tombstone
+          OR NULLIF(TRIM(COALESCE(judgment_human.answer, judgment_human_summary.answer, '')), '') IS NOT NULL AS tombstone
       FROM scoped_article scoped
       INNER JOIN selected_import_state selected
         ON selected.article_id = scoped.article_id
-      INNER JOIN mart.review_human_status_patch_v4 human
-        ON human.project_id = ${getSqlLiteral(input.projectId)}
-        AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
-        AND human.article_id = scoped.article_id
       CROSS JOIN project_settings
-      INNER JOIN mart.review_llm_status_patch_v4 llm
-        ON llm.project_id = ${getSqlLiteral(input.projectId)}
-        AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
-        AND llm.article_id = human.article_id
-        AND (llm.prompt_id = human.prompt_id OR human.prompt_id = 'summary')
-        AND llm.list_mode_key = human.list_mode_key
-        AND llm.patch_watermark = (
-          SELECT MAX(newer_llm.patch_watermark)
-          FROM mart.review_llm_status_patch_v4 newer_llm
-          WHERE newer_llm.project_id = llm.project_id
-            AND newer_llm.review_config_hash = llm.review_config_hash
-            AND newer_llm.prompt_config_hash = llm.prompt_config_hash
-            AND newer_llm.base_generation = llm.base_generation
-            AND newer_llm.list_mode_key = llm.list_mode_key
-            AND newer_llm.article_id = llm.article_id
-            AND newer_llm.prompt_id = llm.prompt_id
-        )
-        AND human.patch_watermark = (
-          SELECT MAX(newer.patch_watermark)
-          FROM mart.review_human_status_patch_v4 newer
-          WHERE newer.project_id = human.project_id
-            AND newer.prompt_config_hash = human.prompt_config_hash
-            AND newer.base_generation = human.base_generation
-            AND newer.article_id = human.article_id
-            AND newer.prompt_id IS NOT DISTINCT FROM human.prompt_id
-            AND newer.list_mode_key = human.list_mode_key
-        )
-        AND (
-          (project_settings.human_judgment_mode = 'summary' AND human.prompt_id = 'summary')
-          OR (project_settings.human_judgment_mode <> 'summary' AND human.prompt_id <> 'summary')
-        )
+      CROSS JOIN enabled_prompt prompt
+      LEFT JOIN app."judgment_human" judgment_human
+        ON judgment_human.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
+        AND judgment_human.article_id = scoped.article_id
+        AND judgment_human.prompt_id = prompt.prompt_id
+        AND project_settings.human_judgment_mode <> 'summary'
+      LEFT JOIN app."judgment_human_summary" judgment_human_summary
+        ON judgment_human_summary.project_id = ${getSqlLiteral(input.projectId)}
+        AND judgment_human_summary.article_id = scoped.article_id
+        AND project_settings.human_judgment_mode = 'summary'
     ),
     queue_union AS (
       SELECT * FROM llm_queue
