@@ -51,7 +51,7 @@ type SelectedImportProjectionRow = {
   tombstone: boolean
 }
 
-type ProjectReviewServingSelectedImportArticleRangeInput = {
+export type ProjectReviewServingSelectedImportArticleRangeInput = {
   chunkEndArticleId: string
   chunkStartArticleId: string
   projectId: string
@@ -693,6 +693,52 @@ export const projectReviewServingSelectedImportArticleRange = async (
   const insertedRowCount = await getSelectedImportArticleRangeInsertedRowCount(params, database)
 
   return {insertedRowCount, selectedImportSnapshotId: params.selectedImportSnapshotId, status: 'completed' as const}
+}
+
+export const projectReviewServingSelectedImportArticleRanges = async (
+  params: {ranges: readonly ProjectReviewServingSelectedImportArticleRangeInput[]},
+  database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportProjectorDatabase,
+) => {
+  const [firstRange] = params.ranges
+
+  if (firstRange === undefined) {
+    return {rangeCount: 0, status: 'completed' as const}
+  }
+
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'selectedImport',
+      projectionManifests:
+        firstRange.writeProjectionState === false ? [] : [getSelectedImportProjectionManifest(firstRange)],
+      records: [],
+      statements: params.ranges.flatMap((range) => {
+        return range.replaceExistingRows === false
+          ? [
+              getInsertSelectedImportArticleRangeRowsStatement(range),
+              ...getRefreshSelectedImportServingArticleRangeStatements(range),
+            ]
+          : [
+              getDeleteSelectedImportArticleRangeRowsStatement(range),
+              getInsertSelectedImportArticleRangeRowsStatement(range),
+              ...getRefreshSelectedImportServingArticleRangeStatements(range),
+            ]
+      }),
+      selectedImportSnapshotCursor:
+        firstRange.writeProjectionState === false
+          ? undefined
+          : {
+              cursorJson: null,
+              projectId: firstRange.projectId,
+              projectScopeIdentity: firstRange.projectScopeIdentity,
+              selectedImportSnapshotId: firstRange.selectedImportSnapshotId,
+              sourceDeltaHighWater: firstRange.sourceDeltaHighWater,
+              status: 'completed',
+            },
+    },
+    database,
+  )
+
+  return {rangeCount: params.ranges.length, status: 'completed' as const}
 }
 
 export const refreshReviewServingSelectedImportServingArticleRange = async (
