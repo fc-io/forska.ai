@@ -2220,17 +2220,6 @@ const resetSelectedImportSnapshotForRebuild = async (
         project_scope_identity: input.projectScopeIdentity,
         selected_import_snapshot_id: input.selectedImportSnapshotId,
       },
-      table: 'mart.review_selected_import_patch_v4',
-    },
-    database,
-  )
-  await deleteReviewServingProjectorRows(
-    {
-      predicates: {
-        project_id: input.projectId,
-        project_scope_identity: input.projectScopeIdentity,
-        selected_import_snapshot_id: input.selectedImportSnapshotId,
-      },
       table: 'app.review_selected_article_import_v4',
     },
     database,

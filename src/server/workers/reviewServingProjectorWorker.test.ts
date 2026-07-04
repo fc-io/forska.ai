@@ -3142,6 +3142,7 @@ test('base rebuild chunks regenerate project scope and selected import state bef
   expect(joined).toContain('INSERT INTO mart.project_scope_article')
   expect(joined).toContain('projectScope.rebuild')
   expect(joined).toContain('reviewChange')
+  expect(joined).not.toContain('DELETE FROM mart.review_selected_import_patch_v4')
   expect(joined).toContain('DELETE FROM app.review_selected_article_import_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_selected_import_patch_v4')
   expect(joined).not.toContain('article_id IS NOT DISTINCT FROM')
