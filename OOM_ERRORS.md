@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-04 - Default Review-Serving Rebuild Batch Cap
+
+- Error: Turning serial multi-chunk review-serving rebuild batching on by default would be unsafe without a default memory cap.
+- Context: Maintenance heartbeat defaults for `reviewServing.projector.worker` controlled Phase 6 batching.
+- Cause: The previous guardrail existed only when an operator configured both batch size and RSS cap, so a default-on batch size could otherwise run uncapped.
+- Fix: Maintenance env defaults now use `FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE=2` with an auto system-memory-derived `FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES`, while explicit env overrides can still force size 1 or cap 0/off.
+- Verification: `bun test src/server/utils/env.test.ts src/server/utils/reviewServingProjectorWorkerHeartbeat.test.ts src/server/workers/reviewServingProjectorWorker.test.ts`.
+
 ## 2026-07-04 - Review-Serving Rebuild Batch RSS Guardrail
 
 - Error: Opt-in multi-chunk review-serving rebuild batches could keep claiming additional chunks even when process RSS was already high.

@@ -1,6 +1,6 @@
 import {expect, test} from 'bun:test'
 
-import {loadEnv} from './env.ts'
+import {getDefaultReviewServingRebuildChunkBatchMaxRssBytes, loadEnv} from './env.ts'
 
 test('uses local dev port defaults without env files', () => {
   const resolvedEnv = loadEnv({envValues: {}})
@@ -11,12 +11,34 @@ test('uses local dev port defaults without env files', () => {
   expect(resolvedEnv.PROJECT_MART_LARGE_REBUILD_BATCH_SIZE).toBe(128)
   expect(resolvedEnv.PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE).toBe(4)
   expect(resolvedEnv.PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS).toBe(1000)
-  expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES).toBe(0)
-  expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE).toBe(1)
+  expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES).toBe(
+    getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
+  )
+  expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE).toBe(2)
   expect(resolvedEnv.FORSKA_RUNTIME_PROFILE).toBe('local')
   expect(resolvedEnv.LOG_DIR).toBe(`${process.cwd()}/logs/runtime/local`)
   expect(resolvedEnv.LOG_LEVEL).toBe('INFO')
   expect(resolvedEnv.LOG_STDERR_LEVEL).toBe('WARN')
+})
+
+test('preserves explicit review serving rebuild chunk batch overrides', () => {
+  const resolvedEnv = loadEnv({
+    envValues: {
+      FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES: '0',
+      FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE: '1',
+    },
+  })
+
+  expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES).toBe(0)
+  expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE).toBe(1)
+})
+
+test('bounds default review serving rebuild chunk batch RSS cap from system memory', () => {
+  const gibibyte = 1024 ** 3
+
+  expect(getDefaultReviewServingRebuildChunkBatchMaxRssBytes(4 * gibibyte)).toBe(4 * gibibyte)
+  expect(getDefaultReviewServingRebuildChunkBatchMaxRssBytes(10 * gibibyte)).toBe(7 * gibibyte)
+  expect(getDefaultReviewServingRebuildChunkBatchMaxRssBytes(128 * gibibyte)).toBe(12 * gibibyte)
 })
 
 test('uses configured runtime log filtering and profile values', () => {
