@@ -2169,7 +2169,7 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   expect(joined).toContain('human_status_identity')
   expect(joined).toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
   expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
-  expect(filterOptionDeletes).toHaveLength(2)
+  expect(filterOptionDeletes).toHaveLength(0)
   expect(joined).toContain('"summaryProjectorSnapshots"')
   expect(joined).toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('"judgmentPayloadProjectorSnapshots"')
@@ -2182,7 +2182,7 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   ).toBe(3)
 })
 
-test('worker does not refresh summary filter options when a rebuild request is finalized', async () => {
+test('worker refreshes summary filter options when an active-snapshot summary request is finalized', async () => {
   const harness = createWorkerHarness()
   const statements: string[] = []
   const requestId = 'rebuild-summary-finalize'
@@ -2233,7 +2233,7 @@ test('worker does not refresh summary filter options when a rebuild request is f
       return [{pendingChunkCount: 0}] as T[]
     }
 
-    if (statement.includes("projection_component = 'summary'") && statement.includes('output_base_generation')) {
+    if (statement.includes('output_base_generation AS outputBaseGeneration')) {
       return [
         {
           outputBaseGeneration: summaryChunk.outputBaseGeneration,
@@ -2273,9 +2273,7 @@ test('worker does not refresh summary filter options when a rebuild request is f
     }
 
     if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId') && statement.includes("'candidate'")) {
-      return [
-        {projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-summary-finalize'},
-      ] as T[]
+      return [] as T[]
     }
 
     if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
@@ -2306,9 +2304,10 @@ test('worker does not refresh summary filter options when a rebuild request is f
 
   expect(result.chunk).toMatchObject({chunkId: summaryChunk.chunkId, status: 'completed'})
   expect(harness.runChunkInputs).toEqual([summaryChunk])
-  expect(filterOptionDeletes).toHaveLength(0)
+  expect(filterOptionDeletes).toHaveLength(2)
   expect(statements.join('\n')).toContain('FROM mart.review_article_summary_rebuild_partial_v4')
-  expect(statements.join('\n')).toContain("status = 'failed'")
+  expect(statements.join('\n')).toContain('FROM app.review_projection_identity_manifest')
+  expect(statements.join('\n')).toContain("status = 'completed'")
 })
 
 test('worker refreshes posting stats once when a posting rebuild request is finalized', async () => {
@@ -2560,11 +2559,11 @@ test('claimed requestless summary chunks fail fast before the legacy path', asyn
   expect(statements.join('\n')).not.toContain('mart.review_article_summary_rebuild_partial_v4')
 })
 
-test('request-associated summary chunk refresh failures happen before chunk completion', async () => {
+test('request-associated summary chunks stage partials without refreshing filter options', async () => {
   const statements: string[] = []
   const summaryChunk = {
     ...chunkManifest,
-    chunkId: 'chunk-summary-request-retryable-refresh',
+    chunkId: 'chunk-summary-request-staged-options',
     outputBaseGeneration: 7,
     projectionComponent: 'summary' as const,
     projectionIdentity: 'summary:project-1',
@@ -2597,10 +2596,6 @@ test('request-associated summary chunk refresh failures happen before chunk comp
         ] as T[]
       }
 
-      if (statement.includes('FROM app.review_projection_identity_manifest')) {
-        throw new Error('summary filter refresh failed')
-      }
-
       return [] as T[]
     },
     run: async (statement: string) => {
@@ -2611,17 +2606,16 @@ test('request-associated summary chunk refresh failures happen before chunk comp
     },
   }
 
-  try {
-    await runReviewServingProjectorWorkerClaimedRebuildChunk({chunk: summaryChunk, leaseOwner: 'worker-1'}, database)
-    throw new Error('expected summary filter refresh to fail')
-  } catch (error) {
-    expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).toBe('summary filter refresh failed')
-  }
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: summaryChunk, leaseOwner: 'worker-1'},
+    database,
+  )
 
+  expect(result).toEqual({status: 'completed'})
   expect(statements.join('\n')).toContain('mart.review_article_summary_rebuild_partial_v4')
-  expect(statements.join('\n')).toContain('FROM app.review_projection_identity_manifest')
-  expect(statements.join('\n')).not.toContain("status = 'completed'")
+  expect(statements.join('\n')).not.toContain('FROM app.review_projection_identity_manifest')
+  expect(statements.join('\n')).not.toContain('DELETE FROM mart.review_filter_option_serving_v4')
+  expect(statements.join('\n')).not.toContain('INSERT INTO mart.review_filter_option_serving_v4')
 })
 
 test('admission-presplit posting rebuild chunk still presplits above the runtime row budget', async () => {

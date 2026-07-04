@@ -1749,18 +1749,6 @@ const runSummaryRebuildChunk = async (
           Promise.resolve([] as unknown[]),
         )
 
-        await refreshSummaryFilterOptionsForProjections(
-          [
-            {
-              outputBaseGeneration: input.chunk.outputBaseGeneration,
-              projectId,
-              projectionIdentity: input.chunk.projectionIdentity,
-            },
-          ],
-          getChunkProjectorDatabase(tx) as ReviewServingChunkManifestRepositoryDatabase
-            & ReviewServingProjectorWorkerDatabase,
-        )
-
         return {diagnosticsJson: {summaryProjectorSnapshots: snapshotDiagnostics}}
       },
     },
@@ -3481,6 +3469,24 @@ const getRebuildRequestHasPostingChunks = async (
   return Number(row?.postingChunkCount ?? 0) > 0
 }
 
+const getRebuildRequestSummaryFilterOptionProjections = async (
+  requestId: string,
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  return database.queryJson<SummaryFilterOptionProjectionRow>(`
+    SELECT DISTINCT
+      output_base_generation AS outputBaseGeneration,
+      project_id AS projectId,
+      projection_identity AS projectionIdentity
+    FROM app.review_rebuild_chunk_manifest
+    WHERE request_id = ${getSqlLiteral(requestId)}
+      AND project_id IS NOT NULL
+      AND projection_component = 'summary'
+      AND status = 'completed'
+    ORDER BY project_id ASC, projection_identity ASC, output_base_generation ASC
+  `)
+}
+
 const refreshPostingStatsForRebuildRequestSnapshots = async (
   promotionRows: readonly RebuildRequestSnapshotPromotionRow[],
   database: ReviewServingProjectorWorkerDatabase,
@@ -3832,10 +3838,11 @@ const finalizeCompletedReviewServingRebuildRequest = async (
     return
   }
 
-  const [hasPostingChunks, reductionRows, promotionRows] = await Promise.all([
+  const [hasPostingChunks, reductionRows, promotionRows, summaryFilterOptionProjections] = await Promise.all([
     getRebuildRequestHasPostingChunks(chunk.requestId, database),
     getRebuildRequestSnapshotReductionTargets(chunk.requestId, database),
     getRebuildRequestSnapshotPromotions(chunk.requestId, database),
+    getRebuildRequestSummaryFilterOptionProjections(chunk.requestId, database),
   ])
 
   if (hasPostingChunks) {
@@ -3862,6 +3869,10 @@ const finalizeCompletedReviewServingRebuildRequest = async (
   const failedPromotion = promotions.find((promotion) => {
     return !promotion.promoted
   })
+
+  if (failedPromotion === undefined) {
+    await refreshSummaryFilterOptionsForProjections(summaryFilterOptionProjections, database)
+  }
 
   await markCompletedRebuildRequestFinalized(
     {

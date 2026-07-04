@@ -909,6 +909,15 @@ const getSummaryRebuildPartialScopePredicate = (input: {
     AND ${qualifier}snapshot_id = ${getSqlLiteral(input.snapshotId)}`
 }
 
+const getCompletedSummaryRebuildPartialChunkJoin = (partialAlias: string) => {
+  return `INNER JOIN app.review_rebuild_chunk_manifest chunk
+      ON chunk.request_id = ${partialAlias}.request_id
+      AND chunk.chunk_id = ${partialAlias}.chunk_id
+      AND chunk.project_id = ${partialAlias}.project_id
+      AND chunk.projection_component = 'summary'
+      AND chunk.status = 'completed'`
+}
+
 const getSummaryRebuildPartialChunkIdPredicate = (chunkIds: readonly string[]) => {
   return `chunk_id IN (${chunkIds
     .map((chunkId) => {
@@ -921,15 +930,16 @@ const getNextSummaryRebuildPartialReductionChunkIds = async (
   input: {projectId: string; requestId: string; reviewConfigHash: string; snapshotId: string},
   database: ReviewServingSummaryProjectorDatabase,
 ) => {
-  const scopePredicate = getSummaryRebuildPartialScopePredicate(input)
+  const scopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'partial'})
 
   return database.queryJson<{chunkId: string}>(`
-    SELECT chunk_id AS chunkId
-    FROM mart.review_article_summary_rebuild_partial_v4
+    SELECT partial.chunk_id AS chunkId
+    FROM mart.review_article_summary_rebuild_partial_v4 partial
+    ${getCompletedSummaryRebuildPartialChunkJoin('partial')}
     WHERE ${scopePredicate}
-      AND chunk_id <> ${getSqlLiteral(summaryRebuildPartialAccumulatorChunkId)}
-    GROUP BY chunk_id
-    ORDER BY chunk_id
+      AND partial.chunk_id <> ${getSqlLiteral(summaryRebuildPartialAccumulatorChunkId)}
+    GROUP BY partial.chunk_id
+    ORDER BY partial.chunk_id
     LIMIT ${summaryRebuildPartialReductionBatchSize}
   `)
 }
@@ -959,7 +969,7 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
   },
   database: ReviewServingSummaryProjectorDatabase,
 ) => {
-  const scopePredicate = getSummaryRebuildPartialScopePredicate(input)
+  const scopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'partial'})
   const chunkIdPredicate = getSummaryRebuildPartialChunkIdPredicate(input.chunkIds)
 
   await database.transaction(async (tx) => {
@@ -989,32 +999,33 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
         partial_updated_at
       )
       SELECT
-        request_id,
+        partial.request_id,
         ${getSqlLiteral(summaryRebuildPartialAccumulatorChunkId)} AS chunk_id,
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        serving_key,
-        summary_kind,
-        summary_identity,
-        ANY_VALUE(list_mode_key) AS list_mode_key,
-        ANY_VALUE(count_kind) AS count_kind,
-        ANY_VALUE(summary_definition_version) AS summary_definition_version,
-        ANY_VALUE(filter_key) AS filter_key,
-        ANY_VALUE(facet_kind) AS facet_kind,
-        ANY_VALUE(facet_key) AS facet_key,
-        ANY_VALUE(facet_value) AS facet_value,
-        ANY_VALUE(prompt_id) AS prompt_id,
-        ANY_VALUE(answer_id) AS answer_id,
-        ANY_VALUE(answer_value) AS answer_value,
-        ANY_VALUE(availability) AS availability,
-        ANY_VALUE(stale_reason) AS stale_reason,
-        CASE WHEN ANY_VALUE(availability) = 'ready' THEN SUM(COALESCE(count_value, 0)) ELSE NULL END AS count_value,
+        partial.project_id,
+        partial.review_config_hash,
+        partial.snapshot_id,
+        partial.serving_key,
+        partial.summary_kind,
+        partial.summary_identity,
+        ANY_VALUE(partial.list_mode_key) AS list_mode_key,
+        ANY_VALUE(partial.count_kind) AS count_kind,
+        ANY_VALUE(partial.summary_definition_version) AS summary_definition_version,
+        ANY_VALUE(partial.filter_key) AS filter_key,
+        ANY_VALUE(partial.facet_kind) AS facet_kind,
+        ANY_VALUE(partial.facet_key) AS facet_key,
+        ANY_VALUE(partial.facet_value) AS facet_value,
+        ANY_VALUE(partial.prompt_id) AS prompt_id,
+        ANY_VALUE(partial.answer_id) AS answer_id,
+        ANY_VALUE(partial.answer_value) AS answer_value,
+        ANY_VALUE(partial.availability) AS availability,
+        ANY_VALUE(partial.stale_reason) AS stale_reason,
+        CASE WHEN ANY_VALUE(partial.availability) = 'ready' THEN SUM(COALESCE(partial.count_value, 0)) ELSE NULL END AS count_value,
         current_timestamp AS partial_updated_at
-      FROM mart.review_article_summary_rebuild_partial_v4
+      FROM mart.review_article_summary_rebuild_partial_v4 partial
+      ${getCompletedSummaryRebuildPartialChunkJoin('partial')}
       WHERE ${scopePredicate}
-        AND ${chunkIdPredicate}
-      GROUP BY request_id, project_id, review_config_hash, snapshot_id, serving_key, summary_kind, summary_identity
+        AND partial.${chunkIdPredicate}
+      GROUP BY partial.request_id, partial.project_id, partial.review_config_hash, partial.snapshot_id, partial.serving_key, partial.summary_kind, partial.summary_identity
       ON CONFLICT(request_id, chunk_id, project_id, review_config_hash, snapshot_id, serving_key) DO UPDATE SET
         count_value = CASE
           WHEN excluded.availability = 'ready' AND availability = 'ready'
@@ -1025,7 +1036,7 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
     `)
     await tx.run(`
       DELETE FROM mart.review_article_summary_rebuild_partial_v4
-      WHERE ${scopePredicate}
+      WHERE ${getSummaryRebuildPartialScopePredicate(input)}
         AND ${chunkIdPredicate}
     `)
   })
@@ -1107,13 +1118,23 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         component_kind,
         summary_definition_version,
         contribution_key,
-        contribution_value,
+        ANY_VALUE(contribution_value) AS contribution_value,
         current_timestamp AS contribution_updated_at
-      FROM mart.review_article_summary_contribution_rebuild_partial_v4
+      FROM mart.review_article_summary_contribution_rebuild_partial_v4 partial_contribution
       WHERE request_id = ${getSqlLiteral(input.requestId)}
         AND project_id = ${getSqlLiteral(input.projectId)}
         AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
         AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        AND EXISTS (
+          SELECT 1
+          FROM app.review_rebuild_chunk_manifest chunk
+          WHERE chunk.request_id = partial_contribution.request_id
+            AND chunk.chunk_id = partial_contribution.chunk_id
+            AND chunk.project_id = partial_contribution.project_id
+            AND chunk.projection_component = 'summary'
+            AND chunk.status = 'completed'
+        )
+      GROUP BY project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key
     `)
     await tx.run(`
       INSERT INTO mart.review_article_count_serving_v4 (

@@ -185,7 +185,17 @@ const createDuckdbSummaryDatabase = async (
 }
 
 const createSummaryReductionSchema = async (database: ReviewServingSummaryProjectorDatabase) => {
+  await database.run('CREATE SCHEMA IF NOT EXISTS app')
   await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+  await database.run(`
+    CREATE TABLE app.review_rebuild_chunk_manifest (
+      request_id VARCHAR NOT NULL,
+      chunk_id VARCHAR NOT NULL,
+      project_id VARCHAR,
+      projection_component VARCHAR NOT NULL,
+      status VARCHAR NOT NULL
+    )
+  `)
   await database.run(`
     CREATE TABLE mart.review_article_summary_rebuild_partial_v4 (
       request_id VARCHAR NOT NULL,
@@ -278,6 +288,29 @@ const createSummaryReductionSchema = async (database: ReviewServingSummaryProjec
       facet_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
       PRIMARY KEY(project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version)
     )
+  `)
+}
+
+const insertSummaryChunkManifestRows = async (
+  database: ReviewServingSummaryProjectorDatabase,
+  input: {chunkIds: readonly string[]; requestId?: string; status?: string},
+) => {
+  const requestId = input.requestId ?? 'rebuild-summary-1'
+  const status = input.status ?? 'completed'
+  const values = input.chunkIds
+    .map((chunkId) => {
+      return `('${requestId}', '${chunkId}', 'project-1', 'summary', '${status}')`
+    })
+    .join(', ')
+
+  await database.run(`
+    INSERT INTO app.review_rebuild_chunk_manifest (
+      request_id,
+      chunk_id,
+      project_id,
+      projection_component,
+      status
+    ) VALUES ${values}
   `)
 }
 
@@ -540,7 +573,7 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   )
   const joined = statements.join('\n')
   const batchSelects = statements.filter((statement) => {
-    return statement.includes('GROUP BY chunk_id')
+    return statement.includes('GROUP BY partial.chunk_id')
   })
   const accumulatorWrites = statements.filter((statement) => {
     return statement.includes("'__summary_rebuild_partial_accumulator__' AS chunk_id")
@@ -549,6 +582,8 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   expect(batchSelects).toHaveLength(3)
   expect(accumulatorWrites).toHaveLength(2)
   expect(batchSelects[0]).toContain('LIMIT 256')
+  expect(batchSelects[0]).toContain('INNER JOIN app.review_rebuild_chunk_manifest chunk')
+  expect(batchSelects[0]).toContain("chunk.status = 'completed'")
   expect(batchSelects[0]).toContain("chunk_id <> '__summary_rebuild_partial_accumulator__'")
   expect(joined).toContain("chunk_id IN ('chunk-001', 'chunk-002')")
   expect(joined).toContain("chunk_id IN ('chunk-003')")
@@ -571,6 +606,7 @@ test('summary rebuild request finalization reduces conflicting partial chunks in
 
     try {
       await createSummaryReductionSchema(database)
+      await insertSummaryChunkManifestRows(database, {chunkIds: ['chunk-001', 'chunk-002']})
       await database.run(`
         INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
           request_id,
@@ -617,6 +653,136 @@ test('summary rebuild request finalization reduces conflicting partial chunks in
   }
 })
 
+test('summary rebuild request finalization ignores stale partial chunks without completed manifests', async () => {
+  const duckdbPath = `/tmp/forska-summary-stale-partial-finalize-${Date.now()}.duckdb`
+
+  try {
+    const {close, database} = await createDuckdbSummaryDatabase(duckdbPath)
+
+    try {
+      await createSummaryReductionSchema(database)
+      await insertSummaryChunkManifestRows(database, {chunkIds: ['chunk-current']})
+      await database.run(`
+        INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+          request_id,
+          chunk_id,
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          serving_key,
+          summary_kind,
+          summary_identity,
+          list_mode_key,
+          count_kind,
+          summary_definition_version,
+          filter_key,
+          count_value
+        ) VALUES
+          ('rebuild-summary-1', 'chunk-current', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 3),
+          ('rebuild-summary-1', 'chunk-stale', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 99)
+      `)
+
+      await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+        {
+          requestId: 'rebuild-summary-1',
+          snapshots: [{projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'}],
+        },
+        database,
+      )
+      const countRows = await database.queryJson<{countValue: string}>(`
+        SELECT CAST(count_value AS VARCHAR) AS countValue
+        FROM mart.review_article_count_serving_v4
+      `)
+
+      expect(countRows).toEqual([{countValue: '3'}])
+    } finally {
+      close()
+    }
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
+test('summary rebuild request finalization deduplicates overlapping contribution partials', async () => {
+  const duckdbPath = `/tmp/forska-summary-duplicate-contribution-finalize-${Date.now()}.duckdb`
+
+  try {
+    const {close, database} = await createDuckdbSummaryDatabase(duckdbPath)
+
+    try {
+      await createSummaryReductionSchema(database)
+      await insertSummaryChunkManifestRows(database, {chunkIds: ['chunk-left', 'chunk-right']})
+      await database.run(`
+        INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+          request_id,
+          chunk_id,
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          serving_key,
+          summary_kind,
+          summary_identity,
+          list_mode_key,
+          count_kind,
+          summary_definition_version,
+          filter_key,
+          count_value
+        ) VALUES (
+          'rebuild-summary-1',
+          'chunk-left',
+          'project-1',
+          'review-config-1',
+          'snapshot-1',
+          'count-key',
+          'count',
+          'review.llm.assessedByPrompt',
+          'llm',
+          'review.llm.assessedByPrompt',
+          'review-llm-assessed-by-prompt:v1',
+          'prompt:prompt-1',
+          1
+        )
+      `)
+      await database.run(`
+        INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4 (
+          request_id,
+          chunk_id,
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          article_id,
+          component_kind,
+          summary_definition_version,
+          contribution_key,
+          contribution_value
+        ) VALUES
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', 'same-key', 1),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', 'same-key', 1)
+      `)
+
+      await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+        {
+          requestId: 'rebuild-summary-1',
+          snapshots: [{projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'}],
+        },
+        database,
+      )
+      const contributionRows = await database.queryJson<{contributionValue: string; total: string}>(`
+        SELECT
+          CAST(COUNT(*) AS VARCHAR) AS total,
+          CAST(ANY_VALUE(contribution_value) AS VARCHAR) AS contributionValue
+        FROM mart.review_article_summary_contribution_v4
+      `)
+
+      expect(contributionRows).toEqual([{contributionValue: '1', total: '1'}])
+    } finally {
+      close()
+    }
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
 test('summary rebuild request finalization leaves serving summaries unchanged when no partials exist', async () => {
   const duckdbPath = `/tmp/forska-summary-partial-noop-${Date.now()}.duckdb`
 
@@ -625,6 +791,7 @@ test('summary rebuild request finalization leaves serving summaries unchanged wh
 
     try {
       await createSummaryReductionSchema(database)
+      await insertSummaryChunkManifestRows(database, {chunkIds: ['chunk-001']})
       await database.run(`
         INSERT INTO mart.review_article_count_serving_v4 (
           project_id,
@@ -810,6 +977,7 @@ test('summary rebuild request finalization deletes stale facets when no facet pa
 
     try {
       await createSummaryReductionSchema(database)
+      await insertSummaryChunkManifestRows(database, {chunkIds: ['chunk-001']})
       await database.run(`
         INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
           request_id,
