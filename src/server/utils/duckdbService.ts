@@ -4371,19 +4371,6 @@ export const runDuckdbMaintenance = async (
   })
 }
 
-const hasDuckdbSnapshotWal = (snapshotWalPath: string) => {
-  return Effect.tryPromise(() => {
-    return access(snapshotWalPath).then(
-      () => {
-        return true
-      },
-      () => {
-        return false
-      },
-    )
-  })
-}
-
 const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<DuckdbSnapshot, unknown, never> => {
   return Effect.gen(function* () {
     if (runtimeConfig.databasePath === ':memory:') {
@@ -4393,23 +4380,16 @@ const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<D
     const createdAt = new Date().toISOString()
     const snapshotName = `${basename(runtimeConfig.databasePath)}.${createdAt.replaceAll(':', '-')}.${randomUUID()}.duckdb`
     const snapshotPath = join(duckdbSnapshotDirectory, snapshotName)
-    const walPath = `${runtimeConfig.databasePath}.wal`
-    const snapshotWalPath = `${snapshotPath}.wal`
 
     yield* Effect.tryPromise(() => {
       return mkdir(duckdbSnapshotDirectory, {recursive: true})
     })
     yield* Effect.tryPromise(() => {
+      return runDuckdbStatementDirect('CHECKPOINT')
+    })
+    yield* Effect.tryPromise(() => {
       return copyFile(runtimeConfig.databasePath, snapshotPath)
     })
-
-    const hasWal = yield* hasDuckdbSnapshotWal(walPath)
-
-    if (hasWal) {
-      yield* Effect.tryPromise(() => {
-        return copyFile(walPath, snapshotWalPath)
-      })
-    }
 
     return {createdAt, snapshotPath} satisfies DuckdbSnapshot
   })
