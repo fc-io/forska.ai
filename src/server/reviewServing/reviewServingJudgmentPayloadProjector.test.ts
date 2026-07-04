@@ -30,13 +30,23 @@ const judgmentClaim = (input?: Partial<ReviewServingDirtyWorkClaim>): ReviewServ
 }
 
 const createJudgmentPayloadDatabase = (input?: {
+  humanCount?: number
   humanRows?: readonly Record<string, unknown>[]
+  llmCount?: number
   llmRows?: readonly Record<string, unknown>[]
 }) => {
   const statements: string[] = []
   const database: ReviewServingJudgmentPayloadProjectorDatabase = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
+
+      if (statement.includes('COUNT(*)') && statement.includes("payload_kind = 'llm'")) {
+        return [{rowCount: input?.llmCount ?? 0}] as T[]
+      }
+
+      if (statement.includes('COUNT(*)') && statement.includes("payload_kind = 'human'")) {
+        return [{rowCount: input?.humanCount ?? 0}] as T[]
+      }
 
       if (statement.includes('latest_judgment AS')) {
         return (input?.llmRows ?? []) as T[]
@@ -338,6 +348,50 @@ test('judgment payload projection writes payload manifest when acknowledging cla
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
   expect(joined).toContain('review-serving-judgment-payload-projector')
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+})
+
+test('claimless article-range judgment payload rebuild writes detail rows with SQL-native statements', async () => {
+  const {database, statements} = createJudgmentPayloadDatabase({humanCount: 4, llmCount: 4})
+
+  const result = await projectReviewServingJudgmentPayloadRows(
+    {...projectInput(), chunkEndArticleId: 'article-9', chunkStartArticleId: 'article-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+  const sourceQueries = statements.filter((statement) => {
+    return statement.includes('FROM active_article active') && !statement.includes('INSERT INTO')
+  })
+  const inserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO mart.review_article_judgment_detail_serving_v4')
+  })
+
+  expect(result).toMatchObject({
+    diagnosticsJson: {
+      judgmentPayloadProjector: {
+        directSqlWriter: true,
+        humanMaterializedRecordCount: 0,
+        llmMaterializedRecordCount: 0,
+        materializedRecordCount: 0,
+      },
+    },
+    humanRowCount: 4,
+    llmRowCount: 4,
+  })
+  expect(result.diagnosticsJson.phaseTimings.recordTransformMs).toBeUndefined()
+  expect(result.diagnosticsJson.phaseTimings.sourceQueryMs).toBeUndefined()
+  expect(result.diagnosticsJson.phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.phaseTimings.postWriteCountMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.judgmentPayloadProjector.writer.records.inputRecordCount).toBe(0)
+  expect(inserts).toHaveLength(2)
+  expect(sourceQueries).toHaveLength(0)
+  expect(joined).toContain("article_id >= 'article-1'")
+  expect(joined).toContain("article_id <= 'article-9'")
+  expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('llm'), ('both')))")
+  expect(joined).toContain("list_mode(list_mode_key) AS (SELECT * FROM (VALUES ('human'), ('both')))")
+  expect(joined).toContain('json_object(')
+  expect(joined).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO UPDATE SET',
+  )
 })
 
 test('article-set judgment hydration reads bounded payload rows with stable ordering', () => {
