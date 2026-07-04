@@ -85,7 +85,10 @@ import {
   projectReviewServingSelectedImportBatch,
 } from '../reviewServing/reviewServingSelectedImportProjector.ts'
 import {composeReviewServingCandidateSnapshotManifest} from '../reviewServing/reviewServingSnapshotPromotionService.ts'
-import {projectReviewServingSummaries} from '../reviewServing/reviewServingSummaryProjector.ts'
+import {
+  projectReviewServingSummaries,
+  reduceReviewServingSummaryRebuildPartialsForRequestSnapshots,
+} from '../reviewServing/reviewServingSummaryProjector.ts'
 import {
   projectReviewServingTitleSearchRebuildRows,
   projectReviewServingTitleSearchRows,
@@ -3488,152 +3491,6 @@ const refreshPostingStatsForRebuildRequestSnapshots = async (
   }, Promise.resolve())
 }
 
-const reduceSummaryRebuildPartialsForRequestSnapshot = async (
-  input: {projectId: string; requestId: string; reviewConfigHash: string; snapshotId: string},
-  database: ReviewServingProjectorWorkerDatabase,
-) => {
-  await database.transaction(async (tx) => {
-    await tx.run(`
-      DELETE FROM mart.review_article_count_serving_v4
-      WHERE project_id = ${getSqlLiteral(input.projectId)}
-        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-        AND EXISTS (
-          SELECT 1
-          FROM mart.review_article_summary_rebuild_partial_v4 partial
-          WHERE partial.request_id = ${getSqlLiteral(input.requestId)}
-            AND partial.project_id = ${getSqlLiteral(input.projectId)}
-            AND partial.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-            AND partial.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-            AND partial.summary_kind = 'count'
-        )
-    `)
-    await tx.run(`
-      DELETE FROM mart.review_filter_facet_serving_v4
-      WHERE project_id = ${getSqlLiteral(input.projectId)}
-        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-        AND EXISTS (
-          SELECT 1
-          FROM mart.review_article_summary_rebuild_partial_v4 partial
-          WHERE partial.request_id = ${getSqlLiteral(input.requestId)}
-            AND partial.project_id = ${getSqlLiteral(input.projectId)}
-            AND partial.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-            AND partial.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-            AND partial.summary_kind = 'facet'
-        )
-    `)
-    await tx.run(`
-      INSERT INTO mart.review_article_count_serving_v4 (
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        summary_identity,
-        list_mode_key,
-        count_kind,
-        summary_definition_version,
-        filter_key,
-        count_value,
-        availability,
-        stale_reason,
-        count_updated_at
-      )
-      SELECT
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        summary_identity,
-        COALESCE(list_mode_key, 'global') AS list_mode_key,
-        count_kind,
-        summary_definition_version,
-        filter_key,
-        CASE WHEN ANY_VALUE(availability) = 'ready' THEN SUM(COALESCE(count_value, 0)) ELSE NULL END AS count_value,
-        ANY_VALUE(availability) AS availability,
-        ANY_VALUE(stale_reason) AS stale_reason,
-        current_timestamp AS count_updated_at
-      FROM mart.review_article_summary_rebuild_partial_v4
-      WHERE request_id = ${getSqlLiteral(input.requestId)}
-        AND project_id = ${getSqlLiteral(input.projectId)}
-        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-        AND summary_kind = 'count'
-      GROUP BY project_id, review_config_hash, snapshot_id, summary_identity, COALESCE(list_mode_key, 'global'), count_kind, summary_definition_version, filter_key
-    `)
-    await tx.run(`
-      INSERT INTO mart.review_filter_facet_serving_v4 (
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        summary_identity,
-        facet_kind,
-        facet_key,
-        facet_value,
-        prompt_id,
-        answer_id,
-        answer_value,
-        summary_definition_version,
-        count_value,
-        availability,
-        facet_updated_at
-      )
-      SELECT
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        summary_identity,
-        facet_kind,
-        facet_key,
-        facet_value,
-        ANY_VALUE(prompt_id) AS prompt_id,
-        ANY_VALUE(answer_id) AS answer_id,
-        ANY_VALUE(answer_value) AS answer_value,
-        summary_definition_version,
-        CASE WHEN ANY_VALUE(availability) = 'ready' THEN SUM(COALESCE(count_value, 0)) ELSE NULL END AS count_value,
-        ANY_VALUE(availability) AS availability,
-        current_timestamp AS facet_updated_at
-      FROM mart.review_article_summary_rebuild_partial_v4
-      WHERE request_id = ${getSqlLiteral(input.requestId)}
-        AND project_id = ${getSqlLiteral(input.projectId)}
-        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-        AND summary_kind = 'facet'
-      GROUP BY project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version
-    `)
-    await tx.run(`
-      DELETE FROM mart.review_article_summary_rebuild_partial_v4
-      WHERE request_id = ${getSqlLiteral(input.requestId)}
-        AND project_id = ${getSqlLiteral(input.projectId)}
-        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-    `)
-  })
-}
-
-const reduceSummaryRebuildPartialsForRequestSnapshots = async (
-  input: {requestId: string; snapshots: readonly RebuildRequestSnapshotPromotionRow[]},
-  database: ReviewServingProjectorWorkerDatabase,
-) => {
-  await input.snapshots.reduce<Promise<void>>(async (previous, row) => {
-    await previous
-
-    if (row.reviewConfigHash === null) {
-      throw new Error(
-        `cannot reduce summary rebuild partials without review config hash for snapshot ${row.snapshotId}`,
-      )
-    }
-
-    await reduceSummaryRebuildPartialsForRequestSnapshot(
-      {
-        projectId: row.projectId,
-        requestId: input.requestId,
-        reviewConfigHash: row.reviewConfigHash,
-        snapshotId: row.snapshotId,
-      },
-      database,
-    )
-  }, Promise.resolve())
-}
-
 const refreshSummaryFilterOptionsForProjections = async (
   summaryProjections: readonly SummaryFilterOptionProjectionRow[],
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
@@ -3887,7 +3744,7 @@ const finalizeCompletedReviewServingRebuildRequest = async (
     await refreshPostingStatsForRebuildRequestSnapshots(promotionRows, database)
   }
 
-  await reduceSummaryRebuildPartialsForRequestSnapshots(
+  await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
     {requestId: chunk.requestId, snapshots: promotionRows},
     database,
   )
