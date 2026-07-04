@@ -11,6 +11,7 @@ import {
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
+  writeReviewServingQueueRebuildRanges,
   writeReviewServingQueueRebuildRows,
 } from './reviewServingProjectorWriter.ts'
 
@@ -41,6 +42,8 @@ export type ProjectReviewServingQueueRebuildInput = {
   selectedImportSnapshotId: string
   snapshotId: string
 }
+
+export type ProjectReviewServingQueueRebuildRangesInput = {ranges: readonly ProjectReviewServingQueueRebuildInput[]}
 
 type QueueSourceRow = {
   activitySortAt: Date | string | null
@@ -696,18 +699,33 @@ export const projectReviewServingQueueRebuildRows = async (
   input: ProjectReviewServingQueueRebuildInput,
   database: Pick<ReviewServingQueueProjectorDatabase, 'run'> = getAppDatabaseService(),
 ) => {
-  await writeReviewServingQueueRebuildRows(
+  await writeReviewServingQueueRebuildRows(getReviewServingQueueRebuildWriterInput(input), database)
+}
+
+const getReviewServingQueueRebuildWriterInput = (input: ProjectReviewServingQueueRebuildInput) => {
+  return {
+    projectId: input.projectId,
+    queueIdentitySql: getQueueIdentitySql({
+      promptId: 'queue.prompt_id',
+      queueKind: 'queue.queue_kind',
+      reviewConfigHash: 'queue.review_config_hash',
+    }),
+    rangePredicateSql: getQueueServingRangePredicate(input),
+    rebuildSourceCtesSql: getQueueRebuildSourceCtes(input),
+    reviewConfigHash: input.reviewConfigHash,
+    snapshotId: input.snapshotId,
+  }
+}
+
+export const projectReviewServingQueueRebuildRanges = async (
+  input: ProjectReviewServingQueueRebuildRangesInput,
+  database: ReviewServingQueueProjectorDatabase = getAppDatabaseService() as ReviewServingQueueProjectorDatabase,
+) => {
+  await writeReviewServingQueueRebuildRanges(
     {
-      projectId: input.projectId,
-      queueIdentitySql: getQueueIdentitySql({
-        promptId: 'queue.prompt_id',
-        queueKind: 'queue.queue_kind',
-        reviewConfigHash: 'queue.review_config_hash',
+      ranges: input.ranges.map((range) => {
+        return getReviewServingQueueRebuildWriterInput(range)
       }),
-      rangePredicateSql: getQueueServingRangePredicate(input),
-      rebuildSourceCtesSql: getQueueRebuildSourceCtes(input),
-      reviewConfigHash: input.reviewConfigHash,
-      snapshotId: input.snapshotId,
     },
     database,
   )
