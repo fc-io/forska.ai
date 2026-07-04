@@ -300,9 +300,7 @@ test('project-scoped summary rebuilds subtract prior contribution articles missi
 })
 
 test('unchunked full summary rebuild writes final serving rows without contribution state', async () => {
-  const {database, statements} = createSummaryDatabase({
-    sourceRows: [sourceCountRow(), sourceFacetRow()],
-  })
+  const {database, statements} = createSummaryDatabase({sourceRows: [sourceCountRow(), sourceFacetRow()]})
 
   const result = await projectReviewServingSummaries(projectInput([]), database)
   const joined = statements.join('\n')
