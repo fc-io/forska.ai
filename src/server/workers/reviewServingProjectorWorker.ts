@@ -512,6 +512,12 @@ const statusArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjectionCo
   'humanStatus',
   'llmStatus',
 ])
+const requestlessSummaryRangeRebuildChunkError =
+  'requestless ranged summary rebuild chunks are not supported; admit a request-associated review serving rebuild so summary partials can be reduced during request finalization'
+
+const isRequestlessSummaryRangeRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
+  return chunk.projectionComponent === 'summary' && chunk.requestId === null
+}
 
 const getArticleRangeRebuildChunkPresplitRowLimit = (chunk: ReviewServingRebuildChunkManifest) => {
   if (chunk.projectionComponent === 'summary') {
@@ -2568,6 +2574,10 @@ export const runReviewServingProjectorWorkerClaimedRebuildChunk = async (
   input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
+  if (isRequestlessSummaryRangeRebuildChunk(input.chunk)) {
+    throw new Error(requestlessSummaryRangeRebuildChunkError)
+  }
+
   if (shouldPresplitArticleRangeRebuildChunk(input.chunk)) {
     const split = await splitClaimedArticleRangeRebuildChunk(
       {
@@ -4118,6 +4128,26 @@ const logReviewServingProjectorWorkerRebuildChunkProgress = (input: {
   )
 }
 
+const rejectRequestlessSummaryRangeRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  await database.run(`
+    UPDATE app.review_rebuild_chunk_manifest
+    SET
+      status = 'quarantined',
+      retry_count = retry_count + 1,
+      retry_after = NULL,
+      last_error = ${getSqlLiteral(requestlessSummaryRangeRebuildChunkError)},
+      lease_owner = NULL,
+      lease_expires_at = NULL,
+      updated_at = current_timestamp
+    WHERE chunk_id = ${getSqlLiteral(input.chunk.chunkId)}
+      AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
+      AND status <> 'completed'
+  `)
+}
+
 const runReviewServingProjectorWorkerRebuildChunk = async ({
   database,
   dependencies,
@@ -4174,6 +4204,14 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
     await measureReviewServingProjectorWorkerPhase(timings, 'heartbeatMs', async () => {
       await heartbeatClaimedRebuildChunkLease({chunk: claimedChunk, database, dependencies, options, service, workerId})
     })
+    if (isRequestlessSummaryRangeRebuildChunk(claimedChunk)) {
+      await measureReviewServingProjectorWorkerPhase(timings, 'rejectRequestlessSummaryMs', async () => {
+        await rejectRequestlessSummaryRangeRebuildChunk({chunk: claimedChunk, leaseOwner: workerId}, database)
+      })
+      logReviewServingProjectorWorkerRebuildChunkProgress({chunk: claimedChunk, status: 'failed', timings, workerId})
+
+      return {chunkId: claimedChunk.chunkId, requestId: claimedChunk.requestId, status: 'failed'}
+    }
     await measureReviewServingProjectorWorkerPhase(timings, 'executeMs', async () => {
       await service.runClaimedChunk({chunk: claimedChunk, database, leaseOwner: workerId, workloadContext})
     })
