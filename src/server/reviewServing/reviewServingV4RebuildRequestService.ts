@@ -390,15 +390,9 @@ const getReviewServingV4BootstrapArticleRanges = async (
       FROM app.project_prompt project_prompt
       INNER JOIN project_settings project ON project.id = project_prompt.project_id
       INNER JOIN app.prompt prompt ON prompt.id = project_prompt.prompt_id
-      UNION ALL
-      SELECT llm.prompt_id
-      FROM mart.review_llm_status_patch_v4 llm
-      INNER JOIN project_settings project ON project.id = llm.project_id
-      UNION ALL
-      SELECT human.prompt_id
-      FROM mart.review_human_status_patch_v4 human
-      INNER JOIN project_settings project ON project.id = human.project_id
-      WHERE human.prompt_id <> 'summary'
+      WHERE project_prompt.enabled = TRUE
+        AND project_prompt.archived = FALSE
+        AND COALESCE(prompt.archived, FALSE) = FALSE
     ),
     rebuild_prompt AS (
       SELECT prompt_id
@@ -935,29 +929,9 @@ const getReviewServingV4RebuildStats = async (
       FROM app.project_prompt project_prompt
       INNER JOIN project_settings project ON project.id = project_prompt.project_id
       INNER JOIN app.prompt prompt ON prompt.id = project_prompt.prompt_id
-      UNION ALL
-      SELECT
-        llm.prompt_id,
-        NULL::TIMESTAMPTZ AS project_prompt_updated_at,
-        prompt.updated_at AS prompt_updated_at,
-        llm.patch_updated_at AS patch_prompt_updated_at,
-        COALESCE(prompt.content_hash, sha256(prompt.original_text), llm.prompt_id) AS prompt_content_hash,
-        NULL AS configured_prompt_content_hash
-      FROM mart.review_llm_status_patch_v4 llm
-      INNER JOIN project_settings project ON project.id = llm.project_id
-      LEFT JOIN app.prompt prompt ON prompt.id = llm.prompt_id
-      UNION ALL
-      SELECT
-        human.prompt_id,
-        NULL::TIMESTAMPTZ AS project_prompt_updated_at,
-        prompt.updated_at AS prompt_updated_at,
-        human.patch_updated_at AS patch_prompt_updated_at,
-        COALESCE(prompt.content_hash, sha256(prompt.original_text), human.prompt_id) AS prompt_content_hash,
-        NULL AS configured_prompt_content_hash
-      FROM mart.review_human_status_patch_v4 human
-      INNER JOIN project_settings project ON project.id = human.project_id
-      LEFT JOIN app.prompt prompt ON prompt.id = human.prompt_id
-      WHERE human.prompt_id <> 'summary'
+      WHERE project_prompt.enabled = TRUE
+        AND project_prompt.archived = FALSE
+        AND COALESCE(prompt.archived, FALSE) = FALSE
     ),
     rebuild_prompt AS (
       SELECT
