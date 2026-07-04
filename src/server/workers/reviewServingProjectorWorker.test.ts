@@ -221,7 +221,7 @@ test('worker can drain multiple rebuild chunks in one opt-in batch', async () =>
   const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-batch-1'}
   const secondChunk = {...chunkManifest, ...secondChunkInput, chunkId: 'chunk-batch-2'}
   const chunkInputs = [firstChunkInput, secondChunkInput]
-  const chunksByStartKey = new Map([
+  const chunksByStartKey = new Map<string, ReviewServingRebuildChunkManifest>([
     [firstChunkInput.chunkStartKey, firstChunk],
     [secondChunkInput.chunkStartKey, secondChunk],
   ])
@@ -229,6 +229,7 @@ test('worker can drain multiple rebuild chunks in one opt-in batch', async () =>
     [firstChunk.chunkId, firstChunk],
     [secondChunk.chunkId, secondChunk],
   ])
+  const claimCountsAtRun: number[] = []
   let nextIndex = 0
 
   harness.dependencies.rebuildChunkService = {
@@ -248,6 +249,12 @@ test('worker can drain multiple rebuild chunks in one opt-in batch', async () =>
 
       return chunksById.get(heartbeatInput.chunkId) ?? null
     },
+    runClaimedChunk: async ({chunk}) => {
+      claimCountsAtRun.push(harness.claimInputs.length)
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
   } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
 
   const result = await runReviewServingProjectorWorkerOnce(
@@ -263,7 +270,53 @@ test('worker can drain multiple rebuild chunks in one opt-in batch', async () =>
       return chunk.chunkId
     }),
   ).toEqual(['chunk-batch-1', 'chunk-batch-2'])
+  expect(claimCountsAtRun).toEqual([2, 2])
   expect(harness.wakeInputs).toHaveLength(1)
+})
+
+test('worker does not preclaim incompatible rebuild chunks in one batch', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const firstChunkInput = {...chunkInput, chunkEndKey: 'article-050', chunkStartKey: 'article-001'}
+  const secondChunkInput = {
+    ...chunkInput,
+    chunkEndKey: 'article-099',
+    chunkStartKey: 'article-051',
+    projectionComponent: 'payload' as const,
+    projectionIdentity: 'payload:project-1',
+  }
+  const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-batch-1'}
+  const secondChunk = {...chunkManifest, ...secondChunkInput, chunkId: 'chunk-batch-2'}
+  const chunkInputs = [firstChunkInput, secondChunkInput]
+  const chunksByStartKey = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunkInput.chunkStartKey, firstChunk],
+    [secondChunkInput.chunkStartKey, secondChunk],
+  ])
+  let nextIndex = 0
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInputs[nextIndex++] ?? null
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result.chunk).toMatchObject({chunkId: 'chunk-batch-1', status: 'completed'})
+  expect(result.chunkBatchCount).toBe(1)
+  expect(harness.getNextChunkInputs).toHaveLength(2)
+  expect(harness.claimInputs).toHaveLength(1)
+  expect(harness.runChunkInputs).toEqual([firstChunk])
 })
 
 test('worker keeps opt-in rebuild chunk batches below the RSS cap', async () => {
