@@ -8,6 +8,7 @@ import {
   insertJudgmentProviderTelemetryHistorySamples,
   type JudgmentProviderTelemetryHistorySampleInsert,
 } from '../services/judgmentProviderTelemetryHistoryService.ts'
+import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 import {HttpError} from '../utils/httpError.ts'
 
@@ -25,6 +26,10 @@ const providerRuntimeMatchResolverModulePath = new URL('../providers/providerRun
   .pathname
 const judgmentDispatchRuntimeModulePath = new URL('../cron/judgmentsJobs/judgmentDispatchRuntime.ts', import.meta.url)
   .pathname
+const appReadOnlyDatabaseServiceModulePath = new URL('../services/appReadOnlyDatabaseService.ts', import.meta.url)
+  .pathname
+
+let testReadOnlyDatabase: {queryJson: <T>(statement: string) => Promise<T[]>} | null = null
 
 const getDefaultRuntimeMatch = () => {
   return {
@@ -136,6 +141,21 @@ const registerModuleMocks = () => {
       getJudgmentDispatchQueueCapacity: state.getJudgmentDispatchQueueCapacity,
     }
   })
+  void mock.module(appReadOnlyDatabaseServiceModulePath, () => {
+    const getTestReadOnlyDatabase = () => {
+      if (!testReadOnlyDatabase) {
+        throw new Error('Test read-only database not initialized')
+      }
+
+      return testReadOnlyDatabase
+    }
+
+    return {
+      closeAppReadOnlyDatabaseServices: async () => {},
+      getApiReadOnlyAppDatabaseService: getTestReadOnlyDatabase,
+      getJudgeWorkerReadOnlyAppDatabaseService: getTestReadOnlyDatabase,
+    }
+  })
 }
 
 let app: {handle: (request: Request) => Promise<Response>} | null = null
@@ -163,6 +183,7 @@ beforeAll(async () => {
   await migrateDuckdb()
 
   const database = getAppDatabaseService()
+  testReadOnlyDatabase = database
 
   closeDatabase = () => {
     return database.close()
@@ -178,6 +199,7 @@ afterAll(async () => {
 
   await getJudgmentJobSqliteService().closeAll()
   await closeDatabase?.()
+  testReadOnlyDatabase = null
   tempRuntimeRoot.cleanup()
   mock.restore()
 })
@@ -407,6 +429,7 @@ const insertUnassessedServingFixture = async ({jobId, projectId}: {jobId: string
 
   const articleId = `unassessed-serving-article-${Date.now()}`
   const promptId = `unassessed-serving-prompt-${Date.now()}`
+  const snapshotId = `unassessed-serving-snapshot-${Date.now()}`
 
   await runDatabase(`
     INSERT INTO app.judgment_job (id, project_id, status, storage_state)
@@ -438,67 +461,96 @@ const insertUnassessedServingFixture = async ({jobId, projectId}: {jobId: string
     INSERT INTO mart.project_scope_article (project_id, article_id, in_curated_scope, in_route_scope, article_created_at, article_updated_at)
     VALUES ('${projectId}', '${articleId}', TRUE, FALSE, TIMESTAMPTZ '2025-09-09 00:00:00+00', TIMESTAMPTZ '2025-09-10 00:00:00+00')
   `)
+  const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
+
+  if (!reviewConfigHash) {
+    throw new Error('Failed to calculate review config hash for unassessed serving fixture')
+  }
+
   await runDatabase(`
-    INSERT INTO app.project_review_serving_generation (project_id, active_generation)
-    VALUES ('${projectId}', 1)
+    INSERT INTO app.review_serving_snapshot_manifest (
+      project_id,
+      snapshot_id,
+      snapshot_status,
+      review_config_hash,
+      composed_identity_json,
+      component_state_json,
+      required_components_json,
+      optional_components_json,
+      source_watermarks_json,
+      activated_at,
+      updated_at
+    ) VALUES (
+      '${projectId}',
+      '${snapshotId}',
+      'active',
+      '${reviewConfigHash}',
+      '{}'::JSON,
+      '{"required":[],"optional":[]}'::JSON,
+      '[]'::JSON,
+      '[]'::JSON,
+      '{}'::JSON,
+      TIMESTAMPTZ '2025-09-10 00:00:00+00',
+      TIMESTAMPTZ '2025-09-10 00:00:00+00'
+    )
   `)
   await runDatabase(`
-    INSERT INTO mart.review_article_serving (
+    INSERT INTO mart.review_article_serving_v4 (
       project_id,
-      generation,
+      review_config_hash,
+      snapshot_id,
+      base_generation,
+      patch_watermark,
+      display_identity,
+      project_scope_identity,
+      selected_import_identity,
+      llm_status_identity,
+      human_status_identity,
+      posting_identity,
+      summary_identity,
+      payload_identity,
+      list_mode_key,
       article_id,
       article_created_at,
       article_updated_at,
+      sort_key,
+      activity_sort_at,
       article_title,
-      article_external_id,
-      journal_title,
-      url,
-      full_text_pdf,
-      full_text_fetched_at,
-      full_text_conversion_status,
-      source_metadata,
-      has_all_llm_judgments,
       llm_judged_prompt_count,
-      llm_judged_prompt_ids,
-      enabled_prompt_count,
-      human_answered_prompt_count,
-      human_answered_prompt_ids,
-      has_all_human_answers,
-      review_opened,
-      review_sections_completed,
-      latest_llm_created_at,
-      latest_human_updated_at,
-      latest_review_updated_at,
-      serving_updated_at
+      enabled_prompt_count
     ) VALUES (
       '${projectId}',
+      '${reviewConfigHash}',
+      '${snapshotId}',
       1,
+      0,
+      'display:${snapshotId}',
+      'projectScope:${snapshotId}',
+      'selectedImport:${snapshotId}',
+      'llmStatus:${snapshotId}',
+      'humanStatus:${snapshotId}',
+      'posting:${snapshotId}',
+      'summary:${snapshotId}',
+      'payload:${snapshotId}',
+      'llm',
       '${articleId}',
       TIMESTAMPTZ '2025-09-09 00:00:00+00',
       TIMESTAMPTZ '2025-09-10 00:00:00+00',
+      TIMESTAMPTZ '2025-09-09 00:00:00+00',
+      TIMESTAMPTZ '2025-09-10 00:00:00+00',
       'Unassessed stale preview article',
-      'external-${articleId}',
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      TRUE,
       1,
-      ['${promptId}'],
-      1,
-      0,
-      NULL,
-      FALSE,
-      FALSE,
-      0,
-      current_timestamp,
-      NULL,
-      NULL,
-      current_timestamp
+      1
     )
   `)
+}
+
+const expectOkResponse = async (response: Response) => {
+  if (response.status !== 200) {
+    throw new Error(await response.text())
+  }
+
+  expect(response.status).toBe(200)
 }
 
 test('owner-backed claim route returns immutable execution snapshot identity and snapshot fetch returns payload', async () => {
@@ -4255,9 +4307,9 @@ test('unassessed endpoints stay serving-only while project marts are stale', asy
   const freshCountResponse = await app.handle(
     new Request(`http://localhost/api/judgmentsjobs-unassessed-count?jobId=${jobId}`),
   )
-  const freshCountBody = (await freshCountResponse.json()) as {count: number}
 
-  expect(freshCountResponse.status).toBe(200)
+  await expectOkResponse(freshCountResponse)
+  const freshCountBody = (await freshCountResponse.json()) as {count: number}
   expect(freshCountBody.count).toBe(0)
 
   await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
@@ -4268,17 +4320,17 @@ test('unassessed endpoints stay serving-only while project marts are stale', asy
   const staleCountResponse = await app.handle(
     new Request(`http://localhost/api/judgmentsjobs-unassessed-count?jobId=${jobId}`),
   )
-  const staleCountBody = (await staleCountResponse.json()) as {count: number}
 
-  expect(staleCountResponse.status).toBe(200)
+  await expectOkResponse(staleCountResponse)
+  const staleCountBody = (await staleCountResponse.json()) as {count: number}
   expect(staleCountBody.count).toBe(0)
 
   const previewResponse = await app.handle(
     new Request(`http://localhost/api/judgmentsjobs-unassessed-articles?jobId=${jobId}`),
   )
-  const previewBody = (await previewResponse.json()) as {data: Array<{articleTitle: string; id: string}>; error: null}
 
-  expect(previewResponse.status).toBe(200)
+  await expectOkResponse(previewResponse)
+  const previewBody = (await previewResponse.json()) as {data: Array<{articleTitle: string; id: string}>; error: null}
   expect(previewBody.error).toBeNull()
   expect(previewBody.data).toHaveLength(0)
 })
