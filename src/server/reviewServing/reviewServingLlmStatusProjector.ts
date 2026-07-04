@@ -25,6 +25,7 @@ export type ProjectReviewServingLlmStatusInput = {
   chunkStartArticleId?: string | null
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
+  emitPatchRows?: boolean
   listModeKeys: readonly string[]
   projectId: string
   projectionIdentity: string
@@ -849,6 +850,7 @@ export const projectReviewServingLlmStatusPatches = async (
     getArticleScopedRows(input, database),
   ])
   const patchWatermark = getPatchWatermark(input.claims)
+  const emitPatchRows = input.claims.length > 0 || (input.emitPatchRows ?? true)
   const rows = [...judgmentRows, ...promptRows, ...projectRows, ...articleRows]
   const recordRows = rows.flatMap((row) => {
     const promptConfigHash = getPromptConfigHash(row)
@@ -884,9 +886,9 @@ export const projectReviewServingLlmStatusPatches = async (
       acknowledgements: input.claims,
       component: 'llmStatus',
       projectionManifests: input.claims.length === 0 ? [] : [getLlmStatusPatchManifest(input)],
-      records,
+      records: emitPatchRows ? records : [],
       statements: [
-        input.claims.length === 0
+        input.claims.length === 0 && emitPatchRows
           ? getDeleteRebuiltLlmStatusPatchRowsStatement({
               baseGeneration: input.baseGeneration,
               chunkEndArticleId: input.chunkEndArticleId,
@@ -931,5 +933,5 @@ export const projectReviewServingLlmStatusPatches = async (
     database,
   )
 
-  return {patchRowCount: records.length, patchWatermark}
+  return {patchRowCount: emitPatchRows ? records.length : 0, patchWatermark}
 }
