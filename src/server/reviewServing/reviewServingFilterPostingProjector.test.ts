@@ -22,15 +22,6 @@ const contributionKey = (row: Record<string, unknown>) => {
   return JSON.stringify({filterKind: row.filterKind, filterValue: row.filterValue, listModeKey: row.listModeKey})
 }
 
-const contributionRow = (row: Record<string, unknown>) => {
-  return {
-    articleId: row.articleId,
-    contributionKey: contributionKey(row),
-    contributionValue: 1,
-    summaryDefinitionVersion: 'posting-v4-test',
-  }
-}
-
 const servingRowKey = (row: Record<string, unknown>) => {
   return JSON.stringify({
     articleId: row.articleId,
@@ -87,16 +78,16 @@ const createPostingDatabase = (input?: {
       }
 
       if (
-        statement.includes('FROM article_id_filter dirty')
-        && statement.includes('review_article_summary_contribution_v4')
-      ) {
-        return (input?.contributionRows ?? (input?.existingRows ?? []).map(contributionRow)) as T[]
-      }
-
-      if (
         statement.includes('SUM(contribution.contribution_value)')
         && statement.includes('GROUP BY filter.contribution_key')
       ) {
+        return (input?.contributionTotalRows
+          ?? (input?.statsRows ?? []).map((row) => {
+            return {contributionKey: contributionKey(row), contributionValue: row.cardinality ?? 0}
+          })) as T[]
+      }
+
+      if (statement.includes('stats_key_filter') && statement.includes('COUNT(serving.article_id)')) {
         return (input?.contributionTotalRows
           ?? (input?.statsRows ?? []).map((row) => {
             return {contributionKey: contributionKey(row), contributionValue: row.cardinality ?? 0}
@@ -226,7 +217,7 @@ test('full posting rebuilds refresh stats from serving state without JS contribu
   expect(joined).not.toContain('343341342341341300000')
 })
 
-test('full posting rebuilds write serving and contribution state without incremental patch fanout', async () => {
+test('full posting rebuilds write serving without contribution or incremental patch fanout', async () => {
   const {database, statements} = createPostingDatabase({
     existingRows: [],
     newRows: [
@@ -258,13 +249,8 @@ test('full posting rebuilds write serving and contribution state without increme
   )
   expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
-  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
-  expect(
-    statements.find((statement) => {
-      return statement.includes('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
-    }),
-  ).not.toContain('summary_definition_version')
-  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
+  expect(joined).not.toContain('INSERT INTO mart.review_article_summary_contribution_v4')
   expect(joined).toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
   expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
   expect(joined).toContain('WITH posting_source AS')
@@ -289,9 +275,7 @@ test('full posting rebuilds scope set-based serving deletes to article ranges', 
   expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain('serving.article_id >=')
   expect(joined).toContain('serving.article_id <=')
-  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
-  expect(joined).toContain('contribution.article_id >=')
-  expect(joined).toContain('contribution.article_id <=')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
 })
 
 test('chunked full posting rebuilds can defer stats refresh outside chunk writes', async () => {
