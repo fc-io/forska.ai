@@ -320,6 +320,11 @@ test('unchunked full summary rebuild writes final serving rows with contribution
   expect(joined).toContain('INSERT INTO mart.review_filter_facet_serving_v4')
   expect(joined).not.toContain('SELECT DISTINCT contribution.article_id AS articleId')
   expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4')
+  expect(
+    statements.find((statement) => {
+      return statement.includes('DELETE FROM mart.review_article_summary_contribution_v4')
+    }),
+  ).not.toContain('summary_definition_version')
   expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
 })
 
