@@ -12,6 +12,7 @@ import {
 const createSelectedImportProjectorDatabase = (input?: {
   batchRows?: readonly Record<string, unknown>[]
   cursorJson?: unknown
+  rangeRowCount?: number
 }) => {
   const statements: string[] = []
   const database: ReviewServingSelectedImportProjectorDatabase = {
@@ -24,6 +25,10 @@ const createSelectedImportProjectorDatabase = (input?: {
 
       if (statement.includes('FROM app.review_projection_identity_manifest')) {
         return [] as T[]
+      }
+
+      if (statement.includes('COUNT(*)') && statement.includes('FROM app.review_selected_article_import_v4 selected')) {
+        return [{rowCount: input?.rangeRowCount ?? 0}] as T[]
       }
 
       return (input?.batchRows ?? []) as T[]
@@ -159,14 +164,15 @@ test('selected-import projector reads project scope and hot fields in bounded de
   expect(batchSelect).toContain('LIMIT 3')
 })
 
-test('selected-import article range rebuild deletes the range before insert-only rows', async () => {
+test('selected-import article range rebuild writes selected rows directly in SQL', async () => {
   const {database, statements} = createSelectedImportProjectorDatabase({
     batchRows: [
       selectedImportRow({articleId: 'article-1', rankKeySort: '0000:article-1:source-1', rankNumericSort: 0}),
     ],
+    rangeRowCount: 7,
   })
 
-  await projectReviewServingSelectedImportArticleRange(
+  const result = await projectReviewServingSelectedImportArticleRange(
     {
       chunkEndArticleId: 'article-9',
       chunkStartArticleId: 'article-1',
@@ -184,13 +190,23 @@ test('selected-import article range rebuild deletes the range before insert-only
   const insertStatement = statements.find((statement) => {
     return statement.includes('INSERT INTO app.review_selected_article_import_v4')
   })
+  const sourceQueries = statements.filter((statement) => {
+    return statement.includes('WITH selected_import_candidates AS') && !statement.includes('INSERT INTO')
+  })
 
+  expect(result.insertedRowCount).toBe(7)
   expect(deleteStatement).toContain("project_id = 'project-1'")
   expect(deleteStatement).toContain("project_scope_identity = 'projectScope:identity-1'")
   expect(deleteStatement).toContain("selected_import_snapshot_id = 'selected-import-snapshot-1'")
   expect(deleteStatement).toContain("article_id >= 'article-1'")
   expect(deleteStatement).toContain("article_id <= 'article-9'")
-  expect(insertStatement).not.toContain('ON CONFLICT')
+  expect(insertStatement).toContain('WITH selected_import_candidates AS')
+  expect(insertStatement).toContain('ROW_NUMBER() OVER')
+  expect(insertStatement).toContain("WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)")
+  expect(insertStatement).toContain(
+    'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO UPDATE SET',
+  )
+  expect(sourceQueries).toHaveLength(0)
 })
 
 test('selected-import V4 projector does not use the runtime selected scoped import CTE', () => {
