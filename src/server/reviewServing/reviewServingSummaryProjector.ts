@@ -839,11 +839,157 @@ const getDirectFullSummaryPartialDeleteStatements = (input: ProjectReviewServing
   ]
 }
 
+const summaryRebuildPartialAccumulatorChunkId = '__summary_rebuild_partial_accumulator__'
+const summaryRebuildPartialReductionBatchSize = 256
+
+const getSummaryRebuildPartialScopePredicate = (input: {
+  alias?: string
+  projectId: string
+  requestId: string
+  reviewConfigHash: string
+  snapshotId: string
+}) => {
+  const qualifier = input.alias === undefined ? '' : `${input.alias}.`
+
+  return `${qualifier}request_id = ${getSqlLiteral(input.requestId)}
+    AND ${qualifier}project_id = ${getSqlLiteral(input.projectId)}
+    AND ${qualifier}review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+    AND ${qualifier}snapshot_id = ${getSqlLiteral(input.snapshotId)}`
+}
+
+const getSummaryRebuildPartialChunkIdPredicate = (chunkIds: readonly string[]) => {
+  return `chunk_id IN (${chunkIds
+    .map((chunkId) => {
+      return getSqlLiteral(chunkId)
+    })
+    .join(', ')})`
+}
+
+const getNextSummaryRebuildPartialReductionChunkIds = async (
+  input: {projectId: string; requestId: string; reviewConfigHash: string; snapshotId: string},
+  database: ReviewServingSummaryProjectorDatabase,
+) => {
+  const scopePredicate = getSummaryRebuildPartialScopePredicate(input)
+
+  return database.queryJson<{chunkId: string}>(`
+    SELECT chunk_id AS chunkId
+    FROM mart.review_article_summary_rebuild_partial_v4
+    WHERE ${scopePredicate}
+      AND chunk_id <> ${getSqlLiteral(summaryRebuildPartialAccumulatorChunkId)}
+    GROUP BY chunk_id
+    ORDER BY chunk_id
+    LIMIT ${summaryRebuildPartialReductionBatchSize}
+  `)
+}
+
+const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
+  input: {
+    chunkIds: readonly string[]
+    projectId: string
+    requestId: string
+    reviewConfigHash: string
+    snapshotId: string
+  },
+  database: ReviewServingSummaryProjectorDatabase,
+) => {
+  const scopePredicate = getSummaryRebuildPartialScopePredicate(input)
+  const chunkIdPredicate = getSummaryRebuildPartialChunkIdPredicate(input.chunkIds)
+
+  await database.transaction(async (tx) => {
+    await tx.run(`
+      INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+        request_id,
+        chunk_id,
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        serving_key,
+        summary_kind,
+        summary_identity,
+        list_mode_key,
+        count_kind,
+        summary_definition_version,
+        filter_key,
+        facet_kind,
+        facet_key,
+        facet_value,
+        prompt_id,
+        answer_id,
+        answer_value,
+        availability,
+        stale_reason,
+        count_value,
+        partial_updated_at
+      )
+      SELECT
+        request_id,
+        ${getSqlLiteral(summaryRebuildPartialAccumulatorChunkId)} AS chunk_id,
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        serving_key,
+        summary_kind,
+        summary_identity,
+        ANY_VALUE(list_mode_key) AS list_mode_key,
+        ANY_VALUE(count_kind) AS count_kind,
+        ANY_VALUE(summary_definition_version) AS summary_definition_version,
+        ANY_VALUE(filter_key) AS filter_key,
+        ANY_VALUE(facet_kind) AS facet_kind,
+        ANY_VALUE(facet_key) AS facet_key,
+        ANY_VALUE(facet_value) AS facet_value,
+        ANY_VALUE(prompt_id) AS prompt_id,
+        ANY_VALUE(answer_id) AS answer_id,
+        ANY_VALUE(answer_value) AS answer_value,
+        ANY_VALUE(availability) AS availability,
+        ANY_VALUE(stale_reason) AS stale_reason,
+        CASE WHEN ANY_VALUE(availability) = 'ready' THEN SUM(COALESCE(count_value, 0)) ELSE NULL END AS count_value,
+        current_timestamp AS partial_updated_at
+      FROM mart.review_article_summary_rebuild_partial_v4
+      WHERE ${scopePredicate}
+        AND ${chunkIdPredicate}
+      GROUP BY request_id, project_id, review_config_hash, snapshot_id, serving_key, summary_kind, summary_identity
+      ON CONFLICT(request_id, chunk_id, project_id, review_config_hash, snapshot_id, serving_key) DO UPDATE SET
+        count_value = CASE
+          WHEN excluded.availability = 'ready' AND availability = 'ready'
+          THEN COALESCE(count_value, 0) + COALESCE(excluded.count_value, 0)
+          ELSE NULL
+        END,
+        partial_updated_at = current_timestamp
+    `)
+    await tx.run(`
+      DELETE FROM mart.review_article_summary_rebuild_partial_v4
+      WHERE ${scopePredicate}
+        AND ${chunkIdPredicate}
+    `)
+  })
+}
+
+const reduceSummaryRebuildPartialBatchesIntoAccumulator = async (
+  input: {projectId: string; requestId: string; reviewConfigHash: string; snapshotId: string},
+  database: ReviewServingSummaryProjectorDatabase,
+): Promise<void> => {
+  const chunkRows = await getNextSummaryRebuildPartialReductionChunkIds(input, database)
+  const chunkIds = chunkRows.map((row) => {
+    return row.chunkId
+  })
+
+  if (chunkIds.length === 0) {
+    return
+  }
+
+  await reduceSummaryRebuildPartialChunkBatchIntoAccumulator({...input, chunkIds}, database)
+  await reduceSummaryRebuildPartialBatchesIntoAccumulator(input, database)
+}
+
 const reduceSummaryRebuildPartialsForRequestSnapshot = async (
   input: {projectId: string; requestId: string; reviewConfigHash: string; snapshotId: string},
   database: ReviewServingSummaryProjectorDatabase,
 ) => {
+  await reduceSummaryRebuildPartialBatchesIntoAccumulator(input, database)
+
   await database.transaction(async (tx) => {
+    const scopePredicate = getSummaryRebuildPartialScopePredicate(input)
+    const partialScopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'partial'})
     await tx.run(`
       DELETE FROM mart.review_article_count_serving_v4
       WHERE project_id = ${getSqlLiteral(input.projectId)}
@@ -852,10 +998,8 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         AND EXISTS (
           SELECT 1
           FROM mart.review_article_summary_rebuild_partial_v4 partial
-          WHERE partial.request_id = ${getSqlLiteral(input.requestId)}
-            AND partial.project_id = ${getSqlLiteral(input.projectId)}
-            AND partial.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-            AND partial.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          WHERE ${partialScopePredicate}
+            AND partial.chunk_id = ${getSqlLiteral(summaryRebuildPartialAccumulatorChunkId)}
             AND partial.summary_kind = 'count'
         )
     `)
@@ -867,10 +1011,8 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         AND EXISTS (
           SELECT 1
           FROM mart.review_article_summary_rebuild_partial_v4 partial
-          WHERE partial.request_id = ${getSqlLiteral(input.requestId)}
-            AND partial.project_id = ${getSqlLiteral(input.projectId)}
-            AND partial.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-            AND partial.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          WHERE ${partialScopePredicate}
+            AND partial.chunk_id = ${getSqlLiteral(summaryRebuildPartialAccumulatorChunkId)}
             AND partial.summary_kind = 'facet'
         )
     `)
@@ -903,10 +1045,8 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         ANY_VALUE(stale_reason) AS stale_reason,
         current_timestamp AS count_updated_at
       FROM mart.review_article_summary_rebuild_partial_v4
-      WHERE request_id = ${getSqlLiteral(input.requestId)}
-        AND project_id = ${getSqlLiteral(input.projectId)}
-        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      WHERE ${scopePredicate}
+        AND chunk_id = ${getSqlLiteral(summaryRebuildPartialAccumulatorChunkId)}
         AND summary_kind = 'count'
       GROUP BY project_id, review_config_hash, snapshot_id, summary_identity, COALESCE(list_mode_key, 'global'), count_kind, summary_definition_version, filter_key
     `)
@@ -943,19 +1083,14 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         ANY_VALUE(availability) AS availability,
         current_timestamp AS facet_updated_at
       FROM mart.review_article_summary_rebuild_partial_v4
-      WHERE request_id = ${getSqlLiteral(input.requestId)}
-        AND project_id = ${getSqlLiteral(input.projectId)}
-        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      WHERE ${scopePredicate}
+        AND chunk_id = ${getSqlLiteral(summaryRebuildPartialAccumulatorChunkId)}
         AND summary_kind = 'facet'
       GROUP BY project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version
     `)
     await tx.run(`
       DELETE FROM mart.review_article_summary_rebuild_partial_v4
-      WHERE request_id = ${getSqlLiteral(input.requestId)}
-        AND project_id = ${getSqlLiteral(input.projectId)}
-        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      WHERE ${scopePredicate}
     `)
   })
 }

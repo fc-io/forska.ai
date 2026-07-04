@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-04 - Summary Partial Finalization Reduction
+
+- Error: Live primary `dev:server` maintenance owner reached about 14.6GB RSS, then exited with Bun `panic: A C++ exception occurred` while the review-serving current-DB progress gate was advancing project `d03fe24a-cfcf-41ed-b09f-7b554a393d80`.
+- Context: Request-associated chunked full-summary rebuilds and completed-request finalization over `mart.review_article_summary_rebuild_partial_v4` under the bounded maintenance profile.
+- Cause: Summary partial finalization reduced all request partial rows for a snapshot with request-wide `INSERT ... GROUP BY` statements in one transaction, so large current-DB requests with tens of thousands of summary chunks could still create an unbounded native aggregation even though chunk projection was bounded.
+- Fix: Summary finalization now first reduces partial rows into per-serving-key accumulator rows in bounded `chunk_id` batches, atomically deleting each reduced batch, then writes final count/facet serving rows from the bounded accumulator only.
+- Verification: `bun test src/server/reviewServing/reviewServingSummaryProjector.test.ts`.
+
 ## 2026-07-04 - Low-Memory Migration Checkpoint OOM
 
 - Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` after `bun run db:mig` applied `0112_reviewServingSummaryRebuildPartial.sql`.
