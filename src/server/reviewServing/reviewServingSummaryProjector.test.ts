@@ -443,7 +443,7 @@ test('unchunked full summary rebuild writes final serving rows with contribution
   expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
 })
 
-test('chunked full summary rebuild writes request partials without contribution or final serving rows', async () => {
+test('chunked full summary rebuild writes request partials and contribution state without final serving rows', async () => {
   const {database, statements} = createSummaryDatabase({sourceRows: [sourceCountRow(), sourceFacetRow()]})
 
   const result = await projectReviewServingSummaries(
@@ -458,20 +458,23 @@ test('chunked full summary rebuild writes request partials without contribution 
   )
   const joined = statements.join('\n')
 
-  expect(result.contributionRowCount).toBe(0)
+  expect(result.contributionRowCount).toBe(2)
   expect(result.diagnosticsJson.summaryProjector).toMatchObject({
+    contributionRecordCount: 2,
     directFullSnapshot: true,
     partialFullSnapshot: true,
     partialRowCount: 2,
   })
   expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toMatchObject({
+    'mart.review_article_summary_contribution_v4': 2,
     'mart.review_article_summary_rebuild_partial_v4': 2,
   })
   expect(joined).toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
+  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
   expect(joined).toContain('INSERT INTO mart.review_article_summary_rebuild_partial_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
   expect(joined).toContain("article_id >= 'article-001'")
   expect(joined).toContain("article_id <= 'article-099'")
-  expect(joined).not.toContain('INSERT INTO mart.review_article_summary_contribution_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_filter_facet_serving_v4')
 })
@@ -569,6 +572,59 @@ test('summary rebuild request finalization reduces conflicting partial chunks in
 
       expect(countRows).toEqual([{countValue: '5'}])
       expect(partialRows).toEqual([{total: '0'}])
+    } finally {
+      close()
+    }
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
+test('summary rebuild request finalization deletes stale facets when no facet partials remain', async () => {
+  const duckdbPath = `/tmp/forska-summary-partial-empty-facet-${Date.now()}.duckdb`
+
+  try {
+    const {close, database} = await createDuckdbSummaryDatabase(duckdbPath)
+
+    try {
+      await createSummaryReductionSchema(database)
+      await database.run(`
+        INSERT INTO mart.review_filter_facet_serving_v4 (
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          summary_identity,
+          facet_kind,
+          facet_key,
+          facet_value,
+          summary_definition_version,
+          count_value
+        ) VALUES (
+          'project-1',
+          'review-config-1',
+          'snapshot-1',
+          'review.filter.promptAnswer',
+          'review',
+          'promptAnswer',
+          'old-answer',
+          'review-filter-prompt-answer:v1',
+          9
+        )
+      `)
+
+      await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+        {
+          requestId: 'rebuild-summary-1',
+          snapshots: [{projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'}],
+        },
+        database,
+      )
+      const facetRows = await database.queryJson<{total: string}>(`
+        SELECT CAST(COUNT(*) AS VARCHAR) AS total
+        FROM mart.review_filter_facet_serving_v4
+      `)
+
+      expect(facetRows).toEqual([{total: '0'}])
     } finally {
       close()
     }
