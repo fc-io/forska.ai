@@ -4,7 +4,7 @@
 
 Make the V4 review-serving rebuild path fast enough for the review page's normal "missing snapshot" path. This plan is intentionally investigation and implementation planning only; no code changes are included here.
 
-Status: PR #108's safe implementation slices are complete, and the current branch has started the next durable slices by removing claimless article-range `judgmentInputContent` rebuild JS materialization and selected-import article-range rebuild JS materialization. The remaining roadmap is deferred future work because the open items require benchmark evidence, direct snapshot/reduction design, or live DuckDB safety validation before implementation.
+Status: PR #108's safe implementation slices are complete, and the follow-up rebuild-speed slices removed claimless article-range `judgmentInputContent` rebuild JS materialization and selected-import article-range rebuild JS materialization. The remaining roadmap is deferred future work because the open items require benchmark evidence, direct snapshot/reduction design, or live DuckDB safety validation before implementation.
 
 ## Implementation Audit - Post PR #108 Merge
 
