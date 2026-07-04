@@ -103,6 +103,10 @@ export type WriteReviewServingTitleSearchRebuildRowsInput = {
   titlePrefixLength: number
 }
 
+export type WriteReviewServingTitleSearchRebuildRangesInput = {
+  ranges: readonly WriteReviewServingTitleSearchRebuildRowsInput[]
+}
+
 const projectorRecordBatchSize = 250
 const reviewServingProjectorDeleteScopedInsertOnlyTables = new Set<string>([
   'app.review_selected_article_import_v4',
@@ -527,20 +531,17 @@ export const promoteReviewServingProjectorSnapshot = async (
   })
 }
 
-export const writeReviewServingTitleSearchRebuildRows = async (
-  input: WriteReviewServingTitleSearchRebuildRowsInput,
-  database: Pick<ReviewServingProjectorWriterDatabase, 'run'> = getAppDatabaseService(),
-) => {
-  await database.run(`
+const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServingTitleSearchRebuildRowsInput) => {
+  return [
+    `
     DELETE FROM mart.review_title_search_serving_v4 search
     WHERE search.project_id = ${getSqlLiteral(input.projectId)}
       AND search.search_identity = ${getSqlLiteral(input.searchIdentity)}
       AND search.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
       AND search.snapshot_id = ${getSqlLiteral(input.snapshotId)}
       ${input.targetArticleRangePredicateSql}
-  `)
-
-  await database.run(`
+  `,
+    `
     INSERT INTO mart.review_title_search_serving_v4 (
       project_id,
       search_identity,
@@ -590,7 +591,35 @@ export const writeReviewServingTitleSearchRebuildRows = async (
       title_prefix = excluded.title_prefix,
       activity_sort_at = excluded.activity_sort_at,
       search_updated_at = excluded.search_updated_at
-  `)
+  `,
+  ]
+}
+
+export const writeReviewServingTitleSearchRebuildRows = async (
+  input: WriteReviewServingTitleSearchRebuildRowsInput,
+  database: Pick<ReviewServingProjectorWriterDatabase, 'run'> = getAppDatabaseService(),
+) => {
+  await getReviewServingTitleSearchRebuildRowsStatements(input).reduce<Promise<void>>(async (previous, statement) => {
+    await previous
+    await database.run(statement)
+  }, Promise.resolve())
+}
+
+export const writeReviewServingTitleSearchRebuildRanges = async (
+  input: WriteReviewServingTitleSearchRebuildRangesInput,
+  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
+) => {
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'search',
+      projectionManifests: [],
+      records: [],
+      statements: input.ranges.flatMap((range) => {
+        return getReviewServingTitleSearchRebuildRowsStatements(range)
+      }),
+    },
+    database,
+  )
 }
 
 export const writeReviewServingQueueRebuildRows = async (
