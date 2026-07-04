@@ -24,6 +24,8 @@ test('duckdb snapshots copy database without forcing a checkpoint', () => {
 
   expect(copySnapshotSource).not.toContain("runDuckdbStatementDirect('CHECKPOINT')")
   expect(copySnapshotSource).toContain('copyFile(runtimeConfig.databasePath, snapshotPath)')
+  expect(copySnapshotSource).toContain('copyFile(sourceWalPath, snapshotWalPath)')
+  expect(copySnapshotSource).toContain("code !== 'ENOENT'")
 })
 
 test('duckdb service reuses the same embedded runtime across module reloads', async () => {

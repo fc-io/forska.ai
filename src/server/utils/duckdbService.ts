@@ -29,6 +29,7 @@ type DuckdbRuntimeConfig = {
   tempDirectory: string | null
   threads: string
 }
+type NodeErrorWithCode = Error & {code?: string}
 export type ReadOnlyDuckdbRuntimeOptionsInput = {
   accessMode?: 'READ_ONLY'
   memoryLimit?: string
@@ -4386,6 +4387,18 @@ const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<D
     })
     yield* Effect.tryPromise(() => {
       return copyFile(runtimeConfig.databasePath, snapshotPath)
+    })
+    yield* Effect.tryPromise(async () => {
+      const sourceWalPath = `${runtimeConfig.databasePath}.wal`
+      const snapshotWalPath = `${snapshotPath}.wal`
+
+      try {
+        await copyFile(sourceWalPath, snapshotWalPath)
+      } catch (error) {
+        if ((error as NodeErrorWithCode).code !== 'ENOENT') {
+          throw error
+        }
+      }
     })
 
     return {createdAt, snapshotPath} satisfies DuckdbSnapshot
