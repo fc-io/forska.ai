@@ -26,7 +26,12 @@ export type ReviewServingSummaryProjectorDatabase = ReviewServingProjectorWriter
 
 export type ReviewServingSummarySnapshotReductionInput = {
   requestId: string
-  snapshots: readonly {projectId: string; reviewConfigHash: string | null; snapshotId: string}[]
+  snapshots: readonly {
+    hasSummaryRebuildChunks?: boolean
+    projectId: string
+    reviewConfigHash: string | null
+    snapshotId: string
+  }[]
 }
 
 export type ProjectReviewServingSummariesInput = {
@@ -1007,14 +1012,20 @@ const reduceSummaryRebuildPartialBatchesIntoAccumulator = async (
 }
 
 const reduceSummaryRebuildPartialsForRequestSnapshot = async (
-  input: {projectId: string; requestId: string; reviewConfigHash: string; snapshotId: string},
+  input: {
+    hasSummaryRebuildChunks?: boolean
+    projectId: string
+    requestId: string
+    reviewConfigHash: string
+    snapshotId: string
+  },
   database: ReviewServingSummaryProjectorDatabase,
 ) => {
   await reduceSummaryRebuildPartialBatchesIntoAccumulator(input, database)
 
   const accumulatorPartialCount = await getSummaryRebuildAccumulatorPartialCount(input, database)
 
-  if (accumulatorPartialCount === 0) {
+  if (accumulatorPartialCount === 0 && input.hasSummaryRebuildChunks !== true) {
     return
   }
 
@@ -1118,14 +1129,19 @@ export const reduceReviewServingSummaryRebuildPartialsForRequestSnapshots = asyn
   await input.snapshots.reduce<Promise<void>>(async (previous, row) => {
     await previous
 
-    if (row.reviewConfigHash === null) {
+    if (row.reviewConfigHash === null && row.hasSummaryRebuildChunks === true) {
       throw new Error(
         `cannot reduce summary rebuild partials without review config hash for snapshot ${row.snapshotId}`,
       )
     }
 
+    if (row.reviewConfigHash === null) {
+      return
+    }
+
     await reduceSummaryRebuildPartialsForRequestSnapshot(
       {
+        hasSummaryRebuildChunks: row.hasSummaryRebuildChunks,
         projectId: row.projectId,
         requestId: input.requestId,
         reviewConfigHash: row.reviewConfigHash,

@@ -1401,6 +1401,30 @@ test('worker default dependencies discover chunks and cleanup targets instead of
   expect(source).not.toContain("runClaimedChunk: async () => {\n      return {status: 'completed'}")
 })
 
+test('runtime-presplit rebuild chunks do not reuse inclusive boundary starts', () => {
+  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+
+  expect(source).toContain('chunkStartKey: formatUuidArticleId(index === 0 ? start : previousEnd + 1n)')
+  expect(source).toContain('scoped_start_key AS chunkStartKey')
+  expect(source).not.toContain('COALESCE(previous_scoped_end_key')
+})
+
+test('request snapshot targets match null-snapshot chunks by component generation', () => {
+  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const start = source.indexOf('const getRebuildRequestSnapshotTargets = async')
+  const end = source.indexOf('\nconst getRebuildRequestSnapshotReductionTargets', start)
+  const targetSource = source.slice(start, end)
+
+  expect(targetSource).toContain(
+    "CAST(json_extract_string(state.value, '$.baseGeneration') AS BIGINT) = chunk.output_base_generation",
+  )
+  expect(targetSource).toContain('AS hasSummaryRebuildChunks')
+  expect(targetSource).toContain("summary_chunk.projection_component = 'summary'")
+  expect(targetSource).toContain(
+    "CAST(json_extract_string(summary_state.value, '$.baseGeneration') AS BIGINT) = summary_chunk.output_base_generation",
+  )
+})
+
 test('display rebuild chunk executor writes bounded base rows and completes the chunk', async () => {
   const statements: string[] = []
   const displayChunk = {
