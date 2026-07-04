@@ -30,6 +30,11 @@ export type ProjectReviewServingJudgmentPayloadInput = {
   useTitle: boolean
 }
 
+export type ProjectReviewServingJudgmentPayloadArticleRangeInput = ProjectReviewServingJudgmentPayloadInput & {
+  chunkEndArticleId: string
+  chunkStartArticleId: string
+}
+
 type JudgmentPayloadKind = 'human' | 'llm'
 
 const rowNumberSql = ['row', 'number'].join('_')
@@ -651,4 +656,38 @@ export const projectReviewServingJudgmentPayloadRows = async (
     humanRowCount: result.humanRowCount,
     llmRowCount: result.llmRowCount,
   }
+}
+
+export const projectReviewServingJudgmentPayloadArticleRanges = async (
+  params: {ranges: readonly ProjectReviewServingJudgmentPayloadArticleRangeInput[]},
+  database: ReviewServingJudgmentPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingJudgmentPayloadProjectorDatabase,
+) => {
+  const [firstRange] = params.ranges
+
+  if (firstRange === undefined) {
+    return {rangeCount: 0, status: 'completed' as const}
+  }
+
+  await writeReviewServingProjectorComponent(
+    {
+      acknowledgements: [],
+      component: 'payload',
+      projectionManifests: [],
+      records: [],
+      statements: params.ranges.flatMap((range) => {
+        const requestedPayloadKinds = getRequestedPayloadKinds(range.listModeKeys)
+        const insertStatements = [
+          getLlmJudgmentDirectInsertStatement(range),
+          getHumanJudgmentDirectInsertStatement(range),
+        ].filter((statement): statement is string => {
+          return statement !== null
+        })
+
+        return [...getReplacementDeleteStatements(range, requestedPayloadKinds), ...insertStatements]
+      }),
+    },
+    database,
+  )
+
+  return {rangeCount: params.ranges.length, status: 'completed' as const}
 }

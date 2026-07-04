@@ -43,7 +43,10 @@ import {
   refreshReviewServingFilterPostingStats,
 } from '../reviewServing/reviewServingFilterPostingProjector.ts'
 import {projectReviewServingHumanStatusPatches} from '../reviewServing/reviewServingHumanStatusProjector.ts'
-import {projectReviewServingJudgmentPayloadRows} from '../reviewServing/reviewServingJudgmentPayloadProjector.ts'
+import {
+  projectReviewServingJudgmentPayloadArticleRanges,
+  projectReviewServingJudgmentPayloadRows,
+} from '../reviewServing/reviewServingJudgmentPayloadProjector.ts'
 import {projectReviewServingLlmStatusPatches} from '../reviewServing/reviewServingLlmStatusProjector.ts'
 import {
   createCandidateReviewServingSnapshotManifest,
@@ -2609,6 +2612,142 @@ const runSelectedImportRebuildChunkBatch = async (
   })
 }
 
+const canRunJudgmentInputContentRebuildChunkBatch = (chunks: readonly ReviewServingRebuildChunkManifest[]) => {
+  return (
+    chunks.length > 1
+    && chunks.every((chunk) => {
+      return chunk.projectionComponent === 'judgmentInputContent' && chunk.requestId === null
+    })
+  )
+}
+
+const completeJudgmentInputContentRebuildChunkAfterBatchWrite = async (
+  input: {
+    batchRangeCount: number
+    chunk: ReviewServingRebuildChunkManifest
+    leaseOwner: string
+    snapshotIds: readonly string[]
+  },
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  const completedChunk = await writeReviewServingRebuildChunkOutput(
+    {
+      ...input.chunk,
+      diagnosticsJson: {judgmentInputContentBatchWriter: {rangeCount: input.batchRangeCount}},
+      leaseOwner: input.leaseOwner,
+      validateOutput: async (tx) => {
+        return getRebuildChunkOutputValidation({
+          chunk: input.chunk,
+          getChecksum: () => {
+            return getJudgmentInputContentRebuildChunkOutputChecksum(
+              {chunk: input.chunk, snapshotIds: input.snapshotIds},
+              tx,
+            )
+          },
+          getCount: () => {
+            return getJudgmentInputContentRebuildChunkOutputCount(
+              {chunk: input.chunk, snapshotIds: input.snapshotIds},
+              tx,
+            )
+          },
+        })
+      },
+      writeOutput: async () => {
+        return {diagnosticsJson: {judgmentInputContentBatchWriter: {writeOutputAlreadyCompleted: true}}}
+      },
+    },
+    database,
+  )
+
+  if (completedChunk === null) {
+    throw new Error(`review serving rebuild chunk ${input.chunk.chunkId} is no longer claimed by ${input.leaseOwner}`)
+  }
+}
+
+const runJudgmentInputContentRebuildChunkBatch = async (
+  input: {chunks: readonly ReviewServingRebuildChunkManifest[]; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  if (!canRunJudgmentInputContentRebuildChunkBatch(input.chunks)) {
+    return null
+  }
+
+  const [firstChunk] = input.chunks
+  if (firstChunk === undefined) {
+    return null
+  }
+
+  const projectId = requireRebuildChunkProjectId(firstChunk)
+  const manifest = await requireRebuildChunkProjectionManifest(firstChunk, database)
+  const snapshots = await getRebuildChunkSnapshots(firstChunk, database)
+  const snapshotIds = getRebuildSnapshotIds(snapshots)
+  const currentSettings = await getCurrentProjectReviewSnapshotSettings(projectId, database)
+  const payloadSnapshots = snapshots.filter((snapshot) => {
+    return getSnapshotReviewSettings(snapshot, currentSettings) !== null
+  })
+
+  await database.transaction(async (tx) => {
+    await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
+      await previous
+      await requireClaimedRebuildChunk({chunk, leaseOwner: input.leaseOwner}, tx)
+    }, Promise.resolve())
+
+    const chunkDatabase = getChunkProjectorDatabase(tx)
+
+    await payloadSnapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+      await previous
+      const project = getSnapshotReviewSettings(snapshot, currentSettings)
+
+      if (project === null) {
+        return
+      }
+
+      await projectReviewServingJudgmentPayloadArticleRanges(
+        {
+          ranges: input.chunks.map((chunk) => {
+            return {
+              acknowledgeClaims: false,
+              baseGeneration: chunk.outputBaseGeneration,
+              chunkEndArticleId: chunk.chunkEndKey,
+              chunkStartArticleId: chunk.chunkStartKey,
+              claims: [],
+              definitionVersion: manifest.definitionVersion,
+              listModeKeys: reviewServingListModes,
+              modelId: project.modelId,
+              projectId,
+              projectionIdentity: chunk.projectionIdentity,
+              reviewConfigHash: requireReviewConfigHash(snapshot),
+              snapshotId: snapshot.snapshotId,
+              useAbstract: project.useAbstract,
+              useFulltext: project.useFulltext,
+              useFulltextNoImages: project.useFulltextNoImages,
+              useTitle: project.useTitle,
+            }
+          }),
+        },
+        chunkDatabase,
+      )
+    }, Promise.resolve())
+  })
+
+  await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
+    await previous
+    await completeJudgmentInputContentRebuildChunkAfterBatchWrite(
+      {batchRangeCount: input.chunks.length, chunk, leaseOwner: input.leaseOwner, snapshotIds},
+      database,
+    )
+  }, Promise.resolve())
+
+  return input.chunks.map((chunk) => {
+    return {
+      chunkId: chunk.chunkId,
+      projectionComponent: chunk.projectionComponent,
+      requestId: chunk.requestId,
+      status: 'completed' as const,
+    }
+  })
+}
+
 export const runReviewServingProjectorWorkerClaimedRebuildChunk = async (
   input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
@@ -4594,6 +4733,97 @@ const runSelectedImportReviewServingProjectorWorkerRebuildChunkBatch = async (in
   return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
 }
 
+const runJudgmentInputContentReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
+  claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+  workerId: string
+}): Promise<{chunk: ReviewServingProjectorWorkerChunkResult; completedCount: number} | null> => {
+  const chunks = input.claimedChunks.map((claimed) => {
+    return claimed.chunk
+  })
+  let completedCount = 0
+  let lastCompletedChunk: ReviewServingProjectorWorkerChunkResult | null = null
+  let batchResults: Awaited<ReturnType<typeof runJudgmentInputContentRebuildChunkBatch>>
+
+  try {
+    await input.claimedChunks.reduce<Promise<void>>(async (previous, claimed) => {
+      await previous
+      await measureReviewServingProjectorWorkerPhase(claimed.timings, 'heartbeatMs', async () => {
+        await heartbeatClaimedRebuildChunkLease({
+          chunk: claimed.chunk,
+          database: input.database,
+          dependencies: input.dependencies,
+          options: input.options,
+          service: claimed.service,
+          workerId: input.workerId,
+        })
+      })
+    }, Promise.resolve())
+    batchResults = await runJudgmentInputContentRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+  } catch (error) {
+    const [firstClaimed] = input.claimedChunks
+
+    if (firstClaimed === undefined) {
+      throw error
+    }
+
+    const failedChunk = await measureReviewServingProjectorWorkerPhase(
+      firstClaimed.timings,
+      'failUpdateMs',
+      async () => {
+        return firstClaimed.service.failChunk(
+          {chunkId: firstClaimed.chunk.chunkId, error: getErrorText(error), leaseOwner: input.workerId},
+          input.database,
+        )
+      },
+    )
+    await measureReviewServingProjectorWorkerPhase(firstClaimed.timings, 'finalizeFailedRequestMs', async () => {
+      await finalizeFailedReviewServingRebuildRequest(failedChunk, input.database)
+    })
+    logReviewServingProjectorWorkerRebuildChunkProgress({
+      chunk: firstClaimed.chunk,
+      status: 'failed',
+      timings: firstClaimed.timings,
+      workerId: input.workerId,
+    })
+
+    return {
+      chunk: {chunkId: firstClaimed.chunk.chunkId, requestId: firstClaimed.chunk.requestId, status: 'failed'},
+      completedCount,
+    }
+  }
+
+  if (batchResults === null) {
+    return null
+  }
+
+  for (const result of batchResults) {
+    const claimed = input.claimedChunks.find((candidate) => {
+      return candidate.chunk.chunkId === result.chunkId
+    })
+
+    if (claimed === undefined) {
+      continue
+    }
+
+    await measureReviewServingProjectorWorkerPhase(claimed.timings, 'finalizeRequestMs', async () => {
+      await finalizeCompletedReviewServingRebuildRequest(claimed.chunk, input.database)
+    })
+    logReviewServingProjectorWorkerRebuildChunkProgress({
+      chunk: claimed.chunk,
+      status: 'completed',
+      timings: claimed.timings,
+      workerId: input.workerId,
+    })
+    completedCount += 1
+    lastCompletedChunk = result
+  }
+
+  return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
+}
+
 const runReviewServingProjectorWorkerRebuildChunkBatch = async (
   input: Parameters<typeof runReviewServingProjectorWorkerRebuildChunk>[0],
 ): Promise<{chunk: ReviewServingProjectorWorkerChunkResult; completedCount: number}> => {
@@ -4618,6 +4848,18 @@ const runReviewServingProjectorWorkerRebuildChunkBatch = async (
 
     if (selectedImportBatch !== null) {
       return selectedImportBatch
+    }
+
+    const judgmentInputContentBatch = await runJudgmentInputContentReviewServingProjectorWorkerRebuildChunkBatch({
+      claimedChunks: claimedBatch.claimedChunks,
+      database: input.database,
+      dependencies: input.dependencies,
+      options: input.options,
+      workerId: input.workerId,
+    })
+
+    if (judgmentInputContentBatch !== null) {
+      return judgmentInputContentBatch
     }
 
     for (const claimed of claimedBatch.claimedChunks) {
