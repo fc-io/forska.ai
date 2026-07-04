@@ -247,6 +247,10 @@ const getSummaryContributionRows = async (
 ) => {
   const articleIds = getClaimArticleIds(input.claims)
 
+  if (input.claims.length === 0) {
+    return getFullRebuildSummaryContributionRows(input, database)
+  }
+
   return input.listModeKeys.length === 0
     ? []
     : database.queryJson<SummaryContributionSourceRow>(`
@@ -475,6 +479,159 @@ const getSummaryContributionRows = async (
                 AND newer.base_generation = human.base_generation
                 AND newer.patch_watermark > human.patch_watermark
             )
+        ),
+        summary_union AS (
+          SELECT * FROM base_counts
+          UNION ALL SELECT * FROM selected_facets
+          UNION ALL SELECT * FROM llm_counts
+          UNION ALL SELECT * FROM human_counts
+          UNION ALL SELECT * FROM conflict_counts
+          UNION ALL SELECT * FROM answer_facets
+        )
+        SELECT * FROM summary_union
+      `)
+}
+
+const getFullRebuildSummaryContributionRows = async (
+  input: ProjectReviewServingSummariesInput,
+  database: ReviewServingSummaryProjectorDatabase,
+) => {
+  return input.listModeKeys.length === 0
+    ? []
+    : database.queryJson<SummaryContributionSourceRow>(`
+        WITH ${getDirtyArticleCte(input, [])},
+        ${getListModeCte(input.listModeKeys)},
+        project_settings AS (
+          SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = ${getSqlLiteral(input.projectId)}), 'prompt') AS human_judgment_mode
+        ),
+        scoped_serving AS (
+          SELECT serving.*
+          FROM article_id_filter dirty
+          INNER JOIN mart.review_article_serving_v4 serving
+            ON serving.project_id = ${getSqlLiteral(input.projectId)}
+            AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+            AND serving.article_id = dirty.article_id
+          INNER JOIN list_mode_key_filter list_mode_key
+            ON list_mode_key.list_mode_key = serving.list_mode_key
+        ),
+        selected_article AS (
+          SELECT DISTINCT
+            serving.article_id,
+            serving.selected_import_route_id AS import_route_id,
+            serving.publication_year,
+            serving.duplicate_flag,
+            serving.conflict_flag
+          FROM scoped_serving serving
+        ),
+        llm_detail AS (
+          SELECT detail.*
+          FROM article_id_filter dirty
+          INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
+            ON detail.project_id = ${getSqlLiteral(input.projectId)}
+            AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+            AND detail.payload_kind = 'llm'
+            AND detail.article_id = dirty.article_id
+          INNER JOIN list_mode_key_filter list_mode_key
+            ON list_mode_key.list_mode_key = detail.list_mode_key
+        ),
+        human_detail AS (
+          SELECT detail.*
+          FROM article_id_filter dirty
+          INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
+            ON detail.project_id = ${getSqlLiteral(input.projectId)}
+            AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+            AND detail.payload_kind = 'human'
+            AND detail.article_id = dirty.article_id
+          INNER JOIN list_mode_key_filter list_mode_key
+            ON list_mode_key.list_mode_key = detail.list_mode_key
+        ),
+        base_counts AS (
+          SELECT serving.article_id AS articleId, 'count' AS summaryKind, 'review.list.total' AS countKind, 'list:all' AS filterKey, serving.list_mode_key AS listModeKey, 'review.list.total' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, NULL AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM scoped_serving serving
+          UNION ALL
+          SELECT serving.article_id AS articleId, 'count' AS summaryKind, 'review.list.filteredTotal' AS countKind, ${getSqlLiteral(dynamicFilteredTotalFilterKey)} AS filterKey, serving.list_mode_key AS listModeKey, 'review.list.filteredTotal' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, NULL AS promptId, NULL AS answerId, NULL AS answerValue, 'unavailable' AS availability, 'dynamic filter/search scopes require a precomputed filter signature' AS staleReason
+          FROM scoped_serving serving
+        ),
+        selected_facets AS (
+          SELECT selected.article_id AS articleId, 'facet' AS summaryKind, 'review.filter.duplicateFlag' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.filter.duplicateFlag' AS summaryIdentity, 'review' AS facetKind, 'duplicateFlag' AS facetKey, CAST(selected.duplicate_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL AS answerId, CAST(selected.duplicate_flag AS VARCHAR) AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM selected_article selected WHERE selected.duplicate_flag IS NOT NULL
+          UNION ALL
+          SELECT selected.article_id AS articleId, 'facet' AS summaryKind, 'review.filter.importRoute' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.filter.importRoute' AS summaryIdentity, 'review' AS facetKind, 'importRoute' AS facetKey, selected.import_route_id AS facetValue, NULL AS promptId, NULL AS answerId, selected.import_route_id AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM selected_article selected WHERE selected.import_route_id IS NOT NULL
+          UNION ALL
+          SELECT selected.article_id AS articleId, 'facet' AS summaryKind, 'review.filter.publicationYear' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.filter.publicationYear' AS summaryIdentity, 'review' AS facetKind, 'publicationYear' AS facetKey, CAST(selected.publication_year AS VARCHAR) AS facetValue, NULL AS promptId, NULL AS answerId, CAST(selected.publication_year AS VARCHAR) AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM selected_article selected WHERE selected.publication_year IS NOT NULL
+        ),
+        llm_counts AS (
+          SELECT llm.article_id AS articleId, 'count' AS summaryKind, 'review.llm.assessedByPrompt' AS countKind, concat('prompt:', llm.prompt_id) AS filterKey, llm.list_mode_key AS listModeKey, 'review.llm.assessedByPrompt' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, llm.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM llm_detail llm
+          INNER JOIN selected_article selected ON selected.article_id = llm.article_id
+          WHERE llm.list_mode_key IN ('llm', 'both') AND (llm.answered_original IS NOT NULL OR COALESCE(LENGTH(llm.answered_original_as_array), 0) > 0)
+          UNION ALL
+          SELECT queue.article_id AS articleId, 'count' AS summaryKind, 'review.llm.unassessedByPrompt' AS countKind, concat('prompt:', queue.prompt_id) AS filterKey, list_mode_key.list_mode_key AS listModeKey, 'review.llm.unassessedByPrompt' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, queue.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM mart.review_unassessed_queue_serving_v4 queue
+          INNER JOIN article_id_filter dirty ON dirty.article_id = queue.article_id
+          INNER JOIN selected_article selected ON selected.article_id = queue.article_id
+          CROSS JOIN list_mode_key_filter list_mode_key
+          WHERE queue.project_id = ${getSqlLiteral(input.projectId)} AND queue.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND queue.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND queue.queue_kind = 'unassessed' AND queue.prompt_id IS NOT NULL
+          UNION ALL
+          SELECT queue.article_id AS articleId, 'count' AS summaryKind, 'review.queue.unassessedReady' AS countKind, 'queue:ready' AS filterKey, list_mode_key.list_mode_key AS listModeKey, 'review.queue.unassessedReady' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, queue.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM mart.review_unassessed_queue_serving_v4 queue
+          INNER JOIN article_id_filter dirty ON dirty.article_id = queue.article_id
+          INNER JOIN selected_article selected ON selected.article_id = queue.article_id
+          CROSS JOIN list_mode_key_filter list_mode_key
+          WHERE queue.project_id = ${getSqlLiteral(input.projectId)} AND queue.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND queue.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND queue.queue_kind = 'unassessed'
+        ),
+        human_counts AS (
+          SELECT human.article_id AS articleId, 'count' AS summaryKind, 'review.human.reviewedByPrompt' AS countKind, concat('prompt:', human.prompt_id) AS filterKey, human.list_mode_key AS listModeKey, 'review.human.reviewedByPrompt' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, human.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM human_detail human
+          INNER JOIN selected_article selected ON selected.article_id = human.article_id
+          CROSS JOIN project_settings
+          WHERE human.list_mode_key IN ('human', 'both') AND human.answered_original IS NOT NULL
+            AND (
+              (project_settings.human_judgment_mode = 'summary' AND human.prompt_id = 'summary')
+              OR (project_settings.human_judgment_mode <> 'summary' AND human.prompt_id <> 'summary')
+            )
+        ),
+        conflict_counts AS (
+          SELECT llm.article_id AS articleId, 'count' AS summaryKind, 'review.both.conflictByPrompt' AS countKind, concat('prompt:', llm.prompt_id) AS filterKey, 'both' AS listModeKey, 'review.both.conflictByPrompt' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, llm.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM llm_detail llm
+          INNER JOIN human_detail human
+            ON human.article_id = llm.article_id
+            AND human.prompt_id = llm.prompt_id
+            AND human.list_mode_key = llm.list_mode_key
+            AND human.answered_original IS NOT NULL
+          INNER JOIN selected_article selected ON selected.article_id = llm.article_id
+          WHERE llm.list_mode_key = 'both' AND llm.answered_original IS NOT NULL AND llm.answered_original IS DISTINCT FROM human.answered_original
+        ),
+        answer_facets AS (
+          SELECT llm.article_id AS articleId, 'facet' AS summaryKind, 'review.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.filter.promptAnswer' AS summaryIdentity, 'review' AS facetKind, 'promptAnswer' AS facetKey, llm.answered_original AS facetValue, llm.prompt_id AS promptId, NULL AS answerId, llm.answered_original AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM llm_detail llm
+          INNER JOIN selected_article selected ON selected.article_id = llm.article_id
+          WHERE llm.list_mode_key = 'llm' AND llm.answered_original IS NOT NULL AND llm.answered_original_as_array IS NULL
+          UNION ALL
+          SELECT llm.article_id AS articleId, 'facet' AS summaryKind, 'review.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.filter.promptAnswer' AS summaryIdentity, 'review' AS facetKind, 'promptAnswer' AS facetKey, answer.answer_value AS facetValue, llm.prompt_id AS promptId, NULL AS answerId, answer.answer_value AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM llm_detail llm
+          INNER JOIN selected_article selected ON selected.article_id = llm.article_id
+          CROSS JOIN UNNEST(llm.answered_original_as_array) AS answer(answer_value)
+          WHERE llm.list_mode_key = 'llm' AND llm.answered_original_as_array IS NOT NULL
+          UNION ALL
+          SELECT human.article_id AS articleId, 'facet' AS summaryKind, 'review.human.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.human.filter.promptAnswer' AS summaryIdentity, 'human' AS facetKind, 'promptAnswer' AS facetKey, human.answered_original AS facetValue, human.prompt_id AS promptId, NULL AS answerId, human.answered_original AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM human_detail human
+          INNER JOIN selected_article selected ON selected.article_id = human.article_id
+          CROSS JOIN project_settings
+          WHERE human.list_mode_key = 'human' AND human.prompt_id <> 'summary' AND human.answered_original IS NOT NULL
+            AND project_settings.human_judgment_mode <> 'summary'
+          UNION ALL
+          SELECT human.article_id AS articleId, 'facet' AS summaryKind, 'review.human.filter.summaryAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.human.filter.summaryAnswer' AS summaryIdentity, 'human' AS facetKind, 'summaryAnswer' AS facetKey, human.answered_original AS facetValue, human.prompt_id AS promptId, NULL AS answerId, human.answered_original AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM human_detail human
+          INNER JOIN selected_article selected ON selected.article_id = human.article_id
+          CROSS JOIN project_settings
+          WHERE human.list_mode_key = 'human' AND human.prompt_id = 'summary' AND human.answered_original IS NOT NULL
+            AND project_settings.human_judgment_mode = 'summary'
         ),
         summary_union AS (
           SELECT * FROM base_counts
