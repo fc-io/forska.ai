@@ -123,6 +123,8 @@ export type WriteReviewServingQueueRebuildRowsInput = {
   snapshotId: string
 }
 
+export type WriteReviewServingQueueRebuildRangesInput = {ranges: readonly WriteReviewServingQueueRebuildRowsInput[]}
+
 export type WriteReviewServingProjectorComponentInput = {
   acknowledgements?: readonly ReviewServingDirtyWorkClaim[]
   candidateSnapshot?: ReviewServingSnapshotManifestInput
@@ -622,19 +624,16 @@ export const writeReviewServingTitleSearchRebuildRanges = async (
   )
 }
 
-export const writeReviewServingQueueRebuildRows = async (
-  input: WriteReviewServingQueueRebuildRowsInput,
-  database: Pick<ReviewServingProjectorWriterDatabase, 'run'> = getAppDatabaseService(),
-) => {
-  await database.run(`
+const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQueueRebuildRowsInput) => {
+  return [
+    `
     DELETE FROM mart.review_unassessed_queue_serving_v4
     WHERE project_id = ${getSqlLiteral(input.projectId)}
       AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
       AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
       ${input.rangePredicateSql}
-  `)
-
-  await database.run(`
+  `,
+    `
     INSERT INTO mart.review_unassessed_queue_serving_v4 (
       project_id,
       review_config_hash,
@@ -663,7 +662,35 @@ export const writeReviewServingQueueRebuildRows = async (
     WHERE NOT queue.tombstone
     ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id, queue_identity) DO UPDATE SET
       queue_updated_at = excluded.queue_updated_at
-  `)
+  `,
+  ]
+}
+
+export const writeReviewServingQueueRebuildRows = async (
+  input: WriteReviewServingQueueRebuildRowsInput,
+  database: Pick<ReviewServingProjectorWriterDatabase, 'run'> = getAppDatabaseService(),
+) => {
+  await getReviewServingQueueRebuildRowsStatements(input).reduce<Promise<void>>(async (previous, statement) => {
+    await previous
+    await database.run(statement)
+  }, Promise.resolve())
+}
+
+export const writeReviewServingQueueRebuildRanges = async (
+  input: WriteReviewServingQueueRebuildRangesInput,
+  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
+) => {
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'queue',
+      projectionManifests: [],
+      records: [],
+      statements: input.ranges.flatMap((range) => {
+        return getReviewServingQueueRebuildRowsStatements(range)
+      }),
+    },
+    database,
+  )
 }
 
 export const writeReviewServingProjectorComponent = async (
