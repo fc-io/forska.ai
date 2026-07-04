@@ -299,6 +299,30 @@ test('project-scoped summary rebuilds subtract prior contribution articles missi
   expect(storedContributionSelect).toBeDefined()
 })
 
+test('unchunked full summary rebuild writes final serving rows without contribution state', async () => {
+  const {database, statements} = createSummaryDatabase({
+    sourceRows: [sourceCountRow(), sourceFacetRow()],
+  })
+
+  const result = await projectReviewServingSummaries(projectInput([]), database)
+  const joined = statements.join('\n')
+
+  expect(result.contributionRowCount).toBe(0)
+  expect(result.diagnosticsJson.summaryProjector).toMatchObject({directFullSnapshot: true})
+  expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toMatchObject({
+    'mart.review_article_count_serving_v4': 1,
+    'mart.review_filter_facet_serving_v4': 1,
+  })
+  expect(hasSummaryValue(result.summaryValues, {count_kind: 'review.llm.assessedByPrompt', count_value: 1})).toBe(true)
+  expect(hasSummaryValue(result.summaryValues, {facet_key: 'summaryAnswer', count_value: 1})).toBe(true)
+  expect(joined).toContain('DELETE FROM mart.review_article_count_serving_v4')
+  expect(joined).toContain('DELETE FROM mart.review_filter_facet_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_filter_facet_serving_v4')
+  expect(joined).not.toContain('SELECT DISTINCT contribution.article_id AS articleId')
+  expect(joined).not.toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+})
+
 test('date range and search-scope SQL stays scoped and explicit unsupported filtered counts are unavailable', async () => {
   const unavailableRow = sourceCountRow({
     availability: 'unavailable',

@@ -14,6 +14,7 @@ import {
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
+  getDeleteReviewServingProjectorRowsStatement,
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
@@ -109,6 +110,10 @@ const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
         }) as string[],
     ),
   ]
+}
+
+const isDirectFullSummarySnapshotInput = (input: ProjectReviewServingSummariesInput) => {
+  return input.claims.length === 0 && input.chunkStartArticleId == null && input.chunkEndArticleId == null
 }
 
 const getArticleRangePredicate = (input: {
@@ -672,9 +677,111 @@ const getSummaryRecords = async (input: {
   })
 }
 
+const getDirectFullSummaryRecords = (input: {
+  projectId: string
+  reviewConfigHash: string
+  rows: readonly SummaryContributionSourceRow[]
+  snapshotId: string
+}) => {
+  const aggregatedRows = getRowsAsContributionRows(input.rows).reduce(
+    (acc, row) => {
+      const current = acc.get(row.contributionKey)
+      acc.set(row.contributionKey, (current ?? 0) + row.contributionValue)
+
+      return acc
+    },
+    new Map<string, number>(),
+  )
+
+  return Array.from(aggregatedRows.entries()).flatMap(([contributionKey, countValue]) => {
+    const identity = parseSummaryContributionKey(contributionKey)
+    const record =
+      identity === null
+        ? null
+        : getSummaryRecord({
+            countValue,
+            identity,
+            projectId: input.projectId,
+            reviewConfigHash: input.reviewConfigHash,
+            snapshotId: input.snapshotId,
+          })
+
+    return record === null ? [] : [record]
+  })
+}
+
+const getDirectFullSummaryDeleteStatements = (input: ProjectReviewServingSummariesInput) => {
+  const predicates = {
+    project_id: input.projectId,
+    review_config_hash: input.reviewConfigHash,
+    snapshot_id: input.snapshotId,
+  }
+
+  return [
+    getDeleteReviewServingProjectorRowsStatement({
+      predicates,
+      table: 'mart.review_article_count_serving_v4',
+    }),
+    getDeleteReviewServingProjectorRowsStatement({
+      predicates,
+      table: 'mart.review_filter_facet_serving_v4',
+    }),
+  ]
+}
+
+const projectDirectFullReviewServingSummaries = async (input: {
+  database: ReviewServingSummaryProjectorDatabase
+  measure: <T>(phase: string, operation: () => Promise<T>) => Promise<T>
+  measureSync: <T>(phase: string, operation: () => T) => T
+  phaseTimings: Record<string, number>
+  projectorInput: ProjectReviewServingSummariesInput
+}) => {
+  const sourceRows = await input.measure('sourceQueryMs', async () => {
+    return getSummaryContributionRows(input.projectorInput, input.database)
+  })
+  const summaryRecords = input.measureSync('summaryRecordBuildMs', () => {
+    return getDirectFullSummaryRecords({
+      projectId: input.projectorInput.projectId,
+      reviewConfigHash: input.projectorInput.reviewConfigHash,
+      rows: sourceRows,
+      snapshotId: input.projectorInput.snapshotId,
+    })
+  })
+  const writerResult = await input.measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        component: 'summary',
+        records: summaryRecords,
+        statements: getDirectFullSummaryDeleteStatements(input.projectorInput),
+      },
+      input.database,
+    )
+  })
+
+  return {
+    contributionRowCount: 0,
+    diagnosticsJson: {
+      phaseTimings: input.phaseTimings,
+      summaryProjector: {
+        contributionDiffCount: 0,
+        contributionRecordCount: 0,
+        directFullSnapshot: true,
+        priorArticleRowCount: 0,
+        sourceRowCount: sourceRows.length,
+        writer: writerResult.diagnostics,
+      },
+    },
+    repairRequired: false,
+    summaryRowCount: summaryRecords.length,
+    summaryValues: summaryRecords.map((record) => {
+      return record.values
+    }),
+  }
+}
+
 export const projectReviewServingSummaries = async (
   input: ProjectReviewServingSummariesInput,
-  database: ReviewServingSummaryProjectorDatabase = getAppDatabaseService(),
+  database: ReviewServingSummaryProjectorDatabase = getAppDatabaseService() as ReviewServingSummaryProjectorDatabase,
 ) => {
   const phaseTimings: Record<string, number> = {}
   const measure = async <T>(phase: string, operation: () => Promise<T>) => {
@@ -689,6 +796,11 @@ export const projectReviewServingSummaries = async (
     phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
     return result
   }
+
+  if (isDirectFullSummarySnapshotInput(input)) {
+    return projectDirectFullReviewServingSummaries({database, measure, measureSync, phaseTimings, projectorInput: input})
+  }
+
   const [sourceRows, priorArticleRows] = await measure('sourceQueryMs', async () => {
     return Promise.all([getSummaryContributionRows(input, database), getPriorContributionArticleIds(input, database)])
   })
