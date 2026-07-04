@@ -58,6 +58,8 @@ type ProjectReviewServingSelectedImportArticleRangeInput = {
   projectScopeIdentity: string
   replaceExistingRows?: boolean
   selectedImportSnapshotId: string
+  servingBaseGeneration?: number
+  servingProjectionIdentity?: string
   sourceDeltaHighWater: number
   writeProjectionState?: boolean
 }
@@ -387,6 +389,163 @@ const getSelectedImportArticleRangeInsertedRowCount = async (
   return row?.rowCount ?? 0
 }
 
+const selectedImportServingColumns = [
+  'project_id',
+  'review_config_hash',
+  'snapshot_id',
+  'base_generation',
+  'patch_watermark',
+  'display_identity',
+  'project_scope_identity',
+  'selected_import_identity',
+  'llm_status_identity',
+  'human_status_identity',
+  'posting_identity',
+  'summary_identity',
+  'payload_identity',
+  'list_mode_key',
+  'article_id',
+  'sort_key',
+  'activity_sort_at',
+  'article_title',
+  'article_external_id',
+  'journal_title',
+  'url',
+  'full_text_pdf',
+  'selected_import_route_id',
+  'selected_rank_key',
+  'publication_year',
+  'duplicate_flag',
+  'conflict_flag',
+  'llm_status_key',
+  'human_status_key',
+  'llm_judged_prompt_count',
+  'enabled_prompt_count',
+  'human_answered_prompt_count',
+  'review_opened',
+  'review_sections_completed',
+  'serving_updated_at',
+  'article_created_at',
+  'article_updated_at',
+  'arxiv_id',
+  'biorxiv_id',
+  'medrxiv_id',
+  'doi',
+  'pmid',
+  'full_text_fetched_at',
+  'full_text_conversion_status',
+].join(', ')
+
+const getRefreshSelectedImportServingArticleRangeStatements = (
+  input: ProjectReviewServingSelectedImportArticleRangeInput,
+) => {
+  if (input.servingBaseGeneration === undefined || input.servingProjectionIdentity === undefined) {
+    return []
+  }
+
+  return [
+    `CREATE OR REPLACE TEMP TABLE review_selected_import_serving_rebuild_v4 AS
+     SELECT
+       serving.project_id,
+       serving.review_config_hash,
+       serving.snapshot_id,
+       serving.base_generation,
+       GREATEST(serving.patch_watermark, ${getSqlLiteral(input.sourceDeltaHighWater)}) AS patch_watermark,
+       serving.display_identity,
+       serving.project_scope_identity,
+       serving.selected_import_identity,
+       serving.llm_status_identity,
+       serving.human_status_identity,
+       serving.posting_identity,
+       serving.summary_identity,
+       serving.payload_identity,
+       serving.list_mode_key,
+       serving.article_id,
+       serving.sort_key,
+       serving.activity_sort_at,
+       COALESCE(selected.article_title, article.article_title) AS article_title,
+       COALESCE(selected.external_id, article.article_id) AS article_external_id,
+       selected.journal_title,
+       COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
+       serving.full_text_pdf,
+       selected.import_route_id AS selected_import_route_id,
+       selected.selected_rank_key,
+       selected.publication_year,
+       COALESCE(selected.duplicate_flag, FALSE) AS duplicate_flag,
+       COALESCE(selected.conflict_flag, FALSE) AS conflict_flag,
+       serving.llm_status_key,
+       serving.human_status_key,
+       serving.llm_judged_prompt_count,
+       serving.enabled_prompt_count,
+       serving.human_answered_prompt_count,
+       serving.review_opened,
+       serving.review_sections_completed,
+       current_timestamp AS serving_updated_at,
+       serving.article_created_at,
+       serving.article_updated_at,
+       serving.arxiv_id,
+       serving.biorxiv_id,
+       serving.medrxiv_id,
+       serving.doi,
+       serving.pmid,
+       serving.full_text_fetched_at,
+       serving.full_text_conversion_status
+     FROM mart.review_article_serving_v4 serving
+     INNER JOIN app."article" article
+       ON article.id = serving.article_id
+     LEFT JOIN app.review_selected_article_import_v4 selected
+       ON selected.project_id = serving.project_id
+       AND selected.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+       AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+       AND selected.article_id = serving.article_id
+       AND NOT selected.tombstone
+     LEFT JOIN app.article_import_route_source_record selected_source
+       ON selected_source.import_route_id = selected.import_route_id
+       AND selected_source.article_id = selected.article_id
+       AND selected_source.source_record_key = selected.source_record_key
+       AND selected_source.quarantined_at IS NULL
+     WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+       AND serving.selected_import_identity = ${getSqlLiteral(input.servingProjectionIdentity)}
+       AND serving.base_generation = ${getSqlLiteral(input.servingBaseGeneration)}
+       AND serving.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
+       AND serving.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
+       AND EXISTS (
+         SELECT 1
+         FROM app.review_serving_snapshot_manifest snapshot
+         WHERE snapshot.project_id = serving.project_id
+           AND snapshot.snapshot_id = serving.snapshot_id
+           AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+           AND snapshot.snapshot_status IN ('candidate', 'active')
+       )
+       AND (
+         serving.article_title IS DISTINCT FROM COALESCE(selected.article_title, article.article_title)
+         OR serving.article_external_id IS DISTINCT FROM COALESCE(selected.external_id, article.article_id)
+         OR serving.url IS DISTINCT FROM COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url)
+         OR serving.selected_import_route_id IS DISTINCT FROM selected.import_route_id
+         OR serving.selected_rank_key IS DISTINCT FROM selected.selected_rank_key
+         OR serving.journal_title IS DISTINCT FROM selected.journal_title
+         OR serving.publication_year IS DISTINCT FROM selected.publication_year
+         OR serving.duplicate_flag IS DISTINCT FROM COALESCE(selected.duplicate_flag, FALSE)
+         OR serving.conflict_flag IS DISTINCT FROM COALESCE(selected.conflict_flag, FALSE)
+         OR serving.patch_watermark < ${getSqlLiteral(input.sourceDeltaHighWater)}
+       )`,
+    `DELETE FROM mart.review_article_serving_v4 serving
+     WHERE EXISTS (
+       SELECT 1
+       FROM review_selected_import_serving_rebuild_v4 updated
+       WHERE updated.project_id = serving.project_id
+         AND updated.review_config_hash = serving.review_config_hash
+         AND updated.snapshot_id = serving.snapshot_id
+         AND updated.list_mode_key = serving.list_mode_key
+         AND updated.article_id = serving.article_id
+     )`,
+    `INSERT INTO mart.review_article_serving_v4 (${selectedImportServingColumns})
+     SELECT ${selectedImportServingColumns}
+     FROM review_selected_import_serving_rebuild_v4
+     ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING`,
+  ]
+}
+
 const getSelectedImportCursorFromRows = (
   rows: readonly SelectedImportProjectionRow[],
   existingCursor: SelectedImportCursor | null,
@@ -508,10 +667,14 @@ export const projectReviewServingSelectedImportArticleRange = async (
       records: [],
       statements:
         params.replaceExistingRows === false
-          ? [getInsertSelectedImportArticleRangeRowsStatement(params)]
+          ? [
+              getInsertSelectedImportArticleRangeRowsStatement(params),
+              ...getRefreshSelectedImportServingArticleRangeStatements(params),
+            ]
           : [
               getDeleteSelectedImportArticleRangeRowsStatement(params),
               getInsertSelectedImportArticleRangeRowsStatement(params),
+              ...getRefreshSelectedImportServingArticleRangeStatements(params),
             ],
       selectedImportSnapshotCursor:
         params.writeProjectionState === false
@@ -530,4 +693,22 @@ export const projectReviewServingSelectedImportArticleRange = async (
   const insertedRowCount = await getSelectedImportArticleRangeInsertedRowCount(params, database)
 
   return {insertedRowCount, selectedImportSnapshotId: params.selectedImportSnapshotId, status: 'completed' as const}
+}
+
+export const refreshReviewServingSelectedImportServingArticleRange = async (
+  params: ProjectReviewServingSelectedImportArticleRangeInput & {
+    servingBaseGeneration: number
+    servingProjectionIdentity: string
+  },
+  database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportProjectorDatabase,
+) => {
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'selectedImport',
+      projectionManifests: [],
+      records: [],
+      statements: getRefreshSelectedImportServingArticleRangeStatements(params),
+    },
+    database,
+  )
 }

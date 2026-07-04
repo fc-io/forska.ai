@@ -209,6 +209,33 @@ test('selected-import article range rebuild writes selected rows directly in SQL
   expect(sourceQueries).toHaveLength(0)
 })
 
+test('selected-import article range rebuild can refresh final serving rows from base rows', async () => {
+  const {database, statements} = createSelectedImportProjectorDatabase({rangeRowCount: 3})
+
+  await projectReviewServingSelectedImportArticleRange(
+    {
+      chunkEndArticleId: 'article-9',
+      chunkStartArticleId: 'article-1',
+      projectId: 'project-1',
+      projectScopeIdentity: 'projectScope:identity-1',
+      selectedImportSnapshotId: 'selected-import-snapshot-1',
+      servingBaseGeneration: 7,
+      servingProjectionIdentity: 'selectedImport:identity-1',
+      sourceDeltaHighWater: 9,
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_selected_import_serving_rebuild_v4 AS')
+  expect(joined).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
+  expect(joined).toContain("selected.selected_import_snapshot_id = 'selected-import-snapshot-1'")
+  expect(joined).toContain("serving.selected_import_identity = 'selectedImport:identity-1'")
+  expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
+  expect(joined).not.toContain('mart.review_selected_import_patch_v4')
+})
+
 test('selected-import V4 projector does not use the runtime selected scoped import CTE', () => {
   const source = readFileSync(join(import.meta.dir, 'reviewServingSelectedImportProjector.ts'), 'utf8')
 
