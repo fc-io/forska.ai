@@ -92,7 +92,7 @@ const baseStats = {
   judgmentUpdatedAt: '2026-06-20T10:02:00.000Z',
   modelExecutionIdentityDigest: 'model-execution-digest-v1',
   modelUpdatedAt: '2026-06-20T10:01:45.000Z',
-  patchPromptUpdatedAt: '2026-06-20T10:01:50.000Z',
+  patchPromptUpdatedAt: null,
   promptCount: 2,
   promptIdentityDigest: 'prompt-digest-v1',
   promptUpdatedAt: '2026-06-20T10:01:30.000Z',
@@ -362,12 +362,7 @@ test('V4 rebuild request service estimates admission budget from project data', 
       providerConnectionUpdatedAt: '2026-06-20T10:01:40.000Z',
     },
     projectArticles: {count: 100_000, updatedAt: '2026-06-20T10:00:00.000Z'},
-    projectPrompts: {
-      count: 4,
-      enabledCount: 4,
-      patchUpdatedAt: '2026-06-20T10:01:50.000Z',
-      updatedAt: '2026-06-20T10:01:00.000Z',
-    },
+    projectPrompts: {count: 4, enabledCount: 4, patchUpdatedAt: null, updatedAt: '2026-06-20T10:01:00.000Z'},
     prompts: {count: 4, identityDigest: 'prompt-digest-v1', updatedAt: '2026-06-20T10:01:30.000Z'},
     snapshots: {count: 1, updatedAt: '2026-06-20T10:03:45.000Z'},
     summaryHumanJudgments: {count: 1_000, updatedAt: '2026-06-20T10:03:30.000Z'},
@@ -380,8 +375,8 @@ test('V4 rebuild request service estimates admission budget from project data', 
   expect(joined).toContain('LEFT JOIN app.provider_connection provider_connection')
   expect(joined).toContain('model_execution_identity_digest')
   expect(joined).toContain('rebuild_prompt_source AS')
-  expect(joined).toContain('FROM mart.review_llm_status_patch_v4 llm')
-  expect(joined).toContain('FROM mart.review_human_status_patch_v4 human')
+  expect(joined).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
+  expect(joined).not.toContain('FROM mart.review_human_status_patch_v4 human')
   expect(joined).toContain('FROM rebuild_prompt')
   expect(joined).toContain('INNER JOIN scoped_article_id ON scoped_article_id.article_id = judgment.article_id')
   expect(joined).not.toContain('INNER JOIN scoped_article ON scoped_article.article_id = judgment.article_id')
@@ -649,6 +644,8 @@ test('V4 rebuild request service splits missing snapshot bootstraps into bounded
   expect(request.overBudgetReason).toBeNull()
   expect(joined).toContain('NTILE(')
   expect(joined).toContain('INSERT INTO app.review_rebuild_chunk_manifest')
+  expect(joined).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
+  expect(joined).not.toContain('FROM mart.review_human_status_patch_v4 human')
   expect(joined).toContain('article-000-a')
   expect(joined).toContain('article-001-a')
   expect(displayChunkInserts.length).toBeGreaterThan(1)
@@ -682,6 +679,8 @@ test('V4 missing snapshot rebuild bootstraps candidate-only projects with bounde
   expect(request.status).toBe('admitted')
   expect(request.overBudgetReason).toBeNull()
   expect(joined).toContain('NTILE(')
+  expect(joined).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
+  expect(joined).not.toContain('FROM mart.review_human_status_patch_v4 human')
   expect(displayChunkInserts.length).toBeGreaterThan(1)
   expect(joined).toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).toContain('INSERT INTO app.review_serving_snapshot_manifest')
