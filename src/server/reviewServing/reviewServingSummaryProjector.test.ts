@@ -214,6 +214,36 @@ const createSummaryReductionSchema = async (database: ReviewServingSummaryProjec
     )
   `)
   await database.run(`
+    CREATE TABLE mart.review_article_summary_contribution_rebuild_partial_v4 (
+      request_id VARCHAR NOT NULL,
+      chunk_id VARCHAR NOT NULL,
+      project_id VARCHAR NOT NULL,
+      review_config_hash VARCHAR NOT NULL,
+      snapshot_id VARCHAR NOT NULL,
+      article_id VARCHAR NOT NULL,
+      component_kind VARCHAR NOT NULL,
+      summary_definition_version VARCHAR NOT NULL,
+      contribution_key VARCHAR NOT NULL,
+      contribution_value BIGINT NOT NULL,
+      contribution_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      PRIMARY KEY(request_id, chunk_id, project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key)
+    )
+  `)
+  await database.run(`
+    CREATE TABLE mart.review_article_summary_contribution_v4 (
+      project_id VARCHAR NOT NULL,
+      review_config_hash VARCHAR NOT NULL,
+      snapshot_id VARCHAR NOT NULL,
+      article_id VARCHAR NOT NULL,
+      component_kind VARCHAR NOT NULL,
+      summary_definition_version VARCHAR NOT NULL,
+      contribution_key VARCHAR NOT NULL,
+      contribution_value BIGINT NOT NULL,
+      contribution_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      PRIMARY KEY(project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key)
+    )
+  `)
+  await database.run(`
     CREATE TABLE mart.review_article_count_serving_v4 (
       project_id VARCHAR NOT NULL,
       review_config_hash VARCHAR NOT NULL,
@@ -443,7 +473,7 @@ test('unchunked full summary rebuild writes final serving rows with contribution
   expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
 })
 
-test('chunked full summary rebuild writes request partials and contribution state without final serving rows', async () => {
+test('chunked full summary rebuild stages request partials and contribution state without final serving rows', async () => {
   const {database, statements} = createSummaryDatabase({sourceRows: [sourceCountRow(), sourceFacetRow()]})
 
   const result = await projectReviewServingSummaries(
@@ -466,15 +496,14 @@ test('chunked full summary rebuild writes request partials and contribution stat
     partialRowCount: 2,
   })
   expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toMatchObject({
-    'mart.review_article_summary_contribution_v4': 2,
+    'mart.review_article_summary_contribution_rebuild_partial_v4': 2,
     'mart.review_article_summary_rebuild_partial_v4': 2,
   })
   expect(joined).toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
-  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
+  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_summary_rebuild_partial_v4')
-  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
-  expect(joined).toContain("article_id >= 'article-001'")
-  expect(joined).toContain("article_id <= 'article-099'")
+  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
   expect(joined).not.toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_filter_facet_serving_v4')
 })
@@ -486,7 +515,7 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
 
-      if (statement.includes('COUNT(*) AS partialCount')) {
+      if (statement.includes('partialCount')) {
         return [{partialCount: 1}] as T[]
       }
 
@@ -498,7 +527,7 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
     transaction: async (operation) => {
       statements.push('BEGIN')
 
-      return operation(database)
+      return await operation(database)
     },
   }
 
@@ -528,6 +557,10 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   )
   expect(joined).toContain("AND chunk_id = '__summary_rebuild_partial_accumulator__'")
   expect(joined).toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
+  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+  expect(joined).toContain('FROM mart.review_article_summary_contribution_rebuild_partial_v4')
+  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
 })
 
 test('summary rebuild request finalization reduces conflicting partial chunks in DuckDB', async () => {
