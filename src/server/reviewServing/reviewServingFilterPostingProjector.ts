@@ -688,17 +688,6 @@ const getDeletePatchRowsStatement = (input: ProjectReviewServingFilterPostingsIn
       })
 }
 
-const getDeleteContributionRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
-  const rangePredicate = hasChunkArticleRange(input) ? getArticleRangePredicate({alias: 'contribution', ...input}) : ''
-
-  return `DELETE FROM mart.review_article_summary_contribution_v4 contribution
-    WHERE contribution.project_id = ${getSqlLiteral(input.projectId)}
-      AND contribution.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-      AND contribution.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      AND contribution.component_kind = 'posting'
-      ${rangePredicate}`
-}
-
 const getInsertFullRebuildServingRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
   return `INSERT INTO mart.review_article_filter_posting_serving_v4 (
       project_id,
@@ -740,36 +729,6 @@ const getInsertFullRebuildServingRowsStatement = (input: ProjectReviewServingFil
       posting_identity = excluded.posting_identity,
       sort_key = excluded.sort_key,
       posting_updated_at = excluded.posting_updated_at`
-}
-
-const getInsertFullRebuildContributionRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
-  return `INSERT INTO mart.review_article_summary_contribution_v4 (
-      project_id,
-      review_config_hash,
-      snapshot_id,
-      article_id,
-      component_kind,
-      summary_definition_version,
-      contribution_key,
-      contribution_value,
-      contribution_updated_at
-    )
-    WITH posting_source AS (${getPostingContributionRowsStatement(input)})
-    SELECT DISTINCT
-      ${getSqlLiteral(input.projectId)} AS project_id,
-      ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
-      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-      posting.articleId AS article_id,
-      'posting' AS component_kind,
-      ${getSqlLiteral(input.definitionVersion)} AS summary_definition_version,
-      ${getPostingIdentitySql('posting')} AS contribution_key,
-      1 AS contribution_value,
-      current_timestamp AS contribution_updated_at
-    FROM posting_source posting
-    WHERE NOT posting.tombstone
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key) DO UPDATE SET
-      contribution_value = excluded.contribution_value,
-      contribution_updated_at = excluded.contribution_updated_at`
 }
 
 const getDeleteFullRebuildStatsRowsStatement = (
@@ -858,10 +817,7 @@ export const refreshReviewServingFilterPostingStats = async (
 }
 
 const getFullRebuildWriteStatements = (input: ProjectReviewServingFilterPostingsInput) => {
-  const insertStatements =
-    input.listModeKeys.length === 0
-      ? []
-      : [getInsertFullRebuildServingRowsStatement(input), getInsertFullRebuildContributionRowsStatement(input)]
+  const insertStatements = input.listModeKeys.length === 0 ? [] : [getInsertFullRebuildServingRowsStatement(input)]
   const statsStatements =
     input.refreshFullRebuildStats === false
       ? []
@@ -869,7 +825,6 @@ const getFullRebuildWriteStatements = (input: ProjectReviewServingFilterPostings
 
   return [
     getDeleteFullRebuildServingRowsStatement(input),
-    getDeleteContributionRowsStatement(input),
     ...insertStatements,
     ...statsStatements,
   ]
