@@ -3577,17 +3577,27 @@ const refreshSummaryFilterOptionsForProjections = async (
   }, Promise.resolve())
 }
 
-const getRebuildRequestSnapshotPromotions = async (
-  requestId: string,
+const getRebuildRequestSnapshotTargets = async (
+  input: {requestId: string; snapshotStatuses: readonly ['candidate'] | readonly ['candidate', 'active']},
   database: ReviewServingChunkManifestRepositoryDatabase,
 ) => {
+  const snapshotStatusPredicate = `snapshot.snapshot_status IN (${input.snapshotStatuses
+    .map((status) => {
+      return getSqlLiteral(status)
+    })
+    .join(', ')})`
+
   return database.queryJson<RebuildRequestSnapshotPromotionRow>(`
     WITH chunk_snapshot AS (
       SELECT
         chunk.project_id,
         chunk.snapshot_id
       FROM app.review_rebuild_chunk_manifest chunk
-      WHERE chunk.request_id = ${getSqlLiteral(requestId)}
+      INNER JOIN app.review_serving_snapshot_manifest snapshot
+        ON snapshot.project_id = chunk.project_id
+        AND snapshot.snapshot_id = chunk.snapshot_id
+        AND ${snapshotStatusPredicate}
+      WHERE chunk.request_id = ${getSqlLiteral(input.requestId)}
         AND chunk.project_id IS NOT NULL
         AND chunk.snapshot_id IS NOT NULL
       UNION
@@ -3597,9 +3607,9 @@ const getRebuildRequestSnapshotPromotions = async (
       FROM app.review_rebuild_chunk_manifest chunk
       INNER JOIN app.review_serving_snapshot_manifest snapshot
         ON snapshot.project_id = chunk.project_id
-        AND snapshot.snapshot_status IN ('candidate', 'active')
+        AND ${snapshotStatusPredicate}
       CROSS JOIN json_each(json_extract(snapshot.component_state_json, '$.required')) state
-      WHERE chunk.request_id = ${getSqlLiteral(requestId)}
+      WHERE chunk.request_id = ${getSqlLiteral(input.requestId)}
         AND chunk.project_id IS NOT NULL
         AND chunk.snapshot_id IS NULL
         AND json_extract_string(state.value, '$.component') = chunk.projection_component
@@ -3611,9 +3621,9 @@ const getRebuildRequestSnapshotPromotions = async (
       FROM app.review_rebuild_chunk_manifest chunk
       INNER JOIN app.review_serving_snapshot_manifest snapshot
         ON snapshot.project_id = chunk.project_id
-        AND snapshot.snapshot_status IN ('candidate', 'active')
+        AND ${snapshotStatusPredicate}
       CROSS JOIN json_each(json_extract(snapshot.component_state_json, '$.optional')) state
-      WHERE chunk.request_id = ${getSqlLiteral(requestId)}
+      WHERE chunk.request_id = ${getSqlLiteral(input.requestId)}
         AND chunk.project_id IS NOT NULL
         AND chunk.snapshot_id IS NULL
         AND json_extract_string(state.value, '$.component') = chunk.projection_component
@@ -3629,6 +3639,20 @@ const getRebuildRequestSnapshotPromotions = async (
       AND snapshot.snapshot_id = chunk_snapshot.snapshot_id
     ORDER BY chunk_snapshot.project_id ASC, chunk_snapshot.snapshot_id ASC
   `)
+}
+
+const getRebuildRequestSnapshotReductionTargets = async (
+  requestId: string,
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  return getRebuildRequestSnapshotTargets({requestId, snapshotStatuses: ['candidate', 'active']}, database)
+}
+
+const getRebuildRequestSnapshotPromotions = async (
+  requestId: string,
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  return getRebuildRequestSnapshotTargets({requestId, snapshotStatuses: ['candidate']}, database)
 }
 
 const getCandidateSnapshotComponentIdentities = (candidate: ReviewServingSnapshotManifest) => {
@@ -3769,17 +3793,18 @@ const finalizeCompletedReviewServingRebuildRequest = async (
     return
   }
 
-  const [hasPostingChunks, promotionRows] = await Promise.all([
+  const [hasPostingChunks, reductionRows, promotionRows] = await Promise.all([
     getRebuildRequestHasPostingChunks(chunk.requestId, database),
+    getRebuildRequestSnapshotReductionTargets(chunk.requestId, database),
     getRebuildRequestSnapshotPromotions(chunk.requestId, database),
   ])
 
   if (hasPostingChunks) {
-    await refreshPostingStatsForRebuildRequestSnapshots(promotionRows, database)
+    await refreshPostingStatsForRebuildRequestSnapshots(reductionRows, database)
   }
 
   await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
-    {requestId: chunk.requestId, snapshots: promotionRows},
+    {requestId: chunk.requestId, snapshots: reductionRows},
     database,
   )
 

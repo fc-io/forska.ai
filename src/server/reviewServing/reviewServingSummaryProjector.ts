@@ -892,6 +892,21 @@ const getNextSummaryRebuildPartialReductionChunkIds = async (
   `)
 }
 
+const getSummaryRebuildAccumulatorPartialCount = async (
+  input: {projectId: string; requestId: string; reviewConfigHash: string; snapshotId: string},
+  database: ReviewServingSummaryProjectorDatabase,
+) => {
+  const scopePredicate = getSummaryRebuildPartialScopePredicate(input)
+  const rows = await database.queryJson<{partialCount: number}>(`
+    SELECT CAST(COUNT(*) AS INTEGER) AS partialCount
+    FROM mart.review_article_summary_rebuild_partial_v4
+    WHERE ${scopePredicate}
+      AND chunk_id = ${getSqlLiteral(summaryRebuildPartialAccumulatorChunkId)}
+  `)
+
+  return Number(rows[0]?.partialCount ?? 0)
+}
+
 const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
   input: {
     chunkIds: readonly string[]
@@ -996,6 +1011,12 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
   database: ReviewServingSummaryProjectorDatabase,
 ) => {
   await reduceSummaryRebuildPartialBatchesIntoAccumulator(input, database)
+
+  const accumulatorPartialCount = await getSummaryRebuildAccumulatorPartialCount(input, database)
+
+  if (accumulatorPartialCount === 0) {
+    return
+  }
 
   await database.transaction(async (tx) => {
     const scopePredicate = getSummaryRebuildPartialScopePredicate(input)

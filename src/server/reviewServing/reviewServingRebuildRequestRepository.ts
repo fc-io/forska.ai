@@ -376,19 +376,11 @@ const getDefaultRebuildArticleRanges = async (
         CAST(COUNT(*) AS INTEGER) AS scopedArticleCount
       FROM chunked_article
       GROUP BY chunk_index
-    ), bucket_range_with_neighbors AS (
-      SELECT
-        scoped_start_key,
-        scoped_end_key,
-        scopedArticleCount,
-        LAG(scoped_end_key) OVER (ORDER BY chunk_index) AS previous_scoped_end_key
-      FROM bucket_range
-    )
     SELECT
-      COALESCE(previous_scoped_end_key, scoped_start_key) AS chunkStartKey,
+      scoped_start_key AS chunkStartKey,
       scoped_end_key AS chunkEndKey,
       scopedArticleCount
-    FROM bucket_range_with_neighbors
+    FROM bucket_range
     ORDER BY scoped_start_key
   `)
 

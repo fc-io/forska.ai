@@ -486,6 +486,10 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
 
+      if (statement.includes('COUNT(*) AS partialCount')) {
+        return [{partialCount: 1}] as T[]
+      }
+
       return (chunkBatches.shift() ?? []) as T[]
     },
     run: async (statement: string) => {
@@ -580,6 +584,87 @@ test('summary rebuild request finalization reduces conflicting partial chunks in
   }
 })
 
+test('summary rebuild request finalization leaves serving summaries unchanged when no partials exist', async () => {
+  const duckdbPath = `/tmp/forska-summary-partial-noop-${Date.now()}.duckdb`
+
+  try {
+    const {close, database} = await createDuckdbSummaryDatabase(duckdbPath)
+
+    try {
+      await createSummaryReductionSchema(database)
+      await database.run(`
+        INSERT INTO mart.review_article_count_serving_v4 (
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          summary_identity,
+          list_mode_key,
+          count_kind,
+          summary_definition_version,
+          filter_key,
+          count_value
+        ) VALUES (
+          'project-1',
+          'review-config-1',
+          'snapshot-1',
+          'review.llm.assessedByPrompt',
+          'llm',
+          'review.llm.assessedByPrompt',
+          'review-llm-assessed-by-prompt:v1',
+          'prompt:prompt-1',
+          7
+        )
+      `)
+      await database.run(`
+        INSERT INTO mart.review_filter_facet_serving_v4 (
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          summary_identity,
+          facet_kind,
+          facet_key,
+          facet_value,
+          summary_definition_version,
+          count_value
+        ) VALUES (
+          'project-1',
+          'review-config-1',
+          'snapshot-1',
+          'review.filter.promptAnswer',
+          'review',
+          'promptAnswer',
+          'old-answer',
+          'review-filter-prompt-answer:v1',
+          9
+        )
+      `)
+
+      await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+        {
+          requestId: 'rebuild-posting-only-1',
+          snapshots: [{projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'}],
+        },
+        database,
+      )
+      const countRows = await database.queryJson<{countValue: string}>(`
+        SELECT CAST(count_value AS VARCHAR) AS countValue
+        FROM mart.review_article_count_serving_v4
+      `)
+      const facetRows = await database.queryJson<{countValue: string}>(`
+        SELECT CAST(count_value AS VARCHAR) AS countValue
+        FROM mart.review_filter_facet_serving_v4
+      `)
+
+      expect(countRows).toEqual([{countValue: '7'}])
+      expect(facetRows).toEqual([{countValue: '9'}])
+    } finally {
+      close()
+    }
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
 test('summary rebuild request finalization deletes stale facets when no facet partials remain', async () => {
   const duckdbPath = `/tmp/forska-summary-partial-empty-facet-${Date.now()}.duckdb`
 
@@ -588,6 +673,37 @@ test('summary rebuild request finalization deletes stale facets when no facet pa
 
     try {
       await createSummaryReductionSchema(database)
+      await database.run(`
+        INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+          request_id,
+          chunk_id,
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          serving_key,
+          summary_kind,
+          summary_identity,
+          list_mode_key,
+          count_kind,
+          summary_definition_version,
+          filter_key,
+          count_value
+        ) VALUES (
+          'rebuild-summary-1',
+          'chunk-001',
+          'project-1',
+          'review-config-1',
+          'snapshot-1',
+          'count-key',
+          'count',
+          'review.llm.assessedByPrompt',
+          'llm',
+          'review.llm.assessedByPrompt',
+          'review-llm-assessed-by-prompt:v1',
+          'prompt:prompt-1',
+          3
+        )
+      `)
       await database.run(`
         INSERT INTO mart.review_filter_facet_serving_v4 (
           project_id,
