@@ -954,7 +954,7 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
           THEN COALESCE(count_value, 0) + COALESCE(excluded.count_value, 0)
           ELSE NULL
         END,
-        partial_updated_at = current_timestamp
+        partial_updated_at = now()
     `)
     await tx.run(`
       DELETE FROM mart.review_article_summary_rebuild_partial_v4
