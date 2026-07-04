@@ -12,6 +12,7 @@ import {
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
+  writeReviewServingTitleSearchRebuildRanges,
   writeReviewServingTitleSearchRebuildRows,
 } from './reviewServingProjectorWriter.ts'
 import {getReviewServingOptionalComponentAvailability} from './reviewServingSnapshotPromotionService.ts'
@@ -43,6 +44,10 @@ export type ProjectReviewServingTitleSearchRebuildInput = {
   searchIdentity: string
   selectedImportSnapshotId?: string | null
   snapshotId: string
+}
+
+export type ProjectReviewServingTitleSearchRebuildRangesInput = {
+  ranges: readonly ProjectReviewServingTitleSearchRebuildInput[]
 }
 
 type TitleSearchSourceRow = {
@@ -342,22 +347,39 @@ export const projectReviewServingTitleSearchRebuildRows = async (
   input: ProjectReviewServingTitleSearchRebuildInput,
   database: ReviewServingTitleSearchProjectorDatabase = getAppDatabaseService() as ReviewServingTitleSearchProjectorDatabase,
 ) => {
-  await writeReviewServingTitleSearchRebuildRows(
+  await writeReviewServingTitleSearchRebuildRows(getReviewServingTitleSearchRebuildWriterInput(input), database)
+
+  return {patchWatermark: 0}
+}
+
+const getReviewServingTitleSearchRebuildWriterInput = (input: ProjectReviewServingTitleSearchRebuildInput) => {
+  return {
+    activitySortAtSql:
+      'COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at)',
+    articleRangePredicateSql: getArticleRangePredicate(input),
+    articleTitleSql: getSelectedImportTitleSql(input),
+    projectId: input.projectId,
+    projectScopeIdentity: input.projectScopeIdentity,
+    searchIdentity: input.searchIdentity,
+    selectedImportJoinSql: getSelectedImportTitleJoinSql(input),
+    snapshotId: input.snapshotId,
+    targetArticleRangePredicateSql: getArticleRangePredicate(input, 'search'),
+    titlePrefixLength,
+  }
+}
+
+export const projectReviewServingTitleSearchRebuildRanges = async (
+  input: ProjectReviewServingTitleSearchRebuildRangesInput,
+  database: ReviewServingTitleSearchProjectorDatabase = getAppDatabaseService() as ReviewServingTitleSearchProjectorDatabase,
+) => {
+  await writeReviewServingTitleSearchRebuildRanges(
     {
-      activitySortAtSql:
-        'COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at)',
-      articleRangePredicateSql: getArticleRangePredicate(input),
-      articleTitleSql: getSelectedImportTitleSql(input),
-      projectId: input.projectId,
-      projectScopeIdentity: input.projectScopeIdentity,
-      searchIdentity: input.searchIdentity,
-      selectedImportJoinSql: getSelectedImportTitleJoinSql(input),
-      snapshotId: input.snapshotId,
-      targetArticleRangePredicateSql: getArticleRangePredicate(input, 'search'),
-      titlePrefixLength,
+      ranges: input.ranges.map((range) => {
+        return getReviewServingTitleSearchRebuildWriterInput(range)
+      }),
     },
     database,
   )
 
-  return {patchWatermark: 0}
+  return {patchWatermark: 0, rangeCount: input.ranges.length}
 }
