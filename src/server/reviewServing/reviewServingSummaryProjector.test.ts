@@ -773,8 +773,38 @@ test('summary rebuild request finalization ignores stale accumulator rows from p
   }
 })
 
-test('summary rebuild request finalization deduplicates overlapping contribution partials', async () => {
+test('summary rebuild request finalization deduplicates overlapping contribution partial counts', async () => {
   const duckdbPath = `/tmp/forska-summary-duplicate-contribution-finalize-${Date.now()}.duckdb`
+  const countContributionKey = contributionKey({
+    answerId: null,
+    answerValue: null,
+    availability: 'ready',
+    countKind: 'review.llm.assessedByPrompt',
+    facetKind: null,
+    facetKey: null,
+    facetValue: null,
+    filterKey: 'prompt:prompt-1',
+    listModeKey: 'llm',
+    promptId: 'prompt-1',
+    staleReason: null,
+    summaryIdentity: 'review.llm.assessedByPrompt',
+    summaryKind: 'count',
+  })
+  const facetContributionKey = contributionKey({
+    answerId: null,
+    answerValue: 'yes',
+    availability: 'ready',
+    countKind: 'review.human.filter.summaryAnswer',
+    facetKind: 'human',
+    facetKey: 'summaryAnswer',
+    facetValue: 'yes',
+    filterKey: null,
+    listModeKey: null,
+    promptId: 'summary',
+    staleReason: null,
+    summaryIdentity: 'review.human.filter.summaryAnswer',
+    summaryKind: 'facet',
+  })
 
   try {
     const {close, database} = await createDuckdbSummaryDatabase(duckdbPath)
@@ -796,22 +826,17 @@ test('summary rebuild request finalization deduplicates overlapping contribution
           count_kind,
           summary_definition_version,
           filter_key,
+          facet_kind,
+          facet_key,
+          facet_value,
+          prompt_id,
+          answer_value,
           count_value
-        ) VALUES (
-          'rebuild-summary-1',
-          'chunk-left',
-          'project-1',
-          'review-config-1',
-          'snapshot-1',
-          'count-key',
-          'count',
-          'review.llm.assessedByPrompt',
-          'llm',
-          'review.llm.assessedByPrompt',
-          'review-llm-assessed-by-prompt:v1',
-          'prompt:prompt-1',
-          1
-        )
+        ) VALUES
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', NULL, NULL, NULL, 'prompt-1', NULL, 2),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'count-key', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', NULL, NULL, NULL, 'prompt-1', NULL, 2),
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'facet-key', 'facet', 'review.human.filter.summaryAnswer', NULL, 'review.human.filter.summaryAnswer', 'review-human-filter-summary-answer:v1', NULL, 'human', 'summaryAnswer', 'yes', 'summary', 'yes', 2),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'facet-key', 'facet', 'review.human.filter.summaryAnswer', NULL, 'review.human.filter.summaryAnswer', 'review-human-filter-summary-answer:v1', NULL, 'human', 'summaryAnswer', 'yes', 'summary', 'yes', 2)
       `)
       await database.run(`
         INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4 (
@@ -826,8 +851,14 @@ test('summary rebuild request finalization deduplicates overlapping contribution
           contribution_key,
           contribution_value
         ) VALUES
-          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', 'same-key', 1),
-          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', 'same-key', 1)
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-left', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-right', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-left', 'count', 'review-serving-summary:v1', '${facetContributionKey}', 1),
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', '${facetContributionKey}', 1),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', '${facetContributionKey}', 1),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-right', 'count', 'review-serving-summary:v1', '${facetContributionKey}', 1)
       `)
 
       await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
@@ -843,8 +874,18 @@ test('summary rebuild request finalization deduplicates overlapping contribution
           CAST(ANY_VALUE(contribution_value) AS VARCHAR) AS contributionValue
         FROM mart.review_article_summary_contribution_v4
       `)
+      const countRows = await database.queryJson<{countValue: string}>(`
+        SELECT CAST(count_value AS VARCHAR) AS countValue
+        FROM mart.review_article_count_serving_v4
+      `)
+      const facetRows = await database.queryJson<{countValue: string}>(`
+        SELECT CAST(count_value AS VARCHAR) AS countValue
+        FROM mart.review_filter_facet_serving_v4
+      `)
 
-      expect(contributionRows).toEqual([{contributionValue: '1', total: '1'}])
+      expect(contributionRows).toEqual([{contributionValue: '1', total: '6'}])
+      expect(countRows).toEqual([{countValue: '3'}])
+      expect(facetRows).toEqual([{countValue: '3'}])
     } finally {
       close()
     }

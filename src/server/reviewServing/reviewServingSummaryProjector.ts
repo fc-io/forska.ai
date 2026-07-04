@@ -1123,6 +1123,61 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
         contribution_updated_at = now()
     `)
     await tx.run(`
+      UPDATE mart.review_article_summary_rebuild_partial_v4 accumulator
+      SET
+        count_value = CASE
+          WHEN accumulator.availability = 'ready'
+          THEN COALESCE(deduplicated.count_value, accumulator.count_value)
+          ELSE NULL
+        END,
+        partial_updated_at = now()
+      FROM (
+        SELECT
+          contribution.project_id,
+          contribution.review_config_hash,
+          contribution.snapshot_id,
+          json_extract_string(contribution.contribution_key, '$.summaryKind') AS summary_kind,
+          json_extract_string(contribution.contribution_key, '$.summaryIdentity') AS summary_identity,
+          COALESCE(json_extract_string(contribution.contribution_key, '$.listModeKey'), 'global') AS list_mode_key,
+          json_extract_string(contribution.contribution_key, '$.countKind') AS count_kind,
+          json_extract_string(contribution.contribution_key, '$.filterKey') AS filter_key,
+          json_extract_string(contribution.contribution_key, '$.facetKind') AS facet_kind,
+          json_extract_string(contribution.contribution_key, '$.facetKey') AS facet_key,
+          json_extract_string(contribution.contribution_key, '$.facetValue') AS facet_value,
+          SUM(COALESCE(contribution.contribution_value, 0)) AS count_value
+        FROM mart.review_article_summary_contribution_v4 contribution
+        WHERE contribution.project_id = ${getSqlLiteral(input.projectId)}
+          AND contribution.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+          AND contribution.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          AND contribution.component_kind = 'count'
+        GROUP BY
+          contribution.project_id,
+          contribution.review_config_hash,
+          contribution.snapshot_id,
+          json_extract_string(contribution.contribution_key, '$.summaryKind'),
+          json_extract_string(contribution.contribution_key, '$.summaryIdentity'),
+          COALESCE(json_extract_string(contribution.contribution_key, '$.listModeKey'), 'global'),
+          json_extract_string(contribution.contribution_key, '$.countKind'),
+          json_extract_string(contribution.contribution_key, '$.filterKey'),
+          json_extract_string(contribution.contribution_key, '$.facetKind'),
+          json_extract_string(contribution.contribution_key, '$.facetKey'),
+          json_extract_string(contribution.contribution_key, '$.facetValue')
+      ) deduplicated
+      WHERE accumulator.request_id = ${getSqlLiteral(input.requestId)}
+        AND accumulator.chunk_id = ${getSqlLiteral(input.accumulatorChunkId)}
+        AND accumulator.project_id = deduplicated.project_id
+        AND accumulator.review_config_hash = deduplicated.review_config_hash
+        AND accumulator.snapshot_id = deduplicated.snapshot_id
+        AND accumulator.summary_kind = deduplicated.summary_kind
+        AND accumulator.summary_identity = deduplicated.summary_identity
+        AND COALESCE(accumulator.list_mode_key, 'global') = deduplicated.list_mode_key
+        AND accumulator.count_kind IS NOT DISTINCT FROM deduplicated.count_kind
+        AND accumulator.filter_key IS NOT DISTINCT FROM deduplicated.filter_key
+        AND accumulator.facet_kind IS NOT DISTINCT FROM deduplicated.facet_kind
+        AND accumulator.facet_key IS NOT DISTINCT FROM deduplicated.facet_key
+        AND accumulator.facet_value IS NOT DISTINCT FROM deduplicated.facet_value
+    `)
+    await tx.run(`
       DELETE FROM mart.review_article_summary_rebuild_partial_v4
       WHERE ${getSummaryRebuildPartialScopePredicate(input)}
         AND ${chunkIdPredicate}
