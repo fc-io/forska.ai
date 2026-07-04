@@ -683,15 +683,12 @@ const getDirectFullSummaryRecords = (input: {
   rows: readonly SummaryContributionSourceRow[]
   snapshotId: string
 }) => {
-  const aggregatedRows = getRowsAsContributionRows(input.rows).reduce(
-    (acc, row) => {
-      const current = acc.get(row.contributionKey)
-      acc.set(row.contributionKey, (current ?? 0) + row.contributionValue)
+  const aggregatedRows = getRowsAsContributionRows(input.rows).reduce((acc, row) => {
+    const current = acc.get(row.contributionKey)
+    acc.set(row.contributionKey, (current ?? 0) + row.contributionValue)
 
-      return acc
-    },
-    new Map<string, number>(),
-  )
+    return acc
+  }, new Map<string, number>())
 
   return Array.from(aggregatedRows.entries()).flatMap(([contributionKey, countValue]) => {
     const identity = parseSummaryContributionKey(contributionKey)
@@ -718,14 +715,8 @@ const getDirectFullSummaryDeleteStatements = (input: ProjectReviewServingSummari
   }
 
   return [
-    getDeleteReviewServingProjectorRowsStatement({
-      predicates,
-      table: 'mart.review_article_count_serving_v4',
-    }),
-    getDeleteReviewServingProjectorRowsStatement({
-      predicates,
-      table: 'mart.review_filter_facet_serving_v4',
-    }),
+    getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_article_count_serving_v4'}),
+    getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_filter_facet_serving_v4'}),
   ]
 }
 
@@ -798,7 +789,13 @@ export const projectReviewServingSummaries = async (
   }
 
   if (isDirectFullSummarySnapshotInput(input)) {
-    return projectDirectFullReviewServingSummaries({database, measure, measureSync, phaseTimings, projectorInput: input})
+    return projectDirectFullReviewServingSummaries({
+      database,
+      measure,
+      measureSync,
+      phaseTimings,
+      projectorInput: input,
+    })
   }
 
   const [sourceRows, priorArticleRows] = await measure('sourceQueryMs', async () => {

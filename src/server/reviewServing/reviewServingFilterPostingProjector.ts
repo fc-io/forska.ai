@@ -823,11 +823,7 @@ const getFullRebuildWriteStatements = (input: ProjectReviewServingFilterPostings
       ? []
       : [getDeleteFullRebuildStatsRowsStatement(input), getInsertFullRebuildStatsRowsStatement(input)]
 
-  return [
-    getDeleteFullRebuildServingRowsStatement(input),
-    ...insertStatements,
-    ...statsStatements,
-  ]
+  return [getDeleteFullRebuildServingRowsStatement(input), ...insertStatements, ...statsStatements]
 }
 
 const getDeleteStatsRowsStatement = (
