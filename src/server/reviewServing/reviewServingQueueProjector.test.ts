@@ -248,6 +248,31 @@ test('queue rebuild treats missing LLM judgments as unassessed rows', async () =
   expect(joined).not.toContain('OR judgment.is_answered\n')
 })
 
+test('summary-mode queue rebuild uses a synthetic human summary prompt without enabled prompts', async () => {
+  const {database, statements} = createQueueDatabase()
+
+  await projectReviewServingQueueRebuildRows(
+    {
+      baseGeneration: 5,
+      projectId: 'project-1',
+      projectScopeIdentity: 'project-scope-1',
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-snapshot-1',
+      snapshotId: 'snapshot-1',
+    },
+    database,
+  )
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_unassessed_queue_serving_v4')
+  })
+
+  expect(insertStatement).toContain('human_prompt AS')
+  expect(insertStatement).toContain("SELECT\n        'summary' AS prompt_id")
+  expect(insertStatement).toContain("WHERE project_settings.human_judgment_mode = 'summary'")
+  expect(insertStatement).toContain('CROSS JOIN human_prompt prompt')
+  expect(insertStatement).not.toContain('CASE WHEN project_settings.human_judgment_mode =')
+})
+
 test('prompt-mode queue rebuilds suppress synthetic summary human rows', async () => {
   const {database, statements} = createQueueDatabase({
     queueRows: [queueRow({promptId: 'prompt-1', queueKind: 'human-unreviewed'})],
