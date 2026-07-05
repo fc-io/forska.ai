@@ -12,7 +12,6 @@ import {
 } from './reviewServingManifestRepository.ts'
 import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
-  type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
@@ -408,14 +407,7 @@ const getProjectScopedPromptFilterSql = (input: ProjectReviewServingLlmStatusInp
       AND COALESCE(prompt.archived, FALSE) = FALSE
   `
 
-  return input.claims.length === 0
-    ? currentEnabledPromptSql
-    : `${currentEnabledPromptSql}
-      UNION
-      SELECT llm.prompt_id
-      FROM mart.review_llm_status_patch_v4 llm
-      WHERE llm.project_id = ${getSqlLiteral(input.projectId)}
-        AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}`
+  return currentEnabledPromptSql
 }
 
 const getProjectScopedRows = async (
@@ -599,47 +591,6 @@ const getLlmStatusKey = (row: LlmStatusSourceRow) => {
       : 'unanswered'
 }
 
-const getLlmStatusPatchRecord = (input: {
-  baseGeneration: number
-  listModeKey: string
-  patchWatermark: number
-  promptConfigRows: readonly ProjectPromptConfigRow[]
-  projectId: string
-  row: LlmStatusSourceRow
-}): ReviewServingProjectorRecord => {
-  const promptConfigHash = getPromptConfigHash(input.row)
-
-  return {
-    keyColumns: [
-      'project_id',
-      'review_config_hash',
-      'prompt_config_hash',
-      'base_generation',
-      'patch_watermark',
-      'list_mode_key',
-      'article_id',
-      'prompt_id',
-    ],
-    table: 'mart.review_llm_status_patch_v4',
-    values: {
-      answered_original: input.row.tombstone ? null : input.row.answeredOriginal,
-      answered_original_as_array: input.row.tombstone ? null : input.row.answeredOriginalAsArray,
-      article_id: input.row.articleId,
-      base_generation: input.baseGeneration,
-      latest_llm_created_at: input.row.tombstone ? null : input.row.latestLlmCreatedAt,
-      list_mode_key: input.listModeKey,
-      llm_status_key: getLlmStatusKey(input.row),
-      patch_updated_at: new Date(),
-      patch_watermark: input.patchWatermark,
-      project_id: input.projectId,
-      prompt_config_hash: promptConfigHash,
-      prompt_id: input.row.promptId,
-      review_config_hash: getReviewConfigHash({...input.row, promptConfigRows: input.promptConfigRows}),
-      tombstone: input.row.tombstone,
-    },
-  }
-}
-
 const getLlmStatusPatchManifest = (
   input: ProjectReviewServingLlmStatusInput,
 ): ReviewServingProjectionIdentityManifestInput => {
@@ -703,7 +654,6 @@ const getApplyLlmStatusServingStatement = (input: {
           ${getSqlLiteral(input.patchWatermark)} AS patch_watermark
         FROM changed
         GROUP BY changed.review_config_hash, changed.list_mode_key, changed.article_id, changed.prompt_config_hash, changed.prompt_id, changed.llm_status_key, changed.tombstone
-        ${input.includeExistingPatchRows ? getExistingLlmStatusPatchRowsSql(input) : ''}
       ), latest_prompt AS (
         SELECT candidate.*
         FROM candidate_prompt candidate
@@ -789,55 +739,6 @@ const getResetEmptyLlmStatusServingStatement = (input: {
       )`
 }
 
-const getExistingLlmStatusPatchRowsSql = (input: {
-  baseGeneration: number
-  patchWatermark: number
-  projectId: string
-}) => {
-  return `UNION ALL
-    SELECT
-      llm.review_config_hash,
-      llm.list_mode_key,
-      llm.article_id,
-      llm.prompt_config_hash,
-      llm.prompt_id,
-      llm.llm_status_key,
-      llm.tombstone,
-      llm.patch_watermark
-    FROM mart.review_llm_status_patch_v4 llm
-    INNER JOIN changed_article changed
-      ON changed.review_config_hash = llm.review_config_hash
-      AND changed.list_mode_key = llm.list_mode_key
-      AND changed.article_id = llm.article_id
-    WHERE llm.project_id = ${getSqlLiteral(input.projectId)}
-      AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
-      AND llm.patch_watermark <= ${getSqlLiteral(input.patchWatermark)}`
-}
-
-const getDeleteRebuiltLlmStatusPatchRowsStatement = (input: {
-  baseGeneration: number
-  chunkEndArticleId?: string | null
-  chunkStartArticleId?: string | null
-  patchWatermark: number
-  projectId: string
-}) => {
-  const startPredicate =
-    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
-      ? ''
-      : `AND article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`
-  const endPredicate =
-    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
-      ? ''
-      : `AND article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
-
-  return `DELETE FROM mart.review_llm_status_patch_v4
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND base_generation = ${getSqlLiteral(input.baseGeneration)}
-      AND patch_watermark = ${getSqlLiteral(input.patchWatermark)}
-      ${startPredicate}
-      ${endPredicate}`
-}
-
 export const projectReviewServingLlmStatusPatches = async (
   input: ProjectReviewServingLlmStatusInput,
   database: ReviewServingLlmStatusProjectorDatabase = getAppDatabaseService(),
@@ -850,7 +751,6 @@ export const projectReviewServingLlmStatusPatches = async (
     getArticleScopedRows(input, database),
   ])
   const patchWatermark = getPatchWatermark(input.claims)
-  const emitPatchRows = input.claims.length > 0 || (input.emitPatchRows ?? true)
   const rows = [...judgmentRows, ...promptRows, ...projectRows, ...articleRows]
   const recordRows = rows.flatMap((row) => {
     const promptConfigHash = getPromptConfigHash(row)
@@ -868,38 +768,16 @@ export const projectReviewServingLlmStatusPatches = async (
       }
     })
   })
-  const records = rows.flatMap((row) => {
-    return input.listModeKeys.map((listModeKey) => {
-      return getLlmStatusPatchRecord({
-        baseGeneration: input.baseGeneration,
-        listModeKey,
-        patchWatermark,
-        promptConfigRows,
-        projectId: input.projectId,
-        row,
-      })
-    })
-  })
-
   await writeReviewServingProjectorComponent(
     {
       acknowledgements: input.claims,
       component: 'llmStatus',
       projectionManifests: input.claims.length === 0 ? [] : [getLlmStatusPatchManifest(input)],
-      records: emitPatchRows ? records : [],
+      records: [],
       statements: [
-        input.claims.length === 0 && emitPatchRows
-          ? getDeleteRebuiltLlmStatusPatchRowsStatement({
-              baseGeneration: input.baseGeneration,
-              chunkEndArticleId: input.chunkEndArticleId,
-              chunkStartArticleId: input.chunkStartArticleId,
-              patchWatermark,
-              projectId: input.projectId,
-            })
-          : null,
         getApplyLlmStatusServingStatement({
           baseGeneration: input.baseGeneration,
-          includeExistingPatchRows: input.claims.length > 0,
+          includeExistingPatchRows: false,
           patchWatermark,
           projectId: input.projectId,
           projectionIdentity: input.projectionIdentity,
@@ -933,5 +811,5 @@ export const projectReviewServingLlmStatusPatches = async (
     database,
   )
 
-  return {patchRowCount: emitPatchRows ? records.length : 0, patchWatermark}
+  return {patchRowCount: 0, patchWatermark}
 }

@@ -7,7 +7,6 @@ import {
 } from './reviewServingManifestRepository.ts'
 import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
-  type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
@@ -436,36 +435,7 @@ const getProjectScopedRows = async (
       return `(${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.promptOrder)}, ${getSqlLiteral(row.promptTextHash)}, ${getSqlLiteral(row.answerSchemaHash)}, ${getSqlLiteral(row.settingsVersion)}, ${getSqlLiteral(row.thresholdVersion)}, TRUE)`
     })
     .join(', ')
-  const includeExistingPatchRows = input.claims.length > 0
-  const existingPromptConfigCteSql = includeExistingPatchRows
-    ? `, existing_prompt_config AS (
-      SELECT DISTINCT
-        human.prompt_id,
-        NULL::INTEGER AS prompt_order,
-        human.prompt_id AS prompt_text_hash,
-        NULL AS answer_schema_hash,
-        'prompt-v1' AS settings_version,
-        NULL AS threshold_version,
-        FALSE AS active
-      FROM mart.review_human_status_patch_v4 human
-      WHERE human.project_id = ${getSqlLiteral(input.projectId)}
-        AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
-        AND human.prompt_id IS NOT NULL
-        AND human.prompt_id <> 'summary'
-        AND NOT EXISTS (
-          SELECT 1
-          FROM active_prompt_config active
-          WHERE active.prompt_id = human.prompt_id
-        )
-    )`
-    : ''
-  const promptConfigCteSql = includeExistingPatchRows
-    ? `prompt_config AS (
-      SELECT * FROM active_prompt_config
-      UNION ALL
-      SELECT * FROM existing_prompt_config
-    )`
-    : `prompt_config AS (
+  const promptConfigCteSql = `prompt_config AS (
       SELECT * FROM active_prompt_config
     )`
 
@@ -479,7 +449,7 @@ const getProjectScopedRows = async (
   return database.queryJson<HumanStatusSourceRow>(`
     WITH active_prompt_config(prompt_id, prompt_order, prompt_text_hash, answer_schema_hash, settings_version, threshold_version, active) AS (
       SELECT * FROM (VALUES ${activePromptValues})
-    )${existingPromptConfigCteSql}, ${promptConfigCteSql}, article_prompt AS (
+    ), ${promptConfigCteSql}, article_prompt AS (
       SELECT scope.article_id, prompt_config.*
       FROM mart.project_scope_article scope
       CROSS JOIN prompt_config
@@ -547,26 +517,6 @@ const getApplyHumanStatusServingStatement = (input: {
       return `(${getSqlLiteral(row.listModeKey)}, ${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.reviewConfigHash)}, ${getSqlLiteral(row.promptConfigHash)}, ${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.humanStatusKey)}, ${getSqlLiteral(row.tombstone)})`
     })
     .join(', ')
-  const existingPromptRowsSql = input.includeExistingPatchRows
-    ? `UNION ALL
-        SELECT
-          human.list_mode_key,
-          human.article_id,
-          ${getSqlLiteral(input.currentReviewConfigHash)} AS review_config_hash,
-          human.prompt_config_hash,
-          human.prompt_id,
-          human.human_status_key,
-          human.tombstone,
-          human.patch_watermark
-        FROM mart.review_human_status_patch_v4 human
-        INNER JOIN changed_article changed
-          ON changed.list_mode_key = human.list_mode_key
-          AND changed.article_id = human.article_id
-        WHERE human.project_id = ${getSqlLiteral(input.projectId)}
-          AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
-          AND human.patch_watermark <= ${getSqlLiteral(input.patchWatermark)}`
-    : ''
-
   return values.length === 0
     ? null
     : `WITH changed(list_mode_key, article_id, review_config_hash, prompt_config_hash, prompt_id, human_status_key, tombstone) AS (
@@ -586,7 +536,6 @@ const getApplyHumanStatusServingStatement = (input: {
           ${getSqlLiteral(input.patchWatermark)} AS patch_watermark
         FROM changed
         GROUP BY changed.list_mode_key, changed.article_id, changed.review_config_hash, changed.prompt_config_hash, changed.prompt_id, changed.human_status_key, changed.tombstone
-        ${existingPromptRowsSql}
       ), latest_prompt AS (
         SELECT candidate.*
         FROM candidate_prompt candidate
@@ -636,65 +585,6 @@ const getApplyHumanStatusServingStatement = (input: {
       )`
 }
 
-const getDeleteRebuiltHumanStatusPatchRowsStatement = (input: {
-  baseGeneration: number
-  chunkEndArticleId?: string | null
-  chunkStartArticleId?: string | null
-  patchWatermark: number
-  projectId: string
-}) => {
-  const startPredicate =
-    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
-      ? ''
-      : `AND article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`
-  const endPredicate =
-    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
-      ? ''
-      : `AND article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`
-
-  return `DELETE FROM mart.review_human_status_patch_v4
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND base_generation = ${getSqlLiteral(input.baseGeneration)}
-      AND patch_watermark = ${getSqlLiteral(input.patchWatermark)}
-      ${startPredicate}
-      ${endPredicate}`
-}
-
-const getHumanStatusPatchRecord = (input: {
-  baseGeneration: number
-  listModeKey: string
-  patchWatermark: number
-  projectId: string
-  row: HumanStatusSourceRow
-}): ReviewServingProjectorRecord => {
-  return {
-    keyColumns: [
-      'project_id',
-      'prompt_config_hash',
-      'base_generation',
-      'patch_watermark',
-      'list_mode_key',
-      'article_id',
-      'prompt_id',
-    ],
-    table: 'mart.review_human_status_patch_v4',
-    values: {
-      article_id: input.row.articleId,
-      base_generation: input.baseGeneration,
-      human_answered_value: input.row.tombstone ? null : input.row.humanAnsweredValue,
-      human_status_key: input.row.tombstone ? null : input.row.humanStatusKey,
-      latest_human_updated_at: input.row.tombstone ? null : input.row.latestHumanUpdatedAt,
-      list_mode_key: input.listModeKey,
-      patch_updated_at: new Date(),
-      patch_watermark: input.patchWatermark,
-      project_id: input.projectId,
-      prompt_config_hash: getPromptConfigHash({...input.row, promptId: getPromptOrSummaryKey(input.row.promptId)}),
-      prompt_id: input.row.promptOrSummaryKey,
-      tombstone: input.row.tombstone,
-    },
-  }
-}
-
 const getHumanStatusPatchManifest = (
   input: ProjectReviewServingHumanStatusInput,
 ): ReviewServingProjectionIdentityManifestInput => {
@@ -736,7 +626,6 @@ export const projectReviewServingHumanStatusPatches = async (
     getProjectScopedRows(input, database, promptConfigRows),
   ])
   const patchWatermark = getPatchWatermark(input.claims)
-  const emitPatchRows = input.claims.length > 0 || (input.emitPatchRows ?? true)
   const rows = [...judgmentRows, ...promptRows, ...articleRows, ...projectRows]
   const recordRows = rows.flatMap((row) => {
     const promptConfigHash = getPromptConfigHash({...row, promptId: getPromptOrSummaryKey(row.promptId)})
@@ -753,39 +642,18 @@ export const projectReviewServingHumanStatusPatches = async (
       }
     })
   })
-  const records = rows.flatMap((row) => {
-    return input.listModeKeys.map((listModeKey) => {
-      return getHumanStatusPatchRecord({
-        baseGeneration: input.baseGeneration,
-        listModeKey,
-        patchWatermark,
-        projectId: input.projectId,
-        row,
-      })
-    })
-  })
-
   await writeReviewServingProjectorComponent(
     {
       acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
       component: 'humanStatus',
       projectionManifests: input.claims.length === 0 ? [] : [getHumanStatusPatchManifest(input)],
-      records: emitPatchRows ? records : [],
+      records: [],
       statements: [
-        input.claims.length === 0 && emitPatchRows
-          ? getDeleteRebuiltHumanStatusPatchRowsStatement({
-              baseGeneration: input.baseGeneration,
-              chunkEndArticleId: input.chunkEndArticleId,
-              chunkStartArticleId: input.chunkStartArticleId,
-              patchWatermark,
-              projectId: input.projectId,
-            })
-          : null,
         getApplyHumanStatusServingStatement({
           baseGeneration: input.baseGeneration,
           currentSummaryReviewConfigHash,
           currentReviewConfigHash,
-          includeExistingPatchRows: input.claims.length > 0,
+          includeExistingPatchRows: false,
           patchWatermark,
           projectId: input.projectId,
           projectionIdentity: input.projectionIdentity,
@@ -808,5 +676,5 @@ export const projectReviewServingHumanStatusPatches = async (
     database,
   )
 
-  return {patchRowCount: emitPatchRows ? records.length : 0, patchWatermark}
+  return {patchRowCount: 0, patchWatermark}
 }

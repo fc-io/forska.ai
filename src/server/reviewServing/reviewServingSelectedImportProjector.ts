@@ -261,19 +261,6 @@ const getDeleteSelectedImportArticleRangeRowsStatement = (
   `
 }
 
-const getDeleteSelectedImportPatchArticleRangeRowsStatement = (
-  input: ProjectReviewServingSelectedImportArticleRangeInput,
-) => {
-  return `
-    DELETE FROM mart.review_selected_import_patch_v4
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-      AND article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
-      AND article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
-  `
-}
-
 const getInsertSelectedImportArticleRangeRowsStatement = (
   input: ProjectReviewServingSelectedImportArticleRangeInput,
 ) => {
@@ -710,7 +697,6 @@ export const projectReviewServingSelectedImportArticleRange = async (
               ...getRefreshSelectedImportServingArticleRangeStatements(params),
             ]
           : [
-              getDeleteSelectedImportPatchArticleRangeRowsStatement(params),
               getDeleteSelectedImportArticleRangeRowsStatement(params),
               getInsertSelectedImportArticleRangeRowsStatement(params),
               ...getRefreshSelectedImportServingArticleRangeStatements(params),
@@ -757,7 +743,6 @@ export const projectReviewServingSelectedImportArticleRanges = async (
               ...getRefreshSelectedImportServingArticleRangeStatements(range),
             ]
           : [
-              getDeleteSelectedImportPatchArticleRangeRowsStatement(range),
               getDeleteSelectedImportArticleRangeRowsStatement(range),
               getInsertSelectedImportArticleRangeRowsStatement(range),
               ...getRefreshSelectedImportServingArticleRangeStatements(range),

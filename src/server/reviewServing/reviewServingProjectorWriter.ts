@@ -38,12 +38,6 @@ export type ReviewServingProjectorWriterTransaction = {
 
 export type ReviewServingProjectorWritableTable =
   | 'app.review_selected_article_import_v4'
-  | 'mart.review_article_filter_posting_patch_v4'
-  | 'mart.review_article_display_patch_v4'
-  | 'mart.review_human_status_patch_v4'
-  | 'mart.review_llm_status_patch_v4'
-  | 'mart.review_queue_patch_v4'
-  | 'mart.review_selected_import_patch_v4'
   | 'mart.review_article_count_serving_v4'
   | 'mart.review_article_filter_posting_serving_v4'
   | 'mart.review_article_judgment_detail_serving_v4'
@@ -108,11 +102,7 @@ export type WriteReviewServingTitleSearchRebuildRangesInput = {
 }
 
 const projectorRecordBatchSize = 250
-const reviewServingProjectorDeleteScopedInsertOnlyTables = new Set<string>([
-  'app.review_selected_article_import_v4',
-  'mart.review_human_status_patch_v4',
-  'mart.review_llm_status_patch_v4',
-])
+const reviewServingProjectorDeleteScopedInsertOnlyTables = new Set<string>(['app.review_selected_article_import_v4'])
 
 export type WriteReviewServingQueueRebuildRowsInput = {
   projectId: string

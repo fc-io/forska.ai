@@ -187,9 +187,6 @@ test('selected-import article range rebuild writes selected rows directly in SQL
   const deleteStatement = statements.find((statement) => {
     return statement.includes('DELETE FROM app.review_selected_article_import_v4')
   })
-  const patchDeleteStatement = statements.find((statement) => {
-    return statement.includes('DELETE FROM mart.review_selected_import_patch_v4')
-  })
   const insertStatement = statements.find((statement) => {
     return statement.includes('INSERT INTO app.review_selected_article_import_v4')
   })
@@ -198,16 +195,12 @@ test('selected-import article range rebuild writes selected rows directly in SQL
   })
 
   expect(result.insertedRowCount).toBe(7)
+  expect(statements.join('\n')).not.toContain('mart.review_selected_import_patch_v4')
   expect(deleteStatement).toContain("project_id = 'project-1'")
   expect(deleteStatement).toContain("project_scope_identity = 'projectScope:identity-1'")
   expect(deleteStatement).toContain("selected_import_snapshot_id = 'selected-import-snapshot-1'")
   expect(deleteStatement).toContain("article_id >= 'article-1'")
   expect(deleteStatement).toContain("article_id <= 'article-9'")
-  expect(patchDeleteStatement).toContain("project_id = 'project-1'")
-  expect(patchDeleteStatement).toContain("project_scope_identity = 'projectScope:identity-1'")
-  expect(patchDeleteStatement).toContain("selected_import_snapshot_id = 'selected-import-snapshot-1'")
-  expect(patchDeleteStatement).toContain("article_id >= 'article-1'")
-  expect(patchDeleteStatement).toContain("article_id <= 'article-9'")
   expect(insertStatement).toContain('WITH selected_import_candidates AS')
   expect(insertStatement).toContain('ROW_NUMBER() OVER')
   expect(insertStatement).toContain("WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)")
