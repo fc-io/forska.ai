@@ -2630,7 +2630,7 @@ test('high-fanout rebuild chunks commit idempotent output separately from comple
   }
 })
 
-test('status rebuild chunks update serving rows without emitting patch rows', () => {
+test('status rebuild chunks emit patch rows for later incremental aggregation', () => {
   const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
   const getFunctionSource = (functionName: string) => {
     const start = source.indexOf(`const ${functionName} = async`)
@@ -2641,8 +2641,26 @@ test('status rebuild chunks update serving rows without emitting patch rows', ()
     return source.slice(start, end === -1 ? undefined : end)
   }
 
-  expect(getFunctionSource('runLlmStatusRebuildChunk')).toContain('emitPatchRows: false')
-  expect(getFunctionSource('runHumanStatusRebuildChunk')).toContain('emitPatchRows: false')
+  expect(getFunctionSource('runLlmStatusRebuildChunk')).not.toContain('emitPatchRows: false')
+  expect(getFunctionSource('runHumanStatusRebuildChunk')).not.toContain('emitPatchRows: false')
+})
+
+test('batched rebuild chunk writers keep claimed leases alive during batch execution', () => {
+  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const getFunctionSource = (functionName: string) => {
+    const start = source.indexOf(`const ${functionName} = async`)
+    const end = source.indexOf('\nconst ', start + 1)
+
+    expect(start).toBeGreaterThanOrEqual(0)
+
+    return source.slice(start, end === -1 ? undefined : end)
+  }
+  const batchSource = getFunctionSource('runReviewServingProjectorWorkerRebuildChunkBatchWith')
+
+  expect(source).toContain('startClaimedRebuildChunkBatchHeartbeats')
+  expect(batchSource).toContain('const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)')
+  expect(batchSource).toContain('finally')
+  expect(batchSource).toContain('stopHeartbeat()')
 })
 
 test('selected import runner releases dirty work while base projection is still batching', async () => {

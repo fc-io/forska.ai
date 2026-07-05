@@ -228,6 +228,26 @@ test('summary-mode human rows join queue work through article-level summary prom
   expect(selectStatement).toContain('SELECT DISTINCT')
 })
 
+test('queue rebuild treats missing LLM judgments as unassessed rows', async () => {
+  const {database, statements} = createQueueDatabase()
+
+  await projectReviewServingQueueRebuildRows(
+    {
+      baseGeneration: 5,
+      projectId: 'project-1',
+      projectScopeIdentity: 'project-scope-1',
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-snapshot-1',
+      snapshotId: 'snapshot-1',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('OR COALESCE(judgment.is_answered, FALSE)')
+  expect(joined).not.toContain('OR judgment.is_answered\n')
+})
+
 test('prompt-mode queue rebuilds suppress synthetic summary human rows', async () => {
   const {database, statements} = createQueueDatabase({
     queueRows: [queueRow({promptId: 'prompt-1', queueKind: 'human-unreviewed'})],

@@ -1540,7 +1540,6 @@ const runLlmStatusRebuildChunk = async (
             chunkStartArticleId: input.chunk.chunkStartKey,
             claims: [],
             definitionVersion: manifest.definitionVersion,
-            emitPatchRows: false,
             listModeKeys: defaultReviewServingLlmListModeKeys,
             projectId,
             projectionIdentity: input.chunk.projectionIdentity,
@@ -1586,7 +1585,6 @@ const runHumanStatusRebuildChunk = async (
             chunkStartArticleId: input.chunk.chunkStartKey,
             claims: [],
             definitionVersion: manifest.definitionVersion,
-            emitPatchRows: false,
             listModeKeys: defaultReviewServingHumanListModeKeys,
             projectId,
             projectionIdentity: input.chunk.projectionIdentity,
@@ -3390,7 +3388,6 @@ const runLlmStatusRebuildChunkBatch = async (
           chunkStartArticleId: chunk.chunkStartKey,
           claims: [],
           definitionVersion: manifest.definitionVersion,
-          emitPatchRows: false,
           listModeKeys: defaultReviewServingLlmListModeKeys,
           projectId,
           projectionIdentity: chunk.projectionIdentity,
@@ -3500,7 +3497,6 @@ const runHumanStatusRebuildChunkBatch = async (
           chunkStartArticleId: chunk.chunkStartKey,
           claims: [],
           definitionVersion: manifest.definitionVersion,
-          emitPatchRows: false,
           listModeKeys: defaultReviewServingHumanListModeKeys,
           projectId,
           projectionIdentity: chunk.projectionIdentity,
@@ -4532,6 +4528,55 @@ const startClaimedRebuildChunkHeartbeat = (input: {
   return () => {
     clearInterval(interval)
   }
+}
+
+const startClaimedRebuildChunkBatchHeartbeats = (input: {
+  claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
+  database: ReviewServingChunkManifestRepositoryDatabase
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+  workerId: string
+}) => {
+  const stopHeartbeats = input.claimedChunks.map((claimed) => {
+    return startClaimedRebuildChunkHeartbeat({
+      chunk: claimed.chunk,
+      database: input.database,
+      dependencies: input.dependencies,
+      options: input.options,
+      service: claimed.service,
+      workerId: input.workerId,
+    })
+  })
+
+  return () => {
+    stopHeartbeats.reduce<undefined>((_previous, stopHeartbeat) => {
+      stopHeartbeat()
+
+      return undefined
+    }, undefined)
+  }
+}
+
+const heartbeatClaimedRebuildChunkBatchLeases = async (input: {
+  claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
+  database: ReviewServingChunkManifestRepositoryDatabase
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+  workerId: string
+}) => {
+  await input.claimedChunks.reduce<Promise<void>>(async (previous, claimed) => {
+    await previous
+    await measureReviewServingProjectorWorkerPhase(claimed.timings, 'heartbeatMs', async () => {
+      await heartbeatClaimedRebuildChunkLease({
+        chunk: claimed.chunk,
+        database: input.database,
+        dependencies: input.dependencies,
+        options: input.options,
+        service: claimed.service,
+        workerId: input.workerId,
+      })
+    })
+  }, Promise.resolve())
 }
 
 const getErrorText = (error: unknown) => {
@@ -5682,20 +5727,14 @@ const runProjectScopeReviewServingProjectorWorkerRebuildChunkBatch = async (inpu
   let batchResults: Awaited<ReturnType<typeof runProjectScopeRebuildChunkBatch>>
 
   try {
-    await input.claimedChunks.reduce<Promise<void>>(async (previous, claimed) => {
-      await previous
-      await measureReviewServingProjectorWorkerPhase(claimed.timings, 'heartbeatMs', async () => {
-        await heartbeatClaimedRebuildChunkLease({
-          chunk: claimed.chunk,
-          database: input.database,
-          dependencies: input.dependencies,
-          options: input.options,
-          service: claimed.service,
-          workerId: input.workerId,
-        })
-      })
-    }, Promise.resolve())
-    batchResults = await runProjectScopeRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+    await heartbeatClaimedRebuildChunkBatchLeases(input)
+    const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
+
+    try {
+      batchResults = await runProjectScopeRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+    } finally {
+      stopHeartbeat()
+    }
   } catch (error) {
     return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
       claimedChunks: input.claimedChunks,
@@ -5750,20 +5789,14 @@ const runSelectedImportReviewServingProjectorWorkerRebuildChunkBatch = async (in
   let batchResults: Awaited<ReturnType<typeof runSelectedImportRebuildChunkBatch>>
 
   try {
-    await input.claimedChunks.reduce<Promise<void>>(async (previous, claimed) => {
-      await previous
-      await measureReviewServingProjectorWorkerPhase(claimed.timings, 'heartbeatMs', async () => {
-        await heartbeatClaimedRebuildChunkLease({
-          chunk: claimed.chunk,
-          database: input.database,
-          dependencies: input.dependencies,
-          options: input.options,
-          service: claimed.service,
-          workerId: input.workerId,
-        })
-      })
-    }, Promise.resolve())
-    batchResults = await runSelectedImportRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+    await heartbeatClaimedRebuildChunkBatchLeases(input)
+    const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
+
+    try {
+      batchResults = await runSelectedImportRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+    } finally {
+      stopHeartbeat()
+    }
   } catch (error) {
     return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
       claimedChunks: input.claimedChunks,
@@ -5818,20 +5851,14 @@ const runDisplayReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   let batchResults: Awaited<ReturnType<typeof runDisplayRebuildChunkBatch>>
 
   try {
-    await input.claimedChunks.reduce<Promise<void>>(async (previous, claimed) => {
-      await previous
-      await measureReviewServingProjectorWorkerPhase(claimed.timings, 'heartbeatMs', async () => {
-        await heartbeatClaimedRebuildChunkLease({
-          chunk: claimed.chunk,
-          database: input.database,
-          dependencies: input.dependencies,
-          options: input.options,
-          service: claimed.service,
-          workerId: input.workerId,
-        })
-      })
-    }, Promise.resolve())
-    batchResults = await runDisplayRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+    await heartbeatClaimedRebuildChunkBatchLeases(input)
+    const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
+
+    try {
+      batchResults = await runDisplayRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+    } finally {
+      stopHeartbeat()
+    }
   } catch (error) {
     return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
       claimedChunks: input.claimedChunks,
@@ -5886,20 +5913,14 @@ const runPayloadReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   let batchResults: Awaited<ReturnType<typeof runPayloadRebuildChunkBatch>>
 
   try {
-    await input.claimedChunks.reduce<Promise<void>>(async (previous, claimed) => {
-      await previous
-      await measureReviewServingProjectorWorkerPhase(claimed.timings, 'heartbeatMs', async () => {
-        await heartbeatClaimedRebuildChunkLease({
-          chunk: claimed.chunk,
-          database: input.database,
-          dependencies: input.dependencies,
-          options: input.options,
-          service: claimed.service,
-          workerId: input.workerId,
-        })
-      })
-    }, Promise.resolve())
-    batchResults = await runPayloadRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+    await heartbeatClaimedRebuildChunkBatchLeases(input)
+    const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
+
+    try {
+      batchResults = await runPayloadRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+    } finally {
+      stopHeartbeat()
+    }
   } catch (error) {
     return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
       claimedChunks: input.claimedChunks,
@@ -5954,20 +5975,14 @@ const runSearchReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   let batchResults: Awaited<ReturnType<typeof runSearchRebuildChunkBatch>>
 
   try {
-    await input.claimedChunks.reduce<Promise<void>>(async (previous, claimed) => {
-      await previous
-      await measureReviewServingProjectorWorkerPhase(claimed.timings, 'heartbeatMs', async () => {
-        await heartbeatClaimedRebuildChunkLease({
-          chunk: claimed.chunk,
-          database: input.database,
-          dependencies: input.dependencies,
-          options: input.options,
-          service: claimed.service,
-          workerId: input.workerId,
-        })
-      })
-    }, Promise.resolve())
-    batchResults = await runSearchRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+    await heartbeatClaimedRebuildChunkBatchLeases(input)
+    const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
+
+    try {
+      batchResults = await runSearchRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+    } finally {
+      stopHeartbeat()
+    }
   } catch (error) {
     return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
       claimedChunks: input.claimedChunks,
@@ -6022,20 +6037,14 @@ const runQueueReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   let batchResults: Awaited<ReturnType<typeof runQueueRebuildChunkBatch>>
 
   try {
-    await input.claimedChunks.reduce<Promise<void>>(async (previous, claimed) => {
-      await previous
-      await measureReviewServingProjectorWorkerPhase(claimed.timings, 'heartbeatMs', async () => {
-        await heartbeatClaimedRebuildChunkLease({
-          chunk: claimed.chunk,
-          database: input.database,
-          dependencies: input.dependencies,
-          options: input.options,
-          service: claimed.service,
-          workerId: input.workerId,
-        })
-      })
-    }, Promise.resolve())
-    batchResults = await runQueueRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+    await heartbeatClaimedRebuildChunkBatchLeases(input)
+    const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
+
+    try {
+      batchResults = await runQueueRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+    } finally {
+      stopHeartbeat()
+    }
   } catch (error) {
     return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
       claimedChunks: input.claimedChunks,
@@ -6090,20 +6099,17 @@ const runJudgmentInputContentReviewServingProjectorWorkerRebuildChunkBatch = asy
   let batchResults: Awaited<ReturnType<typeof runJudgmentInputContentRebuildChunkBatch>>
 
   try {
-    await input.claimedChunks.reduce<Promise<void>>(async (previous, claimed) => {
-      await previous
-      await measureReviewServingProjectorWorkerPhase(claimed.timings, 'heartbeatMs', async () => {
-        await heartbeatClaimedRebuildChunkLease({
-          chunk: claimed.chunk,
-          database: input.database,
-          dependencies: input.dependencies,
-          options: input.options,
-          service: claimed.service,
-          workerId: input.workerId,
-        })
-      })
-    }, Promise.resolve())
-    batchResults = await runJudgmentInputContentRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
+    await heartbeatClaimedRebuildChunkBatchLeases(input)
+    const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
+
+    try {
+      batchResults = await runJudgmentInputContentRebuildChunkBatch(
+        {chunks, leaseOwner: input.workerId},
+        input.database,
+      )
+    } finally {
+      stopHeartbeat()
+    }
   } catch (error) {
     return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
       claimedChunks: input.claimedChunks,
@@ -6164,20 +6170,14 @@ const runReviewServingProjectorWorkerRebuildChunkBatchWith = async (
   let batchResults: Awaited<ReturnType<typeof runBatch>>
 
   try {
-    await input.claimedChunks.reduce<Promise<void>>(async (previous, claimed) => {
-      await previous
-      await measureReviewServingProjectorWorkerPhase(claimed.timings, 'heartbeatMs', async () => {
-        await heartbeatClaimedRebuildChunkLease({
-          chunk: claimed.chunk,
-          database: input.database,
-          dependencies: input.dependencies,
-          options: input.options,
-          service: claimed.service,
-          workerId: input.workerId,
-        })
-      })
-    }, Promise.resolve())
-    batchResults = await runBatch({chunks, leaseOwner: input.workerId}, input.database)
+    await heartbeatClaimedRebuildChunkBatchLeases(input)
+    const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
+
+    try {
+      batchResults = await runBatch({chunks, leaseOwner: input.workerId}, input.database)
+    } finally {
+      stopHeartbeat()
+    }
   } catch (error) {
     return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
       claimedChunks: input.claimedChunks,
