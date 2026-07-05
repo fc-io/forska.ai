@@ -904,10 +904,6 @@ const getDirectFullSummaryDeleteStatements = (input: ProjectReviewServingSummari
   return [
     getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_article_count_serving_v4'}),
     getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_filter_facet_serving_v4'}),
-    getDeleteReviewServingProjectorRowsStatement({
-      predicates: {...predicates, component_kind: 'count'},
-      table: 'mart.review_article_summary_contribution_v4',
-    }),
   ]
 }
 
@@ -1179,98 +1175,80 @@ const getRefreshSummaryRebuildAccumulatorCountsStatement = (input: {
   reviewConfigHash: string
   snapshotId: string
 }) => {
+  const contributionScopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'partial_contribution'})
+
   return `
     UPDATE mart.review_article_summary_rebuild_partial_v4 accumulator
     SET
       count_value = CASE
         WHEN accumulator.availability = 'ready'
-        THEN COALESCE(deduplicated.count_value, accumulator.count_value)
+        THEN COALESCE(contribution_counts.count_value, accumulator.count_value)
         ELSE NULL
       END,
       partial_updated_at = now()
     FROM (
       SELECT
-        contribution.project_id,
-        contribution.review_config_hash,
-        contribution.snapshot_id,
-        json_extract_string(contribution.contribution_key, '$.summaryKind') AS summary_kind,
-        json_extract_string(contribution.contribution_key, '$.summaryIdentity') AS summary_identity,
-        COALESCE(json_extract_string(contribution.contribution_key, '$.listModeKey'), 'global') AS list_mode_key,
-        json_extract_string(contribution.contribution_key, '$.countKind') AS count_kind,
-        json_extract_string(contribution.contribution_key, '$.filterKey') AS filter_key,
-        json_extract_string(contribution.contribution_key, '$.facetKind') AS facet_kind,
-        json_extract_string(contribution.contribution_key, '$.facetKey') AS facet_key,
-        json_extract_string(contribution.contribution_key, '$.facetValue') AS facet_value,
-        SUM(COALESCE(contribution.contribution_value, 0)) AS count_value
-      FROM mart.review_article_summary_contribution_v4 contribution
-      WHERE contribution.project_id = ${getSqlLiteral(input.projectId)}
-        AND contribution.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND contribution.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-        AND contribution.component_kind = 'count'
+        deduplicated.project_id,
+        deduplicated.review_config_hash,
+        deduplicated.snapshot_id,
+        json_extract_string(deduplicated.contribution_key, '$.summaryKind') AS summary_kind,
+        json_extract_string(deduplicated.contribution_key, '$.summaryIdentity') AS summary_identity,
+        COALESCE(json_extract_string(deduplicated.contribution_key, '$.listModeKey'), 'global') AS list_mode_key,
+        json_extract_string(deduplicated.contribution_key, '$.countKind') AS count_kind,
+        json_extract_string(deduplicated.contribution_key, '$.filterKey') AS filter_key,
+        json_extract_string(deduplicated.contribution_key, '$.facetKind') AS facet_kind,
+        json_extract_string(deduplicated.contribution_key, '$.facetKey') AS facet_key,
+        json_extract_string(deduplicated.contribution_key, '$.facetValue') AS facet_value,
+        SUM(COALESCE(deduplicated.contribution_value, 0)) AS count_value
+      FROM (
+        SELECT
+          partial_contribution.project_id,
+          partial_contribution.review_config_hash,
+          partial_contribution.snapshot_id,
+          partial_contribution.article_id,
+          partial_contribution.component_kind,
+          partial_contribution.summary_definition_version,
+          partial_contribution.contribution_key,
+          ANY_VALUE(partial_contribution.contribution_value) AS contribution_value
+        FROM mart.review_article_summary_contribution_rebuild_partial_v4 partial_contribution
+        ${getCompletedSummaryRebuildPartialChunkJoin('partial_contribution')}
+        WHERE ${contributionScopePredicate}
+          AND partial_contribution.component_kind = 'count'
+        GROUP BY
+          partial_contribution.project_id,
+          partial_contribution.review_config_hash,
+          partial_contribution.snapshot_id,
+          partial_contribution.article_id,
+          partial_contribution.component_kind,
+          partial_contribution.summary_definition_version,
+          partial_contribution.contribution_key
+      ) deduplicated
       GROUP BY
-        contribution.project_id,
-        contribution.review_config_hash,
-        contribution.snapshot_id,
-        json_extract_string(contribution.contribution_key, '$.summaryKind'),
-        json_extract_string(contribution.contribution_key, '$.summaryIdentity'),
-        COALESCE(json_extract_string(contribution.contribution_key, '$.listModeKey'), 'global'),
-        json_extract_string(contribution.contribution_key, '$.countKind'),
-        json_extract_string(contribution.contribution_key, '$.filterKey'),
-        json_extract_string(contribution.contribution_key, '$.facetKind'),
-        json_extract_string(contribution.contribution_key, '$.facetKey'),
-        json_extract_string(contribution.contribution_key, '$.facetValue')
-    ) deduplicated
+        deduplicated.project_id,
+        deduplicated.review_config_hash,
+        deduplicated.snapshot_id,
+        json_extract_string(deduplicated.contribution_key, '$.summaryKind'),
+        json_extract_string(deduplicated.contribution_key, '$.summaryIdentity'),
+        COALESCE(json_extract_string(deduplicated.contribution_key, '$.listModeKey'), 'global'),
+        json_extract_string(deduplicated.contribution_key, '$.countKind'),
+        json_extract_string(deduplicated.contribution_key, '$.filterKey'),
+        json_extract_string(deduplicated.contribution_key, '$.facetKind'),
+        json_extract_string(deduplicated.contribution_key, '$.facetKey'),
+        json_extract_string(deduplicated.contribution_key, '$.facetValue')
+    ) contribution_counts
     WHERE accumulator.request_id = ${getSqlLiteral(input.requestId)}
       AND accumulator.chunk_id = ${getSqlLiteral(input.accumulatorChunkId)}
-      AND accumulator.project_id = deduplicated.project_id
-      AND accumulator.review_config_hash = deduplicated.review_config_hash
-      AND accumulator.snapshot_id = deduplicated.snapshot_id
-      AND accumulator.summary_kind = deduplicated.summary_kind
-      AND accumulator.summary_identity = deduplicated.summary_identity
-      AND COALESCE(accumulator.list_mode_key, 'global') = deduplicated.list_mode_key
-      AND accumulator.count_kind IS NOT DISTINCT FROM deduplicated.count_kind
-      AND accumulator.filter_key IS NOT DISTINCT FROM deduplicated.filter_key
-      AND accumulator.facet_kind IS NOT DISTINCT FROM deduplicated.facet_kind
-      AND accumulator.facet_key IS NOT DISTINCT FROM deduplicated.facet_key
-      AND accumulator.facet_value IS NOT DISTINCT FROM deduplicated.facet_value
-  `
-}
-
-const getPublishSummaryRebuildContributionsStatement = (input: {
-  projectId: string
-  requestId: string
-  reviewConfigHash: string
-  snapshotId: string
-}) => {
-  return `
-    INSERT INTO mart.review_article_summary_contribution_v4 (
-      project_id,
-      review_config_hash,
-      snapshot_id,
-      article_id,
-      component_kind,
-      summary_definition_version,
-      contribution_key,
-      contribution_value,
-      contribution_updated_at
-    )
-    SELECT
-      partial_contribution.project_id,
-      partial_contribution.review_config_hash,
-      partial_contribution.snapshot_id,
-      partial_contribution.article_id,
-      partial_contribution.component_kind,
-      partial_contribution.summary_definition_version,
-      partial_contribution.contribution_key,
-      ANY_VALUE(partial_contribution.contribution_value) AS contribution_value,
-      current_timestamp AS contribution_updated_at
-    FROM mart.review_article_summary_contribution_rebuild_partial_v4 partial_contribution
-    ${getCompletedSummaryRebuildPartialChunkJoin('partial_contribution')}
-    WHERE ${getSummaryRebuildPartialScopePredicate({...input, alias: 'partial_contribution'})}
-    GROUP BY partial_contribution.project_id, partial_contribution.review_config_hash, partial_contribution.snapshot_id, partial_contribution.article_id, partial_contribution.component_kind, partial_contribution.summary_definition_version, partial_contribution.contribution_key
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key) DO UPDATE SET
-      contribution_value = excluded.contribution_value,
-      contribution_updated_at = now()
+      AND accumulator.project_id = contribution_counts.project_id
+      AND accumulator.review_config_hash = contribution_counts.review_config_hash
+      AND accumulator.snapshot_id = contribution_counts.snapshot_id
+      AND accumulator.summary_kind = contribution_counts.summary_kind
+      AND accumulator.summary_identity = contribution_counts.summary_identity
+      AND COALESCE(accumulator.list_mode_key, 'global') = contribution_counts.list_mode_key
+      AND (accumulator.summary_kind = 'facet' OR accumulator.count_kind IS NOT DISTINCT FROM contribution_counts.count_kind)
+      AND accumulator.filter_key IS NOT DISTINCT FROM contribution_counts.filter_key
+      AND accumulator.facet_kind IS NOT DISTINCT FROM contribution_counts.facet_kind
+      AND accumulator.facet_key IS NOT DISTINCT FROM contribution_counts.facet_key
+      AND accumulator.facet_value IS NOT DISTINCT FROM contribution_counts.facet_value
   `
 }
 
@@ -1350,37 +1328,6 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
         END,
         partial_updated_at = now()
     `)
-    await tx.run(`
-      INSERT INTO mart.review_article_summary_contribution_v4 (
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        article_id,
-        component_kind,
-        summary_definition_version,
-        contribution_key,
-        contribution_value,
-        contribution_updated_at
-      )
-      SELECT
-        partial_contribution.project_id,
-        partial_contribution.review_config_hash,
-        partial_contribution.snapshot_id,
-        partial_contribution.article_id,
-        partial_contribution.component_kind,
-        partial_contribution.summary_definition_version,
-        partial_contribution.contribution_key,
-        ANY_VALUE(partial_contribution.contribution_value) AS contribution_value,
-        current_timestamp AS contribution_updated_at
-      FROM mart.review_article_summary_contribution_rebuild_partial_v4 partial_contribution
-      ${getCompletedSummaryRebuildPartialChunkJoin('partial_contribution')}
-      WHERE ${getSummaryRebuildPartialScopePredicate({...input, alias: 'partial_contribution'})}
-        AND partial_contribution.${chunkIdPredicate}
-      GROUP BY partial_contribution.project_id, partial_contribution.review_config_hash, partial_contribution.snapshot_id, partial_contribution.article_id, partial_contribution.component_kind, partial_contribution.summary_definition_version, partial_contribution.contribution_key
-      ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key) DO UPDATE SET
-        contribution_value = excluded.contribution_value,
-        contribution_updated_at = now()
-    `)
     await tx.run(getRefreshSummaryRebuildAccumulatorCountsStatement(input))
     await tx.run(`
       DELETE FROM mart.review_article_summary_rebuild_partial_v4
@@ -1436,14 +1383,6 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
 
   await database.transaction(async (tx) => {
     const scopePredicate = getSummaryRebuildPartialScopePredicate(input)
-    await tx.run(`
-      DELETE FROM mart.review_article_summary_contribution_v4
-      WHERE project_id = ${getSqlLiteral(input.projectId)}
-        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-        AND component_kind = 'count'
-    `)
-    await tx.run(getPublishSummaryRebuildContributionsStatement(input))
     await tx.run(getRefreshSummaryRebuildAccumulatorCountsStatement(scopedInput))
     await tx.run(`
       DELETE FROM mart.review_article_count_serving_v4
@@ -1588,23 +1527,11 @@ const projectDirectFullReviewServingSummaries = async (input: {
       snapshotId: input.projectorInput.snapshotId,
     })
   })
-  const contributionRecords = input.measureSync('contributionRecordBuildMs', () => {
-    return contributionRows.map((row) => {
-      return getReviewServingContributionRecord({
-        componentKind: 'count',
-        projectId: input.projectorInput.projectId,
-        reviewConfigHash: input.projectorInput.reviewConfigHash,
-        row,
-        snapshotId: input.projectorInput.snapshotId,
-        summaryDefinitionVersion: 'review-serving-summary:v1',
-      })
-    })
-  })
   const writerResult = await input.measure('writerMs', async () => {
     return writeReviewServingProjectorComponent(
       {
         component: 'summary',
-        records: [...summaryRecords, ...contributionRecords],
+        records: summaryRecords,
         statements: getDirectFullSummaryDeleteStatements(input.projectorInput),
       },
       input.database,
@@ -1612,12 +1539,12 @@ const projectDirectFullReviewServingSummaries = async (input: {
   })
 
   return {
-    contributionRowCount: contributionRecords.length,
+    contributionRowCount: 0,
     diagnosticsJson: {
       phaseTimings: input.phaseTimings,
       summaryProjector: {
         contributionDiffCount: 0,
-        contributionRecordCount: contributionRecords.length,
+        contributionRecordCount: 0,
         directFullSnapshot: true,
         priorArticleRowCount: 0,
         sourceRowCount: sourceRows.length,
