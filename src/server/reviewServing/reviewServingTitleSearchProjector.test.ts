@@ -109,6 +109,40 @@ test('title search projection writes token rows and search-only component state 
   expect(joined).not.toContain("'selectedImport'")
 })
 
+test('title search direct projection reads selected import base rows without patch overlay', async () => {
+  const {database, statements} = createTitleSearchDatabase({
+    rows: [
+      {
+        activitySortAt: '2026-01-02T00:00:00.000Z',
+        articleId: 'article-1',
+        articleTitle: 'Selected Base',
+        tombstone: false,
+      },
+    ],
+  })
+
+  const result = await projectReviewServingTitleSearchRows(
+    {
+      baseGeneration: 2,
+      projectId: 'project-1',
+      projectScopeIdentity: 'projectScope:identity-1',
+      searchIdentity: 'search:identity-1',
+      selectedImportSnapshotId: 'selected-import-snapshot-1',
+      snapshotId: 'snapshot-1',
+    },
+    database,
+  )
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('FROM mart.project_scope_article scope')
+  })
+
+  expect(result).toEqual({patchWatermark: 0, searchRowCount: 2})
+  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
+  expect(selectStatement).toContain('ELSE COALESCE(selected_base.article_title, article.article_title)')
+  expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
+  expect(selectStatement).not.toContain('selected_patch')
+})
+
 test('project-scoped title search rebuilds scoped articles and clears snapshot search rows', async () => {
   const {database, statements} = createTitleSearchDatabase({
     rows: [
@@ -188,6 +222,9 @@ test('sql-native title search rebuild clears stale chunk tokens before inserting
   expect(deleteStatement).toContain("search.snapshot_id = 'snapshot-1'")
   expect(deleteStatement).toContain("search.article_id >= 'article-001'")
   expect(deleteStatement).toContain("search.article_id <= 'article-099'")
+  expect(insertStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
+  expect(insertStatement).not.toContain('mart.review_selected_import_patch_v4')
+  expect(insertStatement).not.toContain('selected_patch')
   expect(insertStatement).toContain('CROSS JOIN unnest(regexp_split_to_array')
 })
 

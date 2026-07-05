@@ -251,16 +251,14 @@ const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, opti
       COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at, current_timestamp) AS activitySortAt,
       COALESCE(
         CASE
-          WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-          WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.article_title
+          WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
           ELSE selected_base.article_title
         END,
         article.article_title
       ) AS articleTitle,
       COALESCE(
         CASE
-          WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-          WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.external_id
+          WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
           ELSE selected_base.external_id
         END,
         article.article_id
@@ -278,8 +276,7 @@ const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, opti
         )
       END AS sourceMetadata,
       CASE
-        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.journal_title
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
         ELSE selected_base.journal_title
       END AS journalTitle,
       COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
@@ -287,28 +284,23 @@ const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, opti
       article.full_text_fetched_at AS fullTextFetchedAt,
       article.full_text_conversion_status AS fullTextConversionStatus,
       CASE
-        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
         ELSE selected_base.import_route_id
       END AS selectedImportRouteId,
       CASE
-        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.selected_rank_key
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
         ELSE selected_base.selected_rank_key
       END AS selectedRankKey,
       CASE
-        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.publication_year
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
         ELSE selected_base.publication_year
       END AS publicationYear,
       CASE
-        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.duplicate_flag
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
         ELSE selected_base.duplicate_flag
       END AS duplicateFlag,
       CASE
-        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.conflict_flag
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
         ELSE selected_base.conflict_flag
       END AS conflictFlag
     FROM mart.project_scope_article scope
@@ -319,29 +311,14 @@ const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, opti
       AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
       AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
       AND selected_base.article_id = scope.article_id
-    LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
-      ON selected_patch.project_id = scope.project_id
-      AND selected_patch.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-      AND selected_patch.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-      AND selected_patch.article_id = scope.article_id
-      AND selected_patch.patch_watermark = (
-        SELECT MAX(newer.patch_watermark)
-        FROM mart.review_selected_import_patch_v4 newer
-        WHERE newer.project_id = selected_patch.project_id
-          AND newer.project_scope_identity = selected_patch.project_scope_identity
-          AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
-          AND newer.article_id = selected_patch.article_id
-      )
     LEFT JOIN app.article_import_route_source_record selected_source
       ON selected_source.import_route_id = CASE
-        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
         ELSE selected_base.import_route_id
       END
       AND selected_source.article_id = scope.article_id
       AND selected_source.source_record_key = CASE
-        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
         ELSE selected_base.source_record_key
       END
       AND selected_source.quarantined_at IS NULL
@@ -569,12 +546,51 @@ const getDisplayPatchRows = async (
       `)
 }
 
-const getPayloadRowsSql = (input: ProjectReviewServingPayloadInput, options: {orderBy?: boolean} = {}) => {
+const getPayloadRowsSql = (
+  input: ProjectReviewServingPayloadInput,
+  options: {includeSelectedPatchOverlay?: boolean; orderBy?: boolean} = {},
+) => {
   const articleIds = getClaimArticleIds(input.claims)
   const dirtyJoinSql =
     articleIds.length === 0 ? '' : 'INNER JOIN dirty_article dirty ON dirty.article_id = scope.article_id'
   const orderBy =
     options.orderBy === false ? '' : 'ORDER BY article.article_created_at ASC NULLS LAST, scope.article_id ASC'
+  const includeSelectedPatchOverlay = options.includeSelectedPatchOverlay === true
+  const selectedPatchJoinSql = includeSelectedPatchOverlay
+    ? `
+    LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
+      ON selected_patch.project_id = scope.project_id
+      AND selected_patch.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND selected_patch.article_id = scope.article_id
+      AND selected_patch.patch_watermark = (
+        SELECT MAX(newer.patch_watermark)
+        FROM mart.review_selected_import_patch_v4 newer
+        WHERE newer.project_id = selected_patch.project_id
+          AND newer.project_scope_identity = selected_patch.project_scope_identity
+          AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
+          AND newer.article_id = selected_patch.article_id
+      )`
+    : ''
+  const selectedImportRouteIdSql = includeSelectedPatchOverlay
+    ? `CASE
+        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
+        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id
+        ELSE selected_base.import_route_id
+      END`
+    : `CASE
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+        ELSE selected_base.import_route_id
+      END`
+  const selectedSourceRecordKeySql = includeSelectedPatchOverlay
+    ? `CASE
+        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
+        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key
+        ELSE selected_base.source_record_key
+      END`
+    : `CASE
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+        ELSE selected_base.source_record_key
+      END`
 
   return `
     ${getDirtyArticleCteSql(articleIds)}
@@ -606,30 +622,11 @@ const getPayloadRowsSql = (input: ProjectReviewServingPayloadInput, options: {or
       ON selected_base.project_id = scope.project_id
       AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
       AND selected_base.article_id = scope.article_id
-    LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
-      ON selected_patch.project_id = scope.project_id
-      AND selected_patch.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-      AND selected_patch.article_id = scope.article_id
-      AND selected_patch.patch_watermark = (
-        SELECT MAX(newer.patch_watermark)
-        FROM mart.review_selected_import_patch_v4 newer
-        WHERE newer.project_id = selected_patch.project_id
-          AND newer.project_scope_identity = selected_patch.project_scope_identity
-          AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
-          AND newer.article_id = selected_patch.article_id
-      )
+    ${selectedPatchJoinSql}
     LEFT JOIN app.article_import_route_source_record selected_source
-      ON selected_source.import_route_id = CASE
-        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id
-        ELSE selected_base.import_route_id
-      END
+      ON selected_source.import_route_id = ${selectedImportRouteIdSql}
       AND selected_source.article_id = scope.article_id
-      AND selected_source.source_record_key = CASE
-        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key
-        ELSE selected_base.source_record_key
-      END
+      AND selected_source.source_record_key = ${selectedSourceRecordKeySql}
       AND selected_source.quarantined_at IS NULL
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope)
@@ -642,7 +639,9 @@ const getPayloadRows = async (
   input: ProjectReviewServingPayloadInput,
   database: ReviewServingDisplayPayloadProjectorDatabase,
 ) => {
-  return database.queryJson<PayloadProjectionRow>(getPayloadRowsSql(input))
+  return database.queryJson<PayloadProjectionRow>(
+    getPayloadRowsSql(input, {includeSelectedPatchOverlay: (input.claims?.length ?? 0) > 0}),
+  )
 }
 
 const getDisplayPatchRecord = (
@@ -745,7 +744,7 @@ const getPayloadRebuildRowsStatements = (input: ProjectReviewServingPayloadInput
       source_metadata
     )
     WITH payload_source AS (
-      ${getPayloadRowsSql(input, {orderBy: false})}
+      ${getPayloadRowsSql(input, {includeSelectedPatchOverlay: false, orderBy: false})}
     )
     SELECT
       payload_source.abstractText AS abstract_text,
