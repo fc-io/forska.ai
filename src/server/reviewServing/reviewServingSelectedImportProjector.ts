@@ -261,6 +261,19 @@ const getDeleteSelectedImportArticleRangeRowsStatement = (
   `
 }
 
+const getDeleteSelectedImportPatchArticleRangeRowsStatement = (
+  input: ProjectReviewServingSelectedImportArticleRangeInput,
+) => {
+  return `
+    DELETE FROM mart.review_selected_import_patch_v4
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
+      AND article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
+  `
+}
+
 const getInsertSelectedImportArticleRangeRowsStatement = (
   input: ProjectReviewServingSelectedImportArticleRangeInput,
 ) => {
@@ -445,100 +458,125 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
 
   return [
     `CREATE OR REPLACE TEMP TABLE review_selected_import_serving_rebuild_v4 AS
+     WITH serving_template AS (
+       SELECT DISTINCT
+         serving.project_id,
+         serving.review_config_hash,
+         serving.snapshot_id,
+         serving.base_generation,
+         serving.display_identity,
+         serving.project_scope_identity,
+         serving.selected_import_identity,
+         serving.llm_status_identity,
+         serving.human_status_identity,
+         serving.posting_identity,
+         serving.summary_identity,
+         serving.payload_identity,
+         serving.list_mode_key
+       FROM mart.review_article_serving_v4 serving
+       WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+         AND serving.selected_import_identity = ${getSqlLiteral(input.servingProjectionIdentity)}
+         AND serving.base_generation = ${getSqlLiteral(input.servingBaseGeneration)}
+         AND EXISTS (
+           SELECT 1
+           FROM app.review_serving_snapshot_manifest snapshot
+           WHERE snapshot.project_id = serving.project_id
+             AND snapshot.snapshot_id = serving.snapshot_id
+             AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+             AND snapshot.snapshot_status IN ('candidate', 'active')
+         )
+     ), scoped_article AS (
+       SELECT
+         scope.article_id,
+         COALESCE(scope.article_created_at, current_timestamp) AS sort_key,
+         COALESCE(scope.article_updated_at, scope.article_created_at, current_timestamp) AS activity_sort_at
+       FROM mart.project_scope_article scope
+       WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
+         AND (scope.in_curated_scope OR scope.in_route_scope)
+         AND scope.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
+         AND scope.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
+     )
      SELECT
-       serving.project_id,
-       serving.review_config_hash,
-       serving.snapshot_id,
-       serving.base_generation,
-       GREATEST(serving.patch_watermark, ${getSqlLiteral(input.sourceDeltaHighWater)}) AS patch_watermark,
-       serving.display_identity,
-       serving.project_scope_identity,
-       serving.selected_import_identity,
-       serving.llm_status_identity,
-       serving.human_status_identity,
-       serving.posting_identity,
-       serving.summary_identity,
-       serving.payload_identity,
-       serving.list_mode_key,
-       serving.article_id,
-       serving.sort_key,
-       serving.activity_sort_at,
+       template.project_id,
+       template.review_config_hash,
+       template.snapshot_id,
+       template.base_generation,
+       GREATEST(COALESCE(serving.patch_watermark, 0), ${getSqlLiteral(input.sourceDeltaHighWater)}) AS patch_watermark,
+       template.display_identity,
+       template.project_scope_identity,
+       template.selected_import_identity,
+       template.llm_status_identity,
+       template.human_status_identity,
+       template.posting_identity,
+       template.summary_identity,
+       template.payload_identity,
+       template.list_mode_key,
+       scoped.article_id,
+       COALESCE(serving.sort_key, scoped.sort_key) AS sort_key,
+       COALESCE(serving.activity_sort_at, scoped.activity_sort_at) AS activity_sort_at,
        COALESCE(selected.article_title, article.article_title) AS article_title,
        COALESCE(selected.external_id, article.article_id) AS article_external_id,
        selected.journal_title,
        COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
-       serving.full_text_pdf,
+       article.full_text_pdf,
        selected.import_route_id AS selected_import_route_id,
        selected.selected_rank_key,
        selected.publication_year,
        COALESCE(selected.duplicate_flag, FALSE) AS duplicate_flag,
        COALESCE(selected.conflict_flag, FALSE) AS conflict_flag,
-       serving.llm_status_key,
-       serving.human_status_key,
-       serving.llm_judged_prompt_count,
-       serving.enabled_prompt_count,
-       serving.human_answered_prompt_count,
-       serving.review_opened,
-       serving.review_sections_completed,
+       COALESCE(serving.llm_status_key, 'unanswered') AS llm_status_key,
+       COALESCE(serving.human_status_key, 'unanswered') AS human_status_key,
+       COALESCE(serving.llm_judged_prompt_count, 0) AS llm_judged_prompt_count,
+       COALESCE(serving.enabled_prompt_count, 0) AS enabled_prompt_count,
+       COALESCE(serving.human_answered_prompt_count, 0) AS human_answered_prompt_count,
+       COALESCE(serving.review_opened, FALSE) AS review_opened,
+       COALESCE(serving.review_sections_completed, 0) AS review_sections_completed,
        current_timestamp AS serving_updated_at,
-       serving.article_created_at,
-       serving.article_updated_at,
-       serving.arxiv_id,
-       serving.biorxiv_id,
-       serving.medrxiv_id,
-       serving.doi,
-       serving.pmid,
-       serving.full_text_fetched_at,
-       serving.full_text_conversion_status
-     FROM mart.review_article_serving_v4 serving
+       article.article_created_at,
+       article.article_updated_at,
+       article.arxiv_id,
+       article.biorxiv_id,
+       article.medrxiv_id,
+       article.doi,
+       article.pubmed_id AS pmid,
+       article.full_text_fetched_at,
+       article.full_text_conversion_status
+     FROM serving_template template
+     INNER JOIN scoped_article scoped
+       ON TRUE
      INNER JOIN app."article" article
-       ON article.id = serving.article_id
+       ON article.id = scoped.article_id
      LEFT JOIN app.review_selected_article_import_v4 selected
-       ON selected.project_id = serving.project_id
+       ON selected.project_id = template.project_id
        AND selected.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
        AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-       AND selected.article_id = serving.article_id
+       AND selected.article_id = scoped.article_id
        AND NOT selected.tombstone
      LEFT JOIN app.article_import_route_source_record selected_source
        ON selected_source.import_route_id = selected.import_route_id
        AND selected_source.article_id = selected.article_id
        AND selected_source.source_record_key = selected.source_record_key
        AND selected_source.quarantined_at IS NULL
-     WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-       AND serving.selected_import_identity = ${getSqlLiteral(input.servingProjectionIdentity)}
-       AND serving.base_generation = ${getSqlLiteral(input.servingBaseGeneration)}
-       AND serving.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
-       AND serving.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
-       AND EXISTS (
-         SELECT 1
-         FROM app.review_serving_snapshot_manifest snapshot
-         WHERE snapshot.project_id = serving.project_id
-           AND snapshot.snapshot_id = serving.snapshot_id
-           AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-           AND snapshot.snapshot_status IN ('candidate', 'active')
-       )
-       AND (
-         serving.article_title IS DISTINCT FROM COALESCE(selected.article_title, article.article_title)
-         OR serving.article_external_id IS DISTINCT FROM COALESCE(selected.external_id, article.article_id)
-         OR serving.url IS DISTINCT FROM COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url)
-         OR serving.selected_import_route_id IS DISTINCT FROM selected.import_route_id
-         OR serving.selected_rank_key IS DISTINCT FROM selected.selected_rank_key
-         OR serving.journal_title IS DISTINCT FROM selected.journal_title
-         OR serving.publication_year IS DISTINCT FROM selected.publication_year
-         OR serving.duplicate_flag IS DISTINCT FROM COALESCE(selected.duplicate_flag, FALSE)
-         OR serving.conflict_flag IS DISTINCT FROM COALESCE(selected.conflict_flag, FALSE)
-         OR serving.patch_watermark < ${getSqlLiteral(input.sourceDeltaHighWater)}
-       )`,
+     LEFT JOIN mart.review_article_serving_v4 serving
+       ON serving.project_id = template.project_id
+       AND serving.review_config_hash = template.review_config_hash
+       AND serving.snapshot_id = template.snapshot_id
+       AND serving.list_mode_key = template.list_mode_key
+       AND serving.article_id = scoped.article_id`,
     `DELETE FROM mart.review_article_serving_v4 serving
-     WHERE EXISTS (
-       SELECT 1
-       FROM review_selected_import_serving_rebuild_v4 updated
-       WHERE updated.project_id = serving.project_id
-         AND updated.review_config_hash = serving.review_config_hash
-         AND updated.snapshot_id = serving.snapshot_id
-         AND updated.list_mode_key = serving.list_mode_key
-         AND updated.article_id = serving.article_id
-     )`,
+      WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+        AND serving.selected_import_identity = ${getSqlLiteral(input.servingProjectionIdentity)}
+        AND serving.base_generation = ${getSqlLiteral(input.servingBaseGeneration)}
+        AND serving.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
+        AND serving.article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
+        AND EXISTS (
+          SELECT 1
+          FROM app.review_serving_snapshot_manifest snapshot
+          WHERE snapshot.project_id = serving.project_id
+            AND snapshot.snapshot_id = serving.snapshot_id
+            AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+            AND snapshot.snapshot_status IN ('candidate', 'active')
+        )`,
     `INSERT INTO mart.review_article_serving_v4 (${selectedImportServingColumns})
      SELECT ${selectedImportServingColumns}
      FROM review_selected_import_serving_rebuild_v4
@@ -672,6 +710,7 @@ export const projectReviewServingSelectedImportArticleRange = async (
               ...getRefreshSelectedImportServingArticleRangeStatements(params),
             ]
           : [
+              getDeleteSelectedImportPatchArticleRangeRowsStatement(params),
               getDeleteSelectedImportArticleRangeRowsStatement(params),
               getInsertSelectedImportArticleRangeRowsStatement(params),
               ...getRefreshSelectedImportServingArticleRangeStatements(params),
@@ -718,6 +757,7 @@ export const projectReviewServingSelectedImportArticleRanges = async (
               ...getRefreshSelectedImportServingArticleRangeStatements(range),
             ]
           : [
+              getDeleteSelectedImportPatchArticleRangeRowsStatement(range),
               getDeleteSelectedImportArticleRangeRowsStatement(range),
               getInsertSelectedImportArticleRangeRowsStatement(range),
               ...getRefreshSelectedImportServingArticleRangeStatements(range),
