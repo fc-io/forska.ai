@@ -603,7 +603,8 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   expect(joined).toContain("AND chunk_id = '__summary_rebuild_partial_accumulator__:")
   expect(joined).toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
   expect(joined).toContain('FROM mart.review_article_summary_contribution_rebuild_partial_v4')
-  expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
+  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
   expect(
     statements.filter((statement) => {
       return statement.includes('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
@@ -837,6 +838,20 @@ test('summary rebuild request finalization deduplicates overlapping contribution
           ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'facet-key', 'facet', 'review.human.filter.summaryAnswer', NULL, 'review.human.filter.summaryAnswer', 'review-human-filter-summary-answer:v1', NULL, 'human', 'summaryAnswer', 'yes', 'summary', 'yes', 2)
       `)
       await database.run(`
+        INSERT INTO mart.review_article_summary_contribution_v4 (
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          article_id,
+          component_kind,
+          summary_definition_version,
+          contribution_key,
+          contribution_value
+        ) VALUES
+          ('project-1', 'review-config-1', 'snapshot-1', 'article-stale', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
+          ('project-1', 'review-config-1', 'snapshot-other', 'article-other-snapshot', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1)
+      `)
+      await database.run(`
         INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4 (
           request_id,
           chunk_id,
@@ -874,9 +889,23 @@ test('summary rebuild request finalization deduplicates overlapping contribution
         SELECT CAST(count_value AS VARCHAR) AS countValue
         FROM mart.review_filter_facet_serving_v4
       `)
+      const contributionRows = await database.queryJson<{articleId: string; snapshotId: string}>(`
+        SELECT article_id AS articleId, snapshot_id AS snapshotId
+        FROM mart.review_article_summary_contribution_v4
+        ORDER BY snapshot_id, article_id, contribution_key
+      `)
 
       expect(countRows).toEqual([{countValue: '3'}])
       expect(facetRows).toEqual([{countValue: '3'}])
+      expect(contributionRows).toEqual([
+        {articleId: 'article-boundary', snapshotId: 'snapshot-1'},
+        {articleId: 'article-boundary', snapshotId: 'snapshot-1'},
+        {articleId: 'article-left', snapshotId: 'snapshot-1'},
+        {articleId: 'article-left', snapshotId: 'snapshot-1'},
+        {articleId: 'article-right', snapshotId: 'snapshot-1'},
+        {articleId: 'article-right', snapshotId: 'snapshot-1'},
+        {articleId: 'article-other-snapshot', snapshotId: 'snapshot-other'},
+      ])
     } finally {
       close()
     }
