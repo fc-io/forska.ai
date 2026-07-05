@@ -5624,6 +5624,53 @@ const claimCompatibleReviewServingProjectorWorkerRebuildChunkBatch = async (
     : {claimedChunks, status: 'claimed'}
 }
 
+const failClaimedReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
+  claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
+  completedCount: number
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase
+  error: unknown
+  workerId: string
+}): Promise<{chunk: ReviewServingProjectorWorkerChunkResult; completedCount: number}> => {
+  const failedResults = await input.claimedChunks.reduce<Promise<ReviewServingProjectorWorkerChunkResult[]>>(
+    async (previous, claimed) => {
+      const results = await previous
+      const failedChunk = await measureReviewServingProjectorWorkerPhase(
+        claimed.timings,
+        'failUpdateMs',
+        async () => {
+          return claimed.service.failChunk(
+            {chunkId: claimed.chunk.chunkId, error: getErrorText(input.error), leaseOwner: input.workerId},
+            input.database,
+          )
+        },
+      )
+
+      await measureReviewServingProjectorWorkerPhase(claimed.timings, 'finalizeFailedRequestMs', async () => {
+        await finalizeFailedReviewServingRebuildRequest(failedChunk, input.database)
+      })
+      logReviewServingProjectorWorkerRebuildChunkProgress({
+        chunk: claimed.chunk,
+        status: 'failed',
+        timings: claimed.timings,
+        workerId: input.workerId,
+      })
+
+      return [
+        ...results,
+        {chunkId: claimed.chunk.chunkId, requestId: claimed.chunk.requestId, status: 'failed' as const},
+      ]
+    },
+    Promise.resolve([]),
+  )
+  const [firstFailedResult] = failedResults
+
+  if (firstFailedResult === undefined) {
+    throw input.error
+  }
+
+  return {chunk: firstFailedResult, completedCount: input.completedCount}
+}
+
 const runProjectScopeReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase
@@ -5654,36 +5701,13 @@ const runProjectScopeReviewServingProjectorWorkerRebuildChunkBatch = async (inpu
     }, Promise.resolve())
     batchResults = await runProjectScopeRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
   } catch (error) {
-    const [firstClaimed] = input.claimedChunks
-
-    if (firstClaimed === undefined) {
-      throw error
-    }
-
-    const failedChunk = await measureReviewServingProjectorWorkerPhase(
-      firstClaimed.timings,
-      'failUpdateMs',
-      async () => {
-        return firstClaimed.service.failChunk(
-          {chunkId: firstClaimed.chunk.chunkId, error: getErrorText(error), leaseOwner: input.workerId},
-          input.database,
-        )
-      },
-    )
-    await measureReviewServingProjectorWorkerPhase(firstClaimed.timings, 'finalizeFailedRequestMs', async () => {
-      await finalizeFailedReviewServingRebuildRequest(failedChunk, input.database)
-    })
-    logReviewServingProjectorWorkerRebuildChunkProgress({
-      chunk: firstClaimed.chunk,
-      status: 'failed',
-      timings: firstClaimed.timings,
+    return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
+      claimedChunks: input.claimedChunks,
+      completedCount,
+      database: input.database,
+      error,
       workerId: input.workerId,
     })
-
-    return {
-      chunk: {chunkId: firstClaimed.chunk.chunkId, requestId: firstClaimed.chunk.requestId, status: 'failed'},
-      completedCount,
-    }
   }
 
   if (batchResults === null) {
@@ -5745,36 +5769,13 @@ const runSelectedImportReviewServingProjectorWorkerRebuildChunkBatch = async (in
     }, Promise.resolve())
     batchResults = await runSelectedImportRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
   } catch (error) {
-    const [firstClaimed] = input.claimedChunks
-
-    if (firstClaimed === undefined) {
-      throw error
-    }
-
-    const failedChunk = await measureReviewServingProjectorWorkerPhase(
-      firstClaimed.timings,
-      'failUpdateMs',
-      async () => {
-        return firstClaimed.service.failChunk(
-          {chunkId: firstClaimed.chunk.chunkId, error: getErrorText(error), leaseOwner: input.workerId},
-          input.database,
-        )
-      },
-    )
-    await measureReviewServingProjectorWorkerPhase(firstClaimed.timings, 'finalizeFailedRequestMs', async () => {
-      await finalizeFailedReviewServingRebuildRequest(failedChunk, input.database)
-    })
-    logReviewServingProjectorWorkerRebuildChunkProgress({
-      chunk: firstClaimed.chunk,
-      status: 'failed',
-      timings: firstClaimed.timings,
+    return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
+      claimedChunks: input.claimedChunks,
+      completedCount,
+      database: input.database,
+      error,
       workerId: input.workerId,
     })
-
-    return {
-      chunk: {chunkId: firstClaimed.chunk.chunkId, requestId: firstClaimed.chunk.requestId, status: 'failed'},
-      completedCount,
-    }
   }
 
   if (batchResults === null) {
@@ -5836,36 +5837,13 @@ const runDisplayReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
     }, Promise.resolve())
     batchResults = await runDisplayRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
   } catch (error) {
-    const [firstClaimed] = input.claimedChunks
-
-    if (firstClaimed === undefined) {
-      throw error
-    }
-
-    const failedChunk = await measureReviewServingProjectorWorkerPhase(
-      firstClaimed.timings,
-      'failUpdateMs',
-      async () => {
-        return firstClaimed.service.failChunk(
-          {chunkId: firstClaimed.chunk.chunkId, error: getErrorText(error), leaseOwner: input.workerId},
-          input.database,
-        )
-      },
-    )
-    await measureReviewServingProjectorWorkerPhase(firstClaimed.timings, 'finalizeFailedRequestMs', async () => {
-      await finalizeFailedReviewServingRebuildRequest(failedChunk, input.database)
-    })
-    logReviewServingProjectorWorkerRebuildChunkProgress({
-      chunk: firstClaimed.chunk,
-      status: 'failed',
-      timings: firstClaimed.timings,
+    return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
+      claimedChunks: input.claimedChunks,
+      completedCount,
+      database: input.database,
+      error,
       workerId: input.workerId,
     })
-
-    return {
-      chunk: {chunkId: firstClaimed.chunk.chunkId, requestId: firstClaimed.chunk.requestId, status: 'failed'},
-      completedCount,
-    }
   }
 
   if (batchResults === null) {
@@ -5927,36 +5905,13 @@ const runPayloadReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
     }, Promise.resolve())
     batchResults = await runPayloadRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
   } catch (error) {
-    const [firstClaimed] = input.claimedChunks
-
-    if (firstClaimed === undefined) {
-      throw error
-    }
-
-    const failedChunk = await measureReviewServingProjectorWorkerPhase(
-      firstClaimed.timings,
-      'failUpdateMs',
-      async () => {
-        return firstClaimed.service.failChunk(
-          {chunkId: firstClaimed.chunk.chunkId, error: getErrorText(error), leaseOwner: input.workerId},
-          input.database,
-        )
-      },
-    )
-    await measureReviewServingProjectorWorkerPhase(firstClaimed.timings, 'finalizeFailedRequestMs', async () => {
-      await finalizeFailedReviewServingRebuildRequest(failedChunk, input.database)
-    })
-    logReviewServingProjectorWorkerRebuildChunkProgress({
-      chunk: firstClaimed.chunk,
-      status: 'failed',
-      timings: firstClaimed.timings,
+    return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
+      claimedChunks: input.claimedChunks,
+      completedCount,
+      database: input.database,
+      error,
       workerId: input.workerId,
     })
-
-    return {
-      chunk: {chunkId: firstClaimed.chunk.chunkId, requestId: firstClaimed.chunk.requestId, status: 'failed'},
-      completedCount,
-    }
   }
 
   if (batchResults === null) {
@@ -6018,36 +5973,13 @@ const runSearchReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
     }, Promise.resolve())
     batchResults = await runSearchRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
   } catch (error) {
-    const [firstClaimed] = input.claimedChunks
-
-    if (firstClaimed === undefined) {
-      throw error
-    }
-
-    const failedChunk = await measureReviewServingProjectorWorkerPhase(
-      firstClaimed.timings,
-      'failUpdateMs',
-      async () => {
-        return firstClaimed.service.failChunk(
-          {chunkId: firstClaimed.chunk.chunkId, error: getErrorText(error), leaseOwner: input.workerId},
-          input.database,
-        )
-      },
-    )
-    await measureReviewServingProjectorWorkerPhase(firstClaimed.timings, 'finalizeFailedRequestMs', async () => {
-      await finalizeFailedReviewServingRebuildRequest(failedChunk, input.database)
-    })
-    logReviewServingProjectorWorkerRebuildChunkProgress({
-      chunk: firstClaimed.chunk,
-      status: 'failed',
-      timings: firstClaimed.timings,
+    return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
+      claimedChunks: input.claimedChunks,
+      completedCount,
+      database: input.database,
+      error,
       workerId: input.workerId,
     })
-
-    return {
-      chunk: {chunkId: firstClaimed.chunk.chunkId, requestId: firstClaimed.chunk.requestId, status: 'failed'},
-      completedCount,
-    }
   }
 
   if (batchResults === null) {
@@ -6109,36 +6041,13 @@ const runQueueReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
     }, Promise.resolve())
     batchResults = await runQueueRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
   } catch (error) {
-    const [firstClaimed] = input.claimedChunks
-
-    if (firstClaimed === undefined) {
-      throw error
-    }
-
-    const failedChunk = await measureReviewServingProjectorWorkerPhase(
-      firstClaimed.timings,
-      'failUpdateMs',
-      async () => {
-        return firstClaimed.service.failChunk(
-          {chunkId: firstClaimed.chunk.chunkId, error: getErrorText(error), leaseOwner: input.workerId},
-          input.database,
-        )
-      },
-    )
-    await measureReviewServingProjectorWorkerPhase(firstClaimed.timings, 'finalizeFailedRequestMs', async () => {
-      await finalizeFailedReviewServingRebuildRequest(failedChunk, input.database)
-    })
-    logReviewServingProjectorWorkerRebuildChunkProgress({
-      chunk: firstClaimed.chunk,
-      status: 'failed',
-      timings: firstClaimed.timings,
+    return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
+      claimedChunks: input.claimedChunks,
+      completedCount,
+      database: input.database,
+      error,
       workerId: input.workerId,
     })
-
-    return {
-      chunk: {chunkId: firstClaimed.chunk.chunkId, requestId: firstClaimed.chunk.requestId, status: 'failed'},
-      completedCount,
-    }
   }
 
   if (batchResults === null) {
@@ -6200,36 +6109,13 @@ const runJudgmentInputContentReviewServingProjectorWorkerRebuildChunkBatch = asy
     }, Promise.resolve())
     batchResults = await runJudgmentInputContentRebuildChunkBatch({chunks, leaseOwner: input.workerId}, input.database)
   } catch (error) {
-    const [firstClaimed] = input.claimedChunks
-
-    if (firstClaimed === undefined) {
-      throw error
-    }
-
-    const failedChunk = await measureReviewServingProjectorWorkerPhase(
-      firstClaimed.timings,
-      'failUpdateMs',
-      async () => {
-        return firstClaimed.service.failChunk(
-          {chunkId: firstClaimed.chunk.chunkId, error: getErrorText(error), leaseOwner: input.workerId},
-          input.database,
-        )
-      },
-    )
-    await measureReviewServingProjectorWorkerPhase(firstClaimed.timings, 'finalizeFailedRequestMs', async () => {
-      await finalizeFailedReviewServingRebuildRequest(failedChunk, input.database)
-    })
-    logReviewServingProjectorWorkerRebuildChunkProgress({
-      chunk: firstClaimed.chunk,
-      status: 'failed',
-      timings: firstClaimed.timings,
+    return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
+      claimedChunks: input.claimedChunks,
+      completedCount,
+      database: input.database,
+      error,
       workerId: input.workerId,
     })
-
-    return {
-      chunk: {chunkId: firstClaimed.chunk.chunkId, requestId: firstClaimed.chunk.requestId, status: 'failed'},
-      completedCount,
-    }
   }
 
   if (batchResults === null) {
@@ -6297,36 +6183,13 @@ const runReviewServingProjectorWorkerRebuildChunkBatchWith = async (
     }, Promise.resolve())
     batchResults = await runBatch({chunks, leaseOwner: input.workerId}, input.database)
   } catch (error) {
-    const [firstClaimed] = input.claimedChunks
-
-    if (firstClaimed === undefined) {
-      throw error
-    }
-
-    const failedChunk = await measureReviewServingProjectorWorkerPhase(
-      firstClaimed.timings,
-      'failUpdateMs',
-      async () => {
-        return firstClaimed.service.failChunk(
-          {chunkId: firstClaimed.chunk.chunkId, error: getErrorText(error), leaseOwner: input.workerId},
-          input.database,
-        )
-      },
-    )
-    await measureReviewServingProjectorWorkerPhase(firstClaimed.timings, 'finalizeFailedRequestMs', async () => {
-      await finalizeFailedReviewServingRebuildRequest(failedChunk, input.database)
-    })
-    logReviewServingProjectorWorkerRebuildChunkProgress({
-      chunk: firstClaimed.chunk,
-      status: 'failed',
-      timings: firstClaimed.timings,
+    return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
+      claimedChunks: input.claimedChunks,
+      completedCount,
+      database: input.database,
+      error,
       workerId: input.workerId,
     })
-
-    return {
-      chunk: {chunkId: firstClaimed.chunk.chunkId, requestId: firstClaimed.chunk.requestId, status: 'failed'},
-      completedCount,
-    }
   }
 
   if (batchResults === null) {

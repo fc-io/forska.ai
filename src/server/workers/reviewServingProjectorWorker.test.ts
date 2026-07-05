@@ -1542,6 +1542,96 @@ test('worker returns a failed chunk from a rebuild chunk batch', async () => {
   ])
 })
 
+test('worker fails every preclaimed component batch chunk when a batch writer throws', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const statements: string[] = []
+  const firstChunkInput = {
+    ...chunkInput,
+    chunkEndKey: 'article-050',
+    chunkStartKey: 'article-001',
+    inputDigest: 'freshReviewServingSnapshot',
+    projectionComponent: 'projectScope' as const,
+    projectionIdentity: 'projectScope:project-1',
+  }
+  const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
+  const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-batch-1'}
+  const secondChunk = {...chunkManifest, ...secondChunkInput, chunkId: 'chunk-batch-2'}
+  const chunkInputs = [firstChunkInput, secondChunkInput]
+  const chunksByStartKey = new Map([
+    [firstChunkInput.chunkStartKey, firstChunk],
+    [secondChunkInput.chunkStartKey, secondChunk],
+  ])
+  const chunksById = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunk.chunkId, firstChunk],
+    [secondChunk.chunkId, secondChunk],
+  ])
+  let nextIndex = 0
+
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+      const chunkId = [...chunksById.keys()].find((id) => {
+        return statement.includes(id)
+      })
+
+      return [chunksById.get(chunkId ?? firstChunk.chunkId) ?? firstChunk] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('INSERT INTO mart.project_scope_article')) {
+      throw new Error('project scope batch writer failed')
+    }
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    failChunk: async (failure) => {
+      harness.failedChunks.push(failure)
+
+      return {...(chunksById.get(failure.chunkId) ?? firstChunk), lastError: failure.error, status: 'failed' as const}
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInputs[nextIndex++] ?? null
+    },
+    heartbeatChunk: async (heartbeatInput) => {
+      harness.heartbeatInputs.push(heartbeatInput)
+
+      return chunksById.get(heartbeatInput.chunkId) ?? null
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result.status).toBe('failed')
+  expect(result.chunk).toMatchObject({chunkId: firstChunk.chunkId, status: 'failed'})
+  expect(result.chunkBatchCount).toBe(0)
+  expect(harness.claimInputs).toHaveLength(2)
+  expect(harness.runChunkInputs).toEqual([])
+  expect(harness.failedChunks).toEqual([
+    {chunkId: firstChunk.chunkId, error: 'project scope batch writer failed', leaseOwner: 'worker-1'},
+    {chunkId: secondChunk.chunkId, error: 'project scope batch writer failed', leaseOwner: 'worker-1'},
+  ])
+})
+
 test('worker stops a rebuild chunk batch after a foreground request chunk completes', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const firstChunkInput = {
