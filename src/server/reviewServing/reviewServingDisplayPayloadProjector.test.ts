@@ -208,17 +208,10 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
   expect(selectStatement).toContain('article.article_created_at AS articleCreatedAt')
   expect(selectStatement).toContain('json_merge_patch')
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
-  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
   expect(selectStatement).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
   expect(selectStatement).toContain("selected_base.selected_import_snapshot_id = 'selected-import-snapshot-1'")
-  expect(selectStatement).toContain("selected_patch.selected_import_snapshot_id = 'selected-import-snapshot-1'")
-  expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
-  expect(selectStatement).toContain(
-    'WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id',
-  )
-  expect(selectStatement).toContain(
-    'WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key',
-  )
+  expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
+  expect(selectStatement).not.toContain('selected_patch')
   expect(selectStatement).toContain('LEFT(article.article_summary, 2000) AS abstractText')
   expect(insertStatement).toContain('article_created_at')
   expect(insertStatement).toContain('payload_bytes')
@@ -267,6 +260,8 @@ test('payload rebuild ranges write payload rows with SQL-native range statements
   expect(joined).toContain("scope.article_id >= 'article-051'")
   expect(joined).toContain("scope.article_id <= 'article-099'")
   expect(joined).toContain('ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id)')
+  expect(joined).not.toContain('mart.review_selected_import_patch_v4')
+  expect(joined).not.toContain('selected_patch')
   expect(joined).not.toContain('VALUES (')
 })
 
@@ -290,8 +285,16 @@ test('payload claimed updates delete stale rows for removed articles before inse
   const deleteStatement = statements.find((statement) => {
     return statement.includes('DELETE FROM mart.review_article_serving_payload_v4')
   })
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('ORDER BY article.article_created_at ASC NULLS LAST, scope.article_id ASC')
+  })
 
   expect(result).toEqual({payloadRowCount: 0, patchWatermark: 6})
+  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
+  expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
+  expect(selectStatement).toContain(
+    'WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id',
+  )
   expect(deleteStatement).toContain("article_id IN ('article-1')")
   expect(deleteStatement).toContain('payload_identity')
 })
@@ -439,16 +442,8 @@ test('display base rows flow through writer with display fields and selected imp
   expect(selectStatement).toContain('article.article_updated_at AS articleUpdatedAt')
   expect(selectStatement).toContain('article.doi')
   expect(selectStatement).toContain('article.full_text_fetched_at AS fullTextFetchedAt')
-  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
-  expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
-  expect(selectStatement).toContain('WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.article_title')
-  expect(selectStatement).toContain('WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.external_id')
-  expect(selectStatement).toContain(
-    'WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id',
-  )
-  expect(selectStatement).toContain(
-    'WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key',
-  )
+  expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
+  expect(selectStatement).not.toContain('selected_patch')
   expect(selectStatement).toContain('json_merge_patch')
   expect(deletes).toHaveLength(1)
   expect(deletes[0]).toContain("project_id = 'project-1'")
@@ -459,6 +454,8 @@ test('display base rows flow through writer with display fields and selected imp
   expect(deletes[0]).not.toContain('base_generation')
   expect(inserts).toHaveLength(1)
   expect(inserts[0]).not.toContain('ON CONFLICT')
+  expect(inserts[0]).not.toContain('mart.review_selected_import_patch_v4')
+  expect(inserts[0]).not.toContain('selected_patch')
   expect(inserts[0]).toContain('WITH display_base AS')
   expect(inserts[0]).toContain('CROSS JOIN list_mode')
   expect(inserts[0]).not.toContain(') VALUES (\n      ')

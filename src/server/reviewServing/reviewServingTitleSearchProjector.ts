@@ -57,6 +57,12 @@ type TitleSearchSourceRow = {
   tombstone: boolean
 }
 
+type SelectedImportTitleSqlInput = {
+  projectId: string
+  projectScopeIdentity: string
+  selectedImportSnapshotId?: string | null
+}
+
 const titleSearchProjectorName = 'title-search-projector'
 const titleSearchTokenizerVersion = 'title-token-v1'
 const titlePrefixLength = 128
@@ -133,25 +139,44 @@ const getArticleRangePredicate = (
       ${endPredicate}`
 }
 
-const getSelectedImportTitleSql = (input: ProjectReviewServingTitleSearchInput) => {
-  return input.selectedImportSnapshotId === null || input.selectedImportSnapshotId === undefined
-    ? 'article.article_title'
-    : `CASE
+const getSelectedImportTitleSql = (
+  input: SelectedImportTitleSqlInput,
+  options: {includeSelectedPatchOverlay?: boolean} = {},
+) => {
+  if (input.selectedImportSnapshotId === null || input.selectedImportSnapshotId === undefined) {
+    return 'article.article_title'
+  }
+
+  return options.includeSelectedPatchOverlay === true
+    ? `CASE
         WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN article.article_title
         WHEN selected_patch.patch_watermark IS NOT NULL THEN COALESCE(selected_patch.article_title, article.article_title)
         ELSE COALESCE(selected_base.article_title, article.article_title)
       END`
+    : `CASE
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN article.article_title
+        ELSE COALESCE(selected_base.article_title, article.article_title)
+      END`
 }
 
-const getSelectedImportTitleJoinSql = (input: ProjectReviewServingTitleSearchInput) => {
-  return input.selectedImportSnapshotId === null || input.selectedImportSnapshotId === undefined
-    ? ''
-    : `
+const getSelectedImportTitleJoinSql = (
+  input: SelectedImportTitleSqlInput,
+  options: {includeSelectedPatchOverlay?: boolean} = {},
+) => {
+  if (input.selectedImportSnapshotId === null || input.selectedImportSnapshotId === undefined) {
+    return ''
+  }
+
+  const selectedBaseJoinSql = `
     LEFT JOIN app.review_selected_article_import_v4 selected_base
       ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
       AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
       AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-      AND selected_base.article_id = scope.article_id
+      AND selected_base.article_id = scope.article_id`
+
+  return options.includeSelectedPatchOverlay !== true
+    ? selectedBaseJoinSql
+    : `${selectedBaseJoinSql}
     LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
       ON selected_patch.project_id = ${getSqlLiteral(input.projectId)}
       AND selected_patch.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
@@ -199,19 +224,20 @@ const getTitleSearchRows = async (
   const dirtyJoinSql =
     articleIds.length === 0 ? '' : 'INNER JOIN dirty_article dirty ON dirty.article_id = scope.article_id'
   const withSql = dirtyArticleCte.length === 0 ? '' : `WITH ${dirtyArticleCte}`
+  const includeSelectedPatchOverlay = (input.claims?.length ?? 0) > 0
 
   return database.queryJson<TitleSearchSourceRow>(`
     ${withSql}
     SELECT
       scope.article_id AS articleId,
-      ${getSelectedImportTitleSql(input)} AS articleTitle,
+      ${getSelectedImportTitleSql(input, {includeSelectedPatchOverlay})} AS articleTitle,
       COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at) AS activitySortAt,
       article.id IS NULL OR NOT (scope.in_curated_scope OR scope.in_route_scope) AS tombstone
     FROM mart.project_scope_article scope
     ${dirtyJoinSql}
     LEFT JOIN app."article" article
       ON article.id = scope.article_id
-    ${getSelectedImportTitleJoinSql(input)}
+    ${getSelectedImportTitleJoinSql(input, {includeSelectedPatchOverlay})}
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope OR ${articleIds.length > 0 ? 'TRUE' : 'FALSE'})
       ${getArticleRangePredicate(input)}
@@ -357,11 +383,11 @@ const getReviewServingTitleSearchRebuildWriterInput = (input: ProjectReviewServi
     activitySortAtSql:
       'COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at)',
     articleRangePredicateSql: getArticleRangePredicate(input),
-    articleTitleSql: getSelectedImportTitleSql(input),
+    articleTitleSql: getSelectedImportTitleSql(input, {includeSelectedPatchOverlay: false}),
     projectId: input.projectId,
     projectScopeIdentity: input.projectScopeIdentity,
     searchIdentity: input.searchIdentity,
-    selectedImportJoinSql: getSelectedImportTitleJoinSql(input),
+    selectedImportJoinSql: getSelectedImportTitleJoinSql(input, {includeSelectedPatchOverlay: false}),
     snapshotId: input.snapshotId,
     targetArticleRangePredicateSql: getArticleRangePredicate(input, 'search'),
     titlePrefixLength,
