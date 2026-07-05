@@ -2420,37 +2420,6 @@ const resetSelectedImportSnapshotForClaimedRebuild = async (
   })
 }
 
-const resetSelectedImportArticleRangeForClaimedRebuild = async (
-  input: {
-    chunk: ReviewServingRebuildChunkManifest
-    leaseOwner: string
-    projectId: string
-    projectScopeIdentity: string
-    selectedImportSnapshotId: string
-  },
-  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
-) => {
-  await database.transaction(async (tx) => {
-    await requireClaimedRebuildChunk(input, tx)
-    await tx.run(`
-      DELETE FROM app.review_selected_article_import_v4
-      WHERE project_id = ${getSqlLiteral(input.projectId)}
-        AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-        AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-        AND article_id >= ${getSqlLiteral(input.chunk.chunkStartKey)}
-        AND article_id <= ${getSqlLiteral(input.chunk.chunkEndKey)}
-    `)
-    await tx.run(`
-      DELETE FROM mart.review_selected_import_patch_v4
-      WHERE project_id = ${getSqlLiteral(input.projectId)}
-        AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-        AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-        AND article_id >= ${getSqlLiteral(input.chunk.chunkStartKey)}
-        AND article_id <= ${getSqlLiteral(input.chunk.chunkEndKey)}
-    `)
-  })
-}
-
 const projectSelectedImportArticleRangeForClaimedRebuild = async (
   input: {
     chunk: ReviewServingRebuildChunkManifest
@@ -2569,12 +2538,6 @@ const runSelectedImportRebuildChunk = async (
               projectorDatabase,
             )
           } else {
-            if (!isFreshReviewServingSnapshotRebuildChunk(input.chunk)) {
-              await resetSelectedImportArticleRangeForClaimedRebuild(
-                {...input, projectId, projectScopeIdentity, selectedImportSnapshotId},
-                projectorDatabase,
-              )
-            }
             await projectSelectedImportArticleRangeForClaimedRebuild(
               {...input, projectId, projectScopeIdentity, selectedImportSnapshotId, sourceDeltaHighWater},
               projectorDatabase,
