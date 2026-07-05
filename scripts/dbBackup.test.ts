@@ -101,6 +101,7 @@ test('db backup script creates a DuckDB backup while the owner server is running
     const backupPath = backupName ? join(backupDirectoryPath, backupName) : null
     const backupWalPath = backupPath === null ? null : `${backupPath}.source.wal`
     const autoReplayWalPath = backupPath === null ? null : `${backupPath}.wal`
+    const hasBackupWal = backupWalPath === null ? false : existsSync(backupWalPath)
     const queryResult =
       backupPath === null
         ? null
@@ -109,11 +110,10 @@ test('db backup script creates a DuckDB backup while the owner server is running
     expect(result.exitCode).toBe(0)
     expect(result.stdout.toString()).toContain('[dbBackup] Backup created:')
     expect(backupPath).not.toBe(null)
-    expect(backupWalPath === null ? false : existsSync(backupWalPath)).toBe(true)
-    expect(autoReplayWalPath === null ? false : existsSync(autoReplayWalPath)).toBe(false)
-    expect(result.stdout.toString()).toContain('Backup WAL is a recovery sidecar')
     expect(queryResult?.exitCode ?? null).toBe(0)
     expect(queryResult?.stdout.toString() ?? '').toContain('"value":42')
+    expect(autoReplayWalPath === null ? false : existsSync(autoReplayWalPath)).toBe(false)
+    expect(result.stdout.toString().includes('Backup WAL is a recovery sidecar')).toBe(hasBackupWal)
   } finally {
     await stopServer(ownerServer)
     rmSync(workingDirectory, {force: true, recursive: true})

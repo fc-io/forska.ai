@@ -502,7 +502,7 @@ const getHumanJudgmentDirectInsertStatement = (input: ProjectReviewServingJudgme
           'summary' AS prompt_id,
           -1 AS prompt_order,
           judgment_human_summary.id AS human_judgment_id,
-          judgment_human_summary.answer IS NOT NULL AS is_answered,
+          judgment_human_summary.answer IS NOT NULL OR judgment_human_summary.origin = 'covidence_import' AS is_answered,
           judgment_human_summary.answer,
           NULL AS comment,
           judgment_human_summary.created_at AS human_judgment_created_at,
