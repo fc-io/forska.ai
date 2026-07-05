@@ -904,6 +904,7 @@ const getDirectFullSummaryDeleteStatements = (input: ProjectReviewServingSummari
   return [
     getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_article_count_serving_v4'}),
     getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_filter_facet_serving_v4'}),
+    getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_article_summary_contribution_v4'}),
   ]
 }
 
@@ -1527,11 +1528,23 @@ const projectDirectFullReviewServingSummaries = async (input: {
       snapshotId: input.projectorInput.snapshotId,
     })
   })
+  const contributionRecords = input.measureSync('contributionRecordBuildMs', () => {
+    return contributionRows.map((row) => {
+      return getReviewServingContributionRecord({
+        componentKind: 'count',
+        projectId: input.projectorInput.projectId,
+        reviewConfigHash: input.projectorInput.reviewConfigHash,
+        row,
+        snapshotId: input.projectorInput.snapshotId,
+        summaryDefinitionVersion: 'review-serving-summary:v1',
+      })
+    })
+  })
   const writerResult = await input.measure('writerMs', async () => {
     return writeReviewServingProjectorComponent(
       {
         component: 'summary',
-        records: summaryRecords,
+        records: [...summaryRecords, ...contributionRecords],
         statements: getDirectFullSummaryDeleteStatements(input.projectorInput),
       },
       input.database,
@@ -1539,12 +1552,12 @@ const projectDirectFullReviewServingSummaries = async (input: {
   })
 
   return {
-    contributionRowCount: 0,
+    contributionRowCount: contributionRecords.length,
     diagnosticsJson: {
       phaseTimings: input.phaseTimings,
       summaryProjector: {
         contributionDiffCount: 0,
-        contributionRecordCount: 0,
+        contributionRecordCount: contributionRecords.length,
         directFullSnapshot: true,
         priorArticleRowCount: 0,
         sourceRowCount: sourceRows.length,

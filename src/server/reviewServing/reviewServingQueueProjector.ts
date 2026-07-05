@@ -258,7 +258,7 @@ const getQueueRebuildSourceCtes = (input: ProjectReviewServingQueueRebuildInput)
         COALESCE(judgment.created_at, scoped.activity_sort_at) AS activity_sort_at,
         selected.selected_tombstone
           OR scoped.scope_tombstone
-          OR judgment.is_answered
+          OR COALESCE(judgment.is_answered, FALSE)
           OR judgment.answered_original IS NOT NULL
           OR COALESCE(LENGTH(judgment.answered_original_as_array), 0) > 0 AS tombstone
       FROM scoped_article scoped
