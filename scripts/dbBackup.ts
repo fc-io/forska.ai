@@ -33,7 +33,7 @@ const getFileExists = async (filePath: string) => {
 const getBackupArtifactPaths = (databasePath: string, snapshot: AppDatabaseSnapshot) => {
   const backupName = `${getBackupBaseName(databasePath)}_${getBackupStamp(snapshot.createdAt)}.duckdb`
   const backupPath = join(backupDirectory, backupName)
-  return {backupPath, backupWalPath: `${backupPath}.wal`}
+  return {backupPath, backupWalPath: `${backupPath}.source.wal`}
 }
 
 const copySnapshotToBackup = async (databasePath: string, snapshot: AppDatabaseSnapshot): Promise<BackupArtifact> => {
@@ -74,6 +74,7 @@ const runDuckdbBackup = async () => {
 
     if (artifact.backupWalPath !== null) {
       log(`Backup WAL created: ${artifact.backupWalPath}`)
+      log('Backup WAL is a recovery sidecar; restore it beside the backup as <backup>.wal before first open only when WAL replay is required.')
     }
   } finally {
     await deleteSnapshot(snapshot)

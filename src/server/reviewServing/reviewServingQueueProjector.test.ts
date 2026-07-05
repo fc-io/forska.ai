@@ -174,6 +174,32 @@ test('prompt config changes rebuild prompt-scoped and summary queue rows', async
   expect(servingDelete).toContain("prompt_id IN ('prompt-1')")
   expect(servingDelete).toContain("OR prompt_id = 'summary'")
   expect(queueSelect).toContain("OR queue.prompt_id = 'summary'")
+  expect(queueSelect?.match(/queue_union AS/g) ?? []).toHaveLength(1)
+})
+
+test('summary-mode queue rebuild tombstones imported Covidence summary decisions with empty answers', async () => {
+  const {database, statements} = createQueueDatabase({
+    queueRows: [queueRow({promptId: 'summary', queueKind: 'human-unreviewed', tombstone: true})],
+    reviewConfigHash: 'review-config-1',
+  })
+
+  const result = await projectReviewServingQueuePatches(
+    projectInput([
+      queueClaim({
+        articleId: null,
+        dirtyKind: 'prompt.config.updated',
+        scopeId: 'project-1:prompt-1',
+        scopeKind: 'prompt',
+      }),
+    ]),
+    database,
+  )
+  const queueSelect = statements.find((statement) => {
+    return statement.includes('FROM queue_union queue')
+  })
+
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
+  expect(queueSelect).toContain("judgment_human_summary.origin = 'covidence_import'")
 })
 
 test('summary-mode human rows join queue work through article-level summary prompt', async () => {
