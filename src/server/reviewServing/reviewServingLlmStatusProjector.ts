@@ -144,6 +144,9 @@ const hasArticleScopeClaim = (claims: readonly ReviewServingDirtyWorkClaim[]) =>
         'article.judgmentInput.updated',
         'projectScope.article.added',
         'projectScope.article.removed',
+        'judgment.llm.created',
+        'judgment.llm.updated',
+        'judgment.llm.deleted',
       ].includes(claim.dirtyKind)
     )
   })

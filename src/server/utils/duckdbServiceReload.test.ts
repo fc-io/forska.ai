@@ -15,7 +15,7 @@ const removePathIfExists = (path: string) => {
   rmSync(path, {force: true, recursive: true})
 }
 
-test('duckdb snapshots materialize a standalone copy without forcing a checkpoint', () => {
+test('duckdb snapshots materialize file and WAL copies to preserve foreign-key load order without checkpoint OOM', () => {
   const source = readFileSync('src/server/utils/duckdbService.ts', 'utf8')
   const copySnapshotSource = source.slice(
     source.indexOf('const copyDuckdbSnapshot'),
@@ -23,11 +23,11 @@ test('duckdb snapshots materialize a standalone copy without forcing a checkpoin
   )
 
   expect(copySnapshotSource).not.toContain("runDuckdbStatementDirect('CHECKPOINT')")
-  expect(copySnapshotSource).not.toContain('copyFile(runtimeConfig.databasePath, snapshotPath)')
-  expect(copySnapshotSource).not.toContain('copyFile(sourceWalPath, snapshotWalPath)')
-  expect(copySnapshotSource).toContain('COPY FROM DATABASE')
-  expect(copySnapshotSource).toContain('ATTACH')
-  expect(copySnapshotSource).toContain('DETACH')
+  expect(copySnapshotSource).toContain('copyFile(runtimeConfig.databasePath, snapshotPath)')
+  expect(copySnapshotSource).toContain('copyFile(sourceWalPath, snapshotWalPath)')
+  expect(copySnapshotSource).not.toContain('COPY FROM DATABASE')
+  expect(copySnapshotSource).not.toContain('ATTACH')
+  expect(copySnapshotSource).not.toContain('DETACH')
 })
 
 test('duckdb service reuses the same embedded runtime across module reloads', async () => {

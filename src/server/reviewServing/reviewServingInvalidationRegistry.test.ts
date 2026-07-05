@@ -130,28 +130,28 @@ test('every emitted delta kind declares complete invalidation metadata', () => {
     [
       'judgment.llm.created',
       'llmStatus',
-      ['queue', 'posting', 'summary', 'payload'],
+      ['queue', 'payload', 'posting', 'summary'],
       ['projectId', 'articleId', 'promptId', 'modelId', 'contentFlags', 'judgmentId', 'sourceHighWaterMark'],
       'contributionDiff',
     ],
     [
       'judgment.llm.updated',
       'llmStatus',
-      ['queue', 'posting', 'summary', 'payload'],
+      ['queue', 'payload', 'posting', 'summary'],
       ['projectId', 'articleId', 'promptId', 'modelId', 'contentFlags', 'judgmentId', 'sourceHighWaterMark'],
       'contributionDiff',
     ],
     [
       'judgment.llm.deleted',
       'llmStatus',
-      ['queue', 'posting', 'summary', 'payload'],
+      ['queue', 'payload', 'posting', 'summary'],
       ['projectId', 'articleId', 'promptId', 'modelId', 'contentFlags', 'judgmentId', 'sourceHighWaterMark'],
       'contributionDiff',
     ],
     [
       'judgment.human.updated',
       'humanStatus',
-      ['queue', 'posting', 'summary', 'payload'],
+      ['queue', 'payload', 'posting', 'summary'],
       ['projectId', 'articleId', 'humanJudgmentKey', 'sourceHighWaterMark'],
       'contributionDiff',
     ],
@@ -200,9 +200,9 @@ test('LLM judgment changes do not invalidate display, selected import, or search
       return rule.affectedComponents
     }),
   ).toEqual([
-    ['llmStatus', 'queue', 'posting', 'summary', 'payload'],
-    ['llmStatus', 'queue', 'posting', 'summary', 'payload'],
-    ['llmStatus', 'queue', 'posting', 'summary', 'payload'],
+    ['llmStatus', 'queue', 'payload', 'posting', 'summary'],
+    ['llmStatus', 'queue', 'payload', 'posting', 'summary'],
+    ['llmStatus', 'queue', 'payload', 'posting', 'summary'],
   ])
   expect(
     llmJudgmentRules.flatMap((rule) => {
@@ -239,8 +239,8 @@ test('human judgment updates do not require prompt-scoped keys', () => {
   const rule = getReviewServingInvalidationRule('judgment.human.updated')
 
   expect(rule.requiredKeys).toEqual(['projectId', 'articleId', 'humanJudgmentKey', 'sourceHighWaterMark'])
-  expect(rule.affectedComponents).toEqual(['humanStatus', 'queue', 'posting', 'summary', 'payload'])
-  expect(rule.downstreamDependents).toEqual(['queue', 'posting', 'summary', 'payload'])
+  expect(rule.affectedComponents).toEqual(['humanStatus', 'queue', 'payload', 'posting', 'summary'])
+  expect(rule.downstreamDependents).toEqual(['queue', 'payload', 'posting', 'summary'])
 })
 
 test('review config changes invalidate judgment input content for content flag changes', () => {

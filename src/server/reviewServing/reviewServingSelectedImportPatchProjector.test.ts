@@ -123,6 +123,8 @@ test('selected-import routine updates write component-narrow patches for only cl
   expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_selected_import_serving_update_v4 AS')
   expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
+  expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
+  expect(joined).toContain('source_record_key')
   expect(joined).toContain('changed_raw(article_id, import_route_id, selected_rank_key')
   expect(joined).toContain('PARTITION BY raw.article_id')
   expect(joined).toContain('serving_template_raw AS')

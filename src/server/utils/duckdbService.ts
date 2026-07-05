@@ -4371,14 +4371,6 @@ export const runDuckdbMaintenance = async (
   })
 }
 
-const getDuckdbStringLiteral = (value: string) => {
-  return `'${value.replaceAll("'", "''")}'`
-}
-
-const getDuckdbIdentifierLiteral = (value: string) => {
-  return `"${value.replaceAll('"', '""')}"`
-}
-
 const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<DuckdbSnapshot, unknown, never> => {
   return Effect.gen(function* () {
     if (runtimeConfig.databasePath === ':memory:') {
@@ -4396,35 +4388,23 @@ const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<D
       return rm(snapshotPath, {force: true})
     })
     yield* Effect.tryPromise(async () => {
-      const [currentDatabase] = await runDuckdbJsonQueryDirect<{databaseName: string}>(
-        'SELECT current_database() AS databaseName',
-      )
-
-      if (currentDatabase === undefined) {
-        throw new Error('DuckDB current database name is unavailable')
-      }
-
-      const {databaseName} = currentDatabase
-      const snapshotDatabaseName = `f1_snapshot_${randomUUID().replaceAll('-', '_')}`
-      const sourceDatabaseIdentifier = getDuckdbIdentifierLiteral(databaseName)
-      const snapshotDatabaseIdentifier = getDuckdbIdentifierLiteral(snapshotDatabaseName)
-      let snapshotAttached = false
+      const sourceWalPath = `${runtimeConfig.databasePath}.wal`
+      const snapshotWalPath = `${snapshotPath}.wal`
 
       try {
-        await runDuckdbStatementDirect(
-          `ATTACH ${getDuckdbStringLiteral(snapshotPath)} AS ${snapshotDatabaseIdentifier}`,
-        )
-        snapshotAttached = true
-        await runDuckdbStatementDirect(
-          `COPY FROM DATABASE ${sourceDatabaseIdentifier} TO ${snapshotDatabaseIdentifier}`,
-        )
-        await runDuckdbStatementDirect(`DETACH ${snapshotDatabaseIdentifier}`)
-        snapshotAttached = false
-      } catch (error) {
-        if (snapshotAttached) {
-          await runDuckdbStatementDirect(`DETACH ${snapshotDatabaseIdentifier}`).catch(() => {})
-        }
+        await copyFile(runtimeConfig.databasePath, snapshotPath)
+        await access(sourceWalPath, fsConstants.F_OK)
+          .then(() => {
+            return copyFile(sourceWalPath, snapshotWalPath)
+          })
+          .catch((error: unknown) => {
+            if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+              return
+            }
 
+            throw error
+          })
+      } catch (error) {
         await rm(snapshotPath, {force: true})
         await rm(`${snapshotPath}.wal`, {force: true})
         throw error

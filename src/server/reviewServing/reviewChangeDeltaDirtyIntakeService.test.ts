@@ -146,7 +146,7 @@ test('delta intake starts projector work at first affected component only', asyn
   })
 
   expect(result).toMatchObject({dirtyWorkCount: 5, maxSourceHighWaterMark: 7, status: 'converted'})
-  expect(projectionComponents).toEqual(['llmStatus', 'queue', 'posting', 'summary', 'payload'])
+  expect(projectionComponents).toEqual(['llmStatus', 'queue', 'payload', 'posting', 'summary'])
   expect(dirtyInserts[0]).toContain('judgment.llm.updated')
   expect(dirtyInserts[0]).not.toContain('selectedImport')
   expect(dirtyInserts[0]).not.toContain('display')
