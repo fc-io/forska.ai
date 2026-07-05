@@ -234,6 +234,17 @@ const getQueueRebuildSourceCtes = (input: ProjectReviewServingQueueRebuildInput)
         COALESCE(project.human_judgment_mode, 'prompt') AS human_judgment_mode
       FROM app.project project
       WHERE project.id = ${getSqlLiteral(input.projectId)}
+    ), human_prompt AS (
+      SELECT
+        enabled_prompt.prompt_id
+      FROM enabled_prompt
+      CROSS JOIN project_settings
+      WHERE project_settings.human_judgment_mode <> 'summary'
+      UNION ALL
+      SELECT
+        ${getSqlLiteral('summary')} AS prompt_id
+      FROM project_settings
+      WHERE project_settings.human_judgment_mode = 'summary'
     ), latest_judgment AS (
       SELECT
         judgment.*,
@@ -273,7 +284,7 @@ const getQueueRebuildSourceCtes = (input: ProjectReviewServingQueueRebuildInput)
     human_queue AS (
       SELECT DISTINCT
         scoped.article_id,
-        CASE WHEN project_settings.human_judgment_mode = 'summary' THEN 'summary' ELSE prompt.prompt_id END AS prompt_id,
+        prompt.prompt_id,
         ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
         ${getSqlLiteral('human-unreviewed')} AS queue_kind,
         CASE
@@ -288,7 +299,7 @@ const getQueueRebuildSourceCtes = (input: ProjectReviewServingQueueRebuildInput)
       INNER JOIN selected_import_state selected
         ON selected.article_id = scoped.article_id
       CROSS JOIN project_settings
-      CROSS JOIN enabled_prompt prompt
+      CROSS JOIN human_prompt prompt
       LEFT JOIN app."judgment_human" judgment_human
         ON judgment_human.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
         AND judgment_human.article_id = scoped.article_id
