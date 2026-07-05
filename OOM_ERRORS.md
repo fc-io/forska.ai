@@ -20,6 +20,14 @@ Entry format:
 - Fix: Snapshot fallback now copies the database file and WAL under the append barrier, avoiding both FK copy-order failures and live checkpoint allocation.
 - Verification: `bun test src/server/utils/duckdbServiceReload.test.ts src/server/utils/duckdbServiceShutdown.test.ts src/server/utils/duckdbServiceMemoryLimit.test.ts src/server/utils/duckdbScriptAccess.test.ts`; current-DB `db:query:snapshot`.
 
+## 2026-07-05 - Legacy Review-Serving Patch Retention
+
+- Error: Large legacy V4 patch tables kept being scanned by startup integrity probes after the dirty-patch cutover.
+- Context: `review_llm_status_patch_v4` and sibling legacy patch tables during DuckDB startup preflight and backup/snapshot work.
+- Cause: Retention cleanup removed the old patch cleanup specs entirely, leaving existing patch rows to persist forever.
+- Fix: Retention cleanup now drains all legacy V4 patch tables in bounded per-project batches while direct serving tables continue normal snapshot-protected cleanup.
+- Verification: `bun test src/server/reviewServing/reviewServingRetentionService.test.ts`.
+
 ## 2026-07-04 - Default Review-Serving Rebuild Batch Cap
 
 - Error: Turning serial multi-chunk review-serving rebuild batching on by default would be unsafe without a default memory cap.
