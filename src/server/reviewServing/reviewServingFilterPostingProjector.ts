@@ -403,6 +403,148 @@ const getPostingContributionRowsStatement = (input: ProjectReviewServingFilterPo
       `
 }
 
+const getFullRebuildPostingContributionRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+  return `
+        WITH ${getDirtyArticleCte(input, [])},
+        ${getListModeCte(input.listModeKeys)},
+        scoped_article AS (
+          SELECT
+            scope.article_id,
+            COALESCE(scope.article_updated_at, scope.article_created_at, TIMESTAMPTZ ${getSqlLiteral(stalePostingSortAt)}) AS sort_key,
+            NOT (scope.in_curated_scope OR scope.in_route_scope) AS scope_tombstone
+          FROM article_id_filter dirty
+          INNER JOIN mart.project_scope_article scope
+            ON scope.project_id = ${getSqlLiteral(input.projectId)}
+            AND scope.article_id = dirty.article_id
+        ),
+        selected_import_state AS (
+          SELECT
+            scoped.article_id,
+            scoped.sort_key,
+            selected.import_route_id,
+            selected.selected_rank_key,
+            selected.publication_year,
+            COALESCE(selected.duplicate_flag, FALSE) AS duplicate_flag,
+            COALESCE(selected.conflict_flag, FALSE) AS conflict_flag,
+            scoped.scope_tombstone AS tombstone
+          FROM scoped_article scoped
+          LEFT JOIN app.review_selected_article_import_v4 selected
+            ON selected.project_id = ${getSqlLiteral(input.projectId)}
+            AND selected.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+            AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+            AND selected.article_id = scoped.article_id
+        ),
+        selected_postings AS (
+          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.sort_key AS sortKey, selected.tombstone AS tombstone, 'importRoute' AS filterKind, selected.import_route_id AS filterValue
+          FROM selected_import_state selected CROSS JOIN list_mode_key_filter list_mode_key
+          UNION ALL
+          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.sort_key AS sortKey, selected.tombstone AS tombstone, 'publicationYear' AS filterKind, CAST(selected.publication_year AS VARCHAR) AS filterValue
+          FROM selected_import_state selected CROSS JOIN list_mode_key_filter list_mode_key
+          UNION ALL
+          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.sort_key AS sortKey, selected.tombstone AS tombstone, 'duplicateFlag' AS filterKind, CAST(selected.duplicate_flag AS VARCHAR) AS filterValue
+          FROM selected_import_state selected CROSS JOIN list_mode_key_filter list_mode_key
+          UNION ALL
+          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.sort_key AS sortKey, selected.tombstone AS tombstone, 'conflictFlag' AS filterKind, CAST(selected.conflict_flag AS VARCHAR) AS filterValue
+          FROM selected_import_state selected CROSS JOIN list_mode_key_filter list_mode_key
+        ),
+        scoped_serving AS (
+          SELECT serving.*
+          FROM scoped_article scoped
+          INNER JOIN mart.review_article_serving_v4 serving
+            ON serving.project_id = ${getSqlLiteral(input.projectId)}
+            AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+            AND serving.article_id = scoped.article_id
+          INNER JOIN list_mode_key_filter list_mode_key
+            ON list_mode_key.list_mode_key = serving.list_mode_key
+        ),
+        serving_status_postings AS (
+          SELECT serving.article_id AS articleId, serving.list_mode_key AS listModeKey, serving.sort_key AS sortKey, FALSE AS tombstone, 'llmStatus' AS filterKind, serving.llm_status_key AS filterValue
+          FROM scoped_serving serving
+          UNION ALL
+          SELECT serving.article_id AS articleId, serving.list_mode_key AS listModeKey, serving.sort_key AS sortKey, FALSE AS tombstone, 'humanStatus' AS filterKind, serving.human_status_key AS filterValue
+          FROM scoped_serving serving
+        ),
+        project_settings AS (
+          SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = ${getSqlLiteral(input.projectId)}), 'prompt') AS human_judgment_mode
+        ),
+        llm_detail AS (
+          SELECT detail.*
+          FROM scoped_article scoped
+          INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
+            ON detail.project_id = ${getSqlLiteral(input.projectId)}
+            AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+            AND detail.payload_kind = 'llm'
+            AND detail.article_id = scoped.article_id
+          INNER JOIN list_mode_key_filter list_mode_key
+            ON list_mode_key.list_mode_key = detail.list_mode_key
+        ),
+        human_detail AS (
+          SELECT detail.*
+          FROM scoped_article scoped
+          INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
+            ON detail.project_id = ${getSqlLiteral(input.projectId)}
+            AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+            AND detail.payload_kind = 'human'
+            AND detail.article_id = scoped.article_id
+          INNER JOIN list_mode_key_filter list_mode_key
+            ON list_mode_key.list_mode_key = detail.list_mode_key
+        ),
+        llm_postings AS (
+          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, serving.sort_key AS sortKey, FALSE AS tombstone, 'promptAnswer' AS filterKind, concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original) AS filterValue
+          FROM scoped_article scoped
+          INNER JOIN llm_detail llm
+            ON llm.article_id = scoped.article_id
+            AND llm.answered_original IS NOT NULL
+            AND llm.answered_original_as_array IS NULL
+          INNER JOIN scoped_serving serving
+            ON serving.article_id = llm.article_id
+            AND serving.list_mode_key = llm.list_mode_key
+          UNION ALL
+          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, serving.sort_key AS sortKey, FALSE AS tombstone, 'promptAnswer' AS filterKind, concat('review:promptAnswer:', llm.prompt_id, ':', answer.answer_value) AS filterValue
+          FROM scoped_article scoped
+          INNER JOIN llm_detail llm
+            ON llm.article_id = scoped.article_id
+            AND llm.answered_original_as_array IS NOT NULL
+          INNER JOIN scoped_serving serving
+            ON serving.article_id = llm.article_id
+            AND serving.list_mode_key = llm.list_mode_key
+          CROSS JOIN UNNEST(llm.answered_original_as_array) AS answer(answer_value)
+          WHERE answer.answer_value IS NOT NULL
+        ),
+        human_postings AS (
+          SELECT human.article_id AS articleId, human.list_mode_key AS listModeKey, serving.sort_key AS sortKey, FALSE AS tombstone, 'promptAnswer' AS filterKind, concat('human:promptAnswer:', human.prompt_id, ':', human.answered_original) AS filterValue
+          FROM scoped_article scoped
+          INNER JOIN human_detail human
+            ON human.article_id = scoped.article_id
+            AND human.answered_original IS NOT NULL
+          CROSS JOIN project_settings
+          INNER JOIN scoped_serving serving
+            ON serving.article_id = human.article_id
+            AND serving.list_mode_key = human.list_mode_key
+          WHERE (
+            project_settings.human_judgment_mode = 'summary'
+            AND human.prompt_id = 'summary'
+          ) OR (
+            project_settings.human_judgment_mode <> 'summary'
+            AND human.prompt_id <> 'summary'
+          )
+        ),
+        posting_union AS (
+          SELECT * FROM selected_postings
+          UNION ALL SELECT * FROM serving_status_postings
+          UNION ALL SELECT * FROM llm_postings
+          UNION ALL SELECT * FROM human_postings
+        )
+        SELECT articleId, filterKind, filterValue, listModeKey, sortKey, tombstone
+        FROM posting_union
+        WHERE filterValue IS NOT NULL
+        ORDER BY listModeKey ASC, filterKind ASC, filterValue ASC, articleId ASC
+      `
+}
+
 const getPostingContributionRows = async (
   input: ProjectReviewServingFilterPostingsInput,
   database: ReviewServingFilterPostingProjectorDatabase,
@@ -692,7 +834,7 @@ const getInsertFullRebuildServingRowsStatement = (input: ProjectReviewServingFil
       sort_key,
       posting_updated_at
     )
-    WITH posting_source AS (${getPostingContributionRowsStatement(input)}),
+    WITH posting_source AS (${getFullRebuildPostingContributionRowsStatement(input)}),
     serving_source AS (
       SELECT
         posting.filterKind,

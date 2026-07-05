@@ -43,6 +43,18 @@ const liveServingRowCount = (rows: readonly Record<string, unknown>[]) => {
   ).size
 }
 
+const legacyPostingSourcePatchTables = [
+  'mart.review_selected_import_patch_v4',
+  'mart.review_llm_status_patch_v4',
+  'mart.review_human_status_patch_v4',
+]
+
+const expectNoLegacyPostingSourcePatchTables = (statement: string) => {
+  for (const table of legacyPostingSourcePatchTables) {
+    expect(statement).not.toContain(table)
+  }
+}
+
 const createPostingDatabase = (input?: {
   contributionTotalRows?: readonly Record<string, unknown>[]
   contributionRows?: readonly Record<string, unknown>[]
@@ -213,6 +225,7 @@ test('full posting rebuilds refresh stats from serving state without JS contribu
   expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
   expect(joined).toContain('COUNT(*) AS cardinality')
   expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 serving')
+  expectNoLegacyPostingSourcePatchTables(joined)
   expect(joined).not.toContain('SUM(contribution.contribution_value)')
   expect(joined).not.toContain('343341342341341300000')
 })
@@ -257,6 +270,13 @@ test('full posting rebuilds write serving without contribution or incremental pa
   expect(joined).toContain('serving_source AS')
   expect(joined).toContain('GROUP BY posting.filterKind, posting.filterValue, posting.listModeKey, posting.articleId')
   expect(joined).toContain('CAST(to_json(posting.filterKind) AS VARCHAR)')
+  expect(joined).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
+  expect(joined).toContain('INNER JOIN mart.review_article_serving_v4 serving')
+  expect(joined).toContain('INNER JOIN mart.review_article_judgment_detail_serving_v4 detail')
+  expect(joined).toContain("'llmStatus' AS filterKind, serving.llm_status_key AS filterValue")
+  expect(joined).toContain("concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original)")
+  expect(joined).toContain("concat('human:promptAnswer:', human.prompt_id, ':', human.answered_original)")
+  expectNoLegacyPostingSourcePatchTables(joined)
 })
 
 test('full posting rebuilds scope set-based serving deletes to article ranges', async () => {
