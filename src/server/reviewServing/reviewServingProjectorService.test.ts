@@ -135,7 +135,7 @@ test('component run plan starts at the invalidation registry first affected comp
   const scope = getScope()
   const plan = getReviewServingProjectorComponentRunPlan(scope)
 
-  expect(plan).toEqual(['humanStatus', 'queue', 'posting', 'summary', 'payload'])
+  expect(plan).toEqual(['humanStatus', 'queue', 'payload', 'posting', 'summary'])
   expect(plan).not.toContain('selectedImport')
   expect(plan).not.toContain('display')
 })
@@ -181,12 +181,12 @@ test('dirty-work intake enqueues only the affected component slice', async () =>
     upserts.map((input) => {
       return input.projectionComponent
     }),
-  ).toEqual(['humanStatus', 'queue', 'posting', 'summary', 'payload'])
+  ).toEqual(['humanStatus', 'queue', 'payload', 'posting', 'summary'])
   expect(
     upserts.map((input) => {
       return input.projectionIdentity
     }),
-  ).toEqual(['humanStatus:identity', 'queue:identity', 'posting:identity', 'summary:identity', 'payload:identity'])
+  ).toEqual(['humanStatus:identity', 'queue:identity', 'payload:identity', 'posting:identity', 'summary:identity'])
 })
 
 test('claim manifest ensure refreshes stale review config hashes before reuse', async () => {

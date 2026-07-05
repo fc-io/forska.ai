@@ -26,10 +26,6 @@ const createLlmStatusDatabase = (input?: {
         return (input?.projectRows ?? []) as T[]
       }
 
-      if (statement.includes('FROM app.project_prompt project_prompt')) {
-        return (input?.promptConfigRows ?? [promptConfigRow()]) as T[]
-      }
-
       if (statement.includes('FROM app.review_change_delta delta')) {
         return (input?.judgmentRows ?? []) as T[]
       }
@@ -40,6 +36,10 @@ const createLlmStatusDatabase = (input?: {
 
       if (statement.includes('FROM article_id_filter dirty')) {
         return (input?.scopedArticleRows ?? []) as T[]
+      }
+
+      if (statement.includes('FROM app.project_prompt project_prompt')) {
+        return (input?.promptConfigRows ?? [promptConfigRow()]) as T[]
       }
 
       return [] as T[]
@@ -151,6 +151,31 @@ test('LLM judgment deltas update serving directly from persisted benchmark confi
   expect(selectStatement).toContain("VALUES ('article-1')")
   expect(statements.join('\n')).not.toContain('mart.review_llm_status_patch_v4')
   expect(statements.join('\n')).toContain('UPDATE mart.review_article_serving_v4 serving')
+})
+
+test('LLM judgment deltas recompute all article prompts before updating article status', async () => {
+  const {database, statements} = createLlmStatusDatabase({
+    judgmentRows: [llmStatusRow({promptId: 'prompt-1'})],
+    scopedArticleRows: [
+      llmStatusRow({promptId: 'prompt-1'}),
+      llmStatusRow({promptId: 'prompt-2', promptTextHash: 'prompt-text-2'}),
+    ],
+  })
+
+  await projectReviewServingLlmStatusPatches(projectInput([llmClaim()]), database)
+  const articleSelect = statements.find((statement) => {
+    return (
+      statement.includes('FROM article_id_filter dirty')
+      && statement.includes('INNER JOIN app.project_prompt project_prompt')
+    )
+  })
+  const updateStatement = statements.find((statement) => {
+    return statement.includes('UPDATE mart.review_article_serving_v4 serving')
+  })
+
+  expect(articleSelect).toContain("VALUES ('article-1')")
+  expect(updateStatement).toContain("'prompt-1'")
+  expect(updateStatement).toContain("'prompt-2'")
 })
 
 test('LLM deletes update serving directly without rebuilding unrelated components', async () => {

@@ -7,7 +7,10 @@ import {
   type ReviewServingQueueProjectorDatabase,
 } from './reviewServingQueueProjector.ts'
 
-const createQueueDatabase = (input?: {queueRows?: readonly Record<string, unknown>[]}) => {
+const createQueueDatabase = (input?: {
+  queueRows?: readonly Record<string, unknown>[]
+  reviewConfigHash?: string | null
+}) => {
   const statements: string[] = []
   const database: ReviewServingQueueProjectorDatabase = {
     queryJson: async <T>(statement: string) => {
@@ -15,6 +18,12 @@ const createQueueDatabase = (input?: {queueRows?: readonly Record<string, unknow
 
       if (statement.includes('FROM app.review_source_change_outbox')) {
         return [] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return input?.reviewConfigHash === undefined
+          ? ([] as T[])
+          : ([{reviewConfigHash: input.reviewConfigHash}] as T[])
       }
 
       if (statement.includes('FROM queue_union queue')) {
@@ -136,8 +145,11 @@ test('answered or deleted status rows write queue tombstones without serving row
   expect(servingInsert).toBeUndefined()
 })
 
-test('prompt config changes rebuild only prompt-scoped queue rows', async () => {
-  const {database, statements} = createQueueDatabase({queueRows: [queueRow({articleId: 'article-2'})]})
+test('prompt config changes rebuild prompt-scoped and summary queue rows', async () => {
+  const {database, statements} = createQueueDatabase({
+    queueRows: [queueRow({articleId: 'article-2'}), queueRow({articleId: 'article-2', promptId: 'summary'})],
+    reviewConfigHash: 'review-config-1',
+  })
 
   const result = await projectReviewServingQueuePatches(
     projectInput([
@@ -153,10 +165,15 @@ test('prompt config changes rebuild only prompt-scoped queue rows', async () => 
   const servingDelete = statements.find((statement) => {
     return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
   })
+  const queueSelect = statements.find((statement) => {
+    return statement.includes('FROM queue_union queue')
+  })
 
-  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 2})
   expect(statements.join('\n')).not.toContain('mart.review_queue_patch_v4')
   expect(servingDelete).toContain("prompt_id IN ('prompt-1')")
+  expect(servingDelete).toContain("OR prompt_id = 'summary'")
+  expect(queueSelect).toContain("OR queue.prompt_id = 'summary'")
 })
 
 test('summary-mode human rows join queue work through article-level summary prompt', async () => {

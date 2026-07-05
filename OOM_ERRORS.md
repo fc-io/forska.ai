@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-05 - Snapshot Fallback Checkpoint OOM
+
+- Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` while running `db:query:snapshot` against the runtime primary DB.
+- Context: Current-DB live progress verification after the snapshot fallback switched away from `COPY FROM DATABASE`.
+- Cause: The FK-safe fallback reintroduced a forced `CHECKPOINT`, which can exceed the constrained maintenance profile memory cap.
+- Fix: Snapshot fallback now copies the database file and WAL under the append barrier, avoiding both FK copy-order failures and live checkpoint allocation.
+- Verification: `bun test src/server/utils/duckdbServiceReload.test.ts src/server/utils/duckdbServiceShutdown.test.ts src/server/utils/duckdbServiceMemoryLimit.test.ts src/server/utils/duckdbScriptAccess.test.ts`; current-DB `db:query:snapshot`.
+
 ## 2026-07-04 - Default Review-Serving Rebuild Batch Cap
 
 - Error: Turning serial multi-chunk review-serving rebuild batching on by default would be unsafe without a default memory cap.

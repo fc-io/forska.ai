@@ -57,7 +57,7 @@ test('dirty work scope uses invalidation registry lookup metadata', () => {
   })
 
   expect(scope).toEqual({
-    affectedComponents: ['llmStatus', 'queue', 'posting', 'summary', 'payload'],
+    affectedComponents: ['llmStatus', 'queue', 'payload', 'posting', 'summary'],
     dirtyKind: 'judgment.llm.updated',
     dirtyRangeEnd: null,
     dirtyRangeStart: null,

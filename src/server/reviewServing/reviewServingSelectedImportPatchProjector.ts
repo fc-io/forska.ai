@@ -11,6 +11,7 @@ import {
   type ReviewServingSourcePartitionWatermarks,
 } from './reviewServingProjectorDomain.ts'
 import {
+  type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
@@ -837,6 +838,39 @@ const getApplySelectedImportServingStatements = (input: {
       ]
 }
 
+const getSelectedImportBaseRecord = (
+  input: Pick<
+    ProjectReviewServingSelectedImportPatchInput,
+    'projectId' | 'projectScopeIdentity' | 'selectedImportSnapshotId'
+  >,
+  row: SelectedImportPatchRow,
+): ReviewServingProjectorRecord => {
+  const tombstone = row.tombstone || row.scopeTombstone
+
+  return {
+    keyColumns: ['project_id', 'project_scope_identity', 'selected_import_snapshot_id', 'article_id'],
+    table: 'app.review_selected_article_import_v4',
+    values: {
+      article_id: row.articleId,
+      article_title: tombstone ? null : row.articleTitle,
+      conflict_flag: tombstone ? false : (row.conflictFlag ?? false),
+      duplicate_flag: tombstone ? false : (row.duplicateFlag ?? false),
+      external_id: tombstone ? null : row.externalId,
+      import_route_id: tombstone ? null : row.importRouteId,
+      journal_title: tombstone ? null : row.journalTitle,
+      project_id: input.projectId,
+      project_scope_identity: input.projectScopeIdentity,
+      publication_year: tombstone ? null : row.publicationYear,
+      selected_import_snapshot_id: input.selectedImportSnapshotId,
+      selected_import_updated_at: new Date(),
+      selected_rank_key: tombstone ? null : row.selectedRankKey,
+      selected_rank_numeric: tombstone ? null : row.selectedRankNumeric,
+      source_record_key: tombstone ? null : row.sourceRecordKey,
+      tombstone,
+    },
+  }
+}
+
 const getSelectedImportPatchManifest = (
   input: ProjectReviewServingSelectedImportPatchInput,
 ): ReviewServingProjectionIdentityManifestInput => {
@@ -866,13 +900,16 @@ export const projectReviewServingSelectedImportPatches = async (
   const rows = await getSelectedImportPatchRows(input, database)
   const templates = await getSelectedImportServingTemplates(input, database)
   const patchWatermark = getPatchWatermark(input.claims)
+  const baseRecords = rows.map((row) => {
+    return getSelectedImportBaseRecord(input, row)
+  })
 
   await writeReviewServingProjectorComponent(
     {
       acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
       component: 'selectedImport',
       projectionManifests: input.claims.length === 0 ? [] : [getSelectedImportPatchManifest(input)],
-      records: [],
+      records: baseRecords,
       statements: getApplySelectedImportServingStatements({
         baseGeneration: input.baseGeneration,
         patchWatermark,

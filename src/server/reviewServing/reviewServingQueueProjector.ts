@@ -391,6 +391,11 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
 
   const reviewConfigHash = await getSnapshotReviewConfigHash(input, database)
 
+  const promptPredicate =
+    promptIds.length === 0
+      ? ''
+      : `INNER JOIN prompt_id_filter dirty_prompt ON dirty_prompt.prompt_id = queue.prompt_id OR queue.prompt_id = 'summary'`
+
   return ctes.length === 0 || input.snapshotId === null || input.snapshotId === undefined || reviewConfigHash === null
     ? []
     : database.queryJson<QueueSourceRow>(`
@@ -409,9 +414,13 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
         FROM queue_union queue
         INNER JOIN article_id_filter dirty
           ON dirty.article_id = queue.article_id
-        ${promptIds.length === 0 ? '' : `INNER JOIN prompt_id_filter dirty_prompt ON dirty_prompt.prompt_id = queue.prompt_id`}
+        ${promptPredicate}
         ORDER BY articleId ASC, promptId ASC, queueKind ASC, reviewConfigHash ASC
       `)
+}
+
+const getQueuePromptDeletePredicate = (promptIds: readonly string[]) => {
+  return `AND (prompt_id IN (${promptIds.map(getSqlLiteral).join(', ')}) OR prompt_id = 'summary')`
 }
 
 const getUnassessedQueueServingRecord = (
@@ -503,7 +512,7 @@ const getDeleteReplacedQueueServingStatement = (
         WHERE project_id = ${getSqlLiteral(input.projectId)}
           AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
           ${reviewConfigPredicate}
-          AND prompt_id IN (${promptIds.map(getSqlLiteral).join(', ')})`
+          ${getQueuePromptDeletePredicate(promptIds)}`
         : `DELETE FROM mart.review_unassessed_queue_serving_v4
         WHERE project_id = ${getSqlLiteral(input.projectId)}
           AND snapshot_id = ${getSqlLiteral(input.snapshotId)}

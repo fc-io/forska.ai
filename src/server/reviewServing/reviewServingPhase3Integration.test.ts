@@ -356,9 +356,9 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   ).toEqual([
     'llmStatus',
     'queue',
+    'payload',
     'posting',
     'summary',
-    'payload',
     'display',
     'payload',
     'posting',
@@ -507,14 +507,14 @@ test('Phase 3 patch and selected-import guard coverage stays inventoried', () =>
     },
     {
       filePath: 'src/server/reviewServing/reviewServingLlmStatusProjector.test.ts',
-      markers: ['LLM judgment deltas write component-narrow status patches', 'mart.review_llm_status_patch_v4'],
+      markers: [
+        'LLM judgment deltas update serving directly from persisted benchmark config',
+        'mart.review_llm_status_patch_v4',
+      ],
     },
     {
       filePath: 'src/server/reviewServing/reviewServingHumanStatusProjector.test.ts',
-      markers: [
-        'human prompt answer deltas write component-narrow status patches',
-        'mart.review_human_status_patch_v4',
-      ],
+      markers: ['human prompt answer deltas update serving directly', 'mart.review_human_status_patch_v4'],
     },
     {
       filePath: 'src/server/reviewServing/reviewServingSelectedImportProjector.test.ts',

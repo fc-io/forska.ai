@@ -81,29 +81,14 @@ export const readReviewServingExportArticles = async (input: {
          AND selected_base.project_scope_identity = s.project_scope_identity
          AND selected_base.selected_import_snapshot_id = manifest.selected_import_snapshot_id
          AND selected_base.article_id = s.article_id
-        LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
-          ON selected_patch.project_id = s.project_id
-         AND selected_patch.project_scope_identity = s.project_scope_identity
-         AND selected_patch.selected_import_snapshot_id = manifest.selected_import_snapshot_id
-         AND selected_patch.article_id = s.article_id
-         AND selected_patch.patch_watermark = (
-           SELECT MAX(newer.patch_watermark)
-           FROM mart.review_selected_import_patch_v4 newer
-           WHERE newer.project_id = selected_patch.project_id
-             AND newer.project_scope_identity = selected_patch.project_scope_identity
-             AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
-             AND newer.article_id = selected_patch.article_id
-         )
         LEFT JOIN app.article_import_route_source_record selected_source
           ON selected_source.import_route_id = CASE
-            WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-            WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id
+            WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
             ELSE selected_base.import_route_id
           END
          AND selected_source.article_id = s.article_id
          AND selected_source.source_record_key = CASE
-           WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-           WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key
+           WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
            ELSE selected_base.source_record_key
          END
          AND selected_source.quarantined_at IS NULL
