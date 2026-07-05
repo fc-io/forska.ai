@@ -5310,8 +5310,8 @@ const adoptRequestlessSummaryRangeRebuildChunk = async (
         'admitted',
         '{}'::JSON,
         ${getSqlLiteral(JSON.stringify({adoptedRequestlessSummaryChunks: true}))}::JSON,
-        current_timestamp,
-        current_timestamp
+        now(),
+        now()
       )
       ON CONFLICT(request_id) DO UPDATE SET
         status = CASE
@@ -5322,13 +5322,13 @@ const adoptRequestlessSummaryRangeRebuildChunk = async (
           WHEN app.review_rebuild_request.admission_state = 'blocked_over_budget' THEN app.review_rebuild_request.admission_state
           ELSE 'admitted'
         END,
-        updated_at = current_timestamp
+        updated_at = now()
     `)
     await tx.run(`
       UPDATE app.review_rebuild_chunk_manifest
       SET
         request_id = ${getSqlLiteral(requestId)},
-        updated_at = current_timestamp
+        updated_at = now()
       WHERE request_id IS NULL
         AND project_id IS NOT DISTINCT FROM ${getSqlLiteral(projectId)}
         AND snapshot_id IS NOT DISTINCT FROM ${getSqlLiteral(input.chunk.snapshotId)}

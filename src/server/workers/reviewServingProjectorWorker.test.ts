@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto'
-import {readFileSync} from 'node:fs'
+import {existsSync, readFileSync, unlinkSync} from 'node:fs'
 import {join} from 'node:path'
 
 import {expect, mock, test} from 'bun:test'
@@ -78,6 +78,12 @@ const getRequestlessSummaryRangeRebuildRequestId = (chunk: ReviewServingRebuildC
     .slice(0, 24)
 
   return `requestless-summary:${digest}`
+}
+
+const removeFileIfExists = (filePath: string) => {
+  if (existsSync(filePath)) {
+    unlinkSync(filePath)
+  }
 }
 
 const createWorkerHarness = (input?: {
@@ -3955,6 +3961,214 @@ test('worker adopts requestless summary chunks into request finalization before 
   expect(joined).not.toContain("status = 'quarantined'")
   expect(setIntervalMock).toHaveBeenCalledTimes(1)
   expect(clearIntervalMock).toHaveBeenCalledWith(intervalToken)
+})
+
+test('requestless summary adoption persists request linkage in DuckDB', () => {
+  const duckdbPath = `/tmp/forska-requestless-summary-adoption-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`
+  const script = `
+    import {createHash} from 'node:crypto'
+
+    const [
+      {migrateDuckdb},
+      {getAppDatabaseService},
+      {resetDuckdbServiceForTests},
+      {resetServerRuntimeRoleForTests},
+      {runReviewServingProjectorWorkerOnce},
+    ] = await Promise.all([
+      import('./src/db/migrateDuckdb.ts'),
+      import('./src/server/services/appDatabaseService.ts'),
+      import('./src/server/utils/duckdbService.ts'),
+      import('./src/server/utils/serverRuntimeRole.ts'),
+      import('./src/server/workers/reviewServingProjectorWorker.ts'),
+    ])
+
+    resetDuckdbServiceForTests()
+    resetServerRuntimeRoleForTests()
+    await migrateDuckdb()
+
+    const database = getAppDatabaseService()
+    const chunkInput = {
+      chunkEndKey: 'article-099',
+      chunkStartKey: 'article-001',
+      inputDigest: 'digest-1',
+      inputWatermark: 42,
+      outputBaseGeneration: 7,
+      projectId: 'project-1',
+      projectionComponent: 'summary',
+      projectionIdentity: 'summary:project-1',
+      requestId: null,
+      snapshotId: 'snapshot-summary-1',
+    }
+    const requestDigest = createHash('sha256')
+      .update([
+        chunkInput.projectId,
+        chunkInput.projectionComponent,
+        chunkInput.projectionIdentity,
+        chunkInput.outputBaseGeneration,
+        chunkInput.inputWatermark,
+        chunkInput.snapshotId,
+      ].join('\\0'))
+      .digest('hex')
+      .slice(0, 24)
+    const requestId = 'requestless-summary:' + requestDigest
+    const chunk = {
+      ...chunkInput,
+      actualInputRows: null,
+      actualOutputBytes: null,
+      actualOutputRows: null,
+      actualPayloadBytes: null,
+      actualPromptCount: null,
+      actualTempBytes: null,
+      admissionState: 'admitted',
+      budgetJson: {},
+      checksum: null,
+      chunkId: 'chunk-summary-requestless-duckdb',
+      completedAt: null,
+      createdAt: '2026-06-16T10:00:00.000Z',
+      diagnosticsJson: {},
+      durationMs: null,
+      estimatedInputRows: null,
+      estimatedOutputBytes: null,
+      estimatedOutputRows: null,
+      estimatedPayloadBytes: null,
+      estimatedPromptCount: null,
+      estimatedTempBytes: null,
+      lastError: null,
+      leaseExpiresAt: '2026-06-16T10:01:00.000Z',
+      leaseOwner: 'worker-1',
+      maxInputRows: null,
+      maxOutputBytes: null,
+      maxOutputRows: null,
+      maxPayloadBytes: null,
+      maxPromptCount: null,
+      maxTempBytes: null,
+      oomCategory: null,
+      overBudgetReason: null,
+      parentChunkId: null,
+      retryAfter: null,
+      retryCount: 0,
+      snapshotCount: 1,
+      splitDepth: 0,
+      startedAt: '2026-06-16T10:00:00.000Z',
+      status: 'running',
+      updatedAt: '2026-06-16T10:00:00.000Z',
+      workloadClass: null,
+    }
+
+    await database.run(\`
+      INSERT INTO app.review_rebuild_chunk_manifest (
+        chunk_id,
+        project_id,
+        projection_component,
+        projection_identity,
+        input_digest,
+        input_watermark,
+        chunk_start_key,
+        chunk_end_key,
+        output_base_generation,
+        status,
+        lease_owner,
+        lease_expires_at,
+        started_at,
+        request_id,
+        snapshot_id
+      )
+      VALUES (
+        '\${chunk.chunkId}',
+        '\${chunk.projectId}',
+        '\${chunk.projectionComponent}',
+        '\${chunk.projectionIdentity}',
+        '\${chunk.inputDigest}',
+        \${chunk.inputWatermark},
+        '\${chunk.chunkStartKey}',
+        '\${chunk.chunkEndKey}',
+        \${chunk.outputBaseGeneration},
+        'running',
+        'worker-1',
+        TIMESTAMPTZ '\${chunk.leaseExpiresAt}',
+        TIMESTAMPTZ '\${chunk.startedAt}',
+        NULL,
+        '\${chunk.snapshotId}'
+      )
+    \`)
+
+    let nextReturned = false
+    const result = await runReviewServingProjectorWorkerOnce(
+      {workerId: 'worker-1'},
+      {
+        getDatabase: () => database,
+        nowMs: () => 1_000,
+        rebuildChunkService: {
+          claimChunk: async () => chunk,
+          failChunk: async (failure) => {
+            throw new Error('unexpected failure: ' + failure.error)
+          },
+          getNextChunk: async () => {
+            if (nextReturned) {
+              return null
+            }
+            nextReturned = true
+
+            return chunkInput
+          },
+          heartbeatChunk: async () => chunk,
+          isChunkComplete: async () => false,
+          runClaimedChunk: async ({chunk: claimedChunk}) => {
+            if (claimedChunk.requestId !== requestId) {
+              throw new Error('summary chunk was not adopted before execution')
+            }
+
+            return {status: 'completed'}
+          },
+        },
+        sleep: async () => {},
+        wakeProjectors: async () => {
+          return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
+        },
+      },
+    )
+
+    const requestRows = await database.queryJson(\`
+      SELECT request_id AS requestId, reason, status
+      FROM app.review_rebuild_request
+      WHERE request_id = '\${requestId}'
+    \`)
+    const chunkRows = await database.queryJson(\`
+      SELECT chunk_id AS chunkId, request_id AS requestId
+      FROM app.review_rebuild_chunk_manifest
+      WHERE chunk_id = '\${chunk.chunkId}'
+    \`)
+
+    if (result.chunk.requestId !== requestId || result.chunk.status !== 'completed') {
+      throw new Error('worker did not complete the adopted summary chunk')
+    }
+    if (requestRows.length !== 1 || requestRows[0].reason !== 'requestless_summary_range_rebuild') {
+      throw new Error('requestless summary adoption did not persist a rebuild request')
+    }
+    if (chunkRows.length !== 1 || chunkRows[0].requestId !== requestId) {
+      throw new Error('requestless summary adoption did not persist the chunk request id')
+    }
+  `
+  const run = globalThis.Bun.spawnSync(['bun', '-e', script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      DUCKDB_MEMORY_LIMIT: '6400MiB',
+      DUCKDB_PATH: duckdbPath,
+      SERVER_DUCKDB_OWNER_URL: '',
+      SERVER_ROLE: 'maintenance-worker',
+    },
+  })
+
+  try {
+    expect(run.stderr.toString()).toBe('')
+    expect(run.exitCode).toBe(0)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
 })
 
 test('claimed requestless summary chunks stage partials through an adopted request', async () => {
