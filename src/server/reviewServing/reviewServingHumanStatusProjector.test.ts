@@ -364,6 +364,7 @@ test('human direct full rebuild chunks update serving without patch rows', async
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
   expect(joined).not.toContain('DELETE FROM mart.review_human_status_patch_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_human_status_patch_v4')
+  expect(joined).not.toContain('FROM mart.review_human_status_patch_v4')
   expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
 })
 

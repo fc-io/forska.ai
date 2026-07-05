@@ -436,18 +436,9 @@ const getProjectScopedRows = async (
       return `(${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.promptOrder)}, ${getSqlLiteral(row.promptTextHash)}, ${getSqlLiteral(row.answerSchemaHash)}, ${getSqlLiteral(row.settingsVersion)}, ${getSqlLiteral(row.thresholdVersion)}, TRUE)`
     })
     .join(', ')
-
-  if (
-    (!shouldRebuildProjectHumanStatus(input.claims) && !hasChunkArticleRange(input))
-    || promptConfigRowsWithSummary.length === 0
-  ) {
-    return []
-  }
-
-  return database.queryJson<HumanStatusSourceRow>(`
-    WITH active_prompt_config(prompt_id, prompt_order, prompt_text_hash, answer_schema_hash, settings_version, threshold_version, active) AS (
-      SELECT * FROM (VALUES ${activePromptValues})
-    ), existing_prompt_config AS (
+  const includeExistingPatchRows = input.claims.length > 0
+  const existingPromptConfigCteSql = includeExistingPatchRows
+    ? `, existing_prompt_config AS (
       SELECT DISTINCT
         human.prompt_id,
         NULL::INTEGER AS prompt_order,
@@ -466,11 +457,29 @@ const getProjectScopedRows = async (
           FROM active_prompt_config active
           WHERE active.prompt_id = human.prompt_id
         )
-    ), prompt_config AS (
+    )`
+    : ''
+  const promptConfigCteSql = includeExistingPatchRows
+    ? `prompt_config AS (
       SELECT * FROM active_prompt_config
       UNION ALL
       SELECT * FROM existing_prompt_config
-    ), article_prompt AS (
+    )`
+    : `prompt_config AS (
+      SELECT * FROM active_prompt_config
+    )`
+
+  if (
+    (!shouldRebuildProjectHumanStatus(input.claims) && !hasChunkArticleRange(input))
+    || promptConfigRowsWithSummary.length === 0
+  ) {
+    return []
+  }
+
+  return database.queryJson<HumanStatusSourceRow>(`
+    WITH active_prompt_config(prompt_id, prompt_order, prompt_text_hash, answer_schema_hash, settings_version, threshold_version, active) AS (
+      SELECT * FROM (VALUES ${activePromptValues})
+    )${existingPromptConfigCteSql}, ${promptConfigCteSql}, article_prompt AS (
       SELECT scope.article_id, prompt_config.*
       FROM mart.project_scope_article scope
       CROSS JOIN prompt_config
@@ -519,6 +528,7 @@ const getApplyHumanStatusServingStatement = (input: {
   baseGeneration: number
   currentSummaryReviewConfigHash: string | null
   currentReviewConfigHash: string | null
+  includeExistingPatchRows: boolean
   patchWatermark: number
   projectId: string
   projectionIdentity: string
@@ -537,6 +547,25 @@ const getApplyHumanStatusServingStatement = (input: {
       return `(${getSqlLiteral(row.listModeKey)}, ${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.reviewConfigHash)}, ${getSqlLiteral(row.promptConfigHash)}, ${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.humanStatusKey)}, ${getSqlLiteral(row.tombstone)})`
     })
     .join(', ')
+  const existingPromptRowsSql = input.includeExistingPatchRows
+    ? `UNION ALL
+        SELECT
+          human.list_mode_key,
+          human.article_id,
+          ${getSqlLiteral(input.currentReviewConfigHash)} AS review_config_hash,
+          human.prompt_config_hash,
+          human.prompt_id,
+          human.human_status_key,
+          human.tombstone,
+          human.patch_watermark
+        FROM mart.review_human_status_patch_v4 human
+        INNER JOIN changed_article changed
+          ON changed.list_mode_key = human.list_mode_key
+          AND changed.article_id = human.article_id
+        WHERE human.project_id = ${getSqlLiteral(input.projectId)}
+          AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
+          AND human.patch_watermark <= ${getSqlLiteral(input.patchWatermark)}`
+    : ''
 
   return values.length === 0
     ? null
@@ -557,23 +586,7 @@ const getApplyHumanStatusServingStatement = (input: {
           ${getSqlLiteral(input.patchWatermark)} AS patch_watermark
         FROM changed
         GROUP BY changed.list_mode_key, changed.article_id, changed.review_config_hash, changed.prompt_config_hash, changed.prompt_id, changed.human_status_key, changed.tombstone
-        UNION ALL
-        SELECT
-          human.list_mode_key,
-          human.article_id,
-          ${getSqlLiteral(input.currentReviewConfigHash)} AS review_config_hash,
-          human.prompt_config_hash,
-          human.prompt_id,
-          human.human_status_key,
-          human.tombstone,
-          human.patch_watermark
-        FROM mart.review_human_status_patch_v4 human
-        INNER JOIN changed_article changed
-          ON changed.list_mode_key = human.list_mode_key
-          AND changed.article_id = human.article_id
-        WHERE human.project_id = ${getSqlLiteral(input.projectId)}
-          AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
-          AND human.patch_watermark <= ${getSqlLiteral(input.patchWatermark)}
+        ${existingPromptRowsSql}
       ), latest_prompt AS (
         SELECT candidate.*
         FROM candidate_prompt candidate
@@ -772,6 +785,7 @@ export const projectReviewServingHumanStatusPatches = async (
           baseGeneration: input.baseGeneration,
           currentSummaryReviewConfigHash,
           currentReviewConfigHash,
+          includeExistingPatchRows: input.claims.length > 0,
           patchWatermark,
           projectId: input.projectId,
           projectionIdentity: input.projectionIdentity,
