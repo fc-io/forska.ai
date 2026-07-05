@@ -360,13 +360,12 @@ test('projects list-mode count deltas with summary identity and definition versi
     }),
   ).toBe(true)
   expect(hasSummaryValue(result.summaryValues, {count_value: 8, list_mode_key: 'llm'})).toBe(true)
-  expect(joined).toContain('selected_base.project_scope_identity')
-  expect(joined).toContain('selected_base.selected_import_snapshot_id')
-  expect(joined).toContain('COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE)')
-  expect(joined).toContain('COALESCE(selected_patch.duplicate_flag, selected_base.duplicate_flag, FALSE)')
-  expect(joined).toContain('llm.base_generation = 5')
-  expect(joined).toContain('scoped.in_scope AS in_selected_scope')
-  expect(joined).toContain('FROM mart.review_selected_import_patch_v4 newer')
+  expect(joined).toContain('FROM scoped_serving serving')
+  expect(joined).toContain('serving.selected_import_route_id AS import_route_id')
+  expect(joined).toContain('serving.duplicate_flag')
+  expect(joined).toContain('serving.conflict_flag')
+  expect(joined).toContain('mart.review_article_judgment_detail_serving_v4 detail')
+  expect(joined).not.toContain('mart.review_selected_import_patch_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
 })
@@ -404,14 +403,14 @@ test('projects human summary-answer facets independently from prompt answers', a
       summary_identity: 'review.human.filter.summaryAnswer',
     }),
   ).toBe(true)
-  expect(selectStatement).toContain('FROM mart.review_human_status_patch_v4 newer')
-  expect(selectStatement).toContain('human.base_generation = 5')
+  expect(selectStatement).not.toContain('mart.review_human_status_patch_v4')
+  expect(selectStatement).toContain('mart.review_article_judgment_detail_serving_v4 detail')
   expect(selectStatement).toContain(
     "COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = 'project-1'), 'prompt') AS human_judgment_mode",
   )
   expect(selectStatement).toContain("project_settings.human_judgment_mode <> 'summary'")
   expect(selectStatement).toContain("project_settings.human_judgment_mode = 'summary'")
-  expect(selectStatement).toContain('newer.prompt_id IS NOT DISTINCT FROM human.prompt_id')
+  expect(selectStatement).toContain('human.prompt_id')
 })
 
 test('projects llm prompt-answer facets from array answers', async () => {
@@ -1332,8 +1331,8 @@ test('date range and search-scope SQL stays scoped and explicit unsupported filt
     return statement.includes('FROM summary_union')
   })
 
-  expect(sourceStatement).toContain('selected_base.publication_year')
-  expect(sourceStatement).toContain('selected_patch.publication_year')
+  expect(sourceStatement).toContain('serving.publication_year')
+  expect(sourceStatement).not.toContain('selected_patch.publication_year')
   expect(sourceStatement).not.toContain('scope.publication_year')
   expect(sourceStatement).toContain('filter:dynamic')
   expect(
@@ -1432,9 +1431,9 @@ test('summary status and answer sources require selected scope', async () => {
     return statement.includes('FROM summary_union')
   })
 
-  expect(sourceStatement).toContain('selected.article_id = llm.article_id AND selected.in_selected_scope')
-  expect(sourceStatement).toContain('selected.article_id = queue.article_id AND selected.in_selected_scope')
-  expect(sourceStatement).toContain('selected.article_id = human.article_id AND selected.in_selected_scope')
+  expect(sourceStatement).toContain('INNER JOIN selected_article selected ON selected.article_id = llm.article_id')
+  expect(sourceStatement).toContain('INNER JOIN selected_article selected ON selected.article_id = queue.article_id')
+  expect(sourceStatement).toContain('INNER JOIN selected_article selected ON selected.article_id = human.article_id')
 })
 
 test('unsupported or incompatible contribution state enqueues repair instead of scanning raw tables', async () => {

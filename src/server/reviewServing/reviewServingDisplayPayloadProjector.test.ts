@@ -114,15 +114,12 @@ test('display routine updates write component-narrow patches for only claimed ar
   const selectStatement = statements.find((statement) => {
     return statement.includes('WITH dirty_article(article_id)')
   })
-  const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_article_display_patch_v4')
-  })
   const joined = statements.join('\n')
   const updateStatement = statements.find((statement) => {
     return statement.includes('UPDATE mart.review_article_serving_v4')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 6})
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 6})
   expect(selectStatement).toContain("VALUES ('article-1')")
   expect(selectStatement).toContain(
     'COALESCE(article.article_created_at, scope.article_created_at, current_timestamp) AS sortKey',
@@ -133,21 +130,15 @@ test('display routine updates write component-narrow patches for only claimed ar
   expect(selectStatement).toContain('FROM dirty_article dirty')
   expect(selectStatement).toContain('LEFT JOIN mart.project_scope_article scope')
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
-  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
+  expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
+  expect(selectStatement).not.toContain('selected_patch')
   expect(selectStatement).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
-  expect(selectStatement).toContain('WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.article_title')
   expect(selectStatement).toContain('ELSE selected_base.article_title')
-  expect(selectStatement).toContain('WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.external_id')
   expect(selectStatement).toContain('ELSE selected_base.external_id')
   expect(selectStatement).toContain(
     "COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url",
   )
-  expect(selectStatement).toContain(
-    'WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key',
-  )
-  expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, display_identity, base_generation, patch_watermark, article_id)',
-  )
+  expect(joined).not.toContain('mart.review_article_display_patch_v4')
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('UPDATE mart.review_article_serving_v4')
   expect(joined).toContain("article_external_id = 'NCT-1'")
@@ -290,11 +281,8 @@ test('payload claimed updates delete stale rows for removed articles before inse
   })
 
   expect(result).toEqual({payloadRowCount: 0, patchWatermark: 6})
-  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
-  expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
-  expect(selectStatement).toContain(
-    'WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id',
-  )
+  expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
+  expect(selectStatement).not.toContain('selected_patch')
   expect(deleteStatement).toContain("article_id IN ('article-1')")
   expect(deleteStatement).toContain('payload_identity')
 })

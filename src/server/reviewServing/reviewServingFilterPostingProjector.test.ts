@@ -176,13 +176,12 @@ test('answer changes update posting stats from old and new contribution diffs', 
   const result = await projectReviewServingFilterPostings(projectInput([postingClaim()]), database)
   const joined = statements.join('\n')
 
-  expect(result.patchRowCount).toBe(2)
+  expect(result.patchRowCount).toBe(0)
   expect(result.servingRowCount).toBe(1)
   expect(result.validationResult).toBeUndefined()
   expect(result.diagnosticsJson.phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
   expect(result.diagnosticsJson.phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
   expect(result.diagnosticsJson.postingProjector.writer.records.inputRecordsByTable).toMatchObject({
-    'mart.review_article_filter_posting_patch_v4': 2,
     'mart.review_article_filter_posting_serving_v4': 1,
   })
   expect(joined).not.toContain('scope.source_updated_at')
@@ -200,7 +199,7 @@ test('answer changes update posting stats from old and new contribution diffs', 
     listModeKey: 'llm',
     selectivity: 0.8,
   })
-  expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
+  expect(joined).not.toContain('mart.review_article_filter_posting_patch_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
 })
@@ -335,7 +334,7 @@ test('deletes write tombstones, remove serving rows, and decrement stats in the 
   )
   const joined = statements.join('\n')
 
-  expect(result.patchRowCount).toBe(1)
+  expect(result.patchRowCount).toBe(0)
   expect(result.servingRowCount).toBe(0)
   expect(result.statsValues).toContainEqual({
     cardinality: 3,
@@ -345,7 +344,7 @@ test('deletes write tombstones, remove serving rows, and decrement stats in the 
     selectivity: 0.3,
   })
   expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
-  expect(joined).toContain('TRUE')
+  expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
 })
@@ -401,14 +400,10 @@ test('selected-import rank changes move filter contribution between selected imp
     listModeKey: 'llm',
     selectivity: 0.2,
   })
-  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
-  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
-  expect(selectStatement).toContain('COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE)')
-  expect(selectStatement).toContain('COALESCE(selected_patch.duplicate_flag, selected_base.duplicate_flag, FALSE)')
-  expect(selectStatement).toContain('COALESCE(selected_patch.conflict_flag, selected_base.conflict_flag, FALSE)')
+  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
+  expect(selectStatement).not.toContain('selected_patch')
   expect(selectStatement).toContain('scoped.scope_tombstone AS tombstone')
-  expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
-  expect(selectStatement).toContain('newer.patch_watermark')
+  expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
 })
 
 test('human postings read only the current status patch per logical prompt key', async () => {
@@ -422,10 +417,8 @@ test('human postings read only the current status patch per logical prompt key',
     return statement.includes('FROM posting_union')
   })
 
-  expect(selectStatement).toContain('FROM mart.review_human_status_patch_v4 newer')
-  expect(selectStatement).toContain('human.base_generation = 5')
-  expect(selectStatement).toContain('newer.prompt_id IS NOT DISTINCT FROM human.prompt_id')
-  expect(selectStatement).toContain('newer.list_mode_key = human.list_mode_key')
+  expect(selectStatement).not.toContain('mart.review_human_status_patch_v4')
+  expect(selectStatement).toContain('human_detail AS')
 })
 
 test('status postings use article-level all-prompt status rows', async () => {
@@ -436,15 +429,12 @@ test('status postings use article-level all-prompt status rows', async () => {
     return statement.includes('FROM posting_union')
   })
 
-  expect(selectStatement).toContain('llm_article_status AS')
-  expect(selectStatement).toContain("'llmStatus' AS filterKind, llm.llm_status_key AS filterValue")
-  expect(selectStatement).toContain('human_article_status AS')
-  expect(selectStatement).toContain("'humanStatus' AS filterKind, human.human_status_key AS filterValue")
-  expect(selectStatement).toContain("COUNT(*) FILTER (WHERE NOT tombstone AND llm_status_key = 'answered')")
+  expect(selectStatement).toContain('scoped_serving AS')
+  expect(selectStatement).toContain("'llmStatus' AS filterKind, serving.llm_status_key AS filterValue")
+  expect(selectStatement).toContain("'humanStatus' AS filterKind, serving.human_status_key AS filterValue")
   expect(selectStatement).toContain('project_settings AS')
   expect(selectStatement).toContain("human_judgment_mode = 'summary'")
-  expect(selectStatement).toContain("human.prompt_id = 'summary' AND human.human_status_key = 'answered'")
-  expect(selectStatement).toContain("human.prompt_id <> 'summary' AND human.human_status_key = 'answered'")
+  expect(selectStatement).toContain('human_detail AS')
 })
 
 test('human status postings honor summary-mode status rows separately from prompt rows', async () => {
@@ -461,7 +451,7 @@ test('human status postings honor summary-mode status rows separately from promp
   expect(selectStatement).toContain('CROSS JOIN project_settings')
   expect(selectStatement).toContain("human.prompt_id = 'summary'")
   expect(selectStatement).toContain("human.prompt_id <> 'summary'")
-  expect(selectStatement).toContain("THEN 'answered'")
+  expect(selectStatement).toContain('human_detail AS')
 })
 
 test('prompt-answer postings encode prompt ids in filter values', async () => {
@@ -474,11 +464,11 @@ test('prompt-answer postings encode prompt ids in filter values', async () => {
 
   expect(selectStatement).toContain("concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original)")
   expect(selectStatement).toContain("concat('review:promptAnswer:', llm.prompt_id, ':', answer.answer_value)")
-  expect(selectStatement).toContain("concat('human:promptAnswer:', human.prompt_id, ':', human.human_answered_value)")
+  expect(selectStatement).toContain("concat('human:promptAnswer:', human.prompt_id, ':', human.answered_original)")
   expect(selectStatement).toContain('llm.answered_original IS NOT NULL')
   expect(selectStatement).toContain('llm.answered_original_as_array IS NULL')
   expect(selectStatement).toContain('answer.answer_value IS NOT NULL')
-  expect(selectStatement).toContain('human.human_answered_value IS NOT NULL')
+  expect(selectStatement).toContain('human.answered_original IS NOT NULL')
 })
 
 test('prompt-scoped posting rebuilds clear only changed tombstoned serving rows before reinserting', async () => {

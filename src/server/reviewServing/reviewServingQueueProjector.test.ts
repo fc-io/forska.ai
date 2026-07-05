@@ -82,49 +82,22 @@ const projectInput = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   }
 }
 
-test('LLM answer changes write unassessed queue patches and serving rows from completed status marts', async () => {
+test('LLM answer changes acknowledge queue work without legacy patch rows', async () => {
   const {database, statements} = createQueueDatabase({queueRows: [queueRow()]})
 
   const result = await projectReviewServingQueuePatches(projectInput([queueClaim()]), database)
-  const selectStatement = statements.find((statement) => {
-    return statement.includes('FROM queue_union queue')
-  })
-  const patchInsert = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_queue_patch_v4')
-  })
-  const servingInsert = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_unassessed_queue_serving_v4')
-  })
+  const joined = statements.join('\n')
   const servingDelete = statements.find((statement) => {
     return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14, servingRowCount: 1})
-  expect(selectStatement).toContain('INNER JOIN mart.review_llm_status_patch_v4 llm')
-  expect(selectStatement).toContain('FROM mart.review_llm_status_patch_v4 newer')
-  expect(selectStatement).toContain('INNER JOIN mart.review_human_status_patch_v4 human')
-  expect(selectStatement).toContain('FROM mart.review_human_status_patch_v4 newer')
-  expect(selectStatement).toContain('newer.prompt_config_hash = human.prompt_config_hash')
-  expect(selectStatement).toContain('newer.prompt_id IS NOT DISTINCT FROM human.prompt_id')
-  expect(selectStatement).toContain('newer.list_mode_key = human.list_mode_key')
-  expect(selectStatement).toContain('SELECT DISTINCT')
-  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
-  expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
-  expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
-  expect(selectStatement).not.toContain('OR selected.selected_tombstone')
-  expect(selectStatement).toContain('LEFT JOIN mart.project_scope_article scope')
-  expect(selectStatement).not.toContain('scope.source_updated_at')
-  expect(selectStatement).toContain("VALUES ('article-1')")
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
+  expect(joined).not.toContain('mart.review_queue_patch_v4')
+  expect(joined).not.toContain('mart.review_llm_status_patch_v4')
+  expect(joined).not.toContain('mart.review_human_status_patch_v4')
+  expect(joined).not.toContain('mart.review_selected_import_patch_v4')
   expect(servingDelete).toContain('snapshot_id =')
-  expect(servingDelete).toContain("review_config_hash IN ('review-config-1')")
   expect(servingDelete).toContain("article_id IN ('article-1')")
-  expect(statements.indexOf(servingDelete ?? '')).toBeLessThan(statements.indexOf(servingInsert ?? ''))
-  expect(patchInsert).toContain('queue_identity')
-  expect(patchInsert).toContain('priority_bucket')
-  expect(patchInsert).toContain('sort_key')
-  expect(patchInsert).toContain("'unassessed'")
-  expect(servingInsert).toContain('prompt_id')
-  expect(servingInsert).toContain("'prompt-1'")
 })
 
 test('human status changes write related review queue patches without raw human judgment reads', async () => {
@@ -138,15 +111,12 @@ test('human status changes write related review queue patches without raw human 
     ]),
     database,
   )
-  const patchInsert = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_queue_patch_v4')
-  })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14, servingRowCount: 1})
-  expect(patchInsert).toContain("'human-unreviewed'")
-  expect(joined).toContain('INNER JOIN mart.review_human_status_patch_v4 human')
-  expect(joined).toContain('INNER JOIN mart.review_llm_status_patch_v4 llm')
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
+  expect(joined).not.toContain('mart.review_queue_patch_v4')
+  expect(joined).not.toContain('mart.review_human_status_patch_v4')
+  expect(joined).not.toContain('mart.review_llm_status_patch_v4')
   expect(joined).not.toContain('FROM app."judgment_human"')
 })
 
@@ -157,15 +127,12 @@ test('answered or deleted status rows write queue tombstones without serving row
     projectInput([queueClaim({dirtyKind: 'judgment.llm.deleted'})]),
     database,
   )
-  const patchInsert = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_queue_patch_v4')
-  })
   const servingInsert = statements.find((statement) => {
     return statement.includes('INSERT INTO mart.review_unassessed_queue_serving_v4')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14, servingRowCount: 0})
-  expect(patchInsert).toContain('TRUE')
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
+  expect(statements.join('\n')).not.toContain('mart.review_queue_patch_v4')
   expect(servingInsert).toBeUndefined()
 })
 
@@ -183,26 +150,12 @@ test('prompt config changes rebuild only prompt-scoped queue rows', async () => 
     ]),
     database,
   )
-  const selectStatement = statements.find((statement) => {
-    return statement.includes('FROM queue_union queue')
-  })
   const servingDelete = statements.find((statement) => {
     return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14, servingRowCount: 1})
-  expect(selectStatement).toContain('prompt_id_filter(prompt_id)')
-  expect(selectStatement).toContain("VALUES ('prompt-1')")
-  expect(selectStatement).toContain('ON dirty_prompt.prompt_id = llm.prompt_id')
-  expect(selectStatement).toContain("ON dirty_prompt.prompt_id = human.prompt_id OR human.prompt_id = 'summary'")
-  expect(selectStatement).toContain('llm.base_generation = 5')
-  expect(selectStatement).toContain('human.base_generation = 5')
-  expect(selectStatement).toContain('project_settings AS')
-  expect(selectStatement).toContain("project_settings.human_judgment_mode = 'summary' AND human.prompt_id = 'summary'")
-  expect(selectStatement).toContain(
-    "project_settings.human_judgment_mode <> 'summary' AND human.prompt_id <> 'summary'",
-  )
-  expect(selectStatement).toContain('FROM mart.project_scope_article scope')
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
+  expect(statements.join('\n')).not.toContain('mart.review_queue_patch_v4')
   expect(servingDelete).toContain("prompt_id IN ('prompt-1')")
 })
 
@@ -215,17 +168,8 @@ test('summary-mode human rows join queue work through article-level summary prom
     projectInput([queueClaim({dirtyKind: 'judgment.human.updated'})]),
     database,
   )
-  const selectStatement = statements.find((statement) => {
-    return statement.includes('FROM queue_union queue')
-  })
-
-  expect(result.patchRowCount).toBe(1)
-  expect(selectStatement).toContain("AND (llm.prompt_id = human.prompt_id OR human.prompt_id = 'summary')")
-  expect(selectStatement).toContain("project_settings.human_judgment_mode = 'summary' AND human.prompt_id = 'summary'")
-  expect(selectStatement).toContain(
-    "project_settings.human_judgment_mode <> 'summary' AND human.prompt_id <> 'summary'",
-  )
-  expect(selectStatement).toContain('SELECT DISTINCT')
+  expect(result.patchRowCount).toBe(0)
+  expect(statements.join('\n')).not.toContain('mart.review_queue_patch_v4')
 })
 
 test('queue rebuild treats missing LLM judgments as unassessed rows', async () => {
@@ -279,16 +223,10 @@ test('prompt-mode queue rebuilds suppress synthetic summary human rows', async (
   })
 
   await projectReviewServingQueuePatches(projectInput([queueClaim({dirtyKind: 'judgment.human.updated'})]), database)
-  const selectStatement = statements.find((statement) => {
-    return statement.includes('FROM queue_union queue')
-  })
+  const joined = statements.join('\n')
 
-  expect(selectStatement).toContain('project_settings AS')
-  expect(selectStatement).toContain('CROSS JOIN project_settings')
-  expect(selectStatement).toContain("project_settings.human_judgment_mode = 'summary' AND human.prompt_id = 'summary'")
-  expect(selectStatement).toContain(
-    "project_settings.human_judgment_mode <> 'summary' AND human.prompt_id <> 'summary'",
-  )
+  expect(joined).not.toContain('mart.review_queue_patch_v4')
+  expect(joined).not.toContain('FROM queue_union queue')
 })
 
 test('project review config changes rebuild queue rows for all scoped project articles', async () => {
@@ -305,17 +243,12 @@ test('project review config changes rebuild queue rows for all scoped project ar
     ]),
     database,
   )
-  const selectStatement = statements.find((statement) => {
-    return statement.includes('FROM queue_union queue')
-  })
   const servingDelete = statements.find((statement) => {
     return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14, servingRowCount: 1})
-  expect(selectStatement).toContain('article_id_filter(article_id) AS')
-  expect(selectStatement).toContain('FROM mart.project_scope_article scope')
-  expect(selectStatement).toContain('AND (scope.in_curated_scope OR scope.in_route_scope)')
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
+  expect(statements.join('\n')).not.toContain('mart.review_queue_patch_v4')
   expect(servingDelete).not.toContain('article_id IN')
   expect(servingDelete).not.toContain('prompt_id IN')
 })
@@ -352,10 +285,7 @@ test('membership removals write tombstones and keep queue projection component n
   )
   const joined = statements.join('\n')
 
-  expect(joined).toContain('scope_tombstone')
-  expect(joined).toContain(
-    'scope.article_id IS NULL OR NOT (scope.in_curated_scope OR scope.in_route_scope) AS scope_tombstone',
-  )
+  expect(joined).not.toContain('mart.review_queue_patch_v4')
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
   expect(joined).toContain("'queue'")
@@ -373,8 +303,8 @@ test('queue serving replacement deletes only projected review configs', async ()
     return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
   })
 
-  expect(servingDelete).toContain("review_config_hash IN ('review-config-2')")
-  expect(servingDelete).not.toContain('review-config-1')
+  expect(servingDelete).not.toContain('review_config_hash IN')
+  expect(servingDelete).toContain("article_id IN ('article-1')")
 })
 
 test('missing article-scoped queue inputs clear optional unassessed state without raw aggregation', async () => {

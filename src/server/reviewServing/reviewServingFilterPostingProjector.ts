@@ -118,19 +118,6 @@ const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   ]
 }
 
-const getLatestHumanPatchPredicate = (alias: string) => {
-  return `NOT EXISTS (
-              SELECT 1
-              FROM mart.review_human_status_patch_v4 newer
-              WHERE newer.project_id = ${alias}.project_id
-                AND newer.base_generation = ${alias}.base_generation
-                AND newer.article_id = ${alias}.article_id
-                AND newer.prompt_id IS NOT DISTINCT FROM ${alias}.prompt_id
-                AND newer.list_mode_key = ${alias}.list_mode_key
-                AND newer.patch_watermark > ${alias}.patch_watermark
-            )`
-}
-
 const getValuesCte = (columnName: string, values: readonly string[]) => {
   return values.length === 0
     ? ''
@@ -228,184 +215,12 @@ const getDirtyArticleCte = (input: ProjectReviewServingFilterPostingsInput, arti
 }
 
 const getPostingContributionRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
-  const articleIds = getClaimArticleIds(input.claims)
-
-  return `
-        WITH ${getDirtyArticleCte(input, articleIds)},
-        ${getListModeCte(input.listModeKeys)},
-        scoped_article AS (
-          SELECT
-            scope.article_id,
-            COALESCE(scope.article_updated_at, scope.article_created_at, TIMESTAMPTZ ${getSqlLiteral(stalePostingSortAt)}) AS sort_key,
-            NOT (scope.in_curated_scope OR scope.in_route_scope) AS scope_tombstone
-          FROM article_id_filter dirty
-          INNER JOIN mart.project_scope_article scope
-            ON scope.project_id = ${getSqlLiteral(input.projectId)}
-            AND scope.article_id = dirty.article_id
-        ),
-        selected_import_state AS (
-          SELECT
-            scoped.article_id,
-            scoped.sort_key,
-            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_patch.import_route_id, selected_base.import_route_id) END AS import_route_id,
-            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_patch.selected_rank_key, selected_base.selected_rank_key) END AS selected_rank_key,
-            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_patch.publication_year, selected_base.publication_year) END AS publication_year,
-            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN FALSE ELSE COALESCE(selected_patch.duplicate_flag, selected_base.duplicate_flag, FALSE) END AS duplicate_flag,
-            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN FALSE ELSE COALESCE(selected_patch.conflict_flag, selected_base.conflict_flag, FALSE) END AS conflict_flag,
-            scoped.scope_tombstone AS tombstone
-          FROM scoped_article scoped
-          LEFT JOIN app.review_selected_article_import_v4 selected_base
-            ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
-            AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-            AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-            AND selected_base.article_id = scoped.article_id
-          LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
-            ON selected_patch.project_id = ${getSqlLiteral(input.projectId)}
-            AND selected_patch.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-            AND selected_patch.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-            AND selected_patch.article_id = scoped.article_id
-            AND selected_patch.patch_watermark = (
-              SELECT MAX(newer.patch_watermark)
-              FROM mart.review_selected_import_patch_v4 newer
-              WHERE newer.project_id = selected_patch.project_id
-                AND newer.project_scope_identity = selected_patch.project_scope_identity
-                AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
-                AND newer.article_id = selected_patch.article_id
-            )
-        ),
-        selected_postings AS (
-          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.sort_key AS sortKey, selected.tombstone AS tombstone, 'importRoute' AS filterKind, selected.import_route_id AS filterValue
-          FROM selected_import_state selected CROSS JOIN list_mode_key_filter list_mode_key
-          UNION ALL
-          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.sort_key AS sortKey, selected.tombstone AS tombstone, 'publicationYear' AS filterKind, CAST(selected.publication_year AS VARCHAR) AS filterValue
-          FROM selected_import_state selected CROSS JOIN list_mode_key_filter list_mode_key
-          UNION ALL
-          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.sort_key AS sortKey, selected.tombstone AS tombstone, 'duplicateFlag' AS filterKind, CAST(selected.duplicate_flag AS VARCHAR) AS filterValue
-          FROM selected_import_state selected CROSS JOIN list_mode_key_filter list_mode_key
-          UNION ALL
-          SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.sort_key AS sortKey, selected.tombstone AS tombstone, 'conflictFlag' AS filterKind, CAST(selected.conflict_flag AS VARCHAR) AS filterValue
-          FROM selected_import_state selected CROSS JOIN list_mode_key_filter list_mode_key
-        ),
-        latest_llm_patch AS (
-          SELECT llm.*
-          FROM mart.review_llm_status_patch_v4 llm
-          INNER JOIN scoped_article scoped_llm
-            ON scoped_llm.article_id = llm.article_id
-          WHERE llm.project_id = ${getSqlLiteral(input.projectId)}
-            AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-            AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
-            AND NOT EXISTS (
-              SELECT 1
-              FROM mart.review_llm_status_patch_v4 newer
-              WHERE newer.project_id = llm.project_id
-                AND newer.review_config_hash = llm.review_config_hash
-                AND newer.base_generation = llm.base_generation
-                AND newer.article_id = llm.article_id
-                AND newer.prompt_id = llm.prompt_id
-                AND newer.list_mode_key = llm.list_mode_key
-                AND newer.patch_watermark > llm.patch_watermark
-            )
-        ),
-        llm_article_status AS (
-          SELECT article_id, list_mode_key, MAX(latest_llm_created_at) AS latest_llm_created_at, COUNT(*) FILTER (WHERE NOT tombstone) = 0 AS tombstone, CASE WHEN COUNT(*) FILTER (WHERE NOT tombstone AND llm_status_key = 'answered') = COUNT(*) FILTER (WHERE NOT tombstone) AND COUNT(*) FILTER (WHERE NOT tombstone) > 0 THEN 'answered' ELSE 'unanswered' END AS llm_status_key
-          FROM latest_llm_patch
-          GROUP BY article_id, list_mode_key
-        ),
-        llm_postings AS (
-          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, COALESCE(llm.latest_llm_created_at, scoped.sort_key) AS sortKey, llm.tombstone OR scoped.scope_tombstone AS tombstone, 'llmStatus' AS filterKind, llm.llm_status_key AS filterValue
-          FROM scoped_article scoped
-          INNER JOIN llm_article_status llm
-            ON llm.article_id = scoped.article_id
-          INNER JOIN list_mode_key_filter list_mode_key
-            ON list_mode_key.list_mode_key = llm.list_mode_key
-          UNION ALL
-          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, COALESCE(llm.latest_llm_created_at, scoped.sort_key) AS sortKey, llm.tombstone OR scoped.scope_tombstone AS tombstone, 'promptAnswer' AS filterKind, concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original) AS filterValue
-          FROM scoped_article scoped
-          INNER JOIN latest_llm_patch llm
-            ON llm.article_id = scoped.article_id
-            AND llm.answered_original IS NOT NULL
-            AND llm.answered_original_as_array IS NULL
-          INNER JOIN list_mode_key_filter list_mode_key
-            ON list_mode_key.list_mode_key = llm.list_mode_key
-          UNION ALL
-          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, COALESCE(llm.latest_llm_created_at, scoped.sort_key) AS sortKey, llm.tombstone OR scoped.scope_tombstone AS tombstone, 'promptAnswer' AS filterKind, concat('review:promptAnswer:', llm.prompt_id, ':', answer.answer_value) AS filterValue
-          FROM scoped_article scoped
-          INNER JOIN latest_llm_patch llm
-            ON llm.article_id = scoped.article_id
-            AND llm.answered_original_as_array IS NOT NULL
-          INNER JOIN list_mode_key_filter list_mode_key
-            ON list_mode_key.list_mode_key = llm.list_mode_key
-          CROSS JOIN UNNEST(llm.answered_original_as_array) AS answer(answer_value)
-          WHERE answer.answer_value IS NOT NULL
-        ),
-        latest_human_patch AS (
-          SELECT human.*
-          FROM mart.review_human_status_patch_v4 human
-          INNER JOIN scoped_article scoped_human
-            ON scoped_human.article_id = human.article_id
-          WHERE human.project_id = ${getSqlLiteral(input.projectId)}
-            AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
-            AND ${getLatestHumanPatchPredicate('human')}
-        ), project_settings AS (
-          SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = ${getSqlLiteral(input.projectId)}), 'prompt') AS human_judgment_mode
-        ),
-        human_article_status AS (
-          SELECT
-            human.article_id,
-            human.list_mode_key,
-            MAX(human.latest_human_updated_at) AS latest_human_updated_at,
-            CASE
-              WHEN project_settings.human_judgment_mode = 'summary' THEN COUNT(*) FILTER (WHERE NOT human.tombstone AND human.prompt_id = 'summary') = 0
-              ELSE COUNT(*) FILTER (WHERE NOT human.tombstone AND human.prompt_id <> 'summary') = 0
-            END AS tombstone,
-            CASE
-              WHEN project_settings.human_judgment_mode = 'summary' AND COUNT(*) FILTER (WHERE NOT human.tombstone AND human.prompt_id = 'summary' AND human.human_status_key = 'answered') > 0 THEN 'answered'
-              WHEN project_settings.human_judgment_mode <> 'summary' AND COUNT(*) FILTER (WHERE NOT human.tombstone AND human.prompt_id <> 'summary' AND human.human_status_key = 'answered') = COUNT(*) FILTER (WHERE NOT human.tombstone AND human.prompt_id <> 'summary') AND COUNT(*) FILTER (WHERE NOT human.tombstone AND human.prompt_id <> 'summary') > 0 THEN 'answered'
-              ELSE 'unanswered'
-            END AS human_status_key
-          FROM latest_human_patch human
-          CROSS JOIN project_settings
-          GROUP BY human.article_id, human.list_mode_key, project_settings.human_judgment_mode
-        ),
-        human_postings AS (
-          SELECT human.article_id AS articleId, human.list_mode_key AS listModeKey, COALESCE(human.latest_human_updated_at, scoped.sort_key) AS sortKey, human.tombstone OR scoped.scope_tombstone AS tombstone, 'humanStatus' AS filterKind, human.human_status_key AS filterValue
-          FROM scoped_article scoped
-          INNER JOIN human_article_status human
-            ON human.article_id = scoped.article_id
-          INNER JOIN list_mode_key_filter list_mode_key
-            ON list_mode_key.list_mode_key = human.list_mode_key
-          UNION ALL
-          SELECT human.article_id AS articleId, human.list_mode_key AS listModeKey, COALESCE(human.latest_human_updated_at, scoped.sort_key) AS sortKey, human.tombstone OR scoped.scope_tombstone AS tombstone, 'promptAnswer' AS filterKind, concat('human:promptAnswer:', human.prompt_id, ':', human.human_answered_value) AS filterValue
-          FROM scoped_article scoped
-          INNER JOIN latest_human_patch human
-            ON human.article_id = scoped.article_id
-            AND human.human_answered_value IS NOT NULL
-          CROSS JOIN project_settings
-          INNER JOIN list_mode_key_filter list_mode_key
-            ON list_mode_key.list_mode_key = human.list_mode_key
-          WHERE (
-            project_settings.human_judgment_mode = 'summary'
-            AND human.prompt_id = 'summary'
-          ) OR (
-            project_settings.human_judgment_mode <> 'summary'
-            AND human.prompt_id <> 'summary'
-          )
-        ),
-        posting_union AS (
-          SELECT * FROM selected_postings
-          UNION ALL SELECT * FROM llm_postings
-          UNION ALL SELECT * FROM human_postings
-        )
-        SELECT articleId, filterKind, filterValue, listModeKey, sortKey, tombstone
-        FROM posting_union
-        WHERE filterValue IS NOT NULL
-        ORDER BY listModeKey ASC, filterKind ASC, filterValue ASC, articleId ASC
-      `
+  return getFullRebuildPostingContributionRowsStatement(input)
 }
 
 const getFullRebuildPostingContributionRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
   return `
-        WITH ${getDirtyArticleCte(input, [])},
+        WITH ${getDirtyArticleCte(input, getClaimArticleIds(input.claims))},
         ${getListModeCte(input.listModeKeys)},
         scoped_article AS (
           SELECT
@@ -658,40 +473,6 @@ const getPostingTotalRows = async (
       `)
 }
 
-const getPostingPatchRecord = (input: {
-  baseGeneration: number
-  patchWatermark: number
-  projectId: string
-  row: PostingContributionRow
-}): ReviewServingProjectorRecord => {
-  return {
-    keyColumns: [
-      'project_id',
-      'posting_identity',
-      'base_generation',
-      'patch_watermark',
-      'filter_kind',
-      'filter_value',
-      'list_mode_key',
-      'article_id',
-    ],
-    table: 'mart.review_article_filter_posting_patch_v4',
-    values: {
-      article_id: input.row.articleId,
-      base_generation: input.baseGeneration,
-      filter_kind: input.row.filterKind,
-      filter_value: input.row.filterValue,
-      list_mode_key: input.row.listModeKey,
-      patch_updated_at: new Date(),
-      patch_watermark: input.patchWatermark,
-      posting_identity: getPostingIdentity(input.row),
-      project_id: input.projectId,
-      sort_key: input.row.sortKey,
-      tombstone: input.row.tombstone,
-    },
-  }
-}
-
 const getPostingServingRecord = (input: {
   projectId: string
   reviewConfigHash: string
@@ -803,22 +584,6 @@ const getDeleteFullRebuildServingRowsStatement = (input: ProjectReviewServingFil
       AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
       AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
       ${rangePredicate}`
-}
-
-const getDeletePatchRowsStatement = (input: ProjectReviewServingFilterPostingsInput, patchWatermark: number) => {
-  const articleIds = getClaimArticleIds(input.claims)
-
-  return articleIds.length === 0
-    ? null
-    : getDeleteReviewServingProjectorRowsStatement({
-        predicates: {
-          article_id: articleIds,
-          base_generation: input.baseGeneration,
-          patch_watermark: patchWatermark,
-          project_id: input.projectId,
-        },
-        table: 'mart.review_article_filter_posting_patch_v4',
-      })
 }
 
 const getInsertFullRebuildServingRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
@@ -1254,15 +1019,7 @@ export const projectReviewServingFilterPostings = async (
       oldRows: getPostingRowsAsContributionRows(existingRows),
     })
   })
-  const {patchRecords, servingRecords} = measureSync('recordTransformMs', () => {
-    const nextPatchRecords = contributionRows.map((row) => {
-      return getPostingPatchRecord({
-        baseGeneration: input.baseGeneration,
-        patchWatermark,
-        projectId: input.projectId,
-        row,
-      })
-    })
+  const {servingRecords} = measureSync('recordTransformMs', () => {
     const nextServingRecords = liveRows.map((row) => {
       return getPostingServingRecord({
         projectId: input.projectId,
@@ -1272,44 +1029,37 @@ export const projectReviewServingFilterPostings = async (
       })
     })
 
-    return {patchRecords: nextPatchRecords, servingRecords: nextServingRecords}
+    return {servingRecords: nextServingRecords}
   })
   const servingRowCount = servingRecords.length
   const statsRecords = await measure('statsQueryAndTransformMs', async () => {
     return getStatsRecords({database, diffs: contributionDiffs, projectorInput: input, rows: contributionRows})
   })
-  const {deletePatchRowsStatement, deleteServingRowsStatement, deleteStatsRowsStatement} = measureSync(
-    'deleteStatementBuildMs',
-    () => {
-      const nextDeleteServingRowsStatement = getDeleteServingRowsStatement(
-        input,
-        contributionRows.filter((row) => {
-          return row.tombstone
-        }),
-      )
-      const nextDeletePatchRowsStatement = getDeletePatchRowsStatement(input, patchWatermark)
-      const nextDeleteStatsRowsStatement = getDeleteStatsRowsStatement(input, statsRecords)
+  const {deleteServingRowsStatement, deleteStatsRowsStatement} = measureSync('deleteStatementBuildMs', () => {
+    const nextDeleteServingRowsStatement = getDeleteServingRowsStatement(
+      input,
+      contributionRows.filter((row) => {
+        return row.tombstone
+      }),
+    )
+    const nextDeleteStatsRowsStatement = getDeleteStatsRowsStatement(input, statsRecords)
 
-      return {
-        deletePatchRowsStatement: nextDeletePatchRowsStatement,
-        deleteServingRowsStatement: nextDeleteServingRowsStatement,
-        deleteStatsRowsStatement: nextDeleteStatsRowsStatement,
-      }
-    },
-  )
+    return {
+      deleteServingRowsStatement: nextDeleteServingRowsStatement,
+      deleteStatsRowsStatement: nextDeleteStatsRowsStatement,
+    }
+  })
   const writerResult = await measure('writerMs', async () => {
     return writeReviewServingProjectorComponent(
       {
         acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
         component: 'posting',
         projectionManifests: input.claims.length === 0 ? [] : [getPostingManifest(input)],
-        records: [...patchRecords, ...servingRecords, ...statsRecords],
+        records: [...servingRecords, ...statsRecords],
         repairDirtyWork: [],
-        statements: [deleteServingRowsStatement, deletePatchRowsStatement, deleteStatsRowsStatement].flatMap(
-          (statement) => {
-            return statement === null ? [] : [statement]
-          },
-        ),
+        statements: [deleteServingRowsStatement, deleteStatsRowsStatement].flatMap((statement) => {
+          return statement === null ? [] : [statement]
+        }),
         watermark:
           input.claims.length === 0
             ? undefined
@@ -1338,7 +1088,7 @@ export const projectReviewServingFilterPostings = async (
         writer: writerResult.diagnostics,
       },
     },
-    patchRowCount: patchRecords.length,
+    patchRowCount: 0,
     patchWatermark,
     repairRequired: false,
     servingRowCount,

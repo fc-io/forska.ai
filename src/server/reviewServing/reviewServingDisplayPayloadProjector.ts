@@ -461,22 +461,8 @@ const getDisplayPatchRows = async (
           article.article_updated_at AS articleUpdatedAt,
           COALESCE(article.article_created_at, scope.article_created_at, current_timestamp) AS sortKey,
           COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at, current_timestamp) AS activitySortAt,
-          COALESCE(
-            CASE
-              WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-              WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.article_title
-              ELSE selected_base.article_title
-            END,
-            article.article_title
-          ) AS articleTitle,
-          COALESCE(
-            CASE
-              WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-              WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.external_id
-              ELSE selected_base.external_id
-            END,
-            article.article_id
-          ) AS articleExternalId,
+          COALESCE(CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_base.article_title END, article.article_title) AS articleTitle,
+          COALESCE(CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_base.external_id END, article.article_id) AS articleExternalId,
           article.arxiv_id AS arxivId,
           article.biorxiv_id AS biorxivId,
           article.medrxiv_id AS medrxivId,
@@ -492,17 +478,9 @@ const getDisplayPatchRows = async (
           article.full_text_pdf AS fullTextPdf,
           article.full_text_fetched_at AS fullTextFetchedAt,
           article.full_text_conversion_status AS fullTextConversionStatus,
-          CASE
-            WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-            WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.journal_title
-            ELSE selected_base.journal_title
-          END AS journalTitle,
+          CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_base.journal_title END AS journalTitle,
           COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
-          CASE
-            WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-            WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.publication_year
-            ELSE selected_base.publication_year
-          END AS publicationYear,
+          CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_base.publication_year END AS publicationYear,
           article.id IS NULL AS tombstone
         FROM dirty_article dirty
         LEFT JOIN app."article" article
@@ -516,31 +494,10 @@ const getDisplayPatchRows = async (
           AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
           AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
           AND selected_base.article_id = dirty.article_id
-        LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
-          ON selected_patch.project_id = ${getSqlLiteral(input.projectId)}
-          AND selected_patch.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-          AND selected_patch.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-          AND selected_patch.article_id = dirty.article_id
-          AND selected_patch.patch_watermark = (
-            SELECT MAX(newer.patch_watermark)
-            FROM mart.review_selected_import_patch_v4 newer
-            WHERE newer.project_id = selected_patch.project_id
-              AND newer.project_scope_identity = selected_patch.project_scope_identity
-              AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
-              AND newer.article_id = selected_patch.article_id
-          )
         LEFT JOIN app.article_import_route_source_record selected_source
-          ON selected_source.import_route_id = CASE
-            WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-            WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id
-            ELSE selected_base.import_route_id
-          END
+          ON selected_source.import_route_id = CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_base.import_route_id END
           AND selected_source.article_id = dirty.article_id
-          AND selected_source.source_record_key = CASE
-            WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-            WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key
-            ELSE selected_base.source_record_key
-          END
+          AND selected_source.source_record_key = CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_base.source_record_key END
           AND selected_source.quarantined_at IS NULL
         ORDER BY dirty.article_id ASC
       `)
@@ -555,39 +512,11 @@ const getPayloadRowsSql = (
     articleIds.length === 0 ? '' : 'INNER JOIN dirty_article dirty ON dirty.article_id = scope.article_id'
   const orderBy =
     options.orderBy === false ? '' : 'ORDER BY article.article_created_at ASC NULLS LAST, scope.article_id ASC'
-  const includeSelectedPatchOverlay = options.includeSelectedPatchOverlay === true
-  const selectedPatchJoinSql = includeSelectedPatchOverlay
-    ? `
-    LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
-      ON selected_patch.project_id = scope.project_id
-      AND selected_patch.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-      AND selected_patch.article_id = scope.article_id
-      AND selected_patch.patch_watermark = (
-        SELECT MAX(newer.patch_watermark)
-        FROM mart.review_selected_import_patch_v4 newer
-        WHERE newer.project_id = selected_patch.project_id
-          AND newer.project_scope_identity = selected_patch.project_scope_identity
-          AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
-          AND newer.article_id = selected_patch.article_id
-      )`
-    : ''
-  const selectedImportRouteIdSql = includeSelectedPatchOverlay
-    ? `CASE
-        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.import_route_id
-        ELSE selected_base.import_route_id
-      END`
-    : `CASE
+  const selectedImportRouteIdSql = `CASE
         WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
         ELSE selected_base.import_route_id
       END`
-  const selectedSourceRecordKeySql = includeSelectedPatchOverlay
-    ? `CASE
-        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL
-        WHEN selected_patch.patch_watermark IS NOT NULL THEN selected_patch.source_record_key
-        ELSE selected_base.source_record_key
-      END`
-    : `CASE
+  const selectedSourceRecordKeySql = `CASE
         WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
         ELSE selected_base.source_record_key
       END`
@@ -622,7 +551,6 @@ const getPayloadRowsSql = (
       ON selected_base.project_id = scope.project_id
       AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
       AND selected_base.article_id = scope.article_id
-    ${selectedPatchJoinSql}
     LEFT JOIN app.article_import_route_source_record selected_source
       ON selected_source.import_route_id = ${selectedImportRouteIdSql}
       AND selected_source.article_id = scope.article_id
@@ -639,45 +567,7 @@ const getPayloadRows = async (
   input: ProjectReviewServingPayloadInput,
   database: ReviewServingDisplayPayloadProjectorDatabase,
 ) => {
-  return database.queryJson<PayloadProjectionRow>(
-    getPayloadRowsSql(input, {includeSelectedPatchOverlay: (input.claims?.length ?? 0) > 0}),
-  )
-}
-
-const getDisplayPatchRecord = (
-  input: ProjectReviewServingDisplayPatchInput,
-  row: DisplayPatchRow,
-): ReviewServingProjectorRecord => {
-  return {
-    keyColumns: ['project_id', 'display_identity', 'base_generation', 'patch_watermark', 'article_id'],
-    table: 'mart.review_article_display_patch_v4',
-    values: {
-      article_external_id: row.tombstone ? null : row.articleExternalId,
-      article_created_at: row.tombstone ? null : row.articleCreatedAt,
-      article_id: row.articleId,
-      article_title: row.tombstone ? null : row.articleTitle,
-      article_updated_at: row.tombstone ? null : row.articleUpdatedAt,
-      arxiv_id: row.tombstone ? null : row.arxivId,
-      biorxiv_id: row.tombstone ? null : row.biorxivId,
-      activity_sort_at: row.tombstone ? null : row.activitySortAt,
-      base_generation: input.baseGeneration,
-      display_identity: input.displayIdentity,
-      doi: row.tombstone ? null : row.doi,
-      full_text_conversion_status: row.tombstone ? null : row.fullTextConversionStatus,
-      full_text_fetched_at: row.tombstone ? null : row.fullTextFetchedAt,
-      full_text_pdf: row.tombstone ? null : row.fullTextPdf,
-      journal_title: row.tombstone ? null : row.journalTitle,
-      medrxiv_id: row.tombstone ? null : row.medrxivId,
-      patch_updated_at: new Date(),
-      patch_watermark: getPatchWatermark(input.claims),
-      pmid: row.tombstone ? null : row.pmid,
-      project_id: input.projectId,
-      publication_year: row.tombstone ? null : row.publicationYear,
-      sort_key: row.tombstone ? null : row.sortKey,
-      tombstone: row.tombstone,
-      url: row.tombstone ? null : row.url,
-    },
-  }
+  return database.queryJson<PayloadProjectionRow>(getPayloadRowsSql(input, {includeSelectedPatchOverlay: false}))
 }
 
 const getPayloadRecord = (
@@ -924,9 +814,7 @@ export const projectReviewServingDisplayPatches = async (
       acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
       component: 'display',
       projectionManifests: input.claims.length === 0 ? [] : [getReviewServingPayloadPatchManifest(input, 'display')],
-      records: rows.map((row) => {
-        return getDisplayPatchRecord(input, row)
-      }),
+      records: [],
       statements: rows.map((row) => {
         return getApplyDisplayPatchServingStatement(input, row)
       }),
@@ -944,7 +832,7 @@ export const projectReviewServingDisplayPatches = async (
     database,
   )
 
-  return {patchRowCount: rows.length, patchWatermark}
+  return {patchRowCount: 0, patchWatermark}
 }
 
 export const projectReviewServingPayloadRows = async (

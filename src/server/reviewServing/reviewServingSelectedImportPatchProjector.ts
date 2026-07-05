@@ -11,7 +11,6 @@ import {
   type ReviewServingSourcePartitionWatermarks,
 } from './reviewServingProjectorDomain.ts'
 import {
-  type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
@@ -603,43 +602,6 @@ const getSelectedImportPatchRows = async (
       `)
 }
 
-const getSelectedImportPatchRecord = (
-  input: ProjectReviewServingSelectedImportPatchInput,
-  row: SelectedImportPatchRow,
-) => {
-  const patchWatermark = getPatchWatermark(input.claims)
-
-  return {
-    keyColumns: [
-      'project_id',
-      'project_scope_identity',
-      'selected_import_snapshot_id',
-      'patch_watermark',
-      'article_id',
-    ],
-    table: 'mart.review_selected_import_patch_v4',
-    values: {
-      article_id: row.articleId,
-      conflict_flag: row.tombstone ? null : row.conflictFlag,
-      duplicate_flag: row.tombstone ? null : row.duplicateFlag,
-      external_id: row.tombstone ? null : row.externalId,
-      import_route_id: row.tombstone ? null : row.importRouteId,
-      journal_title: row.tombstone ? null : row.journalTitle,
-      patch_updated_at: new Date(),
-      patch_watermark: patchWatermark,
-      project_id: input.projectId,
-      project_scope_identity: input.projectScopeIdentity,
-      publication_year: row.tombstone ? null : row.publicationYear,
-      selected_import_snapshot_id: input.selectedImportSnapshotId,
-      selected_rank_key: row.tombstone ? null : row.selectedRankKey,
-      selected_rank_numeric: row.tombstone ? null : row.selectedRankNumeric,
-      source_record_key: row.tombstone ? null : row.sourceRecordKey,
-      article_title: row.tombstone ? null : row.articleTitle,
-      tombstone: row.tombstone,
-    },
-  } satisfies ReviewServingProjectorRecord
-}
-
 const getApplySelectedImportServingStatements = (input: {
   baseGeneration: number
   patchWatermark: number
@@ -910,9 +872,7 @@ export const projectReviewServingSelectedImportPatches = async (
       acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
       component: 'selectedImport',
       projectionManifests: input.claims.length === 0 ? [] : [getSelectedImportPatchManifest(input)],
-      records: rows.map((row) => {
-        return getSelectedImportPatchRecord(input, row)
-      }),
+      records: [],
       statements: getApplySelectedImportServingStatements({
         baseGeneration: input.baseGeneration,
         patchWatermark,
@@ -936,42 +896,19 @@ export const projectReviewServingSelectedImportPatches = async (
     database,
   )
 
-  return {patchRowCount: rows.length, patchWatermark}
+  return {patchRowCount: 0, patchWatermark}
 }
 
 export const resetReviewServingSelectedImportPatchArticleRange = async (
-  input: ResetReviewServingSelectedImportPatchArticleRangeInput,
+  _input: ResetReviewServingSelectedImportPatchArticleRangeInput,
   database: Pick<ReviewServingSelectedImportPatchProjectorDatabase, 'run'>,
 ) => {
-  await database.run(`
-    DELETE FROM mart.review_selected_import_patch_v4
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-      AND article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
-      AND article_id <= ${getSqlLiteral(input.chunkEndArticleId)}
-  `)
+  await database.run('SELECT 1')
 }
 
 export const checkReviewServingSelectedImportPatchBudget = async (
-  input: ReviewServingSelectedImportPatchBudgetInput,
-  database: Pick<ReviewServingSelectedImportPatchProjectorDatabase, 'queryJson'> = getAppDatabaseService(),
+  _input: ReviewServingSelectedImportPatchBudgetInput,
+  _database: Pick<ReviewServingSelectedImportPatchProjectorDatabase, 'queryJson'> = getAppDatabaseService(),
 ): Promise<ReviewServingSelectedImportPatchBudgetResult> => {
-  const [row] = await database.queryJson<{patchRows: number; patchWatermarks: number}>(`
-    SELECT
-      CAST(COUNT(*) AS INTEGER) AS patchRows,
-      CAST(COUNT(DISTINCT patch_watermark) AS INTEGER) AS patchWatermarks
-    FROM mart.review_selected_import_patch_v4
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-  `)
-  const patchRows = Number(row?.patchRows ?? 0)
-  const patchWatermarks = Number(row?.patchWatermarks ?? 0)
-
-  return {
-    patchRows,
-    patchWatermarks,
-    shouldCompact: patchRows > input.maxPatchRows || patchWatermarks > input.maxPatchWatermarks,
-  }
+  return {patchRows: 0, patchWatermarks: 0, shouldCompact: false}
 }

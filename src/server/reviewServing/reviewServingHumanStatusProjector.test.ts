@@ -143,30 +143,20 @@ const projectInput = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   }
 }
 
-test('human prompt answer deltas write component-narrow status patches', async () => {
+test('human prompt answer deltas update serving directly', async () => {
   const {database, statements} = createHumanStatusDatabase({judgmentRows: [humanStatusRow()]})
 
   const result = await projectReviewServingHumanStatusPatches(projectInput([humanClaim()]), database)
   const selectStatement = statements.find((statement) => {
     return statement.includes('FROM app.review_change_delta delta')
   })
-  const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_human_status_patch_v4')
-  })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14})
   expect(selectStatement).toContain('LEFT JOIN app."judgment_human" judgment_human')
   expect(selectStatement).toContain('LEFT JOIN app."judgment_human_summary" judgment_human_summary')
   expect(selectStatement).toContain("VALUES ('article-1')")
-  expect(insertStatement).toContain('prompt_config_hash')
-  expect(insertStatement).toContain('human_status_key')
-  expect(insertStatement).toContain('human_answered_value')
-  expect(insertStatement).toContain("'answered'")
-  expect(insertStatement).toContain("'yes'")
-  expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, prompt_config_hash, base_generation, patch_watermark, list_mode_key, article_id, prompt_id)',
-  )
+  expect(joined).not.toContain('mart.review_human_status_patch_v4')
   expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
   expect(joined).toContain('human_answered_prompt_count')
   expect(joined).toContain('human_answered_summary_count')
@@ -198,19 +188,16 @@ test('human status review config hash includes model execution identity', async 
   expect(statements.join('\n')).toContain(expectedHash)
 })
 
-test('summary human answers do not require prompt IDs and write summary-key patches', async () => {
+test('summary human answers do not require prompt IDs and update summary-key serving state', async () => {
   const {database, statements} = createHumanStatusDatabase({
     judgmentRows: [humanStatusRow({promptId: null, promptOrSummaryKey: 'summary'})],
   })
 
   const result = await projectReviewServingHumanStatusPatches(projectInput([humanClaim()]), database)
-  const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_human_status_patch_v4')
-  })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
-  expect(insertStatement).toContain("'summary'")
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14})
+  expect(joined).not.toContain('mart.review_human_status_patch_v4')
   expect(joined).toContain("'summary', 'answered', FALSE")
   expect(joined).toContain("'humanStatus'")
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
@@ -231,13 +218,10 @@ test('Covidence summary conflicts count as reviewed while preserving null answer
   })
 
   const result = await projectReviewServingHumanStatusPatches(projectInput([humanClaim()]), database)
-  const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_human_status_patch_v4')
-  })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
-  expect(insertStatement).toContain('NULL')
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14})
+  expect(joined).not.toContain('mart.review_human_status_patch_v4')
   expect(joined).toContain("'summary', 'answered', FALSE")
 })
 
@@ -256,18 +240,12 @@ test('human prompt and summary answer changes use delta payload values as contri
   })
 
   const result = await projectReviewServingHumanStatusPatches(projectInput([humanClaim()]), database)
-  const patchInserts = statements.filter((statement) => {
-    return statement.includes('INSERT INTO mart.review_human_status_patch_v4')
-  })
 
-  expect(result).toEqual({patchRowCount: 2, patchWatermark: 14})
-  expect(patchInserts[0]).toContain("'old-prompt'")
-  expect(patchInserts[0]).not.toContain("'latest'")
-  expect(patchInserts[0]).toContain("'new-summary'")
-  expect(patchInserts[0]).toContain("'summary'")
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14})
+  expect(statements.join('\n')).not.toContain('mart.review_human_status_patch_v4')
 })
 
-test('human answer deletes write idempotent tombstone patches', async () => {
+test('human answer deletes update serving directly and acknowledge idempotently', async () => {
   const {database, statements} = createHumanStatusDatabase({
     judgmentRows: [humanStatusRow({humanAnsweredValue: null, humanStatusKey: null, tombstone: true})],
   })
@@ -281,12 +259,7 @@ test('human answer deletes write idempotent tombstone patches', async () => {
     database,
   )
 
-  const patchInserts = statements.filter((statement) => {
-    return statement.includes('INSERT INTO mart.review_human_status_patch_v4')
-  })
-
-  expect(patchInserts).toHaveLength(2)
-  expect(patchInserts[0]).toContain('TRUE')
+  expect(statements.join('\n')).not.toContain('mart.review_human_status_patch_v4')
 })
 
 test('prompt config claims rebuild only prompt-scoped human status rows', async () => {
@@ -310,7 +283,7 @@ test('prompt config claims rebuild only prompt-scoped human status rows', async 
     return statement.includes('FROM app.review_change_delta delta')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14})
   expect(promptSelect).toContain("VALUES ('prompt-1')")
   expect(promptSelect).toContain('INNER JOIN mart.project_scope_article scope')
   expect(promptSelect).toContain('LEFT JOIN app."judgment_human" judgment_human')
@@ -323,33 +296,18 @@ test('prompt config claims rebuild only prompt-scoped human status rows', async 
   expect(deltaSelect).toBeUndefined()
 })
 
-test('human rebuild chunks replace scoped patch rows before bounded inserts', async () => {
+test('human rebuild chunks update serving directly without scoped patch rows', async () => {
   const {database, statements} = createHumanStatusDatabase({projectRows: [humanStatusRow({articleId: 'article-3'})]})
 
   const result = await projectReviewServingHumanStatusPatches(
     {...projectInput([]), chunkEndArticleId: 'article-3', chunkStartArticleId: 'article-3'},
     database,
   )
-  const deleteStatement = statements.find((statement) => {
-    return statement.includes('DELETE FROM mart.review_human_status_patch_v4')
-  })
-  const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_human_status_patch_v4')
-  })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 0})
-  expect(deleteStatement).toContain('patch_watermark = 0')
-  expect(deleteStatement).toContain("article_id >= 'article-3'")
-  expect(deleteStatement).toContain("article_id <= 'article-3'")
-  expect(insertStatement).not.toContain('ON CONFLICT')
-  expect(joined.indexOf('DELETE FROM mart.review_human_status_patch_v4')).toBeLessThan(
-    joined.indexOf('INSERT INTO mart.review_human_status_patch_v4'),
-  )
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
+  expect(joined).not.toContain('mart.review_human_status_patch_v4')
   expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
-  expect(joined.indexOf('DELETE FROM mart.review_human_status_patch_v4')).toBeLessThan(
-    joined.indexOf('UPDATE mart.review_article_serving_v4 serving'),
-  )
 })
 
 test('human direct full rebuild chunks update serving without patch rows', async () => {
@@ -368,7 +326,7 @@ test('human direct full rebuild chunks update serving without patch rows', async
   expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
 })
 
-test('human rebuild chunks use one range delete and bounded insert batches', async () => {
+test('human rebuild chunks avoid patch delete and insert batches', async () => {
   const {database, statements} = createHumanStatusDatabase({
     projectRows: Array.from({length: 251}, (_, index) => {
       return humanStatusRow({articleId: `article-${String(index).padStart(3, '0')}`})
@@ -379,17 +337,6 @@ test('human rebuild chunks use one range delete and bounded insert batches', asy
     {...projectInput([]), chunkEndArticleId: 'article-250', chunkStartArticleId: 'article-000'},
     database,
   )
-  const deleteStatements = statements.filter((statement) => {
-    return statement.includes('DELETE FROM mart.review_human_status_patch_v4')
-  })
-  const insertStatements = statements.filter((statement) => {
-    return statement.includes('INSERT INTO mart.review_human_status_patch_v4')
-  })
-
-  expect(result).toEqual({patchRowCount: 251, patchWatermark: 0})
-  expect(deleteStatements).toHaveLength(1)
-  expect(deleteStatements[0]).toContain("article_id >= 'article-000'")
-  expect(deleteStatements[0]).toContain("article_id <= 'article-250'")
-  expect(insertStatements).toHaveLength(2)
-  expect(insertStatements.join('\n')).not.toContain('ON CONFLICT')
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
+  expect(statements.join('\n')).not.toContain('mart.review_human_status_patch_v4')
 })

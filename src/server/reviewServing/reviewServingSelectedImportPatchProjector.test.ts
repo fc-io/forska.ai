@@ -102,12 +102,9 @@ test('selected-import routine updates write component-narrow patches for only cl
   const selectStatement = statements.find((statement) => {
     return statement.includes('WITH dirty_article(article_id)')
   })
-  const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_selected_import_patch_v4')
-  })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 9})
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 9})
   expect(selectStatement).toContain("VALUES ('article-1')")
   expect(selectStatement).toContain('SELECT DISTINCT')
   expect(selectStatement).toContain('FROM dirty_article dirty')
@@ -122,14 +119,7 @@ test('selected-import routine updates write component-narrow patches for only cl
   expect(selectStatement).toContain('LEFT JOIN app.article_import_route_source_record selected_source')
   expect(selectStatement).toContain("json_extract_string(selected_source.raw_payload, '$.covidence.citation.url')")
   expect(selectStatement).toContain("WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)")
-  expect(insertStatement).toContain('patch_watermark')
-  expect(insertStatement).toContain('source_record_key')
-  expect(insertStatement).toContain('article_title')
-  expect(insertStatement).toContain('external_id')
-  expect(insertStatement).toContain('9')
-  expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, patch_watermark, article_id)',
-  )
+  expect(joined).not.toContain('mart.review_selected_import_patch_v4')
   expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_selected_import_serving_update_v4 AS')
   expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
@@ -214,9 +204,6 @@ test('selected-import projector keeps explicit manifest watermarks separate from
     },
     database,
   )
-  const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_selected_import_patch_v4')
-  })
   const manifestStatement = statements.find((statement) => {
     return (
       statement.includes('INSERT INTO app.review_projection_identity_manifest')
@@ -224,11 +211,8 @@ test('selected-import projector keeps explicit manifest watermarks separate from
     )
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 7})
-  expect(insertStatement).toContain('patch_watermark')
-  expect(insertStatement).toContain(`
-      7,
-      'project-1'`)
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 7})
+  expect(statements.join('\n')).not.toContain('mart.review_selected_import_patch_v4')
   expect(manifestStatement).toContain('\'{"importRunArticle":7,"reviewChange":9}\'::JSON')
 })
 
@@ -257,18 +241,7 @@ test('selected-import tombstones replay idempotently with the same patch waterma
   await projectReviewServingSelectedImportPatches(projectPatchInput([selectedImportClaim()]), database)
   await projectReviewServingSelectedImportPatches(projectPatchInput([selectedImportClaim()]), database)
 
-  const patchInserts = statements.filter((statement) => {
-    return statement.includes('INSERT INTO mart.review_selected_import_patch_v4')
-  })
-
-  expect(patchInserts).toHaveLength(2)
-  expect(patchInserts[0]).toContain('TRUE')
-  expect(patchInserts[0]).toContain(
-    'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, patch_watermark, article_id)',
-  )
-  expect(patchInserts[1]).toContain(
-    'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, patch_watermark, article_id)',
-  )
+  expect(statements.join('\n')).not.toContain('mart.review_selected_import_patch_v4')
 })
 
 test('selected-import tombstones clear selected columns without deleting curated scoped articles', async () => {
@@ -415,7 +388,7 @@ test('selected-import serving insert can seed rows from snapshot templates witho
   expect(servingInsert).toContain('llmStatus:identity-1')
 })
 
-test('selected-import patch budget requests compaction when patch read cost exceeds thresholds', async () => {
+test('selected-import patch budget is a no-op without legacy runtime patch reads', async () => {
   const {database, statements} = createSelectedImportPatchDatabase({budgetRow: {patchRows: 51, patchWatermarks: 3}})
 
   const result = await checkReviewServingSelectedImportPatchBudget(
@@ -429,12 +402,11 @@ test('selected-import patch budget requests compaction when patch read cost exce
     database,
   )
 
-  expect(result).toEqual({patchRows: 51, patchWatermarks: 3, shouldCompact: true})
-  expect(statements.join('\n')).toContain('COUNT(DISTINCT patch_watermark)')
-  expect(statements.join('\n')).toContain('FROM mart.review_selected_import_patch_v4')
+  expect(result).toEqual({patchRows: 0, patchWatermarks: 0, shouldCompact: false})
+  expect(statements.join('\n')).not.toContain('mart.review_selected_import_patch_v4')
 })
 
-test('selected-import patch projector resets only the requested article range', async () => {
+test('selected-import patch projector reset is a no-op without legacy patch rows', async () => {
   const {database, statements} = createSelectedImportPatchDatabase()
 
   await resetReviewServingSelectedImportPatchArticleRange(
@@ -449,12 +421,7 @@ test('selected-import patch projector resets only the requested article range', 
   )
   const joined = statements.join('\n')
 
-  expect(joined).toContain('DELETE FROM mart.review_selected_import_patch_v4')
-  expect(joined).toContain("project_id = 'project-1'")
-  expect(joined).toContain("project_scope_identity = 'projectScope:identity-1'")
-  expect(joined).toContain("selected_import_snapshot_id = 'selected-import-snapshot-1'")
-  expect(joined).toContain("article_id >= 'article-050'")
-  expect(joined).toContain("article_id <= 'article-099'")
+  expect(joined).not.toContain('mart.review_selected_import_patch_v4')
 })
 
 test('project-scoped selected-import rebuilds all project scope articles', async () => {

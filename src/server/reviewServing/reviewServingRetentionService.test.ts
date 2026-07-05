@@ -87,7 +87,7 @@ const candidateManifest = (input?: Partial<ReviewServingSnapshotManifest>): Revi
   }
 }
 
-test('candidate patch budget assessment uses component table and bounded thresholds', async () => {
+test('candidate patch budget assessment skips legacy runtime patch tables', async () => {
   const candidate = candidateManifest({
     componentState: {
       optional: [],
@@ -112,23 +112,11 @@ test('candidate patch budget assessment uses component table and bounded thresho
     database,
   )
 
-  expect(result).toEqual([
-    {
-      baseGeneration: 2,
-      component: 'display',
-      patchRows: 7,
-      patchWatermark: 12,
-      patchWatermarks: 3,
-      projectionIdentity: 'display:identity-1',
-      shouldCompact: true,
-    },
-  ])
-  expect(statements.join('\n')).toContain('FROM mart.review_article_display_patch_v4')
-  expect(statements.join('\n')).toContain("display_identity = 'display:identity-1'")
-  expect(statements.join('\n')).toContain('base_generation = 2')
+  expect(result).toEqual([])
+  expect(statements.join('\n')).not.toContain('mart.review_article_display_patch_v4')
 })
 
-test('status patch budget assessment uses component scope instead of prompt config identity', async () => {
+test('status patch budget assessment skips legacy runtime patch tables', async () => {
   const candidate = candidateManifest({
     componentState: {
       optional: [],
@@ -155,13 +143,12 @@ test('status patch budget assessment uses component scope instead of prompt conf
 
   const joined = statements.join('\n')
 
-  expect(joined).toContain('FROM mart.review_llm_status_patch_v4')
-  expect(joined).toContain('base_generation = 2')
+  expect(joined).not.toContain('mart.review_llm_status_patch_v4')
   expect(joined).not.toContain('prompt_config_hash')
   expect(joined).not.toContain('llmStatus:identity-1')
 })
 
-test('patch compaction writes a new major base generation before activation', async () => {
+test('patch compaction is a no-op without legacy runtime patch tables', async () => {
   const {database, statements} = createRetentionDatabase({
     budgetRows: {'mart.review_selected_import_patch_v4': {patchRows: 101, patchWatermarks: 2}},
   })
@@ -171,26 +158,9 @@ test('patch compaction writes a new major base generation before activation', as
     database,
   )
   const joined = statements.join('\n')
-  const servingUpdateStatement = statements.find((statement) => {
-    return statement.includes('UPDATE mart.review_article_serving_v4 serving')
-  })
-
-  expect(result.compactedComponents).toHaveLength(1)
-  expect(result.compactedComponents[0]?.component).toBe('selectedImport')
-  expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
-  expect(joined).toContain('FROM mart.review_selected_import_patch_v4 patch')
-  expect(joined).toContain('DELETE FROM mart.review_selected_import_patch_v4')
-  expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
-  expect(joined).toContain('FROM app.review_serving_snapshot_manifest snapshot')
-  expect(joined).toContain("snapshot.selected_import_snapshot_id = 'selected-import-snapshot-1'")
-  expect(servingUpdateStatement).not.toContain("AND selected_import_snapshot_id = 'selected-import-snapshot-1'")
-  expect(joined).toContain('base_generation = 5')
-  expect(joined).toContain('patch_watermark = 0')
-  expect(joined).toContain('UPDATE app.review_serving_snapshot_manifest')
-  expect(joined).toContain('"baseGeneration":"5"')
-  expect(joined).toContain('composed_identity_json')
-  expect(joined).toContain('"componentStates"')
-  expect(joined).toContain('reviewServingCompact:project-1:snapshot-candidate:selectedImport:selectedImport:identity-1')
+  expect(result.compactedComponents).toEqual([])
+  expect(joined).not.toContain('mart.review_selected_import_patch_v4')
+  expect(joined).not.toContain('UPDATE mart.review_article_serving_v4 serving')
 })
 
 test('fresh direct candidate snapshots skip incremental patch compaction scans', async () => {
@@ -244,7 +214,7 @@ test('retention cleanup advances a bounded cursor and protects active, last-know
   expect(joined).toContain('"tableIndex":1')
 })
 
-test('patch cleanup uses component-state protection for pinned snapshot base generations', async () => {
+test('retention cleanup skips legacy patch cleanup tables', async () => {
   const {database, statements} = createRetentionDatabase({
     retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 13}, patchWatermark: 0, snapshotId: null},
   })
@@ -255,17 +225,11 @@ test('patch cleanup uses component-state protection for pinned snapshot base gen
   )
   const joined = statements.join('\n')
 
-  expect(joined).toContain('DELETE FROM mart.review_article_display_patch_v4')
-  expect(joined).toContain('app.review_projection_identity_manifest manifest')
-  expect(joined).toContain('UNION ALL')
-  expect(joined).toContain('INNER JOIN app.review_serving_snapshot_manifest pinned_manifest')
-  expect(joined).toContain('component_state_json')
-  expect(joined).not.toContain('manifest.projection_identity = candidate.display_identity')
-  expect(joined).toContain('CAST(candidate.base_generation AS VARCHAR)')
+  expect(joined).not.toContain('mart.review_article_display_patch_v4')
   expect(joined).toContain('LIMIT 5')
 })
 
-test('status patch cleanup orders without a nullable identity column', async () => {
+test('status patch cleanup skips legacy patch tables', async () => {
   const {database, statements} = createRetentionDatabase({
     retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 14}, patchWatermark: 0, snapshotId: null},
   })
@@ -276,8 +240,7 @@ test('status patch cleanup orders without a nullable identity column', async () 
   )
   const joined = statements.join('\n')
 
-  expect(joined).toContain('DELETE FROM mart.review_llm_status_patch_v4')
-  expect(joined).toContain('ORDER BY candidate.base_generation, candidate.patch_watermark')
+  expect(joined).not.toContain('mart.review_llm_status_patch_v4')
   expect(joined).not.toContain('candidate.null')
 })
 

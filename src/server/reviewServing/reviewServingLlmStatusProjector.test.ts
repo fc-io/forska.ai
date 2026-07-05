@@ -123,21 +123,14 @@ const projectInput = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   }
 }
 
-test('LLM judgment deltas write component-narrow status patches from persisted benchmark config', async () => {
+test('LLM judgment deltas update serving directly from persisted benchmark config', async () => {
   const {database, statements} = createLlmStatusDatabase({judgmentRows: [llmStatusRow()]})
 
   const result = await projectReviewServingLlmStatusPatches(projectInput([llmClaim()]), database)
   const selectStatement = statements.find((statement) => {
     return statement.includes('FROM app.review_change_delta delta')
   })
-  const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_llm_status_patch_v4')
-  })
-  const applyStatement = statements.find((statement) => {
-    return statement.includes('UPDATE mart.review_article_serving_v4 serving')
-  })
-
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14})
   expect(selectStatement).toContain('delta.model_id AS modelId')
   expect(selectStatement).toContain('model.provider_connection_id AS modelProviderConnectionId')
   expect(selectStatement).toContain('provider_connection.base_url AS modelProviderBaseUrl')
@@ -156,19 +149,11 @@ test('LLM judgment deltas write component-narrow status patches from persisted b
   expect(selectStatement).toContain('FROM app."judgment" newer_judgment')
   expect(selectStatement).not.toContain('judgment.id = delta.judgment_id')
   expect(selectStatement).toContain("VALUES ('article-1')")
-  expect(insertStatement).toContain('review_config_hash')
-  expect(insertStatement).toContain('prompt_config_hash')
-  expect(insertStatement).toContain('llm_status_key')
-  expect(insertStatement).toContain("'answered'")
-  expect(insertStatement).toContain("'include'")
-  expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, review_config_hash, prompt_config_hash, base_generation, patch_watermark, list_mode_key, article_id, prompt_id)',
-  )
-  expect(applyStatement).toContain('FROM mart.review_llm_status_patch_v4 llm')
+  expect(statements.join('\n')).not.toContain('mart.review_llm_status_patch_v4')
   expect(statements.join('\n')).toContain('UPDATE mart.review_article_serving_v4 serving')
 })
 
-test('LLM deletes write idempotent tombstone patches without rebuilding unrelated components', async () => {
+test('LLM deletes update serving directly without rebuilding unrelated components', async () => {
   const {database, statements} = createLlmStatusDatabase({
     judgmentRows: [
       llmStatusRow({answeredOriginal: null, answeredOriginalAsArray: null, isAnswered: null, tombstone: true}),
@@ -179,12 +164,7 @@ test('LLM deletes write idempotent tombstone patches without rebuilding unrelate
   await projectReviewServingLlmStatusPatches(projectInput([llmClaim({dirtyKind: 'judgment.llm.deleted'})]), database)
 
   const joined = statements.join('\n')
-  const patchInserts = statements.filter((statement) => {
-    return statement.includes('INSERT INTO mart.review_llm_status_patch_v4')
-  })
-
-  expect(patchInserts).toHaveLength(2)
-  expect(patchInserts[0]).toContain('TRUE')
+  expect(joined).not.toContain('mart.review_llm_status_patch_v4')
   expect(joined).toContain("'llmStatus'")
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
@@ -213,7 +193,7 @@ test('prompt config claims rebuild only prompt-scoped LLM status rows', async ()
     return statement.includes('FROM app.review_change_delta delta')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14})
   expect(promptSelect).toContain("VALUES ('prompt-1')")
   expect(promptSelect).toContain('INNER JOIN app.project project')
   expect(promptSelect).toContain("COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode")
@@ -246,9 +226,9 @@ test('project review config claims rebuild project-scoped LLM status rows', asyn
     return statement.includes('FROM app.project project') && !statement.includes('FROM prompt_id_filter dirty_prompt')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14})
   expect(projectSelect).toContain('WITH prompt_id_filter(prompt_id) AS')
-  expect(projectSelect).toContain('FROM mart.review_llm_status_patch_v4 llm')
+  expect(projectSelect).not.toContain('mart.review_llm_status_patch_v4')
   expect(projectSelect).toContain('LEFT JOIN app.project_prompt project_prompt')
   expect(projectSelect).toContain('scoped_article AS')
   expect(projectSelect).toContain('INNER JOIN scoped_article scoped_judgment')
@@ -262,7 +242,6 @@ test('project review config claims rebuild project-scoped LLM status rows', asyn
   expect(projectSelect).toContain(
     'COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone',
   )
-  expect(projectSelect).toContain('WHERE llm.project_id =')
 })
 
 test('LLM full rebuild chunks fan out only over current enabled prompts', async () => {
@@ -279,7 +258,7 @@ test('LLM full rebuild chunks fan out only over current enabled prompts', async 
     return statement.includes('UPDATE mart.review_article_serving_v4 serving')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 0})
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
   expect(projectSelect).toContain('FROM app.project_prompt project_prompt')
   expect(projectSelect).toContain('INNER JOIN app.prompt prompt')
   expect(projectSelect).toContain('project_prompt.enabled')
@@ -329,41 +308,24 @@ test('LLM full rebuild chunks reset serving status when the project has no enabl
   expect(resetStatement).toContain("AND serving.article_id >= 'article-1'")
   expect(resetStatement).toContain("AND serving.article_id <= 'article-9'")
   expect(resetStatement).toContain("snapshot.snapshot_status IN ('candidate', 'active')")
-  expect(joined.indexOf('DELETE FROM mart.review_llm_status_patch_v4')).toBeLessThan(
-    joined.indexOf('SET\n      enabled_prompt_count = 0'),
-  )
+  expect(joined).not.toContain('mart.review_llm_status_patch_v4')
 })
 
-test('LLM rebuild chunks replace scoped patch rows before bounded inserts', async () => {
+test('LLM rebuild chunks update serving directly without scoped patch rows', async () => {
   const {database, statements} = createLlmStatusDatabase({projectRows: [llmStatusRow({articleId: 'article-3'})]})
 
   const result = await projectReviewServingLlmStatusPatches(
     {...projectInput([]), chunkEndArticleId: 'article-3', chunkStartArticleId: 'article-3'},
     database,
   )
-  const deleteStatement = statements.find((statement) => {
-    return statement.includes('DELETE FROM mart.review_llm_status_patch_v4')
-  })
-  const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_llm_status_patch_v4')
-  })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 0})
-  expect(deleteStatement).toContain('patch_watermark = 0')
-  expect(deleteStatement).toContain("article_id >= 'article-3'")
-  expect(deleteStatement).toContain("article_id <= 'article-3'")
-  expect(insertStatement).not.toContain('ON CONFLICT')
-  expect(joined.indexOf('DELETE FROM mart.review_llm_status_patch_v4')).toBeLessThan(
-    joined.indexOf('INSERT INTO mart.review_llm_status_patch_v4'),
-  )
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
+  expect(joined).not.toContain('mart.review_llm_status_patch_v4')
   expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
-  expect(joined.indexOf('DELETE FROM mart.review_llm_status_patch_v4')).toBeLessThan(
-    joined.indexOf('UPDATE mart.review_article_serving_v4 serving'),
-  )
 })
 
-test('LLM rebuild chunks use one range delete and bounded insert batches', async () => {
+test('LLM rebuild chunks avoid patch delete and insert batches', async () => {
   const {database, statements} = createLlmStatusDatabase({
     projectRows: Array.from({length: 251}, (_, index) => {
       return llmStatusRow({articleId: `article-${String(index).padStart(3, '0')}`})
@@ -374,19 +336,8 @@ test('LLM rebuild chunks use one range delete and bounded insert batches', async
     {...projectInput([]), chunkEndArticleId: 'article-250', chunkStartArticleId: 'article-000'},
     database,
   )
-  const deleteStatements = statements.filter((statement) => {
-    return statement.includes('DELETE FROM mart.review_llm_status_patch_v4')
-  })
-  const insertStatements = statements.filter((statement) => {
-    return statement.includes('INSERT INTO mart.review_llm_status_patch_v4')
-  })
-
-  expect(result).toEqual({patchRowCount: 251, patchWatermark: 0})
-  expect(deleteStatements).toHaveLength(1)
-  expect(deleteStatements[0]).toContain("article_id >= 'article-000'")
-  expect(deleteStatements[0]).toContain("article_id <= 'article-250'")
-  expect(insertStatements).toHaveLength(2)
-  expect(insertStatements.join('\n')).not.toContain('ON CONFLICT')
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
+  expect(statements.join('\n')).not.toContain('mart.review_llm_status_patch_v4')
 })
 
 test('article judgment-input claims rebuild article-scoped LLM status rows', async () => {
@@ -400,7 +351,7 @@ test('article judgment-input claims rebuild article-scoped LLM status rows', asy
     return statement.includes('FROM article_id_filter dirty')
   })
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14})
   expect(articleSelect).toContain("VALUES ('article-1')")
   expect(articleSelect).toContain('FROM app."judgment"')
   expect(articleSelect).toContain('judgment.judgment_rank = 1')
@@ -438,7 +389,7 @@ test('newly scoped articles emit unanswered status rows for enabled prompts', as
   })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 2, patchWatermark: 14})
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14})
   expect(articleSelect).toContain('INNER JOIN app.project_prompt project_prompt')
   expect(articleSelect).toContain('FROM app."judgment"')
   expect(articleSelect).toContain('judgment.judgment_rank = 1')

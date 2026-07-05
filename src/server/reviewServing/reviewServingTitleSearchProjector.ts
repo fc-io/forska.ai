@@ -141,19 +141,13 @@ const getArticleRangePredicate = (
 
 const getSelectedImportTitleSql = (
   input: SelectedImportTitleSqlInput,
-  options: {includeSelectedPatchOverlay?: boolean} = {},
+  _options: {includeSelectedPatchOverlay?: boolean} = {},
 ) => {
   if (input.selectedImportSnapshotId === null || input.selectedImportSnapshotId === undefined) {
     return 'article.article_title'
   }
 
-  return options.includeSelectedPatchOverlay === true
-    ? `CASE
-        WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN article.article_title
-        WHEN selected_patch.patch_watermark IS NOT NULL THEN COALESCE(selected_patch.article_title, article.article_title)
-        ELSE COALESCE(selected_base.article_title, article.article_title)
-      END`
-    : `CASE
+  return `CASE
         WHEN COALESCE(selected_base.tombstone, FALSE) THEN article.article_title
         ELSE COALESCE(selected_base.article_title, article.article_title)
       END`
@@ -161,7 +155,7 @@ const getSelectedImportTitleSql = (
 
 const getSelectedImportTitleJoinSql = (
   input: SelectedImportTitleSqlInput,
-  options: {includeSelectedPatchOverlay?: boolean} = {},
+  _options: {includeSelectedPatchOverlay?: boolean} = {},
 ) => {
   if (input.selectedImportSnapshotId === null || input.selectedImportSnapshotId === undefined) {
     return ''
@@ -174,22 +168,7 @@ const getSelectedImportTitleJoinSql = (
       AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
       AND selected_base.article_id = scope.article_id`
 
-  return options.includeSelectedPatchOverlay !== true
-    ? selectedBaseJoinSql
-    : `${selectedBaseJoinSql}
-    LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
-      ON selected_patch.project_id = ${getSqlLiteral(input.projectId)}
-      AND selected_patch.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-      AND selected_patch.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-      AND selected_patch.article_id = scope.article_id
-      AND selected_patch.patch_watermark = (
-        SELECT MAX(newer.patch_watermark)
-        FROM mart.review_selected_import_patch_v4 newer
-        WHERE newer.project_id = selected_patch.project_id
-          AND newer.project_scope_identity = selected_patch.project_scope_identity
-          AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
-          AND newer.article_id = selected_patch.article_id
-      )`
+  return selectedBaseJoinSql
 }
 
 const getNormalizedTitleToken = (value: string) => {
@@ -224,7 +203,7 @@ const getTitleSearchRows = async (
   const dirtyJoinSql =
     articleIds.length === 0 ? '' : 'INNER JOIN dirty_article dirty ON dirty.article_id = scope.article_id'
   const withSql = dirtyArticleCte.length === 0 ? '' : `WITH ${dirtyArticleCte}`
-  const includeSelectedPatchOverlay = (input.claims?.length ?? 0) > 0
+  const includeSelectedPatchOverlay = false
 
   return database.queryJson<TitleSearchSourceRow>(`
     ${withSql}
