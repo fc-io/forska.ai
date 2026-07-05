@@ -5634,16 +5634,12 @@ const failClaimedReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   const failedResults = await input.claimedChunks.reduce<Promise<ReviewServingProjectorWorkerChunkResult[]>>(
     async (previous, claimed) => {
       const results = await previous
-      const failedChunk = await measureReviewServingProjectorWorkerPhase(
-        claimed.timings,
-        'failUpdateMs',
-        async () => {
-          return claimed.service.failChunk(
-            {chunkId: claimed.chunk.chunkId, error: getErrorText(input.error), leaseOwner: input.workerId},
-            input.database,
-          )
-        },
-      )
+      const failedChunk = await measureReviewServingProjectorWorkerPhase(claimed.timings, 'failUpdateMs', async () => {
+        return claimed.service.failChunk(
+          {chunkId: claimed.chunk.chunkId, error: getErrorText(input.error), leaseOwner: input.workerId},
+          input.database,
+        )
+      })
 
       await measureReviewServingProjectorWorkerPhase(claimed.timings, 'finalizeFailedRequestMs', async () => {
         await finalizeFailedReviewServingRebuildRequest(failedChunk, input.database)
