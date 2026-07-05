@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto'
 import {readFileSync} from 'node:fs'
 import {join} from 'node:path'
 
@@ -60,6 +61,24 @@ const chunkManifest = {
   status: 'running',
   updatedAt: '2026-06-16T10:00:00.000Z',
 } satisfies ReviewServingRebuildChunkManifest
+
+const getRequestlessSummaryRangeRebuildRequestId = (chunk: ReviewServingRebuildChunkManifest) => {
+  const digest = createHash('sha256')
+    .update(
+      [
+        chunk.projectId ?? '',
+        chunk.projectionComponent,
+        chunk.projectionIdentity,
+        chunk.outputBaseGeneration,
+        chunk.inputWatermark,
+        chunk.snapshotId ?? '',
+      ].join('\0'),
+    )
+    .digest('hex')
+    .slice(0, 24)
+
+  return `requestless-summary:${digest}`
+}
 
 const createWorkerHarness = (input?: {
   chunkComplete?: boolean
@@ -220,8 +239,8 @@ test('worker can drain multiple rebuild chunks in one opt-in batch', async () =>
     ...chunkInput,
     chunkEndKey: 'article-050',
     chunkStartKey: 'article-001',
-    projectionComponent: 'humanStatus' as const,
-    projectionIdentity: 'humanStatus:project-1',
+    projectionComponent: 'projectScope' as const,
+    projectionIdentity: 'projectScope:project-1',
   }
   const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
   const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-batch-1'}
@@ -1208,14 +1227,176 @@ test('worker writes compatible judgment input content rebuild chunks through one
   expect(joined).toContain('judgmentInputContentBatchWriter')
 })
 
+test('worker writes compatible status and posting rebuild chunks through component batch writers', async () => {
+  const cases = [
+    {
+      component: 'llmStatus',
+      identity: 'llmStatus:project-1',
+      validationTable: 'FROM mart.review_article_serving_v4 serving',
+      writerName: 'llmStatusBatchWriter',
+    },
+    {
+      component: 'humanStatus',
+      identity: 'humanStatus:project-1',
+      validationTable: 'FROM mart.review_article_serving_v4 serving',
+      writerName: 'humanStatusBatchWriter',
+    },
+    {
+      component: 'posting',
+      identity: 'posting:project-1',
+      validationTable: 'FROM mart.review_article_filter_posting_serving_v4 serving',
+      writerName: 'postingBatchWriter',
+    },
+  ] as const
+
+  for (const batchCase of cases) {
+    const harness = createWorkerHarness({wakeStatus: 'completed'})
+    const statements: string[] = []
+    const firstChunkInput = {
+      ...chunkInput,
+      chunkEndKey: 'article-050',
+      chunkStartKey: 'article-001',
+      projectionComponent: batchCase.component,
+      projectionIdentity: batchCase.identity,
+    }
+    const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
+    const firstChunk = {
+      ...chunkManifest,
+      ...firstChunkInput,
+      chunkId: `chunk-${batchCase.component}-batch-1`,
+      parentChunkId: `chunk-${batchCase.component}-parent`,
+      splitDepth: 1,
+    }
+    const secondChunk = {
+      ...chunkManifest,
+      ...secondChunkInput,
+      chunkId: `chunk-${batchCase.component}-batch-2`,
+      parentChunkId: `chunk-${batchCase.component}-parent`,
+      splitDepth: 1,
+    }
+    const chunkInputs = [firstChunkInput, secondChunkInput]
+    const chunksByStartKey = new Map<string, ReviewServingRebuildChunkManifest>([
+      [firstChunkInput.chunkStartKey, firstChunk],
+      [secondChunkInput.chunkStartKey, secondChunk],
+    ])
+    const chunksById = new Map<string, ReviewServingRebuildChunkManifest>([
+      [firstChunk.chunkId, firstChunk],
+      [secondChunk.chunkId, secondChunk],
+    ])
+    const componentState = {
+      optional: [],
+      required: [
+        {baseGeneration: '2', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+        {baseGeneration: '2', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+        {baseGeneration: '2', component: batchCase.component, projectionIdentity: batchCase.identity},
+      ],
+    }
+    let nextIndex = 0
+
+    harness.database.queryJson = async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+        const chunkId = [...chunksById.keys()].find((id) => {
+          return statement.includes(id)
+        })
+
+        return [chunksById.get(chunkId ?? firstChunk.chunkId) ?? firstChunk] as T[]
+      }
+
+      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+        return [
+          {
+            baseGeneration: firstChunk.outputBaseGeneration,
+            definitionVersion: `${batchCase.component}:v1`,
+            inputDigest: firstChunk.inputDigest,
+            inputWatermark: firstChunk.inputWatermark,
+            inputWatermarksJson: {reviewChange: firstChunk.inputWatermark},
+            invalidationReason: firstChunk.inputDigest,
+            manifestId: `manifest-${batchCase.component}`,
+            patchRangeEnd: firstChunk.inputWatermark,
+            patchRangeStart: firstChunk.inputWatermark,
+            patchWatermark: firstChunk.inputWatermark,
+            projectId: firstChunk.projectId,
+            projectionComponent: firstChunk.projectionComponent,
+            projectionIdentity: firstChunk.projectionIdentity,
+            promptConfigHash: null,
+            reviewConfigHash: 'review-config-1',
+            status: 'candidate',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return [
+          {
+            componentStateJson: componentState,
+            reviewConfigHash: 'review-config-1',
+            selectedImportSnapshotId: 'selected-import-snapshot-1',
+            snapshotId: `snapshot-${batchCase.component}-batch-1`,
+          },
+        ] as T[]
+      }
+
+      if (statement.includes(batchCase.validationTable) && statement.includes('AS actualCount')) {
+        return [{actualChecksum: `checksum-${batchCase.component}-batch`, actualCount: 2}] as T[]
+      }
+
+      return [] as T[]
+    }
+    harness.database.run = async (statement: string) => {
+      statements.push(statement)
+    }
+    harness.dependencies.rebuildChunkService = {
+      ...harness.dependencies.rebuildChunkService,
+      claimChunk: async (claimInput) => {
+        harness.claimInputs.push(claimInput)
+
+        return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+      },
+      getNextChunk: async (getNextInput) => {
+        harness.getNextChunkInputs.push(getNextInput)
+
+        return chunkInputs[nextIndex++] ?? null
+      },
+      heartbeatChunk: async (heartbeatInput) => {
+        harness.heartbeatInputs.push(heartbeatInput)
+
+        return chunksById.get(heartbeatInput.chunkId) ?? null
+      },
+      runClaimedChunk: async ({chunk}) => {
+        harness.runChunkInputs.push(chunk)
+
+        return {status: 'completed' as const}
+      },
+    } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+    const result = await runReviewServingProjectorWorkerOnce(
+      {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+      harness.dependencies,
+    )
+    const joined = statements.join('\n')
+
+    expect(result.chunk).toMatchObject({chunkId: secondChunk.chunkId, status: 'completed'})
+    expect(result.chunkBatchCount).toBe(2)
+    expect(harness.claimInputs).toHaveLength(2)
+    expect(harness.runChunkInputs).toEqual([])
+    expect(joined).toContain("article_id >= 'article-001'")
+    expect(joined).toContain("article_id <= 'article-050'")
+    expect(joined).toContain("article_id >= 'article-051'")
+    expect(joined).toContain("article_id <= 'article-099'")
+    expect(joined).toContain(batchCase.writerName)
+  }
+})
+
 test('worker keeps opt-in rebuild chunk batches below the RSS cap', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const firstChunkInput = {
     ...chunkInput,
     chunkEndKey: 'article-050',
     chunkStartKey: 'article-001',
-    projectionComponent: 'humanStatus' as const,
-    projectionIdentity: 'humanStatus:project-1',
+    projectionComponent: 'projectScope' as const,
+    projectionIdentity: 'projectScope:project-1',
   }
   const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
   const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-batch-1'}
@@ -1260,8 +1441,8 @@ test('worker limits opt-in rebuild chunk batches to one chunk when RSS cap is re
     ...chunkInput,
     chunkEndKey: 'article-050',
     chunkStartKey: 'article-001',
-    projectionComponent: 'humanStatus' as const,
-    projectionIdentity: 'humanStatus:project-1',
+    projectionComponent: 'projectScope' as const,
+    projectionIdentity: 'projectScope:project-1',
   }
   const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
   const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-batch-1'}
@@ -1307,8 +1488,8 @@ test('worker returns a failed chunk from a rebuild chunk batch', async () => {
     ...chunkInput,
     chunkEndKey: 'article-050',
     chunkStartKey: 'article-001',
-    projectionComponent: 'humanStatus' as const,
-    projectionIdentity: 'humanStatus:project-1',
+    projectionComponent: 'projectScope' as const,
+    projectionIdentity: 'projectScope:project-1',
   }
   const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
   const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-batch-1'}
@@ -3534,7 +3715,7 @@ test('worker finalizes active-snapshot rebuild requests without promoting active
   expect(joined).not.toContain('candidate snapshot manifest is missing')
 })
 
-test('worker terminally rejects requestless summary chunks before projection', async () => {
+test('worker adopts requestless summary chunks into request finalization before projection', async () => {
   const harness = createWorkerHarness()
   const statements: string[] = []
   const originalSetInterval = globalThis.setInterval
@@ -3557,6 +3738,9 @@ test('worker terminally rejects requestless summary chunks before projection', a
     chunkId: 'chunk-summary-requestless',
     requestId: null,
   } satisfies ReviewServingRebuildChunkManifest
+  const requestId = getRequestlessSummaryRangeRebuildRequestId(summaryChunk)
+  const adoptedSummaryChunk = {...summaryChunk, requestId}
+  let adopted = false
   harness.dependencies.rebuildChunkService = {
     ...harness.dependencies.rebuildChunkService,
     claimChunk: async (claimInput) => {
@@ -3573,10 +3757,21 @@ test('worker terminally rejects requestless summary chunks before projection', a
   harness.database.queryJson = async <T>(statement: string) => {
     statements.push(statement)
 
+    if (statement.includes('pendingChunkCount')) {
+      return [{pendingChunkCount: 1}] as T[]
+    }
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+      return [adopted ? adoptedSummaryChunk : summaryChunk] as T[]
+    }
+
     return [] as T[]
   }
   harness.database.run = async (statement: string) => {
     statements.push(statement)
+    if (statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('request_id =')) {
+      adopted = true
+    }
   }
 
   globalThis.setInterval = setIntervalMock as unknown as typeof setInterval
@@ -3588,20 +3783,19 @@ test('worker terminally rejects requestless summary chunks before projection', a
   })
   const joined = statements.join('\n')
 
-  expect(result.chunk).toMatchObject({chunkId: summaryChunk.chunkId, status: 'failed'})
-  expect(harness.runChunkInputs).toEqual([])
+  expect(result.chunk).toMatchObject({chunkId: summaryChunk.chunkId, requestId, status: 'completed'})
+  expect(harness.runChunkInputs).toHaveLength(1)
+  expect(harness.runChunkInputs[0]).toMatchObject(adoptedSummaryChunk)
   expect(harness.failedChunks).toEqual([])
-  expect(joined).toContain("status = 'quarantined'")
-  expect(joined).toContain('requestless ranged summary rebuild chunks are not supported')
-  expect(joined).toContain('request-associated review serving rebuild')
+  expect(joined).toContain('INSERT INTO app.review_rebuild_request')
+  expect(joined).toContain('requestless_summary_range_rebuild')
+  expect(joined).toContain(`request_id = '${requestId}'`)
+  expect(joined).not.toContain("status = 'quarantined'")
   expect(setIntervalMock).toHaveBeenCalledTimes(1)
   expect(clearIntervalMock).toHaveBeenCalledWith(intervalToken)
-  expect(joined).not.toContain('projectReviewServingSummaries')
-  expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
-  expect(joined).not.toContain('mart.review_filter_option_serving_v4')
 })
 
-test('claimed requestless summary chunks fail fast before the legacy path', async () => {
+test('claimed requestless summary chunks stage partials through an adopted request', async () => {
   const statements: string[] = []
   const summaryChunk = {
     ...chunkManifest,
@@ -3611,14 +3805,43 @@ test('claimed requestless summary chunks fail fast before the legacy path', asyn
     projectionIdentity: 'summary:project-1',
     requestId: null,
   } satisfies ReviewServingRebuildChunkManifest
+  const requestId = getRequestlessSummaryRangeRebuildRequestId(summaryChunk)
+  const adoptedSummaryChunk = {...summaryChunk, requestId}
+  const componentState = {
+    optional: [{baseGeneration: '7', component: 'search', projectionIdentity: 'search:project-1'}],
+    required: [
+      {baseGeneration: '7', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+      {baseGeneration: '7', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+      {baseGeneration: '7', component: 'summary', projectionIdentity: 'summary:project-1'},
+    ],
+  }
+  let adopted = false
   const database: TestDatabase = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
+
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+        return [adopted ? adoptedSummaryChunk : summaryChunk] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return [
+          {
+            componentStateJson: componentState,
+            reviewConfigHash: 'review-config-1',
+            selectedImportSnapshotId: 'selected-import-snapshot-1',
+            snapshotId: 'snapshot-summary-requestless',
+          },
+        ] as T[]
+      }
 
       return [] as T[]
     },
     run: async (statement: string) => {
       statements.push(statement)
+      if (statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('request_id =')) {
+        adopted = true
+      }
     },
     transaction: async <T>(operation: (tx: TestDatabase) => Promise<T>) => {
       statements.push('BEGIN requestless summary claimed')
@@ -3627,16 +3850,16 @@ test('claimed requestless summary chunks fail fast before the legacy path', asyn
     },
   }
 
-  try {
-    await runReviewServingProjectorWorkerClaimedRebuildChunk({chunk: summaryChunk, leaseOwner: 'worker-1'}, database)
-    throw new Error('expected requestless summary chunk to fail')
-  } catch (error) {
-    expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).toContain('request-associated review serving rebuild')
-  }
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk(
+    {chunk: summaryChunk, leaseOwner: 'worker-1'},
+    database,
+  )
 
-  expect(statements.join('\n')).not.toContain('mart.review_article_summary_contribution_v4')
-  expect(statements.join('\n')).not.toContain('mart.review_article_summary_rebuild_partial_v4')
+  expect(result).toEqual({status: 'completed'})
+  expect(statements.join('\n')).toContain('INSERT INTO app.review_rebuild_request')
+  expect(statements.join('\n')).toContain('mart.review_article_summary_rebuild_partial_v4')
+  expect(statements.join('\n')).toContain(`request_id = '${requestId}'`)
+  expect(statements.join('\n')).not.toContain("status = 'quarantined'")
 })
 
 test('request-associated summary chunks stage partials without refreshing filter options', async () => {
