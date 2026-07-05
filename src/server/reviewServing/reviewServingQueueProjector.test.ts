@@ -3,6 +3,7 @@ import {expect, test} from 'bun:test'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   projectReviewServingQueuePatches,
+  projectReviewServingQueueRebuildRows,
   type ReviewServingQueueProjectorDatabase,
 } from './reviewServingQueueProjector.ts'
 
@@ -272,6 +273,29 @@ test('project review config changes rebuild queue rows for all scoped project ar
   expect(selectStatement).toContain('AND (scope.in_curated_scope OR scope.in_route_scope)')
   expect(servingDelete).not.toContain('article_id IN')
   expect(servingDelete).not.toContain('prompt_id IN')
+})
+
+test('queue rebuild rows read selected-import base rows without patch overlay', async () => {
+  const {database, statements} = createQueueDatabase()
+
+  await projectReviewServingQueueRebuildRows(
+    {
+      baseGeneration: 5,
+      projectId: 'project-1',
+      projectScopeIdentity: 'project-scope-1',
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-snapshot-1',
+      snapshotId: 'snapshot-1',
+    },
+    database,
+  )
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_unassessed_queue_serving_v4')
+  })
+
+  expect(insertStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
+  expect(insertStatement).not.toContain('mart.review_selected_import_patch_v4')
+  expect(insertStatement).not.toContain('selected_patch')
 })
 
 test('membership removals write tombstones and keep queue projection component narrow', async () => {
