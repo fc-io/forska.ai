@@ -15,7 +15,7 @@ const removePathIfExists = (path: string) => {
   rmSync(path, {force: true, recursive: true})
 }
 
-test('duckdb snapshots materialize file and WAL copies to preserve foreign-key load order without checkpoint OOM', () => {
+test('duckdb snapshots materialize copied WAL without live checkpoint or copy-from-database', () => {
   const source = readFileSync('src/server/utils/duckdbService.ts', 'utf8')
   const copySnapshotSource = source.slice(
     source.indexOf('const copyDuckdbSnapshot'),
@@ -25,9 +25,69 @@ test('duckdb snapshots materialize file and WAL copies to preserve foreign-key l
   expect(copySnapshotSource).not.toContain("runDuckdbStatementDirect('CHECKPOINT')")
   expect(copySnapshotSource).toContain('copyFile(runtimeConfig.databasePath, snapshotPath)')
   expect(copySnapshotSource).toContain('copyFile(sourceWalPath, snapshotWalPath)')
+  expect(copySnapshotSource).toContain('materializeCopiedDuckdbSnapshot(snapshotPath, runtimeConfig)')
   expect(copySnapshotSource).not.toContain('COPY FROM DATABASE')
   expect(copySnapshotSource).not.toContain('ATTACH')
   expect(copySnapshotSource).not.toContain('DETACH')
+})
+
+test('duckdb snapshot WAL materialization makes read-only copies see committed WAL rows', async () => {
+  const duckdbPath = `/tmp/f1-duckdb-snapshot-wal-source-${Date.now()}.duckdb`
+  const dataRoot = `/tmp/f1-duckdb-snapshot-wal-data-${Date.now()}`
+
+  removeFileIfExists(duckdbPath)
+  removeFileIfExists(`${duckdbPath}.wal`)
+  removePathIfExists(dataRoot)
+
+  try {
+    const result = globalThis.Bun.spawnSync(
+      [
+        'bun',
+        '-e',
+        `
+          const {existsSync} = await import('node:fs')
+          const {DuckDBInstance} = await import('@duckdb/node-api')
+          const service = await import('./src/server/utils/duckdbService.ts?snapshot-wal-materialized=' + Date.now())
+
+          await service.runDuckdbStatement('CREATE SCHEMA app')
+          await service.runDuckdbStatement('CREATE TABLE app.snapshot_wal_test (id INTEGER)')
+          await service.runDuckdbStatement('INSERT INTO app.snapshot_wal_test VALUES (1)')
+
+          const snapshot = await service.createDuckdbSnapshot()
+          const duckdbInstance = await DuckDBInstance.create(snapshot.snapshotPath, service.getReadOnlyDuckdbRuntimeOptions())
+          const connection = await duckdbInstance.connect()
+          const reader = await connection.runAndReadAll('SELECT count(*) AS count FROM app.snapshot_wal_test')
+          const rows = reader.getRowObjectsJson()
+          connection.closeSync()
+          duckdbInstance.closeSync()
+
+          console.log(JSON.stringify({rows, snapshotWalExists: existsSync(snapshot.snapshotPath + '.wal')}))
+          await service.deleteDuckdbSnapshot(snapshot.snapshotPath)
+          await service.closeDuckdbService({checkpointBeforeClose: false})
+        `,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {...process.env, DUCKDB_DATA_ROOT: dataRoot, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'},
+      },
+    )
+
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString())
+    }
+
+    const parsed = JSON.parse(result.stdout.toString().trim()) as {
+      rows: readonly {count: string}[]
+      snapshotWalExists: boolean
+    }
+
+    expect(parsed.rows).toEqual([{count: '1'}])
+    expect(parsed.snapshotWalExists).toBe(false)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removePathIfExists(dataRoot)
+  }
 })
 
 test('duckdb service reuses the same embedded runtime across module reloads', async () => {

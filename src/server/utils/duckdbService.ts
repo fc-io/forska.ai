@@ -4371,6 +4371,18 @@ export const runDuckdbMaintenance = async (
   })
 }
 
+const materializeCopiedDuckdbSnapshot = async (snapshotPath: string, runtimeConfig: DuckdbRuntimeConfig) => {
+  const duckdbInstance = await DuckDBInstance.create(snapshotPath, getDuckdbInstanceOptions(runtimeConfig))
+  const connection = await duckdbInstance.connect()
+
+  try {
+    await connection.run('SELECT 1')
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
+}
+
 const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<DuckdbSnapshot, unknown, never> => {
   return Effect.gen(function* () {
     if (runtimeConfig.databasePath === ':memory:') {
@@ -4404,6 +4416,7 @@ const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<D
 
             throw error
           })
+        await materializeCopiedDuckdbSnapshot(snapshotPath, runtimeConfig)
       } catch (error) {
         await rm(snapshotPath, {force: true})
         await rm(`${snapshotPath}.wal`, {force: true})

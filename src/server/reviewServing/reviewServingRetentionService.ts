@@ -32,6 +32,7 @@ type RetentionStateRow = {
 }
 
 type CleanupTableSpec = {keyColumn: string; protectedPredicate: string; table: string}
+type LegacyPatchCleanupTableSpec = {table: string}
 
 const defaultRetentionCleanupBatchSize = 512
 const defaultRetentionCleanupTargetLimit = 16
@@ -57,6 +58,15 @@ const cleanupTableSpecs: readonly CleanupTableSpec[] = [
     protectedPredicate: 'selected_import_snapshot_id',
     table: 'app.review_selected_article_import_v4',
   },
+]
+
+const legacyPatchCleanupTableSpecs: readonly LegacyPatchCleanupTableSpec[] = [
+  {table: 'mart.review_article_display_patch_v4'},
+  {table: 'mart.review_selected_import_patch_v4'},
+  {table: 'mart.review_llm_status_patch_v4'},
+  {table: 'mart.review_human_status_patch_v4'},
+  {table: 'mart.review_queue_patch_v4'},
+  {table: 'mart.review_article_filter_posting_patch_v4'},
 ]
 
 const getReviewServingRetentionDatabase = () => {
@@ -159,6 +169,10 @@ const getRetentionCursorIndex = (row: RetentionStateRow | null) => {
   return Math.max(0, Number(cursor?.tableIndex ?? 0))
 }
 
+const isCleanupTableSpec = (spec: CleanupTableSpec | LegacyPatchCleanupTableSpec): spec is CleanupTableSpec => {
+  return 'protectedPredicate' in spec
+}
+
 const deleteCleanupBatch = async (
   input: ReviewServingRetentionCleanupInput & {spec: CleanupTableSpec},
   database: ReviewServingRetentionServiceTransaction,
@@ -194,6 +208,22 @@ const deleteCleanupBatch = async (
   `)
 }
 
+const deleteLegacyPatchCleanupBatch = async (
+  input: ReviewServingRetentionCleanupInput & {spec: LegacyPatchCleanupTableSpec},
+  database: ReviewServingRetentionServiceTransaction,
+) => {
+  await database.run(`
+    DELETE FROM ${input.spec.table}
+    WHERE rowid IN (
+        SELECT candidate.rowid
+        FROM ${input.spec.table} candidate
+        WHERE candidate.project_id = ${getSqlLiteral(input.projectId)}
+        ORDER BY candidate.rowid
+        LIMIT ${getSqlLiteral(input.batchSize)}
+      )
+  `)
+}
+
 export const assessReviewServingCandidatePatchBudgets = async (
   _input: {budget?: ReviewServingPatchBudget; candidate: ReviewServingSnapshotManifest},
   _database: ReviewServingRetentionServiceTransaction = getReviewServingRetentionDatabase(),
@@ -216,11 +246,15 @@ export const cleanupReviewServingRetentionState = async (
     const retentionScope = getRetentionScope(input)
     const retentionState = await getRetentionState(retentionScope, tx)
     const tableIndex = getRetentionCursorIndex(retentionState)
-    const allSpecs = cleanupTableSpecs
+    const allSpecs = [...cleanupTableSpecs, ...legacyPatchCleanupTableSpecs]
     const spec = allSpecs[tableIndex % allSpecs.length]
 
-    if (spec !== undefined && 'protectedPredicate' in spec) {
+    if (spec !== undefined && isCleanupTableSpec(spec)) {
       await deleteCleanupBatch({...input, spec}, tx)
+    }
+
+    if (spec !== undefined && !isCleanupTableSpec(spec)) {
+      await deleteLegacyPatchCleanupBatch({...input, spec}, tx)
     }
 
     await writeRetentionMark(

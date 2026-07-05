@@ -214,7 +214,7 @@ test('retention cleanup advances a bounded cursor and protects active, last-know
   expect(joined).toContain('"tableIndex":1')
 })
 
-test('retention cleanup skips legacy patch cleanup tables', async () => {
+test('retention cleanup purges legacy selected-import patch tables in bounded batches', async () => {
   const {database, statements} = createRetentionDatabase({
     retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 13}, patchWatermark: 0, snapshotId: null},
   })
@@ -225,11 +225,13 @@ test('retention cleanup skips legacy patch cleanup tables', async () => {
   )
   const joined = statements.join('\n')
 
-  expect(joined).not.toContain('mart.review_article_display_patch_v4')
+  expect(joined).toContain('DELETE FROM mart.review_selected_import_patch_v4')
+  expect(joined).toContain("WHERE candidate.project_id = 'project-1'")
+  expect(joined).toContain('ORDER BY candidate.rowid')
   expect(joined).toContain('LIMIT 5')
 })
 
-test('status patch cleanup skips legacy patch tables', async () => {
+test('status patch cleanup purges legacy status patch tables without protected snapshot predicates', async () => {
   const {database, statements} = createRetentionDatabase({
     retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 14}, patchWatermark: 0, snapshotId: null},
   })
@@ -240,7 +242,8 @@ test('status patch cleanup skips legacy patch tables', async () => {
   )
   const joined = statements.join('\n')
 
-  expect(joined).not.toContain('mart.review_llm_status_patch_v4')
+  expect(joined).toContain('DELETE FROM mart.review_llm_status_patch_v4')
+  expect(joined).toContain('ORDER BY candidate.rowid')
   expect(joined).not.toContain('candidate.null')
 })
 
