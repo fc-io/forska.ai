@@ -349,7 +349,8 @@ const getFullRebuildSummaryContributionRows = async (
           FROM human_detail human
           INNER JOIN selected_article selected ON selected.article_id = human.article_id
           CROSS JOIN project_settings
-          WHERE human.list_mode_key IN ('human', 'both') AND human.answered_original IS NOT NULL
+          WHERE human.list_mode_key IN ('human', 'both')
+            AND (human.answered_original IS NOT NULL OR COALESCE(TRY_CAST(json_extract_string(human.judgment_payload_json, '$.isAnswered') AS BOOLEAN), FALSE))
             AND (
               (project_settings.human_judgment_mode = 'summary' AND human.prompt_id = 'summary')
               OR (project_settings.human_judgment_mode <> 'summary' AND human.prompt_id <> 'summary')

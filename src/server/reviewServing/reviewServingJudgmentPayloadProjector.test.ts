@@ -162,6 +162,9 @@ test('human payload projection filters rows by active human judgment mode', asyn
 
   expect(humanSelect).toContain("COALESCE(project.human_judgment_mode, 'prompt') = 'prompt'")
   expect(humanSelect).toContain("COALESCE(project.human_judgment_mode, 'prompt') = 'summary'")
+  expect(humanSelect).toContain(
+    "judgment_human_summary.answer IS NOT NULL OR judgment_human_summary.origin = 'covidence_import' AS is_answered",
+  )
 })
 
 test('judgment payload projection replaces broad project detail rows', async () => {

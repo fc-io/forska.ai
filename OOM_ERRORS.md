@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-05 - Large Snapshot Pre-Copy Checkpoint OOM
+
+- Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` while running `db:query:snapshot` against the 78GB primary runtime DB.
+- Context: Current-DB live progress verification after adding a pre-copy checkpoint to avoid copied DDL WAL replay failures for small snapshots.
+- Cause: The checkpoint is safe for small script/test DBs but can exceed the constrained maintenance profile on large runtime DBs.
+- Fix: Snapshot creation only checkpoints small DB files before copying; large DB snapshots keep the checkpoint-free DB+WAL copy path.
+- Verification: `bun test src/server/utils/duckdbServiceReload.test.ts src/server/utils/duckdbServiceShutdown.test.ts src/server/utils/duckdbServiceMemoryLimit.test.ts src/server/utils/duckdbScriptAccess.test.ts`; current-DB live progress gate.
+
 ## 2026-07-05 - Snapshot Fallback Checkpoint OOM
 
 - Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` while running `db:query:snapshot` against the runtime primary DB.

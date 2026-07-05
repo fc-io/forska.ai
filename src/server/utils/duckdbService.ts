@@ -4383,6 +4383,15 @@ const materializeCopiedDuckdbSnapshot = async (snapshotPath: string, runtimeConf
   }
 }
 
+const maxPreSnapshotCheckpointDatabaseBytes = 1024 * 1024 * 1024
+
+const shouldCheckpointBeforeDuckdbSnapshotCopy = (runtimeConfig: DuckdbRuntimeConfig) => {
+  return (
+    runtimeConfig.databasePath !== ':memory:'
+    && statSync(runtimeConfig.databasePath).size <= maxPreSnapshotCheckpointDatabaseBytes
+  )
+}
+
 const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<DuckdbSnapshot, unknown, never> => {
   return Effect.gen(function* () {
     if (runtimeConfig.databasePath === ':memory:') {
@@ -4399,6 +4408,11 @@ const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<D
     yield* Effect.tryPromise(() => {
       return rm(snapshotPath, {force: true})
     })
+    if (shouldCheckpointBeforeDuckdbSnapshotCopy(runtimeConfig)) {
+      yield* Effect.tryPromise(() => {
+        return runDuckdbStatementDirect('CHECKPOINT')
+      })
+    }
     yield* Effect.tryPromise(async () => {
       const sourceWalPath = `${runtimeConfig.databasePath}.wal`
       const snapshotWalPath = `${snapshotPath}.wal`
