@@ -314,7 +314,11 @@ const getQueueRebuildSourceCtes = (input: ProjectReviewServingQueueRebuildInput)
         COALESCE(judgment_human.updated_at, judgment_human_summary.updated_at, scoped.activity_sort_at) AS activity_sort_at,
         selected.selected_tombstone
           OR scoped.scope_tombstone
-          OR NULLIF(TRIM(COALESCE(judgment_human.answer, judgment_human_summary.answer, '')), '') IS NOT NULL AS tombstone
+          OR NULLIF(TRIM(COALESCE(judgment_human.answer, judgment_human_summary.answer, '')), '') IS NOT NULL
+          OR (
+            project_settings.human_judgment_mode = 'summary'
+            AND judgment_human_summary.origin = 'covidence_import'
+          ) AS tombstone
       FROM scoped_article scoped
       INNER JOIN selected_import_state selected
         ON selected.article_id = scoped.article_id
@@ -400,8 +404,7 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
     ? []
     : database.queryJson<QueueSourceRow>(`
         WITH ${ctes.join(',\n        ')},
-        ${getQueueRebuildSourceCtes({...input, reviewConfigHash, snapshotId: input.snapshotId})},
-        queue_union AS (SELECT * FROM llm_queue UNION ALL SELECT * FROM human_queue)
+        ${getQueueRebuildSourceCtes({...input, reviewConfigHash, snapshotId: input.snapshotId})}
         SELECT
           queue.article_id AS articleId,
           queue.prompt_id AS promptId,
