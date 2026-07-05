@@ -479,19 +479,21 @@ test('project-scoped summary rebuilds subtract prior contribution articles missi
   expect(storedContributionSelect).toBeDefined()
 })
 
-test('unchunked full summary rebuild writes final serving rows with contribution state', async () => {
+test('unchunked full summary rebuild writes final serving rows without contribution state', async () => {
   const {database, statements} = createSummaryDatabase({sourceRows: [sourceCountRow(), sourceFacetRow()]})
 
   const result = await projectReviewServingSummaries(projectInput([]), database)
   const joined = statements.join('\n')
 
-  expect(result.contributionRowCount).toBe(2)
-  expect(result.diagnosticsJson.summaryProjector).toMatchObject({directFullSnapshot: true})
+  expect(result.contributionRowCount).toBe(0)
+  expect(result.diagnosticsJson.summaryProjector).toMatchObject({contributionRecordCount: 0, directFullSnapshot: true})
   expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toMatchObject({
     'mart.review_article_count_serving_v4': 1,
-    'mart.review_article_summary_contribution_v4': 2,
     'mart.review_filter_facet_serving_v4': 1,
   })
+  expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).not.toHaveProperty(
+    'mart.review_article_summary_contribution_v4',
+  )
   expect(hasSummaryValue(result.summaryValues, {count_kind: 'review.llm.assessedByPrompt', count_value: 1})).toBe(true)
   expect(hasSummaryValue(result.summaryValues, {facet_key: 'summaryAnswer', count_value: 1})).toBe(true)
   expect(joined).toContain('DELETE FROM mart.review_article_count_serving_v4')
@@ -503,16 +505,10 @@ test('unchunked full summary rebuild writes final serving rows with contribution
   expect(joined).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
   expect(joined).not.toContain('FROM mart.review_human_status_patch_v4 human')
   expect(joined).not.toContain('SELECT DISTINCT contribution.article_id AS articleId')
-  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4')
-  expect(
-    statements.find((statement) => {
-      return statement.includes('DELETE FROM mart.review_article_summary_contribution_v4')
-    }),
-  ).not.toContain('summary_definition_version')
-  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+  expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
 })
 
-test('chunked full summary rebuild stages request partials and contribution state without final serving rows', async () => {
+test('chunked full summary rebuild stages request partials and contribution partials without final serving rows', async () => {
   const {database, statements} = createSummaryDatabase({sourceRows: [sourceCountRow(), sourceFacetRow()]})
 
   const result = await projectReviewServingSummaries(
@@ -546,7 +542,7 @@ test('chunked full summary rebuild stages request partials and contribution stat
   expect(joined).toContain('INNER JOIN mart.review_article_judgment_detail_serving_v4 detail')
   expect(joined).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
   expect(joined).not.toContain('FROM mart.review_human_status_patch_v4 human')
-  expect(joined).not.toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
+  expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_filter_facet_serving_v4')
 })
@@ -607,12 +603,8 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   )
   expect(joined).toContain("AND chunk_id = '__summary_rebuild_partial_accumulator__:")
   expect(joined).toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
-  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4')
-  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
   expect(joined).toContain('FROM mart.review_article_summary_contribution_rebuild_partial_v4')
-  expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key) DO UPDATE SET',
-  )
+  expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
   expect(
     statements.filter((statement) => {
       return statement.includes('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
@@ -875,12 +867,6 @@ test('summary rebuild request finalization deduplicates overlapping contribution
         },
         database,
       )
-      const contributionRows = await database.queryJson<{contributionValue: string; total: string}>(`
-        SELECT
-          CAST(COUNT(*) AS VARCHAR) AS total,
-          CAST(ANY_VALUE(contribution_value) AS VARCHAR) AS contributionValue
-        FROM mart.review_article_summary_contribution_v4
-      `)
       const countRows = await database.queryJson<{countValue: string}>(`
         SELECT CAST(count_value AS VARCHAR) AS countValue
         FROM mart.review_article_count_serving_v4
@@ -890,7 +876,6 @@ test('summary rebuild request finalization deduplicates overlapping contribution
         FROM mart.review_filter_facet_serving_v4
       `)
 
-      expect(contributionRows).toEqual([{contributionValue: '1', total: '6'}])
       expect(countRows).toEqual([{countValue: '3'}])
       expect(facetRows).toEqual([{countValue: '3'}])
     } finally {
@@ -901,7 +886,7 @@ test('summary rebuild request finalization deduplicates overlapping contribution
   }
 })
 
-test('summary rebuild request finalization retries from retained contribution partials', async () => {
+test('summary rebuild request finalization retries from retained contribution partials without main contribution state', async () => {
   const duckdbPath = `/tmp/forska-summary-retained-contribution-finalize-${Date.now()}.duckdb`
   const countContributionKey = contributionKey({
     answerId: null,
@@ -971,10 +956,6 @@ test('summary rebuild request finalization retries from retained contribution pa
         database,
       )
       await database.run(`
-        DELETE FROM mart.review_article_summary_contribution_v4
-        WHERE project_id = 'project-1'
-      `)
-      await database.run(`
         DELETE FROM mart.review_article_count_serving_v4
         WHERE project_id = 'project-1'
       `)
@@ -993,10 +974,6 @@ test('summary rebuild request finalization retries from retained contribution pa
         },
         database,
       )
-      const contributionRows = await database.queryJson<{total: string}>(`
-        SELECT CAST(COUNT(*) AS VARCHAR) AS total
-        FROM mart.review_article_summary_contribution_v4
-      `)
       const countRows = await database.queryJson<{countValue: string}>(`
         SELECT CAST(count_value AS VARCHAR) AS countValue
         FROM mart.review_article_count_serving_v4
@@ -1006,7 +983,6 @@ test('summary rebuild request finalization retries from retained contribution pa
         FROM mart.review_article_summary_contribution_rebuild_partial_v4
       `)
 
-      expect(contributionRows).toEqual([{total: '3'}])
       expect(countRows).toEqual([{countValue: '3'}])
       expect(retainedContributionRows).toEqual([{total: '4'}])
     } finally {
