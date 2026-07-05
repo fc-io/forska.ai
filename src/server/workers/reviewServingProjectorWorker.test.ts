@@ -261,6 +261,7 @@ test('worker can drain multiple rebuild chunks in one opt-in batch', async () =>
     [secondChunk.chunkId, secondChunk],
   ])
   const claimCountsAtRun: number[] = []
+  const heartbeatChunkIdsAtRun: string[][] = []
   let nextIndex = 0
 
   harness.dependencies.rebuildChunkService = {
@@ -282,6 +283,11 @@ test('worker can drain multiple rebuild chunks in one opt-in batch', async () =>
     },
     runClaimedChunk: async ({chunk}) => {
       claimCountsAtRun.push(harness.claimInputs.length)
+      heartbeatChunkIdsAtRun.push(
+        harness.heartbeatInputs.map((input) => {
+          return (input as {chunkId: string}).chunkId
+        }),
+      )
       harness.runChunkInputs.push(chunk)
 
       return {status: 'completed' as const}
@@ -302,6 +308,10 @@ test('worker can drain multiple rebuild chunks in one opt-in batch', async () =>
     }),
   ).toEqual(['chunk-batch-1', 'chunk-batch-2'])
   expect(claimCountsAtRun).toEqual([2, 2])
+  expect(heartbeatChunkIdsAtRun[0]).toContain('chunk-batch-1')
+  expect(heartbeatChunkIdsAtRun[0]).toContain('chunk-batch-2')
+  expect(heartbeatChunkIdsAtRun[1]?.slice(heartbeatChunkIdsAtRun[0]?.length ?? 0)).toContain('chunk-batch-1')
+  expect(heartbeatChunkIdsAtRun[1]?.slice(heartbeatChunkIdsAtRun[0]?.length ?? 0)).toContain('chunk-batch-2')
   expect(harness.wakeInputs).toHaveLength(1)
 })
 
@@ -4801,7 +4811,7 @@ test('base rebuild chunks regenerate project scope and selected import state bef
   expect(joined).toContain('INSERT INTO mart.project_scope_article')
   expect(joined).toContain('projectScope.rebuild')
   expect(joined).toContain('reviewChange')
-  expect(joined).not.toContain('DELETE FROM mart.review_selected_import_patch_v4')
+  expect(joined).toContain('DELETE FROM mart.review_selected_import_patch_v4')
   expect(joined).toContain('DELETE FROM app.review_selected_article_import_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_selected_import_patch_v4')
   expect(joined).not.toContain('article_id IS NOT DISTINCT FROM')

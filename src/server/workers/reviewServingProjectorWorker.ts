@@ -2346,6 +2346,17 @@ const resetSelectedImportSnapshotForRebuild = async (
     },
     database,
   )
+  await deleteReviewServingProjectorRows(
+    {
+      predicates: {
+        project_id: input.projectId,
+        project_scope_identity: input.projectScopeIdentity,
+        selected_import_snapshot_id: input.selectedImportSnapshotId,
+      },
+      table: 'mart.review_selected_import_patch_v4',
+    },
+    database,
+  )
   await database.run(`
     DELETE FROM app.review_selected_import_snapshot
     WHERE project_id = ${getSqlLiteral(input.projectId)}
@@ -2423,6 +2434,14 @@ const resetSelectedImportArticleRangeForClaimedRebuild = async (
     await requireClaimedRebuildChunk(input, tx)
     await tx.run(`
       DELETE FROM app.review_selected_article_import_v4
+      WHERE project_id = ${getSqlLiteral(input.projectId)}
+        AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+        AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+        AND article_id >= ${getSqlLiteral(input.chunk.chunkStartKey)}
+        AND article_id <= ${getSqlLiteral(input.chunk.chunkEndKey)}
+    `)
+    await tx.run(`
+      DELETE FROM mart.review_selected_import_patch_v4
       WHERE project_id = ${getSqlLiteral(input.projectId)}
         AND project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
         AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
@@ -6412,6 +6431,14 @@ const runReviewServingProjectorWorkerRebuildChunkBatch = async (
     }
 
     for (const claimed of claimedBatch.claimedChunks) {
+      await heartbeatClaimedRebuildChunkBatchLeases({
+        claimedChunks: claimedBatch.claimedChunks,
+        database: input.database,
+        dependencies: input.dependencies,
+        options: input.options,
+        workerId: input.workerId,
+      })
+
       const chunk = await runClaimedReviewServingProjectorWorkerRebuildChunk({
         claimedChunk: claimed.chunk,
         database: input.database,

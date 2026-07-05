@@ -187,6 +187,9 @@ test('selected-import article range rebuild writes selected rows directly in SQL
   const deleteStatement = statements.find((statement) => {
     return statement.includes('DELETE FROM app.review_selected_article_import_v4')
   })
+  const patchDeleteStatement = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_selected_import_patch_v4')
+  })
   const insertStatement = statements.find((statement) => {
     return statement.includes('INSERT INTO app.review_selected_article_import_v4')
   })
@@ -200,6 +203,11 @@ test('selected-import article range rebuild writes selected rows directly in SQL
   expect(deleteStatement).toContain("selected_import_snapshot_id = 'selected-import-snapshot-1'")
   expect(deleteStatement).toContain("article_id >= 'article-1'")
   expect(deleteStatement).toContain("article_id <= 'article-9'")
+  expect(patchDeleteStatement).toContain("project_id = 'project-1'")
+  expect(patchDeleteStatement).toContain("project_scope_identity = 'projectScope:identity-1'")
+  expect(patchDeleteStatement).toContain("selected_import_snapshot_id = 'selected-import-snapshot-1'")
+  expect(patchDeleteStatement).toContain("article_id >= 'article-1'")
+  expect(patchDeleteStatement).toContain("article_id <= 'article-9'")
   expect(insertStatement).toContain('WITH selected_import_candidates AS')
   expect(insertStatement).toContain('ROW_NUMBER() OVER')
   expect(insertStatement).toContain("WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)")
@@ -228,12 +236,16 @@ test('selected-import article range rebuild can refresh final serving rows from 
   const joined = statements.join('\n')
 
   expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_selected_import_serving_rebuild_v4 AS')
+  expect(joined).toContain('WITH serving_template AS')
+  expect(joined).toContain('FROM mart.project_scope_article scope')
+  expect(joined).toContain('INNER JOIN scoped_article scoped')
   expect(joined).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
   expect(joined).toContain("selected.selected_import_snapshot_id = 'selected-import-snapshot-1'")
   expect(joined).toContain("serving.selected_import_identity = 'selectedImport:identity-1'")
   expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
+  expect(joined).toContain('article.full_text_pdf')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
-  expect(joined).not.toContain('mart.review_selected_import_patch_v4')
+  expect(joined).not.toContain('LEFT JOIN mart.review_selected_import_patch_v4')
 })
 
 test('selected-import V4 projector does not use the runtime selected scoped import CTE', () => {
