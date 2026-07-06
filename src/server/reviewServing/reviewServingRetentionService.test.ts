@@ -93,7 +93,7 @@ test('retention cleanup drains retired patch tables in bounded batches', async (
   expect(joined).toContain('"tableIndex":12')
 })
 
-test('retention cleanup drains retired summary contributions by project and review config', async () => {
+test('retention cleanup drains retired summary contributions project-wide', async () => {
   const {database, statements} = createRetentionDatabase({
     retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 17}, patchWatermark: 0, snapshotId: null},
   })
@@ -106,10 +106,29 @@ test('retention cleanup drains retired summary contributions by project and revi
 
   expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4')
   expect(joined).toContain("candidate.project_id = 'project-1'")
-  expect(joined).toContain("candidate.review_config_hash = 'review-config-1'")
+  expect(joined).not.toContain('candidate.review_config_hash')
   expect(joined).toContain('ORDER BY candidate.snapshot_id')
   expect(joined).toContain('LIMIT 25')
   expect(joined).toContain('"tableIndex":0')
+})
+
+test('retention cleanup drains scoped legacy llm status rows project-wide', async () => {
+  const {database, statements} = createRetentionDatabase({
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 13}, patchWatermark: 0, snapshotId: null},
+  })
+
+  await cleanupReviewServingRetentionState(
+    {batchSize: 25, now: '2026-06-16T00:00:00.000Z', projectId: 'project-1', reviewConfigHash: 'review-config-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('DELETE FROM mart.review_llm_status_patch_v4')
+  expect(joined).toContain("candidate.project_id = 'project-1'")
+  expect(joined).not.toContain('candidate.review_config_hash')
+  expect(joined).toContain('ORDER BY candidate.patch_watermark')
+  expect(joined).toContain('LIMIT 25')
+  expect(joined).toContain('"tableIndex":14')
 })
 
 test('retention cleanup target discovery scopes normal cleanup by project and review config', async () => {
