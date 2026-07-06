@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-06 - Retired Review-Serving Table Drain
+
+- Error: Historical rows in retired `mart.review_*_patch_v4` tables and `mart.review_article_summary_contribution_v4` could keep bloating DuckDB snapshots/backups after the serving cutover.
+- Context: Review-serving retention cleanup after legacy patch and summary contribution runtime paths were removed.
+- Cause: The cleanup cursor cycled only through active serving table specs, so upgraded databases with already-populated retired tables never selected those tables for deletion.
+- Fix: Retention cleanup now includes a separate bounded per-project drain for retired patch tables and the summary contribution ledger while keeping active serving cleanup snapshot-protected.
+- Verification: `bun test src/server/reviewServing/reviewServingRetentionService.test.ts`; live current-DB progress gate.
+
 ## 2026-07-05 - Large Snapshot Pre-Copy Checkpoint OOM
 
 - Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` while running `db:query:snapshot` against the 78GB primary runtime DB.

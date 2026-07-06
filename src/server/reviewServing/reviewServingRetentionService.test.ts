@@ -55,7 +55,40 @@ test('retention cleanup advances a bounded cursor and protects active, last-know
   expect(joined).toContain('INSERT INTO app.review_serving_retention_mark')
   expect(joined).toContain('updated_at = excluded.updated_at')
   expect(joined).toContain('"tableIndex":1')
-  expect(joined).not.toContain('patch_v4')
+})
+
+test('retention cleanup keeps a bounded drain for retired review-serving tables', async () => {
+  const {database, statements} = createRetentionDatabase({
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 11}, patchWatermark: 0, snapshotId: null},
+  })
+
+  await cleanupReviewServingRetentionState(
+    {batchSize: 25, now: '2026-06-16T00:00:00.000Z', projectId: 'project-1', reviewConfigHash: 'review-config-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('DELETE FROM mart.review_article_display_patch_v4')
+  expect(joined).toContain("candidate.project_id = 'project-1'")
+  expect(joined).toContain('ORDER BY candidate.patch_watermark')
+  expect(joined).toContain('LIMIT 25')
+  expect(joined).toContain('"tableIndex":12')
+})
+
+test('retention cleanup drains retired summary contribution rows after patch tables', async () => {
+  const {database, statements} = createRetentionDatabase({
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 17}, patchWatermark: 0, snapshotId: null},
+  })
+
+  await cleanupReviewServingRetentionState(
+    {batchSize: 25, now: '2026-06-16T00:00:00.000Z', projectId: 'project-1', reviewConfigHash: 'review-config-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4')
+  expect(joined).toContain('ORDER BY candidate.snapshot_id')
+  expect(joined).toContain('"tableIndex":0')
 })
 
 test('retention cleanup target discovery scopes normal cleanup by project and review config', async () => {
