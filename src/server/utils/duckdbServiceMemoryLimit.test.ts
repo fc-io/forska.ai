@@ -369,6 +369,247 @@ test('duckdb service serializes append work with the main queue on low-memory wo
   }
 })
 
+test('duckdb append transactions are opt-in and stay serialized with main transactions on low-memory workers', () => {
+  const duckdbPath = `/tmp/f1-duckdb-service-serialized-append-transaction-${Date.now()}.duckdb`
+
+  try {
+    const stdout = getSpawnOutput(
+      globalThis.Bun.spawnSync(
+        [
+          'bun',
+          '-e',
+          `
+            const {mock} = await import('bun:test')
+
+            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+            let activeStatements = 0
+            let connectCount = 0
+            const overlaps = []
+
+            void mock.module(serverRuntimeRoleModulePath, () => {
+              return {
+                canCurrentServerOwnDuckdb: () => true,
+                ensureCurrentDuckdbOwnerLease: async () => {},
+                registerDuckdbOwnerDemotionHandler: () => {},
+                releaseCurrentDuckdbOwnerLease: async () => {},
+              }
+            })
+
+            void mock.module('@duckdb/node-api', () => {
+              class MockConnection {
+                constructor(kind) {
+                  this.kind = kind
+                }
+
+                async run(statement) {
+                  const label = statement.includes('main-block') ? 'main' : this.kind
+                  activeStatements += 1
+                  overlaps.push({activeStatements, label, statement})
+                  await new Promise((resolve) => setTimeout(resolve, label === 'main' ? 50 : 0))
+                  activeStatements -= 1
+                }
+
+                async runAndReadAll() {
+                  return {getRowObjectsJson: () => []}
+                }
+
+                interrupt() {}
+                closeSync() {}
+              }
+
+              class MockInstance {
+                static async create() {
+                  return new MockInstance()
+                }
+
+                async connect() {
+                  connectCount += 1
+                  return new MockConnection(connectCount === 1 ? 'main' : 'append')
+                }
+
+                closeSync() {}
+              }
+
+              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+            })
+
+            const duckdbService = await import('./src/server/utils/duckdbService.ts?append-transaction-low-memory=' + Date.now())
+            const disabledError = await duckdbService.runDuckdbAppendTransaction(async () => {})
+              .then(() => null, (error) => error)
+            const mainPromise = duckdbService.runDuckdbTransaction(async (tx) => {
+              await tx.run("SELECT 'main-block'")
+            })
+
+            await new Promise((resolve) => setTimeout(resolve, 10))
+
+            process.env.FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED = 'true'
+            const workloadContext = {
+              allowsTempSpill: true,
+              fallbackIntent: 'reject',
+              routeOrJobKey: 'test.appendTransaction',
+              workloadClass: 'test',
+            }
+            const appendPromise = duckdbService.runDuckdbAppendTransaction(async (tx) => {
+              await tx.run("SELECT 'append-block'")
+            }, workloadContext)
+
+            await Promise.all([mainPromise, appendPromise])
+            const diagnostics = await duckdbService.getDuckdbBackgroundRuntimeDiagnostics()
+            console.log(JSON.stringify({disabledError: disabledError?.message ?? null, overlaps, diagnostics}))
+            await duckdbService.closeDuckdbService()
+          `,
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            DUCKDB_APPEND_LANE_COUNT: '2',
+            DUCKDB_PATH: duckdbPath,
+            DUCKDB_MEMORY_LIMIT: '6400MiB',
+            FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED: 'false',
+            SERVER_ROLE: 'maintenance-worker',
+          },
+        },
+      ),
+    )
+
+    const result = JSON.parse(stdout) as {
+      diagnostics: {workloads: Array<{operation: string; queue: string}>}
+      disabledError: string | null
+      overlaps: Array<{activeStatements: number; label: string; statement: string}>
+    }
+
+    expect(result.disabledError).toContain('FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED=true')
+    expect(
+      result.overlaps.every((overlap) => {
+        return overlap.activeStatements === 1
+      }),
+    ).toBe(true)
+    expect(
+      result.diagnostics.workloads.some((workload) => {
+        return workload.operation === 'appendTransaction' && workload.queue === 'main'
+      }),
+    ).toBe(true)
+  } finally {
+    removeDuckdbFiles(duckdbPath)
+  }
+})
+
+test('duckdb append transactions roll back failed append-lane work before the next append transaction', () => {
+  const duckdbPath = `/tmp/f1-duckdb-service-append-transaction-rollback-${Date.now()}.duckdb`
+
+  try {
+    const stdout = getSpawnOutput(
+      globalThis.Bun.spawnSync(
+        [
+          'bun',
+          '-e',
+          `
+            const {mock} = await import('bun:test')
+
+            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+            let connectCount = 0
+            const statements = []
+
+            void mock.module(serverRuntimeRoleModulePath, () => {
+              return {
+                canCurrentServerOwnDuckdb: () => true,
+                ensureCurrentDuckdbOwnerLease: async () => {},
+                registerDuckdbOwnerDemotionHandler: () => {},
+                releaseCurrentDuckdbOwnerLease: async () => {},
+              }
+            })
+
+            void mock.module('@duckdb/node-api', () => {
+              class MockConnection {
+                constructor(kind) {
+                  this.kind = kind
+                }
+
+                async run(statement) {
+                  statements.push({kind: this.kind, statement})
+                }
+
+                async runAndReadAll() {
+                  return {getRowObjectsJson: () => []}
+                }
+
+                interrupt() {}
+                closeSync() {}
+              }
+
+              class MockInstance {
+                static async create() {
+                  return new MockInstance()
+                }
+
+                async connect() {
+                  connectCount += 1
+                  return new MockConnection(connectCount === 1 ? 'main' : 'append')
+                }
+
+                closeSync() {}
+              }
+
+              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+            })
+
+            const duckdbService = await import('./src/server/utils/duckdbService.ts?append-transaction-rollback=' + Date.now())
+            const firstError = await duckdbService.runDuckdbAppendTransaction(async (tx) => {
+              await tx.run("SELECT 'failed-append'")
+              throw new Error('append transaction failed')
+            }).then(() => null, (error) => error)
+
+            await duckdbService.runDuckdbAppendTransaction(async (tx) => {
+              await tx.run("SELECT 'next-append'")
+            })
+
+            console.log(JSON.stringify({firstError: firstError?.message ?? null, statements}))
+            await duckdbService.closeDuckdbService()
+          `,
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            DUCKDB_APPEND_LANE_COUNT: '1',
+            DUCKDB_PATH: duckdbPath,
+            DUCKDB_MEMORY_LIMIT: '20GB',
+            FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED: 'true',
+            SERVER_ROLE: 'maintenance-worker',
+          },
+        },
+      ),
+    )
+
+    const result = JSON.parse(stdout) as {
+      firstError: string | null
+      statements: Array<{kind: string; statement: string}>
+    }
+    const appendStatements = result.statements
+      .filter((entry) => {
+        return entry.kind === 'append'
+      })
+      .map((entry) => {
+        return entry.statement
+      })
+
+    expect(result.firstError).toBe('append transaction failed')
+    expect(appendStatements).toEqual([
+      'BEGIN TRANSACTION',
+      "SELECT 'failed-append'",
+      'ROLLBACK',
+      'BEGIN TRANSACTION',
+      "SELECT 'next-append'",
+      'COMMIT',
+    ])
+  } finally {
+    removeDuckdbFiles(duckdbPath)
+  }
+})
+
 test('duckdb service treats empty interactive json output as an empty row set', () => {
   const duckdbPath = `/tmp/f1-duckdb-service-empty-result-${Date.now()}.duckdb`
 

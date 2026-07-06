@@ -81,6 +81,7 @@ export type DuckdbWorkloadContext = {
   workloadClass: string
 }
 export type DuckdbWorkloadOperation =
+  | 'appendTransaction'
   | 'appendQuery'
   | 'backgroundQuery'
   | 'backgroundStatement'
@@ -3211,6 +3212,14 @@ const runDuckdbBackgroundStatementDirect = async (statement: string) => {
   await runDuckdbStatementsDirect(getDuckdbBackgroundConnection(), splitDuckdbStatements(statement))
 }
 
+const assertDuckdbAppendTransactionEnabled = () => {
+  if (getEnv().FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED) {
+    return
+  }
+
+  throw new Error('DuckDB append transactions require FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED=true')
+}
+
 export const getDuckdbRuntimeConfig = () => {
   return {...getDuckdbRuntimeConfigValue()}
 }
@@ -3728,6 +3737,74 @@ export const runDuckdbAppendJsonQuery = async <T>(
                 })
           })
         },
+      })
+    },
+  })
+}
+
+const runDuckdbAppendTransactionDirect = async <T>(
+  appendConnection: DuckDBConnection,
+  work: (runner: DuckdbTransactionRunner) => Promise<T>,
+): Promise<T> => {
+  await runDuckdbStatementsDirect(appendConnection, ['BEGIN TRANSACTION'])
+
+  try {
+    const result = await work({
+      queryJson: async <T>(statement: string) => {
+        return runDuckdbStatementsAndReadLastDirect<T>(appendConnection, splitDuckdbStatements(statement))
+      },
+      run: async (statement: string) => {
+        await runDuckdbStatementsDirect(appendConnection, splitDuckdbStatements(statement))
+      },
+    })
+
+    await runDuckdbStatementsDirect(appendConnection, ['COMMIT'])
+    return result
+  } catch (error) {
+    const rollbackError = await getDuckdbRollbackError(appendConnection)
+
+    throw rollbackError === null ? error : getChainedDuckdbError(error, rollbackError, 'rollback failed')
+  }
+}
+
+export const runDuckdbAppendTransaction = async <T>(
+  work: (runner: DuckdbTransactionRunner) => Promise<T>,
+  workloadContext?: DuckdbWorkloadContext,
+): Promise<T> => {
+  assertDuckdbAppendTransactionEnabled()
+
+  const queue = getDuckdbRuntimeConfigValue().serializeConcurrentWork ? 'main' : 'append'
+  const queueDepthAtStart = queue === 'main' ? duckdbServiceState.duckdbPendingCount : getDuckdbAppendQueueDepth()
+
+  return withDuckdbWorkloadContext({
+    context: workloadContext,
+    getResultMetrics: getDuckdbUnknownWorkloadResultMetrics,
+    operation: 'appendTransaction',
+    queue,
+    queueDepthAtStart,
+    work: () => {
+      return withNormalizedDuckdbError(async () => {
+        await ensureStartedDuckdbProcess()
+        await waitForDuckdbAppendBarrier()
+        const appendLaneIndex = getNextDuckdbAppendLaneIndex()
+
+        return getDuckdbRuntimeConfigValue().serializeConcurrentWork
+          ? enqueueDuckdbWork(async () => {
+              const startedAtMs = Date.now()
+
+              incrementDuckdbAppendQueueDepth(appendLaneIndex)
+              recordDuckdbAppendBatchStart()
+
+              try {
+                return runDuckdbAppendTransactionDirect(getDuckdbAppendConnection(appendLaneIndex), work)
+              } finally {
+                decrementDuckdbAppendQueueDepth(appendLaneIndex)
+                recordDuckdbAppendBatchCompletion(Date.now() - startedAtMs)
+              }
+            })
+          : enqueueDuckdbAppendLaneWork(appendLaneIndex, (appendConnection) => {
+              return runDuckdbAppendTransactionDirect(appendConnection, work)
+            })
       })
     },
   })

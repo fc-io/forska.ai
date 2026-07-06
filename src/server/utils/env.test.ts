@@ -15,6 +15,7 @@ test('uses local dev port defaults without env files', () => {
     getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
   )
   expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE).toBe(2)
+  expect(resolvedEnv.FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED).toBe(false)
   expect(resolvedEnv.FORSKA_RUNTIME_PROFILE).toBe('local')
   expect(resolvedEnv.LOG_DIR).toBe(`${process.cwd()}/logs/runtime/local`)
   expect(resolvedEnv.LOG_LEVEL).toBe('INFO')
@@ -31,6 +32,12 @@ test('preserves explicit review serving rebuild chunk batch overrides', () => {
 
   expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES).toBe(0)
   expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE).toBe(1)
+})
+
+test('preserves explicit DuckDB append transaction opt-in', () => {
+  const resolvedEnv = loadEnv({envValues: {FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED: 'true'}})
+
+  expect(resolvedEnv.FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED).toBe(true)
 })
 
 test('bounds default review serving rebuild chunk batch RSS cap from system memory', () => {

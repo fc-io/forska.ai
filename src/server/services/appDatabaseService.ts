@@ -9,6 +9,7 @@ import {
   getDuckdbAppendRuntimeMetrics,
   getDuckdbRuntimeConfig,
   runDuckdbAppendJsonQuery,
+  runDuckdbAppendTransaction,
   runDuckdbBackgroundJsonQuery,
   runDuckdbBackgroundStatement,
   runDuckdbJsonQuery,
@@ -211,6 +212,14 @@ const appDatabaseService = {
 
           return {attempted: rows.length, inserted, skipped}
         })
+  },
+  appendTransaction: async (
+    operation: Parameters<typeof runDuckdbAppendTransaction>[0],
+    workloadContext?: DuckdbWorkloadContext,
+  ) => {
+    return withDuckdbOwnerWriteTracking('appendTransaction', () => {
+      return runDuckdbAppendTransaction(operation, workloadContext)
+    })
   },
   close: async (options: AppDatabaseCloseOptions = {}) => {
     await closeDuckdbService(options)
