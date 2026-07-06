@@ -332,6 +332,26 @@ test('projects list-mode count replacements with summary identity and definition
   expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
 })
 
+test('dirty summary recompute scopes source reads to claimed articles', async () => {
+  const {database, statements} = createSummaryDatabase({sourceRows: [sourceCountRow()]})
+
+  await projectReviewServingSummaries(
+    projectInput([
+      summaryClaim({articleId: 'article-1'}),
+      summaryClaim({articleId: 'article-2', dirtyWorkId: 'dirty-work-2', scopeId: 'project-1:article-2'}),
+    ]),
+    database,
+  )
+  const sourceStatement = statements.find((statement) => {
+    return statement.includes('FROM summary_union')
+  })
+
+  expect(sourceStatement).toContain(
+    "article_id_filter(article_id) AS (SELECT * FROM (VALUES ('article-1'), ('article-2')))",
+  )
+  expect(sourceStatement).not.toContain('FROM mart.project_scope_article scope')
+})
+
 test('projects human summary-answer facets independently from prompt answers', async () => {
   const {database, statements} = createSummaryDatabase({
     facetRows: [

@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-06 - Summary Dirty Source Scope
+
+- Error: Ordinary summary dirty claims could scan all `mart.project_scope_article` rows for a project when no rebuild chunk range was present.
+- Context: `projectReviewServingSummaries` dirty background patch wake for review-serving summary counts/facets.
+- Cause: The dirty path called the full-rebuild source helper without passing claimed article ids, so the dirty article CTE fell back to project-wide scope selection.
+- Fix: Dirty summary recompute now uses the claimed-article source helper and has a regression test asserting the source SQL uses a bounded `VALUES` article filter.
+- Verification: `bun test src/server/reviewServing/reviewServingSummaryProjector.test.ts`.
+
 ## 2026-07-06 - Retired Review-Serving Table Drain
 
 - Error: Historical rows in retired `mart.review_*_patch_v4` tables and `mart.review_article_summary_contribution_v4` could keep bloating DuckDB snapshots/backups after the serving cutover.
