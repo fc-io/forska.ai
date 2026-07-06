@@ -937,7 +937,7 @@ test('duckdb service preflights startup WAL replay in a child before opening in-
   }
 })
 
-test('duckdb service repairs indexed tables when startup mutation preflight crashes without an active WAL', () => {
+test('duckdb service retries transient startup indexed-table repair locks', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-index-repair-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
 
@@ -980,12 +980,21 @@ test('duckdb service repairs indexed tables when startup mutation preflight cras
             repairOptions = JSON.parse(String(command[4] ?? '{}'))
             repairSpecs = JSON.parse(String(command[5] ?? '[]'))
 
-            return {
-              exitCode: 0,
-              signalCode: null,
-              stdout: Buffer.from(''),
-              stderr: Buffer.from(''),
-            }
+            return repairCount === 1
+              ? {
+                  exitCode: 1,
+                  signalCode: null,
+                  stdout: Buffer.from(''),
+                  stderr: Buffer.from(
+                    'IO Error: Could not set lock on file "' + duckdbPath + '": Conflicting lock is held in bun (PID 12345) by user fredrik.',
+                  ),
+                }
+              : {
+                  exitCode: 0,
+                  signalCode: null,
+                  stdout: Buffer.from(''),
+                  stderr: Buffer.from(''),
+                }
           }
 
           preflightCount += 1
@@ -1153,7 +1162,7 @@ test('duckdb service repairs indexed tables when startup mutation preflight cras
     }
 
     expect(parsed.preflightCount).toBe(2)
-    expect(parsed.repairCount).toBe(1)
+    expect(parsed.repairCount).toBe(2)
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
     expect(parsed.walExists).toBe(false)

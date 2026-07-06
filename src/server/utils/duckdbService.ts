@@ -198,6 +198,7 @@ const duckdbCheckpointThresholdMaxMiB = 8192
 const duckdbCheckpointThresholdMinMiB = 64
 const duckdbProactiveStartupPreflightMinMemoryMiB = 6401
 const duckdbStartupWalPreflightDisabledEnvValue = 'false'
+const duckdbStartupIndexedTableRepairLockRetryDelaysMs = [100, 250, 500, 1000]
 type DuckdbStartupIndexedTableRepairSpec = {
   duplicateKeySelectSql: string
   lowMemoryStartupPreflight?: boolean
@@ -1592,6 +1593,16 @@ const isDuckdbWalReplayRecoveryError = (error: unknown) => {
   })
 }
 
+const isDuckdbTransientFileLockError = (message: string) => {
+  return message.includes('Could not set lock on file') && message.includes('Conflicting lock is held')
+}
+
+const sleepMs = (delayMs: number) => {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, delayMs)
+  })
+}
+
 const copyDuckdbDatabaseBeforeWalRecovery = async ({
   databaseBackupPath,
   databasePath,
@@ -2253,38 +2264,62 @@ const repairDuckdbStartupIndexedTables = async (runtimeConfig: DuckdbRuntimeConf
     databasePath: runtimeConfig.databasePath,
   })
 
-  const result = globalThis.Bun.spawnSync(
-    [
-      process.execPath,
-      '-e',
-      getDuckdbIndexedTableRepairScript(),
-      JSON.stringify(runtimeConfig.databasePath),
-      JSON.stringify(getDuckdbIndexedTableRepairInstanceOptions(runtimeConfig)),
-      JSON.stringify(repairSpecs),
-      JSON.stringify(repairId),
-    ],
-    {
-      cwd: process.cwd(),
-      env: {...process.env, FORSKA_DUCKDB_STARTUP_INDEX_REPAIR_CHILD: 'true'},
-      stderr: 'pipe',
-      stdin: 'ignore',
-      stdout: 'pipe',
-    },
-  )
+  let result: ReturnType<typeof globalThis.Bun.spawnSync> | null = null
+  let outputText = ''
 
-  const stderr = result.stderr.toString().trim()
-  const stdout = result.stdout.toString().trim()
-  const signalText = result.signalCode === null ? null : `signal=${result.signalCode}`
-  const outputText = [stderr, stdout, signalText]
-    .filter((value) => {
-      return value !== null && value !== ''
+  for (let attempt = 0; attempt <= duckdbStartupIndexedTableRepairLockRetryDelaysMs.length; attempt += 1) {
+    result = globalThis.Bun.spawnSync(
+      [
+        process.execPath,
+        '-e',
+        getDuckdbIndexedTableRepairScript(),
+        JSON.stringify(runtimeConfig.databasePath),
+        JSON.stringify(getDuckdbIndexedTableRepairInstanceOptions(runtimeConfig)),
+        JSON.stringify(repairSpecs),
+        JSON.stringify(repairId),
+      ],
+      {
+        cwd: process.cwd(),
+        env: {...process.env, FORSKA_DUCKDB_STARTUP_INDEX_REPAIR_CHILD: 'true'},
+        stderr: 'pipe',
+        stdin: 'ignore',
+        stdout: 'pipe',
+      },
+    )
+
+    const stderr = result.stderr.toString().trim()
+    const stdout = result.stdout.toString().trim()
+    const signalText = result.signalCode === null ? null : `signal=${result.signalCode}`
+    outputText = [stderr, stdout, signalText]
+      .filter((value) => {
+        return value !== null && value !== ''
+      })
+      .join(' -- ')
+
+    if (result.exitCode === 0) {
+      break
+    }
+
+    const retryDelayMs = duckdbStartupIndexedTableRepairLockRetryDelaysMs[attempt]
+
+    if (retryDelayMs === undefined || !isDuckdbTransientFileLockError(outputText)) {
+      break
+    }
+
+    writeRuntimeOperatorLogEvent({
+      attrs: {attempt: attempt + 1, databasePath: runtimeConfig.databasePath, error: outputText, retryDelayMs},
+      event: 'duckdb.startup.indexed-table-repair-lock-retry',
+      message: '[duckdb] retrying startup indexed-table repair after transient DuckDB file lock',
+      severity: 'WARN',
+      terminalArgs: [`attempt=${attempt + 1}`, `retry_ms=${retryDelayMs}`],
     })
-    .join(' -- ')
+    await sleepMs(retryDelayMs)
+  }
 
-  if (result.exitCode !== 0) {
+  if (result === null || result.exitCode !== 0) {
     throw new Error(
       `DuckDB startup indexed-table repair failed for ${runtimeConfig.databasePath}: ${
-        outputText === '' ? `exitCode=${result.exitCode ?? 'unknown'}` : outputText
+        outputText === '' ? `exitCode=${result?.exitCode ?? 'unknown'}` : outputText
       }`,
     )
   }
