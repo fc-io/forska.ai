@@ -4,7 +4,7 @@
 
 Make the V4 review-serving rebuild path fast enough for the review page's normal "missing snapshot" path. This plan tracks the investigation plus the implementation slices landed from it.
 
-Status: the production-safe rebuild-speed implementation is complete on latest main. The landed slices removed claimless article-range `judgmentInputContent` rebuild JS materialization, selected-import article-range rebuild JS materialization, selected-import rebuild patch production/reads in rebuild sources, dirty incremental legacy patch-table reads/writes, requestless ranged summary quarantine, full summary contribution-state publication, runtime summary contribution ledger dependency, legacy patch/contribution retention drains, and the remaining unbatched status/posting worker paths. Runtime projector reads/writes and retention remain legacy-free. True multi-writer rebuild writes are paused until further notice and should not be treated as active planned implementation work.
+Current authoritative status: the production-safe rebuild-speed implementation is complete. The landed slices removed claimless article-range `judgmentInputContent` rebuild JS materialization, selected-import article-range rebuild JS materialization, selected-import rebuild patch production/reads in rebuild sources, dirty incremental legacy patch-table reads/writes, requestless ranged summary quarantine, full summary contribution-state publication, runtime summary contribution ledger dependency, legacy patch/contribution retention drains, and the remaining unbatched status/posting worker paths. Runtime projector reads/writes and retention remain legacy-free. There are no remaining active implementation tasks in this plan except true multi-writer rebuild writes, which are paused until further notice and must not be scheduled without an explicit reopen decision plus the evidence gates below.
 
 ## Implementation Audit - Post PR #108 Merge
 
@@ -35,7 +35,7 @@ Reopening production wiring requires a new explicit decision plus all of these g
 
 ## Slice 5 Closure
 
-Additional bounded implementation slices remain only where an existing SQL-native component can safely reuse compatible range-disjoint preclaiming and the serialized writer lane. Avoid scaffolding-only parallelism because incorrect versions could change snapshot semantics, increase DuckDB memory pressure, or introduce multi-writer conflicts without proving speed or correctness. Do not start true multi-writer rebuild wiring while it is paused.
+No additional bounded implementation slices remain active in this plan. Avoid scaffolding-only parallelism because incorrect versions could change snapshot semantics, increase DuckDB memory pressure, or introduce multi-writer conflicts without proving speed or correctness. Do not start true multi-writer rebuild wiring while it is paused.
 
 Completed implementation slices on main:
 
@@ -67,22 +67,16 @@ Completed implementation slices on main:
 - Follow-up fix: the accumulator conflict update now uses an explicit DuckDB timestamp function, and `reviewServingSummaryProjector.test.ts` has DuckDB-backed coverage for conflicting partial chunks reducing through finalization.
 - Historical gate status: focused regressions and the Covidence Playwright flow passed after the fix; rerun any live current-DB progress gate only for future benchmark or release validation.
 
-## Deferred Future Work
+## Archived Closure Checklist
 
-The next work should happen only after the listed prerequisites are met:
+The former future-work checklist is archived here only as closure evidence. It is not an active implementation order.
 
-1. Complete direct final-table snapshot build.
-Implemented prerequisite: request-associated chunked full summary rebuilds now stage range partials and reduce them during completed-request finalization, with tests covering partial writes and reducer SQL. Requestless ranged summary chunks are adopted into that request finalization path. Full summary rebuild source rows now come from rebuilt serving/detail tables instead of status patch tables, finalization aggregates request-scoped contribution partials without writing the main contribution table, and dirty summary projection now directly recomputes final count/facet serving rows from serving/detail rows instead of relying on the main contribution ledger. Rebuild LLM and human status chunks now avoid status patch rows and use direct serving updates; queue rebuilds and rebuild request admission no longer consume status patch rows. Selected-import rebuild chunks now write base rows directly with SQL-native statements and refresh final serving rows directly instead of emitting or resetting selected-import patch rows, and direct rebuild readers no longer overlay selected-import patch rows. Dirty incremental projectors now avoid runtime patch-table reads/writes while preserving acknowledgement, manifest, watermark, and active/candidate semantics through direct table updates.
-2. Remaining high-fanout JS materialization removal.
-Implemented prerequisite: residual `posting` contribution diff/stat work no longer uses posting summary contribution rows; full posting writes remain set-based and incremental stats derive from serving-table counts. Judgment payload rebuilds and dirty incremental payload updates now use SQL-native detail-row writes and no longer materialize LLM/human payload source rows or writer records in JS; dirty incremental updates keep the writer transaction for acknowledgements, projection manifests, and watermark advancement only. Selected-import article-range rebuild chunks now use SQL-native base-row writes and no longer materialize selected-import rows or writer records in JS. Future prerequisite: collect current timing diagnostics after the landed slices and design SQL-native or staged paths only for other measured hotspots.
-3. Runtime presplitting removal.
-Implemented: admission-time presplitting is the normal rebuild chunking path. Legacy rows and non-OOM misestimated chunks now execute directly instead of splitting at runtime for exceeding an input-row budget; DuckDB OOM splitting remains available where range splitting is supported.
-4. Reader/transform parallelism.
-Implemented first slice: the generic compatible fallback can prepare already-preclaimed chunks concurrently, bounded by `rebuildChunkBatchSize` and the effective RSS cap, then writes prepared outputs sequentially through the existing writer lane. Audited component-specific requestless range batches are SQL-native multi-range writer paths without a separate JS reader/transform phase, so they remain unchanged. Future prerequisite: identify a real component hotspot with separable JS preparation after future diagnostics before enabling component-specific preparation.
-5. Set-based multi-chunk writer.
-Implemented for proven compatible requestless ranged batches through serialized multi-range writer transactions. Future expansion should require range-disjointness, table compatibility, and conflict/parity tests for each added shape.
-6. Controlled multi-writer execution.
-Paused until further notice. The service now has an opt-in `FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED=true` append-transaction primitive for future disjoint-writer experiments, but rebuild chunks must not use it unless the work is explicitly reopened and stable live benchmark data, write-conflict tests, and memory-spill tests prove the specific component/table/range shape is safe and faster than the serialized multi-range writer.
+1. Direct final-table snapshot build is complete: request-associated chunked full summary rebuilds stage range partials and reduce them during completed-request finalization; requestless ranged summary chunks are adopted into that request finalization path; full summary rebuild source rows come from rebuilt serving/detail tables instead of status patch tables; summary finalization aggregates request-scoped contribution partials without writing the main contribution table; dirty summary projection recomputes final count/facet serving rows from serving/detail rows; rebuild LLM and human status chunks use direct serving updates; queue rebuilds and rebuild request admission no longer consume status patch rows; selected-import rebuild chunks write base rows directly and refresh final serving rows directly; direct rebuild readers no longer overlay selected-import patch rows; and dirty incremental projectors avoid runtime patch-table reads/writes while preserving acknowledgement, manifest, watermark, and active/candidate semantics.
+2. High-fanout JS materialization removal is complete for the measured production-safe hotspots: residual `posting` contribution diff/stat work no longer uses posting summary contribution rows; full posting writes are set-based; incremental stats derive from serving-table counts; judgment payload rebuilds and dirty incremental payload updates use SQL-native detail-row writes without materializing LLM/human payload source rows or writer records in JS; and selected-import article-range rebuild chunks use SQL-native base-row writes without materializing selected-import rows or writer records in JS. Any future SQL-native or staged rewrite requires fresh timing diagnostics proving a remaining hotspot.
+3. Runtime presplitting removal is complete: admission-time presplitting is the normal rebuild chunking path; legacy rows and non-OOM misestimated chunks execute directly; DuckDB OOM splitting remains available where range splitting is supported.
+4. Reader/transform parallelism has its production-safe slice: the generic compatible fallback prepares already-preclaimed chunks concurrently, bounded by `rebuildChunkBatchSize` and the effective RSS cap, then writes prepared outputs sequentially through the existing writer lane. Audited component-specific requestless range batches are SQL-native multi-range writer paths without a separate JS reader/transform phase. Future component-specific preparation requires a newly measured separable JS hotspot.
+5. Set-based multi-chunk writing is complete for proven compatible requestless ranged batches through serialized multi-range writer transactions. Any future expansion requires range-disjointness, table compatibility, and conflict/parity tests for the exact shape.
+6. Controlled true multi-writer execution is paused until further notice. The opt-in `FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED=true` append-transaction primitive exists for future disjoint-writer experiments only; rebuild chunks must not use it unless this work is explicitly reopened and stable live benchmark data, write-conflict tests, and memory-spill tests prove the specific component/table/range shape is safe and faster than the serialized multi-range writer.
 
 ## Historical Evidence - Archived June 30/July 1 Observations
 
@@ -136,7 +130,7 @@ Historical verdict at the time: the path had started making progress, but it was
 
 ## Historical Bottlenecks From The Archived Evidence
 
-These bottlenecks describe the June 30/July 1 implementation. Some are now fixed or partially fixed by PR #108 and earlier follow-ups; the current status table and remaining roadmap above are authoritative.
+These bottlenecks describe the June 30/July 1 implementation. They are archived context only; the current status table and pause decision above are authoritative.
 
 1. The rebuild is an artificial serial waterfall.
 
@@ -219,7 +213,7 @@ Parallelism can help, but only after the work units are made safer for DuckDB an
 
 ## Plan
 
-The original checklists below are retained as historical acceptance criteria. The status lines and implemented/future-work bullets are authoritative for latest main.
+The original checklists below are retained as historical acceptance criteria. The status lines and implemented bullets are authoritative for the completed production-safe plan; future-work bullets are archived notes and not active tasks unless backed by fresh diagnostics or an explicit reopen decision.
 
 ### Phase 0 - Instrument Before Optimizing
 
@@ -288,7 +282,7 @@ Status: complete for production-safe measured hotspots.
 - Implemented: full posting rebuilds now build serving rows with a set-based `INSERT INTO ... SELECT ... ON CONFLICT` statement and omit serving rows plus posting contribution rows from generic projector record writes. Posting summary contribution state is no longer written in full rebuilds or read for incremental stats; incremental stats derive from serving-table counts plus changed rows.
 - Implemented: `judgmentInputContent`/payload rebuild chunks and dirty incremental payload updates now delete and rewrite scoped detail rows with SQL-native `INSERT INTO ... SELECT` statements, build payload JSON in DuckDB, count written rows after insert, and report zero JS materialized source/record rows. Dirty incremental updates preserve dirty-work acknowledgements, projection manifests, and watermark advancement through the shared writer transaction without generic writer records.
 - Implemented: selected-import article-range rebuild chunks now delete/insert scoped `app.review_selected_article_import_v4` rows with SQL-native statements, refresh `mart.review_article_serving_v4` rows directly from selected-import base rows, and use a post-write count, while the cursor-based selected-import batch path remains for full non-ranged base drains before the direct serving refresh.
-- Future work: complete SQL-native/source-staged paths only for lower-volume components where fresh diagnostics prove remaining JS materialization is still meaningful; add component-specific tests with each future rewrite.
+- Archived note: complete any additional SQL-native/source-staged paths only if fresh diagnostics prove remaining JS materialization is still meaningful; add component-specific tests with each reopened rewrite.
 
 - Add a bulk writer path to `writeReviewServingProjectorComponent`:
   - group records by table and conflict key,
@@ -330,7 +324,7 @@ Status: implemented.
 - Implemented: chunks with `checksum !== null` keep strict `string_agg` checksum validation; chunks with `checksum === null` use cheap count validation and store `validationMode: 'cheap-count'`.
 - Implemented: `FORSKA_REVIEW_SERVING_REBUILD_STRICT_VALIDATION=true` forces full checksum diagnostics for chunks without expected checksums and records `validationMode: 'debug-strict-checksum'`.
 - Implemented: full posting rebuild chunks can return a lightweight post-write serving count from `projectReviewServingFilterPostings`; `writeReviewServingRebuildChunkOutput` accepts that validation result and avoids the generic output-table checksum scan when exactly one posting snapshot result provides it.
-- Future work: extend source/staging checksum reuse only if future strict-validation diagnostics expose a bottleneck outside the completed posting full-rebuild path.
+- Archived note: extend source/staging checksum reuse only if future strict-validation diagnostics expose a bottleneck outside the completed posting full-rebuild path.
 
 - If a chunk has an expected checksum, keep strict checksum validation.
 - If a chunk has no expected checksum, skip full `string_agg` checksum by default and store cheaper diagnostics:
@@ -384,14 +378,12 @@ Status: complete for production-safe single-writer rebuild execution; true multi
 
 Expected result: parallelism improves CPU/query throughput without turning DuckDB into a write-lock bottleneck.
 
-## Future Implementation Order
+## Reopen Conditions
 
-1. Keep the missing-snapshot final-table build on direct sources. Selected import is direct for ranged and full rebuild chunks; rebuild LLM/human status patch writes/reads are removed; queue rebuild and rebuild request admission no longer consume status patch rows; full summary rebuild source rows read serving/detail tables; full summary finalization no longer writes or reads the main contribution table; and requestless ranged summary chunks use deterministic internal requests instead of the rejected legacy path.
-2. Dirty incremental judgment payload JS materialization has been removed; continue with other component-specific SQL-native/staged paths only where current diagnostics prove remaining JS materialization is still meaningful.
-3. Runtime input-budget presplitting has been removed; keep future chunk-size work in admission or DuckDB OOM fallback paths.
-4. Extend bounded reader/transform parallelism only where a real component has separable JS preparation; keep memory/RSS guardrails and the serialized writer lane.
-5. Keep set-based multi-chunk writers limited to proven compatible range-disjoint chunks.
-6. Use the append-transaction primitive only for explicit experiments after range-disjointness, write-conflict, memory-spill, and benchmark tests are stable; production rebuild chunks stay single-writer until those gates pass.
+This plan has no active future implementation order. Reopen it only for one of these conditions:
+
+1. Fresh rebuild timing diagnostics prove a remaining production hotspot outside the completed slices.
+2. A new explicit decision restarts true multi-writer rebuild writes, with the evidence gates in `Current Decision - True Multi-Writer Rebuild Writes Paused` satisfied for the exact component/table/range shape.
 
 ## Quality Gates
 
