@@ -2,19 +2,19 @@ import {expect, test} from 'bun:test'
 
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
-  checkReviewServingSelectedImportPatchBudget,
-  projectReviewServingSelectedImportPatches,
-  resetReviewServingSelectedImportPatchArticleRange,
-  type ReviewServingSelectedImportPatchProjectorDatabase,
-} from './reviewServingSelectedImportPatchProjector.ts'
+  checkReviewServingSelectedImportDirtyBudget,
+  projectReviewServingSelectedImportDirty,
+  resetReviewServingSelectedImportDirtyArticleRange,
+  type ReviewServingSelectedImportDirtyProjectorDatabase,
+} from './reviewServingSelectedImportDirtyProjector.ts'
 
-const createSelectedImportPatchDatabase = (input?: {
-  budgetRow?: {patchRows: number; patchWatermarks: number}
-  patchRows?: readonly Record<string, unknown>[]
+const createSelectedImportDirtyDatabase = (input?: {
+  budgetRow?: {dirtyRows: number; dirtyWatermarks: number}
+  dirtyRows?: readonly Record<string, unknown>[]
   snapshotRows?: readonly Record<string, unknown>[]
 }) => {
   const statements: string[] = []
-  const database: ReviewServingSelectedImportPatchProjectorDatabase = {
+  const database: ReviewServingSelectedImportDirtyProjectorDatabase = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
 
@@ -23,14 +23,14 @@ const createSelectedImportPatchDatabase = (input?: {
       }
 
       if (statement.includes('COUNT(DISTINCT patch_watermark)')) {
-        return [input?.budgetRow ?? {patchRows: 0, patchWatermarks: 0}] as T[]
+        return [input?.budgetRow ?? {dirtyRows: 0, dirtyWatermarks: 0}] as T[]
       }
 
       if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
         return (input?.snapshotRows ?? []) as T[]
       }
 
-      return (input?.patchRows ?? []) as T[]
+      return (input?.dirtyRows ?? []) as T[]
     },
     run: async (statement: string) => {
       statements.push(statement)
@@ -64,7 +64,7 @@ const selectedImportClaim = (input?: Partial<ReviewServingDirtyWorkClaim>): Revi
   }
 }
 
-const projectPatchInput = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+const projectDirtyInput = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return {
     baseGeneration: 3,
     claims,
@@ -76,9 +76,9 @@ const projectPatchInput = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   }
 }
 
-test('selected-import routine updates write component-narrow patches for only claimed articles', async () => {
-  const {database, statements} = createSelectedImportPatchDatabase({
-    patchRows: [
+test('selected-import dirty routine updates only claimed articles', async () => {
+  const {database, statements} = createSelectedImportDirtyDatabase({
+    dirtyRows: [
       {
         articleId: 'article-1',
         articleTitle: 'Selected Import Title',
@@ -98,13 +98,13 @@ test('selected-import routine updates write component-narrow patches for only cl
     ],
   })
 
-  const result = await projectReviewServingSelectedImportPatches(projectPatchInput([selectedImportClaim()]), database)
+  const result = await projectReviewServingSelectedImportDirty(projectDirtyInput([selectedImportClaim()]), database)
   const selectStatement = statements.find((statement) => {
     return statement.includes('WITH dirty_article(article_id)')
   })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 0, patchWatermark: 9})
+  expect(result).toEqual({dirtyRowCount: 1, dirtyWatermark: 9})
   expect(selectStatement).toContain("VALUES ('article-1')")
   expect(selectStatement).toContain('SELECT DISTINCT')
   expect(selectStatement).toContain('FROM dirty_article dirty')
@@ -141,10 +141,10 @@ test('selected-import routine updates write component-narrow patches for only cl
 })
 
 test('selected-import projector advances watermark for the max source partition', async () => {
-  const {database, statements} = createSelectedImportPatchDatabase({patchRows: []})
+  const {database, statements} = createSelectedImportDirtyDatabase({dirtyRows: []})
 
-  await projectReviewServingSelectedImportPatches(
-    projectPatchInput([
+  await projectReviewServingSelectedImportDirty(
+    projectDirtyInput([
       selectedImportClaim({
         dirtyWorkId: 'dirty-work-import',
         firstSourceHighWaterMark: 7,
@@ -171,9 +171,9 @@ test('selected-import projector advances watermark for the max source partition'
   expect(watermarkStatement).toContain('9')
 })
 
-test('selected-import projector keeps explicit manifest watermarks separate from patch row watermarks', async () => {
-  const {database, statements} = createSelectedImportPatchDatabase({
-    patchRows: [
+test('selected-import projector keeps explicit manifest watermarks separate from dirty watermarks', async () => {
+  const {database, statements} = createSelectedImportDirtyDatabase({
+    dirtyRows: [
       {
         articleId: 'article-1',
         articleTitle: 'Selected Import Title',
@@ -193,9 +193,9 @@ test('selected-import projector keeps explicit manifest watermarks separate from
     ],
   })
 
-  const result = await projectReviewServingSelectedImportPatches(
+  const result = await projectReviewServingSelectedImportDirty(
     {
-      ...projectPatchInput([
+      ...projectDirtyInput([
         selectedImportClaim({
           firstSourceHighWaterMark: 7,
           latestSourceHighWaterMark: 7,
@@ -213,14 +213,14 @@ test('selected-import projector keeps explicit manifest watermarks separate from
     )
   })
 
-  expect(result).toEqual({patchRowCount: 0, patchWatermark: 7})
+  expect(result).toEqual({dirtyRowCount: 1, dirtyWatermark: 7})
   expect(statements.join('\n')).not.toContain('mart.review_selected_import_patch_v4')
   expect(manifestStatement).toContain('\'{"importRunArticle":7,"reviewChange":9}\'::JSON')
 })
 
-test('selected-import tombstones replay idempotently with the same patch watermark and article key', async () => {
-  const {database, statements} = createSelectedImportPatchDatabase({
-    patchRows: [
+test('selected-import tombstones replay idempotently with the same dirty watermark and article key', async () => {
+  const {database, statements} = createSelectedImportDirtyDatabase({
+    dirtyRows: [
       {
         articleId: 'article-1',
         articleTitle: null,
@@ -240,15 +240,15 @@ test('selected-import tombstones replay idempotently with the same patch waterma
     ],
   })
 
-  await projectReviewServingSelectedImportPatches(projectPatchInput([selectedImportClaim()]), database)
-  await projectReviewServingSelectedImportPatches(projectPatchInput([selectedImportClaim()]), database)
+  await projectReviewServingSelectedImportDirty(projectDirtyInput([selectedImportClaim()]), database)
+  await projectReviewServingSelectedImportDirty(projectDirtyInput([selectedImportClaim()]), database)
 
   expect(statements.join('\n')).not.toContain('mart.review_selected_import_patch_v4')
 })
 
 test('selected-import tombstones clear selected columns without deleting curated scoped articles', async () => {
-  const {database, statements} = createSelectedImportPatchDatabase({
-    patchRows: [
+  const {database, statements} = createSelectedImportDirtyDatabase({
+    dirtyRows: [
       {
         articleId: 'article-1',
         articleTitle: null,
@@ -268,7 +268,7 @@ test('selected-import tombstones clear selected columns without deleting curated
     ],
   })
 
-  await projectReviewServingSelectedImportPatches(projectPatchInput([selectedImportClaim()]), database)
+  await projectReviewServingSelectedImportDirty(projectDirtyInput([selectedImportClaim()]), database)
   const joined = statements.join('\n')
 
   expect(joined).toContain('changed.scope_tombstone = TRUE')
@@ -277,10 +277,10 @@ test('selected-import tombstones clear selected columns without deleting curated
 })
 
 test('project-scoped selected-import rebuilds include previous serving articles for scope tombstones', async () => {
-  const {database, statements} = createSelectedImportPatchDatabase({patchRows: []})
+  const {database, statements} = createSelectedImportDirtyDatabase({dirtyRows: []})
 
-  await projectReviewServingSelectedImportPatches(
-    projectPatchInput([
+  await projectReviewServingSelectedImportDirty(
+    projectDirtyInput([
       selectedImportClaim({
         articleId: null,
         dirtyKind: 'project.reviewConfig.updated',
@@ -301,10 +301,10 @@ test('project-scoped selected-import rebuilds include previous serving articles 
   expect(selectStatement).toContain("snapshot.selected_import_snapshot_id = 'selected-import-snapshot-1'")
 })
 
-test('selected-import patches promote manifest and watermark atomically without unrelated component base generations', async () => {
-  const {database, statements} = createSelectedImportPatchDatabase({patchRows: []})
+test('selected-import dirty projection promotes manifest and watermark atomically without unrelated component base generations', async () => {
+  const {database, statements} = createSelectedImportDirtyDatabase({dirtyRows: []})
 
-  await projectReviewServingSelectedImportPatches(projectPatchInput([selectedImportClaim()]), database)
+  await projectReviewServingSelectedImportDirty(projectDirtyInput([selectedImportClaim()]), database)
 
   const joined = statements.join('\n')
 
@@ -317,8 +317,8 @@ test('selected-import patches promote manifest and watermark atomically without 
 })
 
 test('selected-import serving insert can seed rows from snapshot templates without existing serving rows', async () => {
-  const {database, statements} = createSelectedImportPatchDatabase({
-    patchRows: [
+  const {database, statements} = createSelectedImportDirtyDatabase({
+    dirtyRows: [
       {
         articleId: 'article-1',
         articleTitle: 'Selected Import Title',
@@ -377,7 +377,7 @@ test('selected-import serving insert can seed rows from snapshot templates witho
     ],
   })
 
-  await projectReviewServingSelectedImportPatches(projectPatchInput([selectedImportClaim()]), database)
+  await projectReviewServingSelectedImportDirty(projectDirtyInput([selectedImportClaim()]), database)
 
   const servingInsert = statements.find((statement) => {
     return statement.includes('INSERT INTO mart.review_article_serving_v4')
@@ -390,13 +390,13 @@ test('selected-import serving insert can seed rows from snapshot templates witho
   expect(servingInsert).toContain('llmStatus:identity-1')
 })
 
-test('selected-import patch budget is a no-op without legacy runtime patch reads', async () => {
-  const {database, statements} = createSelectedImportPatchDatabase({budgetRow: {patchRows: 51, patchWatermarks: 3}})
+test('selected-import dirty budget is a no-op without legacy runtime patch reads', async () => {
+  const {database, statements} = createSelectedImportDirtyDatabase({budgetRow: {dirtyRows: 51, dirtyWatermarks: 3}})
 
-  const result = await checkReviewServingSelectedImportPatchBudget(
+  const result = await checkReviewServingSelectedImportDirtyBudget(
     {
-      maxPatchRows: 50,
-      maxPatchWatermarks: 10,
+      maxDirtyRows: 50,
+      maxDirtyWatermarks: 10,
       projectId: 'project-1',
       projectScopeIdentity: 'projectScope:identity-1',
       selectedImportSnapshotId: 'selected-import-snapshot-1',
@@ -404,14 +404,14 @@ test('selected-import patch budget is a no-op without legacy runtime patch reads
     database,
   )
 
-  expect(result).toEqual({patchRows: 0, patchWatermarks: 0, shouldCompact: false})
+  expect(result).toEqual({dirtyRows: 0, dirtyWatermarks: 0, shouldCompact: false})
   expect(statements.join('\n')).not.toContain('mart.review_selected_import_patch_v4')
 })
 
-test('selected-import patch projector reset is a no-op without legacy patch rows', async () => {
-  const {database, statements} = createSelectedImportPatchDatabase()
+test('selected-import dirty article-range reset is a no-op without legacy patch rows', async () => {
+  const {database, statements} = createSelectedImportDirtyDatabase()
 
-  await resetReviewServingSelectedImportPatchArticleRange(
+  await resetReviewServingSelectedImportDirtyArticleRange(
     {
       chunkEndArticleId: 'article-099',
       chunkStartArticleId: 'article-050',
@@ -427,10 +427,10 @@ test('selected-import patch projector reset is a no-op without legacy patch rows
 })
 
 test('project-scoped selected-import rebuilds all project scope articles', async () => {
-  const {database, statements} = createSelectedImportPatchDatabase({patchRows: []})
+  const {database, statements} = createSelectedImportDirtyDatabase({dirtyRows: []})
 
-  await projectReviewServingSelectedImportPatches(
-    projectPatchInput([
+  await projectReviewServingSelectedImportDirty(
+    projectDirtyInput([
       selectedImportClaim({
         articleId: null,
         dirtyKind: 'project.reviewConfig.updated',

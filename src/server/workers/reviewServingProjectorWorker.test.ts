@@ -2918,7 +2918,7 @@ test('worker default dependencies wire real projector runners instead of an empt
   expect(source).toContain('projectReviewServingLlmStatusPatches')
   expect(source).toContain('projectReviewServingHumanStatusPatches')
   expect(source).toContain('projectReviewServingSelectedImportBatch')
-  expect(source).toContain('projectReviewServingSelectedImportPatches')
+  expect(source).toContain('projectReviewServingSelectedImportDirty')
   expect(source).toContain('projectReviewServingQueuePatches')
   expect(source).toContain('projectReviewServingFilterPostings')
   expect(source).toContain('projectReviewServingSummaries')
