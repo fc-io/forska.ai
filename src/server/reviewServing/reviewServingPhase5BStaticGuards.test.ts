@@ -144,7 +144,7 @@ test('production app code no longer writes through the legacy dirty-refresh ledg
   expect(offenders).toEqual([])
 })
 
-test('production review-serving rebuild code does not use append transactions', () => {
+test('production review-serving rebuild code keeps multi-writer append transactions paused', () => {
   const result = globalThis.Bun.spawnSync([
     'rg',
     '-n',
