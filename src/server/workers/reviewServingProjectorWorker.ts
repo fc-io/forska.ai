@@ -5806,21 +5806,30 @@ const failClaimedReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
 const prepareClaimedReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
   workloadContext: DuckdbWorkloadContext
   workerId: string
 }) => {
-  return Promise.all(
-    input.claimedChunks.map((claimed) => {
-      return measureReviewServingProjectorWorkerPhase(claimed.timings, 'prepareMs', async () => {
-        return claimed.service.prepareClaimedChunk?.({
-          chunk: claimed.chunk,
-          database: input.database,
-          leaseOwner: input.workerId,
-          workloadContext: input.workloadContext,
+  await heartbeatClaimedRebuildChunkBatchLeases(input)
+  const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)
+
+  try {
+    return await Promise.all(
+      input.claimedChunks.map((claimed) => {
+        return measureReviewServingProjectorWorkerPhase(claimed.timings, 'prepareMs', async () => {
+          return claimed.service.prepareClaimedChunk?.({
+            chunk: claimed.chunk,
+            database: input.database,
+            leaseOwner: input.workerId,
+            workloadContext: input.workloadContext,
+          })
         })
-      })
-    }),
-  )
+      }),
+    )
+  } finally {
+    stopHeartbeat()
+  }
 }
 
 const runPreparedClaimedReviewServingProjectorWorkerRebuildChunk = async (input: {
@@ -5837,6 +5846,9 @@ const runPreparedClaimedReviewServingProjectorWorkerRebuildChunk = async (input:
       leaseOwner: input.workerId,
       preparedOutput: input.preparedOutput,
       workloadContext: input.workloadContext,
+    })
+    await measureReviewServingProjectorWorkerPhase(input.claimed.timings, 'finalizeRequestMs', async () => {
+      await finalizeCompletedReviewServingRebuildRequest(input.claimed.chunk, input.database)
     })
 
     return {
@@ -6556,6 +6568,8 @@ const runReviewServingProjectorWorkerRebuildChunkBatch = async (
         const preparedOutputs = await prepareClaimedReviewServingProjectorWorkerRebuildChunkBatch({
           claimedChunks: claimedBatch.claimedChunks,
           database: input.database,
+          dependencies: input.dependencies,
+          options: input.options,
           workloadContext: input.workloadContext,
           workerId: input.workerId,
         })

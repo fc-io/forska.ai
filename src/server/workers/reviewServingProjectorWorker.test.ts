@@ -409,6 +409,136 @@ test('worker prepares compatible fallback rebuild chunks concurrently before ser
   )
   expect(maxActiveWrites).toBe(1)
   expect(preparedOutputs).toEqual([{preparedChunkId: firstChunk.chunkId}, {preparedChunkId: secondChunk.chunkId}])
+  expect(events.indexOf(`prepare-end:${firstChunk.chunkId}`)).toBeGreaterThanOrEqual(0)
+  expect(harness.heartbeatInputs.length).toBeGreaterThanOrEqual(2)
+})
+
+test('worker keeps prepared fallback batch leases alive while preparing chunks', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const firstChunkInput = {
+    ...chunkInput,
+    chunkEndKey: 'article-050',
+    chunkStartKey: 'article-001',
+    projectionComponent: 'fallbackPrepared' as ReviewServingRebuildChunkManifest['projectionComponent'],
+    projectionIdentity: 'fallbackPrepared:project-1',
+  }
+  const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
+  const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-prepared-heartbeat-1'}
+  const secondChunk = {...chunkManifest, ...secondChunkInput, chunkId: 'chunk-prepared-heartbeat-2'}
+  const chunkInputs = [firstChunkInput, secondChunkInput]
+  const chunksByStartKey = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunkInput.chunkStartKey, firstChunk],
+    [secondChunkInput.chunkStartKey, secondChunk],
+  ])
+  const chunksById = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunk.chunkId, firstChunk],
+    [secondChunk.chunkId, secondChunk],
+  ])
+  const events: string[] = []
+  let nextIndex = 0
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInputs[nextIndex++] ?? null
+    },
+    heartbeatChunk: async (heartbeatInput) => {
+      harness.heartbeatInputs.push(heartbeatInput)
+      events.push(`heartbeat:${heartbeatInput.chunkId}`)
+
+      return chunksById.get(heartbeatInput.chunkId) ?? null
+    },
+    prepareClaimedChunk: async ({chunk}) => {
+      events.push(`prepare:${chunk.chunkId}`)
+
+      return {preparedChunkId: chunk.chunkId}
+    },
+    runClaimedChunk: async ({chunk}) => {
+      events.push(`write:${chunk.chunkId}`)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result.chunkBatchCount).toBe(2)
+  expect(result.chunk).toMatchObject({chunkId: secondChunk.chunkId, status: 'completed'})
+  expect(events.indexOf(`heartbeat:${firstChunk.chunkId}`)).toBeLessThan(
+    events.indexOf(`prepare:${firstChunk.chunkId}`),
+  )
+  expect(events.indexOf(`heartbeat:${secondChunk.chunkId}`)).toBeLessThan(
+    events.indexOf(`prepare:${firstChunk.chunkId}`),
+  )
+})
+
+test('worker finalizes prepared fallback rebuild requests after completed writes', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const statements: string[] = []
+  const requestId = 'request-prepared-finalize'
+  const preparedChunkInput = {
+    ...chunkInput,
+    projectionComponent: 'fallbackPrepared' as ReviewServingRebuildChunkManifest['projectionComponent'],
+    projectionIdentity: 'fallbackPrepared:project-1',
+    requestId,
+  }
+  const preparedChunk = {...chunkManifest, ...preparedChunkInput, chunkId: 'chunk-prepared-finalize', requestId}
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return preparedChunk
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return preparedChunkInput
+    },
+    prepareClaimedChunk: async ({chunk}) => {
+      return {preparedChunkId: chunk.chunkId}
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('COUNT(*) AS pendingChunkCount')) {
+      return [{pendingChunkCount: 0}] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+  const joined = statements.join('\n')
+
+  expect(result.chunkBatchCount).toBe(1)
+  expect(result.chunk).toMatchObject({chunkId: preparedChunk.chunkId, requestId, status: 'completed'})
+  expect(harness.runChunkInputs).toEqual([preparedChunk])
+  expect(joined).toContain('AS pendingChunkCount')
+  expect(joined).toContain("status = 'completed'")
 })
 
 test('worker keeps prepared fallback writes serialized and fails remaining chunk on write failure', async () => {
