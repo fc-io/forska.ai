@@ -11,6 +11,7 @@ import {
   getDeleteReviewServingProjectorRowsStatement,
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
+  type ReviewServingProjectorWriterDiagnostics,
   writeReviewServingProjectorComponent,
   writeReviewServingTitleSearchRebuildRanges,
   writeReviewServingTitleSearchRebuildRows,
@@ -66,6 +67,43 @@ type SelectedImportTitleSqlInput = {
 const titleSearchProjectorName = 'title-search-projector'
 const titleSearchTokenizerVersion = 'title-token-v1'
 const titlePrefixLength = 128
+
+const getNonNegativeElapsedMs = (startedAtMs: number) => {
+  return Math.max(0, Date.now() - startedAtMs)
+}
+
+const getTimedProjector = () => {
+  const phaseTimings: Record<string, number> = {}
+  const measure = async <T>(phase: string, operation: () => Promise<T>) => {
+    const startedAtMs = Date.now()
+    const result = await operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const measureSync = <T>(phase: string, operation: () => T) => {
+    const startedAtMs = Date.now()
+    const result = operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+
+  return {measure, measureSync, phaseTimings}
+}
+
+const getTitleSearchDiagnosticsJson = (input: {
+  phaseTimings: Record<string, number>
+  sourceRowCount?: number
+  writer?: ReviewServingProjectorWriterDiagnostics
+}) => {
+  return {
+    phaseTimings: input.phaseTimings,
+    titleSearchProjector: {sourceRowCount: input.sourceRowCount, writer: input.writer},
+  }
+}
+
+const withDiagnosticsJson = <T extends object>(result: T, diagnosticsJson: unknown): T => {
+  return Object.defineProperty(result, 'diagnosticsJson', {enumerable: false, value: diagnosticsJson})
+}
 
 const getPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return Math.max(
@@ -309,52 +347,65 @@ export const projectReviewServingTitleSearchRows = async (
   input: ProjectReviewServingTitleSearchInput,
   database: ReviewServingTitleSearchProjectorDatabase = getAppDatabaseService() as ReviewServingTitleSearchProjectorDatabase,
 ) => {
+  const {measure, measureSync, phaseTimings} = getTimedProjector()
   const claims = input.claims ?? []
-  const rows = await getTitleSearchRows(input, database)
+  const rows = await measure('sourceQueryMs', async () => {
+    return getTitleSearchRows(input, database)
+  })
   const definitionVersion = input.definitionVersion
   const projectionIdentity = input.projectionIdentity
-  const records = rows.flatMap((row) => {
-    return row.tombstone
-      ? []
-      : getReviewServingTitleSearchTokens(row.articleTitle).map((token) => {
-          return getTitleSearchRecord(input, row, token)
-        })
+  const records = measureSync('recordTransformMs', () => {
+    return rows.flatMap((row) => {
+      return row.tombstone
+        ? []
+        : getReviewServingTitleSearchTokens(row.articleTitle).map((token) => {
+            return getTitleSearchRecord(input, row, token)
+          })
+    })
   })
   const patchWatermark = getPatchWatermark(claims)
   const hasClaimedWork = claims.length > 0 && definitionVersion !== undefined && projectionIdentity !== undefined
 
-  await writeReviewServingProjectorComponent(
-    {
-      acknowledgements: hasClaimedWork && input.acknowledgeClaims !== false ? claims : [],
-      component: 'search',
-      projectionManifests: hasClaimedWork
-        ? [getTitleSearchManifest({...input, claims, definitionVersion, projectionIdentity})]
-        : [],
-      records,
-      statements: getDeleteDirtyTitleSearchRowsStatements(input),
-      watermark: hasClaimedWork
-        ? {
-            projectId: input.projectId,
-            projectionComponent: 'search',
-            projectorName: titleSearchProjectorName,
-            sourceHighWaterMark: patchWatermark,
-            sourcePartition: getClaimSourcePartition(claims),
-          }
-        : undefined,
-    },
-    database,
-  )
+  const writer = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        acknowledgements: hasClaimedWork && input.acknowledgeClaims !== false ? claims : [],
+        component: 'search',
+        projectionManifests: hasClaimedWork
+          ? [getTitleSearchManifest({...input, claims, definitionVersion, projectionIdentity})]
+          : [],
+        records,
+        statements: getDeleteDirtyTitleSearchRowsStatements(input),
+        watermark: hasClaimedWork
+          ? {
+              projectId: input.projectId,
+              projectionComponent: 'search',
+              projectorName: titleSearchProjectorName,
+              sourceHighWaterMark: patchWatermark,
+              sourcePartition: getClaimSourcePartition(claims),
+            }
+          : undefined,
+      },
+      database,
+    )
+  })
 
-  return {patchWatermark, searchRowCount: records.length}
+  return withDiagnosticsJson(
+    {patchWatermark, searchRowCount: records.length},
+    getTitleSearchDiagnosticsJson({phaseTimings, sourceRowCount: rows.length, writer: writer.diagnostics}),
+  )
 }
 
 export const projectReviewServingTitleSearchRebuildRows = async (
   input: ProjectReviewServingTitleSearchRebuildInput,
   database: ReviewServingTitleSearchProjectorDatabase = getAppDatabaseService() as ReviewServingTitleSearchProjectorDatabase,
 ) => {
-  await writeReviewServingTitleSearchRebuildRows(getReviewServingTitleSearchRebuildWriterInput(input), database)
+  const {measure, phaseTimings} = getTimedProjector()
+  await measure('writerMs', async () => {
+    return writeReviewServingTitleSearchRebuildRows(getReviewServingTitleSearchRebuildWriterInput(input), database)
+  })
 
-  return {patchWatermark: 0}
+  return withDiagnosticsJson({patchWatermark: 0}, getTitleSearchDiagnosticsJson({phaseTimings}))
 }
 
 const getReviewServingTitleSearchRebuildWriterInput = (input: ProjectReviewServingTitleSearchRebuildInput) => {
@@ -377,14 +428,20 @@ export const projectReviewServingTitleSearchRebuildRanges = async (
   input: ProjectReviewServingTitleSearchRebuildRangesInput,
   database: ReviewServingTitleSearchProjectorDatabase = getAppDatabaseService() as ReviewServingTitleSearchProjectorDatabase,
 ) => {
-  await writeReviewServingTitleSearchRebuildRanges(
-    {
-      ranges: input.ranges.map((range) => {
-        return getReviewServingTitleSearchRebuildWriterInput(range)
-      }),
-    },
-    database,
-  )
+  const {measure, phaseTimings} = getTimedProjector()
+  const writer = await measure('writerMs', async () => {
+    return writeReviewServingTitleSearchRebuildRanges(
+      {
+        ranges: input.ranges.map((range) => {
+          return getReviewServingTitleSearchRebuildWriterInput(range)
+        }),
+      },
+      database,
+    )
+  })
 
-  return {patchWatermark: 0, rangeCount: input.ranges.length}
+  return withDiagnosticsJson(
+    {patchWatermark: 0, rangeCount: input.ranges.length},
+    getTitleSearchDiagnosticsJson({phaseTimings, writer: writer.diagnostics}),
+  )
 }

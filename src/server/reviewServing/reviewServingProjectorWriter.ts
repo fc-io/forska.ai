@@ -588,7 +588,7 @@ export const writeReviewServingTitleSearchRebuildRanges = async (
   input: WriteReviewServingTitleSearchRebuildRangesInput,
   database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
 ) => {
-  await writeReviewServingProjectorComponent(
+  return writeReviewServingProjectorComponent(
     {
       component: 'search',
       projectionManifests: [],
@@ -657,7 +657,7 @@ export const writeReviewServingQueueRebuildRanges = async (
   input: WriteReviewServingQueueRebuildRangesInput,
   database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
 ) => {
-  await writeReviewServingProjectorComponent(
+  return writeReviewServingProjectorComponent(
     {
       component: 'queue',
       projectionManifests: [],

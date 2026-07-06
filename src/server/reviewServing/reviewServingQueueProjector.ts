@@ -10,6 +10,7 @@ import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjecto
 import {
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
+  type ReviewServingProjectorWriterDiagnostics,
   writeReviewServingProjectorComponent,
   writeReviewServingQueueRebuildRanges,
   writeReviewServingQueueRebuildRows,
@@ -58,6 +59,43 @@ type QueueSourceRow = {
 
 const queueProjectorName = 'queue-projector'
 const staleQueueSortAt = '1970-01-01T00:00:00.000Z'
+
+const getNonNegativeElapsedMs = (startedAtMs: number) => {
+  return Math.max(0, Date.now() - startedAtMs)
+}
+
+const getTimedProjector = () => {
+  const phaseTimings: Record<string, number> = {}
+  const measure = async <T>(phase: string, operation: () => Promise<T>) => {
+    const startedAtMs = Date.now()
+    const result = await operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const measureSync = <T>(phase: string, operation: () => T) => {
+    const startedAtMs = Date.now()
+    const result = operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+
+  return {measure, measureSync, phaseTimings}
+}
+
+const getQueueDiagnosticsJson = (input: {
+  phaseTimings: Record<string, number>
+  sourceRowCount?: number
+  writer?: ReviewServingProjectorWriterDiagnostics
+}) => {
+  return {
+    phaseTimings: input.phaseTimings,
+    queueProjector: {sourceRowCount: input.sourceRowCount, writer: input.writer},
+  }
+}
+
+const withDiagnosticsJson = <T extends object>(result: T, diagnosticsJson: unknown): T => {
+  return Object.defineProperty(result, 'diagnosticsJson', {enumerable: false, value: diagnosticsJson})
+}
 
 const getPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return Math.max(
@@ -527,46 +565,63 @@ export const projectReviewServingQueuePatches = async (
   input: ProjectReviewServingQueueInput,
   database: ReviewServingQueueProjectorDatabase = getAppDatabaseService() as ReviewServingQueueProjectorDatabase,
 ) => {
-  const rows = await getQueueRows(input, database)
-  const servingRecords = rows
-    .map((row) => {
-      return getUnassessedQueueServingRecord(input, row)
-    })
-    .filter((record) => {
-      return record !== null
-    })
+  const {measure, measureSync, phaseTimings} = getTimedProjector()
+  const rows = await measure('sourceQueryMs', async () => {
+    return getQueueRows(input, database)
+  })
+  const servingRecords = measureSync('recordTransformMs', () => {
+    return rows
+      .map((row) => {
+        return getUnassessedQueueServingRecord(input, row)
+      })
+      .filter((record) => {
+        return record !== null
+      })
+  })
   const patchWatermark = getPatchWatermark(input.claims)
-  const deleteReplacedQueueServingStatement = getDeleteReplacedQueueServingStatement(input, rows)
+  const deleteReplacedQueueServingStatement = measureSync('deleteStatementBuildMs', () => {
+    return getDeleteReplacedQueueServingStatement(input, rows)
+  })
 
-  await writeReviewServingProjectorComponent(
-    {
-      acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
-      component: 'queue',
-      projectionManifests: input.claims.length === 0 ? [] : [getQueuePatchManifest(input)],
-      records: servingRecords,
-      statements: deleteReplacedQueueServingStatement === null ? [] : [deleteReplacedQueueServingStatement],
-      watermark:
-        input.claims.length === 0
-          ? undefined
-          : {
-              projectId: input.projectId,
-              projectionComponent: 'queue',
-              projectorName: queueProjectorName,
-              sourceHighWaterMark: patchWatermark,
-              sourcePartition: getClaimSourcePartition(input.claims),
-            },
-    },
-    database,
+  const writer = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
+        component: 'queue',
+        projectionManifests: input.claims.length === 0 ? [] : [getQueuePatchManifest(input)],
+        records: servingRecords,
+        statements: deleteReplacedQueueServingStatement === null ? [] : [deleteReplacedQueueServingStatement],
+        watermark:
+          input.claims.length === 0
+            ? undefined
+            : {
+                projectId: input.projectId,
+                projectionComponent: 'queue',
+                projectorName: queueProjectorName,
+                sourceHighWaterMark: patchWatermark,
+                sourcePartition: getClaimSourcePartition(input.claims),
+              },
+      },
+      database,
+    )
+  })
+
+  return withDiagnosticsJson(
+    {patchRowCount: 0, patchWatermark, servingRowCount: servingRecords.length},
+    getQueueDiagnosticsJson({phaseTimings, sourceRowCount: rows.length, writer: writer.diagnostics}),
   )
-
-  return {patchRowCount: 0, patchWatermark, servingRowCount: servingRecords.length}
 }
 
 export const projectReviewServingQueueRebuildRows = async (
   input: ProjectReviewServingQueueRebuildInput,
   database: Pick<ReviewServingQueueProjectorDatabase, 'run'> = getAppDatabaseService(),
 ) => {
-  await writeReviewServingQueueRebuildRows(getReviewServingQueueRebuildWriterInput(input), database)
+  const {measure, phaseTimings} = getTimedProjector()
+  await measure('writerMs', async () => {
+    return writeReviewServingQueueRebuildRows(getReviewServingQueueRebuildWriterInput(input), database)
+  })
+
+  return withDiagnosticsJson({}, getQueueDiagnosticsJson({phaseTimings}))
 }
 
 const getReviewServingQueueRebuildWriterInput = (input: ProjectReviewServingQueueRebuildInput) => {
@@ -588,12 +643,17 @@ export const projectReviewServingQueueRebuildRanges = async (
   input: ProjectReviewServingQueueRebuildRangesInput,
   database: ReviewServingQueueProjectorDatabase = getAppDatabaseService() as ReviewServingQueueProjectorDatabase,
 ) => {
-  await writeReviewServingQueueRebuildRanges(
-    {
-      ranges: input.ranges.map((range) => {
-        return getReviewServingQueueRebuildWriterInput(range)
-      }),
-    },
-    database,
-  )
+  const {measure, phaseTimings} = getTimedProjector()
+  const writer = await measure('writerMs', async () => {
+    return writeReviewServingQueueRebuildRanges(
+      {
+        ranges: input.ranges.map((range) => {
+          return getReviewServingQueueRebuildWriterInput(range)
+        }),
+      },
+      database,
+    )
+  })
+
+  return withDiagnosticsJson({}, getQueueDiagnosticsJson({phaseTimings, writer: writer.diagnostics}))
 }

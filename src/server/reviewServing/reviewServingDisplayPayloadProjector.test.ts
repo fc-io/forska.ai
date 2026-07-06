@@ -9,6 +9,12 @@ import {
   type ReviewServingDisplayPayloadProjectorDatabase,
 } from './reviewServingDisplayPayloadProjector.ts'
 
+type ProjectorDiagnosticsResult = {diagnosticsJson: {phaseTimings: Record<string, number>}}
+
+const getProjectorDiagnostics = (result: object) => {
+  return (result as ProjectorDiagnosticsResult).diagnosticsJson
+}
+
 const createDisplayPayloadDatabase = (input?: {
   displayBaseRows?: readonly Record<string, unknown>[]
   displayPatchRows?: readonly Record<string, unknown>[]
@@ -120,6 +126,9 @@ test('display routine updates write component-narrow patches for only claimed ar
   })
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 6})
+  expect(getProjectorDiagnostics(result).phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
+  expect(getProjectorDiagnostics(result).phaseTimings.recordTransformMs).toBeGreaterThanOrEqual(0)
+  expect(getProjectorDiagnostics(result).phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
   expect(selectStatement).toContain("VALUES ('article-1')")
   expect(selectStatement).toContain(
     'COALESCE(article.article_created_at, scope.article_created_at, current_timestamp) AS sortKey',
@@ -196,6 +205,9 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
   const joined = statements.join('\n')
 
   expect(result).toEqual({payloadRowCount: 1, patchWatermark: 0})
+  expect(getProjectorDiagnostics(result).phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
+  expect(getProjectorDiagnostics(result).phaseTimings.recordTransformMs).toBeGreaterThanOrEqual(0)
+  expect(getProjectorDiagnostics(result).phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
   expect(selectStatement).toContain('article.article_created_at AS articleCreatedAt')
   expect(selectStatement).toContain('json_merge_patch')
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
@@ -243,6 +255,7 @@ test('payload rebuild ranges write payload rows with SQL-native range statements
   const joined = statements.join('\n')
 
   expect(result).toEqual({rangeCount: 2})
+  expect(getProjectorDiagnostics(result).phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
   expect(joined).toContain('DELETE FROM mart.review_article_serving_payload_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_payload_v4')
   expect(joined).toContain('WITH payload_source AS')

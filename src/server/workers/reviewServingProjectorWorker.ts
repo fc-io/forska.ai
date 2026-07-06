@@ -175,6 +175,14 @@ type ReviewServingProjectorWorkerDependencies = {
 
 const reviewServingProjectorWorkerCycleLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 
+const getNonNegativeElapsedMs = (startedAtMs: number) => {
+  return Math.max(0, Date.now() - startedAtMs)
+}
+
+const getProjectorResultDiagnosticsJson = (result: object) => {
+  return (result as {diagnosticsJson?: unknown}).diagnosticsJson ?? {}
+}
+
 type ReviewServingProjectorWorkerCycleOptions = {
   batchSize?: number
   cleanupIntervalMs?: number
@@ -1356,9 +1364,9 @@ const runDisplayRebuildChunk = async (
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
 
-        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
-          await previous
-          await projectReviewServingDisplayBaseRows(
+        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(async (previous, snapshot) => {
+          const diagnostics = await previous
+          const result = await projectReviewServingDisplayBaseRows(
             {
               baseGeneration: input.chunk.outputBaseGeneration,
               chunkEndArticleId: input.chunk.chunkEndKey,
@@ -1379,7 +1387,11 @@ const runDisplayRebuildChunk = async (
             },
             chunkDatabase,
           )
-        }, Promise.resolve())
+
+          return [...diagnostics, {snapshotId: snapshot.snapshotId, ...getProjectorResultDiagnosticsJson(result)}]
+        }, Promise.resolve([]))
+
+        return {diagnosticsJson: {displayProjectorSnapshots: snapshotDiagnostics}}
       },
     },
     database,
@@ -1420,9 +1432,9 @@ const runPayloadRebuildChunk = async (
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
 
-        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
-          await previous
-          await projectReviewServingPayloadRanges(
+        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(async (previous, snapshot) => {
+          const diagnostics = await previous
+          const result = await projectReviewServingPayloadRanges(
             {
               ranges: [
                 {
@@ -1439,7 +1451,11 @@ const runPayloadRebuildChunk = async (
             },
             chunkDatabase,
           )
-        }, Promise.resolve())
+
+          return [...diagnostics, {snapshotId: snapshot.snapshotId, ...getProjectorResultDiagnosticsJson(result)}]
+        }, Promise.resolve([]))
+
+        return {diagnosticsJson: {payloadProjectorSnapshots: snapshotDiagnostics}}
       },
     },
     database,
@@ -1480,9 +1496,9 @@ const runSearchRebuildChunk = async (
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
 
-        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
-          await previous
-          await projectReviewServingTitleSearchRebuildRows(
+        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(async (previous, snapshot) => {
+          const diagnostics = await previous
+          const result = await projectReviewServingTitleSearchRebuildRows(
             {
               baseGeneration: input.chunk.outputBaseGeneration,
               chunkEndArticleId: input.chunk.chunkEndKey,
@@ -1495,7 +1511,11 @@ const runSearchRebuildChunk = async (
             },
             chunkDatabase,
           )
-        }, Promise.resolve())
+
+          return [...diagnostics, {snapshotId: snapshot.snapshotId, ...getProjectorResultDiagnosticsJson(result)}]
+        }, Promise.resolve([]))
+
+        return {diagnosticsJson: {titleSearchProjectorSnapshots: snapshotDiagnostics}}
       },
     },
     database,
@@ -1533,7 +1553,7 @@ const runLlmStatusRebuildChunk = async (
         })
       },
       writeOutput: async (tx) => {
-        await projectReviewServingLlmStatusPatches(
+        const result = await projectReviewServingLlmStatusPatches(
           {
             baseGeneration: input.chunk.outputBaseGeneration,
             chunkEndArticleId: input.chunk.chunkEndKey,
@@ -1546,6 +1566,8 @@ const runLlmStatusRebuildChunk = async (
           },
           getChunkProjectorDatabase(tx),
         )
+
+        return {diagnosticsJson: getProjectorResultDiagnosticsJson(result)}
       },
     },
     database,
@@ -1577,7 +1599,7 @@ const runHumanStatusRebuildChunk = async (
         })
       },
       writeOutput: async (tx) => {
-        await projectReviewServingHumanStatusPatches(
+        const result = await projectReviewServingHumanStatusPatches(
           {
             acknowledgeClaims: false,
             baseGeneration: input.chunk.outputBaseGeneration,
@@ -1591,6 +1613,8 @@ const runHumanStatusRebuildChunk = async (
           },
           getChunkProjectorDatabase(tx),
         )
+
+        return {diagnosticsJson: getProjectorResultDiagnosticsJson(result)}
       },
     },
     database,
@@ -1623,9 +1647,9 @@ const runQueueRebuildChunk = async (
       writeOutput: async (tx) => {
         const chunkDatabase = getChunkProjectorDatabase(tx)
 
-        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
-          await previous
-          await projectReviewServingQueueRebuildRows(
+        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(async (previous, snapshot) => {
+          const diagnostics = await previous
+          const result = await projectReviewServingQueueRebuildRows(
             {
               baseGeneration: input.chunk.outputBaseGeneration,
               chunkEndArticleId: input.chunk.chunkEndKey,
@@ -1638,7 +1662,11 @@ const runQueueRebuildChunk = async (
             },
             chunkDatabase,
           )
-        }, Promise.resolve())
+
+          return [...diagnostics, {snapshotId: snapshot.snapshotId, ...getProjectorResultDiagnosticsJson(result)}]
+        }, Promise.resolve([]))
+
+        return {diagnosticsJson: {queueProjectorSnapshots: snapshotDiagnostics}}
       },
     },
     database,
@@ -2497,23 +2525,27 @@ const runSelectedImportRebuildChunk = async (
       writeOutput: async (tx) => {
         const projectorDatabase = getChunkProjectorDatabase(tx)
 
-        await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
-          await previous
+        const snapshotDiagnostics = await snapshots.reduce<Promise<unknown[]>>(async (previous, snapshot) => {
+          const diagnostics = await previous
           const selectedImportSnapshotId = requireSelectedImportSnapshotId(snapshot)
           const projectScopeIdentity = requireSnapshotComponentIdentity(snapshot, 'projectScope')
           const existingSnapshot = await getSelectedImportSnapshotStatus(selectedImportSnapshotId, projectorDatabase)
           const sourceDeltaHighWater = Number(existingSnapshot?.sourceDeltaHighWater ?? input.chunk.inputWatermark)
 
           if (shouldRunFullSelectedImportRebuildChunk(input.chunk)) {
+            const deleteResetStartedAtMs = Date.now()
             await resetSelectedImportSnapshotForClaimedRebuild(
               {...input, projectId, projectScopeIdentity, selectedImportSnapshotId},
               projectorDatabase,
             )
+            const deleteResetMs = getNonNegativeElapsedMs(deleteResetStartedAtMs)
+            const sourceQueryStartedAtMs = Date.now()
             await drainSelectedImportBaseProjectionForClaimedRebuild(
               {...input, projectId, projectScopeIdentity, selectedImportSnapshotId, sourceDeltaHighWater},
               projectorDatabase,
             )
-            await refreshReviewServingSelectedImportServingArticleRange(
+            const sourceQueryMs = getNonNegativeElapsedMs(sourceQueryStartedAtMs)
+            const refreshResult = await refreshReviewServingSelectedImportServingArticleRange(
               {
                 chunkEndArticleId: input.chunk.chunkEndKey,
                 chunkStartArticleId: input.chunk.chunkStartKey,
@@ -2526,13 +2558,34 @@ const runSelectedImportRebuildChunk = async (
               },
               projectorDatabase,
             )
+
+            const refreshDiagnostics = getProjectorResultDiagnosticsJson(refreshResult) as {
+              phaseTimings?: Record<string, number>
+            }
+
+            return [
+              ...diagnostics,
+              {
+                snapshotId: snapshot.snapshotId,
+                ...refreshDiagnostics,
+                phaseTimings: {...(refreshDiagnostics.phaseTimings ?? {}), deleteResetMs, sourceQueryMs},
+              },
+            ]
           } else {
+            const rangeStartedAtMs = Date.now()
             await projectSelectedImportArticleRangeForClaimedRebuild(
               {...input, projectId, projectScopeIdentity, selectedImportSnapshotId, sourceDeltaHighWater},
               projectorDatabase,
             )
+
+            return [
+              ...diagnostics,
+              {snapshotId: snapshot.snapshotId, phaseTimings: {writerMs: getNonNegativeElapsedMs(rangeStartedAtMs)}},
+            ]
           }
-        }, Promise.resolve())
+        }, Promise.resolve([]))
+
+        return {diagnosticsJson: {selectedImportProjectorSnapshots: snapshotDiagnostics}}
       },
     },
     database,
@@ -2582,6 +2635,7 @@ const getSelectedImportRebuildChunkBatchRange = (input: {
 const completeSelectedImportRebuildChunkAfterBatchWrite = async (
   input: {
     batchRangeCount: number
+    batchWriteMs: number
     chunk: ReviewServingRebuildChunkManifest
     leaseOwner: string
     selectedImportSnapshotIds: readonly string[]
@@ -2591,7 +2645,10 @@ const completeSelectedImportRebuildChunkAfterBatchWrite = async (
   const completedChunk = await writeReviewServingRebuildChunkOutput(
     {
       ...input.chunk,
-      diagnosticsJson: {selectedImportBatchWriter: {rangeCount: input.batchRangeCount}},
+      diagnosticsJson: {
+        phaseTimings: {batchWriteMs: input.batchWriteMs},
+        selectedImportBatchWriter: {rangeCount: input.batchRangeCount},
+      },
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
@@ -2640,6 +2697,7 @@ const runSelectedImportRebuildChunkBatch = async (
     return requireSelectedImportSnapshotId(snapshot)
   })
 
+  const batchWriteStartedAtMs = Date.now()
   await database.transaction(async (tx) => {
     await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
       await previous
@@ -2667,11 +2725,18 @@ const runSelectedImportRebuildChunkBatch = async (
       await projectReviewServingSelectedImportArticleRanges({ranges}, projectorDatabase)
     }, Promise.resolve())
   })
+  const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
 
   await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
     await previous
     await completeSelectedImportRebuildChunkAfterBatchWrite(
-      {batchRangeCount: input.chunks.length, chunk, leaseOwner: input.leaseOwner, selectedImportSnapshotIds},
+      {
+        batchRangeCount: input.chunks.length,
+        batchWriteMs,
+        chunk,
+        leaseOwner: input.leaseOwner,
+        selectedImportSnapshotIds,
+      },
       database,
     )
   }, Promise.resolve())
@@ -2698,6 +2763,7 @@ const canRunDisplayRebuildChunkBatch = (chunks: readonly ReviewServingRebuildChu
 const completeDisplayRebuildChunkAfterBatchWrite = async (
   input: {
     batchRangeCount: number
+    batchWriteMs: number
     chunk: ReviewServingRebuildChunkManifest
     leaseOwner: string
     snapshotIds: readonly string[]
@@ -2707,7 +2773,10 @@ const completeDisplayRebuildChunkAfterBatchWrite = async (
   const completedChunk = await writeReviewServingRebuildChunkOutput(
     {
       ...input.chunk,
-      diagnosticsJson: {displayBatchWriter: {rangeCount: input.batchRangeCount}},
+      diagnosticsJson: {
+        displayBatchWriter: {rangeCount: input.batchRangeCount},
+        phaseTimings: {batchWriteMs: input.batchWriteMs},
+      },
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
@@ -2751,6 +2820,7 @@ const runDisplayRebuildChunkBatch = async (
     return snapshot.snapshotId
   })
 
+  const batchWriteStartedAtMs = Date.now()
   await database.transaction(async (tx) => {
     await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
       await previous
@@ -2788,11 +2858,12 @@ const runDisplayRebuildChunkBatch = async (
       )
     }, Promise.resolve())
   })
+  const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
 
   await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
     await previous
     await completeDisplayRebuildChunkAfterBatchWrite(
-      {batchRangeCount: input.chunks.length, chunk, leaseOwner: input.leaseOwner, snapshotIds},
+      {batchRangeCount: input.chunks.length, batchWriteMs, chunk, leaseOwner: input.leaseOwner, snapshotIds},
       database,
     )
   }, Promise.resolve())
@@ -2819,6 +2890,7 @@ const canRunPayloadRebuildChunkBatch = (chunks: readonly ReviewServingRebuildChu
 const completePayloadRebuildChunkAfterBatchWrite = async (
   input: {
     batchRangeCount: number
+    batchWriteMs: number
     chunk: ReviewServingRebuildChunkManifest
     leaseOwner: string
     snapshotIds: readonly string[]
@@ -2828,7 +2900,10 @@ const completePayloadRebuildChunkAfterBatchWrite = async (
   const completedChunk = await writeReviewServingRebuildChunkOutput(
     {
       ...input.chunk,
-      diagnosticsJson: {payloadBatchWriter: {rangeCount: input.batchRangeCount}},
+      diagnosticsJson: {
+        payloadBatchWriter: {rangeCount: input.batchRangeCount},
+        phaseTimings: {batchWriteMs: input.batchWriteMs},
+      },
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
@@ -2870,6 +2945,7 @@ const runPayloadRebuildChunkBatch = async (
   const snapshots = await getRebuildChunkSnapshots(firstChunk, database)
   const snapshotIds = getRebuildSnapshotIds(snapshots)
 
+  const batchWriteStartedAtMs = Date.now()
   await database.transaction(async (tx) => {
     await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
       await previous
@@ -2899,11 +2975,12 @@ const runPayloadRebuildChunkBatch = async (
       )
     }, Promise.resolve())
   })
+  const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
 
   await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
     await previous
     await completePayloadRebuildChunkAfterBatchWrite(
-      {batchRangeCount: input.chunks.length, chunk, leaseOwner: input.leaseOwner, snapshotIds},
+      {batchRangeCount: input.chunks.length, batchWriteMs, chunk, leaseOwner: input.leaseOwner, snapshotIds},
       database,
     )
   }, Promise.resolve())
@@ -2930,6 +3007,7 @@ const canRunSearchRebuildChunkBatch = (chunks: readonly ReviewServingRebuildChun
 const completeSearchRebuildChunkAfterBatchWrite = async (
   input: {
     batchRangeCount: number
+    batchWriteMs: number
     chunk: ReviewServingRebuildChunkManifest
     leaseOwner: string
     snapshotIds: readonly string[]
@@ -2939,7 +3017,10 @@ const completeSearchRebuildChunkAfterBatchWrite = async (
   const completedChunk = await writeReviewServingRebuildChunkOutput(
     {
       ...input.chunk,
-      diagnosticsJson: {searchBatchWriter: {rangeCount: input.batchRangeCount}},
+      diagnosticsJson: {
+        phaseTimings: {batchWriteMs: input.batchWriteMs},
+        searchBatchWriter: {rangeCount: input.batchRangeCount},
+      },
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
@@ -2983,6 +3064,7 @@ const runSearchRebuildChunkBatch = async (
     return snapshot.snapshotId
   })
 
+  const batchWriteStartedAtMs = Date.now()
   await database.transaction(async (tx) => {
     await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
       await previous
@@ -3012,11 +3094,12 @@ const runSearchRebuildChunkBatch = async (
       )
     }, Promise.resolve())
   })
+  const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
 
   await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
     await previous
     await completeSearchRebuildChunkAfterBatchWrite(
-      {batchRangeCount: input.chunks.length, chunk, leaseOwner: input.leaseOwner, snapshotIds},
+      {batchRangeCount: input.chunks.length, batchWriteMs, chunk, leaseOwner: input.leaseOwner, snapshotIds},
       database,
     )
   }, Promise.resolve())
@@ -3043,6 +3126,7 @@ const canRunQueueRebuildChunkBatch = (chunks: readonly ReviewServingRebuildChunk
 const completeQueueRebuildChunkAfterBatchWrite = async (
   input: {
     batchRangeCount: number
+    batchWriteMs: number
     chunk: ReviewServingRebuildChunkManifest
     leaseOwner: string
     snapshotIds: readonly string[]
@@ -3052,7 +3136,10 @@ const completeQueueRebuildChunkAfterBatchWrite = async (
   const completedChunk = await writeReviewServingRebuildChunkOutput(
     {
       ...input.chunk,
-      diagnosticsJson: {queueBatchWriter: {rangeCount: input.batchRangeCount}},
+      diagnosticsJson: {
+        phaseTimings: {batchWriteMs: input.batchWriteMs},
+        queueBatchWriter: {rangeCount: input.batchRangeCount},
+      },
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
@@ -3094,6 +3181,7 @@ const runQueueRebuildChunkBatch = async (
   const snapshots = await getRebuildChunkSnapshots(firstChunk, database)
   const snapshotIds = getRebuildSnapshotIds(snapshots)
 
+  const batchWriteStartedAtMs = Date.now()
   await database.transaction(async (tx) => {
     await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
       await previous
@@ -3123,11 +3211,12 @@ const runQueueRebuildChunkBatch = async (
       )
     }, Promise.resolve())
   })
+  const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
 
   await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
     await previous
     await completeQueueRebuildChunkAfterBatchWrite(
-      {batchRangeCount: input.chunks.length, chunk, leaseOwner: input.leaseOwner, snapshotIds},
+      {batchRangeCount: input.chunks.length, batchWriteMs, chunk, leaseOwner: input.leaseOwner, snapshotIds},
       database,
     )
   }, Promise.resolve())
@@ -3290,6 +3379,7 @@ const canRunLlmStatusRebuildChunkBatch = (chunks: readonly ReviewServingRebuildC
 const completeLlmStatusRebuildChunkAfterBatchWrite = async (
   input: {
     batchRangeCount: number
+    batchWriteMs: number
     chunk: ReviewServingRebuildChunkManifest
     leaseOwner: string
     snapshotIds: readonly string[]
@@ -3299,7 +3389,10 @@ const completeLlmStatusRebuildChunkAfterBatchWrite = async (
   const completedChunk = await writeReviewServingRebuildChunkOutput(
     {
       ...input.chunk,
-      diagnosticsJson: {llmStatusBatchWriter: {rangeCount: input.batchRangeCount}},
+      diagnosticsJson: {
+        llmStatusBatchWriter: {rangeCount: input.batchRangeCount},
+        phaseTimings: {batchWriteMs: input.batchWriteMs},
+      },
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
@@ -3342,6 +3435,7 @@ const runLlmStatusRebuildChunkBatch = async (
   const snapshots = await getRebuildChunkSnapshots(firstChunk, database)
   const snapshotIds = getRebuildSnapshotIds(snapshots)
 
+  const batchWriteStartedAtMs = Date.now()
   await database.transaction(async (tx) => {
     await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
       await previous
@@ -3367,11 +3461,12 @@ const runLlmStatusRebuildChunkBatch = async (
       )
     }, Promise.resolve())
   })
+  const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
 
   await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
     await previous
     await completeLlmStatusRebuildChunkAfterBatchWrite(
-      {batchRangeCount: input.chunks.length, chunk, leaseOwner: input.leaseOwner, snapshotIds},
+      {batchRangeCount: input.chunks.length, batchWriteMs, chunk, leaseOwner: input.leaseOwner, snapshotIds},
       database,
     )
   }, Promise.resolve())
@@ -3398,6 +3493,7 @@ const canRunHumanStatusRebuildChunkBatch = (chunks: readonly ReviewServingRebuil
 const completeHumanStatusRebuildChunkAfterBatchWrite = async (
   input: {
     batchRangeCount: number
+    batchWriteMs: number
     chunk: ReviewServingRebuildChunkManifest
     leaseOwner: string
     snapshotIds: readonly string[]
@@ -3407,7 +3503,10 @@ const completeHumanStatusRebuildChunkAfterBatchWrite = async (
   const completedChunk = await writeReviewServingRebuildChunkOutput(
     {
       ...input.chunk,
-      diagnosticsJson: {humanStatusBatchWriter: {rangeCount: input.batchRangeCount}},
+      diagnosticsJson: {
+        humanStatusBatchWriter: {rangeCount: input.batchRangeCount},
+        phaseTimings: {batchWriteMs: input.batchWriteMs},
+      },
       leaseOwner: input.leaseOwner,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
@@ -3450,6 +3549,7 @@ const runHumanStatusRebuildChunkBatch = async (
   const snapshots = await getRebuildChunkSnapshots(firstChunk, database)
   const snapshotIds = getRebuildSnapshotIds(snapshots)
 
+  const batchWriteStartedAtMs = Date.now()
   await database.transaction(async (tx) => {
     await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
       await previous
@@ -3476,11 +3576,12 @@ const runHumanStatusRebuildChunkBatch = async (
       )
     }, Promise.resolve())
   })
+  const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
 
   await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
     await previous
     await completeHumanStatusRebuildChunkAfterBatchWrite(
-      {batchRangeCount: input.chunks.length, chunk, leaseOwner: input.leaseOwner, snapshotIds},
+      {batchRangeCount: input.chunks.length, batchWriteMs, chunk, leaseOwner: input.leaseOwner, snapshotIds},
       database,
     )
   }, Promise.resolve())
