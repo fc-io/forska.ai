@@ -144,6 +144,24 @@ test('production app code no longer writes through the legacy dirty-refresh ledg
   expect(offenders).toEqual([])
 })
 
+test('production review-serving rebuild code does not use append transactions', () => {
+  const result = globalThis.Bun.spawnSync([
+    'rg',
+    '-n',
+    'runDuckdbAppendTransaction|FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED',
+    'src/server/workers/reviewServingProjectorWorker.ts',
+    'src/server/reviewServing',
+    '-g',
+    '*.ts',
+    '-g',
+    '!*.test.ts',
+  ])
+  const output = result.stdout.toString().trim()
+  const offenders = output.split('\n').filter(Boolean)
+
+  expect(offenders).toEqual([])
+})
+
 test('Phase 5B package commands do not expose normal legacy rebuild workers', async () => {
   const packageJson = (await globalThis.Bun.file(join(projectRoot, 'package.json')).json()) as {
     scripts: Record<string, string>
