@@ -28,7 +28,7 @@ test('computes in-memory old/new contribution diffs for counts, facets, badges, 
 })
 
 test('contribution diffs do not create runtime SQL for the legacy summary contribution table', async () => {
-  const serviceSource = await Bun.file(import.meta.dir + '/reviewServingContributionService.ts').text()
+  const serviceSource = await globalThis.Bun.file(import.meta.dir + '/reviewServingContributionService.ts').text()
 
   expect(serviceSource).not.toContain('review_article_summary_contribution_v4')
 })

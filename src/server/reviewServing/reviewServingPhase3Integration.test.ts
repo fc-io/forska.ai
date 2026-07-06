@@ -193,13 +193,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
             component,
             records: [
               {
-                keyColumns: [
-                  'project_id',
-                  'review_config_hash',
-                  'snapshot_id',
-                  'list_mode_key',
-                  'article_id',
-                ],
+                keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'list_mode_key', 'article_id'],
                 table: 'mart.review_article_serving_v4',
                 values: {
                   article_id: 'article-1',
@@ -248,12 +242,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
             component,
             records: [
               {
-                keyColumns: [
-                  'project_id',
-                  'project_scope_identity',
-                  'selected_import_snapshot_id',
-                  'article_id',
-                ],
+                keyColumns: ['project_id', 'project_scope_identity', 'selected_import_snapshot_id', 'article_id'],
                 table: 'app.review_selected_article_import_v4',
                 values: {
                   article_id: 'article-1',
