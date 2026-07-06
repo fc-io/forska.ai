@@ -145,10 +145,17 @@ type ReviewServingProjectorWorkerRebuildChunkService = {
   }) => Promise<ReviewServingProjectorWorkerChunkInput | null>
   heartbeatChunk: typeof heartbeatReviewServingRebuildChunkLease
   isChunkComplete: typeof isReviewServingRebuildChunkComplete
+  prepareClaimedChunk?: (input: {
+    chunk: ReviewServingRebuildChunkManifest
+    database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase
+    leaseOwner: string
+    workloadContext: DuckdbWorkloadContext
+  }) => Promise<unknown>
   runClaimedChunk: (input: {
     chunk: ReviewServingRebuildChunkManifest
     database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase
     leaseOwner: string
+    preparedOutput?: unknown
     workloadContext: DuckdbWorkloadContext
   }) => Promise<{status: 'completed'}>
 }
@@ -5575,7 +5582,19 @@ const runClaimedReviewServingProjectorWorkerRebuildChunk = async ({
       )
     }
     await measureReviewServingProjectorWorkerPhase(timings, 'executeMs', async () => {
-      await service.runClaimedChunk({chunk: effectiveClaimedChunk, database, leaseOwner: workerId, workloadContext})
+      const preparedOutput = await service.prepareClaimedChunk?.({
+        chunk: effectiveClaimedChunk,
+        database,
+        leaseOwner: workerId,
+        workloadContext,
+      })
+      await service.runClaimedChunk({
+        chunk: effectiveClaimedChunk,
+        database,
+        leaseOwner: workerId,
+        preparedOutput,
+        workloadContext,
+      })
     })
     stopHeartbeat()
   } catch (error) {
@@ -5782,6 +5801,51 @@ const failClaimedReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   }
 
   return {chunk: firstFailedResult, completedCount: input.completedCount}
+}
+
+const prepareClaimedReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
+  claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase
+  workloadContext: DuckdbWorkloadContext
+  workerId: string
+}) => {
+  return Promise.all(
+    input.claimedChunks.map((claimed) => {
+      return measureReviewServingProjectorWorkerPhase(claimed.timings, 'prepareMs', async () => {
+        return claimed.service.prepareClaimedChunk?.({
+          chunk: claimed.chunk,
+          database: input.database,
+          leaseOwner: input.workerId,
+          workloadContext: input.workloadContext,
+        })
+      })
+    }),
+  )
+}
+
+const runPreparedClaimedReviewServingProjectorWorkerRebuildChunk = async (input: {
+  claimed: ClaimedReviewServingProjectorWorkerRebuildChunk
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase
+  preparedOutput: unknown
+  workloadContext: DuckdbWorkloadContext
+  workerId: string
+}) => {
+  return measureReviewServingProjectorWorkerPhase(input.claimed.timings, 'executeMs', async () => {
+    await input.claimed.service.runClaimedChunk({
+      chunk: input.claimed.chunk,
+      database: input.database,
+      leaseOwner: input.workerId,
+      preparedOutput: input.preparedOutput,
+      workloadContext: input.workloadContext,
+    })
+
+    return {
+      chunkId: input.claimed.chunk.chunkId,
+      projectionComponent: input.claimed.chunk.projectionComponent,
+      requestId: input.claimed.chunk.requestId,
+      status: 'completed' as const,
+    }
+  })
 }
 
 const runProjectScopeReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
@@ -6481,6 +6545,52 @@ const runReviewServingProjectorWorkerRebuildChunkBatch = async (
 
     if (postingBatch !== null) {
       return postingBatch
+    }
+
+    const hasPreparedBatch = claimedBatch.claimedChunks.every((claimed) => {
+      return claimed.service.prepareClaimedChunk !== undefined
+    })
+
+    if (hasPreparedBatch) {
+      try {
+        const preparedOutputs = await prepareClaimedReviewServingProjectorWorkerRebuildChunkBatch({
+          claimedChunks: claimedBatch.claimedChunks,
+          database: input.database,
+          workloadContext: input.workloadContext,
+          workerId: input.workerId,
+        })
+
+        for (const [index, claimed] of claimedBatch.claimedChunks.entries()) {
+          await heartbeatClaimedRebuildChunkBatchLeases({
+            claimedChunks: claimedBatch.claimedChunks,
+            database: input.database,
+            dependencies: input.dependencies,
+            options: input.options,
+            workerId: input.workerId,
+          })
+
+          const chunk = await runPreparedClaimedReviewServingProjectorWorkerRebuildChunk({
+            claimed,
+            database: input.database,
+            preparedOutput: preparedOutputs[index],
+            workloadContext: input.workloadContext,
+            workerId: input.workerId,
+          })
+
+          completedCount += 1
+          lastCompletedChunk = chunk
+        }
+
+        return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
+      } catch (error) {
+        return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
+          claimedChunks: claimedBatch.claimedChunks.slice(completedCount),
+          completedCount,
+          database: input.database,
+          error,
+          workerId: input.workerId,
+        })
+      }
     }
 
     for (const claimed of claimedBatch.claimedChunks) {

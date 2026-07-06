@@ -315,6 +315,188 @@ test('worker can drain multiple rebuild chunks in one opt-in batch', async () =>
   expect(harness.wakeInputs).toHaveLength(1)
 })
 
+test('worker prepares compatible fallback rebuild chunks concurrently before serialized writes', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const firstChunkInput = {
+    ...chunkInput,
+    chunkEndKey: 'article-050',
+    chunkStartKey: 'article-001',
+    projectionComponent: 'fallbackPrepared' as ReviewServingRebuildChunkManifest['projectionComponent'],
+    projectionIdentity: 'fallbackPrepared:project-1',
+  }
+  const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
+  const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-prepared-1'}
+  const secondChunk = {...chunkManifest, ...secondChunkInput, chunkId: 'chunk-prepared-2'}
+  const chunkInputs = [firstChunkInput, secondChunkInput]
+  const chunksByStartKey = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunkInput.chunkStartKey, firstChunk],
+    [secondChunkInput.chunkStartKey, secondChunk],
+  ])
+  const chunksById = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunk.chunkId, firstChunk],
+    [secondChunk.chunkId, secondChunk],
+  ])
+  const events: string[] = []
+  const preparedOutputs: unknown[] = []
+  let activeWrites = 0
+  let maxActiveWrites = 0
+  let nextIndex = 0
+  let prepareStartedCount = 0
+  let releasePreparations: (() => void) | null = null
+  const allPreparationsStarted = new Promise<void>((resolve) => {
+    releasePreparations = resolve
+  })
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInputs[nextIndex++] ?? null
+    },
+    heartbeatChunk: async (heartbeatInput) => {
+      harness.heartbeatInputs.push(heartbeatInput)
+
+      return chunksById.get(heartbeatInput.chunkId) ?? null
+    },
+    prepareClaimedChunk: async ({chunk}) => {
+      events.push(`prepare-start:${chunk.chunkId}`)
+      prepareStartedCount += 1
+
+      if (prepareStartedCount === 2) {
+        releasePreparations?.()
+      }
+
+      await allPreparationsStarted
+      events.push(`prepare-end:${chunk.chunkId}`)
+
+      return {preparedChunkId: chunk.chunkId}
+    },
+    runClaimedChunk: async ({chunk, preparedOutput}) => {
+      events.push(`write-start:${chunk.chunkId}`)
+      preparedOutputs.push(preparedOutput)
+      activeWrites += 1
+      maxActiveWrites = Math.max(maxActiveWrites, activeWrites)
+      await Promise.resolve()
+      activeWrites -= 1
+      events.push(`write-end:${chunk.chunkId}`)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result.chunk).toMatchObject({chunkId: secondChunk.chunkId, status: 'completed'})
+  expect(result.chunkBatchCount).toBe(2)
+  expect(events.indexOf(`prepare-start:${firstChunk.chunkId}`)).toBeLessThan(
+    events.indexOf(`write-start:${firstChunk.chunkId}`),
+  )
+  expect(events.indexOf(`prepare-start:${secondChunk.chunkId}`)).toBeLessThan(
+    events.indexOf(`write-start:${firstChunk.chunkId}`),
+  )
+  expect(events).toContain(`write-end:${firstChunk.chunkId}`)
+  expect(events.indexOf(`write-end:${firstChunk.chunkId}`)).toBeLessThan(
+    events.indexOf(`write-start:${secondChunk.chunkId}`),
+  )
+  expect(maxActiveWrites).toBe(1)
+  expect(preparedOutputs).toEqual([{preparedChunkId: firstChunk.chunkId}, {preparedChunkId: secondChunk.chunkId}])
+})
+
+test('worker keeps prepared fallback writes serialized and fails remaining chunk on write failure', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const firstChunkInput = {
+    ...chunkInput,
+    chunkEndKey: 'article-050',
+    chunkStartKey: 'article-001',
+    projectionComponent: 'fallbackPrepared' as ReviewServingRebuildChunkManifest['projectionComponent'],
+    projectionIdentity: 'fallbackPrepared:project-1',
+  }
+  const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
+  const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-prepared-failure-1'}
+  const secondChunk = {...chunkManifest, ...secondChunkInput, chunkId: 'chunk-prepared-failure-2'}
+  const chunkInputs = [firstChunkInput, secondChunkInput]
+  const chunksByStartKey = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunkInput.chunkStartKey, firstChunk],
+    [secondChunkInput.chunkStartKey, secondChunk],
+  ])
+  const chunksById = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunk.chunkId, firstChunk],
+    [secondChunk.chunkId, secondChunk],
+  ])
+  const events: string[] = []
+  let activeWrites = 0
+  let maxActiveWrites = 0
+  let nextIndex = 0
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    failChunk: async (failure) => {
+      harness.failedChunks.push(failure)
+
+      return {...(chunksById.get(failure.chunkId) ?? secondChunk), status: 'failed' as const}
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInputs[nextIndex++] ?? null
+    },
+    heartbeatChunk: async (heartbeatInput) => {
+      harness.heartbeatInputs.push(heartbeatInput)
+
+      return chunksById.get(heartbeatInput.chunkId) ?? null
+    },
+    prepareClaimedChunk: async ({chunk}) => {
+      events.push(`prepare:${chunk.chunkId}`)
+
+      return {preparedChunkId: chunk.chunkId}
+    },
+    runClaimedChunk: async ({chunk}) => {
+      events.push(`write-start:${chunk.chunkId}`)
+      activeWrites += 1
+      maxActiveWrites = Math.max(maxActiveWrites, activeWrites)
+      await Promise.resolve()
+      activeWrites -= 1
+      events.push(`write-end:${chunk.chunkId}`)
+
+      if (chunk.chunkId === secondChunk.chunkId) {
+        throw new Error('prepared write failed')
+      }
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result.status).toBe('failed')
+  expect(result.chunk).toMatchObject({chunkId: secondChunk.chunkId, status: 'failed'})
+  expect(result.chunkBatchCount).toBe(1)
+  expect(maxActiveWrites).toBe(1)
+  expect(events.indexOf(`write-end:${firstChunk.chunkId}`)).toBeLessThan(
+    events.indexOf(`write-start:${secondChunk.chunkId}`),
+  )
+  expect(harness.failedChunks).toEqual([
+    {chunkId: secondChunk.chunkId, error: 'prepared write failed', leaseOwner: 'worker-1'},
+  ])
+})
+
 test('worker does not preclaim incompatible rebuild chunks in one batch', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const firstChunkInput = {...chunkInput, chunkEndKey: 'article-050', chunkStartKey: 'article-001'}
