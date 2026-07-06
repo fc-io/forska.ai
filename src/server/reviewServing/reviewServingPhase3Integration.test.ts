@@ -168,16 +168,15 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
             component,
             records: [
               {
-                keyColumns: ['project_id', 'display_identity', 'base_generation', 'patch_watermark', 'article_id'],
-                table: 'mart.review_article_display_patch_v4',
+                keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'list_mode_key', 'article_id'],
+                table: 'mart.review_article_serving_v4',
                 values: {
                   article_id: 'article-1',
                   article_title: 'Display title',
-                  base_generation: 1,
-                  display_identity: 'display:identity',
-                  patch_watermark: 12,
+                  list_mode_key: 'llm',
                   project_id: 'project-1',
-                  tombstone: false,
+                  review_config_hash: 'review-config-1',
+                  snapshot_id: 'snapshot-1',
                 },
               },
             ],
@@ -197,25 +196,18 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
                 keyColumns: [
                   'project_id',
                   'review_config_hash',
-                  'prompt_config_hash',
-                  'base_generation',
-                  'patch_watermark',
+                  'snapshot_id',
                   'list_mode_key',
                   'article_id',
-                  'prompt_id',
                 ],
-                table: 'mart.review_llm_status_patch_v4',
+                table: 'mart.review_article_serving_v4',
                 values: {
                   article_id: 'article-1',
-                  base_generation: 1,
                   is_answered: true,
                   list_mode_key: 'llm',
-                  patch_watermark: 11,
                   project_id: 'project-1',
-                  prompt_config_hash: 'prompt-config-1',
-                  prompt_id: 'prompt-1',
                   review_config_hash: 'review-config-1',
-                  tombstone: false,
+                  snapshot_id: 'snapshot-1',
                 },
               },
             ],
@@ -260,17 +252,14 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
                   'project_id',
                   'project_scope_identity',
                   'selected_import_snapshot_id',
-                  'patch_watermark',
                   'article_id',
                 ],
-                table: 'mart.review_selected_import_patch_v4',
+                table: 'app.review_selected_article_import_v4',
                 values: {
                   article_id: 'article-1',
-                  patch_watermark: 14,
                   project_id: 'project-1',
                   project_scope_identity: 'projectScope:identity',
                   selected_import_snapshot_id: 'selected-import-1',
-                  tombstone: false,
                 },
               },
             ],
@@ -389,10 +378,10 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   ])
   expect(joined).toContain('BEGIN review-serving-writer')
   expect(joined).toContain('COMMIT review-serving-writer')
-  expect(joined).toContain('INSERT INTO mart.review_article_display_patch_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_title_search_serving_v4')
-  expect(joined).toContain('INSERT INTO mart.review_selected_import_patch_v4')
-  expect(joined).toContain('INSERT INTO mart.review_llm_status_patch_v4')
+  expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
+  expect(joined).not.toContain('_patch_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
 })
@@ -481,13 +470,13 @@ test('required route components share one logical snapshot while optional compon
   ).toBe('unavailable')
 })
 
-test('Phase 3 patch and selected-import guard coverage stays inventoried', () => {
+test('Phase 3 direct serving and selected-import guard coverage stays inventoried', () => {
   const coverage = [
     {
       filePath: 'src/server/reviewServing/reviewServingDisplayPayloadProjector.test.ts',
       markers: [
-        'display routine updates write component-narrow patches for only claimed articles',
-        'mart.review_article_display_patch_v4',
+        'display base rows flow through writer with display fields and selected import hot projection',
+        'mart.review_article_serving_v4',
         "not.toContain('selected_scoped_article_import')",
       ],
     },
@@ -499,22 +488,22 @@ test('Phase 3 patch and selected-import guard coverage stays inventoried', () =>
       ],
     },
     {
-      filePath: 'src/server/reviewServing/reviewServingSelectedImportPatchProjector.test.ts',
+      filePath: 'src/server/reviewServing/reviewServingSelectedImportProjector.test.ts',
       markers: [
-        'selected-import routine updates write component-narrow patches for only claimed articles',
-        'mart.review_selected_import_patch_v4',
+        'selected-import article range rebuild can refresh final serving rows from base rows',
+        'app.review_selected_article_import_v4',
       ],
     },
     {
       filePath: 'src/server/reviewServing/reviewServingLlmStatusProjector.test.ts',
       markers: [
         'LLM judgment deltas update serving directly from persisted benchmark config',
-        'mart.review_llm_status_patch_v4',
+        'mart.review_article_serving_v4',
       ],
     },
     {
       filePath: 'src/server/reviewServing/reviewServingHumanStatusProjector.test.ts',
-      markers: ['human prompt answer deltas update serving directly', 'mart.review_human_status_patch_v4'],
+      markers: ['human prompt answer deltas update serving directly', 'mart.review_article_serving_v4'],
     },
     {
       filePath: 'src/server/reviewServing/reviewServingSelectedImportProjector.test.ts',

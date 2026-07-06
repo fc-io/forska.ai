@@ -42,6 +42,7 @@ Immediate sensible work completed in this PR:
 12. Display, payload, title-search, queue, and posting full rebuild source reads no longer overlay `mart.review_selected_import_patch_v4`; they read selected-import base rows directly.
 13. Full summary rebuilds no longer delete, publish, or refresh from `mart.review_article_summary_contribution_v4`; direct full rebuilds write only final serving rows, and request-associated reducers aggregate request-scoped contribution partials.
 14. Requestless summary adoption has real DuckDB coverage for persisted `review_rebuild_request` and chunk `request_id` linkage, and the adoption SQL uses explicit `now()` timestamps in conflict updates.
+15. Legacy V4 runtime patch-table cleanup and promotion compaction hooks have been removed from retention, selected-import rebuild reset, and snapshot promotion; retention now only cleans active serving/base tables protected by active, last-known-good, and pinned snapshots.
 
 ## Live Gate Blocker - July 4 Summary Finalization RSS
 
@@ -434,6 +435,11 @@ Current Phase 3 slice verification:
 - `bun test src/server/reviewServing/reviewServingLlmStatusProjector.test.ts`
 - `bun test src/server/reviewServing/reviewServingHumanStatusProjector.test.ts`
 - `bun test src/server/workers/reviewServingProjectorWorker.test.ts`
+
+Current legacy patch cleanup removal verification:
+
+- `bun test src/server/reviewServing/reviewServingRetentionService.test.ts src/server/workers/reviewServingProjectorWorker.test.ts`
+- `bun test src/server/reviewServing/reviewServingPhase5BStaticGuards.test.ts src/server/reviewServing/reviewServingPhase3Integration.test.ts src/server/utils/duckdbServiceReload.test.ts`
 
 Historical investigation commands:
 

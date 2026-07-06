@@ -1220,34 +1220,14 @@ test('duckdb service repairs indexed tables when startup mutation preflight cras
     expect(judgmentDetailProbe?.mutationProbeSql).toContain(
       'INSERT INTO mart.review_article_judgment_detail_serving_v4 BY NAME',
     )
-    const llmStatusProbe = parsed.firstPreflightSpecs.find((spec) => {
-      return spec.schemaName === 'mart' && spec.tableName === 'review_llm_status_patch_v4'
-    })
-    expect(llmStatusProbe?.mutationProbeSql).toContain("projection_component = 'llmStatus'")
-    expect(llmStatusProbe?.mutationProbeSql).toContain('C++ exception')
-    expect(llmStatusProbe?.mutationProbeSql).toContain('INSERT INTO mart.review_llm_status_patch_v4 BY NAME')
-    expect(llmStatusProbe?.repairStrategy).toBe('empty-derived')
-    expect(llmStatusProbe?.postRepairSql).toContain("projection_component = 'llmStatus'")
-    expect(llmStatusProbe?.postRepairSql).toContain("status IN ('completed', 'running')")
-    expect(llmStatusProbe?.postRepairSchemaRequirements).toContainEqual({
-      columnNames: ['admission_state', 'request_id', 'retry_after'],
-      schemaName: 'app',
-      tableName: 'review_rebuild_chunk_manifest',
-    })
-    const humanStatusProbe = parsed.firstPreflightSpecs.find((spec) => {
-      return spec.schemaName === 'mart' && spec.tableName === 'review_human_status_patch_v4'
-    })
-    expect(humanStatusProbe?.mutationProbeSql).toContain("projection_component = 'humanStatus'")
-    expect(humanStatusProbe?.mutationProbeSql).toContain('C++ exception')
-    expect(humanStatusProbe?.mutationProbeSql).toContain('INSERT INTO mart.review_human_status_patch_v4 BY NAME')
-    expect(humanStatusProbe?.repairStrategy).toBe('empty-derived')
-    expect(humanStatusProbe?.postRepairSql).toContain("projection_component = 'humanStatus'")
-    expect(humanStatusProbe?.postRepairSql).toContain("status IN ('completed', 'running')")
-    expect(humanStatusProbe?.postRepairSchemaRequirements).toContainEqual({
-      columnNames: ['admission_state', 'request_id', 'retry_after'],
-      schemaName: 'app',
-      tableName: 'review_rebuild_chunk_manifest',
-    })
+    const legacyPatchProbeTables = parsed.firstPreflightSpecs
+      .filter((spec) => {
+        return spec.schemaName === 'mart' && spec.tableName.startsWith('review_') && spec.tableName.endsWith('_patch_v4')
+      })
+      .map((spec) => {
+        return spec.tableName
+      })
+    expect(legacyPatchProbeTables).toEqual([])
     expect(
       parsed.recoveryFiles.filter((fileName) => {
         return fileName.endsWith('.pre-repair.duckdb')

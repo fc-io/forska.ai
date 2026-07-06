@@ -1,6 +1,5 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {type ReviewServingSnapshotManifest} from './reviewServingManifestRepository.ts'
 
 export type ReviewServingRetentionServiceTransaction = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -11,16 +10,12 @@ export type ReviewServingRetentionServiceDatabase = ReviewServingRetentionServic
   transaction: <T>(operation: (tx: ReviewServingRetentionServiceTransaction) => Promise<T>) => Promise<T>
 }
 
-export type ReviewServingPatchBudget = {maxPatchRows: number; maxPatchWatermarks: number}
-
 export type ReviewServingRetentionCleanupInput = {
   batchSize: number
   now: Date | string
   projectId: string
   reviewConfigHash?: string | null
 }
-
-export type ReviewServingCompactionResult = {compactedComponents: readonly []}
 
 export type ReviewServingRetentionCleanupResult = {retentionScope: string}
 
@@ -32,7 +27,6 @@ type RetentionStateRow = {
 }
 
 type CleanupTableSpec = {keyColumn: string; protectedPredicate: string; table: string}
-type LegacyPatchCleanupTableSpec = {table: string}
 
 const defaultRetentionCleanupBatchSize = 512
 const defaultRetentionCleanupTargetLimit = 16
@@ -58,15 +52,6 @@ const cleanupTableSpecs: readonly CleanupTableSpec[] = [
     protectedPredicate: 'selected_import_snapshot_id',
     table: 'app.review_selected_article_import_v4',
   },
-]
-
-const legacyPatchCleanupTableSpecs: readonly LegacyPatchCleanupTableSpec[] = [
-  {table: 'mart.review_article_display_patch_v4'},
-  {table: 'mart.review_selected_import_patch_v4'},
-  {table: 'mart.review_llm_status_patch_v4'},
-  {table: 'mart.review_human_status_patch_v4'},
-  {table: 'mart.review_queue_patch_v4'},
-  {table: 'mart.review_article_filter_posting_patch_v4'},
 ]
 
 const getReviewServingRetentionDatabase = () => {
@@ -169,10 +154,6 @@ const getRetentionCursorIndex = (row: RetentionStateRow | null) => {
   return Math.max(0, Number(cursor?.tableIndex ?? 0))
 }
 
-const isCleanupTableSpec = (spec: CleanupTableSpec | LegacyPatchCleanupTableSpec): spec is CleanupTableSpec => {
-  return 'protectedPredicate' in spec
-}
-
 const deleteCleanupBatch = async (
   input: ReviewServingRetentionCleanupInput & {spec: CleanupTableSpec},
   database: ReviewServingRetentionServiceTransaction,
@@ -208,36 +189,6 @@ const deleteCleanupBatch = async (
   `)
 }
 
-const deleteLegacyPatchCleanupBatch = async (
-  input: ReviewServingRetentionCleanupInput & {spec: LegacyPatchCleanupTableSpec},
-  database: ReviewServingRetentionServiceTransaction,
-) => {
-  await database.run(`
-    DELETE FROM ${input.spec.table}
-    WHERE rowid IN (
-        SELECT candidate.rowid
-        FROM ${input.spec.table} candidate
-        WHERE candidate.project_id = ${getSqlLiteral(input.projectId)}
-        ORDER BY candidate.rowid
-        LIMIT ${getSqlLiteral(input.batchSize)}
-      )
-  `)
-}
-
-export const assessReviewServingCandidatePatchBudgets = async (
-  _input: {budget?: ReviewServingPatchBudget; candidate: ReviewServingSnapshotManifest},
-  _database: ReviewServingRetentionServiceTransaction = getReviewServingRetentionDatabase(),
-) => {
-  return []
-}
-
-export const compactReviewServingCandidateSnapshotPatches = async (
-  _input: {budget?: ReviewServingPatchBudget; candidate: ReviewServingSnapshotManifest},
-  _database: ReviewServingRetentionServiceDatabase = getReviewServingRetentionDatabase(),
-): Promise<ReviewServingCompactionResult> => {
-  return {compactedComponents: []}
-}
-
 export const cleanupReviewServingRetentionState = async (
   input: ReviewServingRetentionCleanupInput,
   database: ReviewServingRetentionServiceDatabase = getReviewServingRetentionDatabase(),
@@ -246,21 +197,16 @@ export const cleanupReviewServingRetentionState = async (
     const retentionScope = getRetentionScope(input)
     const retentionState = await getRetentionState(retentionScope, tx)
     const tableIndex = getRetentionCursorIndex(retentionState)
-    const allSpecs = [...cleanupTableSpecs, ...legacyPatchCleanupTableSpecs]
-    const spec = allSpecs[tableIndex % allSpecs.length]
+    const spec = cleanupTableSpecs[tableIndex % cleanupTableSpecs.length]
 
-    if (spec !== undefined && isCleanupTableSpec(spec)) {
+    if (spec !== undefined) {
       await deleteCleanupBatch({...input, spec}, tx)
-    }
-
-    if (spec !== undefined && !isCleanupTableSpec(spec)) {
-      await deleteLegacyPatchCleanupBatch({...input, spec}, tx)
     }
 
     await writeRetentionMark(
       {
         baseGeneration: Number(retentionState?.baseGeneration ?? 0),
-        cursor: {tableIndex: (tableIndex + 1) % allSpecs.length},
+        cursor: {tableIndex: (tableIndex + 1) % cleanupTableSpecs.length},
         patchWatermark: Number(retentionState?.patchWatermark ?? 0),
         retentionScope,
         snapshotId: retentionState?.snapshotId ?? null,
