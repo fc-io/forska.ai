@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-06 - Scoped Legacy Retention Starvation
+
+- Error: Retired legacy LLM-status patch or summary contribution rows could remain after cleanup when a project had more review-config groups than the retention cleanup target limit.
+- Context: `cleanupReviewServingRetentionState` legacy drain targets selected through capped `review_serving_snapshot_manifest` groups.
+- Cause: Legacy drains were scoped to the selected `review_config_hash`, but retention progress only updated `review_serving_retention_mark`, so the same old manifest groups could keep being selected while other config-scoped legacy rows were never drained.
+- Fix: Retired legacy drain deletes are project-wide again for each selected project while remaining bounded by table cursor and batch size.
+- Verification: `bun test src/server/reviewServing/reviewServingRetentionService.test.ts`; live current-DB progress gate.
+
 ## 2026-07-06 - Summary Dirty Source Scope
 
 - Error: Ordinary summary dirty claims could scan all `mart.project_scope_article` rows for a project when no rebuild chunk range was present.
