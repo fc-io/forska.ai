@@ -349,15 +349,10 @@ const reviewServingCriticalRebuildComponents = [
   'summary',
   'payload',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
-const reviewServingNativeHeavyRebuildComponents = new Set<ReviewServingProjectionComponent>([
-  'llmStatus',
-  'humanStatus',
-  'posting',
-  'summary',
-])
+// Keep status chunks out of this set: they are small SQL-native updates, and per-chunk DuckDB recycle/forced GC
+// can panic Bun on the release-scale primary DB during long status rebuild runs.
+const reviewServingNativeHeavyRebuildComponents = new Set<ReviewServingProjectionComponent>(['posting', 'summary'])
 const reviewServingDuckdbRecycleAfterRebuildComponents = new Set<ReviewServingProjectionComponent>([
-  'llmStatus',
-  'humanStatus',
   'posting',
   'summary',
 ])
