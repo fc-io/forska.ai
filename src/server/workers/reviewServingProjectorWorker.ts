@@ -82,7 +82,7 @@ import {
   type ReviewServingRetentionCleanupInput,
   type ReviewServingRetentionServiceDatabase,
 } from '../reviewServing/reviewServingRetentionService.ts'
-import {projectReviewServingSelectedImportPatches} from '../reviewServing/reviewServingSelectedImportPatchProjector.ts'
+import {projectReviewServingSelectedImportDirty} from '../reviewServing/reviewServingSelectedImportDirtyProjector.ts'
 import {
   projectReviewServingSelectedImportArticleRange,
   type ProjectReviewServingSelectedImportArticleRangeInput,
@@ -4345,7 +4345,7 @@ export const getDefaultReviewServingProjectorRunners = (
       }
 
       const results = await runSnapshotProjectors(snapshots, (snapshot, acknowledgeClaims) => {
-        return projectReviewServingSelectedImportPatches(
+        return projectReviewServingSelectedImportDirty(
           {
             acknowledgeClaims,
             baseGeneration: manifest.baseGeneration,
@@ -4362,7 +4362,7 @@ export const getDefaultReviewServingProjectorRunners = (
 
       return {
         processedCount: results.reduce((total, result) => {
-          return total + result.patchRowCount
+          return total + result.dirtyRowCount
         }, 0),
       }
     },

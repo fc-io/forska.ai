@@ -16,9 +16,9 @@ import {
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
 
-export type ReviewServingSelectedImportPatchProjectorDatabase = ReviewServingProjectorWriterDatabase
+export type ReviewServingSelectedImportDirtyProjectorDatabase = ReviewServingProjectorWriterDatabase
 
-export type ProjectReviewServingSelectedImportPatchInput = {
+export type ProjectReviewServingSelectedImportDirtyInput = {
   acknowledgeClaims?: boolean
   baseGeneration: number
   chunkEndArticleId?: string
@@ -33,21 +33,21 @@ export type ProjectReviewServingSelectedImportPatchInput = {
   status?: ReviewServingProjectionManifestStatus
 }
 
-export type ReviewServingSelectedImportPatchBudgetInput = {
-  maxPatchRows: number
-  maxPatchWatermarks: number
+export type ReviewServingSelectedImportDirtyBudgetInput = {
+  maxDirtyRows: number
+  maxDirtyWatermarks: number
   projectId: string
   projectScopeIdentity: string
   selectedImportSnapshotId: string
 }
 
-export type ReviewServingSelectedImportPatchBudgetResult = {
-  patchRows: number
-  patchWatermarks: number
+export type ReviewServingSelectedImportDirtyBudgetResult = {
+  dirtyRows: number
+  dirtyWatermarks: number
   shouldCompact: boolean
 }
 
-export type ResetReviewServingSelectedImportPatchArticleRangeInput = {
+export type ResetReviewServingSelectedImportDirtyArticleRangeInput = {
   chunkEndArticleId: string
   chunkStartArticleId: string
   projectId: string
@@ -79,7 +79,7 @@ type SnapshotComponentStates = {
   required?: readonly SnapshotComponentState[]
 }
 
-type SelectedImportPatchRow = {
+type SelectedImportDirtyRow = {
   articleId: string
   articleTitle: string | null
   conflictFlag: boolean | null
@@ -96,7 +96,7 @@ type SelectedImportPatchRow = {
   tombstone: boolean
 }
 
-const selectedImportPatchProjectorName = 'selected-import-patch-projector'
+const selectedImportDirtyProjectorName = 'selected-import-dirty-projector'
 
 const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return [
@@ -118,7 +118,7 @@ const hasProjectScopedClaim = (claims: readonly ReviewServingDirtyWorkClaim[]) =
   })
 }
 
-const getDirtyArticleRangePredicateSql = (input: ProjectReviewServingSelectedImportPatchInput, alias: string) => {
+const getDirtyArticleRangePredicateSql = (input: ProjectReviewServingSelectedImportDirtyInput, alias: string) => {
   return input.chunkStartArticleId === undefined || input.chunkEndArticleId === undefined
     ? ''
     : `
@@ -127,7 +127,7 @@ const getDirtyArticleRangePredicateSql = (input: ProjectReviewServingSelectedImp
     `
 }
 
-const getDirtyArticleCte = (input: ProjectReviewServingSelectedImportPatchInput, articleIds: readonly string[]) => {
+const getDirtyArticleCte = (input: ProjectReviewServingSelectedImportDirtyInput, articleIds: readonly string[]) => {
   if (articleIds.length > 0) {
     return `dirty_article(article_id) AS (
           SELECT * FROM (VALUES ${articleIds
@@ -165,7 +165,7 @@ const getDirtyArticleCte = (input: ProjectReviewServingSelectedImportPatchInput,
   return ''
 }
 
-const getPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+const getDirtyWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return Math.max(
     0,
     ...claims.map((claim) => {
@@ -174,7 +174,7 @@ const getPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   )
 }
 
-const getPatchRangeStart = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+const getDirtyRangeStart = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return Math.min(
     ...claims.map((claim) => {
       return claim.firstSourceHighWaterMark
@@ -186,10 +186,10 @@ const getClaimSourcePartition = (claims: readonly ReviewServingDirtyWorkClaim[])
   return claims[0]?.sourcePartition ?? 'import-run-article'
 }
 
-const getPatchWatermarkSourcePartition = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
-  const patchWatermark = getPatchWatermark(claims)
+const getDirtyWatermarkSourcePartition = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  const dirtyWatermark = getDirtyWatermark(claims)
   const maxClaim = claims.find((claim) => {
-    return claim.latestSourceHighWaterMark === patchWatermark
+    return claim.latestSourceHighWaterMark === dirtyWatermark
   })
 
   return maxClaim?.sourcePartition ?? getClaimSourcePartition(claims)
@@ -281,8 +281,8 @@ const getTemplateRowsFromSnapshot = (row: SnapshotTemplateRow) => {
 }
 
 const getSelectedImportServingTemplates = async (
-  input: ProjectReviewServingSelectedImportPatchInput,
-  database: ReviewServingSelectedImportPatchProjectorDatabase,
+  input: ProjectReviewServingSelectedImportDirtyInput,
+  database: ReviewServingSelectedImportDirtyProjectorDatabase,
 ) => {
   const rows = await database.queryJson<SnapshotTemplateRow>(`
     SELECT
@@ -496,16 +496,16 @@ const getSelectedImportServingTemplateCte = (input: {
            )`
 }
 
-const getSelectedImportPatchRows = async (
-  input: ProjectReviewServingSelectedImportPatchInput,
-  database: ReviewServingSelectedImportPatchProjectorDatabase,
+const getSelectedImportDirtyRows = async (
+  input: ProjectReviewServingSelectedImportDirtyInput,
+  database: ReviewServingSelectedImportDirtyProjectorDatabase,
 ) => {
   const articleIds = getClaimArticleIds(input.claims)
   const dirtyArticleCte = getDirtyArticleCte(input, articleIds)
 
   return dirtyArticleCte.length === 0
     ? []
-    : database.queryJson<SelectedImportPatchRow>(`
+    : database.queryJson<SelectedImportDirtyRow>(`
         WITH ${dirtyArticleCte},
         selected_import_candidates AS (
           SELECT DISTINCT
@@ -609,7 +609,7 @@ const getApplySelectedImportServingStatements = (input: {
   projectId: string
   projectionIdentity: string
   selectedImportSnapshotId: string
-  rows: readonly SelectedImportPatchRow[]
+  rows: readonly SelectedImportDirtyRow[]
   templates: readonly SelectedImportServingTemplateRow[]
 }) => {
   const values = input.rows
@@ -840,10 +840,10 @@ const getApplySelectedImportServingStatements = (input: {
 
 const getSelectedImportBaseRecord = (
   input: Pick<
-    ProjectReviewServingSelectedImportPatchInput,
+    ProjectReviewServingSelectedImportDirtyInput,
     'projectId' | 'projectScopeIdentity' | 'selectedImportSnapshotId'
   >,
-  row: SelectedImportPatchRow,
+  row: SelectedImportDirtyRow,
 ): ReviewServingProjectorRecord => {
   const tombstone = row.tombstone || row.scopeTombstone
 
@@ -871,21 +871,21 @@ const getSelectedImportBaseRecord = (
   }
 }
 
-const getSelectedImportPatchManifest = (
-  input: ProjectReviewServingSelectedImportPatchInput,
+const getSelectedImportDirtyManifest = (
+  input: ProjectReviewServingSelectedImportDirtyInput,
 ): ReviewServingProjectionIdentityManifestInput => {
-  const patchWatermark = getPatchWatermark(input.claims)
+  const dirtyWatermark = getDirtyWatermark(input.claims)
 
   return {
     baseGeneration: input.baseGeneration,
     definitionVersion: input.definitionVersion,
     inputDigest: getClaimKinds(input.claims),
-    inputWatermark: patchWatermark,
+    inputWatermark: dirtyWatermark,
     inputWatermarks: input.manifestInputWatermarks ?? getReviewServingSourcePartitionWatermarks(input.claims),
     invalidationReason: getClaimKinds(input.claims),
-    patchRangeEnd: patchWatermark,
-    patchRangeStart: getPatchRangeStart(input.claims),
-    patchWatermark,
+    patchRangeEnd: dirtyWatermark,
+    patchRangeStart: getDirtyRangeStart(input.claims),
+    patchWatermark: dirtyWatermark,
     projectId: input.projectId,
     projectionComponent: 'selectedImport',
     projectionIdentity: input.projectionIdentity,
@@ -893,13 +893,13 @@ const getSelectedImportPatchManifest = (
   }
 }
 
-export const projectReviewServingSelectedImportPatches = async (
-  input: ProjectReviewServingSelectedImportPatchInput,
-  database: ReviewServingSelectedImportPatchProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportPatchProjectorDatabase,
+export const projectReviewServingSelectedImportDirty = async (
+  input: ProjectReviewServingSelectedImportDirtyInput,
+  database: ReviewServingSelectedImportDirtyProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportDirtyProjectorDatabase,
 ) => {
-  const rows = await getSelectedImportPatchRows(input, database)
+  const rows = await getSelectedImportDirtyRows(input, database)
   const templates = await getSelectedImportServingTemplates(input, database)
-  const patchWatermark = getPatchWatermark(input.claims)
+  const dirtyWatermark = getDirtyWatermark(input.claims)
   const baseRecords = rows.map((row) => {
     return getSelectedImportBaseRecord(input, row)
   })
@@ -908,11 +908,11 @@ export const projectReviewServingSelectedImportPatches = async (
     {
       acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
       component: 'selectedImport',
-      projectionManifests: input.claims.length === 0 ? [] : [getSelectedImportPatchManifest(input)],
+      projectionManifests: input.claims.length === 0 ? [] : [getSelectedImportDirtyManifest(input)],
       records: baseRecords,
       statements: getApplySelectedImportServingStatements({
         baseGeneration: input.baseGeneration,
-        patchWatermark,
+        patchWatermark: dirtyWatermark,
         projectId: input.projectId,
         projectionIdentity: input.projectionIdentity,
         selectedImportSnapshotId: input.selectedImportSnapshotId,
@@ -925,27 +925,27 @@ export const projectReviewServingSelectedImportPatches = async (
           : {
               projectId: input.projectId,
               projectionComponent: 'selectedImport',
-              projectorName: selectedImportPatchProjectorName,
-              sourceHighWaterMark: patchWatermark,
-              sourcePartition: getPatchWatermarkSourcePartition(input.claims),
+              projectorName: selectedImportDirtyProjectorName,
+              sourceHighWaterMark: dirtyWatermark,
+              sourcePartition: getDirtyWatermarkSourcePartition(input.claims),
             },
     },
     database,
   )
 
-  return {patchRowCount: 0, patchWatermark}
+  return {dirtyRowCount: rows.length, dirtyWatermark}
 }
 
-export const resetReviewServingSelectedImportPatchArticleRange = async (
-  _input: ResetReviewServingSelectedImportPatchArticleRangeInput,
-  database: Pick<ReviewServingSelectedImportPatchProjectorDatabase, 'run'>,
+export const resetReviewServingSelectedImportDirtyArticleRange = async (
+  _input: ResetReviewServingSelectedImportDirtyArticleRangeInput,
+  database: Pick<ReviewServingSelectedImportDirtyProjectorDatabase, 'run'>,
 ) => {
   await database.run('SELECT 1')
 }
 
-export const checkReviewServingSelectedImportPatchBudget = async (
-  _input: ReviewServingSelectedImportPatchBudgetInput,
-  _database: Pick<ReviewServingSelectedImportPatchProjectorDatabase, 'queryJson'> = getAppDatabaseService(),
-): Promise<ReviewServingSelectedImportPatchBudgetResult> => {
-  return {patchRows: 0, patchWatermarks: 0, shouldCompact: false}
+export const checkReviewServingSelectedImportDirtyBudget = async (
+  _input: ReviewServingSelectedImportDirtyBudgetInput,
+  _database: Pick<ReviewServingSelectedImportDirtyProjectorDatabase, 'queryJson'> = getAppDatabaseService(),
+): Promise<ReviewServingSelectedImportDirtyBudgetResult> => {
+  return {dirtyRows: 0, dirtyWatermarks: 0, shouldCompact: false}
 }
