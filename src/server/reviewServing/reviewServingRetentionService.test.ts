@@ -57,7 +57,17 @@ test('retention cleanup advances a bounded cursor and protects active, last-know
   expect(joined).toContain('"tableIndex":1')
 })
 
-test('retention cleanup cursor drains selected-import cleanup before legacy tables', async () => {
+const legacyRetentionTables = [
+  'mart.review_article_display_patch_v4',
+  'mart.review_selected_import_patch_v4',
+  'mart.review_llm_status_patch_v4',
+  'mart.review_human_status_patch_v4',
+  'mart.review_queue_patch_v4',
+  'mart.review_article_filter_posting_patch_v4',
+  'mart.review_article_summary_contribution_v4',
+]
+
+test('retention cleanup cursor includes selected-import cleanup and wraps over current tables only', async () => {
   const {database, statements} = createRetentionDatabase({
     retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 10}, patchWatermark: 0, snapshotId: null},
   })
@@ -72,10 +82,10 @@ test('retention cleanup cursor drains selected-import cleanup before legacy tabl
   expect(joined).toContain("candidate.project_id = 'project-1'")
   expect(joined).toContain('ORDER BY candidate.selected_import_snapshot_id')
   expect(joined).toContain('LIMIT 25')
-  expect(joined).toContain('"tableIndex":11')
+  expect(joined).toContain('"tableIndex":0')
 })
 
-test('retention cleanup drains retired patch tables in bounded batches', async () => {
+test('retention cleanup no longer references legacy patch or contribution tables at runtime', async () => {
   const {database, statements} = createRetentionDatabase({
     retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 11}, patchWatermark: 0, snapshotId: null},
   })
@@ -86,49 +96,16 @@ test('retention cleanup drains retired patch tables in bounded batches', async (
   )
   const joined = statements.join('\n')
 
-  expect(joined).toContain('DELETE FROM mart.review_article_display_patch_v4')
+  expect(joined).toContain('DELETE FROM mart.review_article_serving_v4')
   expect(joined).toContain("candidate.project_id = 'project-1'")
-  expect(joined).toContain('ORDER BY candidate.patch_watermark')
-  expect(joined).toContain('LIMIT 25')
-  expect(joined).toContain('"tableIndex":12')
-})
-
-test('retention cleanup drains retired summary contributions project-wide', async () => {
-  const {database, statements} = createRetentionDatabase({
-    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 17}, patchWatermark: 0, snapshotId: null},
-  })
-
-  await cleanupReviewServingRetentionState(
-    {batchSize: 25, now: '2026-06-16T00:00:00.000Z', projectId: 'project-1', reviewConfigHash: 'review-config-1'},
-    database,
-  )
-  const joined = statements.join('\n')
-
-  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4')
-  expect(joined).toContain("candidate.project_id = 'project-1'")
-  expect(joined).not.toContain('candidate.review_config_hash')
   expect(joined).toContain('ORDER BY candidate.snapshot_id')
   expect(joined).toContain('LIMIT 25')
-  expect(joined).toContain('"tableIndex":0')
-})
-
-test('retention cleanup drains scoped legacy llm status rows project-wide', async () => {
-  const {database, statements} = createRetentionDatabase({
-    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 13}, patchWatermark: 0, snapshotId: null},
-  })
-
-  await cleanupReviewServingRetentionState(
-    {batchSize: 25, now: '2026-06-16T00:00:00.000Z', projectId: 'project-1', reviewConfigHash: 'review-config-1'},
-    database,
-  )
-  const joined = statements.join('\n')
-
-  expect(joined).toContain('DELETE FROM mart.review_llm_status_patch_v4')
-  expect(joined).toContain("candidate.project_id = 'project-1'")
-  expect(joined).not.toContain('candidate.review_config_hash')
-  expect(joined).toContain('ORDER BY candidate.patch_watermark')
-  expect(joined).toContain('LIMIT 25')
-  expect(joined).toContain('"tableIndex":14')
+  expect(joined).toContain('"tableIndex":1')
+  expect(
+    legacyRetentionTables.filter((table) => {
+      return joined.includes(table)
+    }),
+  ).toEqual([])
 })
 
 test('retention cleanup target discovery scopes normal cleanup by project and review config', async () => {
