@@ -8,12 +8,7 @@ import {
   type NamedReviewFastCountKey,
   type ReviewServingCountAvailability,
 } from './reviewServingContracts.ts'
-import {
-  getReviewServingContributionRecord,
-  prepareReviewServingContributionDiff,
-  type ReviewServingContributionDiff,
-  type ReviewServingContributionRow,
-} from './reviewServingContributionService.ts'
+import {type ReviewServingContributionRow} from './reviewServingContributionService.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
@@ -71,10 +66,6 @@ type SummaryContributionSourceRow = {
 }
 
 type SummaryContributionIdentity = Omit<SummaryContributionSourceRow, 'articleId'>
-
-type ExistingCountRow = {countKind: string; countValue: number | null; filterKey: string; listModeKey: string}
-
-type ExistingFacetRow = {countValue: number | null; facetKey: string; facetValue: string; summaryIdentity: string}
 
 const summaryProjectorName = 'summary-projector'
 const dynamicFilteredTotalFilterKey = 'filter:dynamic'
@@ -159,43 +150,6 @@ const getArticleRangePredicate = (input: {
 
   return `${startPredicate}
           ${endPredicate}`
-}
-
-const getExpectedArticleIds = (
-  claims: readonly ReviewServingDirtyWorkClaim[],
-  rows: readonly SummaryContributionSourceRow[],
-  priorArticleIds: readonly string[],
-) => {
-  const claimArticleIds = getClaimArticleIds(claims)
-
-  return claimArticleIds.length > 0
-    ? claimArticleIds
-    : [
-        ...new Set([
-          ...priorArticleIds,
-          ...rows.map((row) => {
-            return row.articleId
-          }),
-        ]),
-      ]
-}
-
-const getPriorContributionArticleIds = async (
-  input: ProjectReviewServingSummariesInput,
-  database: ReviewServingSummaryProjectorDatabase,
-) => {
-  return getClaimArticleIds(input.claims).length > 0
-    ? []
-    : database.queryJson<{articleId: string}>(`
-        SELECT DISTINCT contribution.article_id AS articleId
-        FROM mart.review_article_summary_contribution_v4 contribution
-        WHERE contribution.project_id = ${getSqlLiteral(input.projectId)}
-          AND contribution.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-          AND contribution.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          AND contribution.component_kind = 'count'
-          AND contribution.summary_definition_version = 'review-serving-summary:v1'
-          ${getArticleRangePredicate({alias: 'contribution', ...input})}
-      `)
 }
 
 const getValuesCte = (columnName: string, values: readonly string[]) => {
@@ -429,32 +383,6 @@ const getRowsAsContributionRows = (rows: readonly SummaryContributionSourceRow[]
   })
 }
 
-const getExistingCountRows = async (
-  input: ProjectReviewServingSummariesInput,
-  database: ReviewServingSummaryProjectorDatabase,
-) => {
-  return database.queryJson<ExistingCountRow>(`
-    SELECT count_kind AS countKind, filter_key AS filterKey, list_mode_key AS listModeKey, CAST(count_value AS DOUBLE) AS countValue
-    FROM mart.review_article_count_serving_v4
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-  `)
-}
-
-const getExistingFacetRows = async (
-  input: ProjectReviewServingSummariesInput,
-  database: ReviewServingSummaryProjectorDatabase,
-) => {
-  return database.queryJson<ExistingFacetRow>(`
-    SELECT summary_identity AS summaryIdentity, facet_key AS facetKey, facet_value AS facetValue, CAST(count_value AS DOUBLE) AS countValue
-    FROM mart.review_filter_facet_serving_v4
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-  `)
-}
-
 const getCountRecord = (input: {
   countValue: number | null
   identity: SummaryContributionIdentity
@@ -550,18 +478,6 @@ const getSummaryRecord = (input: {
   return input.identity.summaryKind === 'count' ? getCountRecord(input) : getFacetRecord(input)
 }
 
-const getCountExistingKey = (row: Pick<ExistingCountRow, 'countKind' | 'filterKey' | 'listModeKey'>) => {
-  return getStableReviewServingJson({countKind: row.countKind, filterKey: row.filterKey, listModeKey: row.listModeKey})
-}
-
-const getFacetExistingKey = (row: Pick<ExistingFacetRow, 'facetKey' | 'facetValue' | 'summaryIdentity'>) => {
-  return getStableReviewServingJson({
-    facetKey: row.facetKey,
-    facetValue: row.facetValue,
-    summaryIdentity: row.summaryIdentity,
-  })
-}
-
 const getIdentityExistingValueKey = (identity: SummaryContributionIdentity) => {
   return identity.summaryKind === 'count'
     ? getStableReviewServingJson({
@@ -574,51 +490,6 @@ const getIdentityExistingValueKey = (identity: SummaryContributionIdentity) => {
         facetValue: identity.facetValue,
         summaryIdentity: identity.summaryIdentity,
       })
-}
-
-const getSummaryRecords = async (input: {
-  database: ReviewServingSummaryProjectorDatabase
-  diffs: readonly ReviewServingContributionDiff[]
-  projectorInput: ProjectReviewServingSummariesInput
-}) => {
-  const [countRows, facetRows] = await Promise.all([
-    getExistingCountRows(input.projectorInput, input.database),
-    getExistingFacetRows(input.projectorInput, input.database),
-  ])
-  const existingValues = new Map<string, number>([
-    ...countRows.map((row) => {
-      return [getCountExistingKey(row), row.countValue ?? 0] as const
-    }),
-    ...facetRows.map((row) => {
-      return [getFacetExistingKey(row), row.countValue ?? 0] as const
-    }),
-  ])
-  const aggregatedDiffs = input.diffs.reduce((acc, diff) => {
-    const identity = parseSummaryContributionKey(diff.contributionKey)
-
-    if (identity === null) {
-      return acc
-    }
-
-    const existingKey = getIdentityExistingValueKey(identity)
-    const current = acc.get(existingKey)
-    acc.set(existingKey, {delta: (current?.delta ?? 0) + diff.delta, identity})
-
-    return acc
-  }, new Map<string, {delta: number; identity: SummaryContributionIdentity}>())
-
-  return Array.from(aggregatedDiffs.entries()).flatMap(([existingKey, diff]) => {
-    const existingValue = existingValues.get(existingKey) ?? 0
-    const record = getSummaryRecord({
-      countValue: Math.max(0, existingValue + diff.delta),
-      identity: diff.identity,
-      projectId: input.projectorInput.projectId,
-      reviewConfigHash: input.projectorInput.reviewConfigHash,
-      snapshotId: input.projectorInput.snapshotId,
-    })
-
-    return record === null ? [] : [record]
-  })
 }
 
 const getDirectFullSummaryRecords = (input: {
@@ -664,7 +535,6 @@ const getDirectFullSummaryDeleteStatements = (input: ProjectReviewServingSummari
   return [
     getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_article_count_serving_v4'}),
     getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_filter_facet_serving_v4'}),
-    getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_article_summary_contribution_v4'}),
   ]
 }
 
@@ -747,7 +617,10 @@ const getDirectFullSummaryPartialRecords = (input: {
 
 const getDirectFullSummaryContributionPartialRecord = (input: {
   chunkId: string
-  record: ReviewServingProjectorRecord
+  row: ReviewServingContributionRow
+  projectId: string
+  reviewConfigHash: string
+  snapshotId: string
   requestId: string
 }) => {
   return {
@@ -764,7 +637,14 @@ const getDirectFullSummaryContributionPartialRecord = (input: {
     ],
     table: 'mart.review_article_summary_contribution_rebuild_partial_v4',
     values: {
-      ...input.record.values,
+      article_id: input.row.articleId,
+      component_kind: 'count',
+      contribution_key: input.row.contributionKey,
+      contribution_value: input.row.contributionValue,
+      project_id: input.projectId,
+      review_config_hash: input.reviewConfigHash,
+      snapshot_id: input.snapshotId,
+      summary_definition_version: 'review-serving-summary:v1',
       chunk_id: input.chunkId,
       contribution_updated_at: new Date(),
       request_id: input.requestId,
@@ -774,11 +654,14 @@ const getDirectFullSummaryContributionPartialRecord = (input: {
 
 const getDirectFullSummaryContributionPartialRecords = (input: {
   chunkId: string
-  contributionRecords: readonly ReviewServingProjectorRecord[]
+  contributionRows: readonly ReviewServingContributionRow[]
+  projectId: string
+  reviewConfigHash: string
+  snapshotId: string
   requestId: string
 }) => {
-  return input.contributionRecords.map((record) => {
-    return getDirectFullSummaryContributionPartialRecord({...input, record})
+  return input.contributionRows.map((row) => {
+    return getDirectFullSummaryContributionPartialRecord({...input, row})
   })
 }
 
@@ -1013,63 +896,6 @@ const getRefreshSummaryRebuildAccumulatorCountsStatement = (input: {
   `
 }
 
-const getDeleteSummaryContributionRowsForRebuildStatement = (input: {
-  projectId: string
-  reviewConfigHash: string
-  snapshotId: string
-}) => {
-  return `
-    DELETE FROM mart.review_article_summary_contribution_v4
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-  `
-}
-
-const getInsertSummaryContributionRowsFromRebuildPartialsStatement = (input: {
-  projectId: string
-  requestId: string
-  reviewConfigHash: string
-  snapshotId: string
-}) => {
-  const scopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'partial_contribution'})
-
-  return `
-    INSERT INTO mart.review_article_summary_contribution_v4 (
-      project_id,
-      review_config_hash,
-      snapshot_id,
-      article_id,
-      component_kind,
-      summary_definition_version,
-      contribution_key,
-      contribution_value,
-      contribution_updated_at
-    )
-    SELECT
-      partial_contribution.project_id,
-      partial_contribution.review_config_hash,
-      partial_contribution.snapshot_id,
-      partial_contribution.article_id,
-      partial_contribution.component_kind,
-      partial_contribution.summary_definition_version,
-      partial_contribution.contribution_key,
-      ANY_VALUE(partial_contribution.contribution_value) AS contribution_value,
-      current_timestamp AS contribution_updated_at
-    FROM mart.review_article_summary_contribution_rebuild_partial_v4 partial_contribution
-    ${getCompletedSummaryRebuildPartialChunkJoin('partial_contribution')}
-    WHERE ${scopePredicate}
-    GROUP BY
-      partial_contribution.project_id,
-      partial_contribution.review_config_hash,
-      partial_contribution.snapshot_id,
-      partial_contribution.article_id,
-      partial_contribution.component_kind,
-      partial_contribution.summary_definition_version,
-      partial_contribution.contribution_key
-  `
-}
-
 const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
   input: {
     accumulatorChunkId: string
@@ -1214,7 +1040,6 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
         AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
     `)
-    await tx.run(getDeleteSummaryContributionRowsForRebuildStatement(input))
     await tx.run(`
       INSERT INTO mart.review_article_count_serving_v4 (
         project_id,
@@ -1287,7 +1112,6 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         AND summary_kind = 'facet'
       GROUP BY project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version
     `)
-    await tx.run(getInsertSummaryContributionRowsFromRebuildPartialsStatement(input))
     await tx.run(`
       DELETE FROM mart.review_article_summary_rebuild_partial_v4
       WHERE ${scopePredicate}
@@ -1347,23 +1171,11 @@ const projectDirectFullReviewServingSummaries = async (input: {
       snapshotId: input.projectorInput.snapshotId,
     })
   })
-  const contributionRecords = input.measureSync('contributionRecordBuildMs', () => {
-    return contributionRows.map((row) => {
-      return getReviewServingContributionRecord({
-        componentKind: 'count',
-        projectId: input.projectorInput.projectId,
-        reviewConfigHash: input.projectorInput.reviewConfigHash,
-        row,
-        snapshotId: input.projectorInput.snapshotId,
-        summaryDefinitionVersion: 'review-serving-summary:v1',
-      })
-    })
-  })
   const writerResult = await input.measure('writerMs', async () => {
     return writeReviewServingProjectorComponent(
       {
         component: 'summary',
-        records: [...summaryRecords, ...contributionRecords],
+        records: summaryRecords,
         statements: getDirectFullSummaryDeleteStatements(input.projectorInput),
       },
       input.database,
@@ -1371,12 +1183,12 @@ const projectDirectFullReviewServingSummaries = async (input: {
   })
 
   return {
-    contributionRowCount: contributionRecords.length,
+    contributionRowCount: 0,
     diagnosticsJson: {
       phaseTimings: input.phaseTimings,
       summaryProjector: {
         contributionDiffCount: 0,
-        contributionRecordCount: contributionRecords.length,
+        contributionRecordCount: 0,
         directFullSnapshot: true,
         priorArticleRowCount: 0,
         sourceRowCount: sourceRows.length,
@@ -1419,18 +1231,6 @@ const projectPartialFullReviewServingSummaries = async (input: {
       summaryRecords,
     })
   })
-  const contributionRecords = input.measureSync('contributionRecordBuildMs', () => {
-    return contributionRows.map((row) => {
-      return getReviewServingContributionRecord({
-        componentKind: 'count',
-        projectId: input.projectorInput.projectId,
-        reviewConfigHash: input.projectorInput.reviewConfigHash,
-        row,
-        snapshotId: input.projectorInput.snapshotId,
-        summaryDefinitionVersion: 'review-serving-summary:v1',
-      })
-    })
-  })
   const writerResult = await input.measure('writerMs', async () => {
     return writeReviewServingProjectorComponent(
       {
@@ -1439,8 +1239,11 @@ const projectPartialFullReviewServingSummaries = async (input: {
           ...partialRecords,
           ...getDirectFullSummaryContributionPartialRecords({
             chunkId: getRequiredSummaryRebuildChunkId(input.projectorInput),
-            contributionRecords,
+            contributionRows,
+            projectId: input.projectorInput.projectId,
+            reviewConfigHash: input.projectorInput.reviewConfigHash,
             requestId: getRequiredSummaryRebuildRequestId(input.projectorInput),
+            snapshotId: input.projectorInput.snapshotId,
           }),
         ],
         statements: getDirectFullSummaryPartialDeleteStatements(input.projectorInput),
@@ -1450,12 +1253,12 @@ const projectPartialFullReviewServingSummaries = async (input: {
   })
 
   return {
-    contributionRowCount: contributionRecords.length,
+    contributionRowCount: contributionRows.length,
     diagnosticsJson: {
       phaseTimings: input.phaseTimings,
       summaryProjector: {
         contributionDiffCount: 0,
-        contributionRecordCount: contributionRecords.length,
+        contributionRecordCount: contributionRows.length,
         directFullSnapshot: true,
         partialFullSnapshot: true,
         partialRowCount: partialRecords.length,
@@ -1510,38 +1313,19 @@ export const projectReviewServingSummaries = async (
     })
   }
 
-  const [sourceRows, priorArticleRows] = await measure('sourceQueryMs', async () => {
-    return Promise.all([getSummaryContributionRows(input, database), getPriorContributionArticleIds(input, database)])
+  const sourceRows = await measure('sourceQueryMs', async () => {
+    return getFullRebuildSummaryContributionRows(input, database)
   })
-  const newRows = measureSync('contributionTransformMs', () => {
+  const contributionRows = measureSync('contributionTransformMs', () => {
     return getRowsAsContributionRows(sourceRows)
   })
-  const contributionDiff = await measure('contributionDiffMs', async () => {
-    return prepareReviewServingContributionDiff(
-      {
-        claims: input.claims,
-        componentKind: 'count',
-        expectedArticleIds: getExpectedArticleIds(
-          input.claims,
-          sourceRows,
-          priorArticleRows.map((row) => {
-            return row.articleId
-          }),
-        ),
-        newRows,
-        projectId: input.projectId,
-        projectionComponent: 'summary',
-        projectionIdentity: input.projectionIdentity,
-        repairDirtyKind: 'project.reviewConfig.updated',
-        reviewConfigHash: input.reviewConfigHash,
-        snapshotId: input.snapshotId,
-        summaryDefinitionVersion: 'review-serving-summary:v1',
-      },
-      database,
-    )
-  })
-  const summaryRecords = await measure('summaryRecordBuildMs', async () => {
-    return getSummaryRecords({database, diffs: contributionDiff.diffs, projectorInput: input})
+  const summaryRecords = measureSync('summaryRecordBuildMs', () => {
+    return getDirectFullSummaryRecords({
+      projectId: input.projectId,
+      reviewConfigHash: input.reviewConfigHash,
+      rows: contributionRows,
+      snapshotId: input.snapshotId,
+    })
   })
   const patchWatermark = getPatchWatermark(input.claims)
   const shouldPublishManifest = input.acknowledgeClaims !== false && input.claims.length > 0
@@ -1571,12 +1355,8 @@ export const projectReviewServingSummaries = async (
                 status: 'candidate',
               },
             ],
-        records: [...summaryRecords, ...contributionDiff.contributionRecords],
-        repairDirtyWork: contributionDiff.repairDirtyWork,
-        statements:
-          contributionDiff.deleteContributionStateStatement === null
-            ? []
-            : [contributionDiff.deleteContributionStateStatement],
+        records: summaryRecords,
+        statements: getDirectFullSummaryDeleteStatements(input),
         watermark: !shouldPublishManifest
           ? undefined
           : {
@@ -1592,18 +1372,19 @@ export const projectReviewServingSummaries = async (
   })
 
   return {
-    contributionRowCount: contributionDiff.contributionRecords.length,
+    contributionRowCount: 0,
     diagnosticsJson: {
       phaseTimings,
       summaryProjector: {
-        contributionDiffCount: contributionDiff.diffs.length,
-        contributionRecordCount: contributionDiff.contributionRecords.length,
-        priorArticleRowCount: priorArticleRows.length,
+        contributionDiffCount: 0,
+        contributionRecordCount: 0,
+        directServingRecompute: true,
+        priorArticleRowCount: 0,
         sourceRowCount: sourceRows.length,
         writer: writerResult.diagnostics,
       },
     },
-    repairRequired: contributionDiff.repairRequired,
+    repairRequired: false,
     summaryRowCount: summaryRecords.length,
     summaryValues: summaryRecords.map((record) => {
       return record.values

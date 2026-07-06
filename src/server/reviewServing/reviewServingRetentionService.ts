@@ -41,7 +41,6 @@ const cleanupTableSpecs: readonly CleanupTableSpec[] = [
     protectedPredicate: 'snapshot_id',
     table: 'mart.review_article_judgment_detail_serving_v4',
   },
-  {keyColumn: 'snapshot_id', protectedPredicate: 'snapshot_id', table: 'mart.review_article_summary_contribution_v4'},
   {keyColumn: 'snapshot_id', protectedPredicate: 'snapshot_id', table: 'mart.review_article_count_serving_v4'},
   {keyColumn: 'snapshot_id', protectedPredicate: 'snapshot_id', table: 'mart.review_filter_facet_serving_v4'},
   {keyColumn: 'snapshot_id', protectedPredicate: 'snapshot_id', table: 'mart.review_filter_option_serving_v4'},

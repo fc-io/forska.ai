@@ -515,9 +515,9 @@ test('Phase 3 direct serving and selected-import guard coverage stays inventorie
     {
       filePath: 'src/server/reviewServing/reviewServingSummaryProjector.test.ts',
       markers: [
-        'prompt badge counts flow through summary contribution rows used by review.prompt.badges',
+        'prompt badge counts flow through direct summary recompute used by review.prompt.badges',
         'review.both.conflictByPrompt',
-        'INSERT INTO mart.review_article_summary_contribution_v4',
+        "expect(joined).not.toContain('mart.review_article_summary_contribution_v4')",
       ],
     },
   ]

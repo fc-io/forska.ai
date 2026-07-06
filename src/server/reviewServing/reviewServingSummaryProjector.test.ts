@@ -89,19 +89,7 @@ const sourceFacetRow = (input?: Record<string, unknown>) => {
   }
 }
 
-const storedContributionRow = (sourceRow: Record<string, unknown>) => {
-  const {articleId: _articleId, ...identity} = sourceRow
-
-  return {
-    articleId: sourceRow.articleId,
-    contributionKey: contributionKey(identity),
-    contributionValue: 1,
-    summaryDefinitionVersion: 'review-serving-summary:v1',
-  }
-}
-
 const createSummaryDatabase = (input?: {
-  contributionRows?: readonly Record<string, unknown>[]
   countRows?: readonly Record<string, unknown>[]
   facetRows?: readonly Record<string, unknown>[]
   sourceRows?: readonly Record<string, unknown>[]
@@ -113,10 +101,6 @@ const createSummaryDatabase = (input?: {
 
       if (statement.includes('FROM summary_union')) {
         return (input?.sourceRows ?? []) as T[]
-      }
-
-      if (statement.includes('mart.review_article_summary_contribution_v4')) {
-        return (input?.contributionRows ?? []) as T[]
       }
 
       if (statement.includes('FROM mart.review_article_count_serving_v4')) {
@@ -241,20 +225,6 @@ const createSummaryReductionSchema = async (database: ReviewServingSummaryProjec
     )
   `)
   await database.run(`
-    CREATE TABLE mart.review_article_summary_contribution_v4 (
-      project_id VARCHAR NOT NULL,
-      review_config_hash VARCHAR NOT NULL,
-      snapshot_id VARCHAR NOT NULL,
-      article_id VARCHAR NOT NULL,
-      component_kind VARCHAR NOT NULL,
-      summary_definition_version VARCHAR NOT NULL,
-      contribution_key VARCHAR NOT NULL,
-      contribution_value BIGINT NOT NULL,
-      contribution_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-      PRIMARY KEY(project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key)
-    )
-  `)
-  await database.run(`
     CREATE TABLE mart.review_article_count_serving_v4 (
       project_id VARCHAR NOT NULL,
       review_config_hash VARCHAR NOT NULL,
@@ -324,50 +294,42 @@ const hasSummaryValue = (rows: readonly Record<string, unknown>[], expected: Rec
   })
 }
 
-test('projects list-mode count deltas with summary identity and definition version', async () => {
-  const oldRow = sourceCountRow({listModeKey: 'human'})
+test('projects list-mode count replacements with summary identity and definition version', async () => {
   const newRow = sourceCountRow({listModeKey: 'llm'})
-  const {database, statements} = createSummaryDatabase({
-    contributionRows: [storedContributionRow(oldRow)],
-    countRows: [
-      {countKind: 'review.llm.assessedByPrompt', countValue: 3, filterKey: 'prompt:prompt-1', listModeKey: 'human'},
-      {countKind: 'review.llm.assessedByPrompt', countValue: 7, filterKey: 'prompt:prompt-1', listModeKey: 'llm'},
-    ],
-    sourceRows: [newRow],
-  })
+  const {database, statements} = createSummaryDatabase({sourceRows: [newRow]})
 
   const result = await projectReviewServingSummaries(projectInput([summaryClaim()], ['llm', 'human']), database)
   const joined = statements.join('\n')
 
   expect(result.diagnosticsJson.summaryProjector.sourceRowCount).toBe(1)
-  expect(result.diagnosticsJson.phaseTimings.contributionDiffMs).toBeGreaterThanOrEqual(0)
+  expect(result.diagnosticsJson.summaryProjector).toMatchObject({directServingRecompute: true})
   expect(result.diagnosticsJson.phaseTimings.contributionTransformMs).toBeGreaterThanOrEqual(0)
   expect(result.diagnosticsJson.phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
   expect(result.diagnosticsJson.phaseTimings.summaryRecordBuildMs).toBeGreaterThanOrEqual(0)
   expect(result.diagnosticsJson.phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
   expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toMatchObject({
-    'mart.review_article_count_serving_v4': 2,
-    'mart.review_article_summary_contribution_v4': 1,
+    'mart.review_article_count_serving_v4': 1,
   })
   expect(
     hasSummaryValue(result.summaryValues, {
       count_kind: 'review.llm.assessedByPrompt',
-      count_value: 2,
+      count_value: 1,
       filter_key: 'prompt:prompt-1',
-      list_mode_key: 'human',
+      list_mode_key: 'llm',
       summary_definition_version: 'review-llm-assessed-by-prompt:v1',
       summary_identity: 'review.llm.assessedByPrompt',
     }),
   ).toBe(true)
-  expect(hasSummaryValue(result.summaryValues, {count_value: 8, list_mode_key: 'llm'})).toBe(true)
   expect(joined).toContain('FROM scoped_serving serving')
   expect(joined).toContain('serving.selected_import_route_id AS import_route_id')
   expect(joined).toContain('serving.duplicate_flag')
   expect(joined).toContain('serving.conflict_flag')
   expect(joined).toContain('mart.review_article_judgment_detail_serving_v4 detail')
   expect(joined).not.toContain('mart.review_selected_import_patch_v4')
+  expect(joined).toContain('DELETE FROM mart.review_article_count_serving_v4')
+  expect(joined).toContain('DELETE FROM mart.review_filter_facet_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4')
-  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+  expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
 })
 
 test('projects human summary-answer facets independently from prompt answers', async () => {
@@ -394,7 +356,7 @@ test('projects human summary-answer facets independently from prompt answers', a
   expect(
     hasSummaryValue(result.summaryValues, {
       answer_value: 'yes',
-      count_value: 5,
+      count_value: 1,
       facet_key: 'summaryAnswer',
       facet_kind: 'human',
       facet_value: 'yes',
@@ -430,15 +392,8 @@ test('projects llm prompt-answer facets from array answers', async () => {
   expect(selectStatement).toContain('llm.answered_original IS NOT NULL AND llm.answered_original_as_array IS NULL')
 })
 
-test('project-scoped summary rebuilds subtract prior contribution articles missing from new rows', async () => {
-  const oldRow = sourceCountRow({articleId: 'article-old'})
-  const {database, statements} = createSummaryDatabase({
-    contributionRows: [storedContributionRow(oldRow)],
-    countRows: [
-      {countKind: 'review.llm.assessedByPrompt', countValue: 3, filterKey: 'prompt:prompt-1', listModeKey: 'llm'},
-    ],
-    sourceRows: [],
-  })
+test('project-scoped summary rebuilds replace stale serving summaries without contribution state', async () => {
+  const {database, statements} = createSummaryDatabase({sourceRows: []})
 
   const result = await projectReviewServingSummaries(
     projectInput([
@@ -451,57 +406,33 @@ test('project-scoped summary rebuilds subtract prior contribution articles missi
     ]),
     database,
   )
-  const priorArticleSelect = statements.find((statement) => {
-    return statement.includes('SELECT DISTINCT contribution.article_id AS articleId')
-  })
-  const storedContributionSelect = statements.find((statement) => {
-    return statement.includes("VALUES ('article-old')")
-  })
-  const projectedSummaryValue = result.summaryValues.find((row) => {
-    return row.count_kind === 'review.llm.assessedByPrompt' && row.count_value === 2
-  })
+  const joined = statements.join('\n')
 
-  expect(projectedSummaryValue?.count_updated_at).toBeInstanceOf(Date)
-  expect(
-    hasSummaryValue(result.summaryValues, {
-      availability: 'ready',
-      count_kind: 'review.llm.assessedByPrompt',
-      count_value: 2,
-      filter_key: 'prompt:prompt-1',
-      list_mode_key: 'llm',
-      project_id: 'project-1',
-      review_config_hash: 'review-config-1',
-      snapshot_id: 'snapshot-1',
-      stale_reason: null,
-      summary_definition_version: 'review-llm-assessed-by-prompt:v1',
-      summary_identity: 'review.llm.assessedByPrompt',
-    }),
-  ).toBe(true)
-  expect(priorArticleSelect).toContain("component_kind = 'count'")
-  expect(storedContributionSelect).toBeDefined()
+  expect(result.summaryValues).toEqual([])
+  expect(joined).toContain('DELETE FROM mart.review_article_count_serving_v4')
+  expect(joined).toContain('DELETE FROM mart.review_filter_facet_serving_v4')
+  expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
 })
 
-test('unchunked full summary rebuild writes final serving rows with contribution state', async () => {
+test('unchunked full summary rebuild writes final serving rows without contribution state', async () => {
   const {database, statements} = createSummaryDatabase({sourceRows: [sourceCountRow(), sourceFacetRow()]})
 
   const result = await projectReviewServingSummaries(projectInput([]), database)
   const joined = statements.join('\n')
 
-  expect(result.contributionRowCount).toBe(2)
-  expect(result.diagnosticsJson.summaryProjector).toMatchObject({contributionRecordCount: 2, directFullSnapshot: true})
+  expect(result.contributionRowCount).toBe(0)
+  expect(result.diagnosticsJson.summaryProjector).toMatchObject({contributionRecordCount: 0, directFullSnapshot: true})
   expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toMatchObject({
     'mart.review_article_count_serving_v4': 1,
-    'mart.review_article_summary_contribution_v4': 2,
     'mart.review_filter_facet_serving_v4': 1,
   })
   expect(hasSummaryValue(result.summaryValues, {count_kind: 'review.llm.assessedByPrompt', count_value: 1})).toBe(true)
   expect(hasSummaryValue(result.summaryValues, {facet_key: 'summaryAnswer', count_value: 1})).toBe(true)
   expect(joined).toContain('DELETE FROM mart.review_article_count_serving_v4')
   expect(joined).toContain('DELETE FROM mart.review_filter_facet_serving_v4')
-  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_filter_facet_serving_v4')
-  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+  expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
   expect(joined).toContain('INNER JOIN mart.review_article_serving_v4 serving')
   expect(joined).toContain('INNER JOIN mart.review_article_judgment_detail_serving_v4 detail')
   expect(joined).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
@@ -605,8 +536,7 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   expect(joined).toContain("AND chunk_id = '__summary_rebuild_partial_accumulator__:")
   expect(joined).toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
   expect(joined).toContain('FROM mart.review_article_summary_contribution_rebuild_partial_v4')
-  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_v4')
-  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+  expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
   expect(
     statements.filter((statement) => {
       return statement.includes('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
@@ -840,20 +770,6 @@ test('summary rebuild request finalization deduplicates overlapping contribution
           ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'facet-key', 'facet', 'review.human.filter.summaryAnswer', NULL, 'review.human.filter.summaryAnswer', 'review-human-filter-summary-answer:v1', NULL, 'human', 'summaryAnswer', 'yes', 'summary', 'yes', 2)
       `)
       await database.run(`
-        INSERT INTO mart.review_article_summary_contribution_v4 (
-          project_id,
-          review_config_hash,
-          snapshot_id,
-          article_id,
-          component_kind,
-          summary_definition_version,
-          contribution_key,
-          contribution_value
-        ) VALUES
-          ('project-1', 'review-config-1', 'snapshot-1', 'article-stale', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
-          ('project-1', 'review-config-1', 'snapshot-other', 'article-other-snapshot', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1)
-      `)
-      await database.run(`
         INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4 (
           request_id,
           chunk_id,
@@ -891,23 +807,9 @@ test('summary rebuild request finalization deduplicates overlapping contribution
         SELECT CAST(count_value AS VARCHAR) AS countValue
         FROM mart.review_filter_facet_serving_v4
       `)
-      const contributionRows = await database.queryJson<{articleId: string; snapshotId: string}>(`
-        SELECT article_id AS articleId, snapshot_id AS snapshotId
-        FROM mart.review_article_summary_contribution_v4
-        ORDER BY snapshot_id, article_id, contribution_key
-      `)
 
       expect(countRows).toEqual([{countValue: '3'}])
       expect(facetRows).toEqual([{countValue: '3'}])
-      expect(contributionRows).toEqual([
-        {articleId: 'article-boundary', snapshotId: 'snapshot-1'},
-        {articleId: 'article-boundary', snapshotId: 'snapshot-1'},
-        {articleId: 'article-left', snapshotId: 'snapshot-1'},
-        {articleId: 'article-left', snapshotId: 'snapshot-1'},
-        {articleId: 'article-right', snapshotId: 'snapshot-1'},
-        {articleId: 'article-right', snapshotId: 'snapshot-1'},
-        {articleId: 'article-other-snapshot', snapshotId: 'snapshot-other'},
-      ])
     } finally {
       close()
     }
@@ -1349,11 +1251,8 @@ test('date range and search-scope SQL stays scoped and explicit unsupported filt
   ).toBe(true)
 })
 
-test('summary diffs aggregate before writing shared count keys', async () => {
+test('direct summary recompute aggregates shared count keys before writing', async () => {
   const {database} = createSummaryDatabase({
-    countRows: [
-      {countKind: 'review.queue.unassessedReady', countValue: 4, filterKey: 'queue:ready', listModeKey: 'llm'},
-    ],
     sourceRows: [
       sourceCountRow({
         countKind: 'review.queue.unassessedReady',
@@ -1377,10 +1276,10 @@ test('summary diffs aggregate before writing shared count keys', async () => {
       return row.count_kind === 'review.queue.unassessedReady'
     }),
   ).toHaveLength(1)
-  expect(hasSummaryValue(result.summaryValues, {count_kind: 'review.queue.unassessedReady', count_value: 6})).toBe(true)
+  expect(hasSummaryValue(result.summaryValues, {count_kind: 'review.queue.unassessedReady', count_value: 2})).toBe(true)
 })
 
-test('prompt badge counts flow through summary contribution rows used by review.prompt.badges', async () => {
+test('prompt badge counts flow through direct summary recompute used by review.prompt.badges', async () => {
   const badgeRows = [
     sourceCountRow({
       countKind: 'review.llm.assessedByPrompt',
@@ -1422,7 +1321,7 @@ test('prompt badge counts flow through summary contribution rows used by review.
     }),
   ).toBe(true)
   expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4')
-  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+  expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
 })
 
 test('summary status and answer sources require selected scope', async () => {
@@ -1439,19 +1338,16 @@ test('summary status and answer sources require selected scope', async () => {
   expect(sourceStatement).toContain('INNER JOIN selected_article selected ON selected.article_id = human.article_id')
 })
 
-test('unsupported or incompatible contribution state enqueues repair instead of scanning raw tables', async () => {
-  const {database, statements} = createSummaryDatabase({
-    contributionRows: [{...storedContributionRow(sourceCountRow()), summaryDefinitionVersion: 'old-summary:v0'}],
-    sourceRows: [sourceCountRow()],
-  })
+test('summary recompute ignores unsupported legacy contribution state', async () => {
+  const {database, statements} = createSummaryDatabase({sourceRows: [sourceCountRow()]})
 
   const result = await projectReviewServingSummaries(projectInput([summaryClaim()]), database)
   const joined = statements.join('\n')
 
-  expect(result.repairRequired).toBe(true)
-  expect(result.summaryRowCount).toBe(0)
-  expect(joined).toContain('INSERT INTO app.review_serving_dirty_work')
-  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+  expect(result.repairRequired).toBe(false)
+  expect(result.summaryRowCount).toBe(1)
+  expect(joined).not.toContain('review-serving-contribution-repair')
+  expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
 })
 
 test('deferred summary option phases do not publish manifests or watermarks', async () => {

@@ -398,55 +398,54 @@ test('selected import snapshot cursor writes unchanged rows through the same ups
 
 test('projector writer batches same-shape record upserts into one statement', async () => {
   const {database, statements} = createWriterDatabase()
+  const keyColumns = [
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'list_mode_key',
+    'count_kind',
+    'summary_definition_version',
+    'filter_key',
+  ]
 
   await writeReviewServingProjectorComponent(
     {
-      component: 'posting',
+      component: 'summary',
       records: [
         {
-          keyColumns: [
-            'project_id',
-            'review_config_hash',
-            'snapshot_id',
-            'article_id',
-            'component_kind',
-            'summary_definition_version',
-            'contribution_key',
-          ],
-          table: 'mart.review_article_summary_contribution_v4',
+          keyColumns,
+          table: 'mart.review_article_count_serving_v4',
           values: {
-            article_id: 'article-1',
-            component_kind: 'posting',
-            contribution_key: '{"filterKind":"duplicateFlag","filterValue":"false","listModeKey":"unassessed"}',
-            contribution_updated_at: new Date('2026-04-02T12:00:00.000Z'),
-            contribution_value: 1,
+            availability: 'ready',
+            count_kind: 'review.list.total',
+            count_updated_at: new Date('2026-04-02T12:00:00.000Z'),
+            count_value: 1,
+            filter_key: 'list:all',
+            list_mode_key: 'llm',
             project_id: 'project-1',
             review_config_hash: 'review-config-1',
             snapshot_id: 'snapshot-1',
-            summary_definition_version: 'posting:identity-1',
+            stale_reason: null,
+            summary_definition_version: 'review-serving-summary:v1',
+            summary_identity: 'review.list.total',
           },
         },
         {
-          keyColumns: [
-            'project_id',
-            'review_config_hash',
-            'snapshot_id',
-            'article_id',
-            'component_kind',
-            'summary_definition_version',
-            'contribution_key',
-          ],
-          table: 'mart.review_article_summary_contribution_v4',
+          keyColumns,
+          table: 'mart.review_article_count_serving_v4',
           values: {
-            article_id: 'article-2',
-            component_kind: 'posting',
-            contribution_key: '{"filterKind":"duplicateFlag","filterValue":"false","listModeKey":"unassessed"}',
-            contribution_updated_at: new Date('2026-04-02T12:00:00.000Z'),
-            contribution_value: 1,
+            availability: 'ready',
+            count_kind: 'review.list.total',
+            count_updated_at: new Date('2026-04-02T12:00:00.000Z'),
+            count_value: 2,
+            filter_key: 'list:all',
+            list_mode_key: 'human',
             project_id: 'project-1',
             review_config_hash: 'review-config-1',
             snapshot_id: 'snapshot-1',
-            summary_definition_version: 'posting:identity-1',
+            stale_reason: null,
+            summary_definition_version: 'review-serving-summary:v1',
+            summary_identity: 'review.list.total',
           },
         },
       ],
@@ -455,12 +454,12 @@ test('projector writer batches same-shape record upserts into one statement', as
   )
 
   const insertStatements = statements.filter((statement) => {
-    return statement.includes('INSERT INTO mart.review_article_summary_contribution_v4')
+    return statement.includes('INSERT INTO mart.review_article_count_serving_v4')
   })
 
   expect(insertStatements).toHaveLength(1)
-  expect(insertStatements[0]).toContain("'article-1'")
-  expect(insertStatements[0]).toContain("'article-2'")
+  expect(insertStatements[0]).toContain("'llm'")
+  expect(insertStatements[0]).toContain("'human'")
 })
 
 test('projector writer collapses duplicate primary-key records before a DuckDB commit', async () => {
@@ -469,44 +468,50 @@ test('projector writer collapses duplicate primary-key records before a DuckDB c
     'project_id',
     'review_config_hash',
     'snapshot_id',
-    'article_id',
-    'component_kind',
+    'list_mode_key',
+    'count_kind',
     'summary_definition_version',
-    'contribution_key',
+    'filter_key',
   ]
 
   await writeReviewServingProjectorComponent(
     {
-      component: 'posting',
+      component: 'summary',
       records: [
         {
           keyColumns,
-          table: 'mart.review_article_summary_contribution_v4',
+          table: 'mart.review_article_count_serving_v4',
           values: {
-            article_id: 'article-1',
-            component_kind: 'posting',
-            contribution_key: '{"filterKind":"duplicateFlag","filterValue":"false","listModeKey":"unassessed"}',
-            contribution_updated_at: new Date('2026-04-02T12:00:00.000Z'),
-            contribution_value: 1,
+            availability: 'ready',
+            count_kind: 'review.list.total',
+            count_updated_at: new Date('2026-04-02T12:00:00.000Z'),
+            count_value: 1,
+            filter_key: 'list:all',
+            list_mode_key: 'llm',
             project_id: 'project-1',
             review_config_hash: 'review-config-1',
             snapshot_id: 'snapshot-1',
-            summary_definition_version: 'posting:identity-1',
+            stale_reason: null,
+            summary_definition_version: 'review-serving-summary:v1',
+            summary_identity: 'review.list.total',
           },
         },
         {
           keyColumns,
-          table: 'mart.review_article_summary_contribution_v4',
+          table: 'mart.review_article_count_serving_v4',
           values: {
-            article_id: 'article-1',
-            component_kind: 'posting',
-            contribution_key: '{"filterKind":"duplicateFlag","filterValue":"false","listModeKey":"unassessed"}',
-            contribution_updated_at: new Date('2026-04-02T12:01:00.000Z'),
-            contribution_value: 2,
+            availability: 'ready',
+            count_kind: 'review.list.total',
+            count_updated_at: new Date('2026-04-02T12:01:00.000Z'),
+            count_value: 2,
+            filter_key: 'list:all',
+            list_mode_key: 'llm',
             project_id: 'project-1',
             review_config_hash: 'review-config-1',
             snapshot_id: 'snapshot-1',
-            summary_definition_version: 'posting:identity-1',
+            stale_reason: null,
+            summary_definition_version: 'review-serving-summary:v1',
+            summary_identity: 'review.list.total',
           },
         },
       ],
@@ -515,51 +520,54 @@ test('projector writer collapses duplicate primary-key records before a DuckDB c
   )
 
   const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_article_summary_contribution_v4')
+    return statement.includes('INSERT INTO mart.review_article_count_serving_v4')
   })
 
   expect(insertStatement).toBeDefined()
-  expect(insertStatement?.match(/'article-1'/gu)).toHaveLength(1)
+  expect(insertStatement?.match(/'llm'/gu)).toHaveLength(1)
   expect(insertStatement).toContain('2')
   expect(insertStatement).toContain('2026-04-02T12:01:00.000Z')
 })
 
-test('projector writer keeps scoped-delete replacement writes idempotent', async () => {
+test('projector writer keeps count serving replacement writes idempotent after scoped deletes', async () => {
   const {database, statements} = createWriterDatabase()
 
   await writeReviewServingProjectorComponent(
     {
-      component: 'posting',
+      component: 'summary',
       records: [
         {
           keyColumns: [
             'project_id',
             'review_config_hash',
             'snapshot_id',
-            'article_id',
-            'component_kind',
+            'list_mode_key',
+            'count_kind',
             'summary_definition_version',
-            'contribution_key',
+            'filter_key',
           ],
-          table: 'mart.review_article_summary_contribution_v4',
+          table: 'mart.review_article_count_serving_v4',
           values: {
-            article_id: 'article-1',
-            component_kind: 'posting',
-            contribution_key: '{"filterKind":"duplicateFlag","filterValue":"false","listModeKey":"unassessed"}',
-            contribution_updated_at: new Date('2026-04-02T12:00:00.000Z'),
-            contribution_value: 1,
+            availability: 'ready',
+            count_kind: 'review.list.total',
+            count_updated_at: new Date('2026-04-02T12:00:00.000Z'),
+            count_value: 1,
+            filter_key: 'list:all',
+            list_mode_key: 'llm',
             project_id: 'project-1',
             review_config_hash: 'review-config-1',
             snapshot_id: 'snapshot-1',
-            summary_definition_version: 'posting:identity-1',
+            stale_reason: null,
+            summary_definition_version: 'review-serving-summary:v1',
+            summary_identity: 'review.list.total',
           },
         },
       ],
       statements: [
         `
-          DELETE FROM mart.review_article_summary_contribution_v4
+          DELETE FROM mart.review_article_count_serving_v4
           WHERE project_id = 'project-1'
-            AND article_id IN ('article-1')
+            AND list_mode_key IN ('llm')
         `,
       ],
     },
@@ -567,12 +575,12 @@ test('projector writer keeps scoped-delete replacement writes idempotent', async
   )
 
   const insertStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO mart.review_article_summary_contribution_v4')
+    return statement.includes('INSERT INTO mart.review_article_count_serving_v4')
   })
 
   expect(insertStatement).toBeDefined()
   expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key) DO UPDATE SET',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, count_kind, summary_definition_version, filter_key) DO UPDATE SET',
   )
 })
 
