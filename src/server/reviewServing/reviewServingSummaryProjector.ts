@@ -1314,7 +1314,7 @@ export const projectReviewServingSummaries = async (
   }
 
   const sourceRows = await measure('sourceQueryMs', async () => {
-    return getFullRebuildSummaryContributionRows(input, database)
+    return getSummaryContributionRows(input, database)
   })
   const contributionRows = measureSync('contributionTransformMs', () => {
     return getRowsAsContributionRows(sourceRows)
