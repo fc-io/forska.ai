@@ -199,7 +199,11 @@ export const cleanupReviewServingRetentionState = async (
     const retentionState = await getRetentionState(retentionScope, tx)
     const tableIndex = getRetentionCursorIndex(retentionState)
     const boundedTableIndex = tableIndex % retentionTableSpecCount
-    const spec = cleanupTableSpecs[boundedTableIndex]!
+    const spec = cleanupTableSpecs[boundedTableIndex]
+
+    if (spec === undefined) {
+      throw new Error(`missing review-serving retention cleanup table spec at index ${boundedTableIndex}`)
+    }
 
     await deleteCleanupBatch({...input, spec}, tx)
 
