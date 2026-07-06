@@ -13,6 +13,7 @@ import {
 import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
   type ReviewServingProjectorWriterDatabase,
+  type ReviewServingProjectorWriterDiagnostics,
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
 
@@ -68,6 +69,43 @@ type LlmStatusSourceRow = {
 }
 
 const llmStatusProjectorName = 'llm-status-projector'
+
+const getNonNegativeElapsedMs = (startedAtMs: number) => {
+  return Math.max(0, Date.now() - startedAtMs)
+}
+
+const getTimedProjector = () => {
+  const phaseTimings: Record<string, number> = {}
+  const measure = async <T>(phase: string, operation: () => Promise<T>) => {
+    const startedAtMs = Date.now()
+    const result = await operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const measureSync = <T>(phase: string, operation: () => T) => {
+    const startedAtMs = Date.now()
+    const result = operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+
+  return {measure, measureSync, phaseTimings}
+}
+
+const getLlmStatusDiagnosticsJson = (input: {
+  phaseTimings: Record<string, number>
+  sourceRowCount: number
+  writer: ReviewServingProjectorWriterDiagnostics
+}) => {
+  return {
+    phaseTimings: input.phaseTimings,
+    llmStatusProjector: {sourceRowCount: input.sourceRowCount, writer: input.writer},
+  }
+}
+
+const withDiagnosticsJson = <T extends object>(result: T, diagnosticsJson: unknown): T => {
+  return Object.defineProperty(result, 'diagnosticsJson', {enumerable: false, value: diagnosticsJson})
+}
 
 const getPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return Math.max(
@@ -744,75 +782,87 @@ const getResetEmptyLlmStatusServingStatement = (input: {
 
 export const projectReviewServingLlmStatusPatches = async (
   input: ProjectReviewServingLlmStatusInput,
-  database: ReviewServingLlmStatusProjectorDatabase = getAppDatabaseService(),
+  database: ReviewServingLlmStatusProjectorDatabase = getAppDatabaseService() as ReviewServingLlmStatusProjectorDatabase,
 ) => {
-  const promptConfigRows = await getProjectPromptConfigRows(input.projectId, database)
-  const [judgmentRows, promptRows, projectRows, articleRows] = await Promise.all([
-    getJudgmentDeltaRows(input, database),
-    getPromptScopedRows(input, database),
-    getProjectScopedRows(input, database),
-    getArticleScopedRows(input, database),
-  ])
+  const {measure, measureSync, phaseTimings} = getTimedProjector()
+  const promptConfigRows = await measure('promptConfigQueryMs', async () => {
+    return getProjectPromptConfigRows(input.projectId, database)
+  })
+  const [judgmentRows, promptRows, projectRows, articleRows] = await measure('sourceQueryMs', async () => {
+    return Promise.all([
+      getJudgmentDeltaRows(input, database),
+      getPromptScopedRows(input, database),
+      getProjectScopedRows(input, database),
+      getArticleScopedRows(input, database),
+    ])
+  })
   const patchWatermark = getPatchWatermark(input.claims)
   const rows = [...judgmentRows, ...promptRows, ...projectRows, ...articleRows]
-  const recordRows = rows.flatMap((row) => {
-    const promptConfigHash = getPromptConfigHash(row)
-    const reviewConfigHash = getReviewConfigHash({...row, promptConfigRows})
+  const recordRows = measureSync('recordTransformMs', () => {
+    return rows.flatMap((row) => {
+      const promptConfigHash = getPromptConfigHash(row)
+      const reviewConfigHash = getReviewConfigHash({...row, promptConfigRows})
 
-    return input.listModeKeys.map((listModeKey) => {
-      return {
-        articleId: row.articleId,
-        listModeKey,
-        llmStatusKey: getLlmStatusKey(row),
-        promptConfigHash,
-        promptId: row.promptId,
-        reviewConfigHash,
-        tombstone: row.tombstone,
-      }
+      return input.listModeKeys.map((listModeKey) => {
+        return {
+          articleId: row.articleId,
+          listModeKey,
+          llmStatusKey: getLlmStatusKey(row),
+          promptConfigHash,
+          promptId: row.promptId,
+          reviewConfigHash,
+          tombstone: row.tombstone,
+        }
+      })
     })
   })
-  await writeReviewServingProjectorComponent(
-    {
-      acknowledgements: input.claims,
-      component: 'llmStatus',
-      projectionManifests: input.claims.length === 0 ? [] : [getLlmStatusPatchManifest(input)],
-      records: [],
-      statements: [
-        getApplyLlmStatusServingStatement({
-          baseGeneration: input.baseGeneration,
-          includeExistingPatchRows: false,
-          patchWatermark,
-          projectId: input.projectId,
-          projectionIdentity: input.projectionIdentity,
-          recordRows,
+  const writer = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        acknowledgements: input.claims,
+        component: 'llmStatus',
+        projectionManifests: input.claims.length === 0 ? [] : [getLlmStatusPatchManifest(input)],
+        records: [],
+        statements: [
+          getApplyLlmStatusServingStatement({
+            baseGeneration: input.baseGeneration,
+            includeExistingPatchRows: false,
+            patchWatermark,
+            projectId: input.projectId,
+            projectionIdentity: input.projectionIdentity,
+            recordRows,
+          }),
+          input.claims.length === 0 && recordRows.length === 0 && promptConfigRows.length === 0
+            ? getResetEmptyLlmStatusServingStatement({
+                baseGeneration: input.baseGeneration,
+                chunkEndArticleId: input.chunkEndArticleId,
+                chunkStartArticleId: input.chunkStartArticleId,
+                listModeKeys: input.listModeKeys,
+                patchWatermark,
+                projectId: input.projectId,
+                projectionIdentity: input.projectionIdentity,
+              })
+            : null,
+        ].flatMap((statement) => {
+          return statement === null ? [] : [statement]
         }),
-        input.claims.length === 0 && recordRows.length === 0 && promptConfigRows.length === 0
-          ? getResetEmptyLlmStatusServingStatement({
-              baseGeneration: input.baseGeneration,
-              chunkEndArticleId: input.chunkEndArticleId,
-              chunkStartArticleId: input.chunkStartArticleId,
-              listModeKeys: input.listModeKeys,
-              patchWatermark,
-              projectId: input.projectId,
-              projectionIdentity: input.projectionIdentity,
-            })
-          : null,
-      ].flatMap((statement) => {
-        return statement === null ? [] : [statement]
-      }),
-      watermark:
-        input.claims.length === 0
-          ? undefined
-          : {
-              projectId: input.projectId,
-              projectionComponent: 'llmStatus',
-              projectorName: llmStatusProjectorName,
-              sourceHighWaterMark: patchWatermark,
-              sourcePartition: getClaimSourcePartition(input.claims),
-            },
-    },
-    database,
-  )
+        watermark:
+          input.claims.length === 0
+            ? undefined
+            : {
+                projectId: input.projectId,
+                projectionComponent: 'llmStatus',
+                projectorName: llmStatusProjectorName,
+                sourceHighWaterMark: patchWatermark,
+                sourcePartition: getClaimSourcePartition(input.claims),
+              },
+      },
+      database,
+    )
+  })
 
-  return {patchRowCount: 0, patchWatermark}
+  return withDiagnosticsJson(
+    {patchRowCount: 0, patchWatermark},
+    getLlmStatusDiagnosticsJson({phaseTimings, sourceRowCount: rows.length, writer: writer.diagnostics}),
+  )
 }

@@ -11,6 +11,7 @@ import {type ReviewServingProjectionIdentityManifestInput} from './reviewServing
 import {
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
+  type ReviewServingProjectorWriterDiagnostics,
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
 
@@ -25,6 +26,7 @@ export type ProjectReviewServingSelectedImportBatchInput = {
 }
 
 export type ReviewServingSelectedImportProjectorBatchResult = {
+  diagnosticsJson?: unknown
   insertedRowCount: number
   selectedImportSnapshotId: string
   status: 'candidate' | 'completed'
@@ -67,6 +69,43 @@ export type ProjectReviewServingSelectedImportArticleRangeInput = {
 const selectedImportProjectorDefinitionVersion = 'review-serving-selected-import-v2'
 const nullRankKeySort = '~'
 const nullRankNumericSort = 1e308
+
+const getNonNegativeElapsedMs = (startedAtMs: number) => {
+  return Math.max(0, Date.now() - startedAtMs)
+}
+
+const getTimedProjector = () => {
+  const phaseTimings: Record<string, number> = {}
+  const measure = async <T>(phase: string, operation: () => Promise<T>) => {
+    const startedAtMs = Date.now()
+    const result = await operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const measureSync = <T>(phase: string, operation: () => T) => {
+    const startedAtMs = Date.now()
+    const result = operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+
+  return {measure, measureSync, phaseTimings}
+}
+
+const getSelectedImportDiagnosticsJson = (input: {
+  phaseTimings: Record<string, number>
+  sourceRowCount?: number
+  writer: ReviewServingProjectorWriterDiagnostics
+}) => {
+  return {
+    phaseTimings: input.phaseTimings,
+    selectedImportProjector: {sourceRowCount: input.sourceRowCount, writer: input.writer},
+  }
+}
+
+const withDiagnosticsJson = <T extends object>(result: T, diagnosticsJson: unknown): T => {
+  return Object.defineProperty(result, 'diagnosticsJson', {enumerable: false, value: diagnosticsJson})
+}
 
 const getReviewServingSelectedImportHash = (label: string, value: ReviewServingIdentityValue) => {
   return createHash('sha256')
@@ -645,6 +684,7 @@ export const projectReviewServingSelectedImportBatch = async (
   params: ProjectReviewServingSelectedImportBatchInput,
   database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportProjectorDatabase,
 ): Promise<ReviewServingSelectedImportProjectorBatchResult> => {
+  const {measure, measureSync, phaseTimings} = getTimedProjector()
   const selectedImportSnapshotId =
     params.selectedImportSnapshotId
     ?? getReviewServingSelectedImportSnapshotId({
@@ -652,72 +692,96 @@ export const projectReviewServingSelectedImportBatch = async (
       projectScopeIdentity: params.projectScopeIdentity,
       sourceDeltaHighWater: params.sourceDeltaHighWater,
     })
-  const snapshotRow = await getSelectedImportSnapshotRow(database, selectedImportSnapshotId)
-  const cursor = getSelectedImportCursor(snapshotRow?.cursorJson ?? null)
-  const rows = await getSelectedImportProjectionRows(database, {...params, selectedImportSnapshotId}, cursor)
-  const nextCursor = getSelectedImportCursorFromRows(rows, cursor)
+  const snapshotRow = await measure('sourceCursorQueryMs', async () => {
+    return getSelectedImportSnapshotRow(database, selectedImportSnapshotId)
+  })
+  const cursor = measureSync('cursorTransformMs', () => {
+    return getSelectedImportCursor(snapshotRow?.cursorJson ?? null)
+  })
+  const rows = await measure('sourceQueryMs', async () => {
+    return getSelectedImportProjectionRows(database, {...params, selectedImportSnapshotId}, cursor)
+  })
+  const nextCursor = measureSync('recordTransformMs', () => {
+    return getSelectedImportCursorFromRows(rows, cursor)
+  })
   const status = rows.length < Math.max(0, Math.floor(params.limit)) ? 'completed' : 'candidate'
+  const records = measureSync('recordBuildMs', () => {
+    return rows.map((row) => {
+      return getSelectedImportProjectorRecord({...params, selectedImportSnapshotId}, row)
+    })
+  })
 
-  await writeReviewServingProjectorComponent(
-    {
-      component: 'selectedImport',
-      projectionManifests:
-        status === 'completed' ? [getSelectedImportProjectionManifest({...params, selectedImportSnapshotId})] : [],
-      records: rows.map((row) => {
-        return getSelectedImportProjectorRecord({...params, selectedImportSnapshotId}, row)
-      }),
-      selectedImportSnapshotCursor: {
-        cursorJson: nextCursor,
-        projectId: params.projectId,
-        projectScopeIdentity: params.projectScopeIdentity,
-        selectedImportSnapshotId,
-        sourceDeltaHighWater: params.sourceDeltaHighWater,
-        status,
+  const writer = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        component: 'selectedImport',
+        projectionManifests:
+          status === 'completed' ? [getSelectedImportProjectionManifest({...params, selectedImportSnapshotId})] : [],
+        records,
+        selectedImportSnapshotCursor: {
+          cursorJson: nextCursor,
+          projectId: params.projectId,
+          projectScopeIdentity: params.projectScopeIdentity,
+          selectedImportSnapshotId,
+          sourceDeltaHighWater: params.sourceDeltaHighWater,
+          status,
+        },
       },
-    },
-    database,
-  )
+      database,
+    )
+  })
 
-  return {insertedRowCount: rows.length, selectedImportSnapshotId, status}
+  return withDiagnosticsJson(
+    {insertedRowCount: rows.length, selectedImportSnapshotId, status},
+    getSelectedImportDiagnosticsJson({phaseTimings, sourceRowCount: rows.length, writer: writer.diagnostics}),
+  )
 }
 
 export const projectReviewServingSelectedImportArticleRange = async (
   params: ProjectReviewServingSelectedImportArticleRangeInput,
   database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportProjectorDatabase,
 ) => {
-  await writeReviewServingProjectorComponent(
-    {
-      component: 'selectedImport',
-      projectionManifests: params.writeProjectionState === false ? [] : [getSelectedImportProjectionManifest(params)],
-      records: [],
-      statements:
-        params.replaceExistingRows === false
-          ? [
-              getInsertSelectedImportArticleRangeRowsStatement(params),
-              ...getRefreshSelectedImportServingArticleRangeStatements(params),
-            ]
-          : [
-              getDeleteSelectedImportArticleRangeRowsStatement(params),
-              getInsertSelectedImportArticleRangeRowsStatement(params),
-              ...getRefreshSelectedImportServingArticleRangeStatements(params),
-            ],
-      selectedImportSnapshotCursor:
-        params.writeProjectionState === false
-          ? undefined
-          : {
-              cursorJson: null,
-              projectId: params.projectId,
-              projectScopeIdentity: params.projectScopeIdentity,
-              selectedImportSnapshotId: params.selectedImportSnapshotId,
-              sourceDeltaHighWater: params.sourceDeltaHighWater,
-              status: 'completed',
-            },
-    },
-    database,
-  )
-  const insertedRowCount = await getSelectedImportArticleRangeInsertedRowCount(params, database)
+  const {measure, phaseTimings} = getTimedProjector()
+  const writer = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        component: 'selectedImport',
+        projectionManifests: params.writeProjectionState === false ? [] : [getSelectedImportProjectionManifest(params)],
+        records: [],
+        statements:
+          params.replaceExistingRows === false
+            ? [
+                getInsertSelectedImportArticleRangeRowsStatement(params),
+                ...getRefreshSelectedImportServingArticleRangeStatements(params),
+              ]
+            : [
+                getDeleteSelectedImportArticleRangeRowsStatement(params),
+                getInsertSelectedImportArticleRangeRowsStatement(params),
+                ...getRefreshSelectedImportServingArticleRangeStatements(params),
+              ],
+        selectedImportSnapshotCursor:
+          params.writeProjectionState === false
+            ? undefined
+            : {
+                cursorJson: null,
+                projectId: params.projectId,
+                projectScopeIdentity: params.projectScopeIdentity,
+                selectedImportSnapshotId: params.selectedImportSnapshotId,
+                sourceDeltaHighWater: params.sourceDeltaHighWater,
+                status: 'completed',
+              },
+      },
+      database,
+    )
+  })
+  const insertedRowCount = await measure('postWriteCountMs', async () => {
+    return getSelectedImportArticleRangeInsertedRowCount(params, database)
+  })
 
-  return {insertedRowCount, selectedImportSnapshotId: params.selectedImportSnapshotId, status: 'completed' as const}
+  return withDiagnosticsJson(
+    {insertedRowCount, selectedImportSnapshotId: params.selectedImportSnapshotId, status: 'completed' as const},
+    getSelectedImportDiagnosticsJson({phaseTimings, writer: writer.diagnostics}),
+  )
 }
 
 export const projectReviewServingSelectedImportArticleRanges = async (
@@ -730,40 +794,46 @@ export const projectReviewServingSelectedImportArticleRanges = async (
     return {rangeCount: 0, status: 'completed' as const}
   }
 
-  await writeReviewServingProjectorComponent(
-    {
-      component: 'selectedImport',
-      projectionManifests:
-        firstRange.writeProjectionState === false ? [] : [getSelectedImportProjectionManifest(firstRange)],
-      records: [],
-      statements: params.ranges.flatMap((range) => {
-        return range.replaceExistingRows === false
-          ? [
-              getInsertSelectedImportArticleRangeRowsStatement(range),
-              ...getRefreshSelectedImportServingArticleRangeStatements(range),
-            ]
-          : [
-              getDeleteSelectedImportArticleRangeRowsStatement(range),
-              getInsertSelectedImportArticleRangeRowsStatement(range),
-              ...getRefreshSelectedImportServingArticleRangeStatements(range),
-            ]
-      }),
-      selectedImportSnapshotCursor:
-        firstRange.writeProjectionState === false
-          ? undefined
-          : {
-              cursorJson: null,
-              projectId: firstRange.projectId,
-              projectScopeIdentity: firstRange.projectScopeIdentity,
-              selectedImportSnapshotId: firstRange.selectedImportSnapshotId,
-              sourceDeltaHighWater: firstRange.sourceDeltaHighWater,
-              status: 'completed',
-            },
-    },
-    database,
-  )
+  const {measure, phaseTimings} = getTimedProjector()
+  const writer = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        component: 'selectedImport',
+        projectionManifests:
+          firstRange.writeProjectionState === false ? [] : [getSelectedImportProjectionManifest(firstRange)],
+        records: [],
+        statements: params.ranges.flatMap((range) => {
+          return range.replaceExistingRows === false
+            ? [
+                getInsertSelectedImportArticleRangeRowsStatement(range),
+                ...getRefreshSelectedImportServingArticleRangeStatements(range),
+              ]
+            : [
+                getDeleteSelectedImportArticleRangeRowsStatement(range),
+                getInsertSelectedImportArticleRangeRowsStatement(range),
+                ...getRefreshSelectedImportServingArticleRangeStatements(range),
+              ]
+        }),
+        selectedImportSnapshotCursor:
+          firstRange.writeProjectionState === false
+            ? undefined
+            : {
+                cursorJson: null,
+                projectId: firstRange.projectId,
+                projectScopeIdentity: firstRange.projectScopeIdentity,
+                selectedImportSnapshotId: firstRange.selectedImportSnapshotId,
+                sourceDeltaHighWater: firstRange.sourceDeltaHighWater,
+                status: 'completed',
+              },
+      },
+      database,
+    )
+  })
 
-  return {rangeCount: params.ranges.length, status: 'completed' as const}
+  return withDiagnosticsJson(
+    {rangeCount: params.ranges.length, status: 'completed' as const},
+    getSelectedImportDiagnosticsJson({phaseTimings, writer: writer.diagnostics}),
+  )
 }
 
 export const refreshReviewServingSelectedImportServingArticleRange = async (
@@ -773,13 +843,18 @@ export const refreshReviewServingSelectedImportServingArticleRange = async (
   },
   database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportProjectorDatabase,
 ) => {
-  await writeReviewServingProjectorComponent(
-    {
-      component: 'selectedImport',
-      projectionManifests: [],
-      records: [],
-      statements: getRefreshSelectedImportServingArticleRangeStatements(params),
-    },
-    database,
-  )
+  const {measure, phaseTimings} = getTimedProjector()
+  const writer = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        component: 'selectedImport',
+        projectionManifests: [],
+        records: [],
+        statements: getRefreshSelectedImportServingArticleRangeStatements(params),
+      },
+      database,
+    )
+  })
+
+  return withDiagnosticsJson({}, getSelectedImportDiagnosticsJson({phaseTimings, writer: writer.diagnostics}))
 }

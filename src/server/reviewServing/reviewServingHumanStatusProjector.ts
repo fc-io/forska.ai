@@ -8,6 +8,7 @@ import {
 import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
   type ReviewServingProjectorWriterDatabase,
+  type ReviewServingProjectorWriterDiagnostics,
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
 import {
@@ -71,6 +72,43 @@ const summaryPromptConfigRow: ProjectPromptConfigRow = {
   promptTextHash: 'summary-human-judgment',
   settingsVersion: 'summary-v1',
   thresholdVersion: null,
+}
+
+const getNonNegativeElapsedMs = (startedAtMs: number) => {
+  return Math.max(0, Date.now() - startedAtMs)
+}
+
+const getTimedProjector = () => {
+  const phaseTimings: Record<string, number> = {}
+  const measure = async <T>(phase: string, operation: () => Promise<T>) => {
+    const startedAtMs = Date.now()
+    const result = await operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+  const measureSync = <T>(phase: string, operation: () => T) => {
+    const startedAtMs = Date.now()
+    const result = operation()
+    phaseTimings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    return result
+  }
+
+  return {measure, measureSync, phaseTimings}
+}
+
+const getHumanStatusDiagnosticsJson = (input: {
+  phaseTimings: Record<string, number>
+  sourceRowCount: number
+  writer: ReviewServingProjectorWriterDiagnostics
+}) => {
+  return {
+    phaseTimings: input.phaseTimings,
+    humanStatusProjector: {sourceRowCount: input.sourceRowCount, writer: input.writer},
+  }
+}
+
+const withDiagnosticsJson = <T extends object>(result: T, diagnosticsJson: unknown): T => {
+  return Object.defineProperty(result, 'diagnosticsJson', {enumerable: false, value: diagnosticsJson})
 }
 
 const getPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
@@ -611,70 +649,84 @@ export const projectReviewServingHumanStatusPatches = async (
   input: ProjectReviewServingHumanStatusInput,
   database: ReviewServingHumanStatusProjectorDatabase = getAppDatabaseService() as ReviewServingHumanStatusProjectorDatabase,
 ) => {
-  const promptConfigRows = await getReviewServingProjectPromptConfigRows(input.projectId, database)
-  const projectSettings = await getReviewServingProjectReviewSettings(input.projectId, database)
+  const {measure, measureSync, phaseTimings} = getTimedProjector()
+  const promptConfigRows = await measure('promptConfigQueryMs', async () => {
+    return getReviewServingProjectPromptConfigRows(input.projectId, database)
+  })
+  const projectSettings = await measure('projectSettingsQueryMs', async () => {
+    return getReviewServingProjectReviewSettings(input.projectId, database)
+  })
   const currentSummaryReviewConfigHash =
     projectSettings === null
       ? null
       : getReviewServingReviewConfigHash({...projectSettings, humanJudgmentMode: 'summary', promptConfigRows})
   const currentReviewConfigHash =
     projectSettings === null ? null : getReviewServingReviewConfigHash({...projectSettings, promptConfigRows})
-  const [judgmentRows, promptRows, articleRows, projectRows] = await Promise.all([
-    getJudgmentDeltaRows(input, database, promptConfigRows),
-    getPromptScopedRows(input, database),
-    getArticleScopedRows(input, database, promptConfigRows),
-    getProjectScopedRows(input, database, promptConfigRows),
-  ])
+  const [judgmentRows, promptRows, articleRows, projectRows] = await measure('sourceQueryMs', async () => {
+    return Promise.all([
+      getJudgmentDeltaRows(input, database, promptConfigRows),
+      getPromptScopedRows(input, database),
+      getArticleScopedRows(input, database, promptConfigRows),
+      getProjectScopedRows(input, database, promptConfigRows),
+    ])
+  })
   const patchWatermark = getPatchWatermark(input.claims)
   const rows = [...judgmentRows, ...promptRows, ...articleRows, ...projectRows]
-  const recordRows = rows.flatMap((row) => {
-    const promptConfigHash = getPromptConfigHash({...row, promptId: getPromptOrSummaryKey(row.promptId)})
+  const recordRows = measureSync('recordTransformMs', () => {
+    return rows.flatMap((row) => {
+      const promptConfigHash = getPromptConfigHash({...row, promptId: getPromptOrSummaryKey(row.promptId)})
 
-    return input.listModeKeys.map((listModeKey) => {
-      return {
-        articleId: row.articleId,
-        humanStatusKey: row.humanStatusKey,
-        listModeKey,
-        promptConfigHash,
-        promptId: getPromptOrSummaryKey(row.promptId),
-        reviewConfigHash: currentReviewConfigHash,
-        tombstone: row.tombstone,
-      }
+      return input.listModeKeys.map((listModeKey) => {
+        return {
+          articleId: row.articleId,
+          humanStatusKey: row.humanStatusKey,
+          listModeKey,
+          promptConfigHash,
+          promptId: getPromptOrSummaryKey(row.promptId),
+          reviewConfigHash: currentReviewConfigHash,
+          tombstone: row.tombstone,
+        }
+      })
     })
   })
-  await writeReviewServingProjectorComponent(
-    {
-      acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
-      component: 'humanStatus',
-      projectionManifests: input.claims.length === 0 ? [] : [getHumanStatusPatchManifest(input)],
-      records: [],
-      statements: [
-        getApplyHumanStatusServingStatement({
-          baseGeneration: input.baseGeneration,
-          currentSummaryReviewConfigHash,
-          currentReviewConfigHash,
-          includeExistingPatchRows: false,
-          patchWatermark,
-          projectId: input.projectId,
-          projectionIdentity: input.projectionIdentity,
-          recordRows,
+  const writer = await measure('writerMs', async () => {
+    return writeReviewServingProjectorComponent(
+      {
+        acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
+        component: 'humanStatus',
+        projectionManifests: input.claims.length === 0 ? [] : [getHumanStatusPatchManifest(input)],
+        records: [],
+        statements: [
+          getApplyHumanStatusServingStatement({
+            baseGeneration: input.baseGeneration,
+            currentSummaryReviewConfigHash,
+            currentReviewConfigHash,
+            includeExistingPatchRows: false,
+            patchWatermark,
+            projectId: input.projectId,
+            projectionIdentity: input.projectionIdentity,
+            recordRows,
+          }),
+        ].flatMap((statement) => {
+          return statement === null ? [] : [statement]
         }),
-      ].flatMap((statement) => {
-        return statement === null ? [] : [statement]
-      }),
-      watermark:
-        input.claims.length === 0
-          ? undefined
-          : {
-              projectId: input.projectId,
-              projectionComponent: 'humanStatus',
-              projectorName: humanStatusProjectorName,
-              sourceHighWaterMark: patchWatermark,
-              sourcePartition: getClaimSourcePartition(input.claims),
-            },
-    },
-    database,
-  )
+        watermark:
+          input.claims.length === 0
+            ? undefined
+            : {
+                projectId: input.projectId,
+                projectionComponent: 'humanStatus',
+                projectorName: humanStatusProjectorName,
+                sourceHighWaterMark: patchWatermark,
+                sourcePartition: getClaimSourcePartition(input.claims),
+              },
+      },
+      database,
+    )
+  })
 
-  return {patchRowCount: 0, patchWatermark}
+  return withDiagnosticsJson(
+    {patchRowCount: 0, patchWatermark},
+    getHumanStatusDiagnosticsJson({phaseTimings, sourceRowCount: rows.length, writer: writer.diagnostics}),
+  )
 }
