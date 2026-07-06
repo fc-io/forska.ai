@@ -13,7 +13,6 @@ import {
   defaultReviewServingProjectorWorkerProgressYieldMs,
   getDefaultReviewServingProjectorRunners,
   getReviewServingProjectorWorkerWorkloadContext,
-  nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
   type ReviewServingProjectorWorkerDependencies,
   runReviewServingProjectorWorker,
   runReviewServingProjectorWorkerClaimedRebuildChunk,
@@ -2332,7 +2331,7 @@ test('worker marks rebuild requests completed after their final chunk completes'
   expect(joined).toContain("request_id = 'rebuild-1'")
 })
 
-test('worker recycles DuckDB and collects garbage after completed status rebuild chunks', async () => {
+test('worker avoids crash-prone DuckDB recycle and forced GC after completed status rebuild chunks', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const llmChunkInput = {
     ...chunkInput,
@@ -2370,8 +2369,8 @@ test('worker recycles DuckDB and collects garbage after completed status rebuild
     requestId: 'rebuild-status',
     status: 'completed',
   })
-  expect(harness.recycledChunks).toEqual([llmChunk])
-  expect(harness.garbageCollectedChunks).toEqual([llmChunk])
+  expect(harness.recycledChunks).toEqual([])
+  expect(harness.garbageCollectedChunks).toEqual([])
 })
 
 test('worker recycles DuckDB after completed summary rebuild chunks', async () => {
@@ -2458,7 +2457,7 @@ test('worker recycles DuckDB after completed posting rebuild chunks', async () =
   expect(harness.garbageCollectedChunks).toEqual([postingChunk])
 })
 
-test('worker yields and collects garbage after each completed status chunk in a long loop', async () => {
+test('worker keeps long status chunk loops on the normal lightweight yield path', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const controller = new AbortController()
   const sleepCalls: number[] = []
@@ -2520,11 +2519,11 @@ test('worker yields and collects garbage after each completed status chunk in a 
   await runReviewServingProjectorWorker({signal: controller.signal, workerId: 'worker-1'}, harness.dependencies)
 
   expect(harness.runChunkInputs).toEqual(statusChunks)
-  expect(harness.recycledChunks).toEqual(statusChunks)
-  expect(harness.garbageCollectedChunks).toEqual(statusChunks)
+  expect(harness.recycledChunks).toEqual([])
+  expect(harness.garbageCollectedChunks).toEqual([])
   expect(sleepCalls).toEqual([
-    nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
-    nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
+    defaultReviewServingProjectorWorkerProgressYieldMs,
+    defaultReviewServingProjectorWorkerProgressYieldMs,
   ])
 })
 
