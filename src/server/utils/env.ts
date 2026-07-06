@@ -31,6 +31,9 @@ const envShape = arktype({
   PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS: 'number | string.integer.parse | null | undefined',
   FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES: 'number | string.integer.parse | null | undefined',
   FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
+  FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED: arktype('"true" | "false" | boolean').pipe((v) => {
+    return typeof v === 'string' ? v.toLowerCase() === 'true' : v
+  }),
   JUDGE_WORKER_ID: 'string',
   JUDGE_WORKER_JOURNAL_PATH: 'string',
   FORSKA_RUNTIME_PROFILE: arktype('"local" | "primary" | "secondary"'),
@@ -158,6 +161,12 @@ export const loadEnv = ({
     ;(merged as Record<string, string>).FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE = String(
       defaultReviewServingRebuildChunkBatchSize,
     )
+  }
+  if (
+    merged.FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED == null
+    || String(merged.FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED).trim() === ''
+  ) {
+    ;(merged as Record<string, string>).FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED = 'false'
   }
   if (merged.JUDGE_WORKER_ID == null) {
     ;(merged as Record<string, string>).JUDGE_WORKER_ID = ''
