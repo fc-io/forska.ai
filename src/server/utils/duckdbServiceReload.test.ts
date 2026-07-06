@@ -1222,7 +1222,9 @@ test('duckdb service repairs indexed tables when startup mutation preflight cras
     )
     const legacyPatchProbeTables = parsed.firstPreflightSpecs
       .filter((spec) => {
-        return spec.schemaName === 'mart' && spec.tableName.startsWith('review_') && spec.tableName.endsWith('_patch_v4')
+        return (
+          spec.schemaName === 'mart' && spec.tableName.startsWith('review_') && spec.tableName.endsWith('_patch_v4')
+        )
       })
       .map((spec) => {
         return spec.tableName
