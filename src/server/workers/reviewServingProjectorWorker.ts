@@ -230,6 +230,10 @@ type ReviewServingProjectorWorkerLoopOptions = ReviewServingProjectorWorkerCycle
   signal?: AbortSignal
 }
 
+const getMaxCompletedRebuildChunksPerRun = (value: number | null | undefined) => {
+  return value === null ? 0 : getPositiveInteger(value, getDefaultMaxCompletedRebuildChunksPerRun())
+}
+
 type ReviewServingProjectorWorkerChunkResult =
   | {chunkId: null; status: 'idle'}
   | {
@@ -5642,9 +5646,8 @@ const getReviewServingProjectorWorkerRebuildChunkPreclaimLimit = (input: {
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
   const firstClaimedChunk = input.claimedChunks[0]?.chunk
-  const maxCompletedRebuildChunksPerRun = getPositiveInteger(
+  const maxCompletedRebuildChunksPerRun = getMaxCompletedRebuildChunksPerRun(
     input.options.maxCompletedRebuildChunksPerRun,
-    getDefaultMaxCompletedRebuildChunksPerRun(),
   )
   const remainingCompletedChunkRunBudget =
     maxCompletedRebuildChunksPerRun > 0
@@ -7394,10 +7397,7 @@ export const runReviewServingProjectorWorker = async (
   logReviewServingProjectorWorkerCycle(cycleResult)
   const nowMs = getWorkerNowMs(dependencies, options)
   const completedRebuildChunksInRun = (options.completedRebuildChunksInRun ?? 0) + cycleResult.chunkBatchCount
-  const maxCompletedRebuildChunksPerRun = getPositiveInteger(
-    options.maxCompletedRebuildChunksPerRun,
-    getDefaultMaxCompletedRebuildChunksPerRun(),
-  )
+  const maxCompletedRebuildChunksPerRun = getMaxCompletedRebuildChunksPerRun(options.maxCompletedRebuildChunksPerRun)
 
   if (options.signal?.aborted) {
     return

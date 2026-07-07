@@ -1161,6 +1161,34 @@ test('reviews warnings fold V4 rebuild chunks into visible progress', async () =
   expect(body.data.indexing.status).toBe('failed')
 })
 
+test('reviews warnings keep fresh serving ready when only obsolete V4 chunks are blocked', async () => {
+  const projectId = 'project-v4-fresh-obsolete-blocked-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-v4-fresh-obsolete-blocked-warning',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-obsolete-blocked-warning',
+    createdAt: '2026-04-02T11:59:00.000Z',
+    projectId,
+    status: 'blocked_over_budget',
+    updatedAt: '2026-04-02T12:02:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.status).toBe('ready')
+})
+
 test('reviews warnings report processing for recently progressed queued V4 rebuild chunks', async () => {
   const projectId = 'project-v4-recent-progress-warning'
   const recentProgressAt = new Date().toISOString()

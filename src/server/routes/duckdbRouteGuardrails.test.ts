@@ -151,6 +151,7 @@ test('serverMain lazy-loads cron routes so disabled low-memory crons cannot star
   expect(serverMainText).not.toContain('import {judgmentsJobsJudgingCron')
   expect(serverMainText).not.toContain('import {nvidiaSmiCron}')
   expect(serverMainText).toContain("await import('./cron/judgmentsJobs.ts')")
+  expect(serverMainText).toContain('judgmentsJobsImportCron')
   expect(serverMainText).toContain("await import('./cron/judgmentsJobsJudgingCron.ts')")
 })
 
@@ -159,6 +160,7 @@ test('serverMain low-memory cron deferral follows maintenance-capable roles and 
 
   expect(serverMainText).toContain('parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT)')
   expect(serverMainText).toContain('shouldServerRoleMountMaintenanceCrons(getCurrentServerRole())')
+  expect(serverMainText).toContain('shouldMountJudgingCrons && !shouldMountMaintenanceCrons')
 })
 
 test('api proxy onRequest intercepts owner-dependent routes before product handlers execute', async () => {

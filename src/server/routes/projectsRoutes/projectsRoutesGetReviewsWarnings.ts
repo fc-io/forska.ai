@@ -146,7 +146,11 @@ const getReviewsIndexingStatus = (params: {
     return 'not-needed'
   }
 
-  if (params.hasQuarantineBarrier || params.hasTerminalV4Work) {
+  if (
+    params.hasQuarantineBarrier
+    || (params.hasTerminalV4Work
+      && (!params.hasReviewServingRows || params.pendingRefreshCount > 0 || params.runningRefreshCount > 0))
+  ) {
     return 'failed'
   }
 
