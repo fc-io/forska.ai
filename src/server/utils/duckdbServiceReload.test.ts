@@ -1084,6 +1084,177 @@ test('duckdb service retries startup WAL preflight locks without quarantining WA
   }
 })
 
+test('duckdb service preserves recovery attempts after startup WAL preflight lock retries', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-wal-preflight-lock-recovery-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+
+  mkdirSync(dataRoot, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+  writeFileSync(`${duckdbPath}.wal`, 'wal')
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {existsSync, readdirSync, readFileSync, writeFileSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const duckdbPath = ${JSON.stringify(duckdbPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        let createCount = 0
+        let preflightCount = 0
+        const originalSpawnSync = globalThis.Bun.spawnSync
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          const script = String(command[2] ?? '')
+
+          if (!script.includes('const tableRepairSpecs')) {
+            return originalSpawnSync(command, options)
+          }
+
+          preflightCount += 1
+
+          if (preflightCount <= 4) {
+            return {
+              exitCode: 1,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(
+                'IO Error: Could not set lock on file "' + duckdbPath + '": Conflicting lock is held in bun (PID 12345) by user fredrik.',
+              ),
+            }
+          }
+
+          return preflightCount === 5
+            ? {
+                exitCode: 5,
+                signalCode: 'SIGTRAP',
+                stdout: Buffer.from(''),
+                stderr: Buffer.from('native WAL replay crash after lock cleared'),
+              }
+            : {
+                exitCode: 0,
+                signalCode: null,
+                stdout: Buffer.from(''),
+                stderr: Buffer.from(''),
+              }
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run() {}
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              createCount += 1
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?wal-preflight-lock-recovery-test=' + Date.now())
+        const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+        const recoveryDirectory = duckdbPath + '.startup-recovery'
+        const recoveryFiles = existsSync(recoveryDirectory) ? readdirSync(recoveryDirectory).sort() : []
+        const manifestName = recoveryFiles.find((fileName) => fileName.endsWith('.recovery.json'))
+        const manifest = manifestName ? JSON.parse(readFileSync(recoveryDirectory + '/' + manifestName, 'utf8')) : null
+        console.log(JSON.stringify({
+          createCount,
+          manifest,
+          preflightCount,
+          recoveryFiles,
+          rows,
+          walExists: existsSync(duckdbPath + '.wal'),
+        }))
+        await duckdbService.closeDuckdbService()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB WAL lock recovery subprocess failed')
+    }
+
+    const parsed = JSON.parse(result.stdout.toString()) as {
+      createCount: number
+      manifest: {error?: string; recovery?: string} | null
+      preflightCount: number
+      recoveryFiles: string[]
+      rows: Array<{value: number}>
+      walExists: boolean
+    }
+
+    expect(parsed.preflightCount).toBe(6)
+    expect(parsed.createCount).toBe(1)
+    expect(parsed.rows).toEqual([{value: 1}])
+    expect(parsed.walExists).toBe(false)
+    expect(parsed.manifest?.recovery).toBe('wal-quarantine-retry-from-last-checkpoint')
+    expect(parsed.manifest?.error).toContain('native WAL replay crash after lock cleared')
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.duckdb')
+      }),
+    ).toHaveLength(1)
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.failed-replay.wal')
+      }),
+    ).toHaveLength(1)
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
 test('duckdb service retries transient startup indexed-table repair locks', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-index-repair-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
@@ -1111,6 +1282,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
         let repairSpecs = []
         let repairOptions = null
         let repairCount = 0
+        let repairLockProbeCount = 0
         let repairScript = ''
         const originalSpawnSync = globalThis.Bun.spawnSync
 
@@ -1121,20 +1293,18 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
 
           const script = String(command[2] ?? '')
 
-          if (script.includes('const repairId')) {
-            repairCount += 1
-            repairScript = script
-            repairOptions = JSON.parse(String(command[4] ?? '{}'))
-            repairSpecs = JSON.parse(String(command[5] ?? '[]'))
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_LOCK_PROBE_CHILD === 'true') {
+            repairLockProbeCount += 1
 
-            return repairCount === 1
+            return repairLockProbeCount === 1
               ? {
                   exitCode: 1,
                   signalCode: null,
                   stdout: Buffer.from(''),
-                  stderr: Buffer.from(
-                    'IO Error: Could not set lock on file "' + duckdbPath + '": Conflicting lock is held in bun (PID 12345) by user fredrik.',
-                  ),
+                  stderr: Buffer.from((
+                    writeFileSync(duckdbPath, 'database-after-lock-holder'),
+                    'IO Error: Could not set lock on file "' + duckdbPath + '": Conflicting lock is held in bun (PID 12345) by user fredrik.'
+                  )),
                 }
               : {
                   exitCode: 0,
@@ -1142,6 +1312,20 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
                   stdout: Buffer.from(''),
                   stderr: Buffer.from(''),
                 }
+          }
+
+          if (script.includes('const repairId')) {
+            repairCount += 1
+            repairScript = script
+            repairOptions = JSON.parse(String(command[4] ?? '{}'))
+            repairSpecs = JSON.parse(String(command[5] ?? '[]'))
+
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
           }
 
           preflightCount += 1
@@ -1221,6 +1405,10 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
           .filter((fileName) => fileName.endsWith('.recovery.json'))
           .map((fileName) => JSON.parse(readFileSync(recoveryDirectory + '/' + fileName, 'utf8')))
         const repairManifest = manifests.find((manifest) => manifest.recovery === 'indexed-table-rebuild') ?? null
+        const repairBackupContent =
+          repairManifest?.preservedDatabasePath === undefined
+            ? null
+            : readFileSync(repairManifest.preservedDatabasePath, 'utf8')
         const preflightWalManifest =
           manifests.find((manifest) => manifest.recovery === 'startup-preflight-mutation-wal-quarantine') ?? null
         console.log(JSON.stringify({
@@ -1231,7 +1419,9 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
           preflightSpecs,
           preflightWalManifest,
           recoveryFiles,
+          repairBackupContent,
           repairCount,
+          repairLockProbeCount,
           repairManifest,
           repairOptions,
           repairScript,
@@ -1294,7 +1484,9 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
         tableName: string
       }>
       recoveryFiles: string[]
+      repairBackupContent: string | null
       repairCount: number
+      repairLockProbeCount: number
       repairManifest: {
         error?: string
         preservedDatabasePath?: string
@@ -1309,7 +1501,8 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     }
 
     expect(parsed.preflightCount).toBe(2)
-    expect(parsed.repairCount).toBe(2)
+    expect(parsed.repairLockProbeCount).toBe(2)
+    expect(parsed.repairCount).toBe(1)
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
     expect(parsed.walExists).toBe(false)
@@ -1318,6 +1511,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(parsed.repairManifest?.recovery).toBe('indexed-table-rebuild')
     expect(parsed.repairManifest?.error).toContain('PRIMARY_review_article_judgment_detail_serving_v4')
     expect(parsed.repairManifest?.repairedTables).toEqual(['mart.review_article_judgment_detail_serving_v4'])
+    expect(parsed.repairBackupContent).toBe('database-after-lock-holder')
     expect(parsed.repairOptions?.checkpoint_threshold).toBe('8GB')
     expect(parsed.repairScript).not.toContain("await connection.run('CHECKPOINT')")
     expect(parsed.repairScript).toContain("spec.repairStrategy !== 'empty-derived'")
