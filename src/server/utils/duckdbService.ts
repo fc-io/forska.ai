@@ -2247,6 +2247,79 @@ const getDuckdbStartupPreflightError = (runtimeConfig: DuckdbRuntimeConfig) => {
   return error
 }
 
+const getDuckdbStartupFileLockProbeScript = () => {
+  return `
+    const databasePath = JSON.parse(process.argv[1])
+    const options = JSON.parse(process.argv[2])
+    const {DuckDBInstance} = await import('@duckdb/node-api')
+
+    const instance = await DuckDBInstance.create(databasePath, options)
+    instance.closeSync()
+  `
+}
+
+const getDuckdbStartupChildOutputText = (result: ReturnType<typeof globalThis.Bun.spawnSync>) => {
+  const stderr = result.stderr.toString().trim()
+  const stdout = result.stdout.toString().trim()
+  const signalText = result.signalCode === null ? null : `signal=${result.signalCode}`
+
+  return [stderr, stdout, signalText]
+    .filter((value) => {
+      return value !== null && value !== ''
+    })
+    .join(' -- ')
+}
+
+const waitForDuckdbStartupRepairFileLock = async (runtimeConfig: DuckdbRuntimeConfig) => {
+  let result: ReturnType<typeof globalThis.Bun.spawnSync> | null = null
+  let outputText = ''
+
+  for (let attempt = 0; attempt <= duckdbStartupIndexedTableRepairLockRetryDelaysMs.length; attempt += 1) {
+    result = globalThis.Bun.spawnSync(
+      [
+        process.execPath,
+        '-e',
+        getDuckdbStartupFileLockProbeScript(),
+        JSON.stringify(runtimeConfig.databasePath),
+        JSON.stringify(getDuckdbIndexedTableRepairInstanceOptions(runtimeConfig)),
+      ],
+      {
+        cwd: process.cwd(),
+        env: {...process.env, FORSKA_DUCKDB_STARTUP_LOCK_PROBE_CHILD: 'true'},
+        stderr: 'pipe',
+        stdin: 'ignore',
+        stdout: 'pipe',
+      },
+    )
+    outputText = getDuckdbStartupChildOutputText(result)
+
+    if (result.exitCode === 0) {
+      return
+    }
+
+    const retryDelayMs = duckdbStartupIndexedTableRepairLockRetryDelaysMs[attempt]
+
+    if (retryDelayMs === undefined || !isDuckdbTransientFileLockError(outputText)) {
+      break
+    }
+
+    writeRuntimeOperatorLogEvent({
+      attrs: {attempt: attempt + 1, databasePath: runtimeConfig.databasePath, error: outputText, retryDelayMs},
+      event: 'duckdb.startup.repair-lock-probe-retry',
+      message: '[duckdb] retrying startup repair after transient DuckDB file lock',
+      severity: 'WARN',
+      terminalArgs: [`attempt=${attempt + 1}`, `retry_ms=${retryDelayMs}`],
+    })
+    await sleepMs(retryDelayMs)
+  }
+
+  throw new Error(
+    `DuckDB startup repair lock probe failed for ${runtimeConfig.databasePath}: ${
+      outputText === '' ? `exitCode=${result?.exitCode ?? 'unknown'}` : outputText
+    }`,
+  )
+}
+
 const repairDuckdbStartupIndexedTables = async (runtimeConfig: DuckdbRuntimeConfig, error: unknown) => {
   if (runtimeConfig.databasePath === ':memory:') {
     throw new Error('DuckDB indexed-table repair is unavailable for :memory: databases')
@@ -2260,7 +2333,8 @@ const repairDuckdbStartupIndexedTables = async (runtimeConfig: DuckdbRuntimeConf
   const repairSpecs = getDuckdbStartupIndexedTableRepairSpecs(error)
 
   await mkdir(recoveryDirectory, {recursive: true})
-  const preservedDatabasePath = await copyDuckdbDatabaseBeforeWalRecovery({
+  await waitForDuckdbStartupRepairFileLock(runtimeConfig)
+  let preservedDatabasePath = await copyDuckdbDatabaseBeforeWalRecovery({
     databaseBackupPath,
     databasePath: runtimeConfig.databasePath,
   })
@@ -2288,14 +2362,7 @@ const repairDuckdbStartupIndexedTables = async (runtimeConfig: DuckdbRuntimeConf
       },
     )
 
-    const stderr = result.stderr.toString().trim()
-    const stdout = result.stdout.toString().trim()
-    const signalText = result.signalCode === null ? null : `signal=${result.signalCode}`
-    outputText = [stderr, stdout, signalText]
-      .filter((value) => {
-        return value !== null && value !== ''
-      })
-      .join(' -- ')
+    outputText = getDuckdbStartupChildOutputText(result)
 
     if (result.exitCode === 0) {
       break
@@ -2315,6 +2382,11 @@ const repairDuckdbStartupIndexedTables = async (runtimeConfig: DuckdbRuntimeConf
       terminalArgs: [`attempt=${attempt + 1}`, `retry_ms=${retryDelayMs}`],
     })
     await sleepMs(retryDelayMs)
+    await waitForDuckdbStartupRepairFileLock(runtimeConfig)
+    preservedDatabasePath = await copyDuckdbDatabaseBeforeWalRecovery({
+      databaseBackupPath,
+      databasePath: runtimeConfig.databasePath,
+    })
   }
 
   if (result === null || result.exitCode !== 0) {
@@ -2366,9 +2438,9 @@ const repairDuckdbStartupIndexedTables = async (runtimeConfig: DuckdbRuntimeConf
 
 const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) => {
   let attemptedIndexedTableRepair = false
-  const maxAttempts = Math.max(3, duckdbStartupPreflightLockRetryDelaysMs.length + 1)
+  let lockRetryCount = 0
 
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+  for (let recoveryAttempt = 0; recoveryAttempt < 3; ) {
     const hadWalBeforePreflight = hasNonEmptyDuckdbWal(runtimeConfig.databasePath)
     const error = getDuckdbStartupPreflightError(runtimeConfig)
 
@@ -2378,7 +2450,7 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
 
     const errorMessage = getNormalizedDuckdbError(error).message
     const compactErrorMessage = getCompactDuckdbErrorMessage(error)
-    const retryDelayMs = duckdbStartupPreflightLockRetryDelaysMs[attempt]
+    const retryDelayMs = duckdbStartupPreflightLockRetryDelaysMs[lockRetryCount]
 
     if (isDuckdbTransientFileLockError(errorMessage)) {
       if (retryDelayMs === undefined) {
@@ -2386,15 +2458,24 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
       }
 
       writeRuntimeOperatorLogEvent({
-        attrs: {attempt: attempt + 1, databasePath: runtimeConfig.databasePath, error: compactErrorMessage, retryDelayMs},
+        attrs: {
+          databasePath: runtimeConfig.databasePath,
+          error: compactErrorMessage,
+          retryAttempt: lockRetryCount + 1,
+          retryDelayMs,
+        },
         event: 'duckdb.startup.preflight-lock-retry',
         message: '[duckdb] retrying startup preflight after transient DuckDB file lock',
         severity: 'WARN',
-        terminalArgs: [`attempt=${attempt + 1}`, `retry_ms=${retryDelayMs}`],
+        terminalArgs: [`attempt=${lockRetryCount + 1}`, `retry_ms=${retryDelayMs}`],
       })
+      lockRetryCount += 1
       await sleepMs(retryDelayMs)
       continue
     }
+
+    lockRetryCount = 0
+    recoveryAttempt += 1
 
     if (hadWalBeforePreflight && hasNonEmptyDuckdbWal(runtimeConfig.databasePath)) {
       await quarantineFailedDuckdbWalReplay(runtimeConfig, error)

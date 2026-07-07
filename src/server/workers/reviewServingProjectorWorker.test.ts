@@ -1962,6 +1962,11 @@ test('worker batches foreground status rebuild request chunks through component 
     ])
     expect(harness.runChunkInputs).toEqual([])
     expect(harness.wakeInputs).toEqual([])
+    expect(
+      statements.filter((statement) => {
+        return statement.includes('pendingChunkCount')
+      }),
+    ).toHaveLength(1)
     expect(joined).toContain("article_id >= 'article-001'")
     expect(joined).toContain("article_id <= 'article-033'")
     expect(joined).toContain("article_id >= 'article-066'")
