@@ -275,7 +275,7 @@ const maintenanceCronRoutes = shouldMountMaintenanceCrons
       .use((await import('./cron/judgmentsJobs.ts')).judgmentsJobsMaintenanceCron)
   : new Elysia()
 const judgmentCronRoutes = shouldMountJudgingCrons
-  ? new Elysia().use((await import('./cron/judgmentsJobs.ts')).judgmentsJobsJudgingCron)
+  ? new Elysia().use((await import('./cron/judgmentsJobsJudgingCron.ts')).judgmentsJobsJudgingCron)
   : new Elysia()
 const shouldWarmCodex = shouldServerRoleRunCodexStartup(getCurrentServerRole())
 const publicProductApiRoutes = shouldCurrentServerMountPublicProductApi() ? getProductApiRoutes() : new Elysia()

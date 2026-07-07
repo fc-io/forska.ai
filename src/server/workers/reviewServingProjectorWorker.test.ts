@@ -1458,6 +1458,221 @@ test('worker writes compatible queue rebuild chunks through one batch writer', a
   expect(joined).toContain('queueBatchWriter')
 })
 
+test('worker clamps foreground queue rebuild batches to the completed chunk run cap', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const statements: string[] = []
+  const queueChunks = Array.from({length: 20}, (_, index) => {
+    const start = String(index * 10 + 1).padStart(3, '0')
+    const end = String((index + 1) * 10).padStart(3, '0')
+    const chunkInputForIndex = {
+      ...chunkInput,
+      chunkEndKey: `article-${end}`,
+      chunkStartKey: `article-${start}`,
+      projectionComponent: 'queue' as const,
+      projectionIdentity: 'queue:project-1',
+      requestId: 'rebuild-queue-cap',
+    }
+
+    return {
+      chunk: {
+        ...chunkManifest,
+        ...chunkInputForIndex,
+        chunkId: `chunk-queue-cap-${index}`,
+        requestId: 'rebuild-queue-cap',
+      },
+      input: chunkInputForIndex,
+    }
+  })
+  const firstQueueChunk = queueChunks[0]
+
+  if (firstQueueChunk === undefined) {
+    throw new Error('expected queue cap test chunk')
+  }
+
+  const chunksByStartKey = new Map(
+    queueChunks.map((entry) => {
+      return [entry.input.chunkStartKey, entry.chunk]
+    }),
+  )
+  const chunksById = new Map(
+    queueChunks.map((entry) => {
+      return [entry.chunk.chunkId, entry.chunk]
+    }),
+  )
+  const componentState = {
+    optional: [],
+    required: [
+      {baseGeneration: '2', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+      {baseGeneration: '2', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+      {baseGeneration: '2', component: 'queue', projectionIdentity: 'queue:project-1'},
+    ],
+  }
+  let nextIndex = 0
+
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+      const chunkId = [...chunksById.keys()].find((id) => {
+        return statement.includes(id)
+      })
+
+      return [chunksById.get(chunkId ?? firstQueueChunk.chunk.chunkId) ?? firstQueueChunk.chunk] as T[]
+    }
+
+    if (statement.includes('COUNT(*) AS pendingChunkCount')) {
+      return [{pendingChunkCount: 1}] as T[]
+    }
+
+    if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+      return [
+        {
+          componentStateJson: componentState,
+          reviewConfigHash: 'review-config-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          snapshotId: 'snapshot-queue-cap',
+        },
+      ] as T[]
+    }
+
+    if (statement.includes('FROM mart.review_unassessed_queue_serving_v4 serving')) {
+      return [{actualChecksum: 'checksum-queue-cap', actualCount: 16}] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return queueChunks[nextIndex++]?.input ?? null
+    },
+    heartbeatChunk: async (heartbeatInput) => {
+      harness.heartbeatInputs.push(heartbeatInput)
+
+      return chunksById.get(heartbeatInput.chunkId) ?? null
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {maxCompletedRebuildChunksPerRun: 16, rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(result.chunk).toMatchObject({chunkId: 'chunk-queue-cap-0', status: 'failed'})
+  expect(harness.claimInputs).toHaveLength(16)
+  expect(harness.getNextChunkInputs).toHaveLength(16)
+})
+
+test('worker fails completed foreground queue rebuild request when batch finalization throws', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const statements: string[] = []
+  const requestId = 'rebuild-queue-finalization-failure'
+  const firstChunkInput = {
+    ...chunkInput,
+    chunkEndKey: 'article-050',
+    chunkStartKey: 'article-001',
+    projectionComponent: 'queue' as const,
+    projectionIdentity: 'queue:project-1',
+    requestId,
+  }
+  const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
+  const firstChunk = {...chunkManifest, ...firstChunkInput, chunkId: 'chunk-queue-finalize-1', requestId}
+  const secondChunk = {...chunkManifest, ...secondChunkInput, chunkId: 'chunk-queue-finalize-2', requestId}
+  const chunksByStartKey = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunkInput.chunkStartKey, firstChunk],
+    [secondChunkInput.chunkStartKey, secondChunk],
+  ])
+  const chunksById = new Map<string, ReviewServingRebuildChunkManifest>([
+    [firstChunk.chunkId, firstChunk],
+    [secondChunk.chunkId, secondChunk],
+  ])
+  const componentState = {
+    optional: [],
+    required: [
+      {baseGeneration: '2', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+      {baseGeneration: '2', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+      {baseGeneration: '2', component: 'queue', projectionIdentity: 'queue:project-1'},
+    ],
+  }
+  let nextIndex = 0
+
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('COUNT(*) AS pendingChunkCount')) {
+      throw new Error('pending count failed')
+    }
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+      const chunkId = [...chunksById.keys()].find((id) => {
+        return statement.includes(id)
+      })
+
+      return [chunksById.get(chunkId ?? firstChunk.chunkId) ?? firstChunk] as T[]
+    }
+
+    if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+      return [
+        {
+          componentStateJson: componentState,
+          reviewConfigHash: 'review-config-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          snapshotId: 'snapshot-queue-finalization-failure',
+        },
+      ] as T[]
+    }
+
+    if (statement.includes('FROM mart.review_unassessed_queue_serving_v4 serving')) {
+      return [{actualChecksum: 'checksum-queue-finalization-failure', actualCount: 2}] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return [firstChunkInput, secondChunkInput][nextIndex++] ?? null
+    },
+    heartbeatChunk: async (heartbeatInput) => {
+      harness.heartbeatInputs.push(heartbeatInput)
+
+      return chunksById.get(heartbeatInput.chunkId) ?? null
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+  const joined = statements.join('\n')
+
+  expect(result.chunk).toMatchObject({chunkId: firstChunk.chunkId, requestId, status: 'failed'})
+  expect(result.chunkBatchCount).toBe(0)
+  expect(joined).toContain('UPDATE app.review_rebuild_request')
+  expect(joined).toContain("status = 'failed'")
+  expect(joined).toContain(`request_id = '${requestId}'`)
+})
+
 test('worker writes compatible judgment input content rebuild chunks through one batch writer', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const statements: string[] = []
@@ -4816,9 +5031,9 @@ test('worker deduplicates request finalization in foreground search and queue ba
   const queueSource = source.slice(queueStart, nextStart)
 
   expect(searchSource).toContain('const finalizedRequestIds = new Set<string>()')
-  expect(searchSource).toContain('await finalizeCompletedReviewServingRebuildRequestOnce({')
+  expect(searchSource).toContain('await finalizeCompletedReviewServingRebuildRequestOnceForBatch({')
   expect(queueSource).toContain('const finalizedRequestIds = new Set<string>()')
-  expect(queueSource).toContain('await finalizeCompletedReviewServingRebuildRequestOnce({')
+  expect(queueSource).toContain('await finalizeCompletedReviewServingRebuildRequestOnceForBatch({')
 })
 
 test('worker refreshes posting stats once when a posting rebuild request is finalized', async () => {

@@ -203,6 +203,7 @@ const getProjectorResultDiagnosticsJson = (result: object) => {
 type ReviewServingProjectorWorkerCycleOptions = {
   batchSize?: number
   cleanupIntervalMs?: number
+  completedRebuildChunksInRun?: number
   foregroundRebuildDrainChunkBudget?: number
   foregroundRebuildDrainCompletedCount?: number
   foregroundRebuildDrainStartedAtMs?: number | null
@@ -212,6 +213,7 @@ type ReviewServingProjectorWorkerCycleOptions = {
   leaseMs?: number
   maxActiveImportCount?: number
   maxPendingDirtyWorkCount?: number
+  maxCompletedRebuildChunksPerRun?: number
   maxRetries?: number
   maxRowsPerWake?: number
   maxWakeMs?: number
@@ -223,9 +225,7 @@ type ReviewServingProjectorWorkerCycleOptions = {
 }
 
 type ReviewServingProjectorWorkerLoopOptions = ReviewServingProjectorWorkerCycleOptions & {
-  completedRebuildChunksInRun?: number
   errorBackoffMs?: number
-  maxCompletedRebuildChunksPerRun?: number
   pollIntervalMs?: number
   signal?: AbortSignal
 }
@@ -5247,6 +5247,35 @@ const finalizeCompletedReviewServingRebuildRequestOnce = async (input: {
   await finalizeCompletedReviewServingRebuildRequest(input.chunk, input.database)
 }
 
+const finalizeCompletedReviewServingRebuildRequestOnceForBatch = async (input: {
+  chunk: ReviewServingRebuildChunkManifest
+  completedCount: number
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase
+  finalizedRequestIds: Set<string>
+  timings: Record<string, number>
+}): Promise<{chunk: ReviewServingProjectorWorkerChunkResult; completedCount: number} | null> => {
+  try {
+    await measureReviewServingProjectorWorkerPhase(input.timings, 'finalizeRequestMs', async () => {
+      await finalizeCompletedReviewServingRebuildRequestOnce({
+        chunk: input.chunk,
+        database: input.database,
+        finalizedRequestIds: input.finalizedRequestIds,
+      })
+    })
+
+    return null
+  } catch (error) {
+    await measureReviewServingProjectorWorkerPhase(input.timings, 'finalizeFailedRequestMs', async () => {
+      await finalizeErroredCompletedReviewServingRebuildRequest({chunk: input.chunk, error}, input.database)
+    })
+
+    return {
+      chunk: {chunkId: input.chunk.chunkId, requestId: input.chunk.requestId, status: 'failed'},
+      completedCount: input.completedCount,
+    }
+  }
+}
+
 const getReviewServingProjectorWorkerDatabase = (
   dependencies: ReviewServingProjectorWorkerDependencies,
   workloadContext: DuckdbWorkloadContext,
@@ -5537,12 +5566,11 @@ const isForegroundBatchableRebuildChunk = (
   return isForegroundBatchableStatusRebuildChunk(chunk) || isForegroundBatchableRangeRebuildChunk(chunk)
 }
 
-const getForegroundRebuildChunkBatchSize = (
-  chunk: Pick<
-    ReviewServingProjectorWorkerChunkInput,
-    'estimatedInputRows' | 'estimatedOutputRows' | 'projectionComponent'
-  >,
-) => {
+const getForegroundRebuildChunkBatchSize = (chunk: {
+  estimatedInputRows?: number | null
+  estimatedOutputRows?: number | null
+  projectionComponent: ReviewServingProjectionComponent
+}) => {
   if (chunk.projectionComponent === 'humanStatus') {
     return foregroundHumanStatusRebuildChunkBatchSize
   }
@@ -5610,19 +5638,29 @@ const isCompatibleReviewServingProjectorWorkerRebuildChunkBatchInput = (
 const getReviewServingProjectorWorkerRebuildChunkPreclaimLimit = (input: {
   batchSize: number
   claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
+  options: ReviewServingProjectorWorkerCycleOptions
 }) => {
   const firstClaimedChunk = input.claimedChunks[0]?.chunk
+  const maxCompletedRebuildChunksPerRun = getPositiveInteger(
+    input.options.maxCompletedRebuildChunksPerRun,
+    getDefaultMaxCompletedRebuildChunksPerRun(),
+  )
+  const remainingCompletedChunkRunBudget =
+    maxCompletedRebuildChunksPerRun > 0
+      ? Math.max(1, maxCompletedRebuildChunksPerRun - getPositiveInteger(input.options.completedRebuildChunksInRun, 0))
+      : Number.POSITIVE_INFINITY
 
   if (firstClaimedChunk !== undefined && isForegroundBatchableRebuildChunk(firstClaimedChunk)) {
-    return getForegroundRebuildChunkBatchSize(firstClaimedChunk)
+    return Math.min(getForegroundRebuildChunkBatchSize(firstClaimedChunk), remainingCompletedChunkRunBudget)
   }
 
-  return input.batchSize
+  return Math.min(input.batchSize, remainingCompletedChunkRunBudget)
 }
 
 const shouldContinueClaimingReviewServingProjectorWorkerRebuildChunkBatch = (input: {
   batchSize: number
   claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
+  options: ReviewServingProjectorWorkerCycleOptions
 }) => {
   return input.claimedChunks.length < getReviewServingProjectorWorkerRebuildChunkPreclaimLimit(input)
 }
@@ -6048,6 +6086,7 @@ const claimCompatibleReviewServingProjectorWorkerStatusBatchTail = async (input:
   const preclaimLimit = getReviewServingProjectorWorkerRebuildChunkPreclaimLimit({
     batchSize: input.batchSize,
     claimedChunks: input.claimedChunks,
+    options: input.options,
   })
   const remainingLimit = preclaimLimit - input.claimedChunks.length
 
@@ -6072,6 +6111,7 @@ const claimCompatibleReviewServingProjectorWorkerStatusBatchTail = async (input:
       !shouldContinueClaimingReviewServingProjectorWorkerRebuildChunkBatch({
         batchSize: input.batchSize,
         claimedChunks: input.claimedChunks,
+        options: input.options,
       })
       || !shouldClaimNextReviewServingProjectorWorkerRebuildChunkForBatch(
         input.claimedChunks.map((claimed) => {
@@ -6117,7 +6157,11 @@ const claimCompatibleReviewServingProjectorWorkerRebuildChunkBatch = async (
   }
 
   while (
-    shouldContinueClaimingReviewServingProjectorWorkerRebuildChunkBatch({batchSize: input.batchSize, claimedChunks})
+    shouldContinueClaimingReviewServingProjectorWorkerRebuildChunkBatch({
+      batchSize: input.batchSize,
+      claimedChunks,
+      options: input.options,
+    })
   ) {
     const timings: Record<string, number> = {}
     const chunkInput = await measureReviewServingProjectorWorkerPhase(timings, 'claimSelectMs', async () => {
@@ -6330,13 +6374,17 @@ const runProjectScopeReviewServingProjectorWorkerRebuildChunkBatch = async (inpu
       continue
     }
 
-    await measureReviewServingProjectorWorkerPhase(claimed.timings, 'finalizeRequestMs', async () => {
-      await finalizeCompletedReviewServingRebuildRequestOnce({
-        chunk: claimed.chunk,
-        database: input.database,
-        finalizedRequestIds,
-      })
+    const finalizationFailure = await finalizeCompletedReviewServingRebuildRequestOnceForBatch({
+      chunk: claimed.chunk,
+      completedCount,
+      database: input.database,
+      finalizedRequestIds,
+      timings: claimed.timings,
     })
+
+    if (finalizationFailure !== null) {
+      return finalizationFailure
+    }
     logReviewServingProjectorWorkerRebuildChunkProgress({
       chunk: claimed.chunk,
       status: 'completed',
@@ -6398,13 +6446,17 @@ const runSelectedImportReviewServingProjectorWorkerRebuildChunkBatch = async (in
       continue
     }
 
-    await measureReviewServingProjectorWorkerPhase(claimed.timings, 'finalizeRequestMs', async () => {
-      await finalizeCompletedReviewServingRebuildRequestOnce({
-        chunk: claimed.chunk,
-        database: input.database,
-        finalizedRequestIds,
-      })
+    const finalizationFailure = await finalizeCompletedReviewServingRebuildRequestOnceForBatch({
+      chunk: claimed.chunk,
+      completedCount,
+      database: input.database,
+      finalizedRequestIds,
+      timings: claimed.timings,
     })
+
+    if (finalizationFailure !== null) {
+      return finalizationFailure
+    }
     logReviewServingProjectorWorkerRebuildChunkProgress({
       chunk: claimed.chunk,
       status: 'completed',
@@ -6466,13 +6518,17 @@ const runDisplayReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
       continue
     }
 
-    await measureReviewServingProjectorWorkerPhase(claimed.timings, 'finalizeRequestMs', async () => {
-      await finalizeCompletedReviewServingRebuildRequestOnce({
-        chunk: claimed.chunk,
-        database: input.database,
-        finalizedRequestIds,
-      })
+    const finalizationFailure = await finalizeCompletedReviewServingRebuildRequestOnceForBatch({
+      chunk: claimed.chunk,
+      completedCount,
+      database: input.database,
+      finalizedRequestIds,
+      timings: claimed.timings,
     })
+
+    if (finalizationFailure !== null) {
+      return finalizationFailure
+    }
     logReviewServingProjectorWorkerRebuildChunkProgress({
       chunk: claimed.chunk,
       status: 'completed',
@@ -6534,13 +6590,17 @@ const runPayloadReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
       continue
     }
 
-    await measureReviewServingProjectorWorkerPhase(claimed.timings, 'finalizeRequestMs', async () => {
-      await finalizeCompletedReviewServingRebuildRequestOnce({
-        chunk: claimed.chunk,
-        database: input.database,
-        finalizedRequestIds,
-      })
+    const finalizationFailure = await finalizeCompletedReviewServingRebuildRequestOnceForBatch({
+      chunk: claimed.chunk,
+      completedCount,
+      database: input.database,
+      finalizedRequestIds,
+      timings: claimed.timings,
     })
+
+    if (finalizationFailure !== null) {
+      return finalizationFailure
+    }
     logReviewServingProjectorWorkerRebuildChunkProgress({
       chunk: claimed.chunk,
       status: 'completed',
@@ -6602,13 +6662,17 @@ const runSearchReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
       continue
     }
 
-    await measureReviewServingProjectorWorkerPhase(claimed.timings, 'finalizeRequestMs', async () => {
-      await finalizeCompletedReviewServingRebuildRequestOnce({
-        chunk: claimed.chunk,
-        database: input.database,
-        finalizedRequestIds,
-      })
+    const finalizationFailure = await finalizeCompletedReviewServingRebuildRequestOnceForBatch({
+      chunk: claimed.chunk,
+      completedCount,
+      database: input.database,
+      finalizedRequestIds,
+      timings: claimed.timings,
     })
+
+    if (finalizationFailure !== null) {
+      return finalizationFailure
+    }
     logReviewServingProjectorWorkerRebuildChunkProgress({
       chunk: claimed.chunk,
       status: 'completed',
@@ -6670,13 +6734,17 @@ const runQueueReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
       continue
     }
 
-    await measureReviewServingProjectorWorkerPhase(claimed.timings, 'finalizeRequestMs', async () => {
-      await finalizeCompletedReviewServingRebuildRequestOnce({
-        chunk: claimed.chunk,
-        database: input.database,
-        finalizedRequestIds,
-      })
+    const finalizationFailure = await finalizeCompletedReviewServingRebuildRequestOnceForBatch({
+      chunk: claimed.chunk,
+      completedCount,
+      database: input.database,
+      finalizedRequestIds,
+      timings: claimed.timings,
     })
+
+    if (finalizationFailure !== null) {
+      return finalizationFailure
+    }
     logReviewServingProjectorWorkerRebuildChunkProgress({
       chunk: claimed.chunk,
       status: 'completed',
@@ -6730,6 +6798,8 @@ const runJudgmentInputContentReviewServingProjectorWorkerRebuildChunkBatch = asy
     return null
   }
 
+  const finalizedRequestIds = new Set<string>()
+
   for (const result of batchResults) {
     const claimed = input.claimedChunks.find((candidate) => {
       return candidate.chunk.chunkId === result.chunkId
@@ -6739,9 +6809,17 @@ const runJudgmentInputContentReviewServingProjectorWorkerRebuildChunkBatch = asy
       continue
     }
 
-    await measureReviewServingProjectorWorkerPhase(claimed.timings, 'finalizeRequestMs', async () => {
-      await finalizeCompletedReviewServingRebuildRequest(claimed.chunk, input.database)
+    const finalizationFailure = await finalizeCompletedReviewServingRebuildRequestOnceForBatch({
+      chunk: claimed.chunk,
+      completedCount,
+      database: input.database,
+      finalizedRequestIds,
+      timings: claimed.timings,
     })
+
+    if (finalizationFailure !== null) {
+      return finalizationFailure
+    }
     logReviewServingProjectorWorkerRebuildChunkProgress({
       chunk: claimed.chunk,
       status: 'completed',
@@ -6809,13 +6887,17 @@ const runReviewServingProjectorWorkerRebuildChunkBatchWith = async (
       continue
     }
 
-    await measureReviewServingProjectorWorkerPhase(claimed.timings, 'finalizeRequestMs', async () => {
-      await finalizeCompletedReviewServingRebuildRequestOnce({
-        chunk: claimed.chunk,
-        database: input.database,
-        finalizedRequestIds,
-      })
+    const finalizationFailure = await finalizeCompletedReviewServingRebuildRequestOnceForBatch({
+      chunk: claimed.chunk,
+      completedCount,
+      database: input.database,
+      finalizedRequestIds,
+      timings: claimed.timings,
     })
+
+    if (finalizationFailure !== null) {
+      return finalizationFailure
+    }
     logReviewServingProjectorWorkerRebuildChunkProgress({
       chunk: claimed.chunk,
       status: 'completed',
