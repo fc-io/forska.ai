@@ -276,7 +276,7 @@ const maintenanceCronRoutes = shouldMountMaintenanceCrons
   : new Elysia()
 const judgmentImportCronRoutes =
   shouldMountJudgingCrons && !shouldMountMaintenanceCrons
-    ? new Elysia().use((await import('./cron/judgmentsJobs.ts')).judgmentsJobsImportCron)
+    ? new Elysia().use((await import('./cron/judgmentsJobsImportCron.ts')).judgmentsJobsImportCron)
     : new Elysia()
 const judgmentCronRoutes = shouldMountJudgingCrons
   ? new Elysia().use((await import('./cron/judgmentsJobsJudgingCron.ts')).judgmentsJobsJudgingCron)

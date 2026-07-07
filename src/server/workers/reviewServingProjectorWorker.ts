@@ -362,17 +362,6 @@ const defaultReviewServingSelectedImportBaseBatchSize = 512
 const reviewServingProjectorWorkerRouteOrJobKey = 'reviewServing.projector.worker'
 const defaultReviewServingLlmListModeKeys = ['llm', 'both'] as const
 const defaultReviewServingHumanListModeKeys = ['human', 'both'] as const
-const reviewServingCriticalRebuildComponents = [
-  'projectScope',
-  'selectedImport',
-  'display',
-  'judgmentInputContent',
-  'llmStatus',
-  'humanStatus',
-  'queue',
-  'summary',
-  'payload',
-] as const satisfies readonly ReviewServingProjectionComponent[]
 const foregroundBatchableStatusRebuildComponents = new Set<ReviewServingProjectionComponent>([
   'humanStatus',
   'llmStatus',
@@ -5354,21 +5343,12 @@ const getBlockedReviewServingProjectorWakeResult = (): WakeReviewServingProjecto
   return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
 }
 
-const isCriticalRebuildChunkResult = (chunk: ReviewServingProjectorWorkerChunkResult) => {
-  return (
-    chunk.status === 'completed'
-    && reviewServingCriticalRebuildComponents.some((component) => {
-      return component === chunk.projectionComponent
-    })
-  )
-}
-
 const getForegroundRebuildDrainStartedAtMs = (input: {
   chunk: ReviewServingProjectorWorkerChunkResult
   nowMs: number
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
-  return isCriticalRebuildChunkResult(input.chunk)
+  return input.chunk.status === 'completed' && input.chunk.requestId !== null
     ? (input.options.foregroundRebuildDrainStartedAtMs ?? input.nowMs)
     : null
 }
@@ -5379,10 +5359,6 @@ const shouldPrioritizeNextRebuildChunk = (input: {
   nowMs: number
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
-  if (input.chunk.status === 'completed' && input.chunk.requestId !== null) {
-    return true
-  }
-
   const defaultDrainBudget =
     input.chunk.status === 'completed' && isForegroundBatchableStatusRebuildChunk(input.chunk)
       ? foregroundStatusRebuildDrainBatchBudget
@@ -5400,7 +5376,6 @@ const shouldPrioritizeNextRebuildChunk = (input: {
   return (
     input.chunk.status === 'completed'
     && input.chunk.requestId !== null
-    && isCriticalRebuildChunkResult(input.chunk)
     && startedAtMs !== null
     && completedCount <= budget
     && input.nowMs - startedAtMs <= ttlMs

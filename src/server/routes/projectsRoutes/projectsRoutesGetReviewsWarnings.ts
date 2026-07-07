@@ -133,6 +133,7 @@ const getReviewsIndexingStatus = (params: {
   enabledPromptCount: number
   hasAnyArticlesInScope: boolean
   hasBlockedCandidateSnapshot: boolean
+  hasLatestTerminalV4Request: boolean
   hasQuarantineBarrier: boolean
   hasReviewServingRows: boolean
   hasTerminalV4Work: boolean
@@ -148,6 +149,7 @@ const getReviewsIndexingStatus = (params: {
 
   if (
     params.hasQuarantineBarrier
+    || params.hasLatestTerminalV4Request
     || (params.hasTerminalV4Work
       && (!params.hasReviewServingRows || params.pendingRefreshCount > 0 || params.runningRefreshCount > 0))
   ) {
@@ -322,6 +324,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       enabledPromptCount,
       hasAnyArticlesInScope,
       hasBlockedCandidateSnapshot,
+      hasLatestTerminalV4Request: servingDiagnostics.rebuildChunks.failedCount > 0,
       hasQuarantineBarrier: terminalQuarantineCount > 0,
       hasReviewServingRows,
       hasTerminalV4Work:

@@ -2710,7 +2710,7 @@ test('worker drains foreground critical rebuild chunks within a bounded chunk bu
   expect(harness.wakeInputs).toEqual([])
 })
 
-test('worker keeps foreground rebuild cycles isolated after the drain budget is exhausted', async () => {
+test('worker resumes normal projector work after the foreground drain budget is exhausted', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const foregroundChunkInput = {...chunkInput, requestId: 'rebuild:foreground'}
   const foregroundChunk = {...chunkManifest, requestId: 'rebuild:foreground'}
@@ -2741,11 +2741,11 @@ test('worker keeps foreground rebuild cycles isolated after the drain budget is 
   )
 
   expect(result.chunk).toMatchObject({requestId: 'rebuild:foreground', status: 'completed'})
-  expect(result.projector).toMatchObject({status: 'blocked'})
-  expect(harness.wakeInputs).toEqual([])
+  expect(result.projector).toMatchObject({status: 'completed'})
+  expect(harness.wakeInputs).toHaveLength(1)
 })
 
-test('worker keeps high-RSS foreground rebuild cycles out of normal projector work', async () => {
+test('worker honors the foreground drain budget before skipping high-RSS foreground work', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const foregroundSearchChunkInput = {
     ...chunkInput,
@@ -2789,8 +2789,8 @@ test('worker keeps high-RSS foreground rebuild cycles out of normal projector wo
   )
 
   expect(result.chunk).toMatchObject({projectionComponent: 'search', requestId: 'rebuild:foreground-search'})
-  expect(result.projector).toMatchObject({status: 'blocked'})
-  expect(harness.wakeInputs).toEqual([])
+  expect(result.projector).toMatchObject({status: 'completed'})
+  expect(harness.wakeInputs).toHaveLength(1)
 })
 
 test('worker keeps draining foreground status rebuild chunks beyond the heavy-chunk budget', async () => {
@@ -2886,7 +2886,7 @@ test('worker keeps draining foreground native-heavy rebuild chunks beyond the he
   expect(harness.garbageCollectedChunks).toEqual([])
 })
 
-test('worker keeps foreground rebuild chunks isolated after the drain TTL expires', async () => {
+test('worker resumes normal projector work after the foreground drain TTL expires', async () => {
   let nowMs = 1_000
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const foregroundChunkInput = {...chunkInput, requestId: 'rebuild:foreground'}
@@ -2927,8 +2927,8 @@ test('worker keeps foreground rebuild chunks isolated after the drain TTL expire
   )
 
   expect(result.chunk).toMatchObject({requestId: 'rebuild:foreground', status: 'completed'})
-  expect(result.projector).toMatchObject({status: 'blocked'})
-  expect(harness.wakeInputs).toEqual([])
+  expect(result.projector).toMatchObject({status: 'completed'})
+  expect(harness.wakeInputs).toHaveLength(1)
 })
 
 test('worker runs delta intake before waking projectors', async () => {
@@ -3897,7 +3897,7 @@ test('worker keeps yielding while foreground rebuild chunks stay isolated', asyn
   await runReviewServingProjectorWorker(
     {
       foregroundRebuildDrainChunkBudget: 2,
-      foregroundRebuildDrainCompletedCount: 2,
+      foregroundRebuildDrainCompletedCount: 1,
       foregroundRebuildDrainStartedAtMs: 1_000,
       foregroundRebuildDrainTtlMs: 10_000,
       signal: controller.signal,
