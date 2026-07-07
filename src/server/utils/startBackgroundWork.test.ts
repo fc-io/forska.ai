@@ -24,7 +24,7 @@ const runStartBackgroundWork = (input: {
   disableServerMutations?: boolean
   duckdbMemoryLimit?: string
   promoteAfterStart?: boolean
-  role: 'api' | 'judge-worker' | 'maintenance-worker'
+  role: 'api' | 'dev-single' | 'judge-worker' | 'maintenance-worker'
 }) => {
   const runScript = globalThis.Bun.spawnSync(
     [
@@ -87,7 +87,7 @@ const runStartBackgroundWork = (input: {
               promotionHandlers.push(handler)
             },
             shouldCurrentServerRunMaintenanceLoops: () => {
-              return currentRole === 'maintenance-worker'
+              return currentRole === 'maintenance-worker' || currentRole === 'dev-single'
             },
             startServerRuntimeRoleMonitor: () => {
               calls.push('serverRuntimeRoleMonitor')
@@ -122,6 +122,7 @@ const runStartBackgroundWork = (input: {
       cwd: process.cwd(),
       env: {
         ...process.env,
+        SERVER_ROLE: input.role,
         ...(input.duckdbMemoryLimit === undefined ? {} : {DUCKDB_MEMORY_LIMIT: input.duckdbMemoryLimit}),
       },
     },
@@ -135,7 +136,7 @@ const runStartBackgroundWork = (input: {
 }
 
 test('startBackgroundWork starts shared infrastructure and maintenance work for maintenance-worker', () => {
-  const result = runStartBackgroundWork({role: 'maintenance-worker'})
+  const result = runStartBackgroundWork({duckdbMemoryLimit: '20GB', role: 'maintenance-worker'})
 
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
@@ -153,7 +154,7 @@ test('startBackgroundWork skips maintenance work when the current role lacks mai
 })
 
 test('startBackgroundWork starts maintenance work after auto owner promotion', () => {
-  const result = runStartBackgroundWork({promoteAfterStart: true, role: 'api'})
+  const result = runStartBackgroundWork({duckdbMemoryLimit: '20GB', promoteAfterStart: true, role: 'api'})
 
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
@@ -166,6 +167,16 @@ test('startBackgroundWork starts maintenance work after auto owner promotion', (
 
 test('startBackgroundWork defers nonessential DuckDB maintenance under low-memory owner profile', () => {
   const result = runStartBackgroundWork({duckdbMemoryLimit: '6400MiB', role: 'maintenance-worker'})
+
+  expect(result.calls).toEqual([
+    'serverRuntimeRoleMonitor',
+    'duckdbOwnerConnectionHeartbeat',
+    'reviewServingProjectorWorkerHeartbeat:default:16',
+  ])
+})
+
+test('startBackgroundWork defers nonessential DuckDB maintenance under normalized default owner limit', () => {
+  const result = runStartBackgroundWork({duckdbMemoryLimit: '', role: 'maintenance-worker'})
 
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',

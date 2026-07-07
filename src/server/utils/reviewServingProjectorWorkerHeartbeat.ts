@@ -38,7 +38,7 @@ const getReviewServingProjectorWorkerMaxRunMs = (options: ReviewServingProjector
 }
 
 const getLowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = () => {
-  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT)
+  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT)
 
   return duckdbLimitMiB !== null && duckdbLimitMiB <= lowMemoryMaintenanceDuckdbLimitMiB
     ? lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun
@@ -95,6 +95,16 @@ export const startReviewServingProjectorWorkerHeartbeat = (
     restartTimer.unref()
   }
 
+  const recycleDuckdbBeforeRestart = async (maxCompletedRebuildChunksPerRun: number | null) => {
+    if (maxCompletedRebuildChunksPerRun === null || stopped || controller.signal.aborted) {
+      return
+    }
+
+    const {closeDuckdbService} = await import('./duckdbService.ts')
+
+    await closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
+  }
+
   const startLoop = () => {
     if (stopped || controller.signal.aborted) {
       return
@@ -134,7 +144,9 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       maxCompletedRebuildChunksPerRun: maxCompletedRebuildChunksPerRun ?? undefined,
       signal: loopController.signal,
     })
-      .then(() => {
+      .then(async () => {
+        await recycleDuckdbBeforeRestart(maxCompletedRebuildChunksPerRun)
+
         if (endedByMaxRun || maxCompletedRebuildChunksPerRun !== null) {
           scheduleRestart(restartDelayMs)
         }

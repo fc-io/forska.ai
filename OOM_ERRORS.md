@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-07 - Low-Memory Review-Serving Heartbeat Recycling
+
+- Error: Low-memory review-serving rebuild bursts could keep native DuckDB memory and file state alive between capped worker runs.
+- Context: `reviewServing.projector.worker` maintenance heartbeat with `maxCompletedRebuildChunksPerRun` under the 6400MiB owner profile.
+- Cause: Low-memory gates read raw `process.env.DUCKDB_MEMORY_LIMIT` instead of the normalized env default, and capped heartbeat restarts scheduled another run without closing the singleton DuckDB runtime.
+- Fix: Low-memory gates now use normalized `env.DUCKDB_MEMORY_LIMIT`, `dev-single` maintenance cron deferral follows maintenance-capable roles, and bounded heartbeat restarts close DuckDB before scheduling the next burst.
+- Verification: `bun test src/server/utils/env.test.ts src/server/utils/reviewServingProjectorWorkerHeartbeat.test.ts src/server/utils/startBackgroundWork.test.ts src/server/workers/reviewServingProjectorWorker.test.ts`; live current-DB progress gate.
+
 ## 2026-07-06 - Scoped Legacy Retention Starvation
 
 - Error: Retired legacy LLM-status patch or summary contribution rows could remain after cleanup when a project had more review-config groups than the retention cleanup target limit.

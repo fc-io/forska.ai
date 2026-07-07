@@ -267,4 +267,5 @@ test('review serving projector worker heartbeat restarts bounded low-memory work
 
   expect(runEvents.length).toBeGreaterThanOrEqual(2)
   expect(result.events).toContainEqual(['abort', 0])
+  expect(result.events).toContainEqual(['recycle'])
 })
