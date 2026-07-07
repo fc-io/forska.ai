@@ -28,6 +28,15 @@ test('maintenance judgment cron module does not import judging cron module', () 
   expect(source).not.toContain('judgmentsJobsJudgingCron')
 })
 
+test('import-only judgment cron module does not import maintenance cron dependencies', () => {
+  const source = readFileSync('src/server/cron/judgmentsJobsImportCron.ts', 'utf8')
+
+  expect(source).not.toContain('judgmentsJobsAddToQueue')
+  expect(source).not.toContain('judgmentsJobsCheckLLMStatus')
+  expect(source).not.toContain('judgmentsJobsCleanupStale')
+  expect(source).not.toContain('judgmentsJobsSampleProviderTelemetry')
+})
+
 test('judgment import cron stays enabled at the low-memory cap', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
@@ -40,7 +49,7 @@ test('judgment import cron stays enabled at the low-memory cap', () => {
           return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
         }
 
-        const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs.ts')
+        const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobsImportCron.ts')
         const serverIdentityModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobServerIdentity.ts')
         const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
         const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')

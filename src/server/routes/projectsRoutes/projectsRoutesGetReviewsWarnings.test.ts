@@ -940,6 +940,38 @@ test('reviews warnings report ready when serving rows are fresh', async () => {
   expect(body.data.indexing.status).toBe('ready')
 })
 
+test('reviews warnings preserve failed latest terminal rebuild request behind serving rows', async () => {
+  const projectId = 'project-latest-terminal-rebuild-failed-with-serving-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-latest-terminal-rebuild-failed-with-serving-warning',
+  })
+  await insertReviewRebuildRequest({
+    createdAt: '2026-04-02T12:00:00.000Z',
+    failedAt: '2026-04-02T12:01:00.000Z',
+    lastError: 'foreground rebuild failed',
+    projectId,
+    requestId: 'request-latest-terminal-rebuild-failed-with-serving-warning',
+    status: 'failed',
+    updatedAt: '2026-04-02T12:01:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('failed')
+  expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({failedCount: 1, pendingCount: 0})
+  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
+  expect(body.data.indexing.status).toBe('failed')
+})
+
 test('reviews warnings do not expose candidate snapshots as readable review pages', async () => {
   const projectId = 'project-candidate-serving-snapshot-warning'
 

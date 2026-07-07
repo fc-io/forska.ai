@@ -5,12 +5,12 @@ import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
 import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentsJobs/judgmentJobServerIdentity.ts'
-import {runJudgmentJobSqliteBackgroundImport} from './judgmentsJobs/judgmentJobSqliteBackgroundImport.ts'
 import {judgmentsJobsAddToQueue} from './judgmentsJobs/judgmentsJobsAddToQueue.ts'
 import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLMStatus.ts'
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
 import {judgmentsJobsSampleProviderTelemetry} from './judgmentsJobs/judgmentsJobsSampleProviderTelemetry.ts'
 import {judgmentsJobsCronState} from './judgmentsJobsCronState.ts'
+import {importJudgmentsCron} from './judgmentsJobsImportCron.ts'
 
 const serverJobId = getDefaultJudgmentServerJobId()
 
@@ -72,20 +72,6 @@ const runAddToQueue = async (): Promise<void> => {
   }
 }
 
-const importJudgmentsCron = async (): Promise<void> => {
-  if (!shouldRunJudgmentMaintenanceCron() || judgmentsJobsCronState.isImportingJudgments) return
-
-  judgmentsJobsCronState.isImportingJudgments = true
-
-  try {
-    await runJudgmentJobSqliteBackgroundImport({claimedBy: serverJobId})
-  } catch (err) {
-    logJudgingCronError('[cron] importJudgmentsCron error:', err)
-  } finally {
-    judgmentsJobsCronState.isImportingJudgments = false
-  }
-}
-
 const checkLLMStatusCron = async (): Promise<void> => {
   if (!shouldRunJudgmentMaintenanceCron()) return
   try {
@@ -129,15 +115,6 @@ const cleanupStaleQueueCron = async (): Promise<void> => {
     logJudgingCronError('[cron] cleanupStaleQueueCron error:', err)
   }
 }
-
-export const judgmentsJobsImportCron = new Elysia().use(
-  cron({
-    name: 'judgments-jobs-import-judgments',
-    pattern: IMPORT_JUDGMENTS_INTERVAL,
-    startAt: new Date(Date.now() + START_DELAY_MS),
-    run: importJudgmentsCron,
-  }),
-)
 
 export const judgmentsJobsMaintenanceCron = new Elysia()
   .use(

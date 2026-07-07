@@ -151,7 +151,7 @@ test('serverMain lazy-loads cron routes so disabled low-memory crons cannot star
   expect(serverMainText).not.toContain('import {judgmentsJobsJudgingCron')
   expect(serverMainText).not.toContain('import {nvidiaSmiCron}')
   expect(serverMainText).toContain("await import('./cron/judgmentsJobs.ts')")
-  expect(serverMainText).toContain('judgmentsJobsImportCron')
+  expect(serverMainText).toContain("await import('./cron/judgmentsJobsImportCron.ts')")
   expect(serverMainText).toContain("await import('./cron/judgmentsJobsJudgingCron.ts')")
 })
 
