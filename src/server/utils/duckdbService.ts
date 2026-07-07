@@ -198,6 +198,7 @@ const duckdbCheckpointThresholdMaxMiB = 8192
 const duckdbCheckpointThresholdMinMiB = 64
 const duckdbProactiveStartupPreflightMinMemoryMiB = 6401
 const duckdbStartupWalPreflightDisabledEnvValue = 'false'
+const duckdbStartupPreflightLockRetryDelaysMs = [100, 250, 500, 1000]
 const duckdbStartupIndexedTableRepairLockRetryDelaysMs = [100, 250, 500, 1000]
 type DuckdbStartupIndexedTableRepairSpec = {
   duplicateKeySelectSql: string
@@ -2365,13 +2366,34 @@ const repairDuckdbStartupIndexedTables = async (runtimeConfig: DuckdbRuntimeConf
 
 const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) => {
   let attemptedIndexedTableRepair = false
+  const maxAttempts = Math.max(3, duckdbStartupPreflightLockRetryDelaysMs.length + 1)
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const hadWalBeforePreflight = hasNonEmptyDuckdbWal(runtimeConfig.databasePath)
     const error = getDuckdbStartupPreflightError(runtimeConfig)
 
     if (error === null) {
       return
+    }
+
+    const errorMessage = getNormalizedDuckdbError(error).message
+    const compactErrorMessage = getCompactDuckdbErrorMessage(error)
+    const retryDelayMs = duckdbStartupPreflightLockRetryDelaysMs[attempt]
+
+    if (isDuckdbTransientFileLockError(errorMessage)) {
+      if (retryDelayMs === undefined) {
+        throw error
+      }
+
+      writeRuntimeOperatorLogEvent({
+        attrs: {attempt: attempt + 1, databasePath: runtimeConfig.databasePath, error: compactErrorMessage, retryDelayMs},
+        event: 'duckdb.startup.preflight-lock-retry',
+        message: '[duckdb] retrying startup preflight after transient DuckDB file lock',
+        severity: 'WARN',
+        terminalArgs: [`attempt=${attempt + 1}`, `retry_ms=${retryDelayMs}`],
+      })
+      await sleepMs(retryDelayMs)
+      continue
     }
 
     if (hadWalBeforePreflight && hasNonEmptyDuckdbWal(runtimeConfig.databasePath)) {
