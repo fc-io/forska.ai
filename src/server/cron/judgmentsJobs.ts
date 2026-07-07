@@ -11,7 +11,6 @@ import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLM
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
 import {judgmentsJobsSampleProviderTelemetry} from './judgmentsJobs/judgmentsJobsSampleProviderTelemetry.ts'
 import {judgmentsJobsCronState} from './judgmentsJobsCronState.ts'
-import {judgmentsJobsJudgingCron} from './judgmentsJobsJudgingCron.ts'
 
 const serverJobId = getDefaultJudgmentServerJobId()
 
@@ -172,7 +171,3 @@ export const judgmentsJobsMaintenanceCron = new Elysia()
       run: checkLLMStatusCron,
     }),
   )
-
-export {judgmentsJobsJudgingCron} from './judgmentsJobsJudgingCron.ts'
-
-export const judgmentsJobsCron = new Elysia().use(judgmentsJobsMaintenanceCron).use(judgmentsJobsJudgingCron)

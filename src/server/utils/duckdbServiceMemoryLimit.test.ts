@@ -1,4 +1,4 @@
-import {existsSync, rmSync} from 'node:fs'
+import {existsSync, readFileSync, rmSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
@@ -506,6 +506,19 @@ test('duckdb recycle barrier blocks foreground work until background work drains
   } finally {
     removeDuckdbFiles(duckdbPath)
   }
+})
+
+test('duckdb recycle barrier survives nested barriers in queued main work', () => {
+  const source = readFileSync('src/server/utils/duckdbService.ts', 'utf8')
+  const barrierSource = source.slice(
+    source.indexOf('const withDuckdbAppendBarrier'),
+    source.indexOf('const getCloseSyncError'),
+  )
+
+  expect(barrierSource).toContain('const previousAppendBarrier = duckdbServiceState.appendBarrier')
+  expect(barrierSource).toContain(
+    'duckdbServiceState.appendBarrier === appendBarrier ? previousAppendBarrier : duckdbServiceState.appendBarrier',
+  )
 })
 
 test('duckdb append transactions are opt-in and stay serialized with main transactions on low-memory workers', () => {

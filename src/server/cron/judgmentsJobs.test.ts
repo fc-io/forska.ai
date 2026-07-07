@@ -1,3 +1,5 @@
+import {readFileSync} from 'node:fs'
+
 import {expect, test} from 'bun:test'
 
 const getLastJsonLine = (value: string) => {
@@ -19,6 +21,12 @@ const getLastJsonLine = (value: string) => {
 
   return lastLine
 }
+
+test('maintenance judgment cron module does not import judging cron module', () => {
+  const source = readFileSync('src/server/cron/judgmentsJobs.ts', 'utf8')
+
+  expect(source).not.toContain('judgmentsJobsJudgingCron')
+})
 
 test('judgment import cron stays enabled at the low-memory cap', () => {
   const runScript = globalThis.Bun.spawnSync(
@@ -306,6 +314,7 @@ test('llm status cron is owned by maintenance worker instead of judge worker', (
         }
 
         const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs.ts')
+        const judgmentsJobsJudgingCronModulePath = getModulePath('./src/server/cron/judgmentsJobsJudgingCron.ts')
         const serverIdentityModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobServerIdentity.ts')
         const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
         const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
@@ -394,10 +403,11 @@ test('llm status cron is owned by maintenance worker instead of judge worker', (
         })
 
         const cronModule = await import(judgmentsJobsModulePath + '?llm-status-role=' + Date.now())
+        const judgingCronModule = await import(judgmentsJobsJudgingCronModulePath + '?llm-status-role=' + Date.now())
         const maintenanceNames = cronModule.judgmentsJobsMaintenanceCron.uses.map((plugin) => {
           return plugin.name
         })
-        const judgingNames = cronModule.judgmentsJobsJudgingCron.uses.map((plugin) => {
+        const judgingNames = judgingCronModule.judgmentsJobsJudgingCron.uses.map((plugin) => {
           return plugin.name
         })
         const checkCron = cronModule.judgmentsJobsMaintenanceCron.uses.find((plugin) => {
@@ -449,6 +459,7 @@ test('provider telemetry sampler cron is owned by maintenance worker and role ga
         }
 
         const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs.ts')
+        const judgmentsJobsJudgingCronModulePath = getModulePath('./src/server/cron/judgmentsJobsJudgingCron.ts')
         const serverIdentityModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobServerIdentity.ts')
         const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
         const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
@@ -536,10 +547,11 @@ test('provider telemetry sampler cron is owned by maintenance worker and role ga
         })
 
         const cronModule = await import(judgmentsJobsModulePath + '?provider-telemetry-role=' + Date.now())
+        const judgingCronModule = await import(judgmentsJobsJudgingCronModulePath + '?provider-telemetry-role=' + Date.now())
         const maintenanceNames = cronModule.judgmentsJobsMaintenanceCron.uses.map((plugin) => {
           return plugin.name
         })
-        const judgingNames = cronModule.judgmentsJobsJudgingCron.uses.map((plugin) => {
+        const judgingNames = judgingCronModule.judgmentsJobsJudgingCron.uses.map((plugin) => {
           return plugin.name
         })
         const sampleCron = cronModule.judgmentsJobsMaintenanceCron.uses.find((plugin) => {
