@@ -2,15 +2,12 @@ import {cors} from '@elysiajs/cors'
 import {Elysia} from 'elysia'
 
 import {migrateDuckdb} from '../db/migrateDuckdb.ts'
-import {fullTextConversionJobsCron} from './cron/fullTextConversionJobs.ts'
-import {fullTextJobsCron} from './cron/fullTextJobs.ts'
-import {judgmentsJobsJudgingCron, judgmentsJobsMaintenanceCron} from './cron/judgmentsJobs.ts'
 import {startJudgeWorkerStartupRolloutCleanup} from './cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
 import {runStartupAutomaticOrphanedQueueRepair} from './cron/judgmentsJobs/judgmentJobRepair.ts'
 import {getDefaultJudgmentServerJobId} from './cron/judgmentsJobs/judgmentJobServerIdentity.ts'
 import {getJudgmentJobSqliteService} from './cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {runStartupJudgmentRolloutCleanup} from './cron/judgmentsJobs/judgmentStartupRolloutCleanup.ts'
-import {nvidiaSmiCron} from './cron/nvidiaSmi.ts'
+import {parseDuckdbMemoryLimitToMiB} from './utils/duckdbMemoryLimit.ts'
 import {apiProxyRoutes} from './routes/ApiProxyRoutes.ts'
 import {duckdbOwnerPrivateApiPrefix} from './routes/apiRouteClassification.ts'
 import {duckdbOwnerConnectionsRoutes} from './routes/DuckdbOwnerConnectionsRoutes.ts'
@@ -181,6 +178,12 @@ const startProjectTransferTtlRecoveryScheduler = () => {
 }
 
 const appServerRuntimeConfig = getAppServerRuntimeConfig()
+const lowMemoryMaintenanceDuckdbLimitMiB = 6400
+const shouldDeferMaintenanceCronsForLowMemoryOwner = () => {
+  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT)
+
+  return getCurrentServerRole() === 'maintenance-worker' && duckdbLimitMiB !== null && duckdbLimitMiB <= lowMemoryMaintenanceDuckdbLimitMiB
+}
 const desktopAllowedOrigins = process.env.FORSKA_DESKTOP_MODE === 'true' ? ['null', 'views://mainview'] : []
 const allowedOrigins = [
   `http://localhost:${env.VITE_PORT}`,
@@ -256,16 +259,20 @@ if (shouldRunMutatingServerWork && getCurrentServerRole() !== 'judge-worker' && 
 }
 
 const shouldMountMaintenanceCrons =
-  shouldRunMutatingServerWork && shouldServerRoleMountMaintenanceCrons(getCurrentServerRole())
+  shouldRunMutatingServerWork
+  && shouldServerRoleMountMaintenanceCrons(getCurrentServerRole())
+  && !shouldDeferMaintenanceCronsForLowMemoryOwner()
 const shouldMountJudgingCrons = shouldRunMutatingServerWork && shouldServerRoleMountJudgingCrons(getCurrentServerRole())
 const maintenanceCronRoutes = shouldMountMaintenanceCrons
   ? new Elysia()
-      .use(fullTextJobsCron)
-      .use(fullTextConversionJobsCron)
-      .use(nvidiaSmiCron)
-      .use(judgmentsJobsMaintenanceCron)
+      .use((await import('./cron/fullTextJobs.ts')).fullTextJobsCron)
+      .use((await import('./cron/fullTextConversionJobs.ts')).fullTextConversionJobsCron)
+      .use((await import('./cron/nvidiaSmi.ts')).nvidiaSmiCron)
+      .use((await import('./cron/judgmentsJobs.ts')).judgmentsJobsMaintenanceCron)
   : new Elysia()
-const judgmentCronRoutes = shouldMountJudgingCrons ? new Elysia().use(judgmentsJobsJudgingCron) : new Elysia()
+const judgmentCronRoutes = shouldMountJudgingCrons
+  ? new Elysia().use((await import('./cron/judgmentsJobs.ts')).judgmentsJobsJudgingCron)
+  : new Elysia()
 const shouldWarmCodex = shouldServerRoleRunCodexStartup(getCurrentServerRole())
 const publicProductApiRoutes = shouldCurrentServerMountPublicProductApi() ? getProductApiRoutes() : new Elysia()
 const duckdbOwnerPrivateApiRoutes = shouldCurrentServerMountDuckdbOwnerPrivateApi()

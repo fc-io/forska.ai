@@ -104,6 +104,7 @@ import {
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {closeDuckdbService, type DuckdbWorkloadContext} from '../utils/duckdbService.ts'
+import {parseDuckdbMemoryLimitToMiB} from '../utils/duckdbMemoryLimit.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
 type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorServiceDependencies['database']>
@@ -222,7 +223,9 @@ type ReviewServingProjectorWorkerCycleOptions = {
 }
 
 type ReviewServingProjectorWorkerLoopOptions = ReviewServingProjectorWorkerCycleOptions & {
+  completedRebuildChunksInRun?: number
   errorBackoffMs?: number
+  maxCompletedRebuildChunksPerRun?: number
   pollIntervalMs?: number
   signal?: AbortSignal
 }
@@ -331,7 +334,7 @@ type RebuildRequestSnapshotPromotionRow = {
 const defaultReviewServingProjectorWorkerBatchSize = 64
 const defaultReviewServingProjectorWorkerCleanupIntervalMs = 60_000
 const defaultReviewServingProjectorWorkerHeartbeatMs = 10_000
-const defaultReviewServingProjectorWorkerLeaseMs = 30_000
+const defaultReviewServingProjectorWorkerLeaseMs = 120_000
 const defaultReviewServingProjectorWorkerMaxRetries = 1
 const defaultReviewServingProjectorWorkerMaxRowsPerWake = 512
 const defaultReviewServingProjectorWorkerMaxWakeMs = 5_000
@@ -339,8 +342,14 @@ const defaultReviewServingProjectorWorkerPollIntervalMs = 2_000
 const defaultReviewServingProjectorWorkerProgressYieldMs = 100
 const defaultReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = 0
 const defaultReviewServingProjectorWorkerRebuildChunkBatchSize = 1
-const foregroundStatusRebuildChunkBatchSize = 32
-const foregroundStatusRebuildDrainBatchBudget = 32
+const foregroundHumanStatusRebuildChunkBatchSize = 4
+const foregroundLlmStatusRebuildChunkBatchSize = 8
+const foregroundStatusRebuildDrainBatchBudget = 16
+const foregroundLightweightNativeHeavyRebuildDrainBatchBudget = 32
+const foregroundStatusReviewServingProjectorWorkerProgressYieldMs = 100
+const lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs = 25
+const lowMemoryMaintenanceDuckdbLimitMiB = 6400
+const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 16
 const nativeHeavyReviewServingProjectorWorkerProgressYieldMs = 1_000
 const defaultReviewServingProjectorWorkerErrorBackoffMs = 10_000
 const defaultReviewServingProjectorWorkerForegroundRebuildDrainChunkBudget = 4
@@ -363,6 +372,11 @@ const reviewServingCriticalRebuildComponents = [
 const foregroundBatchableStatusRebuildComponents = new Set<ReviewServingProjectionComponent>([
   'humanStatus',
   'llmStatus',
+])
+const foregroundBatchableRangeRebuildComponents = new Set<ReviewServingProjectionComponent>([
+  'posting',
+  'queue',
+  'search',
 ])
 // Keep status chunks out of this set: they are small SQL-native updates, and per-chunk DuckDB recycle/forced GC
 // can panic Bun on the release-scale primary DB during long status rebuild runs.
@@ -558,7 +572,6 @@ const highFanoutArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjecti
   'llmStatus',
   'payload',
   'posting',
-  'queue',
   'search',
   'selectedImport',
   'summary',
@@ -612,7 +625,9 @@ const getPositiveFiniteNumber = (value: unknown) => {
   return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : null
 }
 
-const getArticleRangeRebuildChunkEstimatedRows = (chunk: ReviewServingRebuildChunkManifest) => {
+const getArticleRangeRebuildChunkEstimatedRows = (
+  chunk: Pick<ReviewServingRebuildChunkManifest, 'estimatedInputRows' | 'estimatedOutputRows'>,
+) => {
   const estimates = [chunk.estimatedInputRows, chunk.estimatedOutputRows].flatMap((estimate) => {
     const numericEstimate = getPositiveFiniteNumber(estimate)
 
@@ -1833,7 +1848,12 @@ const runSummaryRebuildChunk = async (
 }
 
 const splitClaimedArticleRangeRebuildChunk = async (
-  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string; projectId: string; splitReason: 'duckdb_oom'},
+  input: {
+    chunk: ReviewServingRebuildChunkManifest
+    leaseOwner: string
+    projectId: string
+    splitReason: 'duckdb_oom'
+  },
   database: ReviewServingChunkManifestRepositoryDatabase,
 ) => {
   if (!canSplitRebuildChunk(input.chunk)) {
@@ -3016,7 +3036,7 @@ const canRunSearchRebuildChunkBatch = (chunks: readonly ReviewServingRebuildChun
   return (
     chunks.length > 1
     && chunks.every((chunk) => {
-      return chunk.projectionComponent === 'search' && chunk.requestId === null
+      return chunk.projectionComponent === 'search' && chunk.requestId === chunks[0]?.requestId
     })
   )
 }
@@ -3135,7 +3155,7 @@ const canRunQueueRebuildChunkBatch = (chunks: readonly ReviewServingRebuildChunk
   return (
     chunks.length > 1
     && chunks.every((chunk) => {
-      return chunk.projectionComponent === 'queue' && chunk.requestId === null
+      return chunk.projectionComponent === 'queue' && chunk.requestId === chunks[0]?.requestId
     })
   )
 }
@@ -3623,7 +3643,7 @@ const canRunPostingRebuildChunkBatch = (chunks: readonly ReviewServingRebuildChu
   return (
     chunks.length > 1
     && chunks.every((chunk) => {
-      return chunk.projectionComponent === 'posting' && chunk.requestId === null
+      return chunk.projectionComponent === 'posting' && chunk.requestId === chunks[0]?.requestId
     })
   )
 }
@@ -4460,12 +4480,53 @@ export const getDefaultReviewServingProjectorRunners = (
   }
 }
 
-const shouldRecycleDuckdbAfterCompletedRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
-  return reviewServingDuckdbRecycleAfterRebuildComponents.has(chunk.projectionComponent)
+const shouldRunNativeHeavyCleanupAfterCompletedRebuildChunk = (input: {
+  chunk: Pick<ReviewServingRebuildChunkManifest, 'projectionComponent' | 'requestId'>
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  if (!reviewServingNativeHeavyRebuildComponents.has(input.chunk.projectionComponent)) {
+    return false
+  }
+
+  if (input.chunk.requestId === null) {
+    return true
+  }
+
+  return hasReviewServingProjectorWorkerReachedRssCap(input)
 }
 
-const shouldCollectGarbageAfterCompletedRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
-  return reviewServingNativeHeavyRebuildComponents.has(chunk.projectionComponent)
+const hasRequestAssociatedNativeHeavyChunkReachedRssCap = (input: {
+  chunk: Pick<ReviewServingRebuildChunkManifest, 'projectionComponent' | 'requestId'>
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  return (
+    input.chunk.requestId !== null
+    && shouldRunNativeHeavyCleanupAfterCompletedRebuildChunk(input)
+  )
+}
+
+const shouldRecycleDuckdbAfterCompletedRebuildChunk = (input: {
+  chunk: ReviewServingRebuildChunkManifest
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  return (
+    reviewServingDuckdbRecycleAfterRebuildComponents.has(input.chunk.projectionComponent)
+    && input.chunk.requestId === null
+  )
+}
+
+const shouldCollectGarbageAfterCompletedRebuildChunk = (input: {
+  chunk: ReviewServingRebuildChunkManifest
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  return (
+    input.chunk.requestId === null
+    && reviewServingNativeHeavyRebuildComponents.has(input.chunk.projectionComponent)
+  )
 }
 
 const closeDuckdbAfterCompletedRebuildChunk = async () => {
@@ -4511,7 +4572,7 @@ export const getReviewServingProjectorWorkerId = () => {
 
 export const getReviewServingProjectorWorkerWorkloadContext = (_workerId: string): DuckdbWorkloadContext => {
   return {
-    allowsTempSpill: false,
+    allowsTempSpill: true,
     fallbackIntent: 'reject',
     routeOrJobKey: reviewServingProjectorWorkerRouteOrJobKey,
     searchMode: 'none',
@@ -4534,10 +4595,36 @@ const getPositiveInteger = (value: number | null | undefined, fallback: number) 
   return value !== null && value !== undefined && Number.isInteger(value) && value > 0 ? Math.trunc(value) : fallback
 }
 
+const getDefaultMaxCompletedRebuildChunksPerRun = () => {
+  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT)
+
+  return duckdbLimitMiB !== null && duckdbLimitMiB <= lowMemoryMaintenanceDuckdbLimitMiB
+    ? lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun
+    : 0
+}
+
 const getReviewServingProjectorWorkerMemoryUsage = (
   dependencies: ReviewServingProjectorWorkerDependencies,
 ): ReviewServingProjectorWorkerMemoryUsage => {
   return dependencies.getMemoryUsage?.() ?? process.memoryUsage()
+}
+
+const getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = (
+  options: ReviewServingProjectorWorkerCycleOptions,
+) => {
+  return getPositiveInteger(
+    options.rebuildChunkBatchMaxRssBytes,
+    defaultReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes,
+  )
+}
+
+const hasReviewServingProjectorWorkerReachedRssCap = (input: {
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  const maxRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(input.options)
+
+  return maxRssBytes > 0 && getReviewServingProjectorWorkerMemoryUsage(input.dependencies).rss >= maxRssBytes
 }
 
 const getEffectiveReviewServingProjectorWorkerRebuildChunkBatchSize = (input: {
@@ -4548,10 +4635,7 @@ const getEffectiveReviewServingProjectorWorkerRebuildChunkBatchSize = (input: {
     input.options.rebuildChunkBatchSize,
     defaultReviewServingProjectorWorkerRebuildChunkBatchSize,
   )
-  const maxRssBytes = getPositiveInteger(
-    input.options.rebuildChunkBatchMaxRssBytes,
-    defaultReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes,
-  )
+  const maxRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(input.options)
   const shouldApplyRssCap = batchSize > 1 && maxRssBytes > 0
   const rssBytes = shouldApplyRssCap ? getReviewServingProjectorWorkerMemoryUsage(input.dependencies).rss : 0
 
@@ -5268,13 +5352,23 @@ const getForegroundRebuildDrainStartedAtMs = (input: {
 
 const shouldPrioritizeNextRebuildChunk = (input: {
   chunk: ReviewServingProjectorWorkerChunkResult
+  dependencies: ReviewServingProjectorWorkerDependencies
   nowMs: number
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
+  if (
+    input.chunk.status === 'completed'
+    && input.chunk.requestId !== null
+  ) {
+    return true
+  }
+
   const defaultDrainBudget =
     input.chunk.status === 'completed' && isForegroundBatchableStatusRebuildChunk(input.chunk)
       ? foregroundStatusRebuildDrainBatchBudget
-      : defaultReviewServingProjectorWorkerForegroundRebuildDrainChunkBudget
+      : shouldUseExtendedForegroundRebuildDrainBudget(input)
+        ? foregroundLightweightNativeHeavyRebuildDrainBatchBudget
+        : defaultReviewServingProjectorWorkerForegroundRebuildDrainChunkBudget
   const budget = getPositiveInteger(
     input.options.foregroundRebuildDrainChunkBudget,
     defaultDrainBudget,
@@ -5304,16 +5398,57 @@ const shouldYieldToForegroundRebuildReader = (input: {
   return input.chunk.status === 'completed' && input.chunk.requestId !== null
 }
 
-const getReviewServingProjectorWorkerProgressYieldMs = (chunk: ReviewServingProjectorWorkerChunkResult) => {
-  return chunk.status === 'completed'
-    && chunk.requestId !== null
-    && reviewServingNativeHeavyRebuildComponents.has(chunk.projectionComponent)
+const getReviewServingProjectorWorkerProgressYieldMs = (input: {
+  chunk: ReviewServingProjectorWorkerChunkResult
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  if (
+    input.chunk.status !== 'completed'
+    || input.chunk.requestId === null
+  ) {
+    return defaultReviewServingProjectorWorkerProgressYieldMs
+  }
+
+  if (isForegroundBatchableStatusRebuildChunk(input.chunk)) {
+    return foregroundStatusReviewServingProjectorWorkerProgressYieldMs
+  }
+
+  if (!reviewServingNativeHeavyRebuildComponents.has(input.chunk.projectionComponent)) {
+    return defaultReviewServingProjectorWorkerProgressYieldMs
+  }
+
+  return hasRequestAssociatedNativeHeavyChunkReachedRssCap({
+    chunk: input.chunk,
+    dependencies: input.dependencies,
+    options: input.options,
+  })
     ? nativeHeavyReviewServingProjectorWorkerProgressYieldMs
-    : defaultReviewServingProjectorWorkerProgressYieldMs
+    : lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs
+}
+
+const shouldUseExtendedForegroundRebuildDrainBudget = (input: {
+  chunk: ReviewServingProjectorWorkerChunkResult
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  if (input.chunk.status !== 'completed' || input.chunk.requestId === null) {
+    return false
+  }
+
+  if (isForegroundBatchableStatusRebuildChunk(input.chunk)) {
+    return true
+  }
+
+  return (
+    reviewServingNativeHeavyRebuildComponents.has(input.chunk.projectionComponent)
+    && !hasRequestAssociatedNativeHeavyChunkReachedRssCap(input)
+  )
 }
 
 const getNextForegroundRebuildDrainOptions = (input: {
   chunk: ReviewServingProjectorWorkerChunkResult
+  dependencies: ReviewServingProjectorWorkerDependencies
   nowMs: number
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
@@ -5413,6 +5548,48 @@ const isForegroundBatchableStatusRebuildChunk = (
   )
 }
 
+const isForegroundBatchableRangeRebuildChunk = (
+  chunk: Pick<ReviewServingProjectorWorkerChunkInput, 'projectionComponent' | 'requestId'>,
+) => {
+  return (
+    (chunk.requestId ?? null) !== null
+    && foregroundBatchableRangeRebuildComponents.has(chunk.projectionComponent)
+  )
+}
+
+const isForegroundBatchableRebuildChunk = (
+  chunk: Pick<ReviewServingProjectorWorkerChunkInput, 'projectionComponent' | 'requestId'>,
+) => {
+  return isForegroundBatchableStatusRebuildChunk(chunk) || isForegroundBatchableRangeRebuildChunk(chunk)
+}
+
+const getForegroundRebuildChunkBatchSize = (
+  chunk: Pick<
+    ReviewServingProjectorWorkerChunkInput,
+    'estimatedInputRows' | 'estimatedOutputRows' | 'projectionComponent'
+  >,
+) => {
+  if (chunk.projectionComponent === 'humanStatus') {
+    return foregroundHumanStatusRebuildChunkBatchSize
+  }
+
+  if (chunk.projectionComponent === 'llmStatus') {
+    return foregroundLlmStatusRebuildChunkBatchSize
+  }
+
+  if (chunk.projectionComponent === 'posting') {
+    const estimatedRows = getArticleRangeRebuildChunkEstimatedRows(chunk)
+
+    return estimatedRows !== null && estimatedRows <= 10_000 ? 8 : 2
+  }
+
+  if (chunk.projectionComponent === 'queue') {
+    return 32
+  }
+
+  return 16
+}
+
 const isCompatibleReviewServingProjectorWorkerRebuildRequestBatch = (
   firstChunk: ReviewServingRebuildChunkManifest,
   nextChunk: ReviewServingProjectorWorkerChunkInput,
@@ -5425,8 +5602,8 @@ const isCompatibleReviewServingProjectorWorkerRebuildRequestBatch = (
     || (
       firstRequestId !== null
       && firstRequestId === nextRequestId
-      && isForegroundBatchableStatusRebuildChunk(firstChunk)
-      && isForegroundBatchableStatusRebuildChunk(nextChunk)
+      && isForegroundBatchableRebuildChunk(firstChunk)
+      && isForegroundBatchableRebuildChunk(nextChunk)
     )
   )
 }
@@ -5436,7 +5613,7 @@ const isCompatibleReviewServingProjectorWorkerRebuildChunkBatchInput = (
   nextChunk: ReviewServingProjectorWorkerChunkInput,
 ) => {
   const firstChunk = claimedChunks[0]
-  const isBatchableStatusRequest =
+  const isBatchableBoundaryRequest =
     firstChunk !== undefined
     && isForegroundBatchableStatusRebuildChunk(firstChunk)
     && isForegroundBatchableStatusRebuildChunk(nextChunk)
@@ -5451,7 +5628,7 @@ const isCompatibleReviewServingProjectorWorkerRebuildChunkBatchInput = (
     && nextChunk.outputBaseGeneration === firstChunk.outputBaseGeneration
     && nextChunk.inputWatermark === firstChunk.inputWatermark
     && claimedChunks.every((claimedChunk) => {
-      return isBatchableStatusRequest
+      return isBatchableBoundaryRequest
         ? isRangeBatchableStatusBoundaryReviewServingProjectorWorkerRebuildChunk(claimedChunk, nextChunk)
         : isRangeDisjointReviewServingProjectorWorkerRebuildChunk(claimedChunk, nextChunk)
     })
@@ -5464,9 +5641,11 @@ const getReviewServingProjectorWorkerRebuildChunkPreclaimLimit = (input: {
 }) => {
   const firstClaimedChunk = input.claimedChunks[0]?.chunk
 
-  return firstClaimedChunk !== undefined && isForegroundBatchableStatusRebuildChunk(firstClaimedChunk)
-    ? Math.max(input.batchSize, foregroundStatusRebuildChunkBatchSize)
-    : input.batchSize
+  if (firstClaimedChunk !== undefined && isForegroundBatchableRebuildChunk(firstClaimedChunk)) {
+    return getForegroundRebuildChunkBatchSize(firstClaimedChunk)
+  }
+
+  return input.batchSize
 }
 
 const shouldContinueClaimingReviewServingProjectorWorkerRebuildChunkBatch = (input: {
@@ -5479,7 +5658,7 @@ const shouldContinueClaimingReviewServingProjectorWorkerRebuildChunkBatch = (inp
 const shouldStopReviewServingProjectorWorkerRebuildChunkBatchAfterClaim = (
   chunk: ReviewServingRebuildChunkManifest,
 ) => {
-  return chunk.requestId !== null && !isForegroundBatchableStatusRebuildChunk(chunk)
+  return chunk.requestId !== null && !isForegroundBatchableRebuildChunk(chunk)
 }
 
 type CompatibleStatusRebuildChunkBatchInputRow = {
@@ -5503,7 +5682,7 @@ const getCompatibleStatusRebuildChunkBatchInputs = async (input: {
   now: Date
   projectId?: string | null
 }): Promise<readonly ReviewServingProjectorWorkerChunkInput[]> => {
-  if (!isForegroundBatchableStatusRebuildChunk(input.firstChunk) || input.limit <= 0) {
+  if (!isForegroundBatchableRebuildChunk(input.firstChunk) || input.limit <= 0) {
     return []
   }
 
@@ -5802,12 +5981,14 @@ const runClaimedReviewServingProjectorWorkerRebuildChunk = async ({
     await measureReviewServingProjectorWorkerPhase(timings, 'finalizeRequestMs', async () => {
       await finalizeCompletedReviewServingRebuildRequest(effectiveClaimedChunk, database)
     })
+    const cleanupInput = {chunk: effectiveClaimedChunk, dependencies, options}
+
     if (
-      shouldRecycleDuckdbAfterCompletedRebuildChunk(effectiveClaimedChunk)
-      || shouldCollectGarbageAfterCompletedRebuildChunk(effectiveClaimedChunk)
+      shouldRecycleDuckdbAfterCompletedRebuildChunk(cleanupInput)
+      || shouldCollectGarbageAfterCompletedRebuildChunk(cleanupInput)
     ) {
       try {
-        if (shouldRecycleDuckdbAfterCompletedRebuildChunk(effectiveClaimedChunk)) {
+        if (shouldRecycleDuckdbAfterCompletedRebuildChunk(cleanupInput)) {
           await measureReviewServingProjectorWorkerPhase(timings, 'duckdbRecycleMs', async () => {
             await dependencies.recycleDuckdbAfterCompletedRebuildChunk?.(effectiveClaimedChunk)
           })
@@ -5898,7 +6079,7 @@ const claimCompatibleReviewServingProjectorWorkerStatusBatchTail = async (input:
   })
   const remainingLimit = preclaimLimit - input.claimedChunks.length
 
-  if (remainingLimit <= 0 || !isForegroundBatchableStatusRebuildChunk(firstClaimedChunk)) {
+  if (remainingLimit <= 0 || !isForegroundBatchableRebuildChunk(firstClaimedChunk)) {
     return false
   }
 
@@ -6012,7 +6193,7 @@ const claimCompatibleReviewServingProjectorWorkerRebuildChunkBatch = async (
       break
     }
 
-    if (claimedChunks.length === 1 && isForegroundBatchableStatusRebuildChunk(claimed.chunk)) {
+    if (claimedChunks.length === 1 && isForegroundBatchableRebuildChunk(claimed.chunk)) {
       const exhaustedStatusBatch = await claimCompatibleReviewServingProjectorWorkerStatusBatchTail({
         batchSize: input.batchSize,
         claimedChunks,
@@ -6666,13 +6847,16 @@ const runReviewServingProjectorWorkerRebuildChunkBatchWith = async (
 
   const recycledChunk = input.claimedChunks.at(-1)
 
+  const cleanupInput =
+    recycledChunk === undefined ? null : {chunk: recycledChunk.chunk, dependencies: input.dependencies, options: input.options}
+
   if (
-    recycledChunk !== undefined
-    && (shouldRecycleDuckdbAfterCompletedRebuildChunk(recycledChunk.chunk)
-      || shouldCollectGarbageAfterCompletedRebuildChunk(recycledChunk.chunk))
+    cleanupInput !== null
+    && (shouldRecycleDuckdbAfterCompletedRebuildChunk(cleanupInput)
+      || shouldCollectGarbageAfterCompletedRebuildChunk(cleanupInput))
   ) {
     try {
-      if (shouldRecycleDuckdbAfterCompletedRebuildChunk(recycledChunk.chunk)) {
+      if (shouldRecycleDuckdbAfterCompletedRebuildChunk(cleanupInput)) {
         await measureReviewServingProjectorWorkerPhase(recycledChunk.timings, 'duckdbRecycleMs', async () => {
           await input.dependencies.recycleDuckdbAfterCompletedRebuildChunk?.(recycledChunk.chunk)
         })
@@ -7092,7 +7276,7 @@ export const runReviewServingProjectorWorkerCycle = async (
   })
   const chunk = chunkBatch.chunk
   const nowMs = getWorkerNowMs(dependencies, options)
-  const shouldRunOnlyRebuildChunk = shouldPrioritizeNextRebuildChunk({chunk, nowMs, options})
+  const shouldRunOnlyRebuildChunk = shouldPrioritizeNextRebuildChunk({chunk, dependencies, nowMs, options})
   const deltaIntake = shouldRunOnlyRebuildChunk
     ? getIdleReviewServingProjectorWorkerDeltaIntakeResult()
     : await runReviewServingProjectorWorkerDeltaIntake({database, dependencies, options})
@@ -7142,8 +7326,17 @@ export const runReviewServingProjectorWorker = async (
   const cycleResult = await runReviewServingProjectorWorkerOnce(options, dependencies)
   logReviewServingProjectorWorkerCycle(cycleResult)
   const nowMs = getWorkerNowMs(dependencies, options)
+  const completedRebuildChunksInRun = (options.completedRebuildChunksInRun ?? 0) + cycleResult.chunkBatchCount
+  const maxCompletedRebuildChunksPerRun = getPositiveInteger(
+    options.maxCompletedRebuildChunksPerRun,
+    getDefaultMaxCompletedRebuildChunksPerRun(),
+  )
 
   if (options.signal?.aborted) {
+    return
+  }
+
+  if (maxCompletedRebuildChunksPerRun > 0 && completedRebuildChunksInRun >= maxCompletedRebuildChunksPerRun) {
     return
   }
 
@@ -7151,13 +7344,14 @@ export const runReviewServingProjectorWorker = async (
     cycleResult.status === 'failed'
       ? (options.errorBackoffMs ?? defaultReviewServingProjectorWorkerErrorBackoffMs)
       : shouldYieldToForegroundRebuildReader({chunk: cycleResult.chunk, nowMs, options})
-        ? getReviewServingProjectorWorkerProgressYieldMs(cycleResult.chunk)
+        ? getReviewServingProjectorWorkerProgressYieldMs({chunk: cycleResult.chunk, dependencies, options})
         : cycleResult.status === 'idle'
           ? (options.pollIntervalMs ?? defaultReviewServingProjectorWorkerPollIntervalMs)
           : 0
   const nextOptions = {
     ...options,
-    ...getNextForegroundRebuildDrainOptions({chunk: cycleResult.chunk, nowMs, options}),
+    completedRebuildChunksInRun,
+    ...getNextForegroundRebuildDrainOptions({chunk: cycleResult.chunk, dependencies, nowMs, options}),
     lastCleanupAtMs: cycleResult.nextCleanupAtMs,
   }
 
@@ -7185,6 +7379,7 @@ export {
   defaultReviewServingProjectorWorkerProgressYieldMs,
   defaultReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes,
   defaultReviewServingProjectorWorkerRebuildChunkBatchSize,
+  lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs,
   nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
 }
 

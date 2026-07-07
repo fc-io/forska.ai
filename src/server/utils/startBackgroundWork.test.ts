@@ -22,6 +22,7 @@ const getLastJsonLine = (value: string) => {
 
 const runStartBackgroundWork = (input: {
   disableServerMutations?: boolean
+  duckdbMemoryLimit?: string
   promoteAfterStart?: boolean
   role: 'api' | 'judge-worker' | 'maintenance-worker'
 }) => {
@@ -49,8 +50,10 @@ const runStartBackgroundWork = (input: {
 
         void mock.module(reviewServingProjectorWorkerHeartbeatModulePath, () => {
           return {
-            startReviewServingProjectorWorkerHeartbeat: () => {
-              calls.push('reviewServingProjectorWorkerHeartbeat')
+            startReviewServingProjectorWorkerHeartbeat: (options = {}) => {
+              const maxCompletedRebuildChunksPerRun = options.maxCompletedRebuildChunksPerRun ?? 'default'
+              const maxRunMs = options.maxRunMs ?? 'default'
+              calls.push('reviewServingProjectorWorkerHeartbeat:' + maxRunMs + ':' + maxCompletedRebuildChunksPerRun)
               return () => {
                 calls.push('stopReviewServingProjectorWorkerHeartbeat')
               }
@@ -115,7 +118,13 @@ const runStartBackgroundWork = (input: {
         console.log(JSON.stringify({calls}))
       `,
     ],
-    {cwd: process.cwd(), env: {...process.env}},
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        ...(input.duckdbMemoryLimit === undefined ? {} : {DUCKDB_MEMORY_LIMIT: input.duckdbMemoryLimit}),
+      },
+    },
   )
 
   if (runScript.exitCode !== 0) {
@@ -133,7 +142,7 @@ test('startBackgroundWork starts shared infrastructure and maintenance work for 
     'duckdbOwnerConnectionHeartbeat',
     'requestAttemptCloseoutBackfillScheduler',
     'reviewBulkOperationWorkerHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat',
+    'reviewServingProjectorWorkerHeartbeat:default:default',
   ])
 })
 
@@ -151,7 +160,17 @@ test('startBackgroundWork starts maintenance work after auto owner promotion', (
     'duckdbOwnerConnectionHeartbeat',
     'requestAttemptCloseoutBackfillScheduler',
     'reviewBulkOperationWorkerHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat',
+    'reviewServingProjectorWorkerHeartbeat:default:default',
+  ])
+})
+
+test('startBackgroundWork defers nonessential DuckDB maintenance under low-memory owner profile', () => {
+  const result = runStartBackgroundWork({duckdbMemoryLimit: '6400MiB', role: 'maintenance-worker'})
+
+  expect(result.calls).toEqual([
+    'serverRuntimeRoleMonitor',
+    'duckdbOwnerConnectionHeartbeat',
+    'reviewServingProjectorWorkerHeartbeat:default:16',
   ])
 })
 

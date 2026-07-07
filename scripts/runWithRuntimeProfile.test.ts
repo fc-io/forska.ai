@@ -252,18 +252,26 @@ const isStaleReviewServingProgressSnapshot = (snapshot: ReviewServingProgressSna
   return latestProgressMs === 0 || Date.now() - latestProgressMs > staleReviewServingQueuedProgressMs
 }
 
-const isQueuedReviewServingProgressCandidate = (body: ReviewsWarningsBody) => {
+const hasReviewServingProgressWork = (snapshot: ReviewServingProgressSnapshot) => {
+  return (
+    snapshot.pendingRefreshCount > 0
+    || snapshot.queuedRefreshCount > 0
+    || snapshot.inFlightRefreshCount > 0
+    || snapshot.activeWorkCount > 0
+    || snapshot.rebuildPendingCount > 0
+    || snapshot.rebuildRunningCount > 0
+  )
+}
+
+const isReviewServingProgressCandidate = (body: ReviewsWarningsBody) => {
   const indexing = body.data?.indexing
+  const snapshot = getReviewServingProgressSnapshot(body)
 
   return (
     indexing?.status === 'refreshing'
-    && indexing.progressState === 'queued'
-    && Number(indexing.pendingRefreshCount ?? 0) > 0
-    && Number(indexing.queuedRefreshCount ?? 0) > 0
     && Number(indexing.eligibleConsumerCount ?? 0) > 0
-    && Number(indexing.inFlightRefreshCount ?? 0) === 0
-    && Number(indexing.activeWorkCount ?? 0) === 0
     && indexing.blockedReason === null
+    && hasReviewServingProgressWork(snapshot)
   )
 }
 
@@ -274,12 +282,8 @@ const getReviewServingProgressCandidates = async (apiPort: number) => {
     return null
   })
 
-  if (targetBody !== null && isQueuedReviewServingProgressCandidate(targetBody)) {
-    return [{body: targetBody, projectId: reviewServingProgressProjectId}]
-  }
-
-  if (targetBody?.data?.indexing?.status === 'refreshing') {
-    return []
+  if (targetBody !== null && isReviewServingProgressCandidate(targetBody)) {
+    candidates.push({body: targetBody, projectId: reviewServingProgressProjectId})
   }
 
   try {
@@ -302,7 +306,7 @@ const getReviewServingProgressCandidates = async (apiPort: number) => {
       return null
     })
 
-    if (body !== null && isQueuedReviewServingProgressCandidate(body)) {
+    if (body !== null && isReviewServingProgressCandidate(body)) {
       candidates.push({body, projectId})
     }
   }
@@ -310,14 +314,14 @@ const getReviewServingProgressCandidates = async (apiPort: number) => {
   return candidates
 }
 
-const didReviewServingQueuedWorkProgress = (
+const didReviewServingWorkProgress = (
   before: ReviewServingProgressSnapshot,
   after: ReviewServingProgressSnapshot,
 ) => {
   return (
-    after.progressState !== 'queued'
-    || after.activeWorkCount > 0
-    || after.inFlightRefreshCount > 0
+    after.progressState !== before.progressState
+    || after.activeWorkCount !== before.activeWorkCount
+    || after.inFlightRefreshCount !== before.inFlightRefreshCount
     || after.pendingRefreshCount < before.pendingRefreshCount
     || after.queuedRefreshCount < before.queuedRefreshCount
     || after.expiredLeaseCount < before.expiredLeaseCount
@@ -335,12 +339,6 @@ const expectCurrentDbReviewServingQueuedWorkProgresses = async (apiPort: number)
     return
   }
 
-  const staleTargetCandidate = candidates.find((candidate) => {
-    return (
-      candidate.projectId === reviewServingProgressProjectId
-      && isStaleReviewServingProgressSnapshot(getReviewServingProgressSnapshot(candidate.body))
-    )
-  })
   const hasStaleCandidate = candidates.some((candidate) => {
     return isStaleReviewServingProgressSnapshot(getReviewServingProgressSnapshot(candidate.body))
   })
@@ -349,8 +347,7 @@ const expectCurrentDbReviewServingQueuedWorkProgresses = async (apiPort: number)
     return
   }
 
-  const probedCandidates = staleTargetCandidate === undefined ? candidates : [staleTargetCandidate]
-  const beforeSnapshots = probedCandidates.map((candidate) => {
+  const beforeSnapshots = candidates.map((candidate) => {
     return {candidate, snapshot: getReviewServingProgressSnapshot(candidate.body)}
   })
 
@@ -365,7 +362,7 @@ const expectCurrentDbReviewServingQueuedWorkProgresses = async (apiPort: number)
     }),
   )
   const progressed = afterSnapshots.some(({after, snapshot}) => {
-    return didReviewServingQueuedWorkProgress(snapshot, after)
+    return didReviewServingWorkProgress(snapshot, after)
   })
   const details = afterSnapshots.map(({after, candidate, snapshot}) => {
     return {after, before: snapshot, projectId: candidate.projectId}
@@ -373,10 +370,42 @@ const expectCurrentDbReviewServingQueuedWorkProgresses = async (apiPort: number)
 
   expect(
     progressed,
-    'Review serving work stayed queued without a maintenance-worker progress signal. '
+    'Review serving work stayed refreshing without a maintenance-worker progress signal. '
       + `candidates=${JSON.stringify(details)}`,
   ).toBe(true)
 }
+
+test('current-db review-serving smoke treats active refresh work as a progress candidate', () => {
+  const body: ReviewsWarningsBody = {
+    data: {
+      indexing: {
+        activeWorkCount: 1,
+        blockedReason: null,
+        eligibleConsumerCount: 1,
+        inFlightRefreshCount: 1,
+        pendingRefreshCount: 9,
+        progressState: 'processing',
+        queuedRefreshCount: 0,
+        serving: {
+          diagnostics: {
+            rebuildChunks: {
+              pendingCount: 8,
+              runningCount: 1,
+              updatedAt: '2026-07-07T11:30:00.000Z',
+            },
+          },
+        },
+        status: 'refreshing',
+      },
+    },
+  }
+  const before = getReviewServingProgressSnapshot(body)
+  const after = {...before, rebuildPendingCount: before.rebuildPendingCount - 1}
+
+  expect(isReviewServingProgressCandidate(body)).toBe(true)
+  expect(didReviewServingWorkProgress(before, before)).toBe(false)
+  expect(didReviewServingWorkProgress(before, after)).toBe(true)
+})
 
 const getRuntimeState = async (port: number): Promise<RuntimeStateBody> => {
   const response = await fetch(`http://127.0.0.1:${port}/api/runtime/state`)

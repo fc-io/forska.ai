@@ -131,7 +131,7 @@ type DuckdbTransactionRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run: (statement: string) => Promise<void>
 }
-type CloseDuckdbServiceOptions = {checkpointBeforeClose?: boolean; releaseOwnerLease?: boolean}
+type CloseDuckdbServiceOptions = {checkpointBeforeClose?: boolean; closeRuntime?: boolean; releaseOwnerLease?: boolean}
 type DuckdbAppendBarrier = {promise: Promise<void>; resolve: () => void}
 type DuckdbBoundValues = DuckDBValue[] | Record<string, DuckDBValue>
 type DuckdbBoundTypes = DuckDBType[] | Record<string, DuckDBType | undefined>
@@ -2702,6 +2702,7 @@ const checkpointDuckdbBeforeClose = async (connection: DuckDBConnection | null, 
 }
 
 const closeDuckdbServiceWithoutBarrier = async ({
+  closeRuntime = true,
   checkpointBeforeClose = true,
   releaseOwnerLease = true,
 }: CloseDuckdbServiceOptions = {}) => {
@@ -2716,6 +2717,14 @@ const closeDuckdbServiceWithoutBarrier = async ({
   }
 
   resetDuckdbRuntimeState()
+
+  if (!closeRuntime) {
+    if (releaseOwnerLease) {
+      await releaseCurrentDuckdbOwnerLease()
+    }
+
+    return
+  }
 
   const closeError = getCombinedCloseError([
     getCloseSyncError(
@@ -2765,7 +2774,12 @@ const closeDuckdbServiceDirect = async (options: CloseDuckdbServiceOptions = {})
 
 const closeDuckdbServiceForSignal = async () => {
   duckdbShutdownInProgress = true
-  return closeDuckdbServiceWithoutBarrier({checkpointBeforeClose: true})
+  const shouldCloseRuntime = !getDuckdbRuntimeConfigValue().serializeConcurrentWork
+
+  return closeDuckdbServiceWithoutBarrier({
+    checkpointBeforeClose: shouldCloseRuntime,
+    closeRuntime: shouldCloseRuntime,
+  })
 }
 
 const registerDuckdbShutdownHooks = () => {
