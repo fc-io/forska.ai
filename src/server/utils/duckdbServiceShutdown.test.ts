@@ -240,6 +240,7 @@ test('duckdb shutdown hook skips checkpoint and native close under low-memory ma
     expect(stderr).not.toContain('control close should not run under low-memory runtime')
     expect(stderr).not.toContain('instance close should not run under low-memory runtime')
     expect(stderr).not.toContain('failed to checkpoint before shutdown')
+    expect(existsSync(`${duckdbPath}.duckdb-owner.lock`)).toBe(true)
   } finally {
     if (childProcess.exitCode === null) {
       childProcess.kill('SIGKILL')

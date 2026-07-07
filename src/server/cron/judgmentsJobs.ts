@@ -130,6 +130,15 @@ const cleanupStaleQueueCron = async (): Promise<void> => {
   }
 }
 
+export const judgmentsJobsImportCron = new Elysia().use(
+  cron({
+    name: 'judgments-jobs-import-judgments',
+    pattern: IMPORT_JUDGMENTS_INTERVAL,
+    startAt: new Date(Date.now() + START_DELAY_MS),
+    run: importJudgmentsCron,
+  }),
+)
+
 export const judgmentsJobsMaintenanceCron = new Elysia()
   .use(
     cron({

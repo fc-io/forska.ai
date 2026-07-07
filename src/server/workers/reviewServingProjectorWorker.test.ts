@@ -3344,6 +3344,63 @@ test('worker stops a loop after a completed rebuild chunk burst limit', async ()
   expect(sleepCalls).toEqual([defaultReviewServingProjectorWorkerProgressYieldMs])
 })
 
+test('worker honors explicit null completed rebuild chunk burst limit', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const controller = new AbortController()
+  const statusChunks = Array.from({length: 17}, (_, index) => {
+    return {
+      ...chunkManifest,
+      chunkId: `chunk-llm-status-uncapped-${index + 1}`,
+      projectionComponent: 'llmStatus' as const,
+      projectionIdentity: 'llmStatus:project-1',
+      requestId: 'rebuild-status-uncapped',
+    }
+  }) satisfies ReviewServingRebuildChunkManifest[]
+  let claimIndex = 0
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return statusChunks[Math.min(claimIndex, statusChunks.length - 1)]
+    },
+    getNextChunk: async () => {
+      const chunk = statusChunks[Math.min(claimIndex, statusChunks.length - 1)]
+
+      if (chunk === undefined) {
+        throw new Error('expected status uncapped test chunk')
+      }
+
+      return {
+        ...chunkInput,
+        projectionComponent: chunk.projectionComponent,
+        projectionIdentity: chunk.projectionIdentity,
+        requestId: chunk.requestId,
+      }
+    },
+    heartbeatChunk: async () => {
+      return statusChunks[Math.min(claimIndex, statusChunks.length - 1)]
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+      claimIndex += 1
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.sleep = async () => {
+    if (harness.runChunkInputs.length >= statusChunks.length) {
+      controller.abort()
+    }
+  }
+
+  await runReviewServingProjectorWorker(
+    {maxCompletedRebuildChunksPerRun: null, rebuildChunkBatchSize: 1, signal: controller.signal, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(harness.runChunkInputs).toEqual(statusChunks)
+})
+
 test('worker does not fail completed requestless posting chunks when DuckDB recycle fails', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const postingChunkInput = {

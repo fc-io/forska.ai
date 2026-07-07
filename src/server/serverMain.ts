@@ -274,6 +274,10 @@ const maintenanceCronRoutes = shouldMountMaintenanceCrons
       .use((await import('./cron/nvidiaSmi.ts')).nvidiaSmiCron)
       .use((await import('./cron/judgmentsJobs.ts')).judgmentsJobsMaintenanceCron)
   : new Elysia()
+const judgmentImportCronRoutes =
+  shouldMountJudgingCrons && !shouldMountMaintenanceCrons
+    ? new Elysia().use((await import('./cron/judgmentsJobs.ts')).judgmentsJobsImportCron)
+    : new Elysia()
 const judgmentCronRoutes = shouldMountJudgingCrons
   ? new Elysia().use((await import('./cron/judgmentsJobsJudgingCron.ts')).judgmentsJobsJudgingCron)
   : new Elysia()
@@ -302,6 +306,7 @@ export const app = new Elysia()
   .use(duckdbOwnerConnectionsRoutes)
   .use(judgmentDispatchTelemetryRoutes)
   .use(maintenanceCronRoutes)
+  .use(judgmentImportCronRoutes)
   .use(judgmentCronRoutes)
   .use(publicProductApiRoutes)
   .use(duckdbOwnerPrivateApiRoutes)
