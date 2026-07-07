@@ -1695,6 +1695,10 @@ test('worker writes compatible status and posting rebuild chunks through compone
     harness.database.queryJson = async <T>(statement: string) => {
       statements.push(statement)
 
+      if (statement.includes('pendingChunkCount')) {
+        return [{pendingChunkCount: 1}] as T[]
+      }
+
       if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
         const chunkId = [...chunksById.keys()].find((id) => {
           return statement.includes(id)
@@ -1783,6 +1787,184 @@ test('worker writes compatible status and posting rebuild chunks through compone
     expect(joined).toContain("article_id >= 'article-001'")
     expect(joined).toContain("article_id <= 'article-050'")
     expect(joined).toContain("article_id >= 'article-051'")
+    expect(joined).toContain("article_id <= 'article-099'")
+    expect(joined).toContain(batchCase.writerName)
+  }
+})
+
+test('worker batches foreground status rebuild request chunks through component batch writers', async () => {
+  const cases = [
+    {
+      component: 'llmStatus',
+      identity: 'llmStatus:project-1',
+      writerName: 'llmStatusBatchWriter',
+    },
+    {
+      component: 'humanStatus',
+      identity: 'humanStatus:project-1',
+      writerName: 'humanStatusBatchWriter',
+    },
+  ] as const
+
+  for (const batchCase of cases) {
+    const harness = createWorkerHarness({wakeStatus: 'completed'})
+    const statements: string[] = []
+    const firstChunkInput = {
+      ...chunkInput,
+      chunkEndKey: 'article-033',
+      chunkStartKey: 'article-001',
+      projectionComponent: batchCase.component,
+      projectionIdentity: batchCase.identity,
+      requestId: 'rebuild:foreground-status',
+    }
+    const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-066', chunkStartKey: 'article-033'}
+    const thirdChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-066'}
+    const chunks = [firstChunkInput, secondChunkInput, thirdChunkInput].map((input, index) => {
+      return {
+        ...chunkManifest,
+        ...input,
+        chunkId: `chunk-${batchCase.component}-foreground-batch-${index + 1}`,
+        parentChunkId: `chunk-${batchCase.component}-foreground-parent`,
+        requestId: input.requestId,
+        splitDepth: 1,
+      } satisfies ReviewServingRebuildChunkManifest
+    })
+    const chunkInputs = [firstChunkInput, secondChunkInput, thirdChunkInput]
+    const chunksByStartKey = new Map<string, ReviewServingRebuildChunkManifest>(
+      chunks.map((chunk) => {
+        return [chunk.chunkStartKey, chunk]
+      }),
+    )
+    const chunksById = new Map<string, ReviewServingRebuildChunkManifest>(
+      chunks.map((chunk) => {
+        return [chunk.chunkId, chunk]
+      }),
+    )
+    const compatibleStatusBatchInputs: Array<{
+      excludeChunkIds: readonly string[]
+      firstChunk: ReviewServingRebuildChunkManifest
+      limit: number
+    }> = []
+    const componentState = {
+      optional: [],
+      required: [
+        {baseGeneration: '2', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+        {baseGeneration: '2', component: 'display', projectionIdentity: 'display:project-1'},
+        {baseGeneration: '2', component: 'judgmentInputContent', projectionIdentity: 'judgmentInputContent:project-1'},
+        {baseGeneration: '2', component: batchCase.component, projectionIdentity: batchCase.identity},
+      ],
+    }
+    let nextIndex = 0
+
+    harness.database.queryJson = async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('pendingChunkCount')) {
+        return [{pendingChunkCount: 1}] as T[]
+      }
+
+      if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+        const chunkId = [...chunksById.keys()].find((id) => {
+          return statement.includes(id)
+        })
+
+        return [chunksById.get(chunkId ?? chunks[0].chunkId) ?? chunks[0]] as T[]
+      }
+
+      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+        return [
+          {
+            baseGeneration: chunks[0].outputBaseGeneration,
+            definitionVersion: `${batchCase.component}:v1`,
+            inputDigest: chunks[0].inputDigest,
+            inputWatermark: chunks[0].inputWatermark,
+            inputWatermarksJson: {reviewChange: chunks[0].inputWatermark},
+            invalidationReason: chunks[0].inputDigest,
+            manifestId: `manifest-${batchCase.component}`,
+            patchRangeEnd: chunks[0].inputWatermark,
+            patchRangeStart: chunks[0].inputWatermark,
+            patchWatermark: chunks[0].inputWatermark,
+            projectId: chunks[0].projectId,
+            projectionComponent: chunks[0].projectionComponent,
+            projectionIdentity: chunks[0].projectionIdentity,
+            promptConfigHash: null,
+            reviewConfigHash: 'review-config-1',
+            status: 'candidate',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return [
+          {
+            componentStateJson: componentState,
+            reviewConfigHash: 'review-config-1',
+            selectedImportSnapshotId: 'selected-import-snapshot-1',
+            snapshotId: `snapshot-${batchCase.component}-foreground-batch`,
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM mart.review_article_serving_v4 serving') && statement.includes('AS actualCount')) {
+        return [{actualChecksum: `checksum-${batchCase.component}-foreground-batch`, actualCount: 2}] as T[]
+      }
+
+      return [] as T[]
+    }
+    harness.database.run = async (statement: string) => {
+      statements.push(statement)
+    }
+    harness.dependencies.rebuildChunkService = {
+      ...harness.dependencies.rebuildChunkService,
+      claimChunk: async (claimInput) => {
+        harness.claimInputs.push(claimInput)
+
+        return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+      },
+      getNextChunk: async (getNextInput) => {
+        harness.getNextChunkInputs.push(getNextInput)
+
+        return chunkInputs[nextIndex++] ?? null
+      },
+      getCompatibleStatusChunks: async (input) => {
+        compatibleStatusBatchInputs.push({
+          excludeChunkIds: input.excludeChunkIds,
+          firstChunk: input.firstChunk,
+          limit: input.limit,
+        })
+
+        return chunkInputs.slice(1)
+      },
+      heartbeatChunk: async (heartbeatInput) => {
+        harness.heartbeatInputs.push(heartbeatInput)
+
+        return chunksById.get(heartbeatInput.chunkId) ?? null
+      },
+      runClaimedChunk: async ({chunk}) => {
+        harness.runChunkInputs.push(chunk)
+
+        return {status: 'completed' as const}
+      },
+    } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+    const result = await runReviewServingProjectorWorkerOnce(
+      {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+      harness.dependencies,
+    )
+    const joined = statements.join('\n')
+
+    expect(result.chunk).toMatchObject({chunkId: chunks[2].chunkId, status: 'completed'})
+    expect(result.chunkBatchCount).toBe(3)
+    expect(harness.claimInputs).toHaveLength(3)
+    expect(harness.getNextChunkInputs).toHaveLength(1)
+    expect(compatibleStatusBatchInputs).toEqual([
+      {excludeChunkIds: [chunks[0].chunkId], firstChunk: chunks[0], limit: 31},
+    ])
+    expect(harness.runChunkInputs).toEqual([])
+    expect(harness.wakeInputs).toEqual([])
+    expect(joined).toContain("article_id >= 'article-001'")
+    expect(joined).toContain("article_id <= 'article-033'")
+    expect(joined).toContain("article_id >= 'article-066'")
     expect(joined).toContain("article_id <= 'article-099'")
     expect(joined).toContain(batchCase.writerName)
   }
@@ -2149,6 +2331,48 @@ test('worker yields to normal projector fairness after foreground rebuild drain 
   expect(result.chunk).toMatchObject({requestId: 'rebuild:foreground', status: 'completed'})
   expect(result.projector).toMatchObject({status: 'completed'})
   expect(harness.wakeInputs).toHaveLength(1)
+})
+
+test('worker keeps draining foreground status rebuild chunks beyond the heavy-chunk budget', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const foregroundStatusChunkInput = {
+    ...chunkInput,
+    projectionComponent: 'llmStatus' as const,
+    projectionIdentity: 'llmStatus:project-1',
+    requestId: 'rebuild:foreground-status',
+  }
+  const foregroundStatusChunk = {
+    ...chunkManifest,
+    ...foregroundStatusChunkInput,
+  } satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return foregroundStatusChunk
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return foregroundStatusChunkInput
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {
+      foregroundRebuildDrainCompletedCount: 4,
+      foregroundRebuildDrainStartedAtMs: 1_000,
+      foregroundRebuildDrainTtlMs: 10_000,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  expect(result.chunk).toMatchObject({projectionComponent: 'llmStatus', requestId: 'rebuild:foreground-status'})
+  expect(result.projector).toMatchObject({status: 'blocked'})
+  expect(harness.wakeInputs).toEqual([])
 })
 
 test('worker measures foreground rebuild drain TTL after a critical chunk completes', async () => {

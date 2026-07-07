@@ -12,6 +12,7 @@ import {
 import {
   claimReviewServingRebuildChunk,
   getNextClaimableReviewServingRebuildChunk,
+  getReviewServingRebuildChunkClaimWhere,
   getReviewServingRebuildChunkManifest,
   heartbeatReviewServingRebuildChunkLease,
   isReviewServingRebuildChunkComplete,
@@ -143,6 +144,14 @@ type ReviewServingProjectorWorkerRebuildChunkService = {
     now: Date
     projectId?: string | null
   }) => Promise<ReviewServingProjectorWorkerChunkInput | null>
+  getCompatibleStatusChunks?: (input: {
+    database: ReviewServingChunkManifestRepositoryDatabase
+    excludeChunkIds: readonly string[]
+    firstChunk: ReviewServingRebuildChunkManifest
+    limit: number
+    now: Date
+    projectId?: string | null
+  }) => Promise<readonly ReviewServingProjectorWorkerChunkInput[]>
   heartbeatChunk: typeof heartbeatReviewServingRebuildChunkLease
   isChunkComplete: typeof isReviewServingRebuildChunkComplete
   prepareClaimedChunk?: (input: {
@@ -330,6 +339,8 @@ const defaultReviewServingProjectorWorkerPollIntervalMs = 2_000
 const defaultReviewServingProjectorWorkerProgressYieldMs = 100
 const defaultReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = 0
 const defaultReviewServingProjectorWorkerRebuildChunkBatchSize = 1
+const foregroundStatusRebuildChunkBatchSize = 32
+const foregroundStatusRebuildDrainBatchBudget = 32
 const nativeHeavyReviewServingProjectorWorkerProgressYieldMs = 1_000
 const defaultReviewServingProjectorWorkerErrorBackoffMs = 10_000
 const defaultReviewServingProjectorWorkerForegroundRebuildDrainChunkBudget = 4
@@ -349,6 +360,10 @@ const reviewServingCriticalRebuildComponents = [
   'summary',
   'payload',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
+const foregroundBatchableStatusRebuildComponents = new Set<ReviewServingProjectionComponent>([
+  'humanStatus',
+  'llmStatus',
+])
 // Keep status chunks out of this set: they are small SQL-native updates, and per-chunk DuckDB recycle/forced GC
 // can panic Bun on the release-scale primary DB during long status rebuild runs.
 const reviewServingNativeHeavyRebuildComponents = new Set<ReviewServingProjectionComponent>(['posting', 'summary'])
@@ -519,7 +534,7 @@ const canSplitRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
 const articleRangeRebuildChunkPresplitInputRowLimit = 50_000
 const highFanoutArticleRangeRebuildChunkPresplitRowLimit = 5_000
 const summaryArticleRangeRebuildChunkPresplitRowLimit = 512
-const statusArticleRangeRebuildChunkPresplitRowLimit = 16
+const statusArticleRangeRebuildChunkPresplitRowLimit = 512
 const articleRangeRebuildChunkPresplitMaxBucketCount = 16
 const highFanoutArticleRangeRebuildChunkPresplitMaxBucketCount = 64
 const summaryArticleRangeRebuildChunkPresplitMaxBucketCount = 512
@@ -3373,7 +3388,10 @@ const canRunLlmStatusRebuildChunkBatch = (chunks: readonly ReviewServingRebuildC
   return (
     chunks.length > 1
     && chunks.every((chunk) => {
-      return chunk.projectionComponent === 'llmStatus' && chunk.requestId === null
+      return chunk.projectionComponent === 'llmStatus'
+    })
+    && chunks.every((chunk) => {
+      return chunk.requestId === chunks[0]?.requestId
     })
   )
 }
@@ -3487,7 +3505,10 @@ const canRunHumanStatusRebuildChunkBatch = (chunks: readonly ReviewServingRebuil
   return (
     chunks.length > 1
     && chunks.every((chunk) => {
-      return chunk.projectionComponent === 'humanStatus' && chunk.requestId === null
+      return chunk.projectionComponent === 'humanStatus'
+    })
+    && chunks.every((chunk) => {
+      return chunk.requestId === chunks[0]?.requestId
     })
   )
 }
@@ -4468,6 +4489,11 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
     getNextChunk: ({database, now, projectId}) => {
       return getNextClaimableReviewServingRebuildChunk({now, projectId}, database)
     },
+    getCompatibleStatusChunks: ({database, excludeChunkIds, firstChunk, limit, now, projectId}) => {
+      return getCompatibleStatusRebuildChunkBatchInputs(
+        {database, excludeChunkIds, firstChunk, limit, now, projectId},
+      )
+    },
     heartbeatChunk: heartbeatReviewServingRebuildChunkLease,
     isChunkComplete: isReviewServingRebuildChunkComplete,
     runClaimedChunk: async ({chunk, database, leaseOwner}) => {
@@ -5229,9 +5255,13 @@ const shouldPrioritizeNextRebuildChunk = (input: {
   nowMs: number
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
+  const defaultDrainBudget =
+    input.chunk.status === 'completed' && isForegroundBatchableStatusRebuildChunk(input.chunk)
+      ? foregroundStatusRebuildDrainBatchBudget
+      : defaultReviewServingProjectorWorkerForegroundRebuildDrainChunkBudget
   const budget = getPositiveInteger(
     input.options.foregroundRebuildDrainChunkBudget,
-    defaultReviewServingProjectorWorkerForegroundRebuildDrainChunkBudget,
+    defaultDrainBudget,
   )
   const ttlMs = getPositiveInteger(
     input.options.foregroundRebuildDrainTtlMs,
@@ -5351,16 +5381,53 @@ const isRangeDisjointReviewServingProjectorWorkerRebuildChunk = (
   return nextChunk.chunkEndKey < claimedChunk.chunkStartKey || nextChunk.chunkStartKey > claimedChunk.chunkEndKey
 }
 
+const isRangeBatchableStatusBoundaryReviewServingProjectorWorkerRebuildChunk = (
+  claimedChunk: ReviewServingRebuildChunkManifest,
+  nextChunk: ReviewServingProjectorWorkerChunkInput,
+) => {
+  return nextChunk.chunkEndKey <= claimedChunk.chunkStartKey || nextChunk.chunkStartKey >= claimedChunk.chunkEndKey
+}
+
+const isForegroundBatchableStatusRebuildChunk = (
+  chunk: Pick<ReviewServingProjectorWorkerChunkInput, 'projectionComponent' | 'requestId'>,
+) => {
+  return (
+    (chunk.requestId ?? null) !== null
+    && foregroundBatchableStatusRebuildComponents.has(chunk.projectionComponent)
+  )
+}
+
+const isCompatibleReviewServingProjectorWorkerRebuildRequestBatch = (
+  firstChunk: ReviewServingRebuildChunkManifest,
+  nextChunk: ReviewServingProjectorWorkerChunkInput,
+) => {
+  const firstRequestId = firstChunk.requestId ?? null
+  const nextRequestId = nextChunk.requestId ?? null
+
+  return (
+    (firstRequestId === null && nextRequestId === null)
+    || (
+      firstRequestId !== null
+      && firstRequestId === nextRequestId
+      && isForegroundBatchableStatusRebuildChunk(firstChunk)
+      && isForegroundBatchableStatusRebuildChunk(nextChunk)
+    )
+  )
+}
+
 const isCompatibleReviewServingProjectorWorkerRebuildChunkBatchInput = (
   claimedChunks: readonly ReviewServingRebuildChunkManifest[],
   nextChunk: ReviewServingProjectorWorkerChunkInput,
 ) => {
   const firstChunk = claimedChunks[0]
+  const isBatchableStatusRequest =
+    firstChunk !== undefined
+    && isForegroundBatchableStatusRebuildChunk(firstChunk)
+    && isForegroundBatchableStatusRebuildChunk(nextChunk)
 
   return (
     firstChunk !== undefined
-    && firstChunk.requestId === null
-    && (nextChunk.requestId ?? null) === null
+    && isCompatibleReviewServingProjectorWorkerRebuildRequestBatch(firstChunk, nextChunk)
     && nextChunk.projectId === firstChunk.projectId
     && nextChunk.projectionComponent === firstChunk.projectionComponent
     && nextChunk.projectionComponent !== 'summary'
@@ -5368,9 +5435,111 @@ const isCompatibleReviewServingProjectorWorkerRebuildChunkBatchInput = (
     && nextChunk.outputBaseGeneration === firstChunk.outputBaseGeneration
     && nextChunk.inputWatermark === firstChunk.inputWatermark
     && claimedChunks.every((claimedChunk) => {
-      return isRangeDisjointReviewServingProjectorWorkerRebuildChunk(claimedChunk, nextChunk)
+      return isBatchableStatusRequest
+        ? isRangeBatchableStatusBoundaryReviewServingProjectorWorkerRebuildChunk(claimedChunk, nextChunk)
+        : isRangeDisjointReviewServingProjectorWorkerRebuildChunk(claimedChunk, nextChunk)
     })
   )
+}
+
+const getReviewServingProjectorWorkerRebuildChunkPreclaimLimit = (input: {
+  batchSize: number
+  claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
+}) => {
+  const firstClaimedChunk = input.claimedChunks[0]?.chunk
+
+  return firstClaimedChunk !== undefined && isForegroundBatchableStatusRebuildChunk(firstClaimedChunk)
+    ? Math.max(input.batchSize, foregroundStatusRebuildChunkBatchSize)
+    : input.batchSize
+}
+
+const shouldContinueClaimingReviewServingProjectorWorkerRebuildChunkBatch = (input: {
+  batchSize: number
+  claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
+}) => {
+  return input.claimedChunks.length < getReviewServingProjectorWorkerRebuildChunkPreclaimLimit(input)
+}
+
+const shouldStopReviewServingProjectorWorkerRebuildChunkBatchAfterClaim = (
+  chunk: ReviewServingRebuildChunkManifest,
+) => {
+  return chunk.requestId !== null && !isForegroundBatchableStatusRebuildChunk(chunk)
+}
+
+type CompatibleStatusRebuildChunkBatchInputRow = {
+  checksum: string | null
+  chunkEndKey: string
+  chunkStartKey: string
+  inputDigest: string | null
+  inputWatermark: number
+  outputBaseGeneration: number
+  projectId: string | null
+  projectionComponent: ReviewServingProjectionComponent
+  projectionIdentity: string
+  requestId: string | null
+}
+
+const getCompatibleStatusRebuildChunkBatchInputs = async (input: {
+  database: ReviewServingChunkManifestRepositoryTransaction
+  excludeChunkIds: readonly string[]
+  firstChunk: ReviewServingRebuildChunkManifest
+  limit: number
+  now: Date
+  projectId?: string | null
+}): Promise<readonly ReviewServingProjectorWorkerChunkInput[]> => {
+  if (!isForegroundBatchableStatusRebuildChunk(input.firstChunk) || input.limit <= 0) {
+    return []
+  }
+
+  const excludePredicate =
+    input.excludeChunkIds.length === 0
+      ? ''
+      : `AND candidate.chunk_id NOT IN (${input.excludeChunkIds.map(getSqlLiteral).join(', ')})`
+  const rows = await input.database.queryJson<CompatibleStatusRebuildChunkBatchInputRow>(`
+    SELECT
+      candidate.checksum AS checksum,
+      candidate.chunk_end_key AS chunkEndKey,
+      candidate.chunk_start_key AS chunkStartKey,
+      candidate.input_digest AS inputDigest,
+      candidate.input_watermark AS inputWatermark,
+      candidate.output_base_generation AS outputBaseGeneration,
+      candidate.project_id AS projectId,
+      candidate.projection_component AS projectionComponent,
+      candidate.projection_identity AS projectionIdentity,
+      candidate.request_id AS requestId
+    FROM app.review_rebuild_chunk_manifest candidate
+    WHERE ${getReviewServingRebuildChunkClaimWhere(
+      {now: input.now, projectId: input.projectId, projectionComponent: input.firstChunk.projectionComponent},
+      'candidate',
+    )}
+      AND candidate.request_id = ${getSqlLiteral(input.firstChunk.requestId)}
+      AND candidate.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.firstChunk.projectId)}
+      AND candidate.projection_identity = ${getSqlLiteral(input.firstChunk.projectionIdentity)}
+      AND candidate.output_base_generation = ${getSqlLiteral(input.firstChunk.outputBaseGeneration)}
+      AND candidate.input_watermark = ${getSqlLiteral(input.firstChunk.inputWatermark)}
+      ${excludePredicate}
+    ORDER BY
+      candidate.chunk_start_key ASC,
+      candidate.updated_at ASC,
+      candidate.created_at ASC,
+      candidate.chunk_id ASC
+    LIMIT ${Math.max(0, Math.trunc(input.limit))}
+  `)
+
+  return rows.map((row) => {
+    return {
+      checksum: row.checksum,
+      chunkEndKey: row.chunkEndKey,
+      chunkStartKey: row.chunkStartKey,
+      inputDigest: row.inputDigest,
+      inputWatermark: Number(row.inputWatermark),
+      outputBaseGeneration: Number(row.outputBaseGeneration),
+      projectId: row.projectId,
+      projectionComponent: row.projectionComponent,
+      projectionIdentity: row.projectionIdentity,
+      requestId: row.requestId ?? null,
+    }
+  })
 }
 
 const shouldClaimNextReviewServingProjectorWorkerRebuildChunkForBatch = (
@@ -5692,6 +5861,79 @@ const runReviewServingProjectorWorkerRebuildChunk = async ({
     : claimed.chunk
 }
 
+const claimCompatibleReviewServingProjectorWorkerStatusBatchTail = async (input: {
+  batchSize: number
+  claimedChunks: ClaimedReviewServingProjectorWorkerRebuildChunk[]
+  database: ReviewServingChunkManifestRepositoryDatabase
+  options: ReviewServingProjectorWorkerCycleOptions
+  service: ReviewServingProjectorWorkerRebuildChunkService
+  workerId: string
+}) => {
+  const firstClaimedChunk = input.claimedChunks[0]?.chunk
+  const getCompatibleStatusChunks = input.service.getCompatibleStatusChunks
+
+  if (firstClaimedChunk === undefined || getCompatibleStatusChunks === undefined) {
+    return false
+  }
+
+  const preclaimLimit = getReviewServingProjectorWorkerRebuildChunkPreclaimLimit({
+    batchSize: input.batchSize,
+    claimedChunks: input.claimedChunks,
+  })
+  const remainingLimit = preclaimLimit - input.claimedChunks.length
+
+  if (remainingLimit <= 0 || !isForegroundBatchableStatusRebuildChunk(firstClaimedChunk)) {
+    return false
+  }
+
+  const candidateChunks = await getCompatibleStatusChunks({
+    database: input.database,
+    excludeChunkIds: input.claimedChunks.map((claimed) => {
+      return claimed.chunk.chunkId
+    }),
+    firstChunk: firstClaimedChunk,
+    limit: remainingLimit,
+    now: getWorkerNow(input.options),
+    projectId: input.options.rebuildProjectId,
+  })
+  const exhaustedCandidateSearch = candidateChunks.length < remainingLimit
+
+  for (const chunkInput of candidateChunks) {
+    if (
+      !shouldContinueClaimingReviewServingProjectorWorkerRebuildChunkBatch({
+        batchSize: input.batchSize,
+        claimedChunks: input.claimedChunks,
+      })
+      || !shouldClaimNextReviewServingProjectorWorkerRebuildChunkForBatch(
+        input.claimedChunks.map((claimed) => {
+          return claimed.chunk
+        }),
+        chunkInput,
+      )
+    ) {
+      break
+    }
+
+    const timings: Record<string, number> = {claimSelectMs: 0}
+    const claimed = await claimReviewServingProjectorWorkerRebuildChunkInput({
+      chunkInput,
+      database: input.database,
+      options: input.options,
+      service: input.service,
+      timings,
+      workerId: input.workerId,
+    })
+
+    if (claimed.status !== 'claimed') {
+      break
+    }
+
+    input.claimedChunks.push({chunk: claimed.chunk, service: claimed.service, timings: claimed.timings})
+  }
+
+  return exhaustedCandidateSearch
+}
+
 const claimCompatibleReviewServingProjectorWorkerRebuildChunkBatch = async (
   input: Parameters<typeof runReviewServingProjectorWorkerRebuildChunk>[0] & {batchSize: number},
 ): Promise<
@@ -5705,7 +5947,12 @@ const claimCompatibleReviewServingProjectorWorkerRebuildChunkBatch = async (
     return {chunk: {chunkId: null, status: 'idle'}, status: 'not-claimed'}
   }
 
-  for (let index = 0; index < input.batchSize; index += 1) {
+  while (
+    shouldContinueClaimingReviewServingProjectorWorkerRebuildChunkBatch({
+      batchSize: input.batchSize,
+      claimedChunks,
+    })
+  ) {
     const timings: Record<string, number> = {}
     const chunkInput = await measureReviewServingProjectorWorkerPhase(timings, 'claimSelectMs', async () => {
       return service.getNextChunk({
@@ -5745,8 +5992,22 @@ const claimCompatibleReviewServingProjectorWorkerRebuildChunkBatch = async (
 
     claimedChunks.push({chunk: claimed.chunk, service: claimed.service, timings: claimed.timings})
 
-    if (claimed.chunk.requestId !== null) {
+    if (shouldStopReviewServingProjectorWorkerRebuildChunkBatchAfterClaim(claimed.chunk)) {
       break
+    }
+
+    if (claimedChunks.length === 1 && isForegroundBatchableStatusRebuildChunk(claimed.chunk)) {
+      const exhaustedStatusBatch = await claimCompatibleReviewServingProjectorWorkerStatusBatchTail({
+        batchSize: input.batchSize,
+        claimedChunks,
+        database: input.database,
+        options: input.options,
+        service,
+        workerId: input.workerId,
+      })
+      if (exhaustedStatusBatch) {
+        break
+      }
     }
   }
 
