@@ -269,3 +269,63 @@ test('review serving projector worker heartbeat restarts bounded low-memory work
   expect(result.events).toContainEqual(['abort', 0])
   expect(result.events).toContainEqual(['recycle'])
 })
+
+test('review serving projector worker heartbeat preserves explicit null burst cap', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const events = []
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async (options) => {
+              events.push({maxCompletedRebuildChunksPerRun: options.maxCompletedRebuildChunksPerRun})
+            },
+          }
+        })
+
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?null-cap=' + Date.now())
+        startReviewServingProjectorWorkerHeartbeat({maxCompletedRebuildChunksPerRun: null, pollIntervalMs: 1})()
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5)
+        })
+
+        console.log(JSON.stringify({events}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: '6400MiB'}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Review serving projector worker heartbeat null burst cap test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    events: Array<{maxCompletedRebuildChunksPerRun: number | null}>
+  }
+
+  expect(result.events).toEqual([{maxCompletedRebuildChunksPerRun: null}])
+})

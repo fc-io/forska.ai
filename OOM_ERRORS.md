@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-07 - Foreground Native-Heavy RSS Cap Recycle
+
+- Error: Request-associated summary/posting rebuild chunks could keep running in the same DuckDB runtime after process RSS reached the rebuild chunk cap.
+- Context: `reviewServing.projector.worker` foreground rebuild drain for native-heavy summary and posting chunks.
+- Cause: DuckDB recycle and forced-GC cleanup were suppressed solely because the chunk had a `requestId`.
+- Fix: Request-associated native-heavy chunks now recycle DuckDB and collect garbage when the configured RSS cap is reached, while still using the lightweight path below the cap.
+- Verification: `bun test src/server/workers/reviewServingProjectorWorker.test.ts`; `bun run test:dev-server:current-db`; live request `rebuild:abec097101db4b2658ac696f81a75dcb` moved from `admitted` to `completed`.
+
 ## 2026-07-07 - Low-Memory Review-Serving Heartbeat Recycling
 
 - Error: Low-memory review-serving rebuild bursts could keep native DuckDB memory and file state alive between capped worker runs.

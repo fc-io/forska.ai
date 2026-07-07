@@ -1667,7 +1667,7 @@ test('worker fails completed foreground queue rebuild request when batch finaliz
   const joined = statements.join('\n')
 
   expect(result.chunk).toMatchObject({chunkId: firstChunk.chunkId, requestId, status: 'failed'})
-  expect(result.chunkBatchCount).toBe(0)
+  expect(result.chunkBatchCount).toBe(1)
   expect(joined).toContain('UPDATE app.review_rebuild_request')
   expect(joined).toContain("status = 'failed'")
   expect(joined).toContain(`request_id = '${requestId}'`)
@@ -3108,7 +3108,7 @@ test('worker avoids crash-prone DuckDB recycle and forced GC after completed sta
   expect(harness.garbageCollectedChunks).toEqual([])
 })
 
-test('worker does not force garbage collection after request-associated summary chunks at the RSS cap', async () => {
+test('worker recycles DuckDB and collects garbage after request-associated summary chunks at the RSS cap', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const summaryChunkInput = {
     ...chunkInput,
@@ -3152,11 +3152,11 @@ test('worker does not force garbage collection after request-associated summary 
     requestId: 'rebuild-summary',
     status: 'completed',
   })
-  expect(harness.recycledChunks).toEqual([])
-  expect(harness.garbageCollectedChunks).toEqual([])
+  expect(harness.recycledChunks).toEqual([summaryChunk])
+  expect(harness.garbageCollectedChunks).toEqual([summaryChunk])
 })
 
-test('worker does not force garbage collection after request-associated posting chunks at the RSS cap', async () => {
+test('worker recycles DuckDB and collects garbage after request-associated posting chunks at the RSS cap', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const postingChunkInput = {
     ...chunkInput,
@@ -3200,8 +3200,8 @@ test('worker does not force garbage collection after request-associated posting 
     requestId: 'rebuild-posting',
     status: 'completed',
   })
-  expect(harness.recycledChunks).toEqual([])
-  expect(harness.garbageCollectedChunks).toEqual([])
+  expect(harness.recycledChunks).toEqual([postingChunk])
+  expect(harness.garbageCollectedChunks).toEqual([postingChunk])
 })
 
 test('worker keeps long status chunk loops on the normal lightweight yield path', async () => {
@@ -3531,8 +3531,8 @@ test('worker slows native-heavy progress yield when RSS reaches the cleanup cap'
 
   expect(sleepCalls).toEqual([nativeHeavyReviewServingProjectorWorkerProgressYieldMs])
   expect(harness.runChunkInputs).toEqual([summaryChunk])
-  expect(harness.recycledChunks).toEqual([])
-  expect(harness.garbageCollectedChunks).toEqual([])
+  expect(harness.recycledChunks).toEqual([summaryChunk])
+  expect(harness.garbageCollectedChunks).toEqual([summaryChunk])
 })
 
 test('worker marks rebuild requests failed after terminal chunk failure', async () => {

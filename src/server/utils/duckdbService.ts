@@ -2627,6 +2627,7 @@ const waitForDuckdbBackgroundQueue = async (): Promise<void> => {
 }
 
 const withDuckdbAppendBarrier = async <T>(work: () => Promise<T>): Promise<T> => {
+  const previousAppendBarrier = duckdbServiceState.appendBarrier
   const appendBarrier = createDuckdbAppendBarrier()
   duckdbServiceState.appendBarrier = appendBarrier
 
@@ -2636,7 +2637,7 @@ const withDuckdbAppendBarrier = async <T>(work: () => Promise<T>): Promise<T> =>
     return await work()
   } finally {
     duckdbServiceState.appendBarrier =
-      duckdbServiceState.appendBarrier === appendBarrier ? null : duckdbServiceState.appendBarrier
+      duckdbServiceState.appendBarrier === appendBarrier ? previousAppendBarrier : duckdbServiceState.appendBarrier
     appendBarrier.resolve()
   }
 }

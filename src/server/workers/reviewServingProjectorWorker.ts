@@ -213,7 +213,7 @@ type ReviewServingProjectorWorkerCycleOptions = {
   leaseMs?: number
   maxActiveImportCount?: number
   maxPendingDirtyWorkCount?: number
-  maxCompletedRebuildChunksPerRun?: number
+  maxCompletedRebuildChunksPerRun?: number | null
   maxRetries?: number
   maxRowsPerWake?: number
   maxWakeMs?: number
@@ -4506,7 +4506,7 @@ const shouldRecycleDuckdbAfterCompletedRebuildChunk = (input: {
 }) => {
   return (
     reviewServingDuckdbRecycleAfterRebuildComponents.has(input.chunk.projectionComponent)
-    && input.chunk.requestId === null
+    && (input.chunk.requestId === null || hasRequestAssociatedNativeHeavyChunkReachedRssCap(input))
   )
 }
 
@@ -4516,7 +4516,8 @@ const shouldCollectGarbageAfterCompletedRebuildChunk = (input: {
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
   return (
-    input.chunk.requestId === null && reviewServingNativeHeavyRebuildComponents.has(input.chunk.projectionComponent)
+    reviewServingNativeHeavyRebuildComponents.has(input.chunk.projectionComponent)
+    && (input.chunk.requestId === null || hasRequestAssociatedNativeHeavyChunkReachedRssCap(input))
   )
 }
 
@@ -5271,7 +5272,7 @@ const finalizeCompletedReviewServingRebuildRequestOnceForBatch = async (input: {
 
     return {
       chunk: {chunkId: input.chunk.chunkId, requestId: input.chunk.requestId, status: 'failed'},
-      completedCount: input.completedCount,
+      completedCount: input.completedCount + 1,
     }
   }
 }
@@ -5451,7 +5452,7 @@ const shouldUseExtendedForegroundRebuildDrainBudget = (input: {
 
   return (
     reviewServingNativeHeavyRebuildComponents.has(input.chunk.projectionComponent)
-    && !hasRequestAssociatedNativeHeavyChunkReachedRssCap(input)
+    && !hasReviewServingProjectorWorkerReachedRssCap(input)
   )
 }
 

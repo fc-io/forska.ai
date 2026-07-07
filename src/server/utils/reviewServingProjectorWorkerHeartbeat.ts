@@ -141,7 +141,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
         options.rebuildChunkBatchSize
         ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
         ?? defaultReviewServingProjectorWorkerHeartbeatBatchSize,
-      maxCompletedRebuildChunksPerRun: maxCompletedRebuildChunksPerRun ?? undefined,
+      maxCompletedRebuildChunksPerRun,
       signal: loopController.signal,
     })
       .then(async () => {
