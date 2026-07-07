@@ -1222,7 +1222,9 @@ test('duckdb service preserves recovery attempts after startup WAL preflight loc
 
   try {
     if (result.exitCode !== 0) {
-      throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB WAL lock recovery subprocess failed')
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB WAL lock recovery subprocess failed',
+      )
     }
 
     const parsed = JSON.parse(result.stdout.toString()) as {

@@ -7,7 +7,6 @@ import {runStartupAutomaticOrphanedQueueRepair} from './cron/judgmentsJobs/judgm
 import {getDefaultJudgmentServerJobId} from './cron/judgmentsJobs/judgmentJobServerIdentity.ts'
 import {getJudgmentJobSqliteService} from './cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {runStartupJudgmentRolloutCleanup} from './cron/judgmentsJobs/judgmentStartupRolloutCleanup.ts'
-import {parseDuckdbMemoryLimitToMiB} from './utils/duckdbMemoryLimit.ts'
 import {apiProxyRoutes} from './routes/ApiProxyRoutes.ts'
 import {duckdbOwnerPrivateApiPrefix} from './routes/apiRouteClassification.ts'
 import {duckdbOwnerConnectionsRoutes} from './routes/DuckdbOwnerConnectionsRoutes.ts'
@@ -21,6 +20,7 @@ import {
   runProjectTransferTtlRecovery,
 } from './services/projectTransfer/projectTransferSessionRecovery.ts'
 import {getCodexCliLoginStatus} from './utils/codexCliAuth.ts'
+import {parseDuckdbMemoryLimitToMiB} from './utils/duckdbMemoryLimit.ts'
 import {env} from './utils/env'
 import {getAppServerRuntimeConfig} from './utils/getAppServerRuntimeConfig.ts'
 import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
@@ -180,9 +180,13 @@ const startProjectTransferTtlRecoveryScheduler = () => {
 const appServerRuntimeConfig = getAppServerRuntimeConfig()
 const lowMemoryMaintenanceDuckdbLimitMiB = 6400
 const shouldDeferMaintenanceCronsForLowMemoryOwner = () => {
-  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT)
+  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT)
 
-  return getCurrentServerRole() === 'maintenance-worker' && duckdbLimitMiB !== null && duckdbLimitMiB <= lowMemoryMaintenanceDuckdbLimitMiB
+  return (
+    shouldServerRoleMountMaintenanceCrons(getCurrentServerRole())
+    && duckdbLimitMiB !== null
+    && duckdbLimitMiB <= lowMemoryMaintenanceDuckdbLimitMiB
+  )
 }
 const desktopAllowedOrigins = process.env.FORSKA_DESKTOP_MODE === 'true' ? ['null', 'views://mainview'] : []
 const allowedOrigins = [

@@ -443,6 +443,21 @@ test('human payload contracts cover list and detail response judgments', () => {
   expect(detailHumanJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
 })
 
+test('list judgment payload contracts cover current default review page payloads', () => {
+  const listJudgmentContracts = [
+    getReviewServingReadContract('review.llm.list.judgments'),
+    getReviewServingReadContract('review.human.list.judgments'),
+    getReviewServingReadContract('review.both.list.judgments'),
+    getReviewServingReadContract('review.both.list.humanJudgments'),
+  ]
+
+  expect(
+    listJudgmentContracts.map((contract) => {
+      return contract?.maxEstimatedResultBytes
+    }),
+  ).toEqual([4_000_000, 4_000_000, 4_000_000, 4_000_000])
+})
+
 test('review serving contracts represent article-created date ranges explicitly', () => {
   const contracts = [
     getReviewServingReadContract('review.llm.count'),

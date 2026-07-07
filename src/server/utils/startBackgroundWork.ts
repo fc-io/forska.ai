@@ -1,7 +1,8 @@
+import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {startDuckdbOwnerConnectionHeartbeat} from './duckdbOwnerConnectionHeartbeat.ts'
+import {env} from './env.ts'
 import {startReviewBulkOperationWorkerHeartbeat} from './reviewBulkOperationWorkerHeartbeat.ts'
 import {startReviewServingProjectorWorkerHeartbeat} from './reviewServingProjectorWorkerHeartbeat.ts'
-import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {shouldDisableServerMutationWork} from './serverMutationMode.ts'
 import {
   registerDuckdbOwnerDemotionHandler,
@@ -17,7 +18,7 @@ const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 16
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
 
 const shouldDeferNonessentialDuckdbMaintenanceWork = () => {
-  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT)
+  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT)
 
   return duckdbLimitMiB !== null && duckdbLimitMiB <= lowMemoryMaintenanceDuckdbLimitMiB
 }

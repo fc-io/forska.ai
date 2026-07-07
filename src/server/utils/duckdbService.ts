@@ -2776,10 +2776,7 @@ const closeDuckdbServiceForSignal = async () => {
   duckdbShutdownInProgress = true
   const shouldCloseRuntime = !getDuckdbRuntimeConfigValue().serializeConcurrentWork
 
-  return closeDuckdbServiceWithoutBarrier({
-    checkpointBeforeClose: shouldCloseRuntime,
-    closeRuntime: shouldCloseRuntime,
-  })
+  return closeDuckdbServiceWithoutBarrier({checkpointBeforeClose: shouldCloseRuntime, closeRuntime: shouldCloseRuntime})
 }
 
 const registerDuckdbShutdownHooks = () => {

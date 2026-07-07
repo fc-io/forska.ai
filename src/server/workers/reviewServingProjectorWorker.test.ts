@@ -3171,11 +3171,7 @@ test('worker does not fail completed requestless posting chunks when DuckDB recy
     harness.dependencies,
   )
 
-  expect(result.chunk).toMatchObject({
-    projectionComponent: 'posting',
-    requestId: null,
-    status: 'completed',
-  })
+  expect(result.chunk).toMatchObject({projectionComponent: 'posting', requestId: null, status: 'completed'})
   expect(harness.failedChunks).toEqual([])
 })
 
@@ -4809,6 +4805,20 @@ test('worker refreshes summary filter options before promoting request snapshots
   expect(refreshIndex).toBeGreaterThanOrEqual(0)
   expect(promoteIndex).toBeGreaterThanOrEqual(0)
   expect(refreshIndex).toBeLessThan(promoteIndex)
+})
+
+test('worker deduplicates request finalization in foreground search and queue batches', () => {
+  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const searchStart = source.indexOf('const runSearchReviewServingProjectorWorkerRebuildChunkBatch = async')
+  const queueStart = source.indexOf('const runQueueReviewServingProjectorWorkerRebuildChunkBatch = async')
+  const nextStart = source.indexOf('const runJudgmentInputContentReviewServingProjectorWorkerRebuildChunkBatch = async')
+  const searchSource = source.slice(searchStart, queueStart)
+  const queueSource = source.slice(queueStart, nextStart)
+
+  expect(searchSource).toContain('const finalizedRequestIds = new Set<string>()')
+  expect(searchSource).toContain('await finalizeCompletedReviewServingRebuildRequestOnce({')
+  expect(queueSource).toContain('const finalizedRequestIds = new Set<string>()')
+  expect(queueSource).toContain('await finalizeCompletedReviewServingRebuildRequestOnce({')
 })
 
 test('worker refreshes posting stats once when a posting rebuild request is finalized', async () => {

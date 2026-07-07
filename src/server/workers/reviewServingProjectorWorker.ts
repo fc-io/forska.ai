@@ -103,8 +103,8 @@ import {
 } from '../reviewServing/reviewServingTitleSearchProjector.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {closeDuckdbService, type DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {parseDuckdbMemoryLimitToMiB} from '../utils/duckdbMemoryLimit.ts'
+import {closeDuckdbService, type DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
 type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorServiceDependencies['database']>
@@ -1848,12 +1848,7 @@ const runSummaryRebuildChunk = async (
 }
 
 const splitClaimedArticleRangeRebuildChunk = async (
-  input: {
-    chunk: ReviewServingRebuildChunkManifest
-    leaseOwner: string
-    projectId: string
-    splitReason: 'duckdb_oom'
-  },
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string; projectId: string; splitReason: 'duckdb_oom'},
   database: ReviewServingChunkManifestRepositoryDatabase,
 ) => {
   if (!canSplitRebuildChunk(input.chunk)) {
@@ -4501,10 +4496,7 @@ const hasRequestAssociatedNativeHeavyChunkReachedRssCap = (input: {
   dependencies: ReviewServingProjectorWorkerDependencies
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
-  return (
-    input.chunk.requestId !== null
-    && shouldRunNativeHeavyCleanupAfterCompletedRebuildChunk(input)
-  )
+  return input.chunk.requestId !== null && shouldRunNativeHeavyCleanupAfterCompletedRebuildChunk(input)
 }
 
 const shouldRecycleDuckdbAfterCompletedRebuildChunk = (input: {
@@ -4524,8 +4516,7 @@ const shouldCollectGarbageAfterCompletedRebuildChunk = (input: {
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
   return (
-    input.chunk.requestId === null
-    && reviewServingNativeHeavyRebuildComponents.has(input.chunk.projectionComponent)
+    input.chunk.requestId === null && reviewServingNativeHeavyRebuildComponents.has(input.chunk.projectionComponent)
   )
 }
 
@@ -4551,9 +4542,7 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
       return getNextClaimableReviewServingRebuildChunk({now, projectId}, database)
     },
     getCompatibleStatusChunks: ({database, excludeChunkIds, firstChunk, limit, now, projectId}) => {
-      return getCompatibleStatusRebuildChunkBatchInputs(
-        {database, excludeChunkIds, firstChunk, limit, now, projectId},
-      )
+      return getCompatibleStatusRebuildChunkBatchInputs({database, excludeChunkIds, firstChunk, limit, now, projectId})
     },
     heartbeatChunk: heartbeatReviewServingRebuildChunkLease,
     isChunkComplete: isReviewServingRebuildChunkComplete,
@@ -5356,10 +5345,7 @@ const shouldPrioritizeNextRebuildChunk = (input: {
   nowMs: number
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
-  if (
-    input.chunk.status === 'completed'
-    && input.chunk.requestId !== null
-  ) {
+  if (input.chunk.status === 'completed' && input.chunk.requestId !== null) {
     return true
   }
 
@@ -5369,10 +5355,7 @@ const shouldPrioritizeNextRebuildChunk = (input: {
       : shouldUseExtendedForegroundRebuildDrainBudget(input)
         ? foregroundLightweightNativeHeavyRebuildDrainBatchBudget
         : defaultReviewServingProjectorWorkerForegroundRebuildDrainChunkBudget
-  const budget = getPositiveInteger(
-    input.options.foregroundRebuildDrainChunkBudget,
-    defaultDrainBudget,
-  )
+  const budget = getPositiveInteger(input.options.foregroundRebuildDrainChunkBudget, defaultDrainBudget)
   const ttlMs = getPositiveInteger(
     input.options.foregroundRebuildDrainTtlMs,
     defaultReviewServingProjectorWorkerForegroundRebuildDrainTtlMs,
@@ -5403,10 +5386,7 @@ const getReviewServingProjectorWorkerProgressYieldMs = (input: {
   dependencies: ReviewServingProjectorWorkerDependencies
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
-  if (
-    input.chunk.status !== 'completed'
-    || input.chunk.requestId === null
-  ) {
+  if (input.chunk.status !== 'completed' || input.chunk.requestId === null) {
     return defaultReviewServingProjectorWorkerProgressYieldMs
   }
 
@@ -5542,19 +5522,13 @@ const isRangeBatchableStatusBoundaryReviewServingProjectorWorkerRebuildChunk = (
 const isForegroundBatchableStatusRebuildChunk = (
   chunk: Pick<ReviewServingProjectorWorkerChunkInput, 'projectionComponent' | 'requestId'>,
 ) => {
-  return (
-    (chunk.requestId ?? null) !== null
-    && foregroundBatchableStatusRebuildComponents.has(chunk.projectionComponent)
-  )
+  return (chunk.requestId ?? null) !== null && foregroundBatchableStatusRebuildComponents.has(chunk.projectionComponent)
 }
 
 const isForegroundBatchableRangeRebuildChunk = (
   chunk: Pick<ReviewServingProjectorWorkerChunkInput, 'projectionComponent' | 'requestId'>,
 ) => {
-  return (
-    (chunk.requestId ?? null) !== null
-    && foregroundBatchableRangeRebuildComponents.has(chunk.projectionComponent)
-  )
+  return (chunk.requestId ?? null) !== null && foregroundBatchableRangeRebuildComponents.has(chunk.projectionComponent)
 }
 
 const isForegroundBatchableRebuildChunk = (
@@ -5599,12 +5573,10 @@ const isCompatibleReviewServingProjectorWorkerRebuildRequestBatch = (
 
   return (
     (firstRequestId === null && nextRequestId === null)
-    || (
-      firstRequestId !== null
+    || (firstRequestId !== null
       && firstRequestId === nextRequestId
       && isForegroundBatchableRebuildChunk(firstChunk)
-      && isForegroundBatchableRebuildChunk(nextChunk)
-    )
+      && isForegroundBatchableRebuildChunk(nextChunk))
   )
 }
 
@@ -6145,10 +6117,7 @@ const claimCompatibleReviewServingProjectorWorkerRebuildChunkBatch = async (
   }
 
   while (
-    shouldContinueClaimingReviewServingProjectorWorkerRebuildChunkBatch({
-      batchSize: input.batchSize,
-      claimedChunks,
-    })
+    shouldContinueClaimingReviewServingProjectorWorkerRebuildChunkBatch({batchSize: input.batchSize, claimedChunks})
   ) {
     const timings: Record<string, number> = {}
     const chunkInput = await measureReviewServingProjectorWorkerPhase(timings, 'claimSelectMs', async () => {
@@ -6622,6 +6591,8 @@ const runSearchReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
     return null
   }
 
+  const finalizedRequestIds = new Set<string>()
+
   for (const result of batchResults) {
     const claimed = input.claimedChunks.find((candidate) => {
       return candidate.chunk.chunkId === result.chunkId
@@ -6632,7 +6603,11 @@ const runSearchReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
     }
 
     await measureReviewServingProjectorWorkerPhase(claimed.timings, 'finalizeRequestMs', async () => {
-      await finalizeCompletedReviewServingRebuildRequest(claimed.chunk, input.database)
+      await finalizeCompletedReviewServingRebuildRequestOnce({
+        chunk: claimed.chunk,
+        database: input.database,
+        finalizedRequestIds,
+      })
     })
     logReviewServingProjectorWorkerRebuildChunkProgress({
       chunk: claimed.chunk,
@@ -6684,6 +6659,8 @@ const runQueueReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
     return null
   }
 
+  const finalizedRequestIds = new Set<string>()
+
   for (const result of batchResults) {
     const claimed = input.claimedChunks.find((candidate) => {
       return candidate.chunk.chunkId === result.chunkId
@@ -6694,7 +6671,11 @@ const runQueueReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
     }
 
     await measureReviewServingProjectorWorkerPhase(claimed.timings, 'finalizeRequestMs', async () => {
-      await finalizeCompletedReviewServingRebuildRequest(claimed.chunk, input.database)
+      await finalizeCompletedReviewServingRebuildRequestOnce({
+        chunk: claimed.chunk,
+        database: input.database,
+        finalizedRequestIds,
+      })
     })
     logReviewServingProjectorWorkerRebuildChunkProgress({
       chunk: claimed.chunk,
@@ -6848,10 +6829,13 @@ const runReviewServingProjectorWorkerRebuildChunkBatchWith = async (
   const recycledChunk = input.claimedChunks.at(-1)
 
   const cleanupInput =
-    recycledChunk === undefined ? null : {chunk: recycledChunk.chunk, dependencies: input.dependencies, options: input.options}
+    recycledChunk === undefined
+      ? null
+      : {chunk: recycledChunk.chunk, dependencies: input.dependencies, options: input.options}
 
   if (
-    cleanupInput !== null
+    recycledChunk !== undefined
+    && cleanupInput !== null
     && (shouldRecycleDuckdbAfterCompletedRebuildChunk(cleanupInput)
       || shouldCollectGarbageAfterCompletedRebuildChunk(cleanupInput))
   ) {

@@ -77,6 +77,7 @@ const reviewJudgmentDetailServingTable = 'mart.review_article_judgment_detail_se
 const reviewQueueServingTable = 'mart.review_unassessed_queue_serving_v4'
 const reviewSearchServingTable = 'mart.review_title_search_serving_v4'
 const reviewSnapshotManifestTable = 'app.review_serving_snapshot_manifest'
+const reviewListJudgmentMaxEstimatedResultBytes = 4_000_000
 const countServingSort = {
   direction: 'asc',
   fields: ['list_mode_key', 'count_kind', 'summary_definition_version', 'filter_key'],
@@ -560,7 +561,7 @@ export const reviewServingReadContractList = [
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.llm.list.judgments',
     listMode: 'llm',
-    maxEstimatedResultBytes: 2_000_000,
+    maxEstimatedResultBytes: reviewListJudgmentMaxEstimatedResultBytes,
     maxPageSize: 10_000,
     maxResultRows: 10_000,
     namedFastCounts: [],
@@ -578,7 +579,7 @@ export const reviewServingReadContractList = [
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.human.list.judgments',
     listMode: 'human',
-    maxEstimatedResultBytes: 2_000_000,
+    maxEstimatedResultBytes: reviewListJudgmentMaxEstimatedResultBytes,
     maxPageSize: 10_000,
     maxResultRows: 10_000,
     namedFastCounts: [],
@@ -596,7 +597,7 @@ export const reviewServingReadContractList = [
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.both.list.judgments',
     listMode: 'both',
-    maxEstimatedResultBytes: 2_000_000,
+    maxEstimatedResultBytes: reviewListJudgmentMaxEstimatedResultBytes,
     maxPageSize: 10_000,
     maxResultRows: 10_000,
     namedFastCounts: [],
@@ -614,7 +615,7 @@ export const reviewServingReadContractList = [
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.both.list.humanJudgments',
     listMode: 'both',
-    maxEstimatedResultBytes: 2_000_000,
+    maxEstimatedResultBytes: reviewListJudgmentMaxEstimatedResultBytes,
     maxPageSize: 10_000,
     maxResultRows: 10_000,
     namedFastCounts: [],
