@@ -3728,7 +3728,9 @@ export const runDuckdbJsonQuery = async <T>(
         operation: 'mainQuery',
         queue: 'main',
         queueDepthAtStart: duckdbServiceState.duckdbPendingCount,
-        work: () => {
+        work: async () => {
+          await waitForDuckdbAppendBarrier()
+
           return withNormalizedDuckdbError(() => {
             return enqueueDuckdbWork(async () => {
               await ensureStartedDuckdbProcess()
@@ -3752,7 +3754,9 @@ export const runDuckdbStatement = async (statement: string, workloadContext?: Du
         operation: 'mainStatement',
         queue: 'main',
         queueDepthAtStart: duckdbServiceState.duckdbPendingCount,
-        work: () => {
+        work: async () => {
+          await waitForDuckdbAppendBarrier()
+
           return withNormalizedDuckdbError(() => {
             return enqueueDuckdbWork(async () => {
               await ensureStartedDuckdbProcess()
@@ -3857,8 +3861,8 @@ export const runDuckdbAppendJsonQuery = async <T>(
         queueDepthAtStart,
         work: () => {
           return withNormalizedDuckdbError(async () => {
-            await ensureStartedDuckdbProcess()
             await waitForDuckdbAppendBarrier()
+            await ensureStartedDuckdbProcess()
             const appendLaneIndex = getNextDuckdbAppendLaneIndex()
 
             return getDuckdbRuntimeConfigValue().serializeConcurrentWork
@@ -3933,8 +3937,8 @@ export const runDuckdbAppendTransaction = async <T>(
     queueDepthAtStart,
     work: () => {
       return withNormalizedDuckdbError(async () => {
-        await ensureStartedDuckdbProcess()
         await waitForDuckdbAppendBarrier()
+        await ensureStartedDuckdbProcess()
         const appendLaneIndex = getNextDuckdbAppendLaneIndex()
 
         return getDuckdbRuntimeConfigValue().serializeConcurrentWork
@@ -3969,7 +3973,9 @@ export const runDuckdbTransaction = async <T>(
     operation: 'transaction',
     queue: 'main',
     queueDepthAtStart: duckdbServiceState.duckdbPendingCount,
-    work: () => {
+    work: async () => {
+      await waitForDuckdbAppendBarrier()
+
       return withNormalizedDuckdbError(() => {
         return enqueueDuckdbWork(async () => {
           await ensureStartedDuckdbProcess()
@@ -4009,7 +4015,9 @@ export const runDuckdbMaintenance = async (
     operation: 'maintenance',
     queue: 'main',
     queueDepthAtStart: duckdbServiceState.duckdbPendingCount,
-    work: () => {
+    work: async () => {
+      await waitForDuckdbAppendBarrier()
+
       return withNormalizedDuckdbError(() => {
         return enqueueDuckdbWork(async () => {
           await ensureStartedDuckdbProcess()
@@ -4121,8 +4129,10 @@ export const deleteDuckdbSnapshot = async (snapshotPath: string) => {
 }
 
 export const closeDuckdbService = async (options: CloseDuckdbServiceOptions = {}) => {
-  await enqueueDuckdbWork(async () => {
-    await closeDuckdbServiceDirect(options)
+  await withDuckdbAppendBarrier(async () => {
+    await enqueueDuckdbWork(async () => {
+      await closeDuckdbServiceWithoutBarrier(options)
+    })
   })
 }
 

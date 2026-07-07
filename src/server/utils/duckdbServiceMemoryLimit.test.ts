@@ -369,6 +369,145 @@ test('duckdb service serializes append work with the main queue on low-memory wo
   }
 })
 
+test('duckdb recycle barrier blocks foreground work until background work drains', () => {
+  const duckdbPath = `/tmp/f1-duckdb-service-recycle-foreground-barrier-${Date.now()}.duckdb`
+
+  try {
+    const stdout = getSpawnOutput(
+      globalThis.Bun.spawnSync(
+        [
+          'bun',
+          '-e',
+          `
+            const {mock} = await import('bun:test')
+
+            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+            let releaseBackground = () => {}
+            const events = []
+
+            const waitFor = async (predicate, remainingAttempts = 100) => {
+              if (predicate()) {
+                return true
+              }
+
+              if (remainingAttempts <= 0) {
+                return false
+              }
+
+              await new Promise((resolve) => setTimeout(resolve, 1))
+              return waitFor(predicate, remainingAttempts - 1)
+            }
+
+            void mock.module(serverRuntimeRoleModulePath, () => {
+              return {
+                canCurrentServerOwnDuckdb: () => true,
+                ensureCurrentDuckdbOwnerLease: async () => {},
+                registerDuckdbOwnerDemotionHandler: () => {},
+                releaseCurrentDuckdbOwnerLease: async () => {},
+              }
+            })
+
+            void mock.module('@duckdb/node-api', () => {
+              class MockConnection {
+                async run() {}
+
+                async runAndReadAll(statement) {
+                  const label = statement.includes('background') ? 'background' : 'main'
+                  events.push(['read', label])
+
+                  if (label === 'background') {
+                    await new Promise((resolve) => {
+                      releaseBackground = resolve
+                    })
+                  }
+
+                  return {getRowObjectsJson: () => [{label}]}
+                }
+
+                interrupt() {
+                  events.push(['interrupt'])
+                }
+
+                closeSync() {
+                  events.push(['close'])
+                }
+              }
+
+              class MockInstance {
+                static async create() {
+                  return new MockInstance()
+                }
+
+                async connect() {
+                  return new MockConnection()
+                }
+
+                closeSync() {
+                  events.push(['instance-close'])
+                }
+              }
+
+              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+            })
+
+            const duckdbService = await import('./src/server/utils/duckdbService.ts?recycle-foreground-barrier=' + Date.now())
+            const backgroundPromise = duckdbService.runDuckdbBackgroundJsonQuery("SELECT 'background' AS label")
+
+            const backgroundStarted = await waitFor(() => events.some((event) => event[0] === 'read' && event[1] === 'background'))
+
+            const closePromise = duckdbService.closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
+
+            const barrierActive = await waitFor(() => globalThis.__forskaDuckdbServiceState.appendBarrier !== null)
+
+            const mainPromise = duckdbService.runDuckdbJsonQuery("SELECT 'main' AS label")
+
+            await new Promise((resolve) => setTimeout(resolve, 10))
+
+            const pendingWhileBarrier = globalThis.__forskaDuckdbServiceState.duckdbPendingCount
+
+            releaseBackground()
+            await Promise.all([backgroundPromise, closePromise, mainPromise])
+
+            console.log(JSON.stringify({backgroundStarted, barrierActive, events, pendingWhileBarrier}))
+            await duckdbService.closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
+          `,
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            DUCKDB_PATH: duckdbPath,
+            DUCKDB_MEMORY_LIMIT: '20GB',
+            SERVER_ROLE: 'maintenance-worker',
+          },
+        },
+      ),
+    )
+
+    const result = JSON.parse(stdout) as {
+      backgroundStarted: boolean
+      barrierActive: boolean
+      events: Array<Array<string>>
+      pendingWhileBarrier: number
+    }
+    const mainReadIndex = result.events.findIndex((event) => {
+      return event[0] === 'read' && event[1] === 'main'
+    })
+    const firstCloseIndex = result.events.findIndex((event) => {
+      return event[0] === 'close'
+    })
+
+    expect(result.backgroundStarted).toBe(true)
+    expect(result.barrierActive).toBe(true)
+    expect(result.pendingWhileBarrier).toBe(0)
+    expect(firstCloseIndex).toBeGreaterThan(-1)
+    expect(mainReadIndex).toBeGreaterThan(firstCloseIndex)
+  } finally {
+    removeDuckdbFiles(duckdbPath)
+  }
+})
+
 test('duckdb append transactions are opt-in and stay serialized with main transactions on low-memory workers', () => {
   const duckdbPath = `/tmp/f1-duckdb-service-serialized-append-transaction-${Date.now()}.duckdb`
 
