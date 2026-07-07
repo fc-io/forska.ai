@@ -144,6 +144,15 @@ test('api proxy routes are registered before public product API handlers in serv
   expect(ownerPrivateIndex).toBeGreaterThan(publicProductIndex)
 })
 
+test('serverMain lazy-loads cron routes so disabled low-memory crons cannot start timers at import time', () => {
+  const serverMainText = readFileSync(serverMainPath, 'utf8')
+
+  expect(serverMainText).not.toContain("import {fullTextJobsCron}")
+  expect(serverMainText).not.toContain("import {judgmentsJobsJudgingCron")
+  expect(serverMainText).not.toContain("import {nvidiaSmiCron}")
+  expect(serverMainText).toContain("await import('./cron/judgmentsJobs.ts')")
+})
+
 test('api proxy onRequest intercepts owner-dependent routes before product handlers execute', async () => {
   const apiProxyRoutesModulePath = new URL('./ApiProxyRoutes.ts', import.meta.url).pathname
   const serverRuntimeRoleModulePath = new URL('../utils/serverRuntimeRole.ts', import.meta.url).pathname

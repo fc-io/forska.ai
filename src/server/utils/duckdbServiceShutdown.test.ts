@@ -196,7 +196,7 @@ test('duckdb shutdown hook skips checkpoint while queued work is active', async 
   }
 })
 
-test('duckdb shutdown hook skips checkpoint under low-memory maintenance profile', async () => {
+test('duckdb shutdown hook skips checkpoint and native close under low-memory maintenance profile', async () => {
   const duckdbPath = `/tmp/f1-duckdb-low-memory-shutdown-${Date.now()}.duckdb`
   const childProcess = globalThis.Bun.spawn(
     [
@@ -210,6 +210,12 @@ test('duckdb shutdown hook skips checkpoint under low-memory maintenance profile
           if (statement === 'CHECKPOINT') {
             throw new Error('checkpoint should not run under low-memory runtime')
           }
+        }
+        globalThis.__forskaDuckdbServiceState.controlConnection.closeSync = () => {
+          throw new Error('control close should not run under low-memory runtime')
+        }
+        globalThis.__forskaDuckdbServiceState.duckdbInstance.closeSync = () => {
+          throw new Error('instance close should not run under low-memory runtime')
         }
         process.kill(process.pid, 'SIGTERM')
         setTimeout(() => {
@@ -231,6 +237,8 @@ test('duckdb shutdown hook skips checkpoint under low-memory maintenance profile
 
     expect(childProcess.exitCode).toBe(0)
     expect(stderr).not.toContain('checkpoint should not run under low-memory runtime')
+    expect(stderr).not.toContain('control close should not run under low-memory runtime')
+    expect(stderr).not.toContain('instance close should not run under low-memory runtime')
     expect(stderr).not.toContain('failed to checkpoint before shutdown')
   } finally {
     if (childProcess.exitCode === null) {
