@@ -937,6 +937,153 @@ test('duckdb service preflights startup WAL replay in a child before opening in-
   }
 })
 
+test('duckdb service retries startup WAL preflight locks without quarantining WAL', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-wal-preflight-lock-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+
+  mkdirSync(dataRoot, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+  writeFileSync(`${duckdbPath}.wal`, 'wal')
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {existsSync, readdirSync, writeFileSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const duckdbPath = ${JSON.stringify(duckdbPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        let createCount = 0
+        let preflightCount = 0
+        const originalSpawnSync = globalThis.Bun.spawnSync
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          const script = String(command[2] ?? '')
+
+          if (!script.includes('const tableRepairSpecs')) {
+            return originalSpawnSync(command, options)
+          }
+
+          preflightCount += 1
+
+          return preflightCount < 3
+            ? {
+                exitCode: 1,
+                signalCode: null,
+                stdout: Buffer.from(''),
+                stderr: Buffer.from(
+                  'IO Error: Could not set lock on file "' + duckdbPath + '": Conflicting lock is held in bun (PID 12345) by user fredrik.',
+                ),
+              }
+            : {
+                exitCode: 0,
+                signalCode: null,
+                stdout: Buffer.from(''),
+                stderr: Buffer.from(''),
+              }
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run() {}
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              createCount += 1
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?wal-preflight-lock-test=' + Date.now())
+        const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+        const recoveryDirectory = duckdbPath + '.startup-recovery'
+        const recoveryFiles = existsSync(recoveryDirectory) ? readdirSync(recoveryDirectory).sort() : []
+        console.log(JSON.stringify({
+          createCount,
+          preflightCount,
+          recoveryFiles,
+          rows,
+          walExists: existsSync(duckdbPath + '.wal'),
+        }))
+        await duckdbService.closeDuckdbService()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB WAL lock retry subprocess failed')
+    }
+
+    const parsed = JSON.parse(result.stdout.toString()) as {
+      createCount: number
+      preflightCount: number
+      recoveryFiles: string[]
+      rows: Array<{value: number}>
+      walExists: boolean
+    }
+
+    expect(parsed.preflightCount).toBeGreaterThanOrEqual(3)
+    expect(parsed.createCount).toBe(1)
+    expect(parsed.rows).toEqual([{value: 1}])
+    expect(parsed.walExists).toBe(true)
+    expect(parsed.recoveryFiles).toEqual([])
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
 test('duckdb service retries transient startup indexed-table repair locks', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-index-repair-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
