@@ -22,10 +22,11 @@ test('duckdb snapshots checkpoint before copying without copy-from-database', ()
     source.indexOf('export const createDuckdbSnapshot'),
   )
 
-  expect(copySnapshotSource).toContain("runDuckdbStatementDirect('CHECKPOINT')")
+  expect(source).toContain("runDuckdbStatementDirect('CHECKPOINT')")
+  expect(source).toContain('checkpointBeforeDuckdbSnapshotCopy')
   expect(copySnapshotSource).toContain('shouldCheckpointBeforeDuckdbSnapshotCopy(runtimeConfig)')
   expect(copySnapshotSource).toContain('copyFile(runtimeConfig.databasePath, snapshotPath)')
-  expect(copySnapshotSource).toContain('copyFile(sourceWalPath, snapshotWalPath)')
+  expect(copySnapshotSource).not.toContain('copyFile(sourceWalPath, snapshotWalPath)')
   expect(copySnapshotSource).toContain('materializeCopiedDuckdbSnapshot(snapshotPath, runtimeConfig)')
   expect(copySnapshotSource).not.toContain('COPY FROM DATABASE')
   expect(copySnapshotSource).not.toContain('ATTACH')
@@ -427,7 +428,7 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
       parsed.preflightSpecs.map((spec) => {
         return `${spec.schemaName}.${spec.tableName}`
       }),
-    ).toEqual(['app.review_rebuild_chunk_manifest'])
+    ).toEqual(['app.review_rebuild_request', 'app.review_rebuild_chunk_manifest'])
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
   } finally {
@@ -1542,6 +1543,13 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     })
     expect(selectedImportProbe?.mutationProbeSql).toContain("projection_component = 'selectedImport'")
     expect(selectedImportProbe?.mutationProbeSql).toContain('INSERT INTO app.review_selected_article_import_v4 BY NAME')
+    const rebuildRequestProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'app' && spec.tableName === 'review_rebuild_request'
+    })
+    expect(rebuildRequestProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(rebuildRequestProbe?.repairPrimaryKeyColumns).toEqual(['request_id'])
+    expect(rebuildRequestProbe?.mutationProbeSql).toContain('UPDATE app.review_rebuild_request')
+    expect(rebuildRequestProbe?.mutationProbeSql).toContain('startup_probe_review_rebuild_request')
     const chunkManifestProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'review_rebuild_chunk_manifest'
     })

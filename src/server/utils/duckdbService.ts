@@ -533,6 +533,50 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     duplicateKeySelectSql: `
       SELECT COUNT(*) AS duplicateCount
       FROM (
+        SELECT request_id
+        FROM app.review_rebuild_request
+        GROUP BY request_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    lowMemoryStartupPreflight: true,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_rebuild_request;
+      CREATE TEMP TABLE startup_probe_review_rebuild_request AS
+      SELECT request_id, updated_at
+      FROM app.review_rebuild_request
+      ORDER BY updated_at DESC, request_id ASC
+      LIMIT 1;
+      BEGIN;
+      UPDATE app.review_rebuild_request
+      SET updated_at = current_timestamp
+      WHERE request_id IN (
+        SELECT request_id
+        FROM startup_probe_review_rebuild_request
+      );
+      COMMIT;
+      BEGIN;
+      UPDATE app.review_rebuild_request
+      SET updated_at = (
+        SELECT updated_at
+        FROM startup_probe_review_rebuild_request
+        LIMIT 1
+      )
+      WHERE request_id IN (
+        SELECT request_id
+        FROM startup_probe_review_rebuild_request
+      );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_rebuild_request;
+    `,
+    repairPrimaryKeyColumns: ['request_id'],
+    schemaName: 'app',
+    tableName: 'review_rebuild_request',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
         SELECT chunk_id
         FROM app.review_rebuild_chunk_manifest
         GROUP BY chunk_id
@@ -4047,13 +4091,19 @@ const materializeCopiedDuckdbSnapshot = async (snapshotPath: string, runtimeConf
   }
 }
 
-const maxPreSnapshotCheckpointDatabaseBytes = 1024 * 1024 * 1024
-
 const shouldCheckpointBeforeDuckdbSnapshotCopy = (runtimeConfig: DuckdbRuntimeConfig) => {
-  return (
-    runtimeConfig.databasePath !== ':memory:'
-    && statSync(runtimeConfig.databasePath).size <= maxPreSnapshotCheckpointDatabaseBytes
-  )
+  return runtimeConfig.databasePath !== ':memory:'
+}
+
+const checkpointBeforeDuckdbSnapshotCopy = async () => {
+  await runDuckdbStatementDirect('CHECKPOINT').catch((error) => {
+    writeRuntimeOperatorLogEvent({
+      attrs: {error: getCompactDuckdbErrorMessage(error)},
+      event: 'duckdb.snapshot.pre-copy-checkpoint-failed',
+      message: '[duckdb] snapshot pre-copy checkpoint failed; copying checkpoint database without WAL replay',
+      severity: 'WARN',
+    })
+  })
 }
 
 const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<DuckdbSnapshot, unknown, never> => {
@@ -4074,26 +4124,12 @@ const copyDuckdbSnapshot = (runtimeConfig: DuckdbRuntimeConfig): Effect.Effect<D
     })
     if (shouldCheckpointBeforeDuckdbSnapshotCopy(runtimeConfig)) {
       yield* Effect.tryPromise(() => {
-        return runDuckdbStatementDirect('CHECKPOINT')
+        return checkpointBeforeDuckdbSnapshotCopy()
       })
     }
     yield* Effect.tryPromise(async () => {
-      const sourceWalPath = `${runtimeConfig.databasePath}.wal`
-      const snapshotWalPath = `${snapshotPath}.wal`
-
       try {
         await copyFile(runtimeConfig.databasePath, snapshotPath)
-        await access(sourceWalPath, fsConstants.F_OK)
-          .then(() => {
-            return copyFile(sourceWalPath, snapshotWalPath)
-          })
-          .catch((error: unknown) => {
-            if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-              return
-            }
-
-            throw error
-          })
         await materializeCopiedDuckdbSnapshot(snapshotPath, runtimeConfig)
       } catch (error) {
         await rm(snapshotPath, {force: true})

@@ -111,6 +111,56 @@ test('read-only DuckDB workload context records metrics without using the owner 
   }
 })
 
+test('api read-only DuckDB uses owner queue when this process owns DuckDB', async () => {
+  const duckdbServiceModulePath = new URL('../utils/duckdbService.ts', import.meta.url).pathname
+  const readOnlyDuckdbServiceModulePath = new URL('./readOnlyDuckdbService.ts', import.meta.url).pathname
+  const serverRuntimeRoleModulePath = new URL('../utils/serverRuntimeRole.ts', import.meta.url).pathname
+  const calls: Array<{statement: string; workloadContext: unknown}> = []
+
+  void mock.module(serverRuntimeRoleModulePath, () => {
+    return {
+      canCurrentServerOwnDuckdb: () => {
+        return true
+      },
+      ensureCurrentDuckdbOwnerLease: async () => {},
+      registerDuckdbOwnerDemotionHandler: () => {},
+      releaseCurrentDuckdbOwnerLease: async () => {},
+    }
+  })
+
+  void mock.module(duckdbServiceModulePath, () => {
+    return {
+      getReadOnlyDuckdbRuntimeOptions: () => {
+        return {}
+      },
+      runDuckdbJsonQuery: async <T>(statement: string, workloadContext?: unknown): Promise<T[]> => {
+        calls.push({statement, workloadContext})
+        return [{value: 'owner'}] as T[]
+      },
+      runMeasuredDuckdbJsonWorkload: async <T>(input: {work: () => Promise<T>}) => {
+        return input.work()
+      },
+    }
+  })
+
+  try {
+    const readOnlyDuckdbService = (await import(
+      `${readOnlyDuckdbServiceModulePath}?api-owner-read-only=${Date.now()}`
+    )) as ReadOnlyDuckdbServiceModule
+    const workloadContext = {routeOrJobKey: 'review.warnings', workloadClass: 'foregroundReviewSearch'} as const
+    const rows = await readOnlyDuckdbService.runReadOnlyDuckdbJsonQuery<{value: string}>(
+      'api-read-only',
+      'SELECT value FROM sample',
+      workloadContext,
+    )
+
+    expect(rows).toEqual([{value: 'owner'}])
+    expect(calls).toEqual([{statement: 'SELECT value FROM sample', workloadContext}])
+  } finally {
+    mock.restore()
+  }
+})
+
 test('app read-only database service forwards workload context', async () => {
   const appReadOnlyDatabaseServiceModulePath = new URL('./appReadOnlyDatabaseService.ts', import.meta.url).pathname
   const readOnlyDuckdbServiceModulePath = new URL('./readOnlyDuckdbService.ts', import.meta.url).pathname

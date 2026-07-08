@@ -5311,7 +5311,10 @@ test('worker finalizes completed rebuild requests left admitted after no chunks 
     statements.push(statement)
   }
 
-  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildProjectId: completedChunk.projectId, workerId: 'worker-1'},
+    harness.dependencies,
+  )
   const joined = statements.join('\n')
 
   expect(result.chunk).toMatchObject({chunkId: completedChunk.chunkId, requestId, status: 'completed'})
@@ -5322,9 +5325,33 @@ test('worker finalizes completed rebuild requests left admitted after no chunks 
   expect(joined).toContain('FROM app.review_rebuild_request request')
   expect(joined).toContain("request.status IN ('admitted', 'running')")
   expect(joined).toContain("request.admission_state = 'admitted'")
-  expect(joined).toContain('COUNT(*) <= 256')
+  expect(joined).toContain("AND request.project_id = 'project-1'")
+  expect(joined).not.toContain('COUNT(*) <= 256')
   expect(joined).toContain('UPDATE app.review_rebuild_request')
   expect(joined).toContain("status = 'completed'")
+})
+
+test('worker catch-up finalization remains unscoped without a targeted rebuild project', async () => {
+  const harness = createWorkerHarness()
+  const statements: string[] = []
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return null
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    return [] as T[]
+  }
+
+  await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  expect(statements.join('\n')).not.toContain('request.project_id =')
 })
 
 test('worker catch-up finalization avoids deleting existing summary filter options', () => {
@@ -5333,7 +5360,9 @@ test('worker catch-up finalization avoids deleting existing summary filter optio
   const end = source.indexOf('\nconst getReviewServingProjectorWorkerDatabase', start)
   const catchUpSource = source.slice(start, end)
 
-  expect(catchUpSource).toContain('{deleteSummaryFilterOptions: false}')
+  expect(catchUpSource).toContain('deleteSummaryFilterOptions: false')
+  expect(catchUpSource).toContain('refreshDerivedOutputs: false')
+  expect(catchUpSource).toContain('refreshPostingStats: false')
 })
 
 test('worker adopts requestless summary chunks into request finalization before projection', async () => {
