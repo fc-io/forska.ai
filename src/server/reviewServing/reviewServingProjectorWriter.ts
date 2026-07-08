@@ -100,7 +100,14 @@ export type WriteReviewServingTitleSearchRebuildRangesInput = {
 }
 
 const projectorRecordBatchSize = 250
-const reviewServingProjectorDeleteScopedInsertOnlyTables = new Set<string>(['app.review_selected_article_import_v4'])
+const reviewServingProjectorRecordBatchSizeByTable = new Map<string, number>([
+  ['mart.review_article_summary_contribution_rebuild_partial_v4', 1_000],
+])
+const reviewServingProjectorDeleteScopedInsertOnlyTables = new Set<string>([
+  'app.review_selected_article_import_v4',
+  'mart.review_article_summary_contribution_rebuild_partial_v4',
+  'mart.review_article_summary_rebuild_partial_v4',
+])
 
 export type WriteReviewServingQueueRebuildRowsInput = {
   projectId: string
@@ -326,11 +333,11 @@ const writeReviewServingProjectorRecords = async (
     diagnostics.dedupedRecordCount += dedupedGroup.length
     incrementDiagnosticsCounter(diagnostics.dedupedRecordsByTable, table, dedupedGroup.length)
 
-    for (let index = 0; index < dedupedGroup.length; index += projectorRecordBatchSize) {
+    const batchSize = reviewServingProjectorRecordBatchSizeByTable.get(table) ?? projectorRecordBatchSize
+
+    for (let index = 0; index < dedupedGroup.length; index += batchSize) {
       const batchStartedAtMs = Date.now()
-      await writeReviewServingProjectorRecordBatch(dedupedGroup.slice(index, index + projectorRecordBatchSize), tx, {
-        insertOnly,
-      })
+      await writeReviewServingProjectorRecordBatch(dedupedGroup.slice(index, index + batchSize), tx, {insertOnly})
       diagnostics.batchCount += 1
       incrementDiagnosticsCounter(diagnostics.batchesByTable, table, 1)
       incrementDiagnosticsCounter(diagnostics.writeMsByTable, table, getNonNegativeElapsedMs(batchStartedAtMs))

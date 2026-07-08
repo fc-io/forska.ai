@@ -18,6 +18,7 @@ export type ProjectReviewServingFilterOptionsInput = {
   baseGeneration: number
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
+  deleteExisting?: boolean
   filterOptionIdentity: string
   listModeKeys: readonly string[]
   optionMode: 'human' | 'review'
@@ -313,7 +314,7 @@ export const projectReviewServingFilterOptions = async (
       acknowledgements: shouldPublishManifest ? [] : input.acknowledgeClaims === false ? [] : input.claims,
       component: 'summary',
       records,
-      statements: [getDeleteFilterOptionRowsStatement(input)],
+      statements: input.deleteExisting === false ? [] : [getDeleteFilterOptionRowsStatement(input)],
       watermark:
         shouldPublishManifest || input.claims.length === 0
           ? undefined

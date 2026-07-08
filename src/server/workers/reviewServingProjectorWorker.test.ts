@@ -5257,6 +5257,85 @@ test('worker finalizes active-snapshot rebuild requests without promoting active
   expect(joined).not.toContain('candidate snapshot manifest is missing')
 })
 
+test('worker finalizes completed rebuild requests left admitted after no chunks are claimable', async () => {
+  const harness = createWorkerHarness()
+  const statements: string[] = []
+  const requestId = 'rebuild-stale-completed-finalize'
+  const completedChunkInput = {
+    ...chunkInput,
+    outputBaseGeneration: 7,
+    projectionComponent: 'display' as const,
+    projectionIdentity: 'display:project-1',
+    requestId,
+    snapshotId: 'snapshot-stale-finalize',
+  }
+  const completedChunk = {
+    ...chunkManifest,
+    ...completedChunkInput,
+    chunkId: 'chunk-stale-completed-finalize',
+    completedAt: '2026-07-08T06:00:00.000Z',
+    requestId,
+    status: 'completed' as const,
+  } satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return null
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('SELECT chunk.chunk_id AS chunkId')) {
+      return [{chunkId: completedChunk.chunkId}] as T[]
+    }
+
+    if (statement.includes('WHERE chunk_id =')) {
+      return [completedChunk] as T[]
+    }
+
+    if (statement.includes('COUNT(*) AS pendingChunkCount')) {
+      return [{pendingChunkCount: 0}] as T[]
+    }
+
+    if (statement.includes('postingChunkCount')) {
+      return [{postingChunkCount: 0}] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+  const joined = statements.join('\n')
+
+  expect(result.chunk).toMatchObject({chunkId: completedChunk.chunkId, requestId, status: 'completed'})
+  expect(result.chunkBatchCount).toBe(1)
+  expect(harness.claimInputs).toHaveLength(0)
+  expect(harness.runChunkInputs).toHaveLength(0)
+  expect(harness.wakeInputs).toHaveLength(0)
+  expect(joined).toContain('FROM app.review_rebuild_request request')
+  expect(joined).toContain("request.status IN ('admitted', 'running')")
+  expect(joined).toContain("request.admission_state = 'admitted'")
+  expect(joined).toContain('COUNT(*) <= 256')
+  expect(joined).toContain('UPDATE app.review_rebuild_request')
+  expect(joined).toContain("status = 'completed'")
+})
+
+test('worker catch-up finalization avoids deleting existing summary filter options', () => {
+  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const start = source.indexOf('const finalizeNextCompletedUnfinalizedRebuildRequest = async')
+  const end = source.indexOf('\nconst getReviewServingProjectorWorkerDatabase', start)
+  const catchUpSource = source.slice(start, end)
+
+  expect(catchUpSource).toContain('{deleteSummaryFilterOptions: false}')
+})
+
 test('worker adopts requestless summary chunks into request finalization before projection', async () => {
   const harness = createWorkerHarness()
   const statements: string[] = []

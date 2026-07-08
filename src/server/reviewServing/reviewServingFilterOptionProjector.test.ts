@@ -125,6 +125,17 @@ test('projects supported enum option payloads into scoped option rows', async ()
   expect(joined).not.toContain('numeric_options')
 })
 
+test('filter option refresh can upsert rows without deleting existing scoped options', async () => {
+  const {database, statements} = createFilterOptionDatabase({sourceRows: [sourceRow()]})
+
+  const result = await projectReviewServingFilterOptions({...projectInput(), deleteExisting: false}, database)
+  const joined = statements.join('\n')
+
+  expect(result.optionRowCount).toBe(1)
+  expect(joined).not.toContain('DELETE FROM mart.review_filter_option_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_filter_option_serving_v4')
+})
+
 test('source query preserves active search and filter scope without using posting rows as response rows', async () => {
   const {database, statements} = createFilterOptionDatabase({sourceRows: [sourceRow()]})
 
