@@ -539,6 +539,7 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
 
   mkdirSync(recoveryDirectory, {recursive: true})
   writeFileSync(duckdbPath, 'database')
+  writeFileSync(`${duckdbPath}.wal`, 'committed-wal')
   writeFileSync(activeRepairSpecPath, JSON.stringify({schemaName: 'app', tableName: 'review_serving_dirty_work'}))
 
   const result = globalThis.Bun.spawnSync(
@@ -547,7 +548,7 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
       '-e',
       `
         const {Buffer} = await import('node:buffer')
-        const {existsSync} = await import('node:fs')
+        const {existsSync, readdirSync} = await import('node:fs')
         const {mock} = await import('bun:test')
 
         const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
@@ -617,7 +618,7 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?low-memory-preflight-marker-test=' + Date.now())
         const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
-        console.log(JSON.stringify({activeMarkerExists: existsSync(activeRepairSpecPath), createCount, preflightCount, preflightSpecs, preflightSpecsHistory, rows}))
+        console.log(JSON.stringify({activeMarkerExists: existsSync(activeRepairSpecPath), createCount, preflightCount, preflightSpecs, preflightSpecsHistory, recoveryFiles: readdirSync(${JSON.stringify(recoveryDirectory)}), rows, walExists: existsSync(${JSON.stringify(`${duckdbPath}.wal`)})}))
         await duckdbService.closeDuckdbService()
       `,
     ],
@@ -651,7 +652,9 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
       preflightCount: number
       preflightSpecs: Array<{schemaName: string; tableName: string}>
       preflightSpecsHistory: Array<Array<{schemaName: string; tableName: string}>>
+      recoveryFiles: string[]
       rows: Array<{value: number}>
+      walExists: boolean
     }
 
     expect(parsed.preflightCount).toBe(2)
@@ -661,6 +664,12 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
       }),
     ).toEqual(['app.review_serving_dirty_work'])
     expect(parsed.activeMarkerExists).toBe(false)
+    expect(
+      parsed.recoveryFiles.some((fileName) => {
+        return fileName.endsWith('.failed-replay.wal')
+      }),
+    ).toBe(false)
+    expect(parsed.walExists).toBe(true)
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
   } finally {
@@ -727,7 +736,7 @@ test('duckdb service marks startup repair after fatal index-delete runtime recov
           class MockConnection {
             async run(statement) {
               runCount += 1
-              throw new Error('FatalException: Invalid Input Error: Failed to delete all rows from index. Only deleted 0 out of 1 rows.')
+              throw new Error('FATAL Error: Failed: database has been invalidated because of a previous fatal error. The database must be restarted prior to being used again. FatalException: Invalid Input Error: Failed to delete all rows from index. Only deleted 0 out of 1 rows.')
             }
             async runAndReadAll() {
               return {
@@ -757,16 +766,13 @@ test('duckdb service marks startup repair after fatal index-delete runtime recov
         })
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?fatal-index-marker-test=' + Date.now())
-        let errorMessage = null
-
-        try {
-          await duckdbService.runDuckdbStatement('UPDATE app.review_rebuild_chunk_manifest SET status = status')
-        } catch (error) {
-          errorMessage = error instanceof Error ? error.message : String(error)
-        }
+        await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+        await duckdbService.recoverDuckdbServiceAfterFatalError(
+          new Error('FatalException: Invalid Input Error: Failed to delete all rows from index in mart.review_article_serving_v4. Only deleted 0 out of 1 rows.'),
+        )
 
         const marker = existsSync(activeRepairSpecPath) ? JSON.parse(readFileSync(activeRepairSpecPath, 'utf8')) : null
-        console.log(JSON.stringify({createCount, errorMessage, marker, runCount}))
+        console.log(JSON.stringify({createCount, marker, runCount}))
       `,
     ],
     {
@@ -777,6 +783,7 @@ test('duckdb service marks startup repair after fatal index-delete runtime recov
         DUCKDB_MEMORY_LIMIT: '20GB',
         DUCKDB_PATH: duckdbPath,
         DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT: 'false',
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
         RUN_SERVER_FULL_TEXT_FETCHING: 'false',
         SERVER_ROLE: 'maintenance-worker',
@@ -795,12 +802,15 @@ test('duckdb service marks startup repair after fatal index-delete runtime recov
 
     const parsed = JSON.parse(result.stdout.toString()) as {
       createCount: number
-      errorMessage: string
       marker: {phase: string; schemaName: string; tableName: string} | null
       runCount: number
     }
 
-    expect(parsed.errorMessage).toContain('forced repair failure')
+    expect(parsed.marker).toEqual({
+      phase: 'runtime-fatal-index-delete',
+      schemaName: 'mart',
+      tableName: 'review_article_serving_v4',
+    })
     expect(parsed.createCount).toBeGreaterThanOrEqual(0)
     expect(parsed.runCount).toBeGreaterThanOrEqual(0)
   } finally {
@@ -896,12 +906,13 @@ test('duckdb service retries startup after a recoverable WAL replay failure', ()
   expect(parsed).toEqual({createCount: 2, rows: [{value: 1}]})
 })
 
-test('duckdb service quarantines a WAL that repeatedly fails replay during startup', () => {
+test('duckdb service quarantines a WAL that repeatedly fails replay during startup', async () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-wal-recovery-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
 
   mkdirSync(dataRoot, {recursive: true})
-  writeFileSync(duckdbPath, 'database')
+  const duckdbInstance = await DuckDBInstance.create(duckdbPath)
+  duckdbInstance.closeSync()
   writeFileSync(`${duckdbPath}.wal`, 'wal')
 
   const result = globalThis.Bun.spawnSync(
@@ -977,7 +988,6 @@ test('duckdb service quarantines a WAL that repeatedly fails replay during start
         DUCKDB_MEMORY_LIMIT: '20GB',
         DUCKDB_PATH: duckdbPath,
         DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
-        FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT: 'false',
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
         RUN_SERVER_FULL_TEXT_FETCHING: 'false',
         SERVER_ROLE: 'maintenance-worker',

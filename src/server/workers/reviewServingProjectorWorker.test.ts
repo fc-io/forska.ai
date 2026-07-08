@@ -132,7 +132,7 @@ const createWorkerHarness = (input?: {
   const garbageCollectedChunks: ReviewServingRebuildChunkManifest[] = []
   const getNextChunkInputs: unknown[] = []
   const heartbeatInputs: unknown[] = []
-  const fatalRecycledChunks: ReviewServingRebuildChunkManifest[] = []
+  const fatalRecycledInputs: Array<{chunk: ReviewServingRebuildChunkManifest; error: unknown}> = []
   const recycledChunks: ReviewServingRebuildChunkManifest[] = []
   const runChunkInputs: ReviewServingRebuildChunkManifest[] = []
   const wakeStatus = input?.wakeStatus ?? 'blocked'
@@ -191,8 +191,8 @@ const createWorkerHarness = (input?: {
     recycleDuckdbAfterCompletedRebuildChunk: async (chunk) => {
       recycledChunks.push(chunk)
     },
-    recycleDuckdbAfterFatalRebuildChunkError: async (chunk) => {
-      fatalRecycledChunks.push(chunk)
+    recycleDuckdbAfterFatalRebuildChunkError: async (fatalRecycleInput) => {
+      fatalRecycledInputs.push(fatalRecycleInput)
     },
     sleep: async (_delayMs: number) => {},
     wakeProjectors: async (wakeInput, serviceDependencies) => {
@@ -209,7 +209,7 @@ const createWorkerHarness = (input?: {
     database,
     dependencies,
     failedChunks,
-    fatalRecycledChunks,
+    fatalRecycledInputs,
     garbageCollectedChunks,
     getNextChunkInputs,
     heartbeatInputs,
@@ -3038,7 +3038,12 @@ test('worker recycles DuckDB before retrying fatal rebuild chunk runtime errors'
   const result = await runReviewServingProjectorWorkerOnce({leaseMs: 5_000, workerId: 'worker-2'}, harness.dependencies)
 
   expect(result.status).toBe('failed')
-  expect(harness.fatalRecycledChunks).toEqual([chunkManifest])
+  expect(harness.fatalRecycledInputs).toHaveLength(1)
+  expect(harness.fatalRecycledInputs[0]?.chunk).toEqual(chunkManifest)
+  expect(harness.fatalRecycledInputs[0]?.error).toBeInstanceOf(Error)
+  expect((harness.fatalRecycledInputs[0]?.error as Error | undefined)?.message).toBe(
+    'FatalException: Database has been invalidated because of a previous fatal error',
+  )
   expect(harness.failedChunks).toEqual([
     {
       chunkId: 'chunk-1',
