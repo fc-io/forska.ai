@@ -474,6 +474,12 @@ test('chunked full summary rebuild stages request partials and contribution part
     database,
   )
   const joined = statements.join('\n')
+  const partialInsertStatements = statements.filter((statement) => {
+    return (
+      statement.includes('INSERT INTO mart.review_article_summary_rebuild_partial_v4')
+      || statement.includes('INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4')
+    )
+  })
 
   expect(result.contributionRowCount).toBe(2)
   expect(result.diagnosticsJson.summaryProjector).toMatchObject({
@@ -490,6 +496,7 @@ test('chunked full summary rebuild stages request partials and contribution part
   expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_summary_rebuild_partial_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4')
+  expect(partialInsertStatements.join('\n')).not.toContain('ON CONFLICT')
   expect(joined).toContain('INNER JOIN mart.review_article_serving_v4 serving')
   expect(joined).toContain('INNER JOIN mart.review_article_judgment_detail_serving_v4 detail')
   expect(joined).not.toContain('FROM mart.review_llm_status_patch_v4 llm')

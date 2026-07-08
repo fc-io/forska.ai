@@ -584,6 +584,68 @@ test('projector writer keeps count serving replacement writes idempotent after s
   )
 })
 
+test('projector writer uses larger insert-only batches for delete-scoped summary contribution partials', async () => {
+  const {database, statements} = createWriterDatabase()
+  const records = Array.from({length: 1_001}, (_, index) => {
+    return {
+      keyColumns: [
+        'request_id',
+        'chunk_id',
+        'project_id',
+        'review_config_hash',
+        'snapshot_id',
+        'article_id',
+        'component_kind',
+        'summary_definition_version',
+        'contribution_key',
+      ],
+      table: 'mart.review_article_summary_contribution_rebuild_partial_v4' as const,
+      values: {
+        article_id: `article-${index.toString().padStart(4, '0')}`,
+        chunk_id: 'chunk-summary-1',
+        component_kind: 'count',
+        contribution_key: '{"summaryKind":"count","summaryIdentity":"review.list.total"}',
+        contribution_updated_at: new Date('2026-04-02T12:00:00.000Z'),
+        contribution_value: 1,
+        project_id: 'project-1',
+        request_id: 'rebuild-summary-1',
+        review_config_hash: 'review-config-1',
+        snapshot_id: 'snapshot-1',
+        summary_definition_version: 'review-serving-summary:v1',
+      },
+    }
+  })
+
+  const result = await writeReviewServingProjectorComponent(
+    {
+      component: 'summary',
+      records,
+      statements: [
+        `
+          DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4
+          WHERE request_id = 'rebuild-summary-1'
+            AND chunk_id = 'chunk-summary-1'
+            AND project_id = 'project-1'
+            AND review_config_hash = 'review-config-1'
+            AND snapshot_id = 'snapshot-1'
+        `,
+      ],
+    },
+    database,
+  )
+
+  const insertStatements = statements.filter((statement) => {
+    return statement.includes('INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4')
+  })
+
+  expect(insertStatements).toHaveLength(2)
+  expect(insertStatements.join('\n')).not.toContain('ON CONFLICT')
+  expect(result.diagnostics.records.batchCount).toBe(2)
+  expect(result.diagnostics.records.batchesByTable).toMatchObject({
+    'mart.review_article_summary_contribution_rebuild_partial_v4': 2,
+  })
+})
+
 test('projector writer keeps judgment detail replacement rows idempotent after scoped deletes', async () => {
   const {database, statements} = createWriterDatabase()
   const keyColumns = [

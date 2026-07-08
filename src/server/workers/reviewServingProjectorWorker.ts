@@ -125,6 +125,7 @@ type ClaimReviewServingProjectorWorkerRebuildChunkResult =
   | (ClaimedReviewServingProjectorWorkerRebuildChunk & {status: 'claimed'})
 
 type RebuildChunkSplitRangeRow = {articleCount: number; chunkEndKey: string; chunkStartKey: string}
+type CompletedUnfinalizedRebuildRequestChunkRow = {chunkId: string}
 type RebuildChunkOutputValidationInput = {
   chunk: ReviewServingRebuildChunkManifest
   getChecksum: () => Promise<RebuildChunkOutputChecksumRow>
@@ -346,6 +347,7 @@ const defaultReviewServingProjectorWorkerPollIntervalMs = 2_000
 const defaultReviewServingProjectorWorkerProgressYieldMs = 100
 const defaultReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = 0
 const defaultReviewServingProjectorWorkerRebuildChunkBatchSize = 1
+const completedUnfinalizedRebuildRequestSweepMaxChunkCount = 256
 const foregroundHumanStatusRebuildChunkBatchSize = 4
 const foregroundLlmStatusRebuildChunkBatchSize = 8
 const foregroundStatusRebuildDrainBatchBudget = 16
@@ -4764,6 +4766,40 @@ const getRebuildRequestPendingChunkCount = async (
   return Number(row?.pendingChunkCount ?? 0)
 }
 
+const getNextCompletedUnfinalizedRebuildRequestChunk = async (
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  const [row] = await database.queryJson<CompletedUnfinalizedRebuildRequestChunkRow>(`
+    WITH eligible_request AS (
+      SELECT request.request_id
+      FROM app.review_rebuild_request request
+      INNER JOIN app.review_rebuild_chunk_manifest chunk
+        ON chunk.request_id = request.request_id
+      WHERE request.status IN ('admitted', 'running')
+        AND request.admission_state = 'admitted'
+      GROUP BY request.request_id, request.priority, request.updated_at
+      HAVING SUM(CASE WHEN chunk.status <> 'completed' THEN 1 ELSE 0 END) = 0
+        AND COUNT(*) <= ${getSqlLiteral(completedUnfinalizedRebuildRequestSweepMaxChunkCount)}
+      ORDER BY
+        request.priority DESC,
+        request.updated_at ASC,
+        request.request_id ASC
+      LIMIT 1
+    )
+    SELECT chunk.chunk_id AS chunkId
+    FROM app.review_rebuild_chunk_manifest chunk
+    INNER JOIN eligible_request
+      ON eligible_request.request_id = chunk.request_id
+    WHERE chunk.status = 'completed'
+    ORDER BY
+      chunk.updated_at DESC,
+      chunk.chunk_id ASC
+    LIMIT 1
+  `)
+
+  return row === undefined ? null : getReviewServingRebuildChunkManifest({chunkId: row.chunkId}, database)
+}
+
 const getRebuildRequestHasPostingChunks = async (
   requestId: string,
   database: ReviewServingChunkManifestRepositoryDatabase,
@@ -4817,6 +4853,7 @@ const refreshPostingStatsForRebuildRequestSnapshots = async (
 const refreshSummaryFilterOptionsForProjections = async (
   summaryProjections: readonly SummaryFilterOptionProjectionRow[],
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+  options: {deleteExisting?: boolean} = {},
 ) => {
   await summaryProjections.reduce<Promise<void>>(async (previous, row) => {
     await previous
@@ -4858,6 +4895,7 @@ const refreshSummaryFilterOptionsForProjections = async (
           baseGeneration: Number(row.outputBaseGeneration),
           claims: [],
           definitionVersion: manifest.definitionVersion,
+          deleteExisting: options.deleteExisting,
           filterOptionIdentity: getReviewServingFilterOptionIdentity({
             filterKeys: defaultReviewFilterOptionKeys,
             listModeKeys: reviewServingListModes,
@@ -4880,6 +4918,7 @@ const refreshSummaryFilterOptionsForProjections = async (
           baseGeneration: Number(row.outputBaseGeneration),
           claims: [],
           definitionVersion: manifest.definitionVersion,
+          deleteExisting: options.deleteExisting,
           filterOptionIdentity: getReviewServingFilterOptionIdentity({
             filterKeys: defaultHumanFilterOptionKeys,
             listModeKeys: defaultReviewServingHumanListModeKeys,
@@ -5165,6 +5204,7 @@ const finalizeErroredCompletedReviewServingRebuildRequest = async (
 const finalizeCompletedReviewServingRebuildRequest = async (
   chunk: ReviewServingRebuildChunkManifest,
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+  options: {deleteSummaryFilterOptions?: boolean} = {},
 ) => {
   if (chunk.requestId === null) {
     return
@@ -5197,7 +5237,9 @@ const finalizeCompletedReviewServingRebuildRequest = async (
     database,
   )
 
-  await refreshSummaryFilterOptionsForProjections(summaryFilterOptionProjections, database)
+  await refreshSummaryFilterOptionsForProjections(summaryFilterOptionProjections, database, {
+    deleteExisting: options.deleteSummaryFilterOptions,
+  })
 
   const promotions = await promotionRows.reduce<
     Promise<Awaited<ReturnType<typeof promoteReviewServingProjectorSnapshot>>[]>
@@ -5267,6 +5309,34 @@ const finalizeCompletedReviewServingRebuildRequestOnceForBatch = async (input: {
       chunk: {chunkId: input.chunk.chunkId, requestId: input.chunk.requestId, status: 'failed'},
       completedCount: input.completedCount + 1,
     }
+  }
+}
+
+const finalizeNextCompletedUnfinalizedRebuildRequest = async (input: {
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase
+}): Promise<{chunk: ReviewServingProjectorWorkerChunkResult; completedCount: number} | null> => {
+  const chunk = await getNextCompletedUnfinalizedRebuildRequestChunk(input.database)
+
+  if (chunk === null) {
+    return null
+  }
+
+  try {
+    await finalizeCompletedReviewServingRebuildRequest(chunk, input.database, {deleteSummaryFilterOptions: false})
+
+    return {
+      chunk: {
+        chunkId: chunk.chunkId,
+        projectionComponent: chunk.projectionComponent,
+        requestId: chunk.requestId,
+        status: 'completed',
+      },
+      completedCount: 1,
+    }
+  } catch (error) {
+    await finalizeErroredCompletedReviewServingRebuildRequest({chunk, error}, input.database)
+
+    return {chunk: {chunkId: chunk.chunkId, requestId: chunk.requestId, status: 'failed'}, completedCount: 1}
   }
 }
 
@@ -7319,7 +7389,11 @@ export const runReviewServingProjectorWorkerCycle = async (
     workloadContext,
     workerId,
   })
-  const chunk = chunkBatch.chunk
+  const finalizedChunkBatch =
+    chunkBatch.chunk.status === 'idle'
+      ? ((await finalizeNextCompletedUnfinalizedRebuildRequest({database})) ?? chunkBatch)
+      : chunkBatch
+  const chunk = finalizedChunkBatch.chunk
   const nowMs = getWorkerNowMs(dependencies, options)
   const shouldRunOnlyRebuildChunk = shouldPrioritizeNextRebuildChunk({chunk, dependencies, nowMs, options})
   const deltaIntake = shouldRunOnlyRebuildChunk
@@ -7342,7 +7416,7 @@ export const runReviewServingProjectorWorkerCycle = async (
 
   return {
     chunk,
-    chunkBatchCount: chunkBatch.completedCount,
+    chunkBatchCount: finalizedChunkBatch.completedCount,
     cleanup,
     deltaIntake,
     nextCleanupAtMs,
