@@ -11,10 +11,6 @@ import {
   llmStatusQueryKey,
 } from '../utils/llmStatusQuery'
 
-const isEventTargetWithinElement = (target: EventTarget | null, element: HTMLElement | undefined) => {
-  return target instanceof Node && !!element && element.contains(target)
-}
-
 const isEditableTarget = (target: EventTarget | null) => {
   if (!(target instanceof HTMLElement)) {
     return false
@@ -68,8 +64,6 @@ const formatLastUpdate = (date: Date | null): string => {
 
 export const Navigation = () => {
   const [isAdminMenuOpen, setIsAdminMenuOpen] = createSignal(false)
-  let adminMenuTriggerElement: HTMLDivElement | undefined
-  let adminMenuElement: HTMLDivElement | undefined
   const location = useLocation()
 
   const llmMetricsQuery = useQuery(() => {
@@ -122,46 +116,10 @@ export const Navigation = () => {
     setIsAdminMenuOpen(false)
   }
 
-  const openAdminMenu = () => {
-    setIsAdminMenuOpen(true)
-  }
-
   const toggleAdminMenu = () => {
     setIsAdminMenuOpen((previous) => {
       return !previous
     })
-  }
-
-  const handleAdminMenuTriggerPointerEnter = (event: PointerEvent) => {
-    if (event.pointerType === 'mouse') {
-      openAdminMenu()
-    }
-  }
-
-  const handleAdminMenuTriggerPointerLeave = (event: PointerEvent) => {
-    if (event.pointerType !== 'mouse') {
-      return
-    }
-
-    if (!isEventTargetWithinElement(event.relatedTarget, adminMenuElement)) {
-      closeAdminMenu()
-    }
-  }
-
-  const handleAdminMenuPointerEnter = (event: PointerEvent) => {
-    if (event.pointerType === 'mouse') {
-      openAdminMenu()
-    }
-  }
-
-  const handleAdminMenuPointerLeave = (event: PointerEvent) => {
-    if (event.pointerType !== 'mouse') {
-      return
-    }
-
-    if (!isEventTargetWithinElement(event.relatedTarget, adminMenuTriggerElement)) {
-      closeAdminMenu()
-    }
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -197,7 +155,7 @@ export const Navigation = () => {
           )
         }}
       </Show>
-      <div class="overflow-x-hidden px-4 sm:px-6 lg:px-8">
+      <div class="px-4 sm:px-6 lg:px-8">
         <div class="flex min-h-16 flex-wrap items-center justify-between gap-x-4 gap-y-2 py-2 sm:h-16 sm:flex-nowrap sm:py-0">
           <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 sm:flex-nowrap sm:gap-x-8">
             <Link
@@ -245,169 +203,164 @@ export const Navigation = () => {
                 </div>
               </div>
             </Show>
-            <div
-              ref={(element) => {
-                adminMenuTriggerElement = element
-              }}
-              class="group -mx-2 flex h-full cursor-pointer select-none items-center px-2 sm:mr-4"
-              role="button"
-              tabIndex={0}
-              aria-haspopup="true"
-              aria-expanded={isAdminMenuOpen()}
-              onPointerEnter={handleAdminMenuTriggerPointerEnter}
-              onPointerLeave={handleAdminMenuTriggerPointerLeave}
-              onClick={toggleAdminMenu}
-            >
+            <div class="peer group relative -mx-2 flex h-full cursor-pointer select-none items-center px-2 sm:mr-4">
+              <div aria-hidden="true" class="absolute left-0 right-0 top-full h-8" />
               <div
-                class={`rounded-md px-3 py-2 text-sm font-medium text-gray-700 group-hover:bg-stone-100 group-hover:text-gray-900 ${
-                  isAdminMenuOpen() ? 'bg-stone-100 text-gray-900' : ''
-                }`}
+                class="relative z-10"
+                role="button"
+                tabIndex={0}
+                aria-haspopup="true"
+                aria-expanded={isAdminMenuOpen()}
+                onClick={toggleAdminMenu}
               >
-                Admin
+                <div
+                  class={`rounded-md px-3 py-2 text-sm font-medium text-gray-700 group-hover:bg-stone-100 group-focus-within:bg-stone-100 group-hover:text-gray-900 group-focus-within:text-gray-900 ${
+                    isAdminMenuOpen() ? 'bg-stone-100 text-gray-900' : ''
+                  }`}
+                >
+                  Admin
+                </div>
+              </div>
+            </div>
+            <div
+              class={`absolute left-0 right-0 top-full -mt-px z-50 border-t border-gray-200 bg-stone-100 opacity-0 shadow-sm transition-opacity delay-150 duration-100 hover:pointer-events-auto hover:visible hover:opacity-100 hover:delay-0 focus-within:pointer-events-auto focus-within:visible focus-within:opacity-100 focus-within:delay-0 peer-hover:pointer-events-auto peer-hover:visible peer-hover:opacity-100 peer-hover:delay-0 peer-focus-within:pointer-events-auto peer-focus-within:visible peer-focus-within:opacity-100 peer-focus-within:delay-0 ${
+                isAdminMenuOpen()
+                  ? 'pointer-events-auto visible opacity-100 delay-0'
+                  : 'pointer-events-none invisible opacity-0 delay-150'
+              }`}
+            >
+              <div class="px-4 py-6 sm:px-6 lg:px-8">
+                <div class="flex min-h-64 flex-wrap items-stretch gap-6">
+                  <div class="grid flex-1 grid-cols-1 gap-10 sm:grid-cols-2 lg:grid-cols-3">
+                    <div class="flex flex-col gap-4">
+                      <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">Data</div>
+                      <div class="flex flex-col gap-1">
+                        <Link
+                          to="/admin/assessments"
+                          class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                          onClick={closeAdminMenu}
+                        >
+                          Human Assessments
+                        </Link>
+                        <Link
+                          to="/admin/pdf-conversions"
+                          class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                          onClick={closeAdminMenu}
+                        >
+                          PDF Conversions
+                        </Link>
+                        <Link
+                          to="/admin/pdf-reset"
+                          class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                          onClick={closeAdminMenu}
+                        >
+                          PDF Fetch Reset
+                        </Link>
+                        <Link
+                          to="/admin/unexpected-answers"
+                          class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                          onClick={closeAdminMenu}
+                        >
+                          Unexpected Answers
+                        </Link>
+                      </div>
+                    </div>
+                    <div class="flex flex-col gap-4">
+                      <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">System</div>
+                      <div class="flex flex-col gap-1">
+                        <Link
+                          to="/admin/gpu"
+                          class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                          onClick={closeAdminMenu}
+                        >
+                          GPU Metrics
+                        </Link>
+                        <Link
+                          to="/admin/failed_requests"
+                          class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                          onClick={closeAdminMenu}
+                        >
+                          Failed Requests
+                        </Link>
+                        <Link
+                          to="/admin/setup_stats"
+                          class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                          onClick={closeAdminMenu}
+                        >
+                          Setup/Stats
+                        </Link>
+                        <Link
+                          to="/admin/duckdb-append"
+                          class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                          onClick={closeAdminMenu}
+                        >
+                          DuckDB Append Metrics
+                        </Link>
+                        <Link
+                          to="/settings"
+                          class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                          onClick={closeAdminMenu}
+                        >
+                          Settings
+                        </Link>
+                      </div>
+                    </div>
+                    <div class="flex flex-col gap-4">
+                      <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">Admin</div>
+                      <div class="flex flex-col gap-1">
+                        <Link
+                          to="/admin/datasources"
+                          class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                          onClick={closeAdminMenu}
+                        >
+                          Data Sources
+                        </Link>
+                        <Link
+                          to={'/providers' as never}
+                          class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                          onClick={closeAdminMenu}
+                        >
+                          Providers
+                        </Link>
+                        <Link
+                          to="/admin/duckdb-owner-connections"
+                          class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                          onClick={closeAdminMenu}
+                        >
+                          DuckDB Owner Connections
+                        </Link>
+                        <Link
+                          to="/admin/prompts/deduplicate"
+                          class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                          onClick={closeAdminMenu}
+                        >
+                          Conflicting prompts and judgments
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="flex flex-wrap items-stretch gap-4">
+                    <Link
+                      to="/admin/jobs"
+                      class="flex h-full w-44 sm:w-52 md:w-60 flex-col justify-between rounded-xl border border-stone-200 bg-white/60 px-6 py-6 font-semibold text-gray-900 hover:bg-white"
+                      onClick={closeAdminMenu}
+                    >
+                      <div class="text-lg font-semibold">Jobs</div>
+                    </Link>
+                    <Link
+                      to="/admin/llm"
+                      class="flex h-full w-44 sm:w-52 md:w-60 flex-col justify-between rounded-xl border border-stone-200 bg-white/60 px-6 py-6 font-semibold text-gray-900 hover:bg-white"
+                      onClick={closeAdminMenu}
+                    >
+                      <div class="text-lg font-semibold">LLM Metrics</div>
+                    </Link>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
-      <Show when={isAdminMenuOpen()}>
-        <div
-          ref={(element) => {
-            adminMenuElement = element
-          }}
-          class="absolute left-0 right-0 top-full -mt-px z-50 border-t border-gray-200 bg-stone-100 shadow-sm"
-          onPointerEnter={handleAdminMenuPointerEnter}
-          onPointerLeave={handleAdminMenuPointerLeave}
-        >
-          <div class="px-4 py-6 sm:px-6 lg:px-8">
-            <div class="flex min-h-64 flex-wrap items-stretch gap-6">
-              <div class="grid flex-1 grid-cols-1 gap-10 sm:grid-cols-2 lg:grid-cols-3">
-                <div class="flex flex-col gap-4">
-                  <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">Data</div>
-                  <div class="flex flex-col gap-1">
-                    <Link
-                      to="/admin/assessments"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Human Assessments
-                    </Link>
-                    <Link
-                      to="/admin/pdf-conversions"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      PDF Conversions
-                    </Link>
-                    <Link
-                      to="/admin/pdf-reset"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      PDF Fetch Reset
-                    </Link>
-                    <Link
-                      to="/admin/unexpected-answers"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Unexpected Answers
-                    </Link>
-                  </div>
-                </div>
-                <div class="flex flex-col gap-4">
-                  <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">System</div>
-                  <div class="flex flex-col gap-1">
-                    <Link
-                      to="/admin/gpu"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      GPU Metrics
-                    </Link>
-                    <Link
-                      to="/admin/failed_requests"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Failed Requests
-                    </Link>
-                    <Link
-                      to="/admin/setup_stats"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Setup/Stats
-                    </Link>
-                    <Link
-                      to="/admin/duckdb-append"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      DuckDB Append Metrics
-                    </Link>
-                    <Link
-                      to="/settings"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Settings
-                    </Link>
-                  </div>
-                </div>
-                <div class="flex flex-col gap-4">
-                  <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">Admin</div>
-                  <div class="flex flex-col gap-1">
-                    <Link
-                      to="/admin/datasources"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Data Sources
-                    </Link>
-                    <Link
-                      to={'/providers' as never}
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Providers
-                    </Link>
-                    <Link
-                      to="/admin/duckdb-owner-connections"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      DuckDB Owner Connections
-                    </Link>
-                    <Link
-                      to="/admin/prompts/deduplicate"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Conflicting prompts and judgments
-                    </Link>
-                  </div>
-                </div>
-              </div>
-              <div class="flex flex-wrap items-stretch gap-4">
-                <Link
-                  to="/admin/jobs"
-                  class="flex h-full w-44 sm:w-52 md:w-60 flex-col justify-between rounded-xl border border-stone-200 bg-white/60 px-6 py-6 font-semibold text-gray-900 hover:bg-white"
-                  onClick={closeAdminMenu}
-                >
-                  <div class="text-lg font-semibold">Jobs</div>
-                </Link>
-                <Link
-                  to="/admin/llm"
-                  class="flex h-full w-44 sm:w-52 md:w-60 flex-col justify-between rounded-xl border border-stone-200 bg-white/60 px-6 py-6 font-semibold text-gray-900 hover:bg-white"
-                  onClick={closeAdminMenu}
-                >
-                  <div class="text-lg font-semibold">LLM Metrics</div>
-                </Link>
-              </div>
-            </div>
-          </div>
-        </div>
-      </Show>
     </nav>
   )
 }
