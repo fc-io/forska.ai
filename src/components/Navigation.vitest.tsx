@@ -84,14 +84,14 @@ describe('Navigation admin menu hover', () => {
       expect(bridge?.classList.contains('top-full')).toBe(true)
       expect(bridge?.classList.contains('h-8')).toBe(true)
       expect(menu?.classList.contains('invisible')).toBe(true)
-      expect(menu?.classList.contains('pointer-events-none')).toBe(true)
+      expect(menu?.classList.contains('transition-[visibility]')).toBe(true)
+      expect(menu?.classList.contains('duration-0')).toBe(true)
       expect(menu?.classList.contains('delay-150')).toBe(true)
       expect(menu?.classList.contains('peer-hover:visible')).toBe(true)
-      expect(menu?.classList.contains('peer-hover:pointer-events-auto')).toBe(true)
       expect(menu?.classList.contains('peer-hover:delay-0')).toBe(true)
       expect(menu?.classList.contains('hover:visible')).toBe(true)
-      expect(menu?.classList.contains('hover:pointer-events-auto')).toBe(true)
       expect(menu?.classList.contains('hover:delay-0')).toBe(true)
+      expect(menu?.classList.contains('transition-opacity')).toBe(false)
     } finally {
       dispose()
       container.remove()
@@ -129,18 +129,14 @@ describe('Navigation admin menu hover', () => {
       trigger?.dispatchEvent(new MouseEvent('click', {bubbles: true}))
 
       expect(menu?.classList.contains('visible')).toBe(true)
-      expect(menu?.classList.contains('pointer-events-auto')).toBe(true)
       expect(menu?.classList.contains('delay-0')).toBe(true)
       expect(menu?.classList.contains('invisible')).toBe(false)
-      expect(menu?.classList.contains('pointer-events-none')).toBe(false)
 
       container.querySelector('a[href="/admin/assessments"]')?.dispatchEvent(new MouseEvent('click', {bubbles: true}))
 
       expect(menu?.classList.contains('invisible')).toBe(true)
-      expect(menu?.classList.contains('pointer-events-none')).toBe(true)
       expect(menu?.classList.contains('delay-150')).toBe(true)
       expect(menu?.classList.contains('visible')).toBe(false)
-      expect(menu?.classList.contains('pointer-events-auto')).toBe(false)
     } finally {
       dispose()
       container.remove()
@@ -162,14 +158,12 @@ describe('Navigation admin menu hover', () => {
 
       expect(trigger?.getAttribute('aria-expanded')).toBe('true')
       expect(menu?.classList.contains('visible')).toBe(true)
-      expect(menu?.classList.contains('pointer-events-auto')).toBe(true)
       expect(menu?.classList.contains('invisible')).toBe(false)
 
       trigger?.dispatchEvent(new MouseEvent('click', {bubbles: true}))
 
       expect(trigger?.getAttribute('aria-expanded')).toBe('false')
       expect(menu?.classList.contains('invisible')).toBe(true)
-      expect(menu?.classList.contains('pointer-events-none')).toBe(true)
     } finally {
       dispose()
       container.remove()
@@ -190,13 +184,11 @@ describe('Navigation admin menu hover', () => {
 
       expect(trigger?.getAttribute('aria-expanded')).toBe('true')
       expect(menu?.classList.contains('visible')).toBe(true)
-      expect(menu?.classList.contains('pointer-events-auto')).toBe(true)
 
       window.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, code: 'F13', key: 'F13'}))
 
       expect(trigger?.getAttribute('aria-expanded')).toBe('false')
       expect(menu?.classList.contains('invisible')).toBe(true)
-      expect(menu?.classList.contains('pointer-events-none')).toBe(true)
     } finally {
       dispose()
       container.remove()

@@ -223,10 +223,8 @@ export const Navigation = () => {
               </div>
             </div>
             <div
-              class={`absolute left-0 right-0 top-full -mt-px z-50 border-t border-gray-200 bg-stone-100 opacity-0 shadow-sm transition-opacity delay-150 duration-100 hover:pointer-events-auto hover:visible hover:opacity-100 hover:delay-0 focus-within:pointer-events-auto focus-within:visible focus-within:opacity-100 focus-within:delay-0 peer-hover:pointer-events-auto peer-hover:visible peer-hover:opacity-100 peer-hover:delay-0 peer-focus-within:pointer-events-auto peer-focus-within:visible peer-focus-within:opacity-100 peer-focus-within:delay-0 ${
-                isAdminMenuOpen()
-                  ? 'pointer-events-auto visible opacity-100 delay-0'
-                  : 'pointer-events-none invisible opacity-0 delay-150'
+              class={`absolute left-0 right-0 top-full -mt-px z-50 border-t border-gray-200 bg-stone-100 shadow-sm transition-[visibility] delay-150 duration-0 hover:visible hover:delay-0 focus-within:visible focus-within:delay-0 peer-hover:visible peer-hover:delay-0 peer-focus-within:visible peer-focus-within:delay-0 ${
+                isAdminMenuOpen() ? 'visible delay-0' : 'invisible delay-150'
               }`}
             >
               <div class="px-4 py-6 sm:px-6 lg:px-8">
