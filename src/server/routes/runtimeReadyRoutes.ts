@@ -1,6 +1,6 @@
 import {Elysia} from 'elysia'
 
-import {getRuntimeCutoverVersion} from '../utils/runtimeCutover.ts'
+import {getRuntimeCutoverVersion, probeDuckdbOwnerCutoverCompatibility} from '../utils/runtimeCutover.ts'
 import {runtimeReadyPath, runtimeStatePath} from '../utils/runtimeReadyContract.ts'
 import {getServerRoleCapabilities} from '../utils/serverRole.ts'
 import {
@@ -26,18 +26,41 @@ const getBunMaxHttpRequestsState = () => {
   }
 }
 
+const getOwnerProxyReady = async (duckdbOwnerUrl: string | null, ownerProxy: boolean) => {
+  if (!ownerProxy || duckdbOwnerUrl === null) {
+    return true
+  }
+
+  const result = await probeDuckdbOwnerCutoverCompatibility(duckdbOwnerUrl, 'runtime readiness DuckDB owner')
+
+  return result.status === 'compatible'
+}
+
+const getConfiguredDuckdbOwnerUrl = () => {
+  const value = process.env.SERVER_DUCKDB_OWNER_URL?.trim() ?? ''
+
+  return value === '' ? null : value
+}
+
+const getRuntimeReadyDuckdbOwnerUrl = () => {
+  return getKnownDuckdbOwnerUrl() ?? getConfiguredDuckdbOwnerUrl()
+}
+
 export const runtimeReadyRoutes = new Elysia()
-  .get(runtimeReadyPath, () => {
+  .get(runtimeReadyPath, async () => {
     const role = getCurrentServerRole()
+    const duckdbOwnerUrl = getRuntimeReadyDuckdbOwnerUrl()
+    const ownerProxy = shouldCurrentServerProxyApiToOwner()
+    const ready = await getOwnerProxyReady(duckdbOwnerUrl, ownerProxy)
 
     return {
       data: {
         capabilities: getServerRoleCapabilities(role),
         duckdbOwner: canCurrentServerOwnDuckdb(),
-        duckdbOwnerUrl: getKnownDuckdbOwnerUrl(),
+        duckdbOwnerUrl,
         localOperatorApiExposed: isLocalOperatorApiExposed(),
-        ownerProxy: shouldCurrentServerProxyApiToOwner(),
-        ready: true,
+        ownerProxy,
+        ready,
         role,
         runtimeVersion: getRuntimeCutoverVersion(),
         settingsDiagnosticsApiExposed: true,

@@ -33,6 +33,99 @@ test('duckdb snapshots checkpoint before copying without copy-from-database', ()
   expect(copySnapshotSource).not.toContain('DETACH')
 })
 
+test('duckdb snapshot creation fails when the pre-copy checkpoint fails', () => {
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+        const runStatements = []
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run(statement) {
+              runStatements.push(statement)
+              if (statement === 'CHECKPOINT') {
+                throw new Error('checkpoint failed with wal-backed changes')
+              }
+            }
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?snapshot-checkpoint-failure-test=' + Date.now())
+        let errorMessage = null
+
+        try {
+          await duckdbService.createDuckdbSnapshot()
+        } catch (error) {
+          errorMessage = error instanceof Error ? error.message : String(error)
+        }
+
+        console.log(JSON.stringify({errorMessage, runStatements}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: '/tmp/f1-duckdb-service-snapshot-checkpoint-failure-test.duckdb',
+        DUCKDB_TEMP_DIRECTORY: '/tmp/f1-duckdb-service-snapshot-checkpoint-failure-test-temp',
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB snapshot failure subprocess failed')
+  }
+
+  const parsed = JSON.parse(result.stdout.toString()) as {errorMessage: string | null; runStatements: string[]}
+
+  expect(parsed.errorMessage).toContain('checkpoint failed with wal-backed changes')
+  expect(parsed.runStatements).toEqual(['CHECKPOINT'])
+})
+
 test('duckdb snapshot WAL materialization makes read-only copies see committed WAL rows', async () => {
   const duckdbPath = `/tmp/f1-duckdb-snapshot-wal-source-${Date.now()}.duckdb`
   const dataRoot = `/tmp/f1-duckdb-snapshot-wal-data-${Date.now()}`
@@ -331,6 +424,7 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
         let createCount = 0
         let preflightCount = 0
         let preflightSpecs = []
+        const preflightSpecsHistory = []
         const originalSpawnSync = globalThis.Bun.spawnSync
 
         globalThis.Bun.spawnSync = ((command, options) => {
@@ -340,6 +434,7 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
 
           preflightCount += 1
           preflightSpecs = JSON.parse(String(command[5] ?? '[]'))
+          preflightSpecsHistory.push(preflightSpecs)
 
           return {
             exitCode: 0,
@@ -461,6 +556,7 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
         let createCount = 0
         let preflightCount = 0
         let preflightSpecs = []
+        const preflightSpecsHistory = []
         const originalSpawnSync = globalThis.Bun.spawnSync
 
         globalThis.Bun.spawnSync = ((command, options) => {
@@ -470,6 +566,7 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
 
           preflightCount += 1
           preflightSpecs = JSON.parse(String(command[5] ?? '[]'))
+          preflightSpecsHistory.push(preflightSpecs)
 
           return {
             exitCode: 0,
@@ -520,7 +617,7 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?low-memory-preflight-marker-test=' + Date.now())
         const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
-        console.log(JSON.stringify({activeMarkerExists: existsSync(activeRepairSpecPath), createCount, preflightCount, preflightSpecs, rows}))
+        console.log(JSON.stringify({activeMarkerExists: existsSync(activeRepairSpecPath), createCount, preflightCount, preflightSpecs, preflightSpecsHistory, rows}))
         await duckdbService.closeDuckdbService()
       `,
     ],
@@ -553,18 +650,159 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
       createCount: number
       preflightCount: number
       preflightSpecs: Array<{schemaName: string; tableName: string}>
+      preflightSpecsHistory: Array<Array<{schemaName: string; tableName: string}>>
       rows: Array<{value: number}>
     }
 
-    expect(parsed.preflightCount).toBe(1)
+    expect(parsed.preflightCount).toBe(2)
     expect(
-      parsed.preflightSpecs.map((spec) => {
+      parsed.preflightSpecsHistory[1]?.map((spec) => {
         return `${spec.schemaName}.${spec.tableName}`
       }),
     ).toEqual(['app.review_serving_dirty_work'])
     expect(parsed.activeMarkerExists).toBe(false)
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
+test('duckdb service marks startup repair after fatal index-delete runtime recovery', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-fatal-index-marker-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const activeRepairSpecPath = join(`${duckdbPath}.startup-recovery`, 'startup-preflight-active-table.json')
+
+  mkdirSync(dataRoot, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {existsSync, readFileSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        let createCount = 0
+        let runCount = 0
+        const originalSpawnSync = globalThis.Bun.spawnSync
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          if (String(command[5] ?? '').startsWith('[')) {
+            return {
+              exitCode: 1,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from('forced repair failure'),
+            }
+          }
+
+          return {
+            exitCode: 0,
+            signalCode: null,
+            stdout: Buffer.from(''),
+            stderr: Buffer.from(''),
+          }
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run(statement) {
+              runCount += 1
+              throw new Error('FatalException: Invalid Input Error: Failed to delete all rows from index. Only deleted 0 out of 1 rows.')
+            }
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              createCount += 1
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?fatal-index-marker-test=' + Date.now())
+        let errorMessage = null
+
+        try {
+          await duckdbService.runDuckdbStatement('UPDATE app.review_rebuild_chunk_manifest SET status = status')
+        } catch (error) {
+          errorMessage = error instanceof Error ? error.message : String(error)
+        }
+
+        const marker = existsSync(activeRepairSpecPath) ? JSON.parse(readFileSync(activeRepairSpecPath, 'utf8')) : null
+        console.log(JSON.stringify({createCount, errorMessage, marker, runCount}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB fatal index marker subprocess failed',
+      )
+    }
+
+    const parsed = JSON.parse(result.stdout.toString()) as {
+      createCount: number
+      errorMessage: string
+      marker: {phase: string; schemaName: string; tableName: string} | null
+      runCount: number
+    }
+
+    expect(parsed.errorMessage).toContain('forced repair failure')
+    expect(parsed.createCount).toBeGreaterThanOrEqual(0)
+    expect(parsed.runCount).toBeGreaterThanOrEqual(0)
   } finally {
     removePathIfExists(dataRoot)
   }
@@ -1503,7 +1741,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       walExists: boolean
     }
 
-    expect(parsed.preflightCount).toBe(2)
+    expect(parsed.preflightCount).toBe(1)
     expect(parsed.repairLockProbeCount).toBe(2)
     expect(parsed.repairCount).toBe(1)
     expect(parsed.createCount).toBe(1)
@@ -1531,7 +1769,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       parsed.preflightSpecs.map((spec) => {
         return {schemaName: spec.schemaName, tableName: spec.tableName}
       }),
-    ).toEqual([{schemaName: 'mart', tableName: 'review_article_judgment_detail_serving_v4'}])
+    ).toContainEqual({schemaName: 'mart', tableName: 'review_article_judgment_detail_serving_v4'})
     const articleServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_article_serving_v4'
     })

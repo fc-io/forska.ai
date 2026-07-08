@@ -17,8 +17,8 @@ Entry format:
 - Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` during `db:query:snapshot` on the primary runtime DB.
 - Context: Current-DB verification snapshot creation after request-table startup repair.
 - Cause: A full checkpoint can exceed the constrained maintenance profile on large runtime DBs.
-- Fix: Snapshot creation treats pre-copy checkpoint failure as non-fatal, logs it, and falls back to a checkpoint-only database copy without replaying a copied WAL on request paths.
-- Verification: `bun test src/server/utils/duckdbServiceReload.test.ts src/server/utils/duckdbServiceShutdown.test.ts src/server/utils/duckdbServiceMemoryLimit.test.ts src/server/utils/duckdbScriptAccess.test.ts`; current-DB live progress gate.
+- Fix: Snapshot creation treats pre-copy checkpoint failure as fatal, logs it, and aborts the snapshot rather than returning a potentially stale checkpoint-only database copy. Operators should use the live owner/API path for current-DB checks until checkpoint memory pressure is resolved.
+- Verification: `bun test src/server/utils/duckdbServiceReload.test.ts src/server/utils/duckdbServiceShutdown.test.ts src/server/utils/duckdbServiceMemoryLimit.test.ts src/server/utils/duckdbScriptAccess.test.ts`; `bun run test:dev-server:current-db`; current-DB live progress gate through the owner/API path.
 
 ## 2026-07-07 - Foreground Native-Heavy RSS Cap Recycle
 

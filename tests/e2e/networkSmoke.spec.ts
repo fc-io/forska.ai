@@ -13,6 +13,7 @@ const networkSmokeSeedMode = process.env.FORSKA_NETWORK_SMOKE_SEED_MODE === 'exi
 const runtimeLogDir = process.env.LOG_DIR ?? ''
 const shouldSkipMutatingRouteLoads = process.env.FORSKA_NETWORK_SMOKE_SKIP_MUTATING_ROUTE_LOADS === 'true'
 const areServerMutationsDisabled = process.env.FORSKA_DISABLE_SERVER_MUTATIONS === 'true'
+const networkSmokeAuditTimeoutMs = networkSmokeDbMode === 'current' ? 180_000 : 60_000
 const largeRebuildFailureText = 'Large rebuild failed'
 const forbiddenRuntimeLogPatterns = [
   {label: 'API role DuckDB ownership', pattern: /Current server role api cannot own DuckDB/},
@@ -1322,6 +1323,7 @@ test('network smoke route inventory stays explicit', () => {
 })
 
 test('audited app pages have no unexpected local network errors', async ({page}) => {
+  test.setTimeout(networkSmokeAuditTimeoutMs)
   test.skip(!isNetworkSmokeAudit, 'Network smoke audit only runs via bun run test:network-smoke')
 
   const seed = await createNetworkSmokeSeed()

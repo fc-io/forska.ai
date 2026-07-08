@@ -1,6 +1,7 @@
 import {expect, test} from 'bun:test'
 
 import {runtimeReadyPath, runtimeStatePath} from '../utils/runtimeReadyContract.ts'
+import {resetServerRuntimeRoleForTests} from '../utils/serverRuntimeRole.ts'
 import {classifyApiRoute, shouldApiRouteProxyToDuckdbOwner} from './apiRouteClassification.ts'
 import {exposeLocalOperatorApiEnvVar} from './publicRouteSurfaceGate.ts'
 import {runtimeReadyRoutes} from './runtimeReadyRoutes.ts'
@@ -70,6 +71,36 @@ const withLocalOperatorApiEnv = async (value: string | undefined, run: () => Pro
   }
 }
 
+const withRuntimeOwnerEnv = async (run: () => Promise<void>) => {
+  const previousRole = process.env.SERVER_ROLE
+  const previousOwnerUrl = process.env.SERVER_DUCKDB_OWNER_URL
+
+  try {
+    process.env.SERVER_ROLE = 'api'
+    process.env.SERVER_DUCKDB_OWNER_URL = 'http://127.0.0.1:1'
+    resetServerRuntimeRoleForTests()
+    await run()
+  } finally {
+    if (previousRole === undefined) {
+      delete process.env.SERVER_ROLE
+    }
+
+    if (previousRole !== undefined) {
+      process.env.SERVER_ROLE = previousRole
+    }
+
+    if (previousOwnerUrl === undefined) {
+      delete process.env.SERVER_DUCKDB_OWNER_URL
+    }
+
+    if (previousOwnerUrl !== undefined) {
+      process.env.SERVER_DUCKDB_OWNER_URL = previousOwnerUrl
+    }
+
+    resetServerRuntimeRoleForTests()
+  }
+}
+
 const getRuntimeReadyResponse = async () => {
   const response = await runtimeReadyRoutes.handle(new Request(`http://localhost${runtimeReadyPath}`))
 
@@ -99,6 +130,14 @@ test('runtime readiness reports local operator API exposure', async () => {
     expect(response.data.ready).toBe(true)
     expect(response.data.localOperatorApiExposed).toBe(false)
     expect(response.data.settingsDiagnosticsApiExposed).toBe(true)
+  })
+})
+
+test('runtime readiness reports API proxy unavailable when DuckDB owner is unreachable', async () => {
+  await withRuntimeOwnerEnv(async () => {
+    const response = await getRuntimeReadyResponse()
+
+    expect(response.data.ready).toBe(false)
   })
 })
 
