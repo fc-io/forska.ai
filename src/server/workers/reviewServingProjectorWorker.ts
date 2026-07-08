@@ -104,7 +104,11 @@ import {
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {parseDuckdbMemoryLimitToMiB} from '../utils/duckdbMemoryLimit.ts'
-import {closeDuckdbService, type DuckdbWorkloadContext} from '../utils/duckdbService.ts'
+import {
+  closeDuckdbService,
+  type DuckdbWorkloadContext,
+  recoverDuckdbServiceAfterFatalError,
+} from '../utils/duckdbService.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
 type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorServiceDependencies['database']>
@@ -187,7 +191,10 @@ type ReviewServingProjectorWorkerDependencies = {
   rebuildChunkService?: ReviewServingProjectorWorkerRebuildChunkService
   collectGarbageAfterCompletedRebuildChunk?: (chunk: ReviewServingRebuildChunkManifest) => Promise<void> | void
   recycleDuckdbAfterCompletedRebuildChunk?: (chunk: ReviewServingRebuildChunkManifest) => Promise<void>
-  recycleDuckdbAfterFatalRebuildChunkError?: (chunk: ReviewServingRebuildChunkManifest) => Promise<void>
+  recycleDuckdbAfterFatalRebuildChunkError?: (input: {
+    chunk: ReviewServingRebuildChunkManifest
+    error: unknown
+  }) => Promise<void>
   sleep: typeof sleep
   wakeProjectors: typeof wakeReviewServingProjectorService
 }
@@ -4531,8 +4538,8 @@ const closeDuckdbAfterCompletedRebuildChunk = async () => {
   await closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
 }
 
-const closeDuckdbAfterFatalRebuildChunkError = async () => {
-  await closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
+const closeDuckdbAfterFatalRebuildChunkError = async (input: {error: unknown}) => {
+  await recoverDuckdbServiceAfterFatalError(input.error, {releaseOwnerLease: false})
 }
 
 const collectGarbageAfterCompletedRebuildChunk = () => {
@@ -6160,7 +6167,7 @@ const recycleDuckdbAfterFatalRebuildChunkError = async (input: {
   }
 
   try {
-    await input.dependencies.recycleDuckdbAfterFatalRebuildChunkError?.(input.chunk)
+    await input.dependencies.recycleDuckdbAfterFatalRebuildChunkError?.({chunk: input.chunk, error: input.error})
   } catch (error) {
     reviewServingProjectorWorkerCycleLogger.warn(
       'review-serving-projector-worker:duckdb-fatal-error-recycle-failed',

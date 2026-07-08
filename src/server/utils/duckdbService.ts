@@ -222,6 +222,7 @@ type DuckdbStartupIndexedTableRepairSpec = {
 }
 type DuckdbStartupSchemaRequirement = {columnNames?: string[]; schemaName: string; tableName: string}
 type DuckdbStartupPreflightError = Error & {
+  repairMarkerOnly?: boolean
   repairMarkerPath?: string
   repairSpecs?: DuckdbStartupIndexedTableRepairSpec[]
 }
@@ -1603,7 +1604,7 @@ const withDuckdbStatementErrorContext = async <T>({
   }
 }
 
-const recoverDuckdbRuntimeAfterFatalError = async (error: unknown) => {
+const recoverDuckdbRuntimeAfterFatalError = async (error: unknown, options: CloseDuckdbServiceOptions = {}) => {
   if (duckdbFatalRecoveryPromise !== null) {
     return duckdbFatalRecoveryPromise
   }
@@ -1618,7 +1619,7 @@ const recoverDuckdbRuntimeAfterFatalError = async (error: unknown) => {
     terminalArgs: [getCompactDuckdbErrorMessage(error)],
   })
 
-  duckdbFatalRecoveryPromise = closeDuckdbServiceDirect({checkpointBeforeClose: false})
+  duckdbFatalRecoveryPromise = closeDuckdbServiceDirect({checkpointBeforeClose: false, ...options})
     .catch((closeError) => {
       writeRuntimeFailureLogEvent({
         attrs: {closeError},
@@ -1649,23 +1650,54 @@ const markDuckdbStartupRepairForFatalIndexedTableError = (error: unknown) => {
   }
 
   const markerPath = getDuckdbStartupPreflightActiveRepairSpecPath(runtimeConfig)
+  const repairSpec = getDuckdbStartupRepairSpecForFatalIndexedTableError(normalizedError)
 
   mkdirSync(`${runtimeConfig.databasePath}.startup-recovery`, {recursive: true})
   writeFileSync(
     markerPath,
     JSON.stringify({
       phase: 'runtime-fatal-index-delete',
-      schemaName: 'app',
-      tableName: 'review_rebuild_chunk_manifest',
+      schemaName: repairSpec.schemaName,
+      tableName: repairSpec.tableName,
     }),
   )
   writeRuntimeOperatorLogEvent({
-    attrs: {databasePath: runtimeConfig.databasePath, error: normalizedError.message, markerPath},
+    attrs: {
+      databasePath: runtimeConfig.databasePath,
+      error: normalizedError.message,
+      markerPath,
+      repairedTable: `${repairSpec.schemaName}.${repairSpec.tableName}`,
+    },
     event: 'duckdb.recovery.indexed-table-repair-marker',
     message: '[duckdb] marked indexed table repair for next startup after fatal index-delete error',
     severity: 'WARN',
     terminalArgs: [`marker=${markerPath}`],
   })
+}
+
+const getDuckdbStartupRepairSpecForFatalIndexedTableError = (error: Error) => {
+  const message = error.message
+  const matchedSpec = duckdbStartupIndexedTableRepairSpecs.find((spec) => {
+    return message.includes(`${spec.schemaName}.${spec.tableName}`)
+  })
+
+  if (matchedSpec !== undefined) {
+    return matchedSpec
+  }
+
+  const fallbackSpec = duckdbStartupIndexedTableRepairSpecs.find((spec) => {
+    return spec.schemaName === 'app' && spec.tableName === 'review_rebuild_chunk_manifest'
+  })
+
+  if (fallbackSpec === undefined) {
+    throw new Error('missing DuckDB startup repair fallback spec')
+  }
+
+  return (
+    duckdbStartupIndexedTableRepairSpecs.find((spec) => {
+      return message.includes(spec.tableName)
+    }) ?? fallbackSpec
+  )
 }
 
 const isDuckdbStartupRetryableError = (error: unknown) => {
@@ -2278,6 +2310,7 @@ const getDuckdbStartupPreflightError = (runtimeConfig: DuckdbRuntimeConfig) => {
     const error = new Error(
       `DuckDB startup indexed-table repair marker requested repair for ${runtimeConfig.databasePath}`,
     ) as DuckdbStartupPreflightError
+    error.repairMarkerOnly = true
     error.repairMarkerPath = activeRepairSpecPath
     error.repairSpecs = activeRepairSpecs
     return error
@@ -2578,7 +2611,9 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
     lockRetryCount = 0
     recoveryAttempt += 1
 
-    if (hadWalBeforePreflight && hasNonEmptyDuckdbWal(runtimeConfig.databasePath)) {
+    const markerOnlyRepair = error instanceof Error && error.repairMarkerOnly === true
+
+    if (!markerOnlyRepair && hadWalBeforePreflight && hasNonEmptyDuckdbWal(runtimeConfig.databasePath)) {
       await quarantineFailedDuckdbWalReplay(runtimeConfig, error)
       continue
     }
@@ -4239,6 +4274,10 @@ export const closeDuckdbService = async (options: CloseDuckdbServiceOptions = {}
       await closeDuckdbServiceWithoutBarrier(options)
     })
   })
+}
+
+export const recoverDuckdbServiceAfterFatalError = async (error: unknown, options: CloseDuckdbServiceOptions = {}) => {
+  await recoverDuckdbRuntimeAfterFatalError(error, options)
 }
 
 registerDuckdbOwnerDemotionHandler(async () => {

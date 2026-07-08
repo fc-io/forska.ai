@@ -7,7 +7,13 @@ import {exposeLocalOperatorApiEnvVar} from './publicRouteSurfaceGate.ts'
 import {runtimeReadyRoutes} from './runtimeReadyRoutes.ts'
 
 type RuntimeReadyResponse = {
-  data: {localOperatorApiExposed: boolean; ready: boolean; settingsDiagnosticsApiExposed: boolean}
+  data: {
+    duckdbOwner: boolean
+    duckdbOwnerUrl: string | null
+    localOperatorApiExposed: boolean
+    ready: boolean
+    settingsDiagnosticsApiExposed: boolean
+  }
 }
 
 type RuntimeStateResponse = {
@@ -49,8 +55,14 @@ const withBunMaxHttpRequestsEnv = async (value: string | undefined, run: () => P
 
 const withLocalOperatorApiEnv = async (value: string | undefined, run: () => Promise<void>) => {
   const previousValue = process.env[exposeLocalOperatorApiEnvVar]
+  const previousRole = process.env.SERVER_ROLE
+  const previousOwnerUrl = process.env.SERVER_DUCKDB_OWNER_URL
 
   try {
+    process.env.SERVER_ROLE = 'dev-single'
+    delete process.env.SERVER_DUCKDB_OWNER_URL
+    resetServerRuntimeRoleForTests()
+
     if (value === undefined) {
       delete process.env[exposeLocalOperatorApiEnvVar]
     }
@@ -68,16 +80,40 @@ const withLocalOperatorApiEnv = async (value: string | undefined, run: () => Pro
     if (previousValue !== undefined) {
       process.env[exposeLocalOperatorApiEnvVar] = previousValue
     }
+
+    if (previousRole === undefined) {
+      delete process.env.SERVER_ROLE
+    }
+
+    if (previousRole !== undefined) {
+      process.env.SERVER_ROLE = previousRole
+    }
+
+    if (previousOwnerUrl === undefined) {
+      delete process.env.SERVER_DUCKDB_OWNER_URL
+    }
+
+    if (previousOwnerUrl !== undefined) {
+      process.env.SERVER_DUCKDB_OWNER_URL = previousOwnerUrl
+    }
+
+    resetServerRuntimeRoleForTests()
   }
 }
 
-const withRuntimeOwnerEnv = async (run: () => Promise<void>) => {
+const withRuntimeOwnerEnv = async (run: () => Promise<void>, duckdbOwnerUrl?: string | null) => {
   const previousRole = process.env.SERVER_ROLE
   const previousOwnerUrl = process.env.SERVER_DUCKDB_OWNER_URL
 
   try {
     process.env.SERVER_ROLE = 'api'
-    process.env.SERVER_DUCKDB_OWNER_URL = 'http://127.0.0.1:1'
+    if (duckdbOwnerUrl === null) {
+      delete process.env.SERVER_DUCKDB_OWNER_URL
+    }
+
+    if (duckdbOwnerUrl !== null) {
+      process.env.SERVER_DUCKDB_OWNER_URL = duckdbOwnerUrl ?? 'http://127.0.0.1:1'
+    }
     resetServerRuntimeRoleForTests()
     await run()
   } finally {
@@ -139,6 +175,39 @@ test('runtime readiness reports API proxy unavailable when DuckDB owner is unrea
 
     expect(response.data.ready).toBe(false)
   })
+})
+
+test('runtime readiness reports API proxy unavailable without DuckDB owner URL', async () => {
+  await withRuntimeOwnerEnv(async () => {
+    const response = await getRuntimeReadyResponse()
+
+    expect(response.data.duckdbOwner).toBe(false)
+    expect(response.data.duckdbOwnerUrl).toBe(null)
+    expect(response.data.ready).toBe(false)
+  }, null)
+})
+
+test('runtime readiness requires API proxy target to be ready DuckDB owner', async () => {
+  const previousFetch = globalThis.fetch
+  const responses = [
+    {data: {duckdbOwner: false, ready: true, runtimeVersion: 'split-runtime-v1'}},
+    {data: {duckdbOwner: true, ready: false, runtimeVersion: 'split-runtime-v1'}},
+    {data: {duckdbOwner: true, ready: true, runtimeVersion: 'split-runtime-v1'}},
+  ]
+
+  try {
+    globalThis.fetch = (async () => {
+      return Response.json(responses.shift())
+    }) as unknown as typeof fetch
+
+    await withRuntimeOwnerEnv(async () => {
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(false)
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(false)
+      expect((await getRuntimeReadyResponse()).data.ready).toBe(true)
+    }, 'http://127.0.0.1:4999')
+  } finally {
+    globalThis.fetch = previousFetch
+  }
 })
 
 test('runtime state reports env configured Bun HTTP request cap', async () => {

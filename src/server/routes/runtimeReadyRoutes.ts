@@ -1,6 +1,6 @@
 import {Elysia} from 'elysia'
 
-import {getRuntimeCutoverVersion, probeDuckdbOwnerCutoverCompatibility} from '../utils/runtimeCutover.ts'
+import {getRuntimeCutoverVersion, probeDuckdbOwnerRuntimeReadiness} from '../utils/runtimeCutover.ts'
 import {runtimeReadyPath, runtimeStatePath} from '../utils/runtimeReadyContract.ts'
 import {getServerRoleCapabilities} from '../utils/serverRole.ts'
 import {
@@ -27,11 +27,15 @@ const getBunMaxHttpRequestsState = () => {
 }
 
 const getOwnerProxyReady = async (duckdbOwnerUrl: string | null, ownerProxy: boolean) => {
-  if (!ownerProxy || duckdbOwnerUrl === null) {
+  if (!ownerProxy) {
     return true
   }
 
-  const result = await probeDuckdbOwnerCutoverCompatibility(duckdbOwnerUrl, 'runtime readiness DuckDB owner')
+  if (duckdbOwnerUrl === null) {
+    return false
+  }
+
+  const result = await probeDuckdbOwnerRuntimeReadiness(duckdbOwnerUrl, 'runtime readiness DuckDB owner')
 
   return result.status === 'compatible'
 }

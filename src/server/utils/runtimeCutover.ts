@@ -25,6 +25,13 @@ const getStringProperty = (value: unknown, key: string) => {
   return typeof propertyValue === 'string' ? propertyValue : null
 }
 
+const getBooleanProperty = (value: unknown, key: string) => {
+  const objectValue = getObjectValue(value)
+  const propertyValue = objectValue?.[key]
+
+  return typeof propertyValue === 'boolean' ? propertyValue : null
+}
+
 const readResponseJson = async (response: Response) => {
   const parsed = (await response.json().catch(() => {
     return null
@@ -90,6 +97,38 @@ export const probeDuckdbOwnerCutoverCompatibility = async (
       ? {runtimeVersion: splitRuntimeCutoverVersion, status: 'compatible'}
       : {
           message: getRuntimeCutoverVersionMismatchMessage({context, runtimeVersion}),
+          runtimeVersion,
+          status: 'incompatible',
+        }
+  } catch (error) {
+    return {error, status: 'unreachable'}
+  }
+}
+
+export const probeDuckdbOwnerRuntimeReadiness = async (
+  duckdbOwnerUrl: string,
+  context: string,
+): Promise<RuntimeCutoverProbeResult> => {
+  try {
+    const response = await fetch(`${duckdbOwnerUrl}${runtimeReadyPath}`, {signal: AbortSignal.timeout(1_000)})
+    const parsed = await readResponseJson(response)
+    const runtimeVersion = getRuntimeCutoverVersionFromPeerResponse(parsed)
+    const data = getObjectValue(getObjectValue(parsed)?.data)
+    const ready = getBooleanProperty(data, 'ready')
+    const duckdbOwner = getBooleanProperty(data, 'duckdbOwner')
+
+    if (!isRuntimeCutoverVersionCompatible(runtimeVersion)) {
+      return {
+        message: getRuntimeCutoverVersionMismatchMessage({context, runtimeVersion}),
+        runtimeVersion,
+        status: 'incompatible',
+      }
+    }
+
+    return ready === true && duckdbOwner === true
+      ? {runtimeVersion: splitRuntimeCutoverVersion, status: 'compatible'}
+      : {
+          message: `DuckDB owner target for ${context} is not ready owner: ready=${String(ready)}, duckdbOwner=${String(duckdbOwner)}.`,
           runtimeVersion,
           status: 'incompatible',
         }
