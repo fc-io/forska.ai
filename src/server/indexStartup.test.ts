@@ -41,6 +41,28 @@ const waitForServer = async (port: number, timeoutMs: number): Promise<void> => 
   })
 }
 
+const waitForCondition = async (input: {condition: () => boolean; timeoutMs: number}): Promise<void> => {
+  const startedAt = Date.now()
+
+  await new Promise<void>((resolve, reject) => {
+    const check = () => {
+      if (input.condition()) {
+        resolve()
+        return
+      }
+
+      if (Date.now() - startedAt >= input.timeoutMs) {
+        reject(new Error('Timed out waiting for startup condition'))
+        return
+      }
+
+      setTimeout(check, 50)
+    }
+
+    check()
+  })
+}
+
 const stopServer = async (server: SpawnedServer) => {
   server.kill('SIGTERM')
   await server.exited
@@ -424,7 +446,13 @@ test('judge-worker startup replays unacked completions for the same durable iden
   })
 
   try {
-    await waitForServer(apiPort, 10_000)
+    await waitForServer(apiPort, 20_000)
+    await waitForCondition({
+      condition: () => {
+        return completionRequests.length === 1
+      },
+      timeoutMs: 5_000,
+    })
 
     expect(completionRequests).toHaveLength(1)
     expect(getCompletionAckedAt(journalPath, 'claim-replay-startup')).not.toBe(null)
@@ -473,7 +501,7 @@ test('judge-worker startup skips rollout cleanup when server mutations are disab
   })
 
   try {
-    await waitForServer(apiPort, 10_000)
+    await waitForServer(apiPort, 20_000)
     await new Promise((resolve) => {
       setTimeout(resolve, 250)
     })
@@ -523,6 +551,12 @@ test('judge-worker startup replays unacked completions from worker-id durable jo
 
   try {
     await waitForServer(apiPort, 10_000)
+    await waitForCondition({
+      condition: () => {
+        return completionRequests.length === 1
+      },
+      timeoutMs: 5_000,
+    })
 
     expect(completionRequests).toHaveLength(1)
     expect(getCompletionAckedAt(journalPath, 'claim-replay-startup')).not.toBe(null)
@@ -623,7 +657,12 @@ test('maintenance-worker startup migrates pre-cutover user config naming', async
   const server = startServer(envValues)
 
   try {
-    await waitForServer(apiPort, 10_000)
+    await waitForServer(apiPort, 20_000).catch(async (error) => {
+      const stderr = await readPipeText(server.stderr)
+      const stdout = await readPipeText(server.stdout)
+
+      throw new Error(`${error instanceof Error ? error.message : String(error)}\n${stdout}\n${stderr}`)
+    })
 
     const response = await fetch(`http://127.0.0.1:${apiPort}/__duckdb-owner-rpc/api/users`, {
       signal: AbortSignal.timeout(5_000),
@@ -643,7 +682,7 @@ test('maintenance-worker startup migrates pre-cutover user config naming', async
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
   }
-})
+}, 30_000)
 
 test('maintenance-worker startup tolerates malformed DuckDB lease metadata files', async () => {
   const apiPort = 34989

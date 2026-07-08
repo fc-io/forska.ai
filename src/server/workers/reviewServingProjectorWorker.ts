@@ -187,6 +187,7 @@ type ReviewServingProjectorWorkerDependencies = {
   rebuildChunkService?: ReviewServingProjectorWorkerRebuildChunkService
   collectGarbageAfterCompletedRebuildChunk?: (chunk: ReviewServingRebuildChunkManifest) => Promise<void> | void
   recycleDuckdbAfterCompletedRebuildChunk?: (chunk: ReviewServingRebuildChunkManifest) => Promise<void>
+  recycleDuckdbAfterFatalRebuildChunkError?: (chunk: ReviewServingRebuildChunkManifest) => Promise<void>
   sleep: typeof sleep
   wakeProjectors: typeof wakeReviewServingProjectorService
 }
@@ -532,6 +533,17 @@ const isDuckDbOutOfMemoryError = (error: unknown) => {
     message.includes('Out of Memory Error')
     || message.includes('failed to allocate')
     || message.includes('failed to pin block')
+  )
+}
+
+const isDuckDbFatalRuntimeError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error)
+
+  return (
+    message.includes('FatalException')
+    || message.includes('Database has been invalidated')
+    || message.includes('database has been invalidated')
+    || message.includes('Invalid Input Error: Attempting to execute an unsuccessful or closed pending query result')
   )
 }
 
@@ -4519,6 +4531,10 @@ const closeDuckdbAfterCompletedRebuildChunk = async () => {
   await closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
 }
 
+const closeDuckdbAfterFatalRebuildChunkError = async () => {
+  await closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
+}
+
 const collectGarbageAfterCompletedRebuildChunk = () => {
   globalThis.Bun.gc(true)
 }
@@ -4546,6 +4562,7 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
     },
   },
   recycleDuckdbAfterCompletedRebuildChunk: closeDuckdbAfterCompletedRebuildChunk,
+  recycleDuckdbAfterFatalRebuildChunkError: closeDuckdbAfterFatalRebuildChunkError,
   sleep,
   wakeProjectors: wakeReviewServingProjectorService,
 }
@@ -5366,11 +5383,7 @@ const finalizeNextCompletedUnfinalizedRebuildRequest = async (input: {
   }
 
   try {
-    await finalizeCompletedReviewServingRebuildRequest(chunk, input.database, {
-      deleteSummaryFilterOptions: false,
-      refreshDerivedOutputs: false,
-      refreshPostingStats: false,
-    })
+    await finalizeCompletedReviewServingRebuildRequest(chunk, input.database, {deleteSummaryFilterOptions: false})
 
     return {
       chunk: {
@@ -6065,6 +6078,7 @@ const runClaimedReviewServingProjectorWorkerRebuildChunk = async ({
     stopHeartbeat()
   } catch (error) {
     stopHeartbeat()
+    await recycleDuckdbAfterFatalRebuildChunkError({chunk: effectiveClaimedChunk, dependencies, error})
     const failedChunk = await measureReviewServingProjectorWorkerPhase(timings, 'failUpdateMs', async () => {
       return service.failChunk(
         {chunkId: effectiveClaimedChunk.chunkId, error: getErrorText(error), leaseOwner: workerId},
@@ -6133,6 +6147,31 @@ const runClaimedReviewServingProjectorWorkerRebuildChunk = async ({
     await finalizeErroredCompletedReviewServingRebuildRequest({chunk: effectiveClaimedChunk, error}, database)
 
     return {chunkId: effectiveClaimedChunk.chunkId, requestId: effectiveClaimedChunk.requestId, status: 'failed'}
+  }
+}
+
+const recycleDuckdbAfterFatalRebuildChunkError = async (input: {
+  chunk: ReviewServingRebuildChunkManifest
+  dependencies: ReviewServingProjectorWorkerDependencies
+  error: unknown
+}) => {
+  if (!isDuckDbFatalRuntimeError(input.error)) {
+    return
+  }
+
+  try {
+    await input.dependencies.recycleDuckdbAfterFatalRebuildChunkError?.(input.chunk)
+  } catch (error) {
+    reviewServingProjectorWorkerCycleLogger.warn(
+      'review-serving-projector-worker:duckdb-fatal-error-recycle-failed',
+      '[reviewServingProjectorWorker] failed to recycle DuckDB after fatal rebuild chunk error',
+      {
+        chunkId: input.chunk.chunkId,
+        component: input.chunk.projectionComponent,
+        error,
+        requestId: input.chunk.requestId,
+      },
+    )
   }
 }
 
@@ -6327,12 +6366,18 @@ const failClaimedReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
   completedCount: number
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase
+  dependencies: ReviewServingProjectorWorkerDependencies
   error: unknown
   workerId: string
 }): Promise<{chunk: ReviewServingProjectorWorkerChunkResult; completedCount: number}> => {
   const failedResults = await input.claimedChunks.reduce<Promise<ReviewServingProjectorWorkerChunkResult[]>>(
     async (previous, claimed) => {
       const results = await previous
+      await recycleDuckdbAfterFatalRebuildChunkError({
+        chunk: claimed.chunk,
+        dependencies: input.dependencies,
+        error: input.error,
+      })
       const failedChunk = await measureReviewServingProjectorWorkerPhase(claimed.timings, 'failUpdateMs', async () => {
         return claimed.service.failChunk(
           {chunkId: claimed.chunk.chunkId, error: getErrorText(input.error), leaseOwner: input.workerId},
@@ -6451,6 +6496,7 @@ const runProjectScopeReviewServingProjectorWorkerRebuildChunkBatch = async (inpu
       claimedChunks: input.claimedChunks,
       completedCount,
       database: input.database,
+      dependencies: input.dependencies,
       error,
       workerId: input.workerId,
     })
@@ -6523,6 +6569,7 @@ const runSelectedImportReviewServingProjectorWorkerRebuildChunkBatch = async (in
       claimedChunks: input.claimedChunks,
       completedCount,
       database: input.database,
+      dependencies: input.dependencies,
       error,
       workerId: input.workerId,
     })
@@ -6595,6 +6642,7 @@ const runDisplayReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
       claimedChunks: input.claimedChunks,
       completedCount,
       database: input.database,
+      dependencies: input.dependencies,
       error,
       workerId: input.workerId,
     })
@@ -6667,6 +6715,7 @@ const runPayloadReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
       claimedChunks: input.claimedChunks,
       completedCount,
       database: input.database,
+      dependencies: input.dependencies,
       error,
       workerId: input.workerId,
     })
@@ -6739,6 +6788,7 @@ const runSearchReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
       claimedChunks: input.claimedChunks,
       completedCount,
       database: input.database,
+      dependencies: input.dependencies,
       error,
       workerId: input.workerId,
     })
@@ -6811,6 +6861,7 @@ const runQueueReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
       claimedChunks: input.claimedChunks,
       completedCount,
       database: input.database,
+      dependencies: input.dependencies,
       error,
       workerId: input.workerId,
     })
@@ -6886,6 +6937,7 @@ const runJudgmentInputContentReviewServingProjectorWorkerRebuildChunkBatch = asy
       claimedChunks: input.claimedChunks,
       completedCount,
       database: input.database,
+      dependencies: input.dependencies,
       error,
       workerId: input.workerId,
     })
@@ -6964,6 +7016,7 @@ const runReviewServingProjectorWorkerRebuildChunkBatchWith = async (
       claimedChunks: input.claimedChunks,
       completedCount,
       database: input.database,
+      dependencies: input.dependencies,
       error,
       workerId: input.workerId,
     })
@@ -7250,6 +7303,7 @@ const runReviewServingProjectorWorkerRebuildChunkBatch = async (
           claimedChunks: claimedBatch.claimedChunks.slice(completedCount),
           completedCount,
           database: input.database,
+          dependencies: input.dependencies,
           error,
           workerId: input.workerId,
         })

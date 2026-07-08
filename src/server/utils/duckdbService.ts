@@ -1,5 +1,13 @@
 import {randomUUID} from 'node:crypto'
-import {constants as fsConstants, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync} from 'node:fs'
+import {
+  constants as fsConstants,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import {access, copyFile, mkdir, rename, rm, writeFile} from 'node:fs/promises'
 import {availableParallelism, tmpdir} from 'node:os'
 import {basename, join} from 'node:path'
@@ -213,7 +221,10 @@ type DuckdbStartupIndexedTableRepairSpec = {
   tableName: string
 }
 type DuckdbStartupSchemaRequirement = {columnNames?: string[]; schemaName: string; tableName: string}
-type DuckdbStartupPreflightError = Error & {repairSpecs?: DuckdbStartupIndexedTableRepairSpec[]}
+type DuckdbStartupPreflightError = Error & {
+  repairMarkerPath?: string
+  repairSpecs?: DuckdbStartupIndexedTableRepairSpec[]
+}
 const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[] = [
   {
     duplicateKeySelectSql: `
@@ -1597,6 +1608,8 @@ const recoverDuckdbRuntimeAfterFatalError = async (error: unknown) => {
     return duckdbFatalRecoveryPromise
   }
 
+  markDuckdbStartupRepairForFatalIndexedTableError(error)
+
   writeRuntimeOperatorLogEvent({
     attrs: {error},
     event: 'duckdb.recovery.restart',
@@ -1620,6 +1633,39 @@ const recoverDuckdbRuntimeAfterFatalError = async (error: unknown) => {
     })
 
   return duckdbFatalRecoveryPromise
+}
+
+const markDuckdbStartupRepairForFatalIndexedTableError = (error: unknown) => {
+  const normalizedError = getNormalizedDuckdbError(error)
+
+  if (!normalizedError.message.includes('Failed to delete all rows from index')) {
+    return
+  }
+
+  const runtimeConfig = duckdbServiceState.duckdbRuntimeConfig
+
+  if (runtimeConfig === null || runtimeConfig.databasePath === ':memory:') {
+    return
+  }
+
+  const markerPath = getDuckdbStartupPreflightActiveRepairSpecPath(runtimeConfig)
+
+  mkdirSync(`${runtimeConfig.databasePath}.startup-recovery`, {recursive: true})
+  writeFileSync(
+    markerPath,
+    JSON.stringify({
+      phase: 'runtime-fatal-index-delete',
+      schemaName: 'app',
+      tableName: 'review_rebuild_chunk_manifest',
+    }),
+  )
+  writeRuntimeOperatorLogEvent({
+    attrs: {databasePath: runtimeConfig.databasePath, error: normalizedError.message, markerPath},
+    event: 'duckdb.recovery.indexed-table-repair-marker',
+    message: '[duckdb] marked indexed table repair for next startup after fatal index-delete error',
+    severity: 'WARN',
+    terminalArgs: [`marker=${markerPath}`],
+  })
 }
 
 const isDuckdbStartupRetryableError = (error: unknown) => {
@@ -2227,6 +2273,16 @@ const getDuckdbStartupPreflightError = (runtimeConfig: DuckdbRuntimeConfig) => {
   const activeRepairSpecPath = getDuckdbStartupPreflightActiveRepairSpecPath(runtimeConfig)
   mkdirSync(`${runtimeConfig.databasePath}.startup-recovery`, {recursive: true})
   const activeRepairSpecs = getDuckdbStartupPreflightRepairSpecs(activeRepairSpecPath)
+
+  if (activeRepairSpecs.length > 0) {
+    const error = new Error(
+      `DuckDB startup indexed-table repair marker requested repair for ${runtimeConfig.databasePath}`,
+    ) as DuckdbStartupPreflightError
+    error.repairMarkerPath = activeRepairSpecPath
+    error.repairSpecs = activeRepairSpecs
+    return error
+  }
+
   const preflightRepairSpecs = getDuckdbStartupPreflightSpecsForRuntime(runtimeConfig, activeRepairSpecs)
 
   if (preflightRepairSpecs.length === 0) {
@@ -2285,6 +2341,7 @@ const getDuckdbStartupPreflightError = (runtimeConfig: DuckdbRuntimeConfig) => {
   const repairSpecs = getDuckdbStartupPreflightRepairSpecs(activeRepairSpecPath)
 
   if (repairSpecs.length > 0) {
+    error.repairMarkerPath = activeRepairSpecPath
     error.repairSpecs = repairSpecs
   }
 
@@ -2538,6 +2595,12 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
     if (!attemptedIndexedTableRepair) {
       attemptedIndexedTableRepair = true
       await repairDuckdbStartupIndexedTables(runtimeConfig, error)
+      const repairMarkerPath = error instanceof Error ? error.repairMarkerPath : undefined
+
+      if (typeof repairMarkerPath === 'string') {
+        clearDuckdbStartupPreflightActiveRepairSpec(repairMarkerPath)
+        return
+      }
       continue
     }
 
@@ -4100,9 +4163,10 @@ const checkpointBeforeDuckdbSnapshotCopy = async () => {
     writeRuntimeOperatorLogEvent({
       attrs: {error: getCompactDuckdbErrorMessage(error)},
       event: 'duckdb.snapshot.pre-copy-checkpoint-failed',
-      message: '[duckdb] snapshot pre-copy checkpoint failed; copying checkpoint database without WAL replay',
+      message: '[duckdb] snapshot pre-copy checkpoint failed; aborting snapshot to avoid stale WAL-backed copy',
       severity: 'WARN',
     })
+    throw error
   })
 }
 

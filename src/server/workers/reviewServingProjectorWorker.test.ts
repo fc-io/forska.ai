@@ -132,6 +132,7 @@ const createWorkerHarness = (input?: {
   const garbageCollectedChunks: ReviewServingRebuildChunkManifest[] = []
   const getNextChunkInputs: unknown[] = []
   const heartbeatInputs: unknown[] = []
+  const fatalRecycledChunks: ReviewServingRebuildChunkManifest[] = []
   const recycledChunks: ReviewServingRebuildChunkManifest[] = []
   const runChunkInputs: ReviewServingRebuildChunkManifest[] = []
   const wakeStatus = input?.wakeStatus ?? 'blocked'
@@ -190,6 +191,9 @@ const createWorkerHarness = (input?: {
     recycleDuckdbAfterCompletedRebuildChunk: async (chunk) => {
       recycledChunks.push(chunk)
     },
+    recycleDuckdbAfterFatalRebuildChunkError: async (chunk) => {
+      fatalRecycledChunks.push(chunk)
+    },
     sleep: async (_delayMs: number) => {},
     wakeProjectors: async (wakeInput, serviceDependencies) => {
       wakeInputs.push(wakeInput)
@@ -205,6 +209,7 @@ const createWorkerHarness = (input?: {
     database,
     dependencies,
     failedChunks,
+    fatalRecycledChunks,
     garbageCollectedChunks,
     getNextChunkInputs,
     heartbeatInputs,
@@ -3018,6 +3023,31 @@ test('worker retries claimable failed or expired chunk leases and records execut
   expect(harness.failedChunks).toEqual([{chunkId: 'chunk-1', error: 'chunk executor failed', leaseOwner: 'worker-2'}])
 })
 
+test('worker recycles DuckDB before retrying fatal rebuild chunk runtime errors', async () => {
+  const harness = createWorkerHarness()
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      throw new Error('FatalException: Database has been invalidated because of a previous fatal error')
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce({leaseMs: 5_000, workerId: 'worker-2'}, harness.dependencies)
+
+  expect(result.status).toBe('failed')
+  expect(harness.fatalRecycledChunks).toEqual([chunkManifest])
+  expect(harness.failedChunks).toEqual([
+    {
+      chunkId: 'chunk-1',
+      error: 'FatalException: Database has been invalidated because of a previous fatal error',
+      leaseOwner: 'worker-2',
+    },
+  ])
+})
+
 test('worker heartbeats claimed rebuild chunks before running long executors', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
 
@@ -5361,8 +5391,8 @@ test('worker catch-up finalization avoids deleting existing summary filter optio
   const catchUpSource = source.slice(start, end)
 
   expect(catchUpSource).toContain('deleteSummaryFilterOptions: false')
-  expect(catchUpSource).toContain('refreshDerivedOutputs: false')
-  expect(catchUpSource).toContain('refreshPostingStats: false')
+  expect(catchUpSource).not.toContain('refreshDerivedOutputs: false')
+  expect(catchUpSource).not.toContain('refreshPostingStats: false')
 })
 
 test('worker adopts requestless summary chunks into request finalization before projection', async () => {
