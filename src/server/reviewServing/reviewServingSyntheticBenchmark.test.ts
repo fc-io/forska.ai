@@ -124,6 +124,8 @@ test('review-serving synthetic benchmark writes a physical DuckDB artifact with 
 
   try {
     expect(existsSync(artifact.artifactPath)).toBe(true)
+    expect(artifact.budgetSettings.maxRowsScanned).toBe(250_000)
+    expect(artifact.compareSettings.nonTargetRegressionToleranceRatio).toBe(0.1)
     expect(artifact.fixture).toMatchObject({articleCount: 1_000, promptCount: 7, scale: 'small', seed: 456})
     expect(artifact.operationMetrics).toHaveLength(31)
     expect(artifact.samples).toHaveLength(124)
@@ -158,7 +160,26 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
   })
   const matchingAfter = {...before, artifactPath: 'after.json', command: 'after'}
   const driftedAfter = {...matchingAfter, fixture: {...matchingAfter.fixture, seed: 790}}
+  const driftedBudgetAfter = {
+    ...matchingAfter,
+    budgetSettings: {...matchingAfter.budgetSettings, maxRowsScanned: matchingAfter.budgetSettings.maxRowsScanned + 1},
+  }
+  const driftedCompareAfter = {
+    ...matchingAfter,
+    compareSettings: {
+      ...matchingAfter.compareSettings,
+      nonTargetRegressionToleranceRatio: matchingAfter.compareSettings.nonTargetRegressionToleranceRatio + 0.01,
+    },
+  }
   const driftedModeAfter = {...matchingAfter, mode: 'check' as const}
+  const driftedSampleCountAfter = {
+    ...matchingAfter,
+    operationMetrics: matchingAfter.operationMetrics.map((metrics, index) => {
+      return index === 0 ? {...metrics, sampleCount: metrics.sampleCount - 1} : metrics
+    }),
+  }
+  const driftedSamplePlanAfter = {...matchingAfter, samples: matchingAfter.samples.slice(1)}
+  const driftedTargetMetricAfter = {...matchingAfter, targetMetric: 'compare.rows.scanned'}
   const driftedTargetAfter = {...matchingAfter, targetOperation: 'llmPromptOverlapRows'}
   const regressedAfter = {
     ...matchingAfter,
@@ -174,6 +195,14 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
         : metrics
     }),
   }
+  const rssRegressedAfter = {
+    ...matchingAfter,
+    totals: {
+      ...matchingAfter.totals,
+      peakRssBytes: matchingAfter.totals.peakRssBytes * 2 + 1,
+      rssGrowthBytes: matchingAfter.totals.rssGrowthBytes * 2 + 1,
+    },
+  }
   const firstBeforeMetrics = before.operationMetrics[0]
   const firstAfterMetrics = regressedAfter.operationMetrics[0]
 
@@ -186,8 +215,23 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
       compareReviewServingSyntheticBenchmarkArtifacts({after: driftedAfter, before})
     }).toThrow('config drift')
     expect(() => {
+      compareReviewServingSyntheticBenchmarkArtifacts({after: driftedBudgetAfter, before})
+    }).toThrow('budgetSettings.maxRowsScanned')
+    expect(() => {
+      compareReviewServingSyntheticBenchmarkArtifacts({after: driftedCompareAfter, before})
+    }).toThrow('compareSettings.nonTargetRegressionToleranceRatio')
+    expect(() => {
       compareReviewServingSyntheticBenchmarkArtifacts({after: driftedModeAfter, before})
     }).toThrow('mode')
+    expect(() => {
+      compareReviewServingSyntheticBenchmarkArtifacts({after: driftedSampleCountAfter, before})
+    }).toThrow('operationMetrics.sampleCount')
+    expect(() => {
+      compareReviewServingSyntheticBenchmarkArtifacts({after: driftedSamplePlanAfter, before})
+    }).toThrow('samples.samplePlan')
+    expect(() => {
+      compareReviewServingSyntheticBenchmarkArtifacts({after: driftedTargetMetricAfter, before})
+    }).toThrow('targetMetric')
     expect(() => {
       compareReviewServingSyntheticBenchmarkArtifacts({after: driftedTargetAfter, before})
     }).toThrow('targetOperation')
@@ -211,6 +255,38 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
       budget: Number((firstBeforeMetrics.writerBatchCount * 1.1).toFixed(3)),
       metric: 'compare.writer.batchCount',
       operationKey: firstBeforeMetrics.operationKey,
+    })
+    const targetResult = compareReviewServingSyntheticBenchmarkArtifacts({
+      after: {
+        ...regressedAfter,
+        targetMetric: 'compare.rows.scanned',
+        targetOperation: firstBeforeMetrics.operationKey,
+      },
+      allowConfigDrift: true,
+      before,
+    })
+    expect(targetResult.nonTargetRegressions).not.toContainEqual({
+      actual: firstAfterMetrics.rowsScanned,
+      budget: Number((firstBeforeMetrics.rowsScanned * 1.1).toFixed(3)),
+      metric: 'compare.rows.scanned',
+      operationKey: firstBeforeMetrics.operationKey,
+    })
+    expect(targetResult.nonTargetRegressions).toContainEqual({
+      actual: firstAfterMetrics.tempSpillBytes,
+      budget: firstBeforeMetrics.tempSpillBytes * 1.1,
+      metric: 'compare.temp.spillBytes',
+      operationKey: firstBeforeMetrics.operationKey,
+    })
+    const rssResult = compareReviewServingSyntheticBenchmarkArtifacts({after: rssRegressedAfter, before})
+    expect(rssResult.nonTargetRegressions).toContainEqual({
+      actual: rssRegressedAfter.totals.peakRssBytes,
+      budget: Number((before.totals.peakRssBytes * 1.1).toFixed(3)),
+      metric: 'compare.rss.peakBytes',
+    })
+    expect(rssResult.nonTargetRegressions).toContainEqual({
+      actual: rssRegressedAfter.totals.rssGrowthBytes,
+      budget: Number((before.totals.rssGrowthBytes * 1.1).toFixed(3)),
+      metric: 'compare.rss.growthBytes',
     })
   } finally {
     cleanupReviewServingSyntheticFixture({

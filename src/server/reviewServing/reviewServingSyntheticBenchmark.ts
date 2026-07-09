@@ -61,6 +61,23 @@ export type ReviewServingSyntheticBenchmarkOperationMetrics = {
   writerRowsPerBatch: number
 }
 
+export type ReviewServingSyntheticBenchmarkBudgetSettings = {
+  maxOperationP95LatencyMs: number
+  maxOperationP99LatencyMs: number
+  maxPeakRssBytes: number
+  maxRowsReturned: number
+  maxRowsScanned: number
+  maxRssGrowthBytes: number
+  maxTempSpillBytes: number
+  maxWriterBatchCount: number
+  maxWriterRowsPerBatch: number
+}
+
+export type ReviewServingSyntheticBenchmarkCompareSettings = {
+  latencyP95NoiseFloorMs: number
+  nonTargetRegressionToleranceRatio: number
+}
+
 export type ReviewServingSyntheticBenchmarkViolation = {
   actual: number | string
   budget: number | string
@@ -71,7 +88,9 @@ export type ReviewServingSyntheticBenchmarkViolation = {
 export type ReviewServingSyntheticBenchmarkArtifact = {
   artifactPath: string
   budgetProfile: 'medium-pr' | 'release-manual'
+  budgetSettings: ReviewServingSyntheticBenchmarkBudgetSettings
   command: string
+  compareSettings: ReviewServingSyntheticBenchmarkCompareSettings
   createdAt: string
   duckdbVersion: string
   fixture: ReviewServingSyntheticFixtureManifest
@@ -153,6 +172,11 @@ const syntheticBenchmarkBudgets = {
     maxWriterRowsPerBatch: 1_000_000,
   },
 } as const
+
+const syntheticBenchmarkCompareSettings = {
+  latencyP95NoiseFloorMs: 100,
+  nonTargetRegressionToleranceRatio: 0.1,
+} as const satisfies ReviewServingSyntheticBenchmarkCompareSettings
 
 export const getReviewServingSyntheticBenchmarkArticleCount = (scale: ReviewServingSyntheticBenchmarkScale) => {
   return scaleArticleCounts[scale]
@@ -664,6 +688,12 @@ const getBudgetProfile = (scale: ReviewServingSyntheticBenchmarkScale) => {
   return scale === 'release' ? 'release-manual' : 'medium-pr'
 }
 
+const getBenchmarkBudgetSettings = (
+  scale: ReviewServingSyntheticBenchmarkScale,
+): ReviewServingSyntheticBenchmarkBudgetSettings => {
+  return scale === 'release' ? syntheticBenchmarkBudgets.release : syntheticBenchmarkBudgets.check
+}
+
 const getWorkloadOperationByKey = (operationKey: string) => {
   return reviewServingBenchmarkOverlapWorkloadDefinition.operations.find((operation) => {
     return operation.key === operationKey
@@ -692,8 +722,7 @@ const getBudgetViolations = ({
   artifact: Omit<ReviewServingSyntheticBenchmarkArtifact, 'artifactPath' | 'violations'>
   startRssBytes: number
 }): ReviewServingSyntheticBenchmarkViolation[] => {
-  const budgets =
-    artifact.fixture.scale === 'release' ? syntheticBenchmarkBudgets.release : syntheticBenchmarkBudgets.check
+  const budgets = artifact.budgetSettings
   const rssViolations = [
     {actual: artifact.totals.peakRssBytes, budget: budgets.maxPeakRssBytes, metric: 'rss.peak'},
     {actual: artifact.totals.peakRssBytes - startRssBytes, budget: budgets.maxRssGrowthBytes, metric: 'rss.growth'},
@@ -834,7 +863,9 @@ export const runReviewServingSyntheticBenchmark = async (
     ]
     const artifactWithoutViolations = {
       budgetProfile: getBudgetProfile(input.scale),
+      budgetSettings: getBenchmarkBudgetSettings(input.scale),
       command: input.command,
+      compareSettings: syntheticBenchmarkCompareSettings,
       createdAt: new Date().toISOString(),
       duckdbVersion: await getDuckdbVersion(fixture.connection),
       fixture: fixture.manifest,
@@ -895,6 +926,17 @@ const benchmarkCriticalArtifactFields = [
   'mode',
   'workloadKey',
   'budgetProfile',
+  'budgetSettings.maxOperationP95LatencyMs',
+  'budgetSettings.maxOperationP99LatencyMs',
+  'budgetSettings.maxPeakRssBytes',
+  'budgetSettings.maxRowsReturned',
+  'budgetSettings.maxRowsScanned',
+  'budgetSettings.maxRssGrowthBytes',
+  'budgetSettings.maxTempSpillBytes',
+  'budgetSettings.maxWriterBatchCount',
+  'budgetSettings.maxWriterRowsPerBatch',
+  'compareSettings.latencyP95NoiseFloorMs',
+  'compareSettings.nonTargetRegressionToleranceRatio',
   'fixture.fixtureVersion',
   'fixture.scale',
   'fixture.seed',
@@ -903,6 +945,7 @@ const benchmarkCriticalArtifactFields = [
   'fixture.articlePromptOverlapRows',
   'fixture.duckdbMemoryLimit',
   'fixture.holdout',
+  'targetMetric',
   'targetOperation',
 ] as const
 
@@ -910,6 +953,21 @@ const getArtifactFieldValue = (artifact: ReviewServingSyntheticBenchmarkArtifact
   return field.split('.').reduce<unknown>((value, key) => {
     return typeof value === 'object' && value !== null ? (value as Record<string, unknown>)[key] : undefined
   }, artifact)
+}
+
+const valuesMatchInOrder = (beforeValues: readonly string[], afterValues: readonly string[]) => {
+  return (
+    beforeValues.length === afterValues.length
+    && beforeValues.every((beforeValue, index) => {
+      return beforeValue === afterValues[index]
+    })
+  )
+}
+
+const getArtifactSamplePlan = (artifact: ReviewServingSyntheticBenchmarkArtifact) => {
+  return artifact.samples.map((sample) => {
+    return `${sample.operationKey}:${sample.sampleIndex}:${sample.warmup ? 'warmup' : 'measured'}`
+  })
 }
 
 const getConfigDrift = (
@@ -925,15 +983,21 @@ const getConfigDrift = (
   const fieldDrift = benchmarkCriticalArtifactFields.filter((field) => {
     return getArtifactFieldValue(before, field) !== getArtifactFieldValue(after, field)
   })
-  const operationDrift =
-    operationKeysBefore.length === operationKeysAfter.length
-    && operationKeysBefore.every((operationKey, index) => {
-      return operationKey === operationKeysAfter[index]
-    })
-      ? []
-      : ['operationMetrics.operationKey']
+  const operationDrift = valuesMatchInOrder(operationKeysBefore, operationKeysAfter)
+    ? []
+    : ['operationMetrics.operationKey']
+  const sampleCountDrift = before.operationMetrics.every((beforeMetrics) => {
+    const afterMetrics = getOperationMetricByKey(after, beforeMetrics.operationKey)
 
-  return [...fieldDrift, ...operationDrift]
+    return afterMetrics?.sampleCount === beforeMetrics.sampleCount
+  })
+    ? []
+    : ['operationMetrics.sampleCount']
+  const samplePlanDrift = valuesMatchInOrder(getArtifactSamplePlan(before), getArtifactSamplePlan(after))
+    ? []
+    : ['samples.samplePlan']
+
+  return [...fieldDrift, ...operationDrift, ...sampleCountDrift, ...samplePlanDrift]
 }
 
 const getOperationMetricByKey = (artifact: ReviewServingSyntheticBenchmarkArtifact, operationKey: string) => {
@@ -946,13 +1010,11 @@ export const compareReviewServingSyntheticBenchmarkArtifacts = ({
   after,
   allowConfigDrift = false,
   before,
-  nonTargetRegressionToleranceRatio = 0.1,
   targetOperation = after.targetOperation ?? before.targetOperation,
 }: {
   after: ReviewServingSyntheticBenchmarkArtifact
   allowConfigDrift?: boolean
   before: ReviewServingSyntheticBenchmarkArtifact
-  nonTargetRegressionToleranceRatio?: number
   targetOperation?: string | null
 }): ReviewServingSyntheticBenchmarkCompareResult => {
   const configDrift = getConfigDrift(before, after)
@@ -981,13 +1043,14 @@ export const compareReviewServingSyntheticBenchmarkArtifacts = ({
       : []
   })
   const nonTargetRegressions = deltas.flatMap((delta) => {
-    if (targetOperation && delta.operationKey === targetOperation) {
-      return []
-    }
-
+    const nonTargetRegressionToleranceRatio = after.compareSettings.nonTargetRegressionToleranceRatio
+    const targetMetric = after.targetMetric ?? before.targetMetric
     const maxAllowedP95 = delta.before.p95LatencyMs * (1 + nonTargetRegressionToleranceRatio)
     const maxAllowedRowsScanned = delta.before.rowsScanned * (1 + nonTargetRegressionToleranceRatio)
-    const maxAllowedP95WithNoiseFloor = Math.max(maxAllowedP95, delta.before.p95LatencyMs + 100)
+    const maxAllowedP95WithNoiseFloor = Math.max(
+      maxAllowedP95,
+      delta.before.p95LatencyMs + after.compareSettings.latencyP95NoiseFloorMs,
+    )
 
     return [
       {
@@ -1015,9 +1078,26 @@ export const compareReviewServingSyntheticBenchmarkArtifacts = ({
         operationKey: delta.operationKey,
       },
     ].filter((violation) => {
-      return violation.actual > violation.budget
+      const isTargetMetric = targetOperation === delta.operationKey && targetMetric === violation.metric
+
+      return !isTargetMetric && violation.actual > violation.budget
     })
   })
+  const nonTargetRegressionToleranceRatio = after.compareSettings.nonTargetRegressionToleranceRatio
+  const rssRegressions = [
+    {
+      actual: after.totals.peakRssBytes,
+      budget: Number((before.totals.peakRssBytes * (1 + nonTargetRegressionToleranceRatio)).toFixed(3)),
+      metric: 'compare.rss.peakBytes',
+    },
+    {
+      actual: after.totals.rssGrowthBytes,
+      budget: Number((before.totals.rssGrowthBytes * (1 + nonTargetRegressionToleranceRatio)).toFixed(3)),
+      metric: 'compare.rss.growthBytes',
+    },
+  ].filter((violation) => {
+    return violation.actual > violation.budget
+  })
 
-  return {configDrift, deltas, nonTargetRegressions}
+  return {configDrift, deltas, nonTargetRegressions: [...nonTargetRegressions, ...rssRegressions]}
 }
