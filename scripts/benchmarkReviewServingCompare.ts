@@ -29,7 +29,7 @@ const result = compareReviewServingSyntheticBenchmarkArtifacts({
   after,
   allowConfigDrift: hasArg('--allow-config-drift'),
   before,
-  targetOperation: getArgValue('--target-operation'),
+  targetOperation: getArgValue('--target-operation') ?? undefined,
 })
 
 console.log(JSON.stringify(result, null, 2))

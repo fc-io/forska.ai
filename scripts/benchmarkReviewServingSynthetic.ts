@@ -48,8 +48,23 @@ const getDuckdbMemoryLimit = () => {
   return getArgValue('--duckdb-memory-limit') ?? process.env.DUCKDB_MEMORY_LIMIT?.trim() ?? '1024MiB'
 }
 
+const assertReleaseScaleIsExplicitlyConfirmed = (scale: ReviewServingSyntheticBenchmarkScale) => {
+  if (scale !== 'release') {
+    return
+  }
+
+  if (hasArg('--confirm-release-scale') && getArgValue('--duckdb-memory-limit')) {
+    return
+  }
+
+  throw new Error(
+    'Release-scale review-serving benchmark is manual/long-running. Re-run with --confirm-release-scale and --duckdb-memory-limit=<limit>.',
+  )
+}
+
 const mode = getMode()
 const scale = getScale()
+assertReleaseScaleIsExplicitlyConfirmed(scale)
 const artifact = await runReviewServingSyntheticBenchmark({
   command: `bun ${process.argv.slice(1).join(' ')}`,
   duckdbMemoryLimit: getDuckdbMemoryLimit(),

@@ -172,6 +172,8 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
     },
   }
   const driftedModeAfter = {...matchingAfter, mode: 'check' as const}
+  const driftedDuckdbVersionAfter = {...matchingAfter, duckdbVersion: `${matchingAfter.duckdbVersion}-drift`}
+  const driftedPlatformAfter = {...matchingAfter, platform: {...matchingAfter.platform, bunVersion: '0.0.0-drift'}}
   const driftedSampleCountAfter = {
     ...matchingAfter,
     operationMetrics: matchingAfter.operationMetrics.map((metrics, index) => {
@@ -223,6 +225,12 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
     expect(() => {
       compareReviewServingSyntheticBenchmarkArtifacts({after: driftedModeAfter, before})
     }).toThrow('mode')
+    expect(() => {
+      compareReviewServingSyntheticBenchmarkArtifacts({after: driftedDuckdbVersionAfter, before})
+    }).toThrow('duckdbVersion')
+    expect(() => {
+      compareReviewServingSyntheticBenchmarkArtifacts({after: driftedPlatformAfter, before})
+    }).toThrow('platform.bunVersion')
     expect(() => {
       compareReviewServingSyntheticBenchmarkArtifacts({after: driftedSampleCountAfter, before})
     }).toThrow('operationMetrics.sampleCount')

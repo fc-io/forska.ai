@@ -937,6 +937,7 @@ const benchmarkCriticalArtifactFields = [
   'budgetSettings.maxWriterRowsPerBatch',
   'compareSettings.latencyP95NoiseFloorMs',
   'compareSettings.nonTargetRegressionToleranceRatio',
+  'duckdbVersion',
   'fixture.fixtureVersion',
   'fixture.scale',
   'fixture.seed',
@@ -945,6 +946,9 @@ const benchmarkCriticalArtifactFields = [
   'fixture.articlePromptOverlapRows',
   'fixture.duckdbMemoryLimit',
   'fixture.holdout',
+  'platform.arch',
+  'platform.bunVersion',
+  'platform.os',
   'targetMetric',
   'targetOperation',
 ] as const
