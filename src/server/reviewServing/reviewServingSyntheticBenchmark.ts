@@ -37,6 +37,7 @@ export type ReviewServingSyntheticBenchmarkOperationSample = {
   latencyMs: number
   memoryRssBytes: number
   operationKey: string
+  queueDepth: number
   rowsReturned: number
   rowsScanned: number
   sampleIndex: number
@@ -424,6 +425,7 @@ const runOperationSample = async ({
     latencyMs,
     memoryRssBytes: sampleRssBytes(),
     operationKey,
+    queueDepth: 0,
     rowsReturned,
     rowsScanned,
     sampleIndex,

@@ -191,51 +191,51 @@ batch fanout, or p95/p99 latency.
 
 ### 2. Add Deterministic Synthetic DuckDB Seeding
 
-- [ ] Add a seeder that creates a temp DuckDB file under `.tmp/` or OS temp.
-- [ ] Support explicit scales: `small`, `medium`, and `release`.
-- [ ] Default PR scale to `medium`.
-- [ ] Make seed generation deterministic from a fixed fixture version/seed.
-- [ ] Seed enough data to exercise 7-prompt overlap, filters, counts, queues,
+- [x] Add a seeder that creates a temp DuckDB file under `.tmp/` or OS temp.
+- [x] Support explicit scales: `small`, `medium`, and `release`.
+- [x] Default PR scale to `medium`.
+- [x] Make seed generation deterministic from a fixed fixture version/seed.
+- [x] Seed enough data to exercise 7-prompt overlap, filters, counts, queues,
       review lists, search, payload hydration, and summary/posting paths.
-- [ ] Write a fixture manifest into the report: scale, article count, prompt
+- [x] Write a fixture manifest into the report: scale, article count, prompt
       count, overlap rows, fixture version, seed, and DuckDB memory limit.
-- [ ] Ensure cleanup removes temp DB, WAL/lock/history files, and temp dirs on
+- [x] Ensure cleanup removes temp DB, WAL/lock/history files, and temp dirs on
       success and failure.
 
 ### 3. Add A Physical DuckDB Executor
 
-- [ ] Extend the benchmark harness with an executor that runs actual DuckDB-backed
+- [x] Extend the benchmark harness with an executor that runs actual DuckDB-backed
       operations instead of mocked observations.
-- [ ] Reuse existing review-serving read/write/projector code paths where
+- [x] Reuse existing review-serving read/write/projector code paths where
       practical.
-- [ ] Keep the benchmark isolated from the live current DB.
-- [ ] Capture per-operation samples with rows scanned, rows returned, latency,
+- [x] Keep the benchmark isolated from the live current DB.
+- [x] Capture per-operation samples with rows scanned, rows returned, latency,
       queue depth, temp usage, RSS, and diagnostics.
-- [ ] Add warmup execution so p95/p99 exclude first-use initialization noise.
-- [ ] Surface configured memory limit and benchmark-critical environment in the
+- [x] Add warmup execution so p95/p99 exclude first-use initialization noise.
+- [x] Surface configured memory limit and benchmark-critical environment in the
       release report.
-- [ ] Fail rather than silently changing scale, memory, provider/model settings,
+- [x] Fail rather than silently changing scale, memory, provider/model settings,
       or execution mode.
 
 ### 4. Add Shape/Budget Validation
 
-- [ ] Add PR-tier budgets for the medium synthetic fixture.
-- [ ] Add release-tier budgets for the `synthetic10m7PromptOverlap` fixture.
-- [ ] Fail if foreground samples spill to DuckDB temp storage.
-- [ ] Fail if rows scanned exceed the per-operation budget.
-- [ ] Fail if writer batch count or rows-per-batch fanout exceeds budget.
-- [ ] Fail if peak RSS or RSS growth exceeds budget.
-- [ ] Fail on broad p95/p99 latency guardrails after warmup.
-- [ ] Include violations in the JSON report and terminal output.
+- [x] Add PR-tier budgets for the medium synthetic fixture.
+- [x] Add release-tier budgets for the `synthetic10m7PromptOverlap` fixture.
+- [x] Fail if foreground samples spill to DuckDB temp storage.
+- [x] Fail if rows scanned exceed the per-operation budget.
+- [x] Fail if writer batch count or rows-per-batch fanout exceeds budget.
+- [x] Fail if peak RSS or RSS growth exceeds budget.
+- [x] Fail on broad p95/p99 latency guardrails after warmup.
+- [x] Include violations in the JSON report and terminal output.
 
 ### 5. Add Measure And Compare Modes
 
-- [ ] Add measure mode that writes artifacts without failing budget thresholds.
-- [ ] Add compare mode that accepts `--before` and `--after` artifacts.
-- [ ] Fail compare mode when benchmark-critical settings drift unexpectedly.
-- [ ] Report per-operation improvements and regressions.
-- [ ] Add non-target regression tolerance for optimization tasks.
-- [ ] Add support for a target-operation or target-metric label in artifact
+- [x] Add measure mode that writes artifacts without failing budget thresholds.
+- [x] Add compare mode that accepts `--before` and `--after` artifacts.
+- [x] Fail compare mode when benchmark-critical settings drift unexpectedly.
+- [x] Report per-operation improvements and regressions.
+- [x] Add non-target regression tolerance for optimization tasks.
+- [x] Add support for a target-operation or target-metric label in artifact
       metadata.
 
 ### 6. Add Package Scripts
@@ -257,6 +257,11 @@ batch fanout, or p95/p99 latency.
       benchmark does not provide enough diagnostic granularity.
 - [x] Keep these tests small enough for targeted `bun test path/to/file.test.ts`
       runs.
+
+Summary finalization remains open because the synthetic physical subset does not
+currently call the request-associated summary finalization path directly; adding
+that would duplicate existing projector correctness tests without a stable new
+shape budget in this benchmark module.
 
 ### 8. Add Optimization Workflow Guardrails
 
