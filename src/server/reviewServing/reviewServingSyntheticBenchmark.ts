@@ -433,10 +433,7 @@ const getDuckdbTempSpillBytes = async (connection: DuckDBConnection) => {
 export const getReviewServingSyntheticBenchmarkOperationSql = (operationKey: string, sampleIndex: number) => {
   const normalizedOperationKey = operationKey.toLowerCase()
   const promptId = (sampleIndex % 7) + 1
-  const offset = sampleIndex * 17
   const workloadOperation = getWorkloadOperationByKey(operationKey)
-  const rowsScannedBudget =
-    workloadOperation?.maxRowsScannedPerRequest ?? syntheticBenchmarkBudgets.check.maxRowsScanned
   const pageSize = Math.min(workloadOperation?.pageSize ?? 100, workloadOperation?.targetRowsReturnedPerRequest ?? 100)
 
   if (operationKey === 'llmPromptOverlapCounts') {
@@ -561,8 +558,7 @@ export const getReviewServingSyntheticBenchmarkOperationSql = (operationKey: str
         FROM prompt_overlap
         INNER JOIN article USING (article_id)
         WHERE prompt_overlap.prompt_id = ${promptId}
-          AND prompt_overlap.article_id > ${offset}
-          AND prompt_overlap.article_id <= ${offset + rowsScannedBudget}
+          AND FLOOR((prompt_overlap.article_id - 1) / ${pageSize}) = ${sampleIndex}
         ORDER BY prompt_overlap.article_id
       ),
       selected_rows AS (
@@ -584,8 +580,7 @@ export const getReviewServingSyntheticBenchmarkOperationSql = (operationKey: str
       FROM prompt_overlap
       INNER JOIN article USING (article_id)
       WHERE prompt_overlap.prompt_id = ${promptId}
-        AND prompt_overlap.article_id > ${offset}
-        AND prompt_overlap.article_id <= ${offset + rowsScannedBudget}
+        AND FLOOR((prompt_overlap.article_id - 1) / ${pageSize}) = ${sampleIndex}
       ORDER BY article.article_id
     ),
     selected_rows AS (
@@ -1067,6 +1062,7 @@ export const compareReviewServingSyntheticBenchmarkArtifacts = ({
   targetOperation?: string | null
 }): ReviewServingSyntheticBenchmarkCompareResult => {
   const configDrift = getConfigDrift(before, after)
+  const targetMetric = after.targetMetric ?? before.targetMetric
 
   if (!allowConfigDrift && configDrift.length > 0) {
     throw new Error(`Review-serving benchmark config drift: ${configDrift.join(', ')}`)
@@ -1094,7 +1090,6 @@ export const compareReviewServingSyntheticBenchmarkArtifacts = ({
   })
   const nonTargetRegressions = deltas.flatMap((delta) => {
     const nonTargetRegressionToleranceRatio = after.compareSettings.nonTargetRegressionToleranceRatio
-    const targetMetric = after.targetMetric ?? before.targetMetric
     const maxAllowedP95 = delta.before.p95LatencyMs * (1 + nonTargetRegressionToleranceRatio)
     const maxAllowedP99 = delta.before.p99LatencyMs * (1 + nonTargetRegressionToleranceRatio)
     const maxAllowedRowsReturned = delta.before.rowsReturned * (1 + nonTargetRegressionToleranceRatio)
@@ -1170,7 +1165,7 @@ export const compareReviewServingSyntheticBenchmarkArtifacts = ({
       metric: 'compare.rss.growthBytes',
     },
   ].filter((violation) => {
-    return violation.actual > violation.budget
+    return violation.metric !== targetMetric && violation.actual > violation.budget
   })
 
   return {configDrift, deltas, nonTargetRegressions: [...nonTargetRegressions, ...rssRegressions]}

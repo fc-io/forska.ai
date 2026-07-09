@@ -329,6 +329,21 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
       budget: Number((before.totals.rssGrowthBytes * 1.1).toFixed(3)),
       metric: 'compare.rss.growthBytes',
     })
+    const targetRssResult = compareReviewServingSyntheticBenchmarkArtifacts({
+      after: {...rssRegressedAfter, targetMetric: 'compare.rss.peakBytes'},
+      allowConfigDrift: true,
+      before,
+    })
+    expect(targetRssResult.nonTargetRegressions).not.toContainEqual({
+      actual: rssRegressedAfter.totals.peakRssBytes,
+      budget: Number((before.totals.peakRssBytes * 1.1).toFixed(3)),
+      metric: 'compare.rss.peakBytes',
+    })
+    expect(targetRssResult.nonTargetRegressions).toContainEqual({
+      actual: rssRegressedAfter.totals.rssGrowthBytes,
+      budget: Number((before.totals.rssGrowthBytes * 1.1).toFixed(3)),
+      metric: 'compare.rss.growthBytes',
+    })
   } finally {
     cleanupReviewServingSyntheticFixture({
       duckdbPath: before.artifactPath,
@@ -361,6 +376,12 @@ test('review-serving synthetic operation SQL exercises operation-specific predic
     '(SELECT COUNT(*) FROM candidate_rows) AS rowsScanned',
   )
   expect(getReviewServingSyntheticBenchmarkOperationSql('llmPromptOverlapRows', 1)).toContain('candidate_rows')
+  expect(getReviewServingSyntheticBenchmarkOperationSql('llmPromptOverlapRows', 1)).toContain(
+    'FLOOR((prompt_overlap.article_id - 1) / 100) = 1',
+  )
+  expect(getReviewServingSyntheticBenchmarkOperationSql('llmPromptOverlapRows', 1)).not.toContain(
+    'prompt_overlap.article_id <=',
+  )
 })
 
 test('review-serving synthetic micro-perf keeps high-risk operation shapes bounded', async () => {
@@ -391,6 +412,7 @@ test('review-serving synthetic micro-perf keeps high-risk operation shapes bound
     expect(getOperation('titlePrefixOverlapSearch').rowsScanned).toBe(450)
     expect(getOperation('substringOverlapSearchJob').rowsScanned).toBe(30)
     expect(getOperation('llmPromptOverlapRows').rowsReturned).toBeLessThanOrEqual(300)
+    expect(getOperation('llmPromptOverlapRows').rowsScanned).toBe(300)
     expect(artifact.totals.writerBatchCount).toBeLessThanOrEqual(12)
     expect(artifact.totals.tempSpillBytes).toBe(0)
   } finally {
