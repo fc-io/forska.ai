@@ -9,6 +9,7 @@ import {
   getReviewServingSyntheticFixtureManifest,
   reviewServingSyntheticBenchmarkDefaultSeed,
   reviewServingSyntheticBenchmarkFixtureVersion,
+  runReviewServingSyntheticBenchmark,
 } from './reviewServingSyntheticBenchmark.ts'
 
 test('review-serving synthetic fixture manifest is deterministic by scale and seed', () => {
@@ -54,4 +55,29 @@ test('review-serving synthetic fixture seeds isolated DuckDB data and cleans up 
   }
 
   expect(existsSync(fixture.rootDirectory)).toBe(false)
+})
+
+test('review-serving synthetic benchmark writes a physical DuckDB artifact with operation metrics', async () => {
+  const artifact = await runReviewServingSyntheticBenchmark({
+    artifactDirectory: '.tmp/benchmarks/test-artifacts',
+    command: 'bun test reviewServingSyntheticBenchmark.test.ts',
+    duckdbMemoryLimit: '256MiB',
+    mode: 'measure',
+    scale: 'small',
+    seed: 456,
+  })
+
+  try {
+    expect(existsSync(artifact.artifactPath)).toBe(true)
+    expect(artifact.fixture).toMatchObject({articleCount: 1_000, promptCount: 7, scale: 'small', seed: 456})
+    expect(artifact.operationMetrics).toHaveLength(31)
+    expect(artifact.samples).toHaveLength(124)
+    expect(artifact.samples.some((sample) => {
+      return sample.warmup
+    })).toBe(true)
+    expect(artifact.totals.rowsScanned).toBeGreaterThan(0)
+    expect(artifact.violations).toEqual([])
+  } finally {
+    cleanupReviewServingSyntheticFixture({duckdbPath: artifact.artifactPath, rootDirectory: '.tmp/benchmarks/test-artifacts'})
+  }
 })

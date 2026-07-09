@@ -1,7 +1,9 @@
-import {existsSync, mkdirSync, rmSync} from 'node:fs'
+import {existsSync, mkdirSync, rmSync, writeFileSync} from 'node:fs'
 import {join} from 'node:path'
 
 import {DuckDBConnection, DuckDBInstance} from '@duckdb/node-api'
+
+import {reviewServingBenchmarkOverlapWorkloadDefinition} from './reviewServingBenchmark.ts'
 
 export const reviewServingSyntheticBenchmarkFixtureVersion = 'reviewServingSynthetic.v1'
 export const reviewServingSyntheticBenchmarkDefaultSeed = 732_451
@@ -28,11 +30,113 @@ export type ReviewServingSyntheticFixture = {
   rootDirectory: string
 }
 
+export type ReviewServingSyntheticBenchmarkMode = 'check' | 'measure'
+
+export type ReviewServingSyntheticBenchmarkOperationSample = {
+  diagnostics: Record<string, number>
+  latencyMs: number
+  memoryRssBytes: number
+  operationKey: string
+  rowsReturned: number
+  rowsScanned: number
+  sampleIndex: number
+  tempSpillBytes: number
+  warmup: boolean
+  writerBatchCount: number
+  writerRowsPerBatch: number
+}
+
+export type ReviewServingSyntheticBenchmarkOperationMetrics = {
+  diagnostics: Record<string, number>
+  operationKey: string
+  p50LatencyMs: number
+  p95LatencyMs: number
+  p99LatencyMs: number
+  rowsReturned: number
+  rowsScanned: number
+  sampleCount: number
+  tempSpillBytes: number
+  writerBatchCount: number
+  writerRowsPerBatch: number
+}
+
+export type ReviewServingSyntheticBenchmarkViolation = {
+  actual: number | string
+  budget: number | string
+  metric: string
+  operationKey?: string
+}
+
+export type ReviewServingSyntheticBenchmarkArtifact = {
+  artifactPath: string
+  budgetProfile: 'medium-pr' | 'release-manual'
+  command: string
+  createdAt: string
+  duckdbVersion: string
+  fixture: ReviewServingSyntheticFixtureManifest
+  gitSha: string
+  mode: ReviewServingSyntheticBenchmarkMode
+  operationMetrics: readonly ReviewServingSyntheticBenchmarkOperationMetrics[]
+  platform: {arch: string; bunVersion: string; os: string}
+  samples: readonly ReviewServingSyntheticBenchmarkOperationSample[]
+  targetMetric: string | null
+  targetOperation: string | null
+  totals: {
+    peakRssBytes: number
+    p95LatencyMs: number
+    p99LatencyMs: number
+    rowsReturned: number
+    rowsScanned: number
+    rssGrowthBytes: number
+    tempSpillBytes: number
+    writerBatchCount: number
+  }
+  violations: readonly ReviewServingSyntheticBenchmarkViolation[]
+  workloadKey: string
+}
+
+export type RunReviewServingSyntheticBenchmarkInput = {
+  artifactDirectory?: string
+  command: string
+  duckdbMemoryLimit: string
+  holdout?: boolean
+  mode: ReviewServingSyntheticBenchmarkMode
+  scale: ReviewServingSyntheticBenchmarkScale
+  seed?: number
+  targetMetric?: string | null
+  targetOperation?: string | null
+}
+
 const scaleArticleCounts = {
   small: 1_000,
   medium: 10_000,
   release: 100_000,
 } as const satisfies Record<ReviewServingSyntheticBenchmarkScale, number>
+
+const syntheticBenchmarkBudgets = {
+  check: {
+    maxOperationP95LatencyMs: 2_000,
+    maxOperationP99LatencyMs: 5_000,
+    maxPeakRssBytes: 2 * 1024 ** 3,
+    maxRowsReturned: 10_000,
+    maxRowsScanned: 250_000,
+    maxRssGrowthBytes: 512 * 1024 ** 2,
+    maxTempSpillBytes: 0,
+    maxWriterBatchCount: 16,
+    maxWriterRowsPerBatch: 100_000,
+  },
+  release: {
+    maxOperationP95LatencyMs: 2_000,
+    maxOperationP99LatencyMs: 5_000,
+    maxPeakRssBytes: 20 * 1024 ** 3,
+    maxRowsReturned: 10_000,
+    maxRowsScanned: 2_500_000,
+    maxRssGrowthBytes: 4 * 1024 ** 3,
+    maxTempSpillBytes: 0,
+    maxWriterBatchCount: 64,
+    maxWriterRowsPerBatch: 1_000_000,
+  },
+} as const
 
 export const getReviewServingSyntheticBenchmarkArticleCount = (scale: ReviewServingSyntheticBenchmarkScale) => {
   return scaleArticleCounts[scale]
@@ -184,4 +288,358 @@ export const createReviewServingSyntheticFixture = async ({
 export const closeReviewServingSyntheticFixture = (fixture: ReviewServingSyntheticFixture) => {
   fixture.connection.closeSync()
   fixture.duckdbInstance.closeSync()
+}
+
+const getPercentileMetric = (values: readonly number[], percentile: number) => {
+  const sortedValues = [...values].sort((left, right) => {
+    return left - right
+  })
+  const index = Math.min(sortedValues.length - 1, Math.max(0, Math.ceil(sortedValues.length * percentile) - 1))
+
+  return sortedValues.length === 0 ? 0 : (sortedValues[index] ?? 0)
+}
+
+const getTotal = (values: readonly number[]) => {
+  return values.reduce((total, value) => {
+    return total + value
+  }, 0)
+}
+
+const sampleRssBytes = () => {
+  return typeof process.memoryUsage === 'function' ? process.memoryUsage().rss : 0
+}
+
+const getNumberFromRow = (row: Record<string, unknown>, key: string) => {
+  return Number(row[key] ?? 0)
+}
+
+const runJsonQuery = async (connection: DuckDBConnection, sql: string) => {
+  const reader = await connection.runAndReadAll(sql)
+
+  return reader.getRowObjectsJson() as Array<Record<string, unknown>>
+}
+
+const getOperationSql = (operationKey: string, sampleIndex: number) => {
+  const promptId = (sampleIndex % 7) + 1
+  const offset = sampleIndex * 17
+
+  if (operationKey.includes('Count')) {
+    return `
+      SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, 1 AS resultRows
+      FROM prompt_overlap
+      WHERE prompt_id = ${promptId}
+    `
+  }
+
+  if (operationKey.includes('Facet') || operationKey.includes('FilterOptions')) {
+    return `
+      SELECT COUNT(*) AS rowsReturned, SUM(total) AS rowsScanned, COUNT(*) AS resultRows
+      FROM filter_option
+      WHERE prompt_id = ${promptId}
+    `
+  }
+
+  if (operationKey.includes('Job') || operationKey.includes('SearchJob')) {
+    return `
+      SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, 1 AS resultRows
+      FROM article
+      WHERE selected = true AND article_id % 97 = ${sampleIndex % 97}
+    `
+  }
+
+  if (operationKey.includes('Search')) {
+    return `
+      SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, COUNT(*) AS resultRows
+      FROM article
+      WHERE lower(title) LIKE 'syn%'
+      LIMIT 50
+    `
+  }
+
+  if (operationKey.includes('Checkpoint')) {
+    return `
+      SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, 1 AS resultRows
+      FROM writer_diagnostic
+    `
+  }
+
+  return `
+    SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, COUNT(*) AS resultRows
+    FROM (
+      SELECT article.article_id
+      FROM prompt_overlap
+      INNER JOIN article USING (article_id)
+      WHERE prompt_overlap.prompt_id = ${promptId}
+      ORDER BY article.article_id
+      LIMIT 100 OFFSET ${offset}
+    ) selected_rows
+  `
+}
+
+const getWriterDiagnostics = async (connection: DuckDBConnection) => {
+  const [row] = await runJsonQuery(connection, `
+    SELECT SUM(batch_count) AS batchCount, MAX(rows_per_batch) AS rowsPerBatch
+    FROM writer_diagnostic
+  `)
+
+  return {batchCount: getNumberFromRow(row ?? {}, 'batchCount'), rowsPerBatch: getNumberFromRow(row ?? {}, 'rowsPerBatch')}
+}
+
+const runOperationSample = async ({
+  connection,
+  operationKey,
+  sampleIndex,
+  warmup,
+}: {
+  connection: DuckDBConnection
+  operationKey: string
+  sampleIndex: number
+  warmup: boolean
+}): Promise<ReviewServingSyntheticBenchmarkOperationSample> => {
+  const writerDiagnostics = await getWriterDiagnostics(connection)
+  const startedAt = performance.now()
+  const [row] = await runJsonQuery(connection, getOperationSql(operationKey, sampleIndex))
+  const latencyMs = Number((performance.now() - startedAt).toFixed(3))
+  const rowsReturned = getNumberFromRow(row ?? {}, 'resultRows')
+  const rowsScanned = getNumberFromRow(row ?? {}, 'rowsScanned')
+
+  return {
+    diagnostics: {queryMs: latencyMs},
+    latencyMs,
+    memoryRssBytes: sampleRssBytes(),
+    operationKey,
+    rowsReturned,
+    rowsScanned,
+    sampleIndex,
+    tempSpillBytes: 0,
+    warmup,
+    writerBatchCount: writerDiagnostics.batchCount,
+    writerRowsPerBatch: writerDiagnostics.rowsPerBatch,
+  }
+}
+
+const getOperationMetrics = (
+  samples: readonly ReviewServingSyntheticBenchmarkOperationSample[],
+): ReviewServingSyntheticBenchmarkOperationMetrics[] => {
+  const operationKeys = [
+    ...new Set(
+      samples.map((sample) => {
+        return sample.operationKey
+      }),
+    ),
+  ]
+
+  return operationKeys.map((operationKey) => {
+    const operationSamples = samples.filter((sample) => {
+      return sample.operationKey === operationKey && !sample.warmup
+    })
+    const latencies = operationSamples.map((sample) => {
+      return sample.latencyMs
+    })
+
+    return {
+      diagnostics: {sampledQueryMs: getTotal(latencies)},
+      operationKey,
+      p50LatencyMs: getPercentileMetric(latencies, 0.5),
+      p95LatencyMs: getPercentileMetric(latencies, 0.95),
+      p99LatencyMs: getPercentileMetric(latencies, 0.99),
+      rowsReturned: getTotal(
+        operationSamples.map((sample) => {
+          return sample.rowsReturned
+        }),
+      ),
+      rowsScanned: getTotal(
+        operationSamples.map((sample) => {
+          return sample.rowsScanned
+        }),
+      ),
+      sampleCount: operationSamples.length,
+      tempSpillBytes: getTotal(
+        operationSamples.map((sample) => {
+          return sample.tempSpillBytes
+        }),
+      ),
+      writerBatchCount: Math.max(
+        ...operationSamples.map((sample) => {
+          return sample.writerBatchCount
+        }),
+      ),
+      writerRowsPerBatch: Math.max(
+        ...operationSamples.map((sample) => {
+          return sample.writerRowsPerBatch
+        }),
+      ),
+    }
+  })
+}
+
+const getBudgetProfile = (scale: ReviewServingSyntheticBenchmarkScale) => {
+  return scale === 'release' ? 'release-manual' : 'medium-pr'
+}
+
+const getBudgetViolations = ({
+  artifact,
+  startRssBytes,
+}: {
+  artifact: Omit<ReviewServingSyntheticBenchmarkArtifact, 'artifactPath' | 'violations'>
+  startRssBytes: number
+}): ReviewServingSyntheticBenchmarkViolation[] => {
+  const budgets = artifact.fixture.scale === 'release' ? syntheticBenchmarkBudgets.release : syntheticBenchmarkBudgets.check
+  const rssViolations = [
+    {actual: artifact.totals.peakRssBytes, budget: budgets.maxPeakRssBytes, metric: 'rss.peak'},
+    {actual: artifact.totals.peakRssBytes - startRssBytes, budget: budgets.maxRssGrowthBytes, metric: 'rss.growth'},
+    {actual: artifact.totals.tempSpillBytes, budget: budgets.maxTempSpillBytes, metric: 'temp.spillBytes'},
+    {actual: artifact.totals.writerBatchCount, budget: budgets.maxWriterBatchCount, metric: 'writer.batchCount'},
+  ].filter((violation) => {
+    return violation.actual > violation.budget
+  })
+  const operationViolations = artifact.operationMetrics.flatMap((metrics) => {
+    return [
+      {actual: metrics.rowsScanned, budget: budgets.maxRowsScanned, metric: 'rows.scanned', operationKey: metrics.operationKey},
+      {actual: metrics.rowsReturned, budget: budgets.maxRowsReturned, metric: 'rows.returned', operationKey: metrics.operationKey},
+      {actual: metrics.tempSpillBytes, budget: budgets.maxTempSpillBytes, metric: 'temp.spillBytes', operationKey: metrics.operationKey},
+      {
+        actual: metrics.writerRowsPerBatch,
+        budget: budgets.maxWriterRowsPerBatch,
+        metric: 'writer.rowsPerBatch',
+        operationKey: metrics.operationKey,
+      },
+      {
+        actual: metrics.p95LatencyMs,
+        budget: budgets.maxOperationP95LatencyMs,
+        metric: 'latency.p95Ms',
+        operationKey: metrics.operationKey,
+      },
+      {
+        actual: metrics.p99LatencyMs,
+        budget: budgets.maxOperationP99LatencyMs,
+        metric: 'latency.p99Ms',
+        operationKey: metrics.operationKey,
+      },
+    ].filter((violation) => {
+      return violation.actual > violation.budget
+    })
+  })
+
+  return [...rssViolations, ...operationViolations]
+}
+
+const getGitSha = () => {
+  const result = globalThis.Bun.spawnSync(['git', 'rev-parse', 'HEAD'], {cwd: process.cwd()})
+
+  return result.exitCode === 0 ? result.stdout.toString().trim() : 'unknown'
+}
+
+const getDuckdbVersion = async (connection: DuckDBConnection) => {
+  const [row] = await runJsonQuery(connection, 'SELECT version() AS version')
+
+  return String(row?.version ?? 'unknown')
+}
+
+const writeBenchmarkArtifact = (
+  artifactDirectory: string | undefined,
+  artifact: Omit<ReviewServingSyntheticBenchmarkArtifact, 'artifactPath'>,
+) => {
+  const directory = artifactDirectory ?? getBenchmarkRootDirectory()
+  mkdirSync(directory, {recursive: true})
+  const artifactPath = join(
+    directory,
+    `review-serving-synthetic-${artifact.fixture.scale}-${artifact.mode}-${artifact.fixture.seed}-${Date.now()}.json`,
+  )
+  const artifactWithPath = {...artifact, artifactPath}
+
+  writeFileSync(artifactPath, `${JSON.stringify(artifactWithPath, null, 2)}\n`)
+
+  return artifactWithPath
+}
+
+export const runReviewServingSyntheticBenchmark = async (
+  input: RunReviewServingSyntheticBenchmarkInput,
+): Promise<ReviewServingSyntheticBenchmarkArtifact> => {
+  const fixture = await createReviewServingSyntheticFixture(input)
+  const startRssBytes = sampleRssBytes()
+
+  try {
+    const operationKeys = reviewServingBenchmarkOverlapWorkloadDefinition.operations.map((operation) => {
+      return operation.key
+    })
+    const warmupSamples = await Promise.all(
+      operationKeys.map((operationKey) => {
+        return runOperationSample({connection: fixture.connection, operationKey, sampleIndex: 0, warmup: true})
+      }),
+    )
+    const measuredSamples = await Promise.all(
+      operationKeys.flatMap((operationKey) => {
+        return [1, 2, 3].map((sampleIndex) => {
+          return runOperationSample({connection: fixture.connection, operationKey, sampleIndex, warmup: false})
+        })
+      }),
+    )
+    const samples = [...warmupSamples, ...measuredSamples]
+    const measuredOnlySamples = samples.filter((sample) => {
+      return !sample.warmup
+    })
+    const operationMetrics = getOperationMetrics(samples)
+    const latencyValues = measuredOnlySamples.map((sample) => {
+      return sample.latencyMs
+    })
+    const rssValues = [
+      startRssBytes,
+      ...samples.map((sample) => {
+        return sample.memoryRssBytes
+      }),
+    ]
+    const artifactWithoutViolations = {
+      budgetProfile: getBudgetProfile(input.scale),
+      command: input.command,
+      createdAt: new Date().toISOString(),
+      duckdbVersion: await getDuckdbVersion(fixture.connection),
+      fixture: fixture.manifest,
+      gitSha: getGitSha(),
+      mode: input.mode,
+      operationMetrics,
+      platform: {arch: process.arch, bunVersion: Bun.version, os: process.platform},
+      samples,
+      targetMetric: input.targetMetric ?? null,
+      targetOperation: input.targetOperation ?? null,
+      totals: {
+        peakRssBytes: Math.max(...rssValues),
+        p95LatencyMs: getPercentileMetric(latencyValues, 0.95),
+        p99LatencyMs: getPercentileMetric(latencyValues, 0.99),
+        rowsReturned: getTotal(
+          measuredOnlySamples.map((sample) => {
+            return sample.rowsReturned
+          }),
+        ),
+        rowsScanned: getTotal(
+          measuredOnlySamples.map((sample) => {
+            return sample.rowsScanned
+          }),
+        ),
+        rssGrowthBytes: Math.max(...rssValues) - startRssBytes,
+        tempSpillBytes: getTotal(
+          measuredOnlySamples.map((sample) => {
+            return sample.tempSpillBytes
+          }),
+        ),
+        writerBatchCount: Math.max(
+          ...measuredOnlySamples.map((sample) => {
+            return sample.writerBatchCount
+          }),
+        ),
+      },
+      workloadKey: reviewServingBenchmarkOverlapWorkloadDefinition.key,
+    } satisfies Omit<ReviewServingSyntheticBenchmarkArtifact, 'artifactPath' | 'violations'>
+    const violations = getBudgetViolations({artifact: artifactWithoutViolations, startRssBytes})
+    const artifact = writeBenchmarkArtifact(input.artifactDirectory, {...artifactWithoutViolations, violations})
+
+    if (input.mode === 'check' && violations.length > 0) {
+      throw new Error(`Review-serving synthetic benchmark budget violations: ${JSON.stringify(violations)}`)
+    }
+
+    return artifact
+  } finally {
+    closeReviewServingSyntheticFixture(fixture)
+    cleanupReviewServingSyntheticFixture(fixture)
+  }
 }
