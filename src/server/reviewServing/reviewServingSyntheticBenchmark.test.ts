@@ -98,7 +98,7 @@ test('review-serving synthetic fixture seeds isolated DuckDB data and cleans up 
         filterOptions: '175',
         overlapRows: '7000',
         writerBatches: '6',
-        writerRows: '8273',
+        writerRows: '8280',
         writerRowsPerBatch: 7000,
       },
     ])
@@ -351,6 +351,15 @@ test('review-serving synthetic operation SQL exercises operation-specific predic
   expect(getReviewServingSyntheticBenchmarkOperationSql('substringOverlapSearchJob', 1)).toContain(
     'async_substring_state',
   )
+  expect(getReviewServingSyntheticBenchmarkOperationSql('substringOverlapSearchJob', 1)).toContain(
+    '(SELECT COUNT(*) FROM candidate_rows) AS rowsScanned',
+  )
+  expect(getReviewServingSyntheticBenchmarkOperationSql('titlePrefixOverlapSearch', 1)).toContain(
+    '(SELECT COUNT(*) FROM candidate_rows) AS rowsScanned',
+  )
+  expect(getReviewServingSyntheticBenchmarkOperationSql('bulkOverlapSelectionJob', 1)).toContain(
+    '(SELECT COUNT(*) FROM candidate_rows) AS rowsScanned',
+  )
   expect(getReviewServingSyntheticBenchmarkOperationSql('llmPromptOverlapRows', 1)).toContain('candidate_rows')
 })
 
@@ -379,6 +388,8 @@ test('review-serving synthetic micro-perf keeps high-risk operation shapes bound
     expect(getOperation('overlapFilterOptions').rowsScanned).toBeLessThanOrEqual(3_000)
     expect(getOperation('llmPromptOverlapCounts').rowsReturned).toBe(3)
     expect(getOperation('titlePrefixOverlapSearch').rowsReturned).toBeLessThanOrEqual(150)
+    expect(getOperation('titlePrefixOverlapSearch').rowsScanned).toBe(450)
+    expect(getOperation('substringOverlapSearchJob').rowsScanned).toBe(30)
     expect(getOperation('llmPromptOverlapRows').rowsReturned).toBeLessThanOrEqual(300)
     expect(artifact.totals.writerBatchCount).toBeLessThanOrEqual(12)
     expect(artifact.totals.tempSpillBytes).toBe(0)

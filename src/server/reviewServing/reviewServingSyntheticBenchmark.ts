@@ -5,7 +5,7 @@ import {DuckDBConnection, DuckDBInstance} from '@duckdb/node-api'
 
 import {reviewServingBenchmarkOverlapWorkloadDefinition} from './reviewServingBenchmark.ts'
 
-export const reviewServingSyntheticBenchmarkFixtureVersion = 'reviewServingSynthetic.v1'
+export const reviewServingSyntheticBenchmarkFixtureVersion = 'reviewServingSynthetic.v2'
 export const reviewServingSyntheticBenchmarkDefaultSeed = 732_451
 export const reviewServingSyntheticBenchmarkScales = ['small', 'medium', 'release'] as const
 
@@ -289,7 +289,8 @@ const seedReviewServingSyntheticSchema = async (
     INSERT INTO article
     SELECT
       article_id,
-      'Synthetic review article ' || article_id || ' seed ${manifest.seed}' AS title,
+      CASE WHEN article_id <= 150 THEN 'Synthetic' ELSE 'Reference' END
+        || ' review article ' || article_id || ' seed ${manifest.seed}' AS title,
       2000 + ((article_id + ${manifest.seed}) % 25) AS year,
       article_id % 3 <> 0 AS selected
     FROM range(1, ${manifest.articleCount + 1}) AS source(article_id);
@@ -329,7 +330,7 @@ const seedReviewServingSyntheticSchema = async (
     INSERT INTO async_substring_state
     SELECT article_id, prompt_id, 'overlap ' || token_prefix AS search_text
     FROM prompt_overlap
-    WHERE article_id % 101 = 0;
+    WHERE article_id <= 10;
   `)
   await connection.run(`
     INSERT INTO writer_diagnostic
@@ -484,37 +485,61 @@ export const getReviewServingSyntheticBenchmarkOperationSql = (operationKey: str
 
   if (normalizedOperationKey.includes('substring')) {
     return `
-      SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, COUNT(*) AS resultRows
-      FROM (
+      WITH candidate_rows AS (
         SELECT article_id
         FROM async_substring_state
         WHERE prompt_id = ${promptId} AND search_text LIKE 'overlap%'
+      ),
+      selected_rows AS (
+        SELECT article_id
+        FROM candidate_rows
         LIMIT 1
-      ) selected_rows
+      )
+      SELECT
+        COUNT(*) AS rowsReturned,
+        (SELECT COUNT(*) FROM candidate_rows) AS rowsScanned,
+        COUNT(*) AS resultRows
+      FROM selected_rows
     `
   }
 
   if (normalizedOperationKey.includes('search')) {
     return `
-      SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, COUNT(*) AS resultRows
-      FROM (
+      WITH candidate_rows AS (
         SELECT article_id
         FROM article
         WHERE lower(title) LIKE 'syn%'
+      ),
+      selected_rows AS (
+        SELECT article_id
+        FROM candidate_rows
         LIMIT 50
-      ) selected_rows
+      )
+      SELECT
+        COUNT(*) AS rowsReturned,
+        (SELECT COUNT(*) FROM candidate_rows) AS rowsScanned,
+        COUNT(*) AS resultRows
+      FROM selected_rows
     `
   }
 
   if (operationKey.includes('Job')) {
     return `
-      SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, COUNT(*) AS resultRows
-      FROM (
+      WITH candidate_rows AS (
         SELECT article_id
         FROM article
-        WHERE selected = true AND article_id % 97 = ${sampleIndex % 97}
+        WHERE selected = true AND article_id <= 970 AND article_id % 97 = ${sampleIndex % 97}
+      ),
+      selected_rows AS (
+        SELECT article_id
+        FROM candidate_rows
         LIMIT 1
-      ) selected_rows
+      )
+      SELECT
+        COUNT(*) AS rowsReturned,
+        (SELECT COUNT(*) FROM candidate_rows) AS rowsScanned,
+        COUNT(*) AS resultRows
+      FROM selected_rows
     `
   }
 
