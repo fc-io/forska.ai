@@ -43,6 +43,19 @@ Smoke command:
 bun run bench:review-serving-smoke
 ```
 
+Medium synthetic DuckDB PR gate:
+
+```bash
+bun run bench:review-serving-synthetic-check
+```
+
+Measure and compare workflow:
+
+```bash
+bun run bench:review-serving-synthetic -- --mode=measure --scale=medium
+bun run bench:review-serving-compare -- --before=<before.json> --after=<after.json>
+```
+
 Repo-native release-gate validation command:
 
 ```bash

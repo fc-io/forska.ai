@@ -240,13 +240,13 @@ batch fanout, or p95/p99 latency.
 
 ### 6. Add Package Scripts
 
-- [ ] Add `bench:review-serving-synthetic-check` for the medium PR gate.
-- [ ] Add `bench:review-serving-synthetic` for explicit measure/check modes.
-- [ ] Add `bench:review-serving-compare` for artifact comparison.
-- [ ] Add `bench:review-serving-release-scale` for the manual long gate.
-- [ ] Keep `bench:review-serving-smoke` for fast contract validation unless it is
+- [x] Add `bench:review-serving-synthetic-check` for the medium PR gate.
+- [x] Add `bench:review-serving-synthetic` for explicit measure/check modes.
+- [x] Add `bench:review-serving-compare` for artifact comparison.
+- [x] Add `bench:review-serving-release-scale` for the manual long gate.
+- [x] Keep `bench:review-serving-smoke` for fast contract validation unless it is
       intentionally replaced.
-- [ ] Ensure scripts set explicit runtime profile, DuckDB path, and memory limit.
+- [x] Ensure scripts set explicit runtime profile, DuckDB path, and memory limit.
 
 ### 7. Add Targeted Micro-Perf Tests
 
@@ -260,39 +260,39 @@ batch fanout, or p95/p99 latency.
 
 ### 8. Add Optimization Workflow Guardrails
 
-- [ ] Document the required before/after artifact flow for agent optimization.
-- [ ] Document that optimization tasks must declare the target metric and
+- [x] Document the required before/after artifact flow for agent optimization.
+- [x] Document that optimization tasks must declare the target metric and
       operation before code changes.
-- [ ] Block benchmark-improvement PRs from changing fixture, scale, seed,
+- [x] Block benchmark-improvement PRs from changing fixture, scale, seed,
       skipped operations, budgets, or comparison rules unless explicitly scoped.
-- [ ] Add holdout fixture support for optimization acceptance checks.
-- [ ] Require holdout or release-scale evidence for broad performance rewrites.
+- [x] Add holdout fixture support for optimization acceptance checks.
+- [x] Require holdout or release-scale evidence for broad performance rewrites.
 
 ### 9. Document In `PERF.md`
 
-- [ ] Add the PR synthetic benchmark command with scope, expected runtime, and when to
+- [x] Add the PR synthetic benchmark command with scope, expected runtime, and when to
       run it.
-- [ ] Add measure and compare commands for benchmark optimization work.
-- [ ] Add the release-scale benchmark command as manual/long-running.
-- [ ] State that performance gates use temp synthetic DBs and never the current
+- [x] Add measure and compare commands for benchmark optimization work.
+- [x] Add the release-scale benchmark command as manual/long-running.
+- [x] State that performance gates use temp synthetic DBs and never the current
       DB by default.
-- [ ] State which DuckDB/review-serving changes require the PR perf gate.
-- [ ] State where JSON artifacts are written.
-- [ ] State that benchmark optimization requires before/after artifacts and
+- [x] State which DuckDB/review-serving changes require the PR perf gate.
+- [x] State where JSON artifacts are written.
+- [x] State that benchmark optimization requires before/after artifacts and
       compare output.
-- [ ] Keep `TESTS.md` focused on correctness, smoke, and regression tests, with
+- [x] Keep `TESTS.md` focused on correctness, smoke, and regression tests, with
       only a pointer to `PERF.md` for benchmark workflows.
 
 ### 10. Baseline And Artifacts
 
-- [ ] Decide artifact location, for example `.tmp/benchmarks/` for local output.
-- [ ] Decide whether release baselines are checked in or supplied manually.
-- [ ] Store enough identity data to compare runs: git SHA, fixture version, scale,
+- [x] Decide artifact location, for example `.tmp/benchmarks/` for local output.
+- [x] Decide whether release baselines are checked in or supplied manually.
+- [x] Store enough identity data to compare runs: git SHA, fixture version, scale,
       memory limit, platform, Bun version, DuckDB version, and benchmark command.
-- [ ] Make baseline comparison tolerant to machine noise but strict on shape
+- [x] Make baseline comparison tolerant to machine noise but strict on shape
       regressions.
-- [ ] Store target metric/operation metadata for optimization runs.
-- [ ] Store holdout fixture identity when a holdout run is used.
+- [x] Store target metric/operation metadata for optimization runs.
+- [x] Store holdout fixture identity when a holdout run is used.
 
 ## Quality Gates
 

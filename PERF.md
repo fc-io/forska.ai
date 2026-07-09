@@ -27,27 +27,19 @@ optimization workflows. Correctness, smoke, and regression tests live in
 | `bun run bench:duckdb-append-lanes` | DuckDB append-lane throughput | Uses a temp DuckDB file and compares lane counts. Useful for write-lane throughput and queue-depth experiments. |
 | `bun run bench:project-transfer` | Project transfer package/export/import performance | Supports single fixtures or `--fixture=matrix`, repeated runs, metrics output, progress output, and baseline files. |
 | `bun run bench:review-serving-smoke` | Review-serving benchmark contract smoke | Uses mocked benchmark observations. It validates workload/report shape and does not claim a physical synthetic DuckDB run. |
+| `bun run bench:review-serving-synthetic-check` | Medium synthetic DuckDB PR gate | Uses a temp DuckDB file under `.tmp/benchmarks/`, deterministic synthetic data, warmup-excluded samples, and pass/fail shape budgets. Run this for DuckDB/review-serving query, writer, projector, or benchmark-sensitive changes. |
+| `bun run bench:review-serving-synthetic -- --mode=measure --scale=medium` | Measure-only synthetic artifact generation | Writes JSON artifacts without failing budgets. Use for before/after optimization evidence. Supports `--scale=small|medium|release`, `--seed=<n>`, `--holdout`, `--target-operation=<key>`, and `--target-metric=<metric>`. |
+| `bun run bench:review-serving-compare -- --before=<old.json> --after=<new.json>` | Synthetic artifact comparison | Fails on benchmark-critical config drift unless `--allow-config-drift` is supplied. Reports per-operation deltas and fails on non-target regressions. |
 | `bun run bench:review-serving-release-gate` | Review-serving benchmark test plus smoke report | Runs `reviewServingBenchmark.test.ts` and `bench:review-serving-smoke`; this is still a repo-native contract gate, not the planned physical release-scale DuckDB benchmark. |
+| `bun run bench:review-serving-release-scale -- --confirm-release-scale --duckdb-memory-limit=6400MiB` | Manual long-running release-scale synthetic gate | Guarded wrapper around the release synthetic scale. It requires explicit confirmation and memory limit. |
 
 Additional review-serving benchmark context lives in
 [src/server/reviewServing/reviewServingBenchmark.md](src/server/reviewServing/reviewServingBenchmark.md).
 
-## Planned Review-Serving Synthetic Benchmarks
+## Review-Serving Synthetic Benchmarks
 
-The planned physical DuckDB benchmark work is tracked in
-[PERF_BENCH_PLAN.md](PERF_BENCH_PLAN.md).
-
-Target commands:
-
-| Command | Purpose | Status |
-| --- | --- | --- |
-| `bun run bench:review-serving-synthetic-check` | Medium synthetic DuckDB PR gate with pass/fail shape budgets | Planned |
-| `bun run bench:review-serving-synthetic -- --mode=measure --scale=medium` | Measure-only before/after artifact generation | Planned |
-| `bun run bench:review-serving-compare -- --before old.json --after new.json` | Compare benchmark artifacts and report deltas | Planned |
-| `bun run bench:review-serving-release-scale` | Manual long-running synthetic release-scale gate | Planned |
-
-The synthetic benchmark should use temp DuckDB files by default, not Fredrik's
-current primary DB.
+The physical synthetic benchmark uses temporary DuckDB files by default, never
+Fredrik's current primary DB. Artifacts are written under `.tmp/benchmarks/`.
 
 ## Benchmark Optimization Workflow
 
@@ -63,12 +55,12 @@ Use this workflow when asking an agent to improve benchmark performance:
 7. For broad query-plan, writer, projection, or intermediate-state changes, run a
    holdout fixture or release-scale benchmark before accepting the optimization.
 
-Compare mode should fail when before/after artifacts drift on benchmark-critical
+Compare mode fails when before/after artifacts drift on benchmark-critical
 configuration unless an explicit override is supplied for benchmark-harness work.
 
 ## Artifacts
 
-Planned artifact location: `.tmp/benchmarks/`.
+Artifact location: `.tmp/benchmarks/`.
 
 Benchmark artifacts should record:
 

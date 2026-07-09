@@ -29,3 +29,7 @@ performance-measurement commands live in [PERF.md](PERF.md).
 Target a single Bun test file with `bun test path/to/file.test.ts`.
 
 Quality gates: run the narrow test for your change first, then `bun run lint` or `bun run build` when the changed layer needs it.
+
+Performance benchmark workflows live in [PERF.md](PERF.md). For review-serving
+or DuckDB shape-sensitive changes, run `bun run bench:review-serving-synthetic-check`
+in addition to the relevant correctness tests above.

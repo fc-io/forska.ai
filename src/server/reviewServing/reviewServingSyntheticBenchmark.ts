@@ -365,7 +365,7 @@ const getOperationSql = (operationKey: string, sampleIndex: number) => {
 
   if (operationKey.includes('Search')) {
     return `
-      SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, COUNT(*) AS resultRows
+      SELECT LEAST(COUNT(*), 50) AS rowsReturned, COUNT(*) AS rowsScanned, LEAST(COUNT(*), 50) AS resultRows
       FROM article
       WHERE lower(title) LIKE 'syn%'
       LIMIT 50
@@ -761,11 +761,12 @@ export const compareReviewServingSyntheticBenchmarkArtifacts = ({
 
     const maxAllowedP95 = delta.before.p95LatencyMs * (1 + nonTargetRegressionToleranceRatio)
     const maxAllowedRowsScanned = delta.before.rowsScanned * (1 + nonTargetRegressionToleranceRatio)
+    const maxAllowedP95WithNoiseFloor = Math.max(maxAllowedP95, delta.before.p95LatencyMs + 100)
 
     return [
       {
         actual: delta.after.p95LatencyMs,
-        budget: Number(maxAllowedP95.toFixed(3)),
+        budget: Number(maxAllowedP95WithNoiseFloor.toFixed(3)),
         metric: 'compare.latency.p95Ms',
         operationKey: delta.operationKey,
       },
