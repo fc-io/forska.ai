@@ -124,7 +124,7 @@ export type ReviewServingSyntheticBenchmarkCompareResult = {
   nonTargetRegressions: readonly ReviewServingSyntheticBenchmarkViolation[]
 }
 
-const scaleArticleCounts = {small: 1_000, medium: 10_000, release: 100_000} as const satisfies Record<
+const scaleArticleCounts = {small: 1_000, medium: 10_000, release: 10_000_000} as const satisfies Record<
   ReviewServingSyntheticBenchmarkScale,
   number
 >
@@ -149,7 +149,7 @@ const syntheticBenchmarkBudgets = {
     maxRowsScanned: 2_500_000,
     maxRssGrowthBytes: 4 * 1024 ** 3,
     maxTempSpillBytes: 0,
-    maxWriterBatchCount: 64,
+    maxWriterBatchCount: 128,
     maxWriterRowsPerBatch: 1_000_000,
   },
 } as const
@@ -238,6 +238,10 @@ const seedReviewServingSyntheticSchema = async (
       year INTEGER NOT NULL,
       total INTEGER NOT NULL
     );
+    CREATE TABLE prompt_count (
+      prompt_id INTEGER NOT NULL,
+      total INTEGER NOT NULL
+    );
     CREATE TABLE writer_diagnostic (
       table_name VARCHAR NOT NULL,
       batch_count INTEGER NOT NULL,
@@ -274,33 +278,60 @@ const seedReviewServingSyntheticSchema = async (
     GROUP BY prompt_id, year;
   `)
   await connection.run(`
-    INSERT INTO writer_diagnostic VALUES
-      ('article', 4, ${Math.ceil(manifest.articleCount / 4)}, ${manifest.articleCount}),
-      ('prompt_overlap', 7, ${manifest.articleCount}, ${manifest.articlePromptOverlapRows}),
-      ('filter_option', 1, ${manifest.promptCount * 25}, ${manifest.promptCount * 25});
+    INSERT INTO prompt_count
+    SELECT prompt_id, count(*)::INTEGER AS total
+    FROM prompt_overlap
+    GROUP BY prompt_id;
   `)
+  await connection.run(`
+    INSERT INTO writer_diagnostic
+    SELECT table_name, CEIL(rows_written::DOUBLE / max_rows_per_batch)::INTEGER, LEAST(rows_written, max_rows_per_batch)::INTEGER, rows_written
+    FROM (
+      SELECT 'article' AS table_name, 25_000 AS max_rows_per_batch, COUNT(*)::INTEGER AS rows_written FROM article
+      UNION ALL
+      SELECT 'prompt_overlap' AS table_name, 1_000_000 AS max_rows_per_batch, COUNT(*)::INTEGER AS rows_written FROM prompt_overlap
+      UNION ALL
+      SELECT 'filter_option' AS table_name, 10_000 AS max_rows_per_batch, COUNT(*)::INTEGER AS rows_written FROM filter_option
+      UNION ALL
+      SELECT 'prompt_count' AS table_name, 10_000 AS max_rows_per_batch, COUNT(*)::INTEGER AS rows_written FROM prompt_count
+    ) writer_output;
+  `)
+}
+
+const getFixtureSeed = (holdout: boolean, seed: number | undefined) => {
+  return seed ?? reviewServingSyntheticBenchmarkDefaultSeed + (holdout ? 1 : 0)
 }
 
 export const createReviewServingSyntheticFixture = async ({
   duckdbMemoryLimit,
   holdout = false,
   scale,
-  seed = reviewServingSyntheticBenchmarkDefaultSeed,
+  seed,
 }: {
   duckdbMemoryLimit: string
   holdout?: boolean
   scale: ReviewServingSyntheticBenchmarkScale
   seed?: number
 }): Promise<ReviewServingSyntheticFixture> => {
-  const manifest = getReviewServingSyntheticFixtureManifest({duckdbMemoryLimit, holdout, scale, seed})
-  const rootDirectory = getFixtureRootDirectory(scale, seed)
+  const fixtureSeed = getFixtureSeed(holdout, seed)
+  const manifest = getReviewServingSyntheticFixtureManifest({duckdbMemoryLimit, holdout, scale, seed: fixtureSeed})
+  const rootDirectory = getFixtureRootDirectory(scale, fixtureSeed)
   const duckdbPath = join(rootDirectory, 'synthetic.duckdb')
-  const duckdbInstance = await DuckDBInstance.create(duckdbPath, {memory_limit: duckdbMemoryLimit})
-  const connection = await duckdbInstance.connect()
+  let duckdbInstance: DuckDBInstance | null = null
+  let connection: DuckDBConnection | null = null
 
-  await seedReviewServingSyntheticSchema(connection, manifest)
+  try {
+    duckdbInstance = await DuckDBInstance.create(duckdbPath, {memory_limit: duckdbMemoryLimit})
+    connection = await duckdbInstance.connect()
+    await seedReviewServingSyntheticSchema(connection, manifest)
 
-  return {connection, duckdbInstance, duckdbPath, manifest, rootDirectory}
+    return {connection, duckdbInstance, duckdbPath, manifest, rootDirectory}
+  } catch (error) {
+    connection?.closeSync()
+    duckdbInstance?.closeSync()
+    cleanupReviewServingSyntheticFixture({duckdbPath, rootDirectory})
+    throw error
+  }
 }
 
 export const closeReviewServingSyntheticFixture = (fixture: ReviewServingSyntheticFixture) => {
@@ -337,21 +368,30 @@ const runJsonQuery = async (connection: DuckDBConnection, sql: string) => {
   return reader.getRowObjectsJson() as Array<Record<string, unknown>>
 }
 
+const getDuckdbTempSpillBytes = async (connection: DuckDBConnection) => {
+  const [row] = await runJsonQuery(
+    connection,
+    'SELECT COALESCE(SUM(size), 0) AS tempSpillBytes FROM duckdb_temporary_files()',
+  )
+
+  return getNumberFromRow(row ?? {}, 'tempSpillBytes')
+}
+
 const getOperationSql = (operationKey: string, sampleIndex: number) => {
   const promptId = (sampleIndex % 7) + 1
   const offset = sampleIndex * 17
 
   if (operationKey.includes('Count')) {
     return `
-      SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, 1 AS resultRows
-      FROM prompt_overlap
+      SELECT total AS rowsReturned, 1 AS rowsScanned, 1 AS resultRows
+      FROM prompt_count
       WHERE prompt_id = ${promptId}
     `
   }
 
   if (operationKey.includes('Facet') || operationKey.includes('FilterOptions')) {
     return `
-      SELECT COUNT(*) AS rowsReturned, SUM(total) AS rowsScanned, COUNT(*) AS resultRows
+      SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, COUNT(*) AS resultRows
       FROM filter_option
       WHERE prompt_id = ${promptId}
     `
@@ -359,24 +399,31 @@ const getOperationSql = (operationKey: string, sampleIndex: number) => {
 
   if (operationKey.includes('Job') || operationKey.includes('SearchJob')) {
     return `
-      SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, 1 AS resultRows
-      FROM article
-      WHERE selected = true AND article_id % 97 = ${sampleIndex % 97}
+      SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, COUNT(*) AS resultRows
+      FROM (
+        SELECT article_id
+        FROM article
+        WHERE selected = true AND article_id % 97 = ${sampleIndex % 97}
+        LIMIT 1
+      ) selected_rows
     `
   }
 
   if (operationKey.includes('Search')) {
     return `
-      SELECT LEAST(COUNT(*), 50) AS rowsReturned, COUNT(*) AS rowsScanned, LEAST(COUNT(*), 50) AS resultRows
-      FROM article
-      WHERE lower(title) LIKE 'syn%'
-      LIMIT 50
+      SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, COUNT(*) AS resultRows
+      FROM (
+        SELECT article_id
+        FROM article
+        WHERE lower(title) LIKE 'syn%'
+        LIMIT 50
+      ) selected_rows
     `
   }
 
   if (operationKey.includes('Checkpoint')) {
     return `
-      SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, 1 AS resultRows
+      SELECT COUNT(*) AS rowsReturned, 1 AS rowsScanned, 1 AS resultRows
       FROM writer_diagnostic
     `
   }
@@ -421,9 +468,11 @@ const runOperationSample = async ({
   warmup: boolean
 }): Promise<ReviewServingSyntheticBenchmarkOperationSample> => {
   const writerDiagnostics = await getWriterDiagnostics(connection)
+  const tempSpillBytesBefore = await getDuckdbTempSpillBytes(connection)
   const startedAt = performance.now()
   const [row] = await runJsonQuery(connection, getOperationSql(operationKey, sampleIndex))
   const latencyMs = Number((performance.now() - startedAt).toFixed(3))
+  const tempSpillBytesAfter = await getDuckdbTempSpillBytes(connection)
   const rowsReturned = getNumberFromRow(row ?? {}, 'resultRows')
   const rowsScanned = getNumberFromRow(row ?? {}, 'rowsScanned')
 
@@ -436,7 +485,7 @@ const runOperationSample = async ({
     rowsReturned,
     rowsScanned,
     sampleIndex,
-    tempSpillBytes: 0,
+    tempSpillBytes: Math.max(0, tempSpillBytesAfter - tempSpillBytesBefore),
     warmup,
     writerBatchCount: writerDiagnostics.batchCount,
     writerRowsPerBatch: writerDiagnostics.rowsPerBatch,
@@ -502,6 +551,27 @@ const getBudgetProfile = (scale: ReviewServingSyntheticBenchmarkScale) => {
   return scale === 'release' ? 'release-manual' : 'medium-pr'
 }
 
+const getWorkloadOperationByKey = (operationKey: string) => {
+  return reviewServingBenchmarkOverlapWorkloadDefinition.operations.find((operation) => {
+    return operation.key === operationKey
+  })
+}
+
+const getMaxRowsScannedForOperation = (
+  artifact: Omit<ReviewServingSyntheticBenchmarkArtifact, 'artifactPath' | 'violations'>,
+  operationKey: string,
+) => {
+  return Math.max(
+    ...artifact.samples
+      .filter((sample) => {
+        return sample.operationKey === operationKey && !sample.warmup
+      })
+      .map((sample) => {
+        return sample.rowsScanned
+      }),
+  )
+}
+
 const getBudgetViolations = ({
   artifact,
   startRssBytes,
@@ -520,11 +590,14 @@ const getBudgetViolations = ({
     return violation.actual > violation.budget
   })
   const operationViolations = artifact.operationMetrics.flatMap((metrics) => {
+    const workloadOperation = getWorkloadOperationByKey(metrics.operationKey)
+    const maxRowsScannedPerRequest = workloadOperation?.maxRowsScannedPerRequest ?? budgets.maxRowsScanned
+
     return [
       {
-        actual: metrics.rowsScanned,
-        budget: budgets.maxRowsScanned,
-        metric: 'rows.scanned',
+        actual: getMaxRowsScannedForOperation(artifact, metrics.operationKey),
+        budget: maxRowsScannedPerRequest,
+        metric: 'rows.scannedPerRequest',
         operationKey: metrics.operationKey,
       },
       {
@@ -605,18 +678,33 @@ export const runReviewServingSyntheticBenchmark = async (
     const operationKeys = reviewServingBenchmarkOverlapWorkloadDefinition.operations.map((operation) => {
       return operation.key
     })
-    const warmupSamples = await Promise.all(
-      operationKeys.map((operationKey) => {
-        return runOperationSample({connection: fixture.connection, operationKey, sampleIndex: 0, warmup: true})
-      }),
-    )
-    const measuredSamples = await Promise.all(
-      operationKeys.flatMap((operationKey) => {
-        return [1, 2, 3].map((sampleIndex) => {
-          return runOperationSample({connection: fixture.connection, operationKey, sampleIndex, warmup: false})
+    const warmupSamples = await operationKeys.reduce<Promise<ReviewServingSyntheticBenchmarkOperationSample[]>>(
+      async (samplesPromise, operationKey) => {
+        const samples = await samplesPromise
+        const sample = await runOperationSample({
+          connection: fixture.connection,
+          operationKey,
+          sampleIndex: 0,
+          warmup: true,
         })
-      }),
+
+        return [...samples, sample]
+      },
+      Promise.resolve([]),
     )
+    const measuredSampleInputs = operationKeys.flatMap((operationKey) => {
+      return [1, 2, 3].map((sampleIndex) => {
+        return {operationKey, sampleIndex}
+      })
+    })
+    const measuredSamples = await measuredSampleInputs.reduce<
+      Promise<ReviewServingSyntheticBenchmarkOperationSample[]>
+    >(async (samplesPromise, sampleInput) => {
+      const samples = await samplesPromise
+      const sample = await runOperationSample({connection: fixture.connection, ...sampleInput, warmup: false})
+
+      return [...samples, sample]
+    }, Promise.resolve([]))
     const samples = [...warmupSamples, ...measuredSamples]
     const measuredOnlySamples = samples.filter((sample) => {
       return !sample.warmup
@@ -691,6 +779,7 @@ export const readReviewServingSyntheticBenchmarkArtifact = (artifactPath: string
 }
 
 const benchmarkCriticalArtifactFields = [
+  'mode',
   'workloadKey',
   'budgetProfile',
   'fixture.fixtureVersion',

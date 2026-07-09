@@ -1,4 +1,4 @@
-import {existsSync} from 'node:fs'
+import {existsSync, readdirSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
@@ -26,6 +26,57 @@ test('review-serving synthetic fixture manifest is deterministic by scale and se
   })
 })
 
+test('review-serving synthetic release scale uses the documented 10m fixture shape', () => {
+  expect(
+    getReviewServingSyntheticFixtureManifest({duckdbMemoryLimit: '20GiB', scale: 'release', seed: 123}),
+  ).toMatchObject({articleCount: 10_000_000, articlePromptOverlapRows: 70_000_000})
+})
+
+test('review-serving synthetic holdout fixture uses a distinct default seed', async () => {
+  const fixture = await createReviewServingSyntheticFixture({
+    duckdbMemoryLimit: '256MiB',
+    holdout: true,
+    scale: 'small',
+  })
+
+  try {
+    expect(fixture.manifest.holdout).toBe(true)
+    expect(fixture.manifest.seed).toBe(reviewServingSyntheticBenchmarkDefaultSeed + 1)
+  } finally {
+    closeReviewServingSyntheticFixture(fixture)
+    cleanupReviewServingSyntheticFixture(fixture)
+  }
+})
+
+test('review-serving synthetic fixture cleanup removes partial setup failures', async () => {
+  const benchmarkDirectory = '.tmp/benchmarks'
+  const getFixtureDirectories = () => {
+    if (!existsSync(benchmarkDirectory)) {
+      return []
+    }
+
+    return readdirSync(benchmarkDirectory, {withFileTypes: true})
+      .filter((entry) => {
+        return entry.isDirectory() && entry.name.startsWith('review-serving-small-999-')
+      })
+      .map((entry) => {
+        return entry.name
+      })
+  }
+  const directoriesBefore = getFixtureDirectories()
+
+  let failed = false
+
+  try {
+    await createReviewServingSyntheticFixture({duckdbMemoryLimit: 'not-a-memory-limit', scale: 'small', seed: 999})
+  } catch {
+    failed = true
+  }
+
+  expect(failed).toBe(true)
+  expect(getFixtureDirectories()).toEqual(directoriesBefore)
+})
+
 test('review-serving synthetic fixture seeds isolated DuckDB data and cleans up files', async () => {
   const fixture = await createReviewServingSyntheticFixture({duckdbMemoryLimit: '256MiB', scale: 'small'})
 
@@ -35,11 +86,20 @@ test('review-serving synthetic fixture seeds isolated DuckDB data and cleans up 
         (SELECT COUNT(*) FROM article) AS articles,
         (SELECT COUNT(*) FROM prompt_overlap) AS overlapRows,
         (SELECT COUNT(*) FROM filter_option) AS filterOptions,
-        (SELECT SUM(rows_written) FROM writer_diagnostic) AS writerRows
+        (SELECT SUM(rows_written) FROM writer_diagnostic) AS writerRows,
+        (SELECT SUM(batch_count) FROM writer_diagnostic) AS writerBatches,
+        (SELECT MAX(rows_per_batch) FROM writer_diagnostic) AS writerRowsPerBatch
     `)
 
     expect(reader.getRowObjectsJson()).toEqual([
-      {articles: '1000', filterOptions: '175', overlapRows: '7000', writerRows: '8175'},
+      {
+        articles: '1000',
+        filterOptions: '175',
+        overlapRows: '7000',
+        writerBatches: '4',
+        writerRows: '8182',
+        writerRowsPerBatch: 7000,
+      },
     ])
     expect(fixture.manifest.seed).toBe(reviewServingSyntheticBenchmarkDefaultSeed)
     expect(existsSync(fixture.duckdbPath)).toBe(true)
@@ -72,6 +132,11 @@ test('review-serving synthetic benchmark writes a physical DuckDB artifact with 
       }),
     ).toBe(true)
     expect(artifact.totals.rowsScanned).toBeGreaterThan(0)
+    expect(
+      artifact.samples.every((sample) => {
+        return Number.isFinite(sample.tempSpillBytes)
+      }),
+    ).toBe(true)
     expect(artifact.violations).toEqual([])
   } finally {
     cleanupReviewServingSyntheticFixture({
@@ -92,6 +157,7 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
   })
   const matchingAfter = {...before, artifactPath: 'after.json', command: 'after'}
   const driftedAfter = {...matchingAfter, fixture: {...matchingAfter.fixture, seed: 790}}
+  const driftedModeAfter = {...matchingAfter, mode: 'check' as const}
   const regressedAfter = {
     ...matchingAfter,
     operationMetrics: matchingAfter.operationMetrics.map((metrics, index) => {
@@ -111,6 +177,9 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
     expect(() => {
       compareReviewServingSyntheticBenchmarkArtifacts({after: driftedAfter, before})
     }).toThrow('config drift')
+    expect(() => {
+      compareReviewServingSyntheticBenchmarkArtifacts({after: driftedModeAfter, before})
+    }).toThrow('mode')
     const result = compareReviewServingSyntheticBenchmarkArtifacts({after: regressedAfter, before})
 
     expect(result.deltas).toHaveLength(31)

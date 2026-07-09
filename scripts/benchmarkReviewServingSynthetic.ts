@@ -1,5 +1,4 @@
 import {
-  reviewServingSyntheticBenchmarkDefaultSeed,
   reviewServingSyntheticBenchmarkScales,
   runReviewServingSyntheticBenchmark,
   type ReviewServingSyntheticBenchmarkMode,
@@ -42,7 +41,7 @@ const getScale = (): ReviewServingSyntheticBenchmarkScale => {
 const getSeed = () => {
   const seed = getArgValue('--seed')
 
-  return seed ? Number(seed) : reviewServingSyntheticBenchmarkDefaultSeed
+  return seed ? Number(seed) : undefined
 }
 
 const getDuckdbMemoryLimit = () => {
