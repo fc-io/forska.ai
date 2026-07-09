@@ -4,6 +4,15 @@ The smoke fixture uses mocked review-serving work items and admission decisions,
 so it does not require a populated 10M DuckDB database, serving tables, or
 projectors. It validates the release workload shape and release-report contract.
 
+`reviewServingBenchmark.ts` currently owns the benchmark fixture, workload,
+admission, sample, metric, and release-report contracts. Workload definitions end
+at `ReviewServingBenchmarkWorkloadDefinition` plus generated `workItems`; actual
+execution begins at `ReviewServingBenchmarkExecutor`. The smoke command uses the
+default executor, which returns each mocked `workItem.observation`. Physical
+DuckDB benchmark commands should inject an executor that preserves the same
+workload/report contracts while sourcing observations from an isolated synthetic
+DuckDB file.
+
 The full benchmark fixture is `synthetic10m7PromptOverlap`: 10,000,000
 articles, 7 prompts, and 70,000,000 article-prompt overlap rows. The true
 physical full run is a Phase 6 release-evidence gate and is not required for
@@ -44,3 +53,7 @@ This command does not claim a true 10M DuckDB run. A real release-scale run must
 provide `benchmarkRunKind: "releaseScaleDuckDb"`, the DuckDB memory limit used,
 temp-dir growth, and active snapshot identity values in the emitted release
 report.
+
+`bench:review-serving-release-gate` remains the fast smoke/report validation
+wrapper. Physical synthetic gates use separate `bench:review-serving-synthetic-*`
+commands so benchmark-critical fixture scale, memory, and mode stay explicit.

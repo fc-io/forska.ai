@@ -182,11 +182,11 @@ batch fanout, or p95/p99 latency.
 
 ### 1. Inventory Existing Harness
 
-- [ ] Document the current `reviewServingBenchmark.ts` smoke/mock flow.
-- [ ] Identify where workload definitions end and executor behavior begins.
-- [ ] Confirm `reviewServingBenchmark.test.ts` covers workload shape and release
+- [x] Document the current `reviewServingBenchmark.ts` smoke/mock flow.
+- [x] Identify where workload definitions end and executor behavior begins.
+- [x] Confirm `reviewServingBenchmark.test.ts` covers workload shape and release
       report validation.
-- [ ] Decide whether existing `bench:review-serving-release-gate` should stay as
+- [x] Decide whether existing `bench:review-serving-release-gate` should stay as
       smoke/report validation or become a wrapper around the new commands.
 
 ### 2. Add Deterministic Synthetic DuckDB Seeding
