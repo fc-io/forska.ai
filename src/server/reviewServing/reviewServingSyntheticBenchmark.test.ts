@@ -7,6 +7,7 @@ import {
   closeReviewServingSyntheticFixture,
   compareReviewServingSyntheticBenchmarkArtifacts,
   createReviewServingSyntheticFixture,
+  getReviewServingSyntheticBenchmarkOperationSql,
   getReviewServingSyntheticFixtureManifest,
   reviewServingSyntheticBenchmarkDefaultSeed,
   reviewServingSyntheticBenchmarkFixtureVersion,
@@ -96,8 +97,8 @@ test('review-serving synthetic fixture seeds isolated DuckDB data and cleans up 
         articles: '1000',
         filterOptions: '175',
         overlapRows: '7000',
-        writerBatches: '4',
-        writerRows: '8182',
+        writerBatches: '6',
+        writerRows: '8273',
         writerRowsPerBatch: 7000,
       },
     ])
@@ -158,11 +159,18 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
   const matchingAfter = {...before, artifactPath: 'after.json', command: 'after'}
   const driftedAfter = {...matchingAfter, fixture: {...matchingAfter.fixture, seed: 790}}
   const driftedModeAfter = {...matchingAfter, mode: 'check' as const}
+  const driftedTargetAfter = {...matchingAfter, targetOperation: 'llmPromptOverlapRows'}
   const regressedAfter = {
     ...matchingAfter,
     operationMetrics: matchingAfter.operationMetrics.map((metrics, index) => {
       return index === 0
-        ? {...metrics, p95LatencyMs: metrics.p95LatencyMs * 2 + 1, rowsScanned: metrics.rowsScanned * 2 + 1}
+        ? {
+            ...metrics,
+            p95LatencyMs: metrics.p95LatencyMs * 2 + 1,
+            rowsScanned: metrics.rowsScanned * 2 + 1,
+            tempSpillBytes: metrics.tempSpillBytes + 1,
+            writerBatchCount: metrics.writerBatchCount * 2 + 1,
+          }
         : metrics
     }),
   }
@@ -180,13 +188,28 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
     expect(() => {
       compareReviewServingSyntheticBenchmarkArtifacts({after: driftedModeAfter, before})
     }).toThrow('mode')
+    expect(() => {
+      compareReviewServingSyntheticBenchmarkArtifacts({after: driftedTargetAfter, before})
+    }).toThrow('targetOperation')
     const result = compareReviewServingSyntheticBenchmarkArtifacts({after: regressedAfter, before})
 
     expect(result.deltas).toHaveLength(31)
     expect(result.nonTargetRegressions).toContainEqual({
       actual: firstAfterMetrics.rowsScanned,
-      budget: firstBeforeMetrics.rowsScanned * 1.1,
+      budget: Number((firstBeforeMetrics.rowsScanned * 1.1).toFixed(3)),
       metric: 'compare.rows.scanned',
+      operationKey: firstBeforeMetrics.operationKey,
+    })
+    expect(result.nonTargetRegressions).toContainEqual({
+      actual: firstAfterMetrics.tempSpillBytes,
+      budget: firstBeforeMetrics.tempSpillBytes * 1.1,
+      metric: 'compare.temp.spillBytes',
+      operationKey: firstBeforeMetrics.operationKey,
+    })
+    expect(result.nonTargetRegressions).toContainEqual({
+      actual: firstAfterMetrics.writerBatchCount,
+      budget: Number((firstBeforeMetrics.writerBatchCount * 1.1).toFixed(3)),
+      metric: 'compare.writer.batchCount',
       operationKey: firstBeforeMetrics.operationKey,
     })
   } finally {
@@ -195,6 +218,23 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
       rootDirectory: '.tmp/benchmarks/test-compare-before',
     })
   }
+})
+
+test('review-serving synthetic operation SQL exercises operation-specific predicates', () => {
+  expect(getReviewServingSyntheticBenchmarkOperationSql('llmPromptOverlapCounts', 1)).toContain(
+    "llm_status = 'assessed'",
+  )
+  expect(getReviewServingSyntheticBenchmarkOperationSql('humanPromptOverlapCounts', 1)).toContain(
+    "human_status = 'reviewed'",
+  )
+  expect(getReviewServingSyntheticBenchmarkOperationSql('unassessedPromptOverlapCounts', 1)).toContain(
+    "llm_status = 'unassessed'",
+  )
+  expect(getReviewServingSyntheticBenchmarkOperationSql('detailJudgmentPayloadRows', 1)).toContain('llm_payload')
+  expect(getReviewServingSyntheticBenchmarkOperationSql('substringOverlapSearchJob', 1)).toContain(
+    'async_substring_state',
+  )
+  expect(getReviewServingSyntheticBenchmarkOperationSql('llmPromptOverlapRows', 1)).toContain('candidate_rows')
 })
 
 test('review-serving synthetic micro-perf keeps high-risk operation shapes bounded', async () => {

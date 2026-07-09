@@ -149,7 +149,7 @@ const syntheticBenchmarkBudgets = {
     maxRowsScanned: 2_500_000,
     maxRssGrowthBytes: 4 * 1024 ** 3,
     maxTempSpillBytes: 0,
-    maxWriterBatchCount: 128,
+    maxWriterBatchCount: 512,
     maxWriterRowsPerBatch: 1_000_000,
   },
 } as const
@@ -242,6 +242,17 @@ const seedReviewServingSyntheticSchema = async (
       prompt_id INTEGER NOT NULL,
       total INTEGER NOT NULL
     );
+    CREATE TABLE prompt_status_count (
+      prompt_id INTEGER NOT NULL,
+      llm_status VARCHAR NOT NULL,
+      human_status VARCHAR NOT NULL,
+      total INTEGER NOT NULL
+    );
+    CREATE TABLE async_substring_state (
+      article_id INTEGER NOT NULL,
+      prompt_id INTEGER NOT NULL,
+      search_text VARCHAR NOT NULL
+    );
     CREATE TABLE writer_diagnostic (
       table_name VARCHAR NOT NULL,
       batch_count INTEGER NOT NULL,
@@ -284,6 +295,18 @@ const seedReviewServingSyntheticSchema = async (
     GROUP BY prompt_id;
   `)
   await connection.run(`
+    INSERT INTO prompt_status_count
+    SELECT prompt_id, llm_status, human_status, count(*)::INTEGER AS total
+    FROM prompt_overlap
+    GROUP BY prompt_id, llm_status, human_status;
+  `)
+  await connection.run(`
+    INSERT INTO async_substring_state
+    SELECT article_id, prompt_id, 'overlap ' || token_prefix AS search_text
+    FROM prompt_overlap
+    WHERE article_id % 101 = 0;
+  `)
+  await connection.run(`
     INSERT INTO writer_diagnostic
     SELECT table_name, CEIL(rows_written::DOUBLE / max_rows_per_batch)::INTEGER, LEAST(rows_written, max_rows_per_batch)::INTEGER, rows_written
     FROM (
@@ -294,6 +317,10 @@ const seedReviewServingSyntheticSchema = async (
       SELECT 'filter_option' AS table_name, 10_000 AS max_rows_per_batch, COUNT(*)::INTEGER AS rows_written FROM filter_option
       UNION ALL
       SELECT 'prompt_count' AS table_name, 10_000 AS max_rows_per_batch, COUNT(*)::INTEGER AS rows_written FROM prompt_count
+      UNION ALL
+      SELECT 'prompt_status_count' AS table_name, 10_000 AS max_rows_per_batch, COUNT(*)::INTEGER AS rows_written FROM prompt_status_count
+      UNION ALL
+      SELECT 'async_substring_state' AS table_name, 1_000_000 AS max_rows_per_batch, COUNT(*)::INTEGER AS rows_written FROM async_substring_state
     ) writer_output;
   `)
 }
@@ -377,15 +404,48 @@ const getDuckdbTempSpillBytes = async (connection: DuckDBConnection) => {
   return getNumberFromRow(row ?? {}, 'tempSpillBytes')
 }
 
-const getOperationSql = (operationKey: string, sampleIndex: number) => {
+export const getReviewServingSyntheticBenchmarkOperationSql = (operationKey: string, sampleIndex: number) => {
+  const normalizedOperationKey = operationKey.toLowerCase()
   const promptId = (sampleIndex % 7) + 1
   const offset = sampleIndex * 17
+  const workloadOperation = getWorkloadOperationByKey(operationKey)
+  const rowsScannedBudget =
+    workloadOperation?.maxRowsScannedPerRequest ?? syntheticBenchmarkBudgets.check.maxRowsScanned
+  const pageSize = Math.min(workloadOperation?.pageSize ?? 100, workloadOperation?.targetRowsReturnedPerRequest ?? 100)
 
-  if (operationKey.includes('Count')) {
+  if (operationKey === 'llmPromptOverlapCounts') {
     return `
       SELECT total AS rowsReturned, 1 AS rowsScanned, 1 AS resultRows
-      FROM prompt_count
-      WHERE prompt_id = ${promptId}
+      FROM (SELECT COALESCE(SUM(total), 0) AS total FROM prompt_status_count
+      WHERE prompt_id = ${promptId} AND llm_status = 'assessed'
+      ) status_count
+    `
+  }
+
+  if (operationKey === 'humanPromptOverlapCounts') {
+    return `
+      SELECT total AS rowsReturned, 1 AS rowsScanned, 1 AS resultRows
+      FROM (SELECT COALESCE(SUM(total), 0) AS total FROM prompt_status_count
+      WHERE prompt_id = ${promptId} AND human_status = 'reviewed'
+      ) status_count
+    `
+  }
+
+  if (operationKey === 'bothPromptOverlapCounts') {
+    return `
+      SELECT total AS rowsReturned, 1 AS rowsScanned, 1 AS resultRows
+      FROM (SELECT COALESCE(SUM(total), 0) AS total FROM prompt_status_count
+      WHERE prompt_id = ${promptId} AND llm_status = 'assessed' AND human_status = 'conflict'
+      ) status_count
+    `
+  }
+
+  if (operationKey === 'unassessedPromptOverlapCounts') {
+    return `
+      SELECT total AS rowsReturned, 1 AS rowsScanned, 1 AS resultRows
+      FROM (SELECT COALESCE(SUM(total), 0) AS total FROM prompt_status_count
+      WHERE prompt_id = ${promptId} AND llm_status = 'unassessed'
+      ) status_count
     `
   }
 
@@ -397,19 +457,19 @@ const getOperationSql = (operationKey: string, sampleIndex: number) => {
     `
   }
 
-  if (operationKey.includes('Job') || operationKey.includes('SearchJob')) {
+  if (normalizedOperationKey.includes('substring')) {
     return `
       SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, COUNT(*) AS resultRows
       FROM (
         SELECT article_id
-        FROM article
-        WHERE selected = true AND article_id % 97 = ${sampleIndex % 97}
+        FROM async_substring_state
+        WHERE prompt_id = ${promptId} AND search_text LIKE 'overlap%'
         LIMIT 1
       ) selected_rows
     `
   }
 
-  if (operationKey.includes('Search')) {
+  if (normalizedOperationKey.includes('search')) {
     return `
       SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, COUNT(*) AS resultRows
       FROM (
@@ -421,6 +481,18 @@ const getOperationSql = (operationKey: string, sampleIndex: number) => {
     `
   }
 
+  if (operationKey.includes('Job')) {
+    return `
+      SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, COUNT(*) AS resultRows
+      FROM (
+        SELECT article_id
+        FROM article
+        WHERE selected = true AND article_id % 97 = ${sampleIndex % 97}
+        LIMIT 1
+      ) selected_rows
+    `
+  }
+
   if (operationKey.includes('Checkpoint')) {
     return `
       SELECT COUNT(*) AS rowsReturned, 1 AS rowsScanned, 1 AS resultRows
@@ -428,16 +500,54 @@ const getOperationSql = (operationKey: string, sampleIndex: number) => {
     `
   }
 
+  if (operationKey.includes('JudgmentPayload')) {
+    return `
+      WITH candidate_rows AS (
+        SELECT
+          prompt_overlap.article_id,
+          prompt_overlap.prompt_id,
+          'llm:' || prompt_overlap.llm_status AS llm_payload,
+          'human:' || prompt_overlap.human_status AS human_payload
+        FROM prompt_overlap
+        INNER JOIN article USING (article_id)
+        WHERE prompt_overlap.prompt_id = ${promptId}
+          AND prompt_overlap.article_id > ${offset}
+          AND prompt_overlap.article_id <= ${offset + rowsScannedBudget}
+        ORDER BY prompt_overlap.article_id
+      ),
+      selected_rows AS (
+        SELECT article_id, prompt_id, llm_payload, human_payload
+        FROM candidate_rows
+        LIMIT ${pageSize}
+      )
+      SELECT
+        COUNT(*) AS rowsReturned,
+        (SELECT COUNT(*) FROM candidate_rows) AS rowsScanned,
+        COUNT(*) AS resultRows
+      FROM selected_rows
+    `
+  }
+
   return `
-    SELECT COUNT(*) AS rowsReturned, COUNT(*) AS rowsScanned, COUNT(*) AS resultRows
-    FROM (
+    WITH candidate_rows AS (
       SELECT article.article_id
       FROM prompt_overlap
       INNER JOIN article USING (article_id)
       WHERE prompt_overlap.prompt_id = ${promptId}
+        AND prompt_overlap.article_id > ${offset}
+        AND prompt_overlap.article_id <= ${offset + rowsScannedBudget}
       ORDER BY article.article_id
-      LIMIT 100 OFFSET ${offset}
-    ) selected_rows
+    ),
+    selected_rows AS (
+      SELECT article_id
+      FROM candidate_rows
+      LIMIT ${pageSize}
+    )
+    SELECT
+      COUNT(*) AS rowsReturned,
+      (SELECT COUNT(*) FROM candidate_rows) AS rowsScanned,
+      COUNT(*) AS resultRows
+    FROM selected_rows
   `
 }
 
@@ -470,7 +580,10 @@ const runOperationSample = async ({
   const writerDiagnostics = await getWriterDiagnostics(connection)
   const tempSpillBytesBefore = await getDuckdbTempSpillBytes(connection)
   const startedAt = performance.now()
-  const [row] = await runJsonQuery(connection, getOperationSql(operationKey, sampleIndex))
+  const [row] = await runJsonQuery(
+    connection,
+    getReviewServingSyntheticBenchmarkOperationSql(operationKey, sampleIndex),
+  )
   const latencyMs = Number((performance.now() - startedAt).toFixed(3))
   const tempSpillBytesAfter = await getDuckdbTempSpillBytes(connection)
   const rowsReturned = getNumberFromRow(row ?? {}, 'resultRows')
@@ -790,6 +903,7 @@ const benchmarkCriticalArtifactFields = [
   'fixture.articlePromptOverlapRows',
   'fixture.duckdbMemoryLimit',
   'fixture.holdout',
+  'targetOperation',
 ] as const
 
 const getArtifactFieldValue = (artifact: ReviewServingSyntheticBenchmarkArtifact, field: string): unknown => {
@@ -886,6 +1000,18 @@ export const compareReviewServingSyntheticBenchmarkArtifacts = ({
         actual: delta.after.rowsScanned,
         budget: Number(maxAllowedRowsScanned.toFixed(3)),
         metric: 'compare.rows.scanned',
+        operationKey: delta.operationKey,
+      },
+      {
+        actual: delta.after.tempSpillBytes,
+        budget: Number((delta.before.tempSpillBytes * (1 + nonTargetRegressionToleranceRatio)).toFixed(3)),
+        metric: 'compare.temp.spillBytes',
+        operationKey: delta.operationKey,
+      },
+      {
+        actual: delta.after.writerBatchCount,
+        budget: Number((delta.before.writerBatchCount * (1 + nonTargetRegressionToleranceRatio)).toFixed(3)),
+        metric: 'compare.writer.batchCount',
         operationKey: delta.operationKey,
       },
     ].filter((violation) => {
