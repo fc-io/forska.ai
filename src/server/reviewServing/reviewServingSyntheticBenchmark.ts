@@ -1,4 +1,4 @@
-import {existsSync, mkdirSync, rmSync, writeFileSync} from 'node:fs'
+import {existsSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import {join} from 'node:path'
 
 import {DuckDBConnection, DuckDBInstance} from '@duckdb/node-api'
@@ -105,6 +105,22 @@ export type RunReviewServingSyntheticBenchmarkInput = {
   seed?: number
   targetMetric?: string | null
   targetOperation?: string | null
+}
+
+export type ReviewServingSyntheticBenchmarkCompareResult = {
+  configDrift: readonly string[]
+  deltas: readonly {
+    after: ReviewServingSyntheticBenchmarkOperationMetrics
+    before: ReviewServingSyntheticBenchmarkOperationMetrics
+    operationKey: string
+    p95LatencyDeltaMs: number
+    p99LatencyDeltaMs: number
+    rowsReturnedDelta: number
+    rowsScannedDelta: number
+    tempSpillDeltaBytes: number
+    writerBatchCountDelta: number
+  }[]
+  nonTargetRegressions: readonly ReviewServingSyntheticBenchmarkViolation[]
 }
 
 const scaleArticleCounts = {
@@ -642,4 +658,127 @@ export const runReviewServingSyntheticBenchmark = async (
     closeReviewServingSyntheticFixture(fixture)
     cleanupReviewServingSyntheticFixture(fixture)
   }
+}
+
+export const readReviewServingSyntheticBenchmarkArtifact = (artifactPath: string) => {
+  return JSON.parse(readFileSync(artifactPath, 'utf8')) as ReviewServingSyntheticBenchmarkArtifact
+}
+
+const benchmarkCriticalArtifactFields = [
+  'workloadKey',
+  'budgetProfile',
+  'fixture.fixtureVersion',
+  'fixture.scale',
+  'fixture.seed',
+  'fixture.promptCount',
+  'fixture.articleCount',
+  'fixture.articlePromptOverlapRows',
+  'fixture.duckdbMemoryLimit',
+  'fixture.holdout',
+] as const
+
+const getArtifactFieldValue = (artifact: ReviewServingSyntheticBenchmarkArtifact, field: string): unknown => {
+  return field.split('.').reduce<unknown>((value, key) => {
+    return typeof value === 'object' && value !== null ? (value as Record<string, unknown>)[key] : undefined
+  }, artifact)
+}
+
+const getConfigDrift = (
+  before: ReviewServingSyntheticBenchmarkArtifact,
+  after: ReviewServingSyntheticBenchmarkArtifact,
+) => {
+  const operationKeysBefore = before.operationMetrics.map((operation) => {
+    return operation.operationKey
+  })
+  const operationKeysAfter = after.operationMetrics.map((operation) => {
+    return operation.operationKey
+  })
+  const fieldDrift = benchmarkCriticalArtifactFields.filter((field) => {
+    return getArtifactFieldValue(before, field) !== getArtifactFieldValue(after, field)
+  })
+  const operationDrift =
+    operationKeysBefore.length === operationKeysAfter.length
+    && operationKeysBefore.every((operationKey, index) => {
+      return operationKey === operationKeysAfter[index]
+    })
+      ? []
+      : ['operationMetrics.operationKey']
+
+  return [...fieldDrift, ...operationDrift]
+}
+
+const getOperationMetricByKey = (
+  artifact: ReviewServingSyntheticBenchmarkArtifact,
+  operationKey: string,
+) => {
+  return artifact.operationMetrics.find((metrics) => {
+    return metrics.operationKey === operationKey
+  })
+}
+
+export const compareReviewServingSyntheticBenchmarkArtifacts = ({
+  after,
+  allowConfigDrift = false,
+  before,
+  nonTargetRegressionToleranceRatio = 0.1,
+  targetOperation = after.targetOperation ?? before.targetOperation,
+}: {
+  after: ReviewServingSyntheticBenchmarkArtifact
+  allowConfigDrift?: boolean
+  before: ReviewServingSyntheticBenchmarkArtifact
+  nonTargetRegressionToleranceRatio?: number
+  targetOperation?: string | null
+}): ReviewServingSyntheticBenchmarkCompareResult => {
+  const configDrift = getConfigDrift(before, after)
+
+  if (!allowConfigDrift && configDrift.length > 0) {
+    throw new Error(`Review-serving benchmark config drift: ${configDrift.join(', ')}`)
+  }
+
+  const deltas = before.operationMetrics.flatMap((beforeMetrics) => {
+    const afterMetrics = getOperationMetricByKey(after, beforeMetrics.operationKey)
+
+    return afterMetrics
+      ? [
+          {
+            after: afterMetrics,
+            before: beforeMetrics,
+            operationKey: beforeMetrics.operationKey,
+            p95LatencyDeltaMs: Number((afterMetrics.p95LatencyMs - beforeMetrics.p95LatencyMs).toFixed(3)),
+            p99LatencyDeltaMs: Number((afterMetrics.p99LatencyMs - beforeMetrics.p99LatencyMs).toFixed(3)),
+            rowsReturnedDelta: afterMetrics.rowsReturned - beforeMetrics.rowsReturned,
+            rowsScannedDelta: afterMetrics.rowsScanned - beforeMetrics.rowsScanned,
+            tempSpillDeltaBytes: afterMetrics.tempSpillBytes - beforeMetrics.tempSpillBytes,
+            writerBatchCountDelta: afterMetrics.writerBatchCount - beforeMetrics.writerBatchCount,
+          },
+        ]
+      : []
+  })
+  const nonTargetRegressions = deltas.flatMap((delta) => {
+    if (targetOperation && delta.operationKey === targetOperation) {
+      return []
+    }
+
+    const maxAllowedP95 = delta.before.p95LatencyMs * (1 + nonTargetRegressionToleranceRatio)
+    const maxAllowedRowsScanned = delta.before.rowsScanned * (1 + nonTargetRegressionToleranceRatio)
+
+    return [
+      {
+        actual: delta.after.p95LatencyMs,
+        budget: Number(maxAllowedP95.toFixed(3)),
+        metric: 'compare.latency.p95Ms',
+        operationKey: delta.operationKey,
+      },
+      {
+        actual: delta.after.rowsScanned,
+        budget: Number(maxAllowedRowsScanned.toFixed(3)),
+        metric: 'compare.rows.scanned',
+        operationKey: delta.operationKey,
+      },
+    ].filter((violation) => {
+      return violation.actual > violation.budget
+    })
+  })
+
+  return {configDrift, deltas, nonTargetRegressions}
 }

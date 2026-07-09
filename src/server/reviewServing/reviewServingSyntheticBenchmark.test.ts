@@ -5,6 +5,7 @@ import {expect, test} from 'bun:test'
 import {
   cleanupReviewServingSyntheticFixture,
   closeReviewServingSyntheticFixture,
+  compareReviewServingSyntheticBenchmarkArtifacts,
   createReviewServingSyntheticFixture,
   getReviewServingSyntheticFixtureManifest,
   reviewServingSyntheticBenchmarkDefaultSeed,
@@ -79,5 +80,49 @@ test('review-serving synthetic benchmark writes a physical DuckDB artifact with 
     expect(artifact.violations).toEqual([])
   } finally {
     cleanupReviewServingSyntheticFixture({duckdbPath: artifact.artifactPath, rootDirectory: '.tmp/benchmarks/test-artifacts'})
+  }
+})
+
+test('review-serving synthetic benchmark compare blocks config drift and reports regressions', async () => {
+  const before = await runReviewServingSyntheticBenchmark({
+    artifactDirectory: '.tmp/benchmarks/test-compare-before',
+    command: 'before',
+    duckdbMemoryLimit: '256MiB',
+    mode: 'measure',
+    scale: 'small',
+    seed: 789,
+  })
+  const matchingAfter = {...before, artifactPath: 'after.json', command: 'after'}
+  const driftedAfter = {...matchingAfter, fixture: {...matchingAfter.fixture, seed: 790}}
+  const regressedAfter = {
+    ...matchingAfter,
+    operationMetrics: matchingAfter.operationMetrics.map((metrics, index) => {
+      return index === 0
+        ? {...metrics, p95LatencyMs: metrics.p95LatencyMs * 2 + 1, rowsScanned: metrics.rowsScanned * 2 + 1}
+        : metrics
+    }),
+  }
+  const firstBeforeMetrics = before.operationMetrics[0]
+  const firstAfterMetrics = regressedAfter.operationMetrics[0]
+
+  if (!firstBeforeMetrics || !firstAfterMetrics) {
+    throw new Error('Missing compare metrics')
+  }
+
+  try {
+    expect(() => {
+      compareReviewServingSyntheticBenchmarkArtifacts({after: driftedAfter, before})
+    }).toThrow('config drift')
+    const result = compareReviewServingSyntheticBenchmarkArtifacts({after: regressedAfter, before})
+
+    expect(result.deltas).toHaveLength(31)
+    expect(result.nonTargetRegressions).toContainEqual({
+      actual: firstAfterMetrics.rowsScanned,
+      budget: firstBeforeMetrics.rowsScanned * 1.1,
+      metric: 'compare.rows.scanned',
+      operationKey: firstBeforeMetrics.operationKey,
+    })
+  } finally {
+    cleanupReviewServingSyntheticFixture({duckdbPath: before.artifactPath, rootDirectory: '.tmp/benchmarks/test-compare-before'})
   }
 })
