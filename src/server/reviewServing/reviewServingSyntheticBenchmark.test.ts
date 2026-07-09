@@ -14,9 +14,7 @@ import {
 } from './reviewServingSyntheticBenchmark.ts'
 
 test('review-serving synthetic fixture manifest is deterministic by scale and seed', () => {
-  expect(
-    getReviewServingSyntheticFixtureManifest({duckdbMemoryLimit: '512MiB', scale: 'medium', seed: 123}),
-  ).toEqual({
+  expect(getReviewServingSyntheticFixtureManifest({duckdbMemoryLimit: '512MiB', scale: 'medium', seed: 123})).toEqual({
     articleCount: 10_000,
     articlePromptOverlapRows: 70_000,
     duckdbMemoryLimit: '512MiB',
@@ -41,12 +39,7 @@ test('review-serving synthetic fixture seeds isolated DuckDB data and cleans up 
     `)
 
     expect(reader.getRowObjectsJson()).toEqual([
-      {
-        articles: '1000',
-        filterOptions: '175',
-        overlapRows: '7000',
-        writerRows: '8175',
-      },
+      {articles: '1000', filterOptions: '175', overlapRows: '7000', writerRows: '8175'},
     ])
     expect(fixture.manifest.seed).toBe(reviewServingSyntheticBenchmarkDefaultSeed)
     expect(existsSync(fixture.duckdbPath)).toBe(true)
@@ -73,13 +66,18 @@ test('review-serving synthetic benchmark writes a physical DuckDB artifact with 
     expect(artifact.fixture).toMatchObject({articleCount: 1_000, promptCount: 7, scale: 'small', seed: 456})
     expect(artifact.operationMetrics).toHaveLength(31)
     expect(artifact.samples).toHaveLength(124)
-    expect(artifact.samples.some((sample) => {
-      return sample.warmup
-    })).toBe(true)
+    expect(
+      artifact.samples.some((sample) => {
+        return sample.warmup
+      }),
+    ).toBe(true)
     expect(artifact.totals.rowsScanned).toBeGreaterThan(0)
     expect(artifact.violations).toEqual([])
   } finally {
-    cleanupReviewServingSyntheticFixture({duckdbPath: artifact.artifactPath, rootDirectory: '.tmp/benchmarks/test-artifacts'})
+    cleanupReviewServingSyntheticFixture({
+      duckdbPath: artifact.artifactPath,
+      rootDirectory: '.tmp/benchmarks/test-artifacts',
+    })
   }
 })
 
@@ -123,7 +121,10 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
       operationKey: firstBeforeMetrics.operationKey,
     })
   } finally {
-    cleanupReviewServingSyntheticFixture({duckdbPath: before.artifactPath, rootDirectory: '.tmp/benchmarks/test-compare-before'})
+    cleanupReviewServingSyntheticFixture({
+      duckdbPath: before.artifactPath,
+      rootDirectory: '.tmp/benchmarks/test-compare-before',
+    })
   }
 })
 
@@ -156,6 +157,9 @@ test('review-serving synthetic micro-perf keeps high-risk operation shapes bound
     expect(artifact.totals.writerBatchCount).toBeLessThanOrEqual(12)
     expect(artifact.totals.tempSpillBytes).toBe(0)
   } finally {
-    cleanupReviewServingSyntheticFixture({duckdbPath: artifact.artifactPath, rootDirectory: '.tmp/benchmarks/test-micro-perf'})
+    cleanupReviewServingSyntheticFixture({
+      duckdbPath: artifact.artifactPath,
+      rootDirectory: '.tmp/benchmarks/test-micro-perf',
+    })
   }
 })

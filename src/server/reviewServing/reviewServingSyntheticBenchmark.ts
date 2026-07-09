@@ -124,11 +124,10 @@ export type ReviewServingSyntheticBenchmarkCompareResult = {
   nonTargetRegressions: readonly ReviewServingSyntheticBenchmarkViolation[]
 }
 
-const scaleArticleCounts = {
-  small: 1_000,
-  medium: 10_000,
-  release: 100_000,
-} as const satisfies Record<ReviewServingSyntheticBenchmarkScale, number>
+const scaleArticleCounts = {small: 1_000, medium: 10_000, release: 100_000} as const satisfies Record<
+  ReviewServingSyntheticBenchmarkScale,
+  number
+>
 
 const syntheticBenchmarkBudgets = {
   check: {
@@ -191,7 +190,9 @@ const removeFileIfExists = (filePath: string) => {
   }
 }
 
-export const cleanupReviewServingSyntheticFixture = (fixture: Pick<ReviewServingSyntheticFixture, 'duckdbPath' | 'rootDirectory'>) => {
+export const cleanupReviewServingSyntheticFixture = (
+  fixture: Pick<ReviewServingSyntheticFixture, 'duckdbPath' | 'rootDirectory'>,
+) => {
   removeFileIfExists(fixture.duckdbPath)
   removeFileIfExists(`${fixture.duckdbPath}.wal`)
   removeFileIfExists(`${fixture.duckdbPath}.duckdb-owner.lock`)
@@ -394,12 +395,18 @@ const getOperationSql = (operationKey: string, sampleIndex: number) => {
 }
 
 const getWriterDiagnostics = async (connection: DuckDBConnection) => {
-  const [row] = await runJsonQuery(connection, `
+  const [row] = await runJsonQuery(
+    connection,
+    `
     SELECT SUM(batch_count) AS batchCount, MAX(rows_per_batch) AS rowsPerBatch
     FROM writer_diagnostic
-  `)
+  `,
+  )
 
-  return {batchCount: getNumberFromRow(row ?? {}, 'batchCount'), rowsPerBatch: getNumberFromRow(row ?? {}, 'rowsPerBatch')}
+  return {
+    batchCount: getNumberFromRow(row ?? {}, 'batchCount'),
+    rowsPerBatch: getNumberFromRow(row ?? {}, 'rowsPerBatch'),
+  }
 }
 
 const runOperationSample = async ({
@@ -502,7 +509,8 @@ const getBudgetViolations = ({
   artifact: Omit<ReviewServingSyntheticBenchmarkArtifact, 'artifactPath' | 'violations'>
   startRssBytes: number
 }): ReviewServingSyntheticBenchmarkViolation[] => {
-  const budgets = artifact.fixture.scale === 'release' ? syntheticBenchmarkBudgets.release : syntheticBenchmarkBudgets.check
+  const budgets =
+    artifact.fixture.scale === 'release' ? syntheticBenchmarkBudgets.release : syntheticBenchmarkBudgets.check
   const rssViolations = [
     {actual: artifact.totals.peakRssBytes, budget: budgets.maxPeakRssBytes, metric: 'rss.peak'},
     {actual: artifact.totals.peakRssBytes - startRssBytes, budget: budgets.maxRssGrowthBytes, metric: 'rss.growth'},
@@ -513,9 +521,24 @@ const getBudgetViolations = ({
   })
   const operationViolations = artifact.operationMetrics.flatMap((metrics) => {
     return [
-      {actual: metrics.rowsScanned, budget: budgets.maxRowsScanned, metric: 'rows.scanned', operationKey: metrics.operationKey},
-      {actual: metrics.rowsReturned, budget: budgets.maxRowsReturned, metric: 'rows.returned', operationKey: metrics.operationKey},
-      {actual: metrics.tempSpillBytes, budget: budgets.maxTempSpillBytes, metric: 'temp.spillBytes', operationKey: metrics.operationKey},
+      {
+        actual: metrics.rowsScanned,
+        budget: budgets.maxRowsScanned,
+        metric: 'rows.scanned',
+        operationKey: metrics.operationKey,
+      },
+      {
+        actual: metrics.rowsReturned,
+        budget: budgets.maxRowsReturned,
+        metric: 'rows.returned',
+        operationKey: metrics.operationKey,
+      },
+      {
+        actual: metrics.tempSpillBytes,
+        budget: budgets.maxTempSpillBytes,
+        metric: 'temp.spillBytes',
+        operationKey: metrics.operationKey,
+      },
       {
         actual: metrics.writerRowsPerBatch,
         budget: budgets.maxWriterRowsPerBatch,
@@ -550,8 +573,9 @@ const getGitSha = () => {
 
 const getDuckdbVersion = async (connection: DuckDBConnection) => {
   const [row] = await runJsonQuery(connection, 'SELECT version() AS version')
+  const version = row?.version
 
-  return String(row?.version ?? 'unknown')
+  return typeof version === 'string' || typeof version === 'number' ? String(version) : 'unknown'
 }
 
 const writeBenchmarkArtifact = (
@@ -616,7 +640,7 @@ export const runReviewServingSyntheticBenchmark = async (
       gitSha: getGitSha(),
       mode: input.mode,
       operationMetrics,
-      platform: {arch: process.arch, bunVersion: Bun.version, os: process.platform},
+      platform: {arch: process.arch, bunVersion: globalThis.Bun.version, os: process.platform},
       samples,
       targetMetric: input.targetMetric ?? null,
       targetOperation: input.targetOperation ?? null,
@@ -709,10 +733,7 @@ const getConfigDrift = (
   return [...fieldDrift, ...operationDrift]
 }
 
-const getOperationMetricByKey = (
-  artifact: ReviewServingSyntheticBenchmarkArtifact,
-  operationKey: string,
-) => {
+const getOperationMetricByKey = (artifact: ReviewServingSyntheticBenchmarkArtifact, operationKey: string) => {
   return artifact.operationMetrics.find((metrics) => {
     return metrics.operationKey === operationKey
   })
