@@ -1050,6 +1050,7 @@ export const compareReviewServingSyntheticBenchmarkArtifacts = ({
     const nonTargetRegressionToleranceRatio = after.compareSettings.nonTargetRegressionToleranceRatio
     const targetMetric = after.targetMetric ?? before.targetMetric
     const maxAllowedP95 = delta.before.p95LatencyMs * (1 + nonTargetRegressionToleranceRatio)
+    const maxAllowedRowsReturned = delta.before.rowsReturned * (1 + nonTargetRegressionToleranceRatio)
     const maxAllowedRowsScanned = delta.before.rowsScanned * (1 + nonTargetRegressionToleranceRatio)
     const maxAllowedP95WithNoiseFloor = Math.max(
       maxAllowedP95,
@@ -1067,6 +1068,12 @@ export const compareReviewServingSyntheticBenchmarkArtifacts = ({
         actual: delta.after.rowsScanned,
         budget: Number(maxAllowedRowsScanned.toFixed(3)),
         metric: 'compare.rows.scanned',
+        operationKey: delta.operationKey,
+      },
+      {
+        actual: delta.after.rowsReturned,
+        budget: Number(maxAllowedRowsReturned.toFixed(3)),
+        metric: 'compare.rows.returned',
         operationKey: delta.operationKey,
       },
       {

@@ -190,6 +190,7 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
         ? {
             ...metrics,
             p95LatencyMs: metrics.p95LatencyMs * 2 + 1,
+            rowsReturned: metrics.rowsReturned * 2 + 1,
             rowsScanned: metrics.rowsScanned * 2 + 1,
             tempSpillBytes: metrics.tempSpillBytes + 1,
             writerBatchCount: metrics.writerBatchCount * 2 + 1,
@@ -253,6 +254,12 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
       operationKey: firstBeforeMetrics.operationKey,
     })
     expect(result.nonTargetRegressions).toContainEqual({
+      actual: firstAfterMetrics.rowsReturned,
+      budget: Number((firstBeforeMetrics.rowsReturned * 1.1).toFixed(3)),
+      metric: 'compare.rows.returned',
+      operationKey: firstBeforeMetrics.operationKey,
+    })
+    expect(result.nonTargetRegressions).toContainEqual({
       actual: firstAfterMetrics.tempSpillBytes,
       budget: firstBeforeMetrics.tempSpillBytes * 1.1,
       metric: 'compare.temp.spillBytes',
@@ -277,6 +284,12 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
       actual: firstAfterMetrics.rowsScanned,
       budget: Number((firstBeforeMetrics.rowsScanned * 1.1).toFixed(3)),
       metric: 'compare.rows.scanned',
+      operationKey: firstBeforeMetrics.operationKey,
+    })
+    expect(targetResult.nonTargetRegressions).toContainEqual({
+      actual: firstAfterMetrics.rowsReturned,
+      budget: Number((firstBeforeMetrics.rowsReturned * 1.1).toFixed(3)),
+      metric: 'compare.rows.returned',
       operationKey: firstBeforeMetrics.operationKey,
     })
     expect(targetResult.nonTargetRegressions).toContainEqual({
