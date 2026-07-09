@@ -251,11 +251,11 @@ batch fanout, or p95/p99 latency.
 ### 7. Add Targeted Micro-Perf Tests
 
 - [ ] Add a focused summary finalization perf regression test.
-- [ ] Add a focused filter option projection refresh perf regression test.
-- [ ] Add a focused posting projector rebuild perf regression test.
-- [ ] Add read-contract micro-perf coverage for list/count/search if the physical
+- [x] Add a focused filter option projection refresh perf regression test.
+- [x] Add a focused posting projector rebuild perf regression test.
+- [x] Add read-contract micro-perf coverage for list/count/search if the physical
       benchmark does not provide enough diagnostic granularity.
-- [ ] Keep these tests small enough for targeted `bun test path/to/file.test.ts`
+- [x] Keep these tests small enough for targeted `bun test path/to/file.test.ts`
       runs.
 
 ### 8. Add Optimization Workflow Guardrails

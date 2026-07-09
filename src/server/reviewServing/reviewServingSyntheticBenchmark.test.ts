@@ -126,3 +126,36 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
     cleanupReviewServingSyntheticFixture({duckdbPath: before.artifactPath, rootDirectory: '.tmp/benchmarks/test-compare-before'})
   }
 })
+
+test('review-serving synthetic micro-perf keeps high-risk operation shapes bounded', async () => {
+  const artifact = await runReviewServingSyntheticBenchmark({
+    artifactDirectory: '.tmp/benchmarks/test-micro-perf',
+    command: 'micro-perf',
+    duckdbMemoryLimit: '256MiB',
+    mode: 'measure',
+    scale: 'small',
+    seed: 321,
+  })
+  const getOperation = (operationKey: string) => {
+    const operation = artifact.operationMetrics.find((candidate) => {
+      return candidate.operationKey === operationKey
+    })
+
+    if (!operation) {
+      throw new Error(`Missing operation ${operationKey}`)
+    }
+
+    return operation
+  }
+
+  try {
+    expect(getOperation('overlapFilterOptions').rowsScanned).toBeLessThanOrEqual(3_000)
+    expect(getOperation('llmPromptOverlapCounts').rowsReturned).toBe(3)
+    expect(getOperation('titlePrefixOverlapSearch').rowsReturned).toBeLessThanOrEqual(150)
+    expect(getOperation('llmPromptOverlapRows').rowsReturned).toBeLessThanOrEqual(300)
+    expect(artifact.totals.writerBatchCount).toBeLessThanOrEqual(12)
+    expect(artifact.totals.tempSpillBytes).toBe(0)
+  } finally {
+    cleanupReviewServingSyntheticFixture({duckdbPath: artifact.artifactPath, rootDirectory: '.tmp/benchmarks/test-micro-perf'})
+  }
+})
