@@ -139,6 +139,7 @@ export type ReviewServingSyntheticBenchmarkCompareResult = {
     rowsScannedDelta: number
     tempSpillDeltaBytes: number
     writerBatchCountDelta: number
+    writerRowsPerBatchDelta: number
   }[]
   nonTargetRegressions: readonly ReviewServingSyntheticBenchmarkViolation[]
 }
@@ -715,6 +716,21 @@ const getMaxRowsScannedForOperation = (
   )
 }
 
+const getMaxRowsReturnedForOperation = (
+  artifact: Omit<ReviewServingSyntheticBenchmarkArtifact, 'artifactPath' | 'violations'>,
+  operationKey: string,
+) => {
+  return Math.max(
+    ...artifact.samples
+      .filter((sample) => {
+        return sample.operationKey === operationKey && !sample.warmup
+      })
+      .map((sample) => {
+        return sample.rowsReturned
+      }),
+  )
+}
+
 const getBudgetViolations = ({
   artifact,
   startRssBytes,
@@ -734,6 +750,10 @@ const getBudgetViolations = ({
   const operationViolations = artifact.operationMetrics.flatMap((metrics) => {
     const workloadOperation = getWorkloadOperationByKey(metrics.operationKey)
     const maxRowsScannedPerRequest = workloadOperation?.maxRowsScannedPerRequest ?? budgets.maxRowsScanned
+    const maxRowsReturnedPerRequest = Math.min(
+      workloadOperation?.pageSize ?? budgets.maxRowsReturned,
+      workloadOperation?.targetRowsReturnedPerRequest ?? budgets.maxRowsReturned,
+    )
 
     return [
       {
@@ -743,9 +763,9 @@ const getBudgetViolations = ({
         operationKey: metrics.operationKey,
       },
       {
-        actual: metrics.rowsReturned,
-        budget: budgets.maxRowsReturned,
-        metric: 'rows.returned',
+        actual: getMaxRowsReturnedForOperation(artifact, metrics.operationKey),
+        budget: maxRowsReturnedPerRequest,
+        metric: 'rows.returnedPerRequest',
         operationKey: metrics.operationKey,
       },
       {
@@ -813,8 +833,8 @@ const writeBenchmarkArtifact = (
 export const runReviewServingSyntheticBenchmark = async (
   input: RunReviewServingSyntheticBenchmarkInput,
 ): Promise<ReviewServingSyntheticBenchmarkArtifact> => {
-  const fixture = await createReviewServingSyntheticFixture(input)
   const startRssBytes = sampleRssBytes()
+  const fixture = await createReviewServingSyntheticFixture(input)
 
   try {
     const operationKeys = reviewServingBenchmarkOverlapWorkloadDefinition.operations.map((operation) => {
@@ -1042,6 +1062,7 @@ export const compareReviewServingSyntheticBenchmarkArtifacts = ({
             rowsScannedDelta: afterMetrics.rowsScanned - beforeMetrics.rowsScanned,
             tempSpillDeltaBytes: afterMetrics.tempSpillBytes - beforeMetrics.tempSpillBytes,
             writerBatchCountDelta: afterMetrics.writerBatchCount - beforeMetrics.writerBatchCount,
+            writerRowsPerBatchDelta: afterMetrics.writerRowsPerBatch - beforeMetrics.writerRowsPerBatch,
           },
         ]
       : []
@@ -1050,11 +1071,16 @@ export const compareReviewServingSyntheticBenchmarkArtifacts = ({
     const nonTargetRegressionToleranceRatio = after.compareSettings.nonTargetRegressionToleranceRatio
     const targetMetric = after.targetMetric ?? before.targetMetric
     const maxAllowedP95 = delta.before.p95LatencyMs * (1 + nonTargetRegressionToleranceRatio)
+    const maxAllowedP99 = delta.before.p99LatencyMs * (1 + nonTargetRegressionToleranceRatio)
     const maxAllowedRowsReturned = delta.before.rowsReturned * (1 + nonTargetRegressionToleranceRatio)
     const maxAllowedRowsScanned = delta.before.rowsScanned * (1 + nonTargetRegressionToleranceRatio)
     const maxAllowedP95WithNoiseFloor = Math.max(
       maxAllowedP95,
       delta.before.p95LatencyMs + after.compareSettings.latencyP95NoiseFloorMs,
+    )
+    const maxAllowedP99WithNoiseFloor = Math.max(
+      maxAllowedP99,
+      delta.before.p99LatencyMs + after.compareSettings.latencyP95NoiseFloorMs,
     )
 
     return [
@@ -1062,6 +1088,12 @@ export const compareReviewServingSyntheticBenchmarkArtifacts = ({
         actual: delta.after.p95LatencyMs,
         budget: Number(maxAllowedP95WithNoiseFloor.toFixed(3)),
         metric: 'compare.latency.p95Ms',
+        operationKey: delta.operationKey,
+      },
+      {
+        actual: delta.after.p99LatencyMs,
+        budget: Number(maxAllowedP99WithNoiseFloor.toFixed(3)),
+        metric: 'compare.latency.p99Ms',
         operationKey: delta.operationKey,
       },
       {
@@ -1086,6 +1118,12 @@ export const compareReviewServingSyntheticBenchmarkArtifacts = ({
         actual: delta.after.writerBatchCount,
         budget: Number((delta.before.writerBatchCount * (1 + nonTargetRegressionToleranceRatio)).toFixed(3)),
         metric: 'compare.writer.batchCount',
+        operationKey: delta.operationKey,
+      },
+      {
+        actual: delta.after.writerRowsPerBatch,
+        budget: Number((delta.before.writerRowsPerBatch * (1 + nonTargetRegressionToleranceRatio)).toFixed(3)),
+        metric: 'compare.writer.rowsPerBatch',
         operationKey: delta.operationKey,
       },
     ].filter((violation) => {

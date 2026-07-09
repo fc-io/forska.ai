@@ -190,10 +190,12 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
         ? {
             ...metrics,
             p95LatencyMs: metrics.p95LatencyMs * 2 + 1,
+            p99LatencyMs: metrics.p99LatencyMs + 101,
             rowsReturned: metrics.rowsReturned * 2 + 1,
             rowsScanned: metrics.rowsScanned * 2 + 1,
             tempSpillBytes: metrics.tempSpillBytes + 1,
             writerBatchCount: metrics.writerBatchCount * 2 + 1,
+            writerRowsPerBatch: metrics.writerRowsPerBatch * 2 + 1,
           }
         : metrics
     }),
@@ -248,6 +250,12 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
 
     expect(result.deltas).toHaveLength(31)
     expect(result.nonTargetRegressions).toContainEqual({
+      actual: firstAfterMetrics.p99LatencyMs,
+      budget: Number(Math.max(firstBeforeMetrics.p99LatencyMs * 1.1, firstBeforeMetrics.p99LatencyMs + 100).toFixed(3)),
+      metric: 'compare.latency.p99Ms',
+      operationKey: firstBeforeMetrics.operationKey,
+    })
+    expect(result.nonTargetRegressions).toContainEqual({
       actual: firstAfterMetrics.rowsScanned,
       budget: Number((firstBeforeMetrics.rowsScanned * 1.1).toFixed(3)),
       metric: 'compare.rows.scanned',
@@ -269,6 +277,12 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
       actual: firstAfterMetrics.writerBatchCount,
       budget: Number((firstBeforeMetrics.writerBatchCount * 1.1).toFixed(3)),
       metric: 'compare.writer.batchCount',
+      operationKey: firstBeforeMetrics.operationKey,
+    })
+    expect(result.nonTargetRegressions).toContainEqual({
+      actual: firstAfterMetrics.writerRowsPerBatch,
+      budget: Number((firstBeforeMetrics.writerRowsPerBatch * 1.1).toFixed(3)),
+      metric: 'compare.writer.rowsPerBatch',
       operationKey: firstBeforeMetrics.operationKey,
     })
     const targetResult = compareReviewServingSyntheticBenchmarkArtifacts({
@@ -296,6 +310,12 @@ test('review-serving synthetic benchmark compare blocks config drift and reports
       actual: firstAfterMetrics.tempSpillBytes,
       budget: firstBeforeMetrics.tempSpillBytes * 1.1,
       metric: 'compare.temp.spillBytes',
+      operationKey: firstBeforeMetrics.operationKey,
+    })
+    expect(targetResult.nonTargetRegressions).toContainEqual({
+      actual: firstAfterMetrics.writerRowsPerBatch,
+      budget: Number((firstBeforeMetrics.writerRowsPerBatch * 1.1).toFixed(3)),
+      metric: 'compare.writer.rowsPerBatch',
       operationKey: firstBeforeMetrics.operationKey,
     })
     const rssResult = compareReviewServingSyntheticBenchmarkArtifacts({after: rssRegressedAfter, before})
