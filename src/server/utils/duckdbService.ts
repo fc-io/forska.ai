@@ -551,7 +551,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         HAVING COUNT(*) > 1
       )
     `,
-    lowMemoryStartupPreflight: true,
     mutationProbeSql: `
       DROP TABLE IF EXISTS startup_probe_review_rebuild_request;
       CREATE TEMP TABLE startup_probe_review_rebuild_request AS
@@ -2290,7 +2289,7 @@ const getDuckdbIndexedTableRepairScript = () => {
   `
 }
 
-const getDuckdbStartupPreflightError = (runtimeConfig: DuckdbRuntimeConfig) => {
+const getDuckdbStartupPreflightError = (runtimeConfig: DuckdbRuntimeConfig, hadWalBeforePreflight: boolean) => {
   if (
     runtimeConfig.databasePath === ':memory:'
     || process.env.FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT === duckdbStartupWalPreflightDisabledEnvValue
@@ -2316,9 +2315,11 @@ const getDuckdbStartupPreflightError = (runtimeConfig: DuckdbRuntimeConfig) => {
     return error
   }
 
-  const preflightRepairSpecs = getDuckdbStartupPreflightSpecsForRuntime(runtimeConfig, activeRepairSpecs)
+  const preflightRepairSpecs = hadWalBeforePreflight
+    ? []
+    : getDuckdbStartupPreflightSpecsForRuntime(runtimeConfig, activeRepairSpecs)
 
-  if (preflightRepairSpecs.length === 0) {
+  if (preflightRepairSpecs.length === 0 && !hadWalBeforePreflight) {
     writeRuntimeOperatorLogEvent({
       attrs: {
         databasePath: runtimeConfig.databasePath,
@@ -2576,7 +2577,7 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
 
   for (let recoveryAttempt = 0; recoveryAttempt < 3; ) {
     const hadWalBeforePreflight = hasNonEmptyDuckdbWal(runtimeConfig.databasePath)
-    const error = getDuckdbStartupPreflightError(runtimeConfig)
+    const error = getDuckdbStartupPreflightError(runtimeConfig, hadWalBeforePreflight)
 
     if (error === null) {
       return

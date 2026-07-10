@@ -523,7 +523,7 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
       parsed.preflightSpecs.map((spec) => {
         return `${spec.schemaName}.${spec.tableName}`
       }),
-    ).toEqual(['app.review_rebuild_request', 'app.review_rebuild_chunk_manifest'])
+    ).toEqual(['app.review_rebuild_chunk_manifest'])
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
   } finally {
@@ -1049,6 +1049,7 @@ test('duckdb service preflights startup WAL replay in a child before opening in-
 
         let createCount = 0
         let preflightCount = 0
+        const preflightSpecsHistory = []
         const originalSpawnSync = globalThis.Bun.spawnSync
 
         globalThis.Bun.spawnSync = ((command, options) => {
@@ -1057,6 +1058,7 @@ test('duckdb service preflights startup WAL replay in a child before opening in-
           }
 
           preflightCount += 1
+          preflightSpecsHistory.push(JSON.parse(String(command[5] ?? '[]')))
 
           return preflightCount === 1
             ? {
@@ -1122,6 +1124,7 @@ test('duckdb service preflights startup WAL replay in a child before opening in-
           createCount,
           manifest,
           preflightCount,
+          preflightSpecsHistory,
           recoveryFiles,
           rows,
           walExists: existsSync(duckdbPath + '.wal'),
@@ -1155,12 +1158,19 @@ test('duckdb service preflights startup WAL replay in a child before opening in-
       createCount: number
       manifest: {error?: string; preservedDatabasePath?: string; recovery?: string; walQuarantinePath?: string} | null
       preflightCount: number
+      preflightSpecsHistory: Array<Array<{schemaName: string; tableName: string}>>
       recoveryFiles: string[]
       rows: Array<{value: number}>
       walExists: boolean
     }
 
     expect(parsed.preflightCount).toBe(2)
+    expect(parsed.preflightSpecsHistory[0]).toEqual([])
+    expect(
+      parsed.preflightSpecsHistory[1]?.map((spec) => {
+        return `${spec.schemaName}.${spec.tableName}`
+      }),
+    ).toContain('app.review_rebuild_request')
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
     expect(parsed.walExists).toBe(false)
@@ -1208,6 +1218,7 @@ test('duckdb service retries startup WAL preflight locks without quarantining WA
 
         let createCount = 0
         let preflightCount = 0
+        const preflightSpecsHistory = []
         const originalSpawnSync = globalThis.Bun.spawnSync
 
         globalThis.Bun.spawnSync = ((command, options) => {
@@ -1222,6 +1233,7 @@ test('duckdb service retries startup WAL preflight locks without quarantining WA
           }
 
           preflightCount += 1
+          preflightSpecsHistory.push(JSON.parse(String(command[5] ?? '[]')))
 
           return preflightCount < 3
             ? {
@@ -1286,6 +1298,7 @@ test('duckdb service retries startup WAL preflight locks without quarantining WA
         console.log(JSON.stringify({
           createCount,
           preflightCount,
+          preflightSpecsHistory,
           recoveryFiles,
           rows,
           walExists: existsSync(duckdbPath + '.wal'),
@@ -1318,12 +1331,18 @@ test('duckdb service retries startup WAL preflight locks without quarantining WA
     const parsed = JSON.parse(result.stdout.toString()) as {
       createCount: number
       preflightCount: number
+      preflightSpecsHistory: Array<Array<{schemaName: string; tableName: string}>>
       recoveryFiles: string[]
       rows: Array<{value: number}>
       walExists: boolean
     }
 
     expect(parsed.preflightCount).toBeGreaterThanOrEqual(3)
+    expect(
+      parsed.preflightSpecsHistory.every((specs) => {
+        return specs.length === 0
+      }),
+    ).toBe(true)
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
     expect(parsed.walExists).toBe(true)
@@ -1794,7 +1813,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     const rebuildRequestProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'review_rebuild_request'
     })
-    expect(rebuildRequestProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(rebuildRequestProbe?.lowMemoryStartupPreflight).toBeUndefined()
     expect(rebuildRequestProbe?.repairPrimaryKeyColumns).toEqual(['request_id'])
     expect(rebuildRequestProbe?.mutationProbeSql).toContain('UPDATE app.review_rebuild_request')
     expect(rebuildRequestProbe?.mutationProbeSql).toContain('startup_probe_review_rebuild_request')
