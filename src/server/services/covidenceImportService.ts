@@ -32,7 +32,6 @@ type CovidencePromptTx = {
   run: (statement: string) => Promise<void>
 }
 type CovidenceProjectTx = CovidencePromptTx & {run: (statement: string) => Promise<void>}
-type CovidenceProjectPromptMutationRow = {updatedAt: string | null}
 type CovidenceCsvParseErrorCode =
   | 'duplicate_header'
   | 'empty_file'
@@ -2503,8 +2502,20 @@ export const getOrCreateCovidenceProject = async (params: {
 
   if (existingProject) {
     if (params.promptId) {
-      const [projectPromptMutation] = await queryRunner.queryJson<CovidenceProjectPromptMutationRow>(`
-        INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+      const sourceUpdatedAt = new Date().toISOString()
+
+      // DuckDB 1.5.1 can abort at COMMIT when this conflict update is consumed through DML RETURNING.
+      await queryRunner.run(`
+        INSERT INTO app.project_prompt (
+          id,
+          project_id,
+          prompt_id,
+          prompt_order,
+          archived,
+          enabled,
+          origin_project_id,
+          updated_at
+        )
         VALUES (
           '${escapeSqlString(globalThis.crypto.randomUUID())}',
           '${escapeSqlString(existingProject.id)}',
@@ -2512,22 +2523,22 @@ export const getOrCreateCovidenceProject = async (params: {
           0,
           FALSE,
           TRUE,
-          NULL
+          NULL,
+          ${getSqlLiteral(sourceUpdatedAt)}::TIMESTAMPTZ
         )
         ON CONFLICT(project_id, prompt_id) DO UPDATE SET
           prompt_order = EXCLUDED.prompt_order,
           archived = FALSE,
           enabled = TRUE,
-          updated_at = now()
-        RETURNING updated_at AS updatedAt
+          updated_at = EXCLUDED.updated_at
       `)
       await appendPromptConfigReviewServingDelta(queryRunner, {
         changedPromptConfigFields: [...immutablePromptIdentityReviewServingFields, 'promptOrder', 'enabled'],
         projectId: existingProject.id,
         promptId: params.promptId,
-        sourceMutationKey: `covidenceProjectPrompt|${existingProject.id}|${params.promptId}|${projectPromptMutation?.updatedAt ?? 'unknown'}`,
+        sourceMutationKey: `covidenceProjectPrompt|${existingProject.id}|${params.promptId}|${sourceUpdatedAt}`,
         sourceOperation: 'upsert',
-        sourceUpdatedAt: projectPromptMutation?.updatedAt,
+        sourceUpdatedAt,
       })
       await appendProjectReviewConfigReviewServingDelta(queryRunner, {
         changedReviewConfigFields: ['promptMembership'],

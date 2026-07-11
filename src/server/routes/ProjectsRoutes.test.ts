@@ -4930,6 +4930,85 @@ test('clone route preserves summary mode criteria and human summary judgments', 
   await flushMartRefreshes()
 })
 
+test('edit route skips all writes for an unchanged project without a judgment job', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-noop-connection'
+  const modelId = 'edit-noop-model'
+  const projectId = 'edit-noop-project'
+  const promptId = 'edit-noop-prompt'
+  const originalText = 'Unchanged project prompt'
+  const database = queryDatabase
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(originalText, null, null, null),
+    originProjectId: null,
+    originalText,
+    projectId,
+    projectPromptId: 'edit-noop-project-prompt',
+    promptId,
+  })
+
+  const getWriteState = async () => {
+    const [state] = await database<{deltaCount: number; projectUpdatedAt: string; promptUpdatedAt: string}>(`
+      SELECT
+        CAST(project.updated_at AS VARCHAR) AS projectUpdatedAt,
+        CAST(project_prompt.updated_at AS VARCHAR) AS promptUpdatedAt,
+        (
+          SELECT COUNT(*)
+          FROM app.review_change_delta
+          WHERE project_id = '${projectId}'
+        ) AS deltaCount
+      FROM app.project project
+      INNER JOIN app.project_prompt project_prompt ON project_prompt.project_id = project.id
+      WHERE project.id = '${projectId}'
+        AND project_prompt.prompt_id = '${promptId}'
+      LIMIT 1
+    `)
+
+    return state
+  }
+
+  const before = await getWriteState()
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Archive Regression Project',
+        description: null,
+        prompts: [
+          {archived: false, enabled: true, order: 0, originalId: promptId, originalText, promptHeading: '', type: ''},
+        ],
+        dateFrom: null,
+        dateTo: null,
+        importRoutes: [],
+        modelId,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {promptCleanupSummary?: unknown; prompts: Array<{id: string}>}}
+  const after = await getWriteState()
+
+  expect(response.status).toBe(200)
+  expect(body.data.promptCleanupSummary).toBeUndefined()
+  expect(
+    body.data.prompts.map((prompt) => {
+      return prompt.id
+    }),
+  ).toEqual([promptId])
+  expect(after).toEqual(before)
+
+  await flushMartRefreshes()
+})
+
 test('editing a cloned summary project prompt preserves summary criteria metadata', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')

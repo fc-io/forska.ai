@@ -127,10 +127,9 @@ export const getRuntimeProcessIdentity = (options: RuntimeProcessIdentityOptions
 }
 
 export const getRuntimeProcessLogIdentity = ({
+  identity = getRuntimeProcessIdentity(),
   serverRole,
-}: {serverRole?: RuntimeProcessServerRole} = {}): RuntimeProcessLogIdentity => {
-  const identity = getRuntimeProcessIdentity()
-
+}: {identity?: RuntimeProcessIdentity; serverRole?: RuntimeProcessServerRole} = {}): RuntimeProcessLogIdentity => {
   return identity.service === 'app-server' || serverRole === undefined ? identity : {...identity, serverRole}
 }
 

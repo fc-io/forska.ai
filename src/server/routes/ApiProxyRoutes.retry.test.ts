@@ -160,7 +160,11 @@ test.serial('api proxy retries idempotent GET requests after a transport failure
 
 test.serial('api proxy does not retry non-idempotent POST requests after a transport failure', async () => {
   const app = await loadRoutes()
-  const fetchMock = mock(async (_request: Request | URL | string) => {
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    if (isRuntimeReadyUrl(getRequestUrl(request))) {
+      return getCompatibleRuntimeReadyResponse()
+    }
+
     throw new Error('owner unavailable')
   })
   globalThis.fetch = fetchMock as unknown as typeof fetch
@@ -179,6 +183,40 @@ test.serial('api proxy does not retry non-idempotent POST requests after a trans
   expect(response.status).toBe(502)
   expect(body.error).toContain('DuckDB owner proxy target unavailable')
   expect(ownerFetchCallUrls).toHaveLength(2)
+})
+
+test.serial('api proxy waits for owner readiness before forwarding a non-idempotent PATCH once', async () => {
+  const app = await loadRoutes()
+  let readinessFailureCount = 2
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    const url = getRequestUrl(request)
+
+    if (isRuntimeReadyUrl(url) && readinessFailureCount > 0) {
+      readinessFailureCount -= 1
+      throw new Error('owner restarting')
+    }
+
+    return isRuntimeReadyUrl(url) ? getCompatibleRuntimeReadyResponse() : Response.json({data: {ok: true}, error: null})
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/project-1/edit', {
+      body: JSON.stringify({name: 'Updated project'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {ok: boolean}; error: string | null}
+  const ownerFetchCallUrls = getOwnerFetchCallUrls(fetchMock.mock.calls)
+  const forwardedPatchUrls = ownerFetchCallUrls.filter((url) => {
+    return !isRuntimeReadyUrl(url)
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data.ok).toBe(true)
+  expect(ownerFetchCallUrls).toHaveLength(4)
+  expect(forwardedPatchUrls).toEqual(['http://owner-1:34991/__duckdb-owner-rpc/api/projects/project-1/edit'])
 })
 
 test.serial('api proxy retries idempotent DELETE requests after a temporary same-owner transport failure', async () => {
