@@ -66,6 +66,7 @@ type RuntimeLogRecord = {
 
 const bunExecutablePath = realpathSync(process.execPath)
 const realDevServerSmokeEnabled = process.env.FORSKA_REAL_DEV_SERVER_SMOKE === 'true'
+const realDevServerSmokeTest = realDevServerSmokeEnabled ? test : test.skip
 const reviewServingProgressProjectId =
   process.env.FORSKA_REVIEW_SERVING_PROGRESS_PROJECT_ID ?? 'd03fe24a-cfcf-41ed-b09f-7b554a393d80'
 const reviewServingWarningRouteProbeProjectId =
@@ -75,6 +76,7 @@ const reviewServingWarningFetchTimeoutMs = 60_000
 const forbiddenDevServerOutputPatterns = [
   {label: 'API role DuckDB ownership', pattern: /Current server role api cannot own DuckDB/},
   {label: 'DuckDB fatal runtime restart', pattern: /\[duckdb\] restarting embedded runtime after fatal invalidation/},
+  {label: 'review-serving projector recovery pause', pattern: /paused by operator recovery marker/},
   {label: 'DuckDB owner heartbeat failure', pattern: /\[duckdb-owner\] heartbeat failed/},
   {label: 'review bulk worker loop failure', pattern: /\[reviewBulkOperationWorker\] background loop failed/},
   {label: 'maintenance restart', pattern: /\[server:stack\] restarting maintenance/},
@@ -82,6 +84,19 @@ const forbiddenDevServerOutputPatterns = [
   {label: 'judge duplicate replacement', pattern: /judge replacement is already ready after SIGTERM/},
   {label: 'judge unexpected SIGTERM exit', pattern: /\[server:stack\] judge pid=\d+ exited with code 143/},
 ] as const
+
+test('current-db network smoke includes read-only browser and mutation-enabled split-stack phases', () => {
+  const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as {scripts?: Record<string, string>}
+  const scripts = packageJson.scripts ?? {}
+
+  expect(scripts['test:network-smoke']).toBe('bun run test:network-smoke:current-db')
+  expect(scripts['test:network-smoke:current-db']).toBe(
+    'bun run test:network-smoke:current-db:readonly && bun run test:dev-server:current-db',
+  )
+  expect(scripts['test:network-smoke:current-db:readonly']).toContain('FORSKA_DISABLE_SERVER_MUTATIONS=true')
+  expect(scripts['test:dev-server:current-db']).toContain('FORSKA_REAL_DEV_SERVER_SMOKE=true')
+  expect(scripts['test:dev-server:current-db']).toContain('-t "real primary dev:server startup')
+})
 
 test('stacked server allows DuckDB startup recovery to finish before maintenance restart', () => {
   const source = readFileSync(new URL('./startServerStack.ts', import.meta.url), 'utf8')
@@ -800,14 +815,9 @@ test(
   {timeout: 30_000},
 )
 
-test(
+realDevServerSmokeTest(
   'real primary dev:server startup has no DuckDB owner heartbeat or restart errors',
   async () => {
-    if (!realDevServerSmokeEnabled) {
-      expect(realDevServerSmokeEnabled).toBe(false)
-      return
-    }
-
     const devServerProcess = globalThis.Bun.spawn([bunExecutablePath, 'run', 'dev:server'], {
       cwd: process.cwd(),
       env: {...process.env, FORSKA_DEV_SERVER_WATCH_ACTION: 'restart'},
