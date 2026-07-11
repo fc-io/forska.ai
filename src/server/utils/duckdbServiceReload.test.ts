@@ -1788,7 +1788,11 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(parsed.repairScript).toContain('spec.postRepairSql')
     expect(parsed.repairScript).toContain('stripInlinePrimaryKeyConstraints')
     expect(parsed.repairScript).toContain('getRepairPrimaryKeyIndexSql')
+    expect(parsed.repairScript).toContain("'DROP INDEX IF EXISTS ' + spec.schemaName")
     expect(parsed.repairScript).toContain('CREATE UNIQUE INDEX IF NOT EXISTS idx_')
+    expect(parsed.repairScript).toContain("'_repaired_pk_' + repairId")
+    expect(parsed.repairScript).toContain("startsWith('idx_' + spec.tableName + '_repaired_pk')")
+    expect(parsed.repairScript).toContain("replace(/^CREATE UNIQUE INDEX /, 'CREATE UNIQUE INDEX IF NOT EXISTS ')")
     expect(
       parsed.repairSpecs.map((spec) => {
         return {schemaName: spec.schemaName, tableName: spec.tableName}
@@ -1889,6 +1893,7 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
 
         let createCount = 0
         let firstReadInvalidated = false
+        let releaseCount = 0
         const runStatements = []
 
         void mock.module(serverRuntimeRoleModulePath, () => {
@@ -1896,7 +1901,9 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
             canCurrentServerOwnDuckdb: () => true,
             ensureCurrentDuckdbOwnerLease: async () => {},
             registerDuckdbOwnerDemotionHandler: () => {},
-            releaseCurrentDuckdbOwnerLease: async () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {
+              releaseCount += 1
+            },
           }
         })
 
@@ -1956,7 +1963,7 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?fatal-restart-test=' + Date.now())
         const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
         await duckdbService.closeDuckdbService()
-        console.log(JSON.stringify({createCount, rows, runStatements}))
+        console.log(JSON.stringify({createCount, releaseCount, rows, runStatements}))
       `,
     ],
     {
@@ -1982,9 +1989,10 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
 
   const parsed = JSON.parse(result.stdout.toString()) as {
     createCount: number
+    releaseCount: number
     rows: Array<{value: number}>
     runStatements: string[]
   }
 
-  expect(parsed).toEqual({createCount: 2, rows: [{value: 1}], runStatements: ['2:CHECKPOINT']})
+  expect(parsed).toEqual({createCount: 2, releaseCount: 1, rows: [{value: 1}], runStatements: ['2:CHECKPOINT']})
 })
