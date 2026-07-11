@@ -1,8 +1,11 @@
+import {existsSync} from 'node:fs'
+
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {startDuckdbOwnerConnectionHeartbeat} from './duckdbOwnerConnectionHeartbeat.ts'
 import {env} from './env.ts'
 import {startReviewBulkOperationWorkerHeartbeat} from './reviewBulkOperationWorkerHeartbeat.ts'
 import {startReviewServingProjectorWorkerHeartbeat} from './reviewServingProjectorWorkerHeartbeat.ts'
+import {writeRuntimeOperatorLogEvent} from './runtimeLogger.ts'
 import {shouldDisableServerMutationWork} from './serverMutationMode.ts'
 import {
   registerDuckdbOwnerDemotionHandler,
@@ -16,6 +19,15 @@ let maintenanceBackgroundWorkStops: Array<() => void> | null = null
 const lowMemoryMaintenanceDuckdbLimitMiB = 6400
 const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 16
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
+const reviewServingProjectorPauseMarkerSuffix = '.review-serving-projector-paused'
+
+export const getReviewServingProjectorPauseMarkerPath = (duckdbPath = env.DUCKDB_PATH) => {
+  return `${duckdbPath}${reviewServingProjectorPauseMarkerSuffix}`
+}
+
+const isReviewServingProjectorPaused = () => {
+  return env.DUCKDB_PATH !== ':memory:' && existsSync(getReviewServingProjectorPauseMarkerPath())
+}
 
 const shouldDeferNonessentialDuckdbMaintenanceWork = () => {
   const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT)
@@ -41,10 +53,23 @@ const startMaintenanceBackgroundWork = () => {
     return
   }
 
+  const reviewServingProjectorPaused = isReviewServingProjectorPaused()
+
+  if (reviewServingProjectorPaused) {
+    writeRuntimeOperatorLogEvent({
+      attrs: {markerPath: getReviewServingProjectorPauseMarkerPath()},
+      event: 'review-serving-projector.paused',
+      message: '[reviewServingProjectorWorker] paused by operator recovery marker',
+      severity: 'WARN',
+    })
+  }
+
   maintenanceBackgroundWorkStops = [
     ...(shouldDeferNonessentialDuckdbMaintenanceWork() ? [] : [startRequestAttemptCloseoutBackfillScheduler()]),
     ...(shouldDeferNonessentialDuckdbMaintenanceWork() ? [] : [startReviewBulkOperationWorkerHeartbeat()]),
-    startReviewServingProjectorWorkerHeartbeat(getReviewServingProjectorWorkerHeartbeatOptions()),
+    ...(reviewServingProjectorPaused
+      ? []
+      : [startReviewServingProjectorWorkerHeartbeat(getReviewServingProjectorWorkerHeartbeatOptions())]),
   ]
 }
 

@@ -1618,7 +1618,11 @@ const recoverDuckdbRuntimeAfterFatalError = async (error: unknown, options: Clos
     terminalArgs: [getCompactDuckdbErrorMessage(error)],
   })
 
-  duckdbFatalRecoveryPromise = closeDuckdbServiceDirect({checkpointBeforeClose: false, ...options})
+  duckdbFatalRecoveryPromise = closeDuckdbServiceDirect({
+    checkpointBeforeClose: false,
+    releaseOwnerLease: false,
+    ...options,
+  })
     .catch((closeError) => {
       writeRuntimeFailureLogEvent({
         attrs: {closeError},
@@ -2138,7 +2142,7 @@ const getDuckdbIndexedTableRepairScript = () => {
       }
 
       return (
-        'CREATE UNIQUE INDEX IF NOT EXISTS idx_' + spec.tableName + '_repaired_pk ON ' +
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_' + spec.tableName + '_repaired_pk_' + repairId + ' ON ' +
         sourceName +
         '(' +
         primaryKeyColumns.join(', ') +
@@ -2232,7 +2236,7 @@ const getDuckdbIndexedTableRepairScript = () => {
         }
 
         const indexRows = await getRows(
-          "SELECT sql FROM duckdb_indexes() " +
+          "SELECT index_name AS indexName, sql FROM duckdb_indexes() " +
             "WHERE schema_name = " + getSqlLiteral(spec.schemaName) +
             " AND table_name = " + getSqlLiteral(spec.tableName) +
             " AND sql IS NOT NULL " +
@@ -2258,6 +2262,9 @@ const getDuckdbIndexedTableRepairScript = () => {
         }
 	        await connection.run('DROP TABLE ' + sourceName)
 	        await connection.run('ALTER TABLE ' + repairName + ' RENAME TO ' + spec.tableName)
+	        await connection.run(
+	          'DROP INDEX IF EXISTS ' + spec.schemaName + '.idx_' + spec.tableName + '_repaired_pk',
+	        )
 	        const repairPrimaryKeyIndexSql = getRepairPrimaryKeyIndexSql(spec, sourceName)
 
 	        if (repairPrimaryKeyIndexSql !== null) {
@@ -2265,7 +2272,13 @@ const getDuckdbIndexedTableRepairScript = () => {
 	        }
 
 	        for (const indexRow of indexRows) {
-          const indexSql = String(indexRow.sql).replace(/^CREATE INDEX /, 'CREATE INDEX IF NOT EXISTS ')
+          if (String(indexRow.indexName).startsWith('idx_' + spec.tableName + '_repaired_pk')) {
+            continue
+          }
+
+          const indexSql = String(indexRow.sql)
+            .replace(/^CREATE UNIQUE INDEX /, 'CREATE UNIQUE INDEX IF NOT EXISTS ')
+            .replace(/^CREATE INDEX /, 'CREATE INDEX IF NOT EXISTS ')
           await connection.run(indexSql)
         }
 

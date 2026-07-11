@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-11 - Fatal Recovery Owner Lease
+
+- Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` during a review-serving rebuild chunk claim.
+- Context: The split-runtime maintenance owner restarted its embedded DuckDB runtime after fatal invalidation while API requests were proxied through the owner.
+- Cause: Generic in-process fatal recovery closed DuckDB with the normal shutdown default, releasing the explicit owner lease; the heartbeat then demoted the still-running maintenance process to `api`, so all DB-backed API calls returned 500 and the process supervisor did not restart it.
+- Fix: In-process fatal recovery now preserves the DuckDB owner lease by default; explicit shutdown still releases the lease. Targeted indexed-table repair now skips prior repaired-primary-key indexes and creates a repair-specific unique-index identity so recovery does not reuse the corrupted catalog lineage. An explicit adjacent recovery marker can pause only the review-serving projector while keeping the owner and APIs available, and the pause is logged as an operator warning.
+- Verification: `bun test src/server/utils/startBackgroundWork.test.ts src/server/utils/duckdbServiceReload.test.ts scripts/runWithRuntimeProfile.test.ts`; focused ESLint; direct readiness and product API probes against the primary split server stack.
+
 ## 2026-07-08 - Snapshot Pre-Copy Checkpoint Retry
 
 - Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` during `db:query:snapshot` on the primary runtime DB.

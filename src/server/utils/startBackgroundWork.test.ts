@@ -23,15 +23,18 @@ const getLastJsonLine = (value: string) => {
 const runStartBackgroundWork = (input: {
   disableServerMutations?: boolean
   duckdbMemoryLimit?: string
+  pauseReviewServingProjector?: boolean
   promoteAfterStart?: boolean
   role: 'api' | 'dev-single' | 'judge-worker' | 'maintenance-worker'
 }) => {
+  const duckdbPath = `/tmp/forska-start-background-work-${process.pid}-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
       '-e',
       `
         const {mock} = await import('bun:test')
+        const {rmSync, writeFileSync} = await import('node:fs')
 
         const getModulePath = (relativePath) => {
           return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
@@ -40,13 +43,20 @@ const runStartBackgroundWork = (input: {
         const startBackgroundWorkModulePath = getModulePath('./src/server/utils/startBackgroundWork.ts')
         const reviewServingProjectorWorkerHeartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
         const requestAttemptCloseoutBackfillSchedulerModulePath = getModulePath('./src/server/utils/startRequestAttemptCloseoutBackfillScheduler.ts')
+        const runtimeLoggerModulePath = getModulePath('./src/server/utils/runtimeLogger.ts')
         const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
         const serverMutationModeModulePath = getModulePath('./src/server/utils/serverMutationMode.ts')
         const duckdbOwnerConnectionHeartbeatModulePath = getModulePath('./src/server/utils/duckdbOwnerConnectionHeartbeat.ts')
+        const runtimeLogger = await import(runtimeLoggerModulePath)
         const calls = []
         const input = ${JSON.stringify(input)}
+        const pauseMarkerPath = process.env.DUCKDB_PATH + '.review-serving-projector-paused'
         const promotionHandlers = []
         let currentRole = input.role
+
+        if (input.pauseReviewServingProjector) {
+          writeFileSync(pauseMarkerPath, 'operator recovery pause')
+        }
 
         void mock.module(reviewServingProjectorWorkerHeartbeatModulePath, () => {
           return {
@@ -101,6 +111,14 @@ const runStartBackgroundWork = (input: {
             },
           }
         })
+        void mock.module(runtimeLoggerModulePath, () => {
+          return {
+            ...runtimeLogger,
+            writeRuntimeOperatorLogEvent: ({event}) => {
+              calls.push(event)
+            },
+          }
+        })
         void mock.module(duckdbOwnerConnectionHeartbeatModulePath, () => {
           return {
             startDuckdbOwnerConnectionHeartbeat: () => {
@@ -115,6 +133,7 @@ const runStartBackgroundWork = (input: {
           currentRole = 'maintenance-worker'
           await Promise.all(promotionHandlers.map((handler) => handler('test-promotion')))
         }
+        rmSync(pauseMarkerPath, {force: true})
         console.log(JSON.stringify({calls}))
       `,
     ],
@@ -122,6 +141,7 @@ const runStartBackgroundWork = (input: {
       cwd: process.cwd(),
       env: {
         ...process.env,
+        DUCKDB_PATH: duckdbPath,
         SERVER_ROLE: input.role,
         ...(input.duckdbMemoryLimit === undefined ? {} : {DUCKDB_MEMORY_LIMIT: input.duckdbMemoryLimit}),
       },
@@ -182,6 +202,20 @@ test('startBackgroundWork defers nonessential DuckDB maintenance under normalize
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
     'reviewServingProjectorWorkerHeartbeat:default:16',
+  ])
+})
+
+test('startBackgroundWork keeps owner infrastructure active while the review-serving projector is paused', () => {
+  const result = runStartBackgroundWork({
+    duckdbMemoryLimit: '6400MiB',
+    pauseReviewServingProjector: true,
+    role: 'maintenance-worker',
+  })
+
+  expect(result.calls).toEqual([
+    'serverRuntimeRoleMonitor',
+    'duckdbOwnerConnectionHeartbeat',
+    'review-serving-projector.paused',
   ])
 })
 
