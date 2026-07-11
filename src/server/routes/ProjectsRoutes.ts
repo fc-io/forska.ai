@@ -106,6 +106,7 @@ type ExistingProjectPromptAssociation = {
   criteriaSectionLabel: string | null
   enabled: boolean
   id: string
+  order: number | null
   originProjectId: string | null
   promptId: string
 }
@@ -221,9 +222,11 @@ type ProjectPromptLlmCleanupCandidateRow = {
 type ProjectEditCurrentProject = {
   dateFrom: unknown
   dateTo: unknown
+  description: string | null
   humanJudgmentMode: 'prompt' | 'summary' | null
   id: string
   modelId: string
+  name: string
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -946,6 +949,39 @@ const getExistingProjectPromptComparisonRows = async (projectId: string) => {
   `)
 }
 
+const getProjectEditResponsePrompts = async (db: AppQueryRunner, projectId: string) => {
+  return db.queryJson<{
+    id: string
+    originalText: string
+    transformedText: string | null
+    promptHeading: string | null
+    order: number | null
+    archived: boolean
+    promptArchived: boolean
+    type: string | null
+    enabled: boolean
+    originProjectId: string | null
+    linkedToProject: boolean
+  }>(`
+    SELECT
+      p.id AS id,
+      p.original_text AS originalText,
+      p.transformed_text AS transformedText,
+      p.prompt_heading AS promptHeading,
+      pp.prompt_order AS "order",
+      pp.archived AS archived,
+      p.archived AS promptArchived,
+      p.type AS type,
+      pp.enabled AS enabled,
+      pp.origin_project_id AS originProjectId,
+      TRUE AS linkedToProject
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON pp.prompt_id = p.id
+    WHERE pp.project_id = '${escapeSqlString(projectId)}'
+    ORDER BY pp.prompt_order ASC NULLS LAST
+  `)
+}
+
 const upsertProjectPromptTx = async (
   tx: AppTx,
   params: {
@@ -961,6 +997,7 @@ const upsertProjectPromptTx = async (
     criteriaSectionLabel: string | null
   },
 ) => {
+  const sourceUpdatedAt = new Date().toISOString()
   const hasCriteriaMetadata =
     params.criteriaDisposition !== null || params.criteriaSectionKey !== null || params.criteriaSectionLabel !== null
   const criteriaUpdateParts = hasCriteriaMetadata
@@ -975,10 +1012,11 @@ const upsertProjectPromptTx = async (
     'archived = EXCLUDED.archived',
     'enabled = EXCLUDED.enabled',
     ...criteriaUpdateParts,
-    'updated_at = now()',
+    'updated_at = EXCLUDED.updated_at',
   ]
 
-  const [upsertedPrompt] = await tx.queryJson<{updatedAt: string}>(`
+  // DuckDB 1.5.1 can abort at COMMIT when this conflict update is consumed through DML RETURNING.
+  await tx.run(`
     INSERT INTO app.project_prompt (
       id,
       project_id,
@@ -989,7 +1027,8 @@ const upsertProjectPromptTx = async (
       origin_project_id,
       criteria_disposition,
       criteria_section_key,
-      criteria_section_label
+      criteria_section_label,
+      updated_at
     )
     VALUES (
       '${escapeSqlString(crypto.randomUUID())}',
@@ -1001,13 +1040,12 @@ const upsertProjectPromptTx = async (
       ${getSqlLiteral(params.originProjectId)},
       ${getSqlLiteral(params.criteriaDisposition)},
       ${getSqlLiteral(params.criteriaSectionKey)},
-      ${getSqlLiteral(params.criteriaSectionLabel)}
+      ${getSqlLiteral(params.criteriaSectionLabel)},
+      ${getSqlLiteral(sourceUpdatedAt)}::TIMESTAMPTZ
     )
     ON CONFLICT(project_id, prompt_id) DO UPDATE SET
       ${updateParts.join(',\n      ')}
-    RETURNING updated_at AS updatedAt
   `)
-  const sourceUpdatedAt = upsertedPrompt?.updatedAt ?? new Date().toISOString()
 
   await appendPromptConfigReviewServingDelta(tx, {
     changedPromptConfigFields: params.changedPromptConfigFields ?? ['archived', 'enabled', 'promptOrder'],
@@ -1546,6 +1584,9 @@ export const projectsRoutes = new Elysia()
 
             await upsertProjectPromptTx(tx, {
               changedPromptConfigFields: [...immutablePromptIdentityReviewServingFields, 'promptOrder', 'enabled'],
+              criteriaDisposition: null,
+              criteriaSectionKey: null,
+              criteriaSectionLabel: null,
               projectId: createdProject.id,
               promptId,
               order: orderVal,
@@ -1571,6 +1612,9 @@ export const projectsRoutes = new Elysia()
 
             await upsertProjectPromptTx(tx, {
               changedPromptConfigFields: [...immutablePromptIdentityReviewServingFields, 'promptOrder', 'enabled'],
+              criteriaDisposition: null,
+              criteriaSectionKey: null,
+              criteriaSectionLabel: null,
               projectId: createdProject.id,
               promptId: existing.originalId,
               order: existing.order,
@@ -1716,6 +1760,8 @@ export const projectsRoutes = new Elysia()
       const [currentProject] = await getAppDatabaseService().queryJson<ProjectEditCurrentProject>(`
         SELECT
           id,
+          name,
+          description,
           model_id AS modelId,
           human_judgment_mode AS humanJudgmentMode,
           use_title AS useTitle,
@@ -1741,12 +1787,8 @@ export const projectsRoutes = new Elysia()
       }
 
       const [currentImportRoutes, existingPromptComparisonRows] = await Promise.all([
-        hasExistingJob && body.importRoutes !== undefined
-          ? getCurrentProjectImportRoutes(params.id)
-          : Promise.resolve([]),
-        hasExistingJob && body.prompts !== undefined
-          ? getExistingProjectPromptComparisonRows(params.id)
-          : Promise.resolve([]),
+        body.importRoutes !== undefined ? getCurrentProjectImportRoutes(params.id) : Promise.resolve([]),
+        body.prompts !== undefined ? getExistingProjectPromptComparisonRows(params.id) : Promise.resolve([]),
       ])
       const changedProtectedFields = hasExistingJob
         ? getChangedProtectedProjectEditFields({
@@ -1765,12 +1807,10 @@ export const projectsRoutes = new Elysia()
         )
       }
 
-      const hasPromptChanges = hasExistingJob
-        ? getHasProjectPromptEditChanges({
-            existingPrompts: existingPromptComparisonRows,
-            submittedPrompts: body.prompts as ProjectEditPromptPayload[] | undefined,
-          })
-        : body.prompts !== undefined
+      const hasPromptChanges = getHasProjectPromptEditChanges({
+        existingPrompts: existingPromptComparisonRows,
+        submittedPrompts: body.prompts as ProjectEditPromptPayload[] | undefined,
+      })
 
       if (job && hasPromptChanges && !(await canEditPromptsWithJudgmentJob(getAppDatabaseService(), job))) {
         throw new HttpError(409, 'Pause or drain the judgment job before editing prompts.')
@@ -1778,7 +1818,7 @@ export const projectsRoutes = new Elysia()
 
       const hasModelIdUpdate = body.modelId !== undefined && body.modelId !== currentProject.modelId
       const hasImportRouteChanges =
-        body.importRoutes !== undefined && (!hasExistingJob || changedProtectedFields.includes('importRoutes'))
+        body.importRoutes !== undefined && !hasSameStringSet(body.importRoutes, currentImportRoutes)
       const changedReviewConfigFields = getChangedReviewConfigFields({
         body,
         currentProject,
@@ -1788,6 +1828,22 @@ export const projectsRoutes = new Elysia()
         parsedDateFrom,
         parsedDateTo,
       })
+      const hasNameUpdate = body.name !== undefined && body.name !== currentProject.name
+      const hasDescriptionUpdate = body.description !== undefined && body.description !== currentProject.description
+      const hasEditChanges = hasNameUpdate || hasDescriptionUpdate || changedReviewConfigFields.length > 0
+
+      if (!hasEditChanges) {
+        const [project, prompts] = await Promise.all([
+          getProjectRow(getAppDatabaseService(), params.id),
+          getProjectEditResponsePrompts(getAppDatabaseService(), params.id),
+        ])
+
+        if (!project) {
+          throw new Error('Project not found')
+        }
+
+        return {data: {project: getProjectValue(project), prompts}}
+      }
 
       const runEditTransaction = () => {
         return getAppDatabaseService().transaction(async (tx) => {
@@ -1796,7 +1852,7 @@ export const projectsRoutes = new Elysia()
           if (hasModelIdUpdate) {
             await assertSelectableProviderModelId(tx, {
               errorMessage: 'Selected model does not exist or is disabled',
-              modelId: body.modelId,
+              modelId: body.modelId as string,
             })
           }
 
@@ -1808,22 +1864,28 @@ export const projectsRoutes = new Elysia()
 
           const updateParts = [
             `updated_at = current_timestamp`,
-            body.name !== undefined ? `name = ${getSqlLiteral(body.name)}` : null,
-            body.description !== undefined ? `description = ${getSqlLiteral(body.description)}` : null,
-            !hasExistingJob && parsedDateFrom !== undefined ? `date_from = ${getSqlLiteral(parsedDateFrom)}` : null,
-            !hasExistingJob && parsedDateTo !== undefined ? `date_to = ${getSqlLiteral(parsedDateTo)}` : null,
+            hasNameUpdate ? `name = ${getSqlLiteral(body.name)}` : null,
+            hasDescriptionUpdate ? `description = ${getSqlLiteral(body.description)}` : null,
+            !hasExistingJob && changedReviewConfigFields.includes('dateFrom')
+              ? `date_from = ${getSqlLiteral(parsedDateFrom)}`
+              : null,
+            !hasExistingJob && changedReviewConfigFields.includes('dateTo')
+              ? `date_to = ${getSqlLiteral(parsedDateTo)}`
+              : null,
             !hasExistingJob && hasModelIdUpdate ? `model_id = ${getSqlLiteral(body.modelId)}` : null,
-            !hasExistingJob && body.humanJudgmentMode !== undefined
+            !hasExistingJob && changedReviewConfigFields.includes('humanJudgmentMode')
               ? `human_judgment_mode = ${getSqlLiteral(body.humanJudgmentMode)}`
               : null,
-            !hasExistingJob && body.useTitle !== undefined ? `use_title = ${body.useTitle ? 'TRUE' : 'FALSE'}` : null,
-            !hasExistingJob && body.useAbstract !== undefined
+            !hasExistingJob && changedReviewConfigFields.includes('useTitle')
+              ? `use_title = ${body.useTitle ? 'TRUE' : 'FALSE'}`
+              : null,
+            !hasExistingJob && changedReviewConfigFields.includes('useAbstract')
               ? `use_abstract = ${body.useAbstract ? 'TRUE' : 'FALSE'}`
               : null,
-            !hasExistingJob && body.useFulltext !== undefined
+            !hasExistingJob && changedReviewConfigFields.includes('useFulltext')
               ? `use_fulltext = ${body.useFulltext ? 'TRUE' : 'FALSE'}`
               : null,
-            !hasExistingJob && body.useFulltextNoImages !== undefined
+            !hasExistingJob && changedReviewConfigFields.includes('useFulltextNoImages')
               ? `use_fulltext_no_images = ${body.useFulltextNoImages ? 'TRUE' : 'FALSE'}`
               : null,
           ].filter((part): part is string => {
@@ -1849,7 +1911,8 @@ export const projectsRoutes = new Elysia()
               enabled,
               criteria_disposition AS criteriaDisposition,
               criteria_section_key AS criteriaSectionKey,
-              criteria_section_label AS criteriaSectionLabel
+              criteria_section_label AS criteriaSectionLabel,
+              prompt_order AS "order"
             FROM app.project_prompt
             WHERE project_id = '${escapeSqlString(params.id)}'
           `)
@@ -1935,7 +1998,7 @@ export const projectsRoutes = new Elysia()
                           ...(targetPromptHeading !== existingPromptHeading ? (['promptHeading'] as const) : []),
                           ...(targetPromptType !== existingPromptType ? (['promptType'] as const) : []),
                         ]),
-                    'promptOrder',
+                    ...(prompt.order !== currentAssociation?.order ? (['promptOrder'] as const) : []),
                     ...(typeof archived === 'boolean' && archived !== currentAssociation?.archived
                       ? (['archived'] as const)
                       : []),
@@ -2044,6 +2107,10 @@ export const projectsRoutes = new Elysia()
 
             for (const promptEdit of resolvedPromptEdits) {
               if (promptEdit.currentAssociation) {
+                if (promptEdit.changedPromptConfigFields.length === 0) {
+                  continue
+                }
+
                 await upsertProjectPromptTx(tx, {
                   changedPromptConfigFields: promptEdit.changedPromptConfigFields,
                   projectId: params.id,
@@ -2087,10 +2154,10 @@ export const projectsRoutes = new Elysia()
             await markComparisonServingStaleForProjectPromptEditTx(tx, params.id)
           }
 
-          if (body.importRoutes !== undefined && !hasExistingJob) {
+          if (hasImportRouteChanges && !hasExistingJob) {
             const selectedRoutes = Array.from(
               new Set(
-                body.importRoutes.filter((route) => {
+                (body.importRoutes ?? []).filter((route) => {
                   return typeof route === 'string' && route.trim() !== ''
                 }),
               ),
@@ -2134,36 +2201,7 @@ export const projectsRoutes = new Elysia()
             sourceUpdatedAt: projectSourceUpdatedAt,
           })
 
-          const updatedPrompts = await tx.queryJson<{
-            id: string
-            originalText: string
-            transformedText: string | null
-            promptHeading: string | null
-            order: number | null
-            archived: boolean
-            promptArchived: boolean
-            type: string | null
-            enabled: boolean
-            originProjectId: string | null
-            linkedToProject: boolean
-          }>(`
-          SELECT
-            p.id AS id,
-            p.original_text AS originalText,
-            p.transformed_text AS transformedText,
-            p.prompt_heading AS promptHeading,
-            pp.prompt_order AS "order",
-            pp.archived AS archived,
-            p.archived AS promptArchived,
-            p.type AS type,
-            pp.enabled AS enabled,
-            pp.origin_project_id AS originProjectId,
-            TRUE AS linkedToProject
-          FROM app.project_prompt pp
-          INNER JOIN app.prompt p ON pp.prompt_id = p.id
-          WHERE pp.project_id = '${escapeSqlString(params.id)}'
-          ORDER BY pp.prompt_order ASC NULLS LAST
-        `)
+          const updatedPrompts = await getProjectEditResponsePrompts(tx, params.id)
 
           return promptCleanupSummary
             ? {project: getProjectValue(updatedProject), promptCleanupSummary, prompts: updatedPrompts}

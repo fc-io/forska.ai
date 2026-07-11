@@ -148,6 +148,28 @@ const getIncompatibleDuckdbOwnerTargetResponse = async (duckdbOwnerUrl: string) 
   return result.status === 'incompatible' ? Response.json({data: null, error: result.message}, {status: 426}) : null
 }
 
+const waitForDuckdbOwnerProxyTarget = async (
+  duckdbOwnerUrl: string,
+  deadlineMs = Date.now() + duckdbOwnerProxyRetryTimeoutMs,
+): Promise<Response | null> => {
+  const result = await probeDuckdbOwnerCutoverCompatibility(duckdbOwnerUrl, 'DuckDB owner proxy target')
+
+  if (result.status === 'incompatible') {
+    return Response.json({data: null, error: result.message}, {status: 426})
+  }
+
+  if (result.status === 'compatible') {
+    return null
+  }
+
+  if (Date.now() >= deadlineMs) {
+    return getDuckdbOwnerProxyUnavailableResponse()
+  }
+
+  await waitForDuckdbOwnerProxyRetry()
+  return waitForDuckdbOwnerProxyTarget(duckdbOwnerUrl, deadlineMs)
+}
+
 const fetchDuckdbOwnerProxyResponse = async (
   requestTemplate: DuckdbOwnerProxyRequestTemplate,
   duckdbOwnerUrl: string,
@@ -155,6 +177,15 @@ const fetchDuckdbOwnerProxyResponse = async (
   const incompatibleTargetResponse = await getIncompatibleDuckdbOwnerTargetResponse(duckdbOwnerUrl)
 
   return incompatibleTargetResponse ?? fetch(getDuckdbOwnerProxyRequest(requestTemplate, duckdbOwnerUrl))
+}
+
+const fetchNonRetryableDuckdbOwnerProxyResponse = async (
+  requestTemplate: DuckdbOwnerProxyRequestTemplate,
+  duckdbOwnerUrl: string,
+) => {
+  const targetFailureResponse = await waitForDuckdbOwnerProxyTarget(duckdbOwnerUrl)
+
+  return targetFailureResponse ?? fetch(getDuckdbOwnerProxyRequest(requestTemplate, duckdbOwnerUrl))
 }
 
 const fetchDuckdbOwnerStreamingProxyResponse = async (
@@ -276,7 +307,11 @@ const forwardBufferedApiRequestToDuckdbOwner = async (request: Request): Promise
   const shouldRetryProxyRequest = duckdbOwnerProxyRetryableMethods.has(requestTemplate.method)
 
   try {
-    return getDuckdbOwnerProxyResponse(await fetchDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl))
+    const response = shouldRetryProxyRequest
+      ? await fetchDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl)
+      : await fetchNonRetryableDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl)
+
+    return getDuckdbOwnerProxyResponse(response)
   } catch {
     if (!shouldRetryProxyRequest) {
       return getDuckdbOwnerProxyFailureResponse(requestTemplate)

@@ -51,6 +51,18 @@ type ReviewServingProgressSnapshot = {
 type ReviewServingProgressCandidate = {body: ReviewsWarningsBody; projectId: string}
 type StackStartedPids = {api: number | null; judge: number | null; maintenance: number | null}
 type PipeTextCollector = {done: Promise<void>; getText: () => string}
+type RuntimeLogRecord = {
+  attrs?: {
+    exitCode?: number | null
+    pid?: number | null
+    restartPlanned?: boolean
+    role?: string
+    signal?: string | null
+  }
+  event?: string
+  runtime?: {pid?: number; service?: string}
+  severity?: string
+}
 
 const bunExecutablePath = realpathSync(process.execPath)
 const realDevServerSmokeEnabled = process.env.FORSKA_REAL_DEV_SERVER_SMOKE === 'true'
@@ -696,6 +708,90 @@ test(
         maintenance: pidsAfterReady[1],
       })
       expectNoForbiddenDevServerOutput(stackOutput)
+    } finally {
+      await stopProcess(stackProcess)
+      removePathIfExists(dataRoot)
+    }
+  },
+  {timeout: 30_000},
+)
+
+test(
+  'server stack reports an unexpected maintenance exit to stderr and its runtime log',
+  async () => {
+    if (!canStartLocalListener) {
+      expect(canStartLocalListener).toBe(false)
+      return
+    }
+
+    const dataRoot = join(process.cwd(), 'data', 'runtime', `run-with-runtime-profile-exit-log-${Date.now()}`)
+    const duckdbPath = join(dataRoot, 'forska.duckdb')
+    const logDir = join(dataRoot, 'logs')
+    const [vitePort, apiPort, maintenancePort, judgePort] = await getFourAvailableLocalPorts()
+
+    mkdirSync(dataRoot, {recursive: true})
+
+    const stackProcess = globalThis.Bun.spawn([bunExecutablePath, 'scripts/startServerStack.ts'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: String(apiPort),
+        BACKGROUND_JUDGE_PORT: String(judgePort),
+        BACKGROUND_MAINTENANCE_PORT: String(maintenancePort),
+        DUCKDB_PATH: duckdbPath,
+        JUDGE_WORKER_ID: 'run-with-runtime-profile-exit-log-judge',
+        LOG_DIR: logDir,
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        VITE_PORT: String(vitePort),
+      },
+      stderr: 'pipe',
+      stdout: 'pipe',
+    })
+    const stdout = createPipeTextCollector(stackProcess.stdout)
+    const stderr = createPipeTextCollector(stackProcess.stderr)
+    const collectors = [stdout, stderr]
+
+    try {
+      await Promise.all([
+        waitForRuntimeReady(apiPort, 20_000),
+        waitForRuntimeReady(maintenancePort, 20_000),
+        waitForRuntimeReady(judgePort, 20_000),
+      ])
+      const [, maintenancePid] = await getRequiredRuntimePids([apiPort, maintenancePort, judgePort])
+
+      process.kill(maintenancePid, 'SIGKILL')
+      await waitForRuntimeReady(maintenancePort, 20_000)
+      const [, replacementMaintenancePid] = await getRequiredRuntimePids([apiPort, maintenancePort, judgePort])
+
+      expect(replacementMaintenancePid).not.toBe(maintenancePid)
+      await stopProcess(stackProcess)
+      await Promise.all(
+        collectors.map((collector) => {
+          return collector.done
+        }),
+      )
+
+      const output = getCollectedProcessOutput(collectors)
+      const logPath = join(logDir, `maintenance-worker-server-${new Date().toISOString().slice(0, 10)}.jsonl`)
+      const records = readFileSync(logPath, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => {
+          return JSON.parse(line) as RuntimeLogRecord
+        })
+      const exitRecord = records.find((record) => {
+        return record.event === 'server.stack.managed-process-unexpected-exit'
+      })
+
+      expect(output).toContain(
+        `[server:stack] maintenance pid=${maintenancePid} exited unexpectedly with code 137 signal=SIGKILL; restart planned`,
+      )
+      expect(exitRecord).toMatchObject({
+        attrs: {exitCode: 137, pid: maintenancePid, restartPlanned: true, role: 'maintenance', signal: 'SIGKILL'},
+        runtime: {pid: maintenancePid, service: 'maintenance-worker-server'},
+        severity: 'ERROR',
+      })
     } finally {
       await stopProcess(stackProcess)
       removePathIfExists(dataRoot)

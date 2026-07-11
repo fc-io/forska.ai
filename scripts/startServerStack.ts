@@ -11,6 +11,8 @@ import {isDuckdbOwnerLeaseProcessAlive, readDuckdbOwnerLease} from '../src/serve
 import {getConfiguredDuckdbPath} from '../src/server/utils/getDuckdbPath.ts'
 import {readJudgeWorkerJournalLock} from '../src/server/utils/judgeWorkerJournalIdentity.ts'
 import {isLockOwnedByCurrentMachine} from '../src/server/utils/localMachineIdentity.ts'
+import {installRuntimeJsonlSink, writeRuntimeLogEvent} from '../src/server/utils/runtimeLogger.ts'
+import {resolveRuntimeProcessIdentity, type RuntimeProcessIdentity} from '../src/server/utils/runtimeProcessIdentity.ts'
 import {runtimeReadyPath} from '../src/server/utils/runtimeReadyContract.ts'
 
 type ManagedRole = 'api' | 'judge' | 'maintenance'
@@ -46,6 +48,7 @@ const parentMonitorIntervalMs = 1_000
 const serverStackLockHeartbeatIntervalMs = 1_000
 
 const config = getBackgroundServerStackConfig(process.env)
+const managedProcessRuntimeIdentities = new WeakMap<ServerProcess, RuntimeProcessIdentity>()
 const serverStackLockPath = join(
   tmpdir(),
   'forska-server-stack',
@@ -155,6 +158,8 @@ let serverStackLockHeartbeat: ReturnType<typeof setInterval> | null = null
 const parentPid = process.ppid
 const bunExecutablePath = realpathSync(process.execPath)
 const serverStackStartedAt = new Date().toISOString()
+
+installRuntimeJsonlSink({envValues: process.env, timestamp: serverStackStartedAt})
 
 const getServerStackLockMetadata = (): ServerStackLockMetadata => {
   return {
@@ -399,6 +404,7 @@ const stopConflictingDuckdbOwner = async (envValues: Record<string, string | und
 
 const startServerProcess = async (role: ManagedRole): Promise<ServerProcess> => {
   const env = getBackgroundServerEnv({baseEnv: process.env, role: getBackgroundServerRole(role)})
+  const processStartedAt = new Date().toISOString()
 
   if (role === 'maintenance') {
     await stopConflictingDuckdbOwner(env)
@@ -415,6 +421,10 @@ const startServerProcess = async (role: ManagedRole): Promise<ServerProcess> => 
     stdin: 'ignore',
     stdout: 'inherit',
   })
+  managedProcessRuntimeIdentities.set(
+    serverProcess,
+    resolveRuntimeProcessIdentity({envValues: env, pid: serverProcess.pid, processStartedAt}),
+  )
 
   console.log(`[server:stack] started ${role} pid=${serverProcess.pid ?? 'unknown'}`)
   return serverProcess
@@ -588,7 +598,25 @@ const monitorManagedServerExit = async (role: ManagedRole, serverProcess: Server
 
   setLastExitedManagedProcess(role, serverProcess)
   setManagedServerProcess(role, null)
-  console.error(`[server:stack] ${role} pid=${serverProcess.pid ?? 'unknown'} exited with code ${String(exitCode)}`)
+  const pid = serverProcess.pid ?? null
+  const signal = serverProcess.signalCode
+  const message = `[server:stack] ${role} pid=${pid ?? 'unknown'} exited unexpectedly with code ${String(exitCode)} signal=${signal ?? 'none'}; restart planned`
+
+  console.error(message)
+
+  try {
+    writeRuntimeLogEvent({
+      attrs: {exitCode, pid, restartPlanned: true, role, signal, supervisorPid: process.pid},
+      event: 'server.stack.managed-process-unexpected-exit',
+      message,
+      runtimeIdentity: managedProcessRuntimeIdentities.get(serverProcess),
+      serverRole: getBackgroundServerRole(role),
+      severity: 'ERROR',
+    })
+  } catch (error) {
+    console.error('[server:stack] failed to write managed process exit to runtime log', error)
+  }
+
   await waitFor(restartDelayMs)
 
   if (managedServerState.shuttingDown) {

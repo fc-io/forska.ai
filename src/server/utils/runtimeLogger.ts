@@ -4,6 +4,7 @@ import {join} from 'node:path'
 
 import {
   getRuntimeProcessLogIdentity,
+  type RuntimeProcessIdentity,
   type RuntimeProcessLogIdentity,
   type RuntimeProcessServerRole,
   type RuntimeProcessServiceName,
@@ -27,6 +28,7 @@ export type RuntimeLogEventInput = {
   attrs?: Record<string, unknown>
   event: string
   message: string
+  runtimeIdentity?: RuntimeProcessIdentity
   serverRole?: RuntimeProcessServerRole
   severity: RuntimeLogSeverity
   timestamp?: string
@@ -239,7 +241,7 @@ export const pruneManagedRuntimeLogFiles = ({currentDate, logDir}: {currentDate:
 
   return readdirSync(logDir, {withFileTypes: true}).reduce((deletedFiles, dirent) => {
     const match = dirent.isFile() ? runtimeLogManagedFilePattern.exec(dirent.name) : null
-    const shouldDelete = match !== null && match[2] < cutoffDate
+    const shouldDelete = match?.[2] !== undefined && match[2] < cutoffDate
 
     if (shouldDelete) {
       rmSync(join(logDir, dirent.name), {force: true})
@@ -297,11 +299,19 @@ export const createRuntimeLogRecord = ({
   envValues = process.env,
   event,
   message,
+  runtimeIdentity,
   serverRole = getRuntimeProcessServerRole(envValues),
   severity,
   timestamp = new Date().toISOString(),
 }: RuntimeLogEventInput & {envValues?: Record<string, string | undefined>}): RuntimeLogRecord => {
-  return {attrs: attrs ?? {}, event, message, runtime: getRuntimeProcessLogIdentity({serverRole}), severity, timestamp}
+  return {
+    attrs: attrs ?? {},
+    event,
+    message,
+    runtime: getRuntimeProcessLogIdentity({identity: runtimeIdentity, serverRole}),
+    severity,
+    timestamp,
+  }
 }
 
 export const installRuntimeJsonlSink = ({
