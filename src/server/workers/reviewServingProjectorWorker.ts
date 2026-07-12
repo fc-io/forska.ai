@@ -4775,6 +4775,52 @@ const getErrorText = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
 }
 
+const readmitRetryableFailedRebuildRequests = async (input: {
+  database: ReviewServingChunkManifestRepositoryDatabase
+  projectId?: string | null
+}) => {
+  const projectCondition = input.projectId ? `AND request.project_id = ${getSqlLiteral(input.projectId)}` : ''
+
+  await input.database.run(`
+    UPDATE app.review_rebuild_request AS request
+    SET
+      status = 'admitted',
+      retry_after = NULL,
+      failed_at = NULL,
+      last_error = NULL,
+      lease_owner = NULL,
+      lease_expires_at = NULL,
+      updated_at = current_timestamp
+    WHERE request.status = 'failed'
+      AND request.admission_state = 'admitted'
+      ${projectCondition}
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest chunk
+        WHERE chunk.request_id = request.request_id
+          AND (
+            chunk.status IN ('pending', 'running')
+            OR (
+              chunk.status = 'failed'
+              AND COALESCE(chunk.retry_count, 0) < COALESCE(
+                GREATEST(
+                  1,
+                  TRY_CAST(json_extract_string(request.retry_policy_json, '$.maxAttempts') AS INTEGER)
+                ),
+                3
+              )
+            )
+          )
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest chunk
+        WHERE chunk.request_id = request.request_id
+          AND chunk.status IN ('blocked_over_budget', 'quarantined')
+      )
+  `)
+}
+
 const getRebuildRequestPendingChunkCount = async (
   requestId: string,
   database: ReviewServingChunkManifestRepositoryDatabase,
@@ -7491,6 +7537,7 @@ export const runReviewServingProjectorWorkerCycle = async (
   const wakeId = `${workerId}:${getWorkerNowMs(dependencies, options)}`
   const workloadContext = getReviewServingProjectorWorkerWorkloadContext(workerId)
   const database = getReviewServingProjectorWorkerDatabase(dependencies, workloadContext)
+  await readmitRetryableFailedRebuildRequests({database, projectId: options.rebuildProjectId})
   const chunkBatch = await runReviewServingProjectorWorkerRebuildChunkBatch({
     database,
     dependencies,

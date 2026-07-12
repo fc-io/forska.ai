@@ -3707,6 +3707,26 @@ test('worker marks rebuild requests failed when completion finalization throws',
   expect(joined).toContain("request_id = 'rebuild-finalizer'")
 })
 
+test('worker readmits failed rebuild requests that still have retryable chunks', async () => {
+  const harness = createWorkerHarness({chunkComplete: true})
+
+  await runReviewServingProjectorWorkerOnce({rebuildProjectId: 'project-1', workerId: 'worker-1'}, harness.dependencies)
+
+  const readmissionStatement = harness.runStatements.find((statement) => {
+    return statement.includes('UPDATE app.review_rebuild_request AS request')
+  })
+
+  expect(readmissionStatement).toContain("request.status = 'failed'")
+  expect(readmissionStatement).toContain("request.admission_state = 'admitted'")
+  expect(readmissionStatement).toContain("chunk.status IN ('pending', 'running')")
+  expect(readmissionStatement).toContain("chunk.status = 'failed'")
+  expect(readmissionStatement).toContain("chunk.status IN ('blocked_over_budget', 'quarantined')")
+  expect(readmissionStatement).toContain("AND request.project_id = 'project-1'")
+  expect(readmissionStatement).toContain("status = 'admitted'")
+  expect(readmissionStatement).toContain('failed_at = NULL')
+  expect(readmissionStatement).toContain('last_error = NULL')
+})
+
 test('worker refreshes request candidate snapshot state before promotion', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const requestChunk = {
