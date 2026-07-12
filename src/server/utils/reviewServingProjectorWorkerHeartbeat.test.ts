@@ -38,6 +38,17 @@ test('review serving projector worker heartbeat logs original loop failure and r
         const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
         const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
         const events = []
+        const nativeSetTimeout = globalThis.setTimeout
+
+        globalThis.setTimeout = (callback, delayMs, ...args) => {
+          const timer = nativeSetTimeout(callback, delayMs, ...args)
+          const nativeUnref = timer.unref
+          timer.unref = () => {
+            events.push(['unref', delayMs])
+            return nativeUnref.call(timer)
+          }
+          return timer
+        }
 
         void mock.module(runtimeRoleModulePath, () => {
           return {
@@ -102,7 +113,7 @@ test('review serving projector worker heartbeat logs original loop failure and r
   const output = `${runScript.stdout.toString()}\n${runScript.stderr.toString()}`
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: Array<Array<number | string>>}
 
-  expect(result.events).toEqual([['run', 0, 3, 100], ['run', 1, 3, 100], ['abort']])
+  expect(result.events).toEqual([['run', 0, 3, 100], ['unref', 1], ['run', 2, 3, 100], ['abort']])
   expect(output).toContain('projector loop failed')
   expect(output).not.toContain('An unknown error occurred in Effect.tryPromise')
 })
@@ -268,6 +279,87 @@ test('review serving projector worker heartbeat restarts bounded low-memory work
   expect(runEvents.length).toBeGreaterThanOrEqual(2)
   expect(result.events).toContainEqual(['abort', 0])
   expect(result.events).not.toContainEqual(['recycle'])
+})
+
+test('review serving projector worker heartbeat keeps bounded restart timer refed until stop clears it', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const nativeSetTimeout = globalThis.setTimeout
+        const nativeClearTimeout = globalThis.clearTimeout
+        let restartTimer = null
+        let restartTimerCleared = false
+
+        globalThis.setTimeout = (callback, delayMs, ...args) => {
+          const timer = nativeSetTimeout(callback, delayMs, ...args)
+          if (delayMs === 10_000) {
+            restartTimer = timer
+          }
+          return timer
+        }
+        globalThis.clearTimeout = (timer) => {
+          if (timer === restartTimer) {
+            restartTimerCleared = true
+          }
+          return nativeClearTimeout(timer)
+        }
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async () => {},
+          }
+        })
+
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?refed=' + Date.now())
+        const stop = startReviewServingProjectorWorkerHeartbeat({
+          maxCompletedRebuildChunksPerRun: 1,
+          restartDelayMs: 10_000,
+        })
+
+        await new Promise((resolve) => {
+          nativeSetTimeout(resolve, 5)
+        })
+
+        const restartTimerWasRefed = restartTimer?.hasRef() ?? false
+        stop()
+
+        console.log(JSON.stringify({restartTimerCleared, restartTimerWasRefed}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: ''}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Review serving projector worker heartbeat refed restart test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    restartTimerCleared: boolean
+    restartTimerWasRefed: boolean
+  }
+
+  expect(result).toEqual({restartTimerCleared: true, restartTimerWasRefed: true})
 })
 
 test('review serving projector worker heartbeat preserves explicit null burst cap', () => {
