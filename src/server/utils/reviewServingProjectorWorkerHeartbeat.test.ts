@@ -181,7 +181,7 @@ test('review serving projector worker heartbeat uses guarded maintenance batch d
   ])
 })
 
-test('review serving projector worker heartbeat restarts bounded low-memory worker bursts', () => {
+test('review serving projector worker heartbeat restarts bounded low-memory worker bursts without closing DuckDB', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -267,7 +267,7 @@ test('review serving projector worker heartbeat restarts bounded low-memory work
 
   expect(runEvents.length).toBeGreaterThanOrEqual(2)
   expect(result.events).toContainEqual(['abort', 0])
-  expect(result.events).toContainEqual(['recycle'])
+  expect(result.events).not.toContainEqual(['recycle'])
 })
 
 test('review serving projector worker heartbeat preserves explicit null burst cap', () => {
