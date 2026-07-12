@@ -380,8 +380,7 @@ const foregroundBatchableRangeRebuildComponents = new Set<ReviewServingProjectio
   'queue',
   'search',
 ])
-// Keep status chunks out of this set: they are small SQL-native updates, and per-chunk DuckDB recycle/forced GC
-// can panic Bun on the release-scale primary DB during long status rebuild runs.
+// Keep status chunks out of this set: they are small SQL-native updates, and per-chunk forced GC is unnecessary.
 const reviewServingNativeHeavyRebuildComponents = new Set<ReviewServingProjectionComponent>(['posting', 'summary'])
 const reviewServingDuckdbRecycleAfterRebuildComponents = new Set<ReviewServingProjectionComponent>([
   'posting',
@@ -4573,7 +4572,7 @@ const shouldRecycleDuckdbAfterCompletedRebuildChunk = (input: {
 }) => {
   return (
     reviewServingDuckdbRecycleAfterRebuildComponents.has(input.chunk.projectionComponent)
-    && (input.chunk.requestId === null || hasRequestAssociatedNativeHeavyChunkReachedRssCap(input))
+    && input.chunk.requestId === null
   )
 }
 

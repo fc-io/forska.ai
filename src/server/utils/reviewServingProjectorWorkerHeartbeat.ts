@@ -95,16 +95,6 @@ export const startReviewServingProjectorWorkerHeartbeat = (
     restartTimer.unref()
   }
 
-  const recycleDuckdbBeforeRestart = async (maxCompletedRebuildChunksPerRun: number | null) => {
-    if (maxCompletedRebuildChunksPerRun === null || stopped || controller.signal.aborted) {
-      return
-    }
-
-    const {closeDuckdbService} = await import('./duckdbService.ts')
-
-    await closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
-  }
-
   const startLoop = () => {
     if (stopped || controller.signal.aborted) {
       return
@@ -144,9 +134,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       maxCompletedRebuildChunksPerRun,
       signal: loopController.signal,
     })
-      .then(async () => {
-        await recycleDuckdbBeforeRestart(maxCompletedRebuildChunksPerRun)
-
+      .then(() => {
         if (endedByMaxRun || maxCompletedRebuildChunksPerRun !== null) {
           scheduleRestart(restartDelayMs)
         }

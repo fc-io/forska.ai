@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-12 - Bounded Rebuild Native Teardown Trap
+
+- Error: `maintenance pid=70197 exited unexpectedly with code 133 signal=SIGTRAP; restart planned` after request-associated summary child progress.
+- Context: Low-memory review-serving maintenance cycles completing bounded summary rebuild children while the current-DB warning route was active.
+- Cause: An RSS-capped child completion closed the shared DuckDB runtime, and the bounded heartbeat closed it again before scheduling its next run; native DuckDB teardown after the request-associated work could trap Bun instead of yielding safely.
+- Fix: Request-associated native-heavy chunks retain the shared DuckDB runtime, use forced GC at the RSS cap, and restart bounded heartbeat runs without an explicit DuckDB close. Requestless cleanup and fatal-error recovery still recycle DuckDB.
+- Verification: `bun test src/server/workers/reviewServingProjectorWorker.test.ts src/server/utils/reviewServingProjectorWorkerHeartbeat.test.ts`; `bun run lint`; live current-DB gate deferred to the main agent.
+
 ## 2026-07-12 - Already-Admitted Oversized Rebuild Chunks
 
 - Error: Request-associated payload, summary, and posting chunks with 248,028 estimated input rows remained running without actual rows or duration and could stall the maintenance owner.
