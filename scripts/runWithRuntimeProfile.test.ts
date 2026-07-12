@@ -733,7 +733,7 @@ const expectCurrentDbReviewServingWarningRouteSurvives = async (
   const outputOffsets = getOutputParts().map((part) => {
     return part.length
   })
-  const pidsBefore = await getRequiredRuntimePids(runtimePorts)
+  const {pids: pidsBefore} = await getReadyRuntimePidsUntil(runtimePorts, Date.now() + 20_000)
   const progressCandidatesBefore = await getReviewServingProgressCandidates(apiPort)
   const {body} = await getReviewServingWarningProbe(
     reviewServingWarningRouteProbeProjectId,
