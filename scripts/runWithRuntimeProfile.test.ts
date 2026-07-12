@@ -10,7 +10,7 @@ import {getRuntimeProfileCommandEnv} from './runWithRuntimeProfile.ts'
 type SpawnedProcess = ReturnType<typeof globalThis.Bun.spawn>
 type RuntimeReadyBody = {data?: {ready?: boolean; role?: string}}
 type RuntimeStateBody = {data?: {pid?: number; role?: string}}
-type ProjectsBody = {data?: Array<{id?: string}>}
+type ProjectsBody = {data?: Array<{archived?: boolean; id?: string}>}
 type ReviewsWarningsBody = {
   data?: {
     indexing?: {
@@ -241,6 +241,40 @@ const postReviewWarnings = async (apiPort: number, projectId: string) => {
   })
 }
 
+const getReviewServingWarningProbe = async (
+  configuredProjectId: string,
+  postWarnings: (projectId: string) => Promise<ReviewsWarningsBody>,
+  getProjects: () => Promise<ProjectsBody>,
+) => {
+  const errors: unknown[] = []
+
+  try {
+    return {body: await postWarnings(configuredProjectId), projectId: configuredProjectId}
+  } catch (error) {
+    errors.push(error)
+  }
+
+  const projects = await getProjects()
+  const activeProjectIds = projects.data
+    ?.filter((project) => {
+      return project.archived === false && project.id && project.id !== configuredProjectId
+    })
+    .map((project) => {
+      return project.id as string
+    })
+    ?? []
+
+  for (const projectId of activeProjectIds) {
+    try {
+      return {body: await postWarnings(projectId), projectId}
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+
+  throw new AggregateError(errors, 'Review-serving warning route failed for the configured and active projects')
+}
+
 const getReviewServingProgressSnapshot = (body: ReviewsWarningsBody): ReviewServingProgressSnapshot => {
   const indexing = body.data?.indexing
   const rebuildChunks = indexing?.serving?.diagnostics?.rebuildChunks
@@ -434,6 +468,34 @@ test('current-db review-serving smoke treats active refresh work as a progress c
   expect(didReviewServingWorkProgress(before, after)).toBe(true)
 })
 
+test('current-db warning route probe falls back from an unusable configured project to an active project', async () => {
+  const attemptedProjectIds: string[] = []
+  const expectedBody: ReviewsWarningsBody = {data: {indexing: {status: 'ready'}}}
+  const result = await getReviewServingWarningProbe(
+    'configured-archived',
+    async (projectId) => {
+      attemptedProjectIds.push(projectId)
+
+      if (projectId === 'configured-archived') {
+        throw new Error('Archived projects must be unarchived before use')
+      }
+
+      return expectedBody
+    },
+    async () => {
+      return {
+        data: [
+          {archived: true, id: 'another-archived'},
+          {archived: false, id: 'active-project'},
+        ],
+      }
+    },
+  )
+
+  expect(attemptedProjectIds).toEqual(['configured-archived', 'active-project'])
+  expect(result).toEqual({body: expectedBody, projectId: 'active-project'})
+})
+
 const getRuntimeState = async (port: number): Promise<RuntimeStateBody> => {
   const response = await fetch(`http://127.0.0.1:${port}/api/runtime/state`)
 
@@ -471,7 +533,15 @@ const expectCurrentDbReviewServingWarningRouteSurvives = async (
   runtimePorts: [number, number, number],
 ) => {
   const pidsBefore = await getRequiredRuntimePids(runtimePorts)
-  const body = await postReviewWarnings(apiPort, reviewServingWarningRouteProbeProjectId)
+  const {body} = await getReviewServingWarningProbe(
+    reviewServingWarningRouteProbeProjectId,
+    async (projectId) => {
+      return postReviewWarnings(apiPort, projectId)
+    },
+    async () => {
+      return fetchJson<ProjectsBody>(`http://127.0.0.1:${apiPort}/api/projects`)
+    },
+  )
 
   expect(body.data?.indexing?.status).toBeDefined()
 
