@@ -7591,6 +7591,18 @@ export const runReviewServingProjectorWorkerOnce = async (
   return runReviewServingProjectorWorkerCycle(options, dependencies)
 }
 
+const shouldRestartAfterCompletedRebuildChunk = (
+  chunk: ReviewServingProjectorWorkerChunkResult,
+  maxCompletedRebuildChunksPerRun: number,
+) => {
+  return (
+    maxCompletedRebuildChunksPerRun > 0
+    && chunk.status === 'completed'
+    && chunk.requestId !== null
+    && reviewServingNativeHeavyRebuildComponents.has(chunk.projectionComponent)
+  )
+}
+
 export const runReviewServingProjectorWorker = async (
   options: ReviewServingProjectorWorkerLoopOptions = {},
   dependencies: ReviewServingProjectorWorkerDependencies = defaultReviewServingProjectorWorkerDependencies,
@@ -7610,6 +7622,10 @@ export const runReviewServingProjectorWorker = async (
   }
 
   if (maxCompletedRebuildChunksPerRun > 0 && completedRebuildChunksInRun >= maxCompletedRebuildChunksPerRun) {
+    return
+  }
+
+  if (shouldRestartAfterCompletedRebuildChunk(cycleResult.chunk, maxCompletedRebuildChunksPerRun)) {
     return
   }
 

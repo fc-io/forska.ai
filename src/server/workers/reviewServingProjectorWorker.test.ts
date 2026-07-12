@@ -3436,6 +3436,57 @@ test('worker honors explicit null completed rebuild chunk burst limit', async ()
   expect(harness.runChunkInputs).toEqual(statusChunks)
 })
 
+test('bounded worker restarts after one request-associated native-heavy chunk', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const sleepCalls: number[] = []
+  const summaryChunks = Array.from({length: 2}, (_, index) => {
+    return {
+      ...chunkManifest,
+      chunkId: `chunk-summary-bounded-${index + 1}`,
+      projectionComponent: 'summary' as const,
+      projectionIdentity: 'summary:project-1',
+      requestId: 'rebuild-summary-bounded',
+    }
+  }) satisfies ReviewServingRebuildChunkManifest[]
+  let claimIndex = 0
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return summaryChunks[Math.min(claimIndex, summaryChunks.length - 1)]
+    },
+    getNextChunk: async () => {
+      const chunk = summaryChunks[Math.min(claimIndex, summaryChunks.length - 1)]
+
+      if (chunk === undefined) {
+        throw new Error('expected bounded summary chunk')
+      }
+
+      return {...chunkInput, ...chunk}
+    },
+    heartbeatChunk: async () => {
+      return summaryChunks[Math.min(claimIndex, summaryChunks.length - 1)]
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+      claimIndex += 1
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.sleep = async (delayMs: number) => {
+    sleepCalls.push(delayMs)
+  }
+
+  await runReviewServingProjectorWorker(
+    {maxCompletedRebuildChunksPerRun: 16, rebuildChunkBatchSize: 1, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(harness.runChunkInputs).toEqual(summaryChunks.slice(0, 1))
+  expect(sleepCalls).toEqual([])
+})
+
 test('worker does not fail completed requestless posting chunks when DuckDB recycle fails', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const postingChunkInput = {
