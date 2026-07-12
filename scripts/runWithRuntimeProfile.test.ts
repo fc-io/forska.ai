@@ -59,6 +59,7 @@ type RuntimeStabilityObservation = {
 }
 type StackStartedPids = {api: number | null; judge: number | null; maintenance: number | null}
 type PipeTextCollector = {done: Promise<void>; getText: () => string}
+type RuntimeCrashEvidence = {excerpt: string; label: string}
 type RuntimeLogRecord = {
   attrs?: {
     exitCode?: number | null
@@ -92,6 +93,15 @@ const forbiddenDevServerOutputPatterns = [
   {label: 'judge duplicate replacement', pattern: /judge replacement is already ready after SIGTERM/},
   {label: 'judge unexpected SIGTERM exit', pattern: /\[server:stack\] judge pid=\d+ exited with code 143/},
 ] as const
+const runtimeCrashEvidencePatterns = [
+  {label: 'SIGTRAP', pattern: /SIGTRAP/iu},
+  {label: 'SIGKILL', pattern: /SIGKILL/iu},
+  {label: 'out of memory', pattern: /Out of Memory/iu},
+  {label: 'DuckDB owner heartbeat failure', pattern: /\[duckdb-owner\] heartbeat failed/iu},
+  {label: 'DuckDB fatal runtime invalidation', pattern: /fatal invalidation/iu},
+  {label: 'background loop failure', pattern: /background loop failed/iu},
+] as const
+const runtimeCrashEvidenceExcerptRadius = 100
 
 test('current-db network smoke includes read-only browser and mutation-enabled split-stack phases', () => {
   const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as {scripts?: Record<string, string>}
@@ -198,6 +208,28 @@ const getCollectedProcessOutput = (collectors: PipeTextCollector[]) => {
     .join('\n')
 }
 
+const getCollectedProcessOutputParts = (collectors: PipeTextCollector[]) => {
+  return collectors.map((collector) => {
+    return collector.getText()
+  })
+}
+
+const getRuntimeCrashEvidence = (output: string): RuntimeCrashEvidence[] => {
+  return runtimeCrashEvidencePatterns.flatMap(({label, pattern}) => {
+    const match = pattern.exec(output)
+
+    if (!match || match.index === undefined) {
+      return []
+    }
+
+    const excerptStart = Math.max(0, match.index - runtimeCrashEvidenceExcerptRadius)
+    const excerptEnd = Math.min(output.length, match.index + match[0].length + runtimeCrashEvidenceExcerptRadius)
+    const excerpt = output.slice(excerptStart, excerptEnd).replace(/\s+/gu, ' ').trim()
+
+    return [{excerpt, label}]
+  })
+}
+
 const waitForRuntimeReadyUntil = async (port: number, deadlineMs: number): Promise<RuntimeReadyBody> => {
   return fetch(`http://127.0.0.1:${port}/api/runtime/ready`)
     .then(async (response) => {
@@ -263,14 +295,14 @@ const getReviewServingWarningProbe = async (
   }
 
   const projects = await getProjects()
-  const activeProjectIds = projects.data
-    ?.filter((project) => {
-      return project.archived === false && project.id && project.id !== configuredProjectId
-    })
-    .map((project) => {
-      return project.id as string
-    })
-    ?? []
+  const activeProjectIds =
+    projects.data
+      ?.filter((project) => {
+        return project.archived === false && project.id && project.id !== configuredProjectId
+      })
+      .map((project) => {
+        return project.id as string
+      }) ?? []
 
   for (const projectId of activeProjectIds) {
     try {
@@ -383,10 +415,7 @@ const getReviewServingProgressCandidates = async (apiPort: number) => {
   return candidates
 }
 
-const didReviewServingWorkProgress = (
-  before: ReviewServingProgressSnapshot,
-  after: ReviewServingProgressSnapshot,
-) => {
+const didReviewServingWorkProgress = (before: ReviewServingProgressSnapshot, after: ReviewServingProgressSnapshot) => {
   return (
     after.progressState !== before.progressState
     || after.activeWorkCount !== before.activeWorkCount
@@ -408,8 +437,11 @@ const getRuntimeStabilityFailure = ({
   progressed,
   readyAfter,
 }: RuntimeStabilityObservation) => {
+  const crashEvidence = getRuntimeCrashEvidence(output)
+
   if (
-    pidsAfter.every((pid, index) => {
+    crashEvidence.length === 0
+    && pidsAfter.every((pid, index) => {
       return pid === pidsBefore[index]
     })
   ) {
@@ -431,14 +463,14 @@ const getRuntimeStabilityFailure = ({
     cleanExitPattern.test(output)
     && output.includes('[server:stack] restarting maintenance')
     && replacementPattern.test(output)
-  const hasCrashEvidence =
-    /SIGTRAP|SIGKILL|Out of Memory|\bOOM\b|heartbeat failed|fatal invalidation|background loop failed/iu.test(output)
+  const hasCrashEvidence = crashEvidence.length > 0
 
   return maintenanceOnlyRestart && rolesReady && progressed && hasBoundedRestartEvidence && !hasCrashEvidence
     ? null
     : `Runtime PID stability failed: ${JSON.stringify({
         hasBoundedRestartEvidence,
         hasCrashEvidence,
+        crashEvidence,
         maintenanceOnlyRestart,
         pidsAfter,
         pidsBefore,
@@ -479,9 +511,20 @@ test('runtime stability accepts only healthy bounded maintenance restarts with r
   expect(getRuntimeStabilityFailure(base)).toBeNull()
   expect(getRuntimeStabilityFailure({...base, pidsAfter: [11, 21, 30]})).toContain('Runtime PID stability failed')
   expect(getRuntimeStabilityFailure({...base, progressed: false})).toContain('Runtime PID stability failed')
-  expect(getRuntimeStabilityFailure({...base, output: `${base.output}SIGTRAP`})).toContain(
-    'Runtime PID stability failed',
-  )
+  const sigtrapFailure = getRuntimeStabilityFailure({...base, output: `${base.output}process exited via SIGTRAP`})
+  const outOfMemoryFailure = getRuntimeStabilityFailure({...base, output: `${base.output}fatal: Out of Memory`})
+
+  expect(sigtrapFailure).toContain('Runtime PID stability failed')
+  expect(sigtrapFailure).toContain('"label":"SIGTRAP"')
+  expect(sigtrapFailure).toContain('started maintenance pid=21 process exited via SIGTRAP')
+  expect(outOfMemoryFailure).toContain('"label":"out of memory"')
+  expect(outOfMemoryFailure).toContain('fatal: Out of Memory')
+  expect(
+    getRuntimeStabilityFailure({
+      ...base,
+      output: `${base.output}See OOM_ERRORS.md and the OOM documentation label for prior incidents`,
+    }),
+  ).toBeNull()
   expect(
     getRuntimeStabilityFailure({
       ...base,
@@ -549,13 +592,7 @@ test('current-db review-serving smoke treats active refresh work as a progress c
         progressState: 'processing',
         queuedRefreshCount: 0,
         serving: {
-          diagnostics: {
-            rebuildChunks: {
-              pendingCount: 8,
-              runningCount: 1,
-              updatedAt: '2026-07-07T11:30:00.000Z',
-            },
-          },
+          diagnostics: {rebuildChunks: {pendingCount: 8, runningCount: 1, updatedAt: '2026-07-07T11:30:00.000Z'}},
         },
         status: 'refreshing',
       },
@@ -632,9 +669,11 @@ const getRequiredRuntimePids = async (ports: [number, number, number]) => {
 const expectCurrentDbReviewServingWarningRouteSurvives = async (
   apiPort: number,
   runtimePorts: [number, number, number],
-  getOutput: () => string,
+  getOutputParts: () => string[],
 ) => {
-  const outputOffset = getOutput().length
+  const outputOffsets = getOutputParts().map((part) => {
+    return part.length
+  })
   const pidsBefore = await getRequiredRuntimePids(runtimePorts)
   const progressCandidatesBefore = await getReviewServingProgressCandidates(apiPort)
   const {body} = await getReviewServingWarningProbe(
@@ -668,7 +707,11 @@ const expectCurrentDbReviewServingWarningRouteSurvives = async (
     return didReviewServingWorkProgress(before, after)
   })
   const stabilityFailure = getRuntimeStabilityFailure({
-    output: getOutput().slice(outputOffset),
+    output: getOutputParts()
+      .map((part, index) => {
+        return part.slice(outputOffsets[index])
+      })
+      .join('\n'),
     pidsAfter,
     pidsBefore,
     progressed,
@@ -1050,7 +1093,7 @@ realDevServerSmokeTest(
 
       await Promise.race([
         expectCurrentDbReviewServingWarningRouteSurvives(3001, [3001, 3002, 3003], () => {
-          return getCollectedProcessOutput(collectors)
+          return getCollectedProcessOutputParts(collectors)
         }).then((maintenancePidBefore) => {
           acceptedMaintenanceRestartPid = maintenancePidBefore
         }),
