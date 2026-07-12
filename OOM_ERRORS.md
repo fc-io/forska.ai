@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-12 - Already-Admitted Oversized Rebuild Chunks
+
+- Error: Request-associated payload, summary, and posting chunks with 248,028 estimated input rows remained running without actual rows or duration and could stall the maintenance owner.
+- Context: Review-serving rebuild requests admitted before component-level presplitting was enabled.
+- Cause: Admission presplitting only protected new requests; retryable pending and expired-running legacy chunks still reached native-heavy execution as one range.
+- Fix: The worker now lease-fences and splits oversized bounded article-range chunks before preparation, preserving parent lineage and retry diagnostics; unsafe ranges fail explicitly into the existing terminal parking policy.
+- Verification: `bun test src/server/workers/reviewServingProjectorWorker.test.ts`; `bun run lint`.
+
 ## 2026-07-12 - Bounded Native-Heavy Rebuild Claims
 
 - Error: Maintenance workers trapped near the 6.2 GiB limit after preclaiming multiple request-associated posting chunks, leaving them running without recorded rows or duration.
