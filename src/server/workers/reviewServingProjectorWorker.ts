@@ -566,6 +566,11 @@ const articleRangeRebuildChunkPresplitMaxBucketCount = 16
 const highFanoutArticleRangeRebuildChunkPresplitMaxBucketCount = 64
 const summaryArticleRangeRebuildChunkPresplitMaxBucketCount = 512
 const statusArticleRangeRebuildChunkPresplitMaxBucketCount = 512
+const admittedOversizedRebuildChunkInputRowLimits: Partial<Record<ReviewServingProjectionComponent, number>> = {
+  payload: 10_000,
+  posting: 512,
+  summary: 512,
+}
 const splittableArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjectionComponent> = new Set([
   'projectScope',
   'display',
@@ -648,6 +653,15 @@ const getArticleRangeRebuildChunkEstimatedRows = (
   })
 
   return estimates.length === 0 ? null : Math.max(...estimates)
+}
+
+const isAdmittedOversizedRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
+  const inputRowLimit = admittedOversizedRebuildChunkInputRowLimits[chunk.projectionComponent]
+  const estimatedInputRows = getPositiveFiniteNumber(chunk.estimatedInputRows)
+
+  return chunk.requestId !== null && inputRowLimit !== undefined && estimatedInputRows !== null
+    ? estimatedInputRows > inputRowLimit
+    : false
 }
 
 const getArticleRangeRebuildChunkSplitBucketCount = (chunk: ReviewServingRebuildChunkManifest) => {
@@ -1861,7 +1875,12 @@ const runSummaryRebuildChunk = async (
 }
 
 const splitClaimedArticleRangeRebuildChunk = async (
-  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string; projectId: string; splitReason: 'duckdb_oom'},
+  input: {
+    chunk: ReviewServingRebuildChunkManifest
+    leaseOwner: string
+    projectId: string
+    splitReason: 'admitted_oversized' | 'duckdb_oom'
+  },
   database: ReviewServingChunkManifestRepositoryDatabase,
 ) => {
   if (!canSplitRebuildChunk(input.chunk)) {
@@ -1883,9 +1902,9 @@ const splitClaimedArticleRangeRebuildChunk = async (
       SET
         status = 'completed',
         checksum = ${getSqlLiteral(`split:${input.chunk.chunkId}`)},
-        oom_category = 'duckdb_oom_split',
+        oom_category = ${input.splitReason === 'duckdb_oom' ? "'duckdb_oom_split'" : 'NULL'},
         over_budget_reason = NULL,
-        last_error = NULL,
+        last_error = ${input.splitReason === 'duckdb_oom' ? 'NULL' : 'last_error'},
         lease_owner = NULL,
         lease_expires_at = NULL,
         completed_at = current_timestamp,
@@ -1920,6 +1939,8 @@ const splitClaimedArticleRangeRebuildChunk = async (
               ? input.chunk.diagnosticsJson
               : {}),
             parentChunkId: input.chunk.chunkId,
+            parentLastError: input.chunk.lastError,
+            parentRetryCount: input.chunk.retryCount,
             splitReason: input.splitReason,
           },
           estimatedInputRows: Math.ceil((input.chunk.estimatedInputRows ?? 0) / splittableRanges.length),
@@ -1958,6 +1979,39 @@ const splitClaimedArticleRangeRebuildChunk = async (
 
     return true
   })
+}
+
+const recoverAdmittedOversizedRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
+) => {
+  if (!isAdmittedOversizedRebuildChunk(input.chunk)) {
+    return false
+  }
+
+  const estimatedInputRows = getPositiveFiniteNumber(input.chunk.estimatedInputRows)
+  const inputRowLimit = admittedOversizedRebuildChunkInputRowLimits[input.chunk.projectionComponent]
+  const diagnostic = `cannot safely recover admitted oversized ${input.chunk.projectionComponent} rebuild chunk ${input.chunk.chunkId}: estimated input rows ${estimatedInputRows} exceed component limit ${inputRowLimit}`
+
+  if (!canSplitRebuildChunk(input.chunk)) {
+    throw new Error(`${diagnostic}; bounded article range is not splittable`)
+  }
+
+  const split = await splitClaimedArticleRangeRebuildChunk(
+    {
+      chunk: input.chunk,
+      leaseOwner: input.leaseOwner,
+      projectId: requireRebuildChunkProjectId(input.chunk),
+      splitReason: 'admitted_oversized',
+    },
+    database,
+  )
+
+  if (!split) {
+    throw new Error(`${diagnostic}; fewer than two non-empty child ranges were available`)
+  }
+
+  return true
 }
 
 const runJudgmentInputContentRebuildChunk = async (
@@ -6122,21 +6176,26 @@ const runClaimedReviewServingProjectorWorkerRebuildChunk = async ({
         },
       )
     }
-    await measureReviewServingProjectorWorkerPhase(timings, 'executeMs', async () => {
-      const preparedOutput = await service.prepareClaimedChunk?.({
-        chunk: effectiveClaimedChunk,
-        database,
-        leaseOwner: workerId,
-        workloadContext,
-      })
-      await service.runClaimedChunk({
-        chunk: effectiveClaimedChunk,
-        database,
-        leaseOwner: workerId,
-        preparedOutput,
-        workloadContext,
-      })
+    const recovered = await measureReviewServingProjectorWorkerPhase(timings, 'recoverOversizedMs', async () => {
+      return recoverAdmittedOversizedRebuildChunk({chunk: effectiveClaimedChunk, leaseOwner: workerId}, database)
     })
+    if (!recovered) {
+      await measureReviewServingProjectorWorkerPhase(timings, 'executeMs', async () => {
+        const preparedOutput = await service.prepareClaimedChunk?.({
+          chunk: effectiveClaimedChunk,
+          database,
+          leaseOwner: workerId,
+          workloadContext,
+        })
+        await service.runClaimedChunk({
+          chunk: effectiveClaimedChunk,
+          database,
+          leaseOwner: workerId,
+          preparedOutput,
+          workloadContext,
+        })
+      })
+    }
     stopHeartbeat()
   } catch (error) {
     stopHeartbeat()

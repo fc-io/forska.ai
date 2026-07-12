@@ -2328,77 +2328,6 @@ test('worker executes oversized foreground status rebuild chunks without input-b
   expect(joined).not.toContain("oom_category = 'duckdb_oom_split'")
 })
 
-test('worker leaves oversized non-status foreground chunks to the executor before runtime OOM', async () => {
-  const statements: string[] = []
-  const harness = createWorkerHarness({wakeStatus: 'completed'})
-  const oversizedChunkInput = {
-    ...chunkInput,
-    chunkEndKey: '00000000-0000-0000-0000-000000000064',
-    chunkStartKey: '00000000-0000-0000-0000-000000000001',
-    estimatedInputRows: 249_900,
-    estimatedOutputRows: 249_900,
-    projectionComponent: 'payload' as const,
-    projectionIdentity: 'payload:project-1',
-    requestId: 'rebuild:oversized-payload',
-  }
-  const oversizedChunk = {
-    ...chunkManifest,
-    ...oversizedChunkInput,
-    chunkId: 'chunk-oversized-payload',
-    requestId: oversizedChunkInput.requestId,
-  } satisfies ReviewServingRebuildChunkManifest
-
-  harness.database.queryJson = async <T>(statement: string) => {
-    statements.push(statement)
-
-    if (statement.includes('RETURNING chunk_id AS chunkId')) {
-      return [{chunkId: oversizedChunk.chunkId}] as T[]
-    }
-
-    return [] as T[]
-  }
-  harness.database.run = async (statement: string) => {
-    statements.push(statement)
-  }
-  harness.dependencies.rebuildChunkService = {
-    ...harness.dependencies.rebuildChunkService,
-    claimChunk: async (claimInput) => {
-      harness.claimInputs.push(claimInput)
-
-      return oversizedChunk
-    },
-    getNextChunk: async (getNextInput) => {
-      harness.getNextChunkInputs.push(getNextInput)
-
-      return oversizedChunkInput
-    },
-    heartbeatChunk: async (heartbeatInput) => {
-      harness.heartbeatInputs.push(heartbeatInput)
-
-      return oversizedChunk
-    },
-    runClaimedChunk: async ({chunk}) => {
-      harness.runChunkInputs.push(chunk)
-
-      return {status: 'completed' as const}
-    },
-  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
-
-  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
-  const joined = statements.join('\n')
-
-  expect(result.chunk).toMatchObject({
-    chunkId: oversizedChunk.chunkId,
-    requestId: oversizedChunk.requestId,
-    status: 'completed',
-  })
-  expect(harness.runChunkInputs).toEqual([oversizedChunk])
-  expect(joined).not.toContain("checksum = 'split:chunk-oversized-payload'")
-  expect(joined).not.toContain('"splitReason":"input_row_budget"')
-  expect(joined).not.toContain('INSERT INTO app.review_rebuild_chunk_manifest')
-  expect(joined).not.toContain("oom_category = 'duckdb_oom_split'")
-})
-
 test('worker keeps opt-in rebuild chunk batches below the RSS cap', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const firstChunkInput = {
@@ -5895,6 +5824,95 @@ test('request-associated summary chunks stage partials without refreshing filter
   expect(statements.join('\n')).not.toContain('FROM app.review_projection_identity_manifest')
   expect(statements.join('\n')).not.toContain('DELETE FROM mart.review_filter_option_serving_v4')
   expect(statements.join('\n')).not.toContain('INSERT INTO mart.review_filter_option_serving_v4')
+})
+
+test('worker splits already-admitted oversized payload summary and posting chunks before execution', async () => {
+  for (const component of ['payload', 'summary', 'posting'] as const) {
+    const harness = createWorkerHarness({wakeStatus: 'completed'})
+    const statements: string[] = []
+    const oversizedChunkInput = {
+      ...chunkInput,
+      estimatedInputRows: 248_028,
+      estimatedOutputRows: 248_028,
+      projectionComponent: component,
+      projectionIdentity: `${component}:project-1`,
+      requestId: `request-oversized-${component}`,
+    }
+    const oversizedChunk = {
+      ...chunkManifest,
+      ...oversizedChunkInput,
+      chunkId: `chunk-oversized-${component}`,
+      diagnosticsJson: {admittedBeforeComponentPresplit: true},
+      lastError: 'owner stopped before recording output',
+      retryCount: 2,
+    } satisfies ReviewServingRebuildChunkManifest
+    let prepared = false
+
+    harness.dependencies.rebuildChunkService = {
+      ...harness.dependencies.rebuildChunkService,
+      claimChunk: async () => {
+        return oversizedChunk
+      },
+      getNextChunk: async () => {
+        return oversizedChunkInput
+      },
+      heartbeatChunk: async () => {
+        return oversizedChunk
+      },
+      prepareClaimedChunk: async () => {
+        prepared = true
+      },
+      runClaimedChunk: async ({chunk}) => {
+        harness.runChunkInputs.push(chunk)
+
+        return {status: 'completed' as const}
+      },
+    } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+    harness.database.queryJson = async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM mart.project_scope_article scope')) {
+        return [
+          {articleCount: 124_014, chunkEndKey: 'article-050', chunkStartKey: 'article-001'},
+          {articleCount: 124_014, chunkEndKey: 'article-099', chunkStartKey: 'article-051'},
+        ] as T[]
+      }
+
+      if (statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('RETURNING chunk_id')) {
+        return [{chunkId: oversizedChunk.chunkId}] as T[]
+      }
+
+      if (statement.includes('COUNT(*) AS pendingChunkCount')) {
+        return [{pendingChunkCount: 2}] as T[]
+      }
+
+      return [] as T[]
+    }
+    harness.database.run = async (statement: string) => {
+      statements.push(statement)
+    }
+
+    const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+    const joined = statements.join('\n')
+    const childInserts = statements.filter((statement) => {
+      return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+    })
+
+    expect(result.chunk).toMatchObject({chunkId: oversizedChunk.chunkId, status: 'completed'})
+    expect(prepared).toBe(false)
+    expect(harness.runChunkInputs).toHaveLength(0)
+    expect(joined).toContain('FROM mart.project_scope_article scope')
+    expect(joined).toContain("status = 'completed'")
+    expect(joined).toContain('lease_expires_at > current_timestamp')
+    expect(joined).toContain('last_error = last_error')
+    expect(childInserts).toHaveLength(2)
+    expect(joined).toContain(`'${oversizedChunk.chunkId}'`)
+    expect(joined).toContain(`'${oversizedChunk.requestId}'`)
+    expect(joined).toContain('"parentLastError":"owner stopped before recording output"')
+    expect(joined).toContain('"parentRetryCount":2')
+    expect(joined).toContain('"splitReason":"admitted_oversized"')
+    expect(joined).not.toContain("oom_category = 'duckdb_oom_split'")
+  }
 })
 
 test('admission-presplit posting rebuild chunk executes directly above the old runtime row budget', async () => {
