@@ -362,6 +362,75 @@ test('review serving projector worker heartbeat keeps bounded restart timer refe
   expect(result).toEqual({restartTimerCleared: true, restartTimerWasRefed: true})
 })
 
+test('review serving projector worker heartbeat exits a dedicated process after one bounded run', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const events = []
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async (options) => {
+              events.push(['run', options.maxCompletedRebuildChunksPerRun])
+            },
+          }
+        })
+
+        process.exit = (code) => {
+          events.push(['exit', code])
+        }
+
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?exit=' + Date.now())
+        const stop = startReviewServingProjectorWorkerHeartbeat({
+          exitProcessAfterBoundedRun: true,
+          maxCompletedRebuildChunksPerRun: 1,
+          restartDelayMs: 10_000,
+        })
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5)
+        })
+        stop()
+
+        console.log(JSON.stringify({events}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: ''}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Review serving projector worker heartbeat bounded process exit test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: Array<[string, number]>}
+
+  expect(result.events).toEqual([
+    ['run', 1],
+    ['exit', 0],
+  ])
+})
+
 test('review serving projector worker heartbeat preserves explicit null burst cap', () => {
   const runScript = globalThis.Bun.spawnSync(
     [

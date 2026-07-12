@@ -5,6 +5,7 @@ import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
 type ReviewServingProjectorWorkerHeartbeatOptions = {
+  exitProcessAfterBoundedRun?: boolean
   maxCompletedRebuildChunksPerRun?: number | null
   maxRunMs?: number | null
   pollIntervalMs?: number
@@ -18,7 +19,7 @@ const reviewServingProjectorWorkerWarningLogger = createRateLimitedLogger({sink:
 const reviewServingProjectorWorkerComponent = 'reviewServingProjectorWorker'
 const defaultReviewServingProjectorWorkerHeartbeatBatchSize = 2
 const lowMemoryMaintenanceDuckdbLimitMiB = 6400
-const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 16
+const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 1
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
 
 const getErrorMessage = (error: unknown) => {
@@ -137,6 +138,15 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       signal: loopController.signal,
     })
       .then(() => {
+        if (
+          options.exitProcessAfterBoundedRun === true
+          && maxCompletedRebuildChunksPerRun !== null
+          && !stopped
+          && !controller.signal.aborted
+        ) {
+          process.exit(0)
+        }
+
         if (endedByMaxRun || maxCompletedRebuildChunksPerRun !== null) {
           scheduleRestart(restartDelayMs, true)
         }

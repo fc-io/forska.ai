@@ -61,9 +61,17 @@ const runStartBackgroundWork = (input: {
         void mock.module(reviewServingProjectorWorkerHeartbeatModulePath, () => {
           return {
             startReviewServingProjectorWorkerHeartbeat: (options = {}) => {
+              const exitProcessAfterBoundedRun = options.exitProcessAfterBoundedRun ?? 'default'
               const maxCompletedRebuildChunksPerRun = options.maxCompletedRebuildChunksPerRun ?? 'default'
               const maxRunMs = options.maxRunMs ?? 'default'
-              calls.push('reviewServingProjectorWorkerHeartbeat:' + maxRunMs + ':' + maxCompletedRebuildChunksPerRun)
+              calls.push(
+                'reviewServingProjectorWorkerHeartbeat:'
+                + maxRunMs
+                + ':'
+                + maxCompletedRebuildChunksPerRun
+                + ':'
+                + exitProcessAfterBoundedRun,
+              )
               return () => {
                 calls.push('stopReviewServingProjectorWorkerHeartbeat')
               }
@@ -163,7 +171,7 @@ test('startBackgroundWork starts shared infrastructure and maintenance work for 
     'duckdbOwnerConnectionHeartbeat',
     'requestAttemptCloseoutBackfillScheduler',
     'reviewBulkOperationWorkerHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:default:default',
+    'reviewServingProjectorWorkerHeartbeat:default:default:default',
   ])
 })
 
@@ -181,7 +189,7 @@ test('startBackgroundWork starts maintenance work after auto owner promotion', (
     'duckdbOwnerConnectionHeartbeat',
     'requestAttemptCloseoutBackfillScheduler',
     'reviewBulkOperationWorkerHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:default:default',
+    'reviewServingProjectorWorkerHeartbeat:default:default:default',
   ])
 })
 
@@ -191,7 +199,7 @@ test('startBackgroundWork defers nonessential DuckDB maintenance under low-memor
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:default:16',
+    'reviewServingProjectorWorkerHeartbeat:default:1:true',
   ])
 })
 
@@ -201,7 +209,17 @@ test('startBackgroundWork defers nonessential DuckDB maintenance under normalize
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
-    'reviewServingProjectorWorkerHeartbeat:default:16',
+    'reviewServingProjectorWorkerHeartbeat:default:1:true',
+  ])
+})
+
+test('startBackgroundWork keeps low-memory dev-single review serving restarts in process', () => {
+  const result = runStartBackgroundWork({duckdbMemoryLimit: '6400MiB', role: 'dev-single'})
+
+  expect(result.calls).toEqual([
+    'serverRuntimeRoleMonitor',
+    'duckdbOwnerConnectionHeartbeat',
+    'reviewServingProjectorWorkerHeartbeat:default:1:false',
   ])
 })
 
