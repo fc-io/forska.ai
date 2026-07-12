@@ -86,13 +86,15 @@ export const startReviewServingProjectorWorkerHeartbeat = (
     },
   )
 
-  const scheduleRestart = (delayMs: number) => {
+  const scheduleRestart = (delayMs: number, keepProcessAlive: boolean) => {
     if (stopped || controller.signal.aborted) {
       return
     }
 
     restartTimer = setTimeout(startLoop, delayMs)
-    restartTimer.unref()
+    if (!keepProcessAlive) {
+      restartTimer.unref()
+    }
   }
 
   const startLoop = () => {
@@ -136,7 +138,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
     })
       .then(() => {
         if (endedByMaxRun || maxCompletedRebuildChunksPerRun !== null) {
-          scheduleRestart(restartDelayMs)
+          scheduleRestart(restartDelayMs, true)
         }
       })
       .catch((error) => {
@@ -146,7 +148,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
           return
         }
 
-        scheduleRestart(options.pollIntervalMs ?? 0)
+        scheduleRestart(options.pollIntervalMs ?? 0, false)
       })
       .finally(() => {
         controller.signal.removeEventListener('abort', abortActiveLoop)
