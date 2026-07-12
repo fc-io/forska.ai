@@ -49,6 +49,14 @@ type ReviewServingProgressSnapshot = {
   rebuildUpdatedAt: string | null
 }
 type ReviewServingProgressCandidate = {body: ReviewsWarningsBody; projectId: string}
+type RuntimePids = [number, number, number]
+type RuntimeStabilityObservation = {
+  output: string
+  pidsAfter: RuntimePids
+  pidsBefore: RuntimePids
+  progressed: boolean
+  readyAfter: [RuntimeReadyBody, RuntimeReadyBody, RuntimeReadyBody]
+}
 type StackStartedPids = {api: number | null; judge: number | null; maintenance: number | null}
 type PipeTextCollector = {done: Promise<void>; getText: () => string}
 type RuntimeLogRecord = {
@@ -80,7 +88,7 @@ const forbiddenDevServerOutputPatterns = [
   {label: 'DuckDB owner heartbeat failure', pattern: /\[duckdb-owner\] heartbeat failed/},
   {label: 'review bulk worker loop failure', pattern: /\[reviewBulkOperationWorker\] background loop failed/},
   {label: 'maintenance restart', pattern: /\[server:stack\] restarting maintenance/},
-  {label: 'maintenance unexpected exit', pattern: /\[server:stack\] maintenance pid=\d+ exited with code 0/},
+  {label: 'maintenance unexpected exit', pattern: /\[server:stack\] maintenance pid=\d+ exited unexpectedly/},
   {label: 'judge duplicate replacement', pattern: /judge replacement is already ready after SIGTERM/},
   {label: 'judge unexpected SIGTERM exit', pattern: /\[server:stack\] judge pid=\d+ exited with code 143/},
 ] as const
@@ -393,6 +401,99 @@ const didReviewServingWorkProgress = (
   )
 }
 
+const getRuntimeStabilityFailure = ({
+  output,
+  pidsAfter,
+  pidsBefore,
+  progressed,
+  readyAfter,
+}: RuntimeStabilityObservation) => {
+  if (
+    pidsAfter.every((pid, index) => {
+      return pid === pidsBefore[index]
+    })
+  ) {
+    return null
+  }
+
+  const [apiPidBefore, maintenancePidBefore, judgePidBefore] = pidsBefore
+  const [apiPidAfter, maintenancePidAfter, judgePidAfter] = pidsAfter
+  const rolesReady = readyAfter.every((body, index) => {
+    return body.data?.ready === true && body.data.role === ['api', 'maintenance-worker', 'judge-worker'][index]
+  })
+  const maintenanceOnlyRestart =
+    apiPidAfter === apiPidBefore && judgePidAfter === judgePidBefore && maintenancePidAfter !== maintenancePidBefore
+  const cleanExitPattern = new RegExp(
+    `\\[server:stack\\] maintenance pid=${maintenancePidBefore} exited unexpectedly with code 0 signal=none; restart planned`,
+  )
+  const replacementPattern = new RegExp(`\\[server:stack\\] started maintenance pid=${maintenancePidAfter}(?:\\D|$)`)
+  const hasBoundedRestartEvidence =
+    cleanExitPattern.test(output)
+    && output.includes('[server:stack] restarting maintenance')
+    && replacementPattern.test(output)
+  const hasCrashEvidence =
+    /SIGTRAP|SIGKILL|Out of Memory|\bOOM\b|heartbeat failed|fatal invalidation|background loop failed/iu.test(output)
+
+  return maintenanceOnlyRestart && rolesReady && progressed && hasBoundedRestartEvidence && !hasCrashEvidence
+    ? null
+    : `Runtime PID stability failed: ${JSON.stringify({
+        hasBoundedRestartEvidence,
+        hasCrashEvidence,
+        maintenanceOnlyRestart,
+        pidsAfter,
+        pidsBefore,
+        progressed,
+        rolesReady,
+      })}`
+}
+
+const omitAcceptedMaintenanceRestartOutput = (output: string, maintenancePidBefore: number | null) => {
+  if (maintenancePidBefore === null) {
+    return output
+  }
+
+  return output
+    .replace(
+      `[server:stack] maintenance pid=${maintenancePidBefore} exited unexpectedly with code 0 signal=none; restart planned`,
+      '',
+    )
+    .replace('[server:stack] restarting maintenance', '')
+}
+
+test('runtime stability accepts only healthy bounded maintenance restarts with review-serving progress', () => {
+  const base = {
+    output:
+      '[server:stack] maintenance pid=20 exited unexpectedly with code 0 signal=none; restart planned\n'
+      + '[server:stack] restarting maintenance\n'
+      + '[server:stack] started maintenance pid=21\n',
+    pidsAfter: [10, 21, 30] as RuntimePids,
+    pidsBefore: [10, 20, 30] as RuntimePids,
+    progressed: true,
+    readyAfter: [
+      {data: {ready: true, role: 'api'}},
+      {data: {ready: true, role: 'maintenance-worker'}},
+      {data: {ready: true, role: 'judge-worker'}},
+    ] as [RuntimeReadyBody, RuntimeReadyBody, RuntimeReadyBody],
+  }
+
+  expect(getRuntimeStabilityFailure(base)).toBeNull()
+  expect(getRuntimeStabilityFailure({...base, pidsAfter: [11, 21, 30]})).toContain('Runtime PID stability failed')
+  expect(getRuntimeStabilityFailure({...base, progressed: false})).toContain('Runtime PID stability failed')
+  expect(getRuntimeStabilityFailure({...base, output: `${base.output}SIGTRAP`})).toContain(
+    'Runtime PID stability failed',
+  )
+  expect(
+    getRuntimeStabilityFailure({
+      ...base,
+      readyAfter: [base.readyAfter[0], {data: {ready: false, role: 'maintenance-worker'}}, base.readyAfter[2]],
+    }),
+  ).toContain('Runtime PID stability failed')
+  expect(getForbiddenDevServerOutputMatches(omitAcceptedMaintenanceRestartOutput(base.output, 20))).toEqual([])
+  expect(
+    getForbiddenDevServerOutputMatches(omitAcceptedMaintenanceRestartOutput(`${base.output}${base.output}`, 20)),
+  ).toEqual(['maintenance restart', 'maintenance unexpected exit'])
+})
+
 const expectCurrentDbReviewServingQueuedWorkProgresses = async (apiPort: number) => {
   const candidates = await getReviewServingProgressCandidates(apiPort)
 
@@ -531,8 +632,11 @@ const getRequiredRuntimePids = async (ports: [number, number, number]) => {
 const expectCurrentDbReviewServingWarningRouteSurvives = async (
   apiPort: number,
   runtimePorts: [number, number, number],
+  getOutput: () => string,
 ) => {
+  const outputOffset = getOutput().length
   const pidsBefore = await getRequiredRuntimePids(runtimePorts)
+  const progressCandidatesBefore = await getReviewServingProgressCandidates(apiPort)
   const {body} = await getReviewServingWarningProbe(
     reviewServingWarningRouteProbeProjectId,
     async (projectId) => {
@@ -546,7 +650,33 @@ const expectCurrentDbReviewServingWarningRouteSurvives = async (
   expect(body.data?.indexing?.status).toBeDefined()
 
   await waitFor(3_000)
-  expect(await getRequiredRuntimePids(runtimePorts)).toEqual(pidsBefore)
+  const readyAfter = (await Promise.all(
+    runtimePorts.map((port) => {
+      return waitForRuntimeReady(port, 20_000)
+    }),
+  )) as [RuntimeReadyBody, RuntimeReadyBody, RuntimeReadyBody]
+  const pidsAfter = await getRequiredRuntimePids(runtimePorts)
+  const progressAfter = await Promise.all(
+    progressCandidatesBefore.map(async (candidate) => {
+      return {
+        after: getReviewServingProgressSnapshot(await postReviewWarnings(apiPort, candidate.projectId)),
+        before: getReviewServingProgressSnapshot(candidate.body),
+      }
+    }),
+  )
+  const progressed = progressAfter.some(({after, before}) => {
+    return didReviewServingWorkProgress(before, after)
+  })
+  const stabilityFailure = getRuntimeStabilityFailure({
+    output: getOutput().slice(outputOffset),
+    pidsAfter,
+    pidsBefore,
+    progressed,
+    readyAfter,
+  })
+
+  expect(stabilityFailure).toBeNull()
+  return pidsAfter[1] === pidsBefore[1] ? null : pidsBefore[1]
 }
 
 const readPipeText = async (pipe: SpawnedProcess['stdout']) => {
@@ -897,6 +1027,7 @@ realDevServerSmokeTest(
     const stdout = createPipeTextCollector(devServerProcess.stdout)
     const stderr = createPipeTextCollector(devServerProcess.stderr)
     const collectors = [stdout, stderr]
+    let acceptedMaintenanceRestartPid: number | null = null
 
     try {
       await Promise.race([
@@ -918,7 +1049,11 @@ realDevServerSmokeTest(
       ])
 
       await Promise.race([
-        expectCurrentDbReviewServingWarningRouteSurvives(3001, [3001, 3002, 3003]),
+        expectCurrentDbReviewServingWarningRouteSurvives(3001, [3001, 3002, 3003], () => {
+          return getCollectedProcessOutput(collectors)
+        }).then((maintenancePidBefore) => {
+          acceptedMaintenanceRestartPid = maintenancePidBefore
+        }),
         devServerProcess.exited.then((exitCode) => {
           throw new Error(`dev:server exited during review-serving warning route probe with code ${String(exitCode)}`)
         }),
@@ -939,7 +1074,9 @@ realDevServerSmokeTest(
         return collector.done
       }),
     )
-    expectNoForbiddenDevServerOutput(getCollectedProcessOutput(collectors))
+    expectNoForbiddenDevServerOutput(
+      omitAcceptedMaintenanceRestartOutput(getCollectedProcessOutput(collectors), acceptedMaintenanceRestartPid),
+    )
   },
   {timeout: 240_000},
 )
