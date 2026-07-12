@@ -2019,7 +2019,7 @@ test('worker writes compatible status and posting rebuild chunks through compone
   }
 })
 
-test('worker batches foreground request chunks through compatible component batch writers', async () => {
+test('bounded worker isolates native-heavy request chunks without changing lightweight batches', async () => {
   const cases = [
     {
       component: 'llmStatus',
@@ -2090,6 +2090,12 @@ test('worker batches foreground request chunks through compatible component batc
         splitDepth: 1,
       } satisfies ReviewServingRebuildChunkManifest
     })
+    const firstChunk = chunks[0]
+
+    if (firstChunk === undefined) {
+      throw new Error('expected foreground batch test chunk')
+    }
+
     const chunkInputs = [firstChunkInput, secondChunkInput, thirdChunkInput]
     const chunksByStartKey = new Map<string, ReviewServingRebuildChunkManifest>(
       chunks.map((chunk) => {
@@ -2129,25 +2135,25 @@ test('worker batches foreground request chunks through compatible component batc
           return statement.includes(id)
         })
 
-        return [chunksById.get(chunkId ?? chunks[0].chunkId) ?? chunks[0]] as T[]
+        return [chunksById.get(chunkId ?? firstChunk.chunkId) ?? firstChunk] as T[]
       }
 
       if (statement.includes('FROM app.review_projection_identity_manifest')) {
         return [
           {
-            baseGeneration: chunks[0].outputBaseGeneration,
+            baseGeneration: firstChunk.outputBaseGeneration,
             definitionVersion: `${batchCase.component}:v1`,
-            inputDigest: chunks[0].inputDigest,
-            inputWatermark: chunks[0].inputWatermark,
-            inputWatermarksJson: {reviewChange: chunks[0].inputWatermark},
-            invalidationReason: chunks[0].inputDigest,
+            inputDigest: firstChunk.inputDigest,
+            inputWatermark: firstChunk.inputWatermark,
+            inputWatermarksJson: {reviewChange: firstChunk.inputWatermark},
+            invalidationReason: firstChunk.inputDigest,
             manifestId: `manifest-${batchCase.component}`,
-            patchRangeEnd: chunks[0].inputWatermark,
-            patchRangeStart: chunks[0].inputWatermark,
-            patchWatermark: chunks[0].inputWatermark,
-            projectId: chunks[0].projectId,
-            projectionComponent: chunks[0].projectionComponent,
-            projectionIdentity: chunks[0].projectionIdentity,
+            patchRangeEnd: firstChunk.inputWatermark,
+            patchRangeStart: firstChunk.inputWatermark,
+            patchWatermark: firstChunk.inputWatermark,
+            projectId: firstChunk.projectId,
+            projectionComponent: firstChunk.projectionComponent,
+            projectionIdentity: firstChunk.projectionIdentity,
             promptConfigHash: null,
             reviewConfigHash: 'review-config-1',
             status: 'candidate',
@@ -2209,22 +2215,26 @@ test('worker batches foreground request chunks through compatible component batc
     } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
 
     const result = await runReviewServingProjectorWorkerOnce(
-      {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+      {maxCompletedRebuildChunksPerRun: 16, rebuildChunkBatchSize: 2, workerId: 'worker-1'},
       harness.dependencies,
     )
     const joined = statements.join('\n')
 
-    const expectedBatchSize = Math.min(batchCase.preclaimTailLimit + 1, chunks.length)
+    const expectedBatchSize =
+      batchCase.component === 'posting' ? 1 : Math.min(batchCase.preclaimTailLimit + 1, chunks.length)
+    const expectedPreclaimTailLimit = Math.min(batchCase.preclaimTailLimit, 15)
     const expectedLastChunk = chunks[expectedBatchSize - 1] ?? chunks.at(-1)
 
     expect(result.chunk).toMatchObject({chunkId: expectedLastChunk?.chunkId, status: 'completed'})
     expect(result.chunkBatchCount).toBe(expectedBatchSize)
     expect(harness.claimInputs).toHaveLength(expectedBatchSize)
     expect(harness.getNextChunkInputs).toHaveLength(1)
-    expect(compatibleStatusBatchInputs).toEqual([
-      {excludeChunkIds: [chunks[0].chunkId], firstChunk: chunks[0], limit: batchCase.preclaimTailLimit},
-    ])
-    expect(harness.runChunkInputs).toEqual([])
+    expect(compatibleStatusBatchInputs).toEqual(
+      batchCase.component === 'posting'
+        ? []
+        : [{excludeChunkIds: [firstChunk.chunkId], firstChunk, limit: expectedPreclaimTailLimit}],
+    )
+    expect(harness.runChunkInputs).toEqual(batchCase.component === 'posting' ? [firstChunk] : [])
     expect(harness.wakeInputs).toEqual([])
     const completionChecks = statements.filter((statement) => {
       return statement.includes('pendingChunkCount')
@@ -2234,11 +2244,13 @@ test('worker batches foreground request chunks through compatible component batc
     } else {
       expect(completionChecks.length).toBeGreaterThanOrEqual(1)
     }
-    expect(joined).toContain("article_id >= 'article-001'")
-    expect(joined).toContain("article_id <= 'article-033'")
-    expect(joined).toContain(`article_id >= '${batchCase.startKeys[expectedBatchSize - 1]}'`)
-    expect(joined).toContain(`article_id <= '${batchCase.endKeys[expectedBatchSize - 1]}'`)
-    expect(joined).toContain(batchCase.writerName)
+    if (batchCase.component !== 'posting') {
+      expect(joined).toContain("article_id >= 'article-001'")
+      expect(joined).toContain("article_id <= 'article-033'")
+      expect(joined).toContain(`article_id >= '${batchCase.startKeys[expectedBatchSize - 1]}'`)
+      expect(joined).toContain(`article_id <= '${batchCase.endKeys[expectedBatchSize - 1]}'`)
+      expect(joined).toContain(batchCase.writerName)
+    }
   }
 })
 
