@@ -666,6 +666,65 @@ const getRequiredRuntimePids = async (ports: [number, number, number]) => {
   return pids as [number, number, number]
 }
 
+const getReadyRuntimePidsUntil = async (
+  ports: [number, number, number],
+  deadlineMs: number,
+  waitUntilReady = waitForRuntimeReadyUntil,
+  getPids = getRequiredRuntimePids,
+): Promise<{pids: RuntimePids; ready: [RuntimeReadyBody, RuntimeReadyBody, RuntimeReadyBody]}> => {
+  const ready = (await Promise.all(
+    ports.map((port) => {
+      return waitUntilReady(port, deadlineMs)
+    }),
+  )) as [RuntimeReadyBody, RuntimeReadyBody, RuntimeReadyBody]
+
+  return getPids(ports).then(
+    (pids) => {
+      return {pids, ready}
+    },
+    async (error) => {
+      if (Date.now() >= deadlineMs) {
+        throw error
+      }
+
+      await waitFor(100)
+      return getReadyRuntimePidsUntil(ports, deadlineMs, waitUntilReady, getPids)
+    },
+  )
+}
+
+test('runtime PID sampling re-waits for ready roles after a transient state endpoint gap', async () => {
+  const readyCalls: number[] = []
+  const expectedPids: RuntimePids = [10, 21, 30]
+  const rolesByPort = new Map([
+    [3001, 'api'],
+    [3002, 'maintenance-worker'],
+    [3003, 'judge-worker'],
+  ])
+  let pidAttempts = 0
+  const result = await getReadyRuntimePidsUntil(
+    [3001, 3002, 3003],
+    Date.now() + 1_000,
+    async (port) => {
+      readyCalls.push(port)
+      return {data: {ready: true, role: rolesByPort.get(port)}}
+    },
+    async () => {
+      pidAttempts += 1
+
+      if (pidAttempts === 1) {
+        throw new Error('ConnectionRefused')
+      }
+
+      return expectedPids
+    },
+  )
+
+  expect(result.pids).toEqual(expectedPids)
+  expect(result.ready.map((body) => body.data?.ready)).toEqual([true, true, true])
+  expect(readyCalls).toEqual([3001, 3002, 3003, 3001, 3002, 3003])
+})
+
 const expectCurrentDbReviewServingWarningRouteSurvives = async (
   apiPort: number,
   runtimePorts: [number, number, number],
@@ -689,12 +748,10 @@ const expectCurrentDbReviewServingWarningRouteSurvives = async (
   expect(body.data?.indexing?.status).toBeDefined()
 
   await waitFor(3_000)
-  const readyAfter = (await Promise.all(
-    runtimePorts.map((port) => {
-      return waitForRuntimeReady(port, 20_000)
-    }),
-  )) as [RuntimeReadyBody, RuntimeReadyBody, RuntimeReadyBody]
-  const pidsAfter = await getRequiredRuntimePids(runtimePorts)
+  const {pids: pidsAfter, ready: readyAfter} = await getReadyRuntimePidsUntil(
+    runtimePorts,
+    Date.now() + 20_000,
+  )
   const progressAfter = await Promise.all(
     progressCandidatesBefore.map(async (candidate) => {
       return {
