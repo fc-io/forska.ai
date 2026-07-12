@@ -452,11 +452,18 @@ test('over-budget V4 rebuild requests park before their chunks can be claimable'
 })
 
 test('default rebuild request chunks use existing projection identities and real article bounds', async () => {
-  const {database, statements} = createFakeRequestDatabase()
+  const {database, statements} = createFakeRequestDatabase({
+    articleRangeRows: [
+      {chunkEndKey: 'article-f', chunkStartKey: 'article-a', scopedArticleCount: 512},
+      {chunkEndKey: 'article-m', chunkStartKey: 'article-f ', scopedArticleCount: 512},
+      {chunkEndKey: 'article-t', chunkStartKey: 'article-m ', scopedArticleCount: 512},
+      {chunkEndKey: 'article-z', chunkStartKey: 'article-t ', scopedArticleCount: 512},
+    ],
+  })
 
   const request = await createReviewServingRebuildRequest(
     {
-      estimate: {estimatedInputRows: 100},
+      estimate: {estimatedInputRows: 2_048},
       projectId: 'project-v4',
       reason: 'requestReviewServingLargeRebuild',
       requestedComponents: ['summary', 'payload'],
@@ -478,6 +485,18 @@ test('default rebuild request chunks use existing projection identities and real
   expect(joined).toContain("'payload:identity-1'")
   expect(joined).toContain("'summary:active-identity-1'")
   expect(joined).toContain("'payload:active-identity-1'")
+  expect(joined).toContain('NTILE(4)')
+  expect(joined).toContain("'article-f '")
+  expect(
+    statements.filter((statement) => {
+      return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'summary'")
+    }),
+  ).toHaveLength(8)
+  expect(
+    statements.filter((statement) => {
+      return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'payload'")
+    }),
+  ).toHaveLength(2)
   expect(joined).not.toContain('component:all')
   expect(joined).not.toContain(':request:rebuild:default-identities')
 })
@@ -503,7 +522,7 @@ test('search-only default rebuild presplit chunks preserve sparse article-id gap
 
   const joined = statements.join('\n')
 
-  expect(joined).toContain('COALESCE(previous_scoped_end_key, scoped_start_key) AS chunkStartKey')
+  expect(joined).toContain("ELSE previous_scoped_end_key || ' '")
   expect(joined).toContain('LAG(scoped_end_key) OVER (ORDER BY chunk_index) AS previous_scoped_end_key')
   expect(joined).toContain(')\n    SELECT')
   expect(joined).toContain("'article-001'")
@@ -511,7 +530,7 @@ test('search-only default rebuild presplit chunks preserve sparse article-id gap
   expect(joined).toContain('{"admissionPresplit":true}')
 })
 
-test('posting default rebuilds avoid admission presplit boundary overlap', async () => {
+test('posting default rebuilds presplit into non-overlapping bounded chunks', async () => {
   const {database, statements} = createFakeRequestDatabase({
     activeComponentStateJson: {
       optional: [],
@@ -565,9 +584,10 @@ test('posting default rebuilds avoid admission presplit boundary overlap', async
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'posting'")
   })
 
-  expect(joined).not.toContain('NTILE(4)')
-  expect(postingChunkInserts).toHaveLength(2)
-  expect(joined).not.toContain('{"admissionPresplit":true}')
+  expect(joined).toContain('NTILE(4)')
+  expect(joined).toContain("ELSE previous_scoped_end_key || ' '")
+  expect(postingChunkInserts).toHaveLength(8)
+  expect(joined).toContain('{"admissionPresplit":true}')
 })
 
 test('judgment input content default rebuilds avoid admission presplit boundary overlap', async () => {
@@ -781,7 +801,7 @@ test('project-scope-only default rebuilds avoid admission presplit boundary over
   expect(joined).not.toContain('{"admissionPresplit":true}')
 })
 
-test('summary-only default rebuilds avoid admission presplit boundary overlap', async () => {
+test('summary-only default rebuilds presplit into non-overlapping bounded chunks', async () => {
   const {database, statements} = createFakeRequestDatabase({
     articleRangeRows: [
       {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
@@ -807,9 +827,10 @@ test('summary-only default rebuilds avoid admission presplit boundary overlap', 
     return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'summary'")
   })
 
-  expect(joined).not.toContain('NTILE(4)')
-  expect(summaryChunkInserts).toHaveLength(2)
-  expect(joined).not.toContain('{"admissionPresplit":true}')
+  expect(joined).toContain('NTILE(4)')
+  expect(joined).toContain("ELSE previous_scoped_end_key || ' '")
+  expect(summaryChunkInserts).toHaveLength(8)
+  expect(joined).toContain('{"admissionPresplit":true}')
 })
 
 test('selected-import-only default rebuilds avoid admission presplit boundary overlap', async () => {

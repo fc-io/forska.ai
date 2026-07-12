@@ -300,12 +300,11 @@ const defaultRebuildNonPresplittableComponents = new Set<ReviewServingProjection
   'humanStatus',
   'judgmentInputContent',
   'llmStatus',
-  'posting',
   'projectScope',
   'queue',
   'selectedImport',
-  'summary',
 ])
+const defaultRebuildNativeHeavyComponents = new Set<ReviewServingProjectionComponent>(['posting', 'summary'])
 const defaultRebuildPresplitInputRowLimits = {
   display: 25_000,
   humanStatus: 64,
@@ -328,7 +327,7 @@ const getDefaultRebuildPresplitBucketCount = (input: {
   const estimatedInputRows = input.estimate?.estimatedInputRows
   const inputRowLimit = defaultRebuildPresplitInputRowLimits[input.component]
 
-  return input.requestedComponents.length === 1
+  return (input.requestedComponents.length === 1 || defaultRebuildNativeHeavyComponents.has(input.component))
     && !defaultRebuildNonPresplittableComponents.has(input.component)
     && estimatedInputRows !== null
     && estimatedInputRows !== undefined
@@ -386,7 +385,10 @@ const getDefaultRebuildArticleRanges = async (
       FROM bucket_range
     )
     SELECT
-      COALESCE(previous_scoped_end_key, scoped_start_key) AS chunkStartKey,
+      CASE
+        WHEN previous_scoped_end_key IS NULL THEN scoped_start_key
+        ELSE previous_scoped_end_key || ' '
+      END AS chunkStartKey,
       scoped_end_key AS chunkEndKey,
       scopedArticleCount
     FROM bucket_with_boundary

@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-07-12 - Bounded Native-Heavy Rebuild Claims
+
+- Error: Maintenance workers trapped near the 6.2 GiB limit after preclaiming multiple request-associated posting chunks, leaving them running without recorded rows or duration.
+- Context: Bounded low-memory `reviewServing.projector.worker` runs processing summary and posting rebuild chunks.
+- Cause: The completed-chunk restart boundary applied after a compatible posting batch, while admission skipped the existing summary/posting row-budget presplit limits.
+- Fix: Bounded workers isolate each request-associated native-heavy chunk, and default rebuild admission presplits summary/posting ranges with non-overlapping inclusive boundaries.
+- Verification: `bun test src/server/workers/reviewServingProjectorWorker.test.ts src/server/reviewServing/reviewServingRebuildRequestRepository.test.ts`; focused lint.
+
 ## 2026-07-11 - Fatal Recovery Owner Lease
 
 - Error: `Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` during a review-serving rebuild chunk claim.
