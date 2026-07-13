@@ -1,3 +1,5 @@
+import {rmSync, writeFileSync} from 'node:fs'
+
 import {afterAll, afterEach, beforeAll, expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
@@ -785,6 +787,17 @@ const withServerMutationsDisabled = async <_T>(work: () => Promise<_T>) => {
       process.env.FORSKA_DISABLE_SERVER_MUTATIONS = previousValue
     }
     await resetDuckdbOwnerConnectionsForTests()
+  }
+}
+
+const withReviewServingProjectorPaused = async <_T>(work: () => Promise<_T>) => {
+  const pauseMarkerPath = `${tempDbPath}.review-serving-projector-paused`
+  writeFileSync(pauseMarkerPath, 'operator recovery pause')
+
+  try {
+    return await work()
+  } finally {
+    rmSync(pauseMarkerPath, {force: true})
   }
 }
 
@@ -2209,6 +2222,24 @@ test('reviews warnings do not enqueue foreground V4 repair when server mutation 
   expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
 })
 
+test('reviews warnings do not enqueue foreground V4 repair while the projector is paused by policy', async () => {
+  const projectId = 'project-missing-serving-paused-projector-warning'
+
+  await insertProjectFixture(projectId)
+
+  const {body, response} = await withReviewServingProjectorPaused(() => {
+    return postWarningsRequest(projectId)
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.blockedReason).toBe('paused_by_policy')
+  expect(body.data.indexing.eligibleConsumerCount).toBe(0)
+  expect(body.data.indexing.eligibleConsumerPresent).toBe(false)
+  expect(body.data.indexing.progressState).toBe('blocked')
+  expect(body.data.indexing.status).toBe('blocked')
+  expect(await getReviewRebuildRequestCount(projectId)).toBe(0)
+})
+
 test('reviews warnings leave recently progressing foreground V4 repair priority untouched', async () => {
   const projectId = 'project-missing-serving-recent-v4-progress-warning'
   const requestId = 'request-missing-serving-recent-v4-progress-warning'
@@ -2982,6 +3013,40 @@ test('reviews warnings keep V4 rebuild chunks refreshable when memory policy dis
       process.env.DUCKDB_MEMORY_LIMIT = previousDuckdbMemoryLimit
     }
   }
+})
+
+test('reviews warnings report queued V4 work as policy-blocked while the projector is paused', async () => {
+  const projectId = 'project-v4-rebuild-paused-projector-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-v4-paused-projector-warning',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'rebuild-chunk-v4-paused-projector-warning',
+    createdAt: '2026-04-02T12:00:00.000Z',
+    projectId,
+    status: 'pending',
+    updatedAt: '2026-04-02T12:00:00.000Z',
+  })
+
+  const {body, response} = await withReviewServingProjectorPaused(() => {
+    return postWarningsRequest(projectId)
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.blockedReason).toBe('paused_by_policy')
+  expect(body.data.indexing.eligibleConsumerCount).toBe(0)
+  expect(body.data.indexing.eligibleConsumerPresent).toBe(false)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('blocked')
+  expect(body.data.indexing.queuedRefreshCount).toBe(1)
+  expect(body.data.indexing.status).toBe('blocked')
 })
 
 test('reviews warnings ignore failed legacy large rebuild state while requesting V4 repair outside the foreground response', async () => {

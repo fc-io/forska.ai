@@ -10,6 +10,7 @@ import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
+import {isReviewServingProjectorPaused} from '../../utils/reviewServingProjectorPause.ts'
 import {shouldDisableServerMutationWork} from '../../utils/serverMutationMode.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
@@ -137,6 +138,7 @@ const getReviewsIndexingStatus = (params: {
   hasQuarantineBarrier: boolean
   hasReviewServingRows: boolean
   hasTerminalV4Work: boolean
+  isReviewServingProjectorPaused: boolean
   isServerMutationWorkDisabled: boolean
   pendingRefreshCount: number
   runningRefreshCount: number
@@ -157,7 +159,9 @@ const getReviewsIndexingStatus = (params: {
   }
 
   if (
-    params.hasBlockedCandidateSnapshot
+    (params.isReviewServingProjectorPaused
+      && (!params.hasReviewServingRows || params.pendingRefreshCount > 0 || params.runningRefreshCount > 0))
+    || params.hasBlockedCandidateSnapshot
     || (params.isServerMutationWorkDisabled && params.pendingRefreshCount > 0 && params.runningRefreshCount === 0)
   ) {
     return 'blocked'
@@ -265,6 +269,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       servingDiagnostics.snapshot.activeUpdatedAt,
     )
     const isServerMutationWorkDisabled = shouldDisableServerMutationWork()
+    const reviewServingProjectorPaused = isReviewServingProjectorPaused()
     const queuedRebuildChunkCount = servingDiagnostics.rebuildChunks.claimableCount
     const totalQueuedRebuildChunkCount = servingDiagnostics.rebuildChunks.pendingCount + expiredRebuildChunkLeaseCount
     const inFlightRebuildChunkCount = getNonNegativeDifference(
@@ -276,6 +281,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const hasReviewServingStateThatCanProgress = getHasReviewServingStateThatCanProgress(servingDiagnostics)
     const shouldRequestForegroundRepair =
       !isServerMutationWorkDisabled
+      && !reviewServingProjectorPaused
       && shouldPrioritizeMissingSnapshotRepair
       && pendingCandidateSnapshotActivationCount === 0
       && !hasRecentProgress
@@ -317,7 +323,8 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const pendingRefreshCount =
       pendingRebuildChunkCount + pendingDirtyWorkCount + pendingCandidateSnapshotActivationCount
     const claimableRefreshCount = queuedRebuildChunkCount + servingDiagnostics.dirtyWork.pendingCount
-    const eligibleConsumerCount = claimableRefreshCount > 0 && !isServerMutationWorkDisabled ? 1 : 0
+    const eligibleConsumerCount =
+      claimableRefreshCount > 0 && !isServerMutationWorkDisabled && !reviewServingProjectorPaused ? 1 : 0
     const hasBlockedCandidateSnapshot =
       servingDiagnostics.snapshot.invalidCandidateCount > 0 && pendingRebuildChunkCount === 0
     const indexingStatus = getReviewsIndexingStatus({
@@ -332,6 +339,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           + terminalQuarantineCount
           + (isServerMutationWorkDisabled ? 0 : terminalDirtyWorkCount)
         > 0,
+      isReviewServingProjectorPaused: reviewServingProjectorPaused,
       isServerMutationWorkDisabled,
       pendingRefreshCount,
       runningRefreshCount: inFlightRefreshCount,
@@ -349,9 +357,11 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
         ? 'quarantine_barrier'
         : indexingStatus === 'blocked' && hasBlockedCandidateSnapshot
           ? 'operator_intervention_required'
-          : indexingStatus === 'blocked' && isServerMutationWorkDisabled
-            ? 'waiting_for_maintenance_worker'
-            : null
+          : indexingStatus === 'blocked' && reviewServingProjectorPaused
+            ? 'paused_by_policy'
+            : indexingStatus === 'blocked' && isServerMutationWorkDisabled
+              ? 'waiting_for_maintenance_worker'
+              : null
     return {
       data: {
         projectId,
