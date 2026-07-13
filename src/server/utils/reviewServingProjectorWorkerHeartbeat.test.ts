@@ -362,7 +362,85 @@ test('review serving projector worker heartbeat keeps bounded restart timer refe
   expect(result).toEqual({restartTimerCleared: true, restartTimerWasRefed: true})
 })
 
-test('review serving projector worker heartbeat rotates before native-heavy re-entry', () => {
+test('review serving projector worker heartbeat keeps the owner available before native-heavy rotation', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const events = []
+        const snapshots = []
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async () => {
+              events.push(['run'])
+              return {reason: 'nativeHeavyChunkCompleted'}
+            },
+          }
+        })
+
+        process.kill = (pid, signal) => {
+          events.push(['kill', pid, signal])
+          return true
+        }
+
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?rotate=' + Date.now())
+        const stop = startReviewServingProjectorWorkerHeartbeat({
+          maxCompletedRebuildChunksPerRun: 1,
+          restartDelayMs: 30,
+          rotateProcessAfterNativeHeavyChunk: true,
+        })
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 10)
+        })
+        snapshots.push([...events])
+        await new Promise((resolve) => {
+          setTimeout(resolve, 40)
+        })
+        stop()
+
+        console.log(JSON.stringify({events, pid: process.pid, snapshots}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: ''}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Review serving projector worker heartbeat native-heavy rotation test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    events: Array<[string, number?, string?]>
+    pid: number
+    snapshots: Array<Array<[string, number?, string?]>>
+  }
+
+  expect(result.snapshots).toEqual([[['run']]])
+  expect(result.events).toEqual([['run'], ['kill', result.pid, 'SIGTERM']])
+})
+
+test('review serving projector worker heartbeat cancels pending native-heavy rotation when stopped', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -398,23 +476,23 @@ test('review serving projector worker heartbeat rotates before native-heavy re-e
           events.push(['kill', pid, signal])
           return true
         }
-        process.exit = (code) => {
-          events.push(['exit', code])
-        }
 
-        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?rotate=' + Date.now())
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?cancel-rotate=' + Date.now())
         const stop = startReviewServingProjectorWorkerHeartbeat({
           maxCompletedRebuildChunksPerRun: 1,
-          restartDelayMs: 1,
+          restartDelayMs: 30,
           rotateProcessAfterNativeHeavyChunk: true,
         })
 
         await new Promise((resolve) => {
-          setTimeout(resolve, 20)
+          setTimeout(resolve, 10)
         })
         stop()
+        await new Promise((resolve) => {
+          setTimeout(resolve, 40)
+        })
 
-        console.log(JSON.stringify({events, pid: process.pid}))
+        console.log(JSON.stringify({events}))
       `,
     ],
     {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: ''}},
@@ -424,16 +502,13 @@ test('review serving projector worker heartbeat rotates before native-heavy re-e
     throw new Error(
       runScript.stderr.toString()
         || runScript.stdout.toString()
-        || 'Review serving projector worker heartbeat native-heavy rotation test failed',
+        || 'Review serving projector worker heartbeat rotation cancellation test failed',
     )
   }
 
-  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
-    events: Array<[string, number?, string?]>
-    pid: number
-  }
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: Array<[string, number?, string?]>}
 
-  expect(result.events).toEqual([['run'], ['kill', result.pid, 'SIGTERM']])
+  expect(result.events).toEqual([['run']])
 })
 
 test('review serving projector worker heartbeat ignores obsolete bounded process-exit requests', () => {

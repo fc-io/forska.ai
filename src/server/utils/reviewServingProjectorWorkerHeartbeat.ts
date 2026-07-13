@@ -98,6 +98,16 @@ export const startReviewServingProjectorWorkerHeartbeat = (
     }
   }
 
+  const scheduleProcessRotation = (delayMs: number) => {
+    if (stopped || controller.signal.aborted) {
+      return
+    }
+
+    restartTimer = setTimeout(() => {
+      process.kill(process.pid, 'SIGTERM')
+    }, delayMs)
+  }
+
   const startLoop = () => {
     if (stopped || controller.signal.aborted) {
       return
@@ -144,7 +154,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
           && !stopped
           && !controller.signal.aborted
         ) {
-          process.kill(process.pid, 'SIGTERM')
+          scheduleProcessRotation(restartDelayMs)
           return
         }
 
