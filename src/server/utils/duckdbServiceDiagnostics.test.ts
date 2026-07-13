@@ -128,6 +128,10 @@ test('duckdb native statement diagnostics identify workload and connection witho
             routeOrJobKey: 'reviewServing.summary.request',
             workloadClass: 'reviewProjector',
           })
+          await service.runDuckdbJsonQuery('WITH recent_rows AS (SELECT * FROM app.review_serving_snapshot_manifest) SELECT * FROM recent_rows', {
+            routeOrJobKey: 'reviewServing.summary.read',
+            workloadClass: 'reviewProjector',
+          })
           await service.runDuckdbAppendJsonQuery('SELECT 1 AS value', undefined, undefined, {
             routeOrJobKey: 'reviewServing.summary.append',
             workloadClass: 'reviewProjector',
@@ -173,14 +177,15 @@ test('duckdb native statement diagnostics identify workload and connection witho
     ),
   )
   const result = JSON.parse(stdout) as {errorName: string | null; events: DiagnosticEvent[]; rows: unknown[]}
-  const [queryStart, queryEnd, appendStart, appendEnd, statementStart, statementError] = result.events
+  const [queryStart, queryEnd, readStart, readEnd, appendStart, appendEnd, statementStart, statementError] =
+    result.events
   const transactionEvents = result.events.filter((event) => {
     return event.attrs.routeOrJobKey === 'reviewServing.projector.writer.snapshotPromotion'
   })
 
   expect(result.rows).toEqual([{value: 1}])
   expect(result.errorName).toBe('Error')
-  expect(result.events).toHaveLength(18)
+  expect(result.events).toHaveLength(20)
   expect(JSON.stringify(result.events)).not.toContain(privateSqlValue)
   expect(queryStart).toMatchObject({
     attrs: {
@@ -210,6 +215,17 @@ test('duckdb native statement diagnostics identify workload and connection witho
     event: 'duckdb.statement.end',
     severity: 'INFO',
   })
+  expect(readStart).toMatchObject({
+    attrs: {
+      operation: 'mainQuery',
+      routeOrJobKey: 'reviewServing.summary.read',
+      statementKind: 'WITH',
+      statementTargetTable: 'app.review_serving_snapshot_manifest',
+      workloadClass: 'reviewProjector',
+    },
+    event: 'duckdb.statement.start',
+  })
+  expect(readStart?.attrs.statementExecutionId).toBe(readEnd?.attrs.statementExecutionId)
   expect(appendStart).toMatchObject({
     attrs: {
       connectionRole: 'append',

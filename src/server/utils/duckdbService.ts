@@ -3453,7 +3453,16 @@ const getDuckdbStatementHash = (statement: string) => {
 const getDuckdbStatementTargetTable = (statement: string) => {
   return (
     statement.match(/\b(?:INSERT\s+INTO|MERGE\s+INTO|UPDATE|DELETE\s+FROM)\s+([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)?)/iu)?.[1]
+    ?? statement.match(/\b(?:FROM|JOIN)\s+([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)?)/iu)?.[1]
     ?? null
+  )
+}
+
+const shouldWriteDuckdbStatementDiagnosticToStderr = () => {
+  return ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.FORSKA_DUCKDB_STATEMENT_DIAGNOSTIC_STDERR ?? '')
+      .trim()
+      .toLowerCase(),
   )
 }
 
@@ -3494,27 +3503,32 @@ const writeDuckdbStatementDiagnostic = ({
   const {connectionRole, lane} = getDuckdbConnectionDiagnosticIdentity(duckdbConnection)
   const workloadContext = diagnosticContext.context
   const progress = phase === 'start' ? null : getDuckdbProgressSnapshot(duckdbConnection)
+  const diagnosticAttrs = {
+    connectionRole,
+    durationMs,
+    errorName: error instanceof Error ? error.name : error === null ? null : typeof error,
+    lane,
+    operation: diagnosticContext.operation,
+    phase,
+    progress,
+    progressSource: progress === null ? null : 'DuckDBConnection.progress -> @duckdb/node-bindings.query_progress',
+    queue: diagnosticContext.queue,
+    queueDepthAtStart: diagnosticContext.queueDepthAtStart,
+    routeOrJobKey: workloadContext?.routeOrJobKey ?? `duckdb.${diagnosticContext.operation}`,
+    statementExecutionId,
+    statementHash: getDuckdbStatementHash(statement),
+    statementKind: getDuckdbStatementKind(statement),
+    statementTargetTable: getDuckdbStatementTargetTable(statement),
+    workloadClass: workloadContext?.workloadClass ?? 'unclassified',
+  }
+
+  if (shouldWriteDuckdbStatementDiagnosticToStderr()) {
+    console.error(`[duckdb:statement-diagnostic] ${JSON.stringify(diagnosticAttrs)}`)
+  }
 
   try {
     writeRuntimeLogEvent({
-      attrs: {
-        connectionRole,
-        durationMs,
-        errorName: error instanceof Error ? error.name : error === null ? null : typeof error,
-        lane,
-        operation: diagnosticContext.operation,
-        phase,
-        progress,
-        progressSource: progress === null ? null : 'DuckDBConnection.progress -> @duckdb/node-bindings.query_progress',
-        queue: diagnosticContext.queue,
-        queueDepthAtStart: diagnosticContext.queueDepthAtStart,
-        routeOrJobKey: workloadContext?.routeOrJobKey ?? `duckdb.${diagnosticContext.operation}`,
-        statementExecutionId,
-        statementHash: getDuckdbStatementHash(statement),
-        statementKind: getDuckdbStatementKind(statement),
-        statementTargetTable: getDuckdbStatementTargetTable(statement),
-        workloadClass: workloadContext?.workloadClass ?? 'unclassified',
-      },
+      attrs: diagnosticAttrs,
       event: `duckdb.statement.${phase}`,
       message: `[duckdb] statement ${phase}`,
       severity: phase === 'error' ? 'ERROR' : 'INFO',

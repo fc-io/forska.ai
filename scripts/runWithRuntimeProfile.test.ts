@@ -115,6 +115,7 @@ const runtimeCrashDiagnosticEvents = new Set([
   'duckdb.statement.start',
   'server.stack.managed-process-unexpected-exit',
 ])
+const duckdbStatementDiagnosticLinePattern = /^\[duckdb:statement-diagnostic\] (.+)$/u
 
 test('current-db network smoke includes read-only browser and mutation-enabled split-stack phases', () => {
   const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as {scripts?: Record<string, string>}
@@ -366,6 +367,35 @@ const getRuntimeCrashDiagnosticEvidence = ({
     })
 }
 
+const getRuntimeCrashOutputDiagnosticEvidence = (output: string): RuntimeLogEvidence[] => {
+  return output
+    .split('\n')
+    .flatMap((line): RuntimeLogEvidence[] => {
+      const match = duckdbStatementDiagnosticLinePattern.exec(line.trim())
+
+      if (!match) {
+        return []
+      }
+
+      const attrs = parseRuntimeLogRecord(match[1])?.attrs ?? parseRuntimeLogRecord(`{"attrs":${match[1]}}`)?.attrs
+
+      return attrs === undefined
+        ? []
+        : (() => {
+            const phase = typeof attrs.phase === 'string' ? attrs.phase : 'unknown'
+
+            return [
+              {
+                attrs: getDiagnosticAttrs({attrs, event: 'duckdb.statement.start'}),
+                event: `duckdb.statement.${phase}`,
+                severity: phase === 'error' ? 'ERROR' : 'INFO',
+              },
+            ]
+          })()
+    })
+    .slice(-runtimeCrashDiagnosticEvidenceLimit)
+}
+
 test('runtime crash diagnostics harvest only new sanitized records for the changed pid', () => {
   const logDir = join(tmpdir(), `forska-runtime-crash-evidence-${Date.now()}`)
   const logPath = join(logDir, 'maintenance-worker-server-2026-07-13.jsonl')
@@ -478,6 +508,41 @@ test('runtime crash diagnostics harvest only new sanitized records for the chang
   expect(serializedEvidence).not.toContain('private_before')
   expect(serializedEvidence).not.toContain('unchanged-pid')
   removePathIfExists(logDir)
+})
+
+test('runtime crash diagnostics harvest sanitized DuckDB statement stderr breadcrumbs', () => {
+  const evidence = getRuntimeCrashOutputDiagnosticEvidence(
+    [
+      '[duckdb:statement-diagnostic] {"phase":"start","routeOrJobKey":"reviewServing.projector.writer.snapshotPromotion","statementHash":"abc123def456","statementKind":"INSERT","statementTargetTable":"app.review_serving_snapshot_manifest","workloadClass":"reviewProjector","rawSql":"INSERT INTO private VALUES (secret)"}',
+      '[duckdb:statement-diagnostic] not-json',
+    ].join('\n'),
+  )
+  const serializedEvidence = JSON.stringify(evidence)
+
+  expect(evidence).toEqual([
+    {
+      attrs: {
+        connectionRole: null,
+        durationMs: null,
+        errorName: null,
+        lane: null,
+        operation: null,
+        phase: 'start',
+        queue: null,
+        queueDepthAtStart: null,
+        routeOrJobKey: 'reviewServing.projector.writer.snapshotPromotion',
+        statementExecutionId: null,
+        statementHash: 'abc123def456',
+        statementKind: 'INSERT',
+        statementTargetTable: 'app.review_serving_snapshot_manifest',
+        workloadClass: 'reviewProjector',
+      },
+      event: 'duckdb.statement.start',
+      severity: 'INFO',
+    },
+  ])
+  expect(serializedEvidence).not.toContain('private')
+  expect(serializedEvidence).not.toContain('secret')
 })
 
 const waitForRuntimeReadyUntil = async (port: number, deadlineMs: number): Promise<RuntimeReadyBody> => {
@@ -1018,22 +1083,26 @@ const expectCurrentDbReviewServingWarningRouteSurvives = async (
   const progressed = progressAfter.some(({after, before}) => {
     return didReviewServingWorkProgress(before, after)
   })
+  const stabilityOutput = getOutputParts()
+    .map((part, index) => {
+      return part.slice(outputOffsets[index])
+    })
+    .join('\n')
   const stabilityFailure = getRuntimeStabilityFailure({
-    output: getOutputParts()
-      .map((part, index) => {
-        return part.slice(outputOffsets[index])
-      })
-      .join('\n'),
+    output: stabilityOutput,
     pidsAfter,
     pidsBefore,
     progressed,
     readyAfter,
-    runtimeLogEvidence: getRuntimeCrashDiagnosticEvidence({
-      logDir: runtimeLogDir,
-      pidsAfter,
-      pidsBefore,
-      snapshot: runtimeLogSnapshot,
-    }),
+    runtimeLogEvidence: [
+      ...getRuntimeCrashDiagnosticEvidence({
+        logDir: runtimeLogDir,
+        pidsAfter,
+        pidsBefore,
+        snapshot: runtimeLogSnapshot,
+      }),
+      ...getRuntimeCrashOutputDiagnosticEvidence(stabilityOutput),
+    ],
   })
 
   expect(stabilityFailure).toBeNull()
@@ -1381,7 +1450,11 @@ realDevServerSmokeTest(
   async () => {
     const devServerProcess = globalThis.Bun.spawn([bunExecutablePath, 'run', 'dev:server'], {
       cwd: process.cwd(),
-      env: {...process.env, FORSKA_DEV_SERVER_WATCH_ACTION: 'restart'},
+      env: {
+        ...process.env,
+        FORSKA_DEV_SERVER_WATCH_ACTION: 'restart',
+        FORSKA_DUCKDB_STATEMENT_DIAGNOSTIC_STDERR: 'true',
+      },
       stderr: 'pipe',
       stdout: 'pipe',
     })
