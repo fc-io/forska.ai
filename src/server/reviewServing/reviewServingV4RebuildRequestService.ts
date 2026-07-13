@@ -4,6 +4,7 @@ import {Effect} from 'effect'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   buildReviewDirtyProjectionIdentity,
   getStableReviewServingJson,
@@ -70,6 +71,17 @@ const defaultRequestBudget = {
   maxSnapshotCount: 1,
   maxTempBytes: 0,
 } as const
+
+const getReviewServingV4RebuildRequestWorkloadContext = (projectId: string): DuckdbWorkloadContext => {
+  return {
+    allowsTempSpill: true,
+    fallbackIntent: 'reject',
+    projectId,
+    routeOrJobKey: 'reviewServing.v4RebuildRequest',
+    searchMode: 'none',
+    workloadClass: 'reviewProjector',
+  }
+}
 
 type ReviewServingV4RebuildStatsRow = {
   activeSnapshotCount: number
@@ -1182,7 +1194,7 @@ export const requestReviewServingV4RebuildEffect = (
       }
 
       return request
-    })
+    }, getReviewServingV4RebuildRequestWorkloadContext(input.projectId))
   })
 }
 

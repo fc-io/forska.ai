@@ -518,9 +518,159 @@ test('duckdb recycle barrier survives nested barriers in queued main work', () =
   )
 
   expect(barrierSource).toContain('const previousAppendBarrier = duckdbServiceState.appendBarrier')
-  expect(barrierSource).toContain(
-    'duckdbServiceState.appendBarrier === appendBarrier ? previousAppendBarrier : duckdbServiceState.appendBarrier',
-  )
+  expect(barrierSource).toContain('appendBarrier.active = false')
+  expect(barrierSource).toContain('getActiveDuckdbAppendBarrier(previousAppendBarrier)')
+})
+
+test('duckdb main transaction blocks append-lane work until commit finishes', () => {
+  const duckdbPath = `/tmp/f1-duckdb-service-transaction-append-barrier-${Date.now()}.duckdb`
+
+  try {
+    const stdout = getSpawnOutput(
+      globalThis.Bun.spawnSync(
+        [
+          'bun',
+          '-e',
+          `
+            const {mock} = await import('bun:test')
+
+            const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+            let connectCount = 0
+            let releaseTransactionBody = () => {}
+            const events = []
+
+            const waitFor = async (predicate, remainingAttempts = 100) => {
+              if (predicate()) {
+                return true
+              }
+
+              if (remainingAttempts <= 0) {
+                return false
+              }
+
+              await new Promise((resolve) => setTimeout(resolve, 1))
+              return waitFor(predicate, remainingAttempts - 1)
+            }
+
+            void mock.module(serverRuntimeRoleModulePath, () => {
+              return {
+                canCurrentServerOwnDuckdb: () => false,
+                ensureCurrentDuckdbOwnerLease: async () => {},
+                registerDuckdbOwnerDemotionHandler: () => {},
+                releaseCurrentDuckdbOwnerLease: async () => {},
+              }
+            })
+
+            void mock.module('@duckdb/node-api', () => {
+              class MockConnection {
+                constructor(kind) {
+                  this.kind = kind
+                }
+
+                async run(statement) {
+                  events.push(['run:start', this.kind, statement])
+
+                  if (statement.includes('main-block')) {
+                    await new Promise((resolve) => {
+                      releaseTransactionBody = resolve
+                    })
+                  }
+
+                  events.push(['run:end', this.kind, statement])
+                }
+
+                async runAndReadAll(statement) {
+                  events.push(['read:start', this.kind, statement])
+                  events.push(['read:end', this.kind, statement])
+                  return {getRowObjectsJson: () => [{label: this.kind}]}
+                }
+
+                interrupt() {}
+                closeSync() {}
+              }
+
+              class MockInstance {
+                static async create() {
+                  return new MockInstance()
+                }
+
+                async connect() {
+                  connectCount += 1
+                  return new MockConnection(connectCount === 1 ? 'main' : 'append')
+                }
+
+                closeSync() {}
+              }
+
+              return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+            })
+
+            const workloadContext = {
+              allowsTempSpill: true,
+              fallbackIntent: 'reject',
+              routeOrJobKey: 'test.transactionAppendBarrier',
+              workloadClass: 'test',
+            }
+            const duckdbService = await import('./src/server/utils/duckdbService.ts?transaction-append-barrier=' + Date.now())
+            const transactionPromise = duckdbService.runDuckdbTransaction(async (tx) => {
+              await tx.run("SELECT 'main-block'")
+            }, workloadContext)
+
+            const transactionBodyStarted = await waitFor(() => {
+              return events.some((event) => event[0] === 'run:start' && event[2].includes('main-block'))
+            })
+            const appendPromise = duckdbService.runDuckdbAppendJsonQuery(
+              "SELECT 'append-after-begin' AS label",
+              undefined,
+              undefined,
+              workloadContext,
+            )
+
+            await new Promise((resolve) => setTimeout(resolve, 10))
+            const appendStartedBeforeCommit = events.some((event) => {
+              return event[0] === 'read:start' && event[2].includes('append-after-begin')
+            })
+
+            releaseTransactionBody()
+            await Promise.all([transactionPromise, appendPromise])
+
+            console.log(JSON.stringify({appendStartedBeforeCommit, events, transactionBodyStarted}))
+            await duckdbService.closeDuckdbService()
+          `,
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            DUCKDB_APPEND_LANE_COUNT: '1',
+            DUCKDB_PATH: duckdbPath,
+            DUCKDB_MEMORY_LIMIT: '20GB',
+            SERVER_ROLE: 'maintenance-worker',
+          },
+        },
+      ),
+    )
+
+    const result = JSON.parse(stdout) as {
+      appendStartedBeforeCommit: boolean
+      events: Array<Array<string>>
+      transactionBodyStarted: boolean
+    }
+    const commitEndIndex = result.events.findIndex((event) => {
+      return event[0] === 'run:end' && event[2] === 'COMMIT'
+    })
+    const appendStartIndex = result.events.findIndex((event) => {
+      return event[0] === 'read:start' && event[2].includes('append-after-begin')
+    })
+
+    expect(result.transactionBodyStarted).toBe(true)
+    expect(result.appendStartedBeforeCommit).toBe(false)
+    expect(commitEndIndex).toBeGreaterThan(-1)
+    expect(appendStartIndex).toBeGreaterThan(commitEndIndex)
+  } finally {
+    removeDuckdbFiles(duckdbPath)
+  }
 })
 
 test('duckdb append transactions are opt-in and stay serialized with main transactions on low-memory workers', () => {

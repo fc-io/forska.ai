@@ -3,6 +3,7 @@ import {join, relative} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
+import {type DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {type ReviewServingProjectorWriterDatabase} from './reviewServingProjectorWriter.ts'
 import {
   getReviewServingProjectorReplayKey,
@@ -22,6 +23,8 @@ const getTypeScriptFiles = (directory: string): readonly string[] => {
 
 const createWriterDatabase = () => {
   const statements: string[] = []
+  let transactionCount = 0
+  const workloadContexts: DuckdbWorkloadContext[] = []
   const database: ReviewServingProjectorWriterDatabase = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
@@ -89,12 +92,25 @@ const createWriterDatabase = () => {
     run: async (statement: string) => {
       statements.push(statement)
     },
-    transaction: async (operation) => {
+    transaction: async (operation, workloadContext) => {
+      transactionCount += 1
+
+      if (workloadContext !== undefined) {
+        workloadContexts.push(workloadContext)
+      }
+
       return operation(database)
     },
   }
 
-  return {database, statements}
+  return {
+    database,
+    getTransactionCount: () => {
+      return transactionCount
+    },
+    statements,
+    workloadContexts,
+  }
 }
 
 test('projector replay keys include snapshot, generation, watermark, identity, and row scope', () => {
@@ -168,7 +184,7 @@ test('queue rebuild rows upsert overlapping split chunk boundary rows', async ()
 })
 
 test('projector writer updates rows, manifests, acknowledgements, watermarks, and promotion in one transaction', async () => {
-  const {database, statements} = createWriterDatabase()
+  const {database, getTransactionCount, statements, workloadContexts} = createWriterDatabase()
 
   await writeReviewServingProjectorComponent(
     {
@@ -318,6 +334,14 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
       return statement.includes("snapshot_status = 'active'")
     }),
   ).toBe(true)
+  expect(workloadContexts).toContainEqual({
+    allowsTempSpill: true,
+    fallbackIntent: 'reject',
+    routeOrJobKey: 'reviewServing.projector.writer.display',
+    searchMode: 'none',
+    workloadClass: 'reviewProjector',
+  })
+  expect(getTransactionCount()).toBe(1)
 })
 
 test('selected import snapshot cursor writes are idempotent upserts', async () => {

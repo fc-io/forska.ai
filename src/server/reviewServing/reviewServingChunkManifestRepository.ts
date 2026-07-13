@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 
@@ -11,7 +12,10 @@ export type ReviewServingChunkManifestRepositoryTransaction = {
 }
 
 export type ReviewServingChunkManifestRepositoryDatabase = ReviewServingChunkManifestRepositoryTransaction & {
-  transaction: <T>(operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>) => Promise<T>
+  transaction: <T>(
+    operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>,
+    workloadContext?: DuckdbWorkloadContext,
+  ) => Promise<T>
 }
 
 export type ReviewServingRebuildChunkStatus =

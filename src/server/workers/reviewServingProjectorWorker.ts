@@ -5524,8 +5524,9 @@ const getReviewServingProjectorWorkerDatabase = (
         queryJson: <T>(statement: string) => Promise<T[]>
         run: (statement: string) => Promise<void>
       }) => Promise<T>,
+      transactionWorkloadContext?: DuckdbWorkloadContext,
     ) => {
-      return database.transaction(operation, workloadContext)
+      return database.transaction(operation, transactionWorkloadContext ?? workloadContext)
     },
   } as ReviewServingProjectorWorkerDatabase
     & ReviewServingChunkManifestRepositoryDatabase
