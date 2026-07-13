@@ -1,9 +1,10 @@
-import {existsSync, mkdirSync, readFileSync, realpathSync, rmSync} from 'node:fs'
+import {existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
+import {getRuntimeLogConfig} from '../src/server/utils/runtimeLogger.ts'
 import {getRuntimeProfileDuckdbPath} from '../src/utils/runtimeProfile.ts'
 import {getRuntimeProfileCommandEnv} from './runWithRuntimeProfile.ts'
 
@@ -56,21 +57,26 @@ type RuntimeStabilityObservation = {
   pidsBefore: RuntimePids
   progressed: boolean
   readyAfter: [RuntimeReadyBody, RuntimeReadyBody, RuntimeReadyBody]
+  runtimeLogEvidence?: RuntimeLogEvidence[]
+}
+type RuntimeLogSnapshot = Record<string, number>
+type RuntimeLogEvidence = {
+  attrs: Record<string, unknown>
+  event: string
+  runtime?: RuntimeLogRecord['runtime']
+  severity?: string
+  timestamp?: string
 }
 type StackStartedPids = {api: number | null; judge: number | null; maintenance: number | null}
 type PipeTextCollector = {done: Promise<void>; getText: () => string}
 type RuntimeCrashEvidence = {excerpt: string; label: string}
 type RuntimeLogRecord = {
-  attrs?: {
-    exitCode?: number | null
-    pid?: number | null
-    restartPlanned?: boolean
-    role?: string
-    signal?: string | null
-  }
+  attrs?: Record<string, unknown>
   event?: string
-  runtime?: {pid?: number; service?: string}
+  message?: string
+  runtime?: Record<string, unknown> & {pid?: number; service?: string}
   severity?: string
+  timestamp?: string
 }
 
 const bunExecutablePath = realpathSync(process.execPath)
@@ -102,6 +108,13 @@ const runtimeCrashEvidencePatterns = [
   {label: 'background loop failure', pattern: /background loop failed/iu},
 ] as const
 const runtimeCrashEvidenceExcerptRadius = 100
+const runtimeCrashDiagnosticEvidenceLimit = 12
+const runtimeCrashDiagnosticEvents = new Set([
+  'duckdb.statement.end',
+  'duckdb.statement.error',
+  'duckdb.statement.start',
+  'server.stack.managed-process-unexpected-exit',
+])
 
 test('current-db network smoke includes read-only browser and mutation-enabled split-stack phases', () => {
   const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as {scripts?: Record<string, string>}
@@ -229,6 +242,243 @@ const getRuntimeCrashEvidence = (output: string): RuntimeCrashEvidence[] => {
     return [{excerpt, label}]
   })
 }
+
+const getPrimaryRuntimeLogDir = () => {
+  return getRuntimeLogConfig({envValues: {...process.env, FORSKA_RUNTIME_PROFILE: 'primary'}}).logDir
+}
+
+const getRuntimeLogPaths = (logDir: string) => {
+  if (!existsSync(logDir)) {
+    return []
+  }
+
+  return readdirSync(logDir)
+    .filter((name) => {
+      return name.endsWith('.jsonl')
+    })
+    .map((name) => {
+      return join(logDir, name)
+    })
+    .sort()
+}
+
+const getJsonlLineCount = (path: string) => {
+  return readFileSync(path, 'utf8').split('\n').filter(Boolean).length
+}
+
+const getRuntimeLogSnapshot = (logDir = getPrimaryRuntimeLogDir()): RuntimeLogSnapshot => {
+  return Object.fromEntries(
+    getRuntimeLogPaths(logDir).map((path) => {
+      return [path, getJsonlLineCount(path)]
+    }),
+  )
+}
+
+const parseRuntimeLogRecord = (line: string) => {
+  try {
+    return JSON.parse(line) as RuntimeLogRecord
+  } catch {
+    return null
+  }
+}
+
+const getRuntimeLogRecordsSince = ({logDir, snapshot}: {logDir: string; snapshot: RuntimeLogSnapshot}) => {
+  return getRuntimeLogPaths(logDir).flatMap((path) => {
+    return readFileSync(path, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .slice(snapshot[path] ?? 0)
+      .map(parseRuntimeLogRecord)
+      .filter((record): record is RuntimeLogRecord => {
+        return record !== null
+      })
+  })
+}
+
+const getDiagnosticAttrs = (record: RuntimeLogRecord) => {
+  const attrs = record.attrs ?? {}
+
+  if (record.event === 'server.stack.managed-process-unexpected-exit') {
+    return {
+      exitCode: attrs.exitCode ?? null,
+      pid: attrs.pid ?? null,
+      restartPlanned: attrs.restartPlanned ?? null,
+      role: attrs.role ?? null,
+      signal: attrs.signal ?? null,
+    }
+  }
+
+  return {
+    connectionRole: attrs.connectionRole ?? null,
+    durationMs: attrs.durationMs ?? null,
+    errorName: attrs.errorName ?? null,
+    lane: attrs.lane ?? null,
+    operation: attrs.operation ?? null,
+    phase: attrs.phase ?? null,
+    queue: attrs.queue ?? null,
+    queueDepthAtStart: attrs.queueDepthAtStart ?? null,
+    routeOrJobKey: attrs.routeOrJobKey ?? null,
+    statementExecutionId: attrs.statementExecutionId ?? null,
+    statementHash: attrs.statementHash ?? null,
+    statementKind: attrs.statementKind ?? null,
+    statementTargetTable: attrs.statementTargetTable ?? null,
+    workloadClass: attrs.workloadClass ?? null,
+  }
+}
+
+const getRuntimeCrashDiagnosticEvidence = ({
+  logDir,
+  pidsAfter,
+  pidsBefore,
+  snapshot,
+}: {
+  logDir: string
+  pidsAfter: RuntimePids
+  pidsBefore: RuntimePids
+  snapshot: RuntimeLogSnapshot
+}): RuntimeLogEvidence[] => {
+  const changedPids = new Set(
+    pidsBefore.filter((pid, index) => {
+      return pid !== pidsAfter[index]
+    }),
+  )
+
+  if (changedPids.size === 0) {
+    return []
+  }
+
+  return getRuntimeLogRecordsSince({logDir, snapshot})
+    .filter((record) => {
+      return (
+        runtimeCrashDiagnosticEvents.has(record.event ?? '')
+        && (changedPids.has(Number(record.runtime?.pid)) || changedPids.has(Number(record.attrs?.pid)))
+      )
+    })
+    .slice(-runtimeCrashDiagnosticEvidenceLimit)
+    .map((record) => {
+      return {
+        attrs: getDiagnosticAttrs(record),
+        event: record.event ?? 'unknown',
+        runtime: record.runtime,
+        severity: record.severity,
+        timestamp: record.timestamp,
+      }
+    })
+}
+
+test('runtime crash diagnostics harvest only new sanitized records for the changed pid', () => {
+  const logDir = join(tmpdir(), `forska-runtime-crash-evidence-${Date.now()}`)
+  const logPath = join(logDir, 'maintenance-worker-server-2026-07-13.jsonl')
+  const createRecord = (record: Partial<RuntimeLogRecord> & {event: string}): RuntimeLogRecord => {
+    return {
+      attrs: {},
+      message: 'test',
+      runtime: {
+        hostname: 'test-host',
+        instanceId: 'test-instance',
+        listenPort: 3002,
+        pid: 200,
+        processStartedAt: '2026-07-13T10:00:00.000Z',
+        runtimeProfile: 'primary',
+        service: 'maintenance-worker-server',
+      },
+      severity: 'INFO',
+      timestamp: '2026-07-13T10:00:00.000Z',
+      ...record,
+    }
+  }
+  const stringifyRecords = (records: RuntimeLogRecord[]) => {
+    return records
+      .map((record) => {
+        return JSON.stringify(record)
+      })
+      .join('\n')
+      .concat('\n')
+  }
+
+  mkdirSync(logDir, {recursive: true})
+  writeFileSync(
+    logPath,
+    stringifyRecords([
+      createRecord({
+        attrs: {statementHash: 'stale', statementKind: 'SELECT', rawSql: 'SELECT private_before'},
+        event: 'duckdb.statement.start',
+      }),
+    ]),
+  )
+
+  const snapshot = getRuntimeLogSnapshot(logDir)
+
+  writeFileSync(
+    logPath,
+    stringifyRecords([
+      createRecord({
+        attrs: {statementHash: 'stale', statementKind: 'SELECT', rawSql: 'SELECT private_before'},
+        event: 'duckdb.statement.start',
+      }),
+      createRecord({
+        attrs: {
+          operation: 'appendTransaction',
+          phase: 'start',
+          rawSql: 'INSERT INTO private_table VALUES (secret)',
+          routeOrJobKey: 'review-serving.projector',
+          statementHash: 'abc123def456',
+          statementKind: 'INSERT',
+          statementTargetTable: 'app.review_serving_snapshot_manifest',
+          workloadClass: 'review-serving',
+        },
+        event: 'duckdb.statement.start',
+      }),
+      createRecord({
+        attrs: {statementHash: 'unchanged-pid'},
+        event: 'duckdb.statement.start',
+        runtime: {
+          hostname: 'test-host',
+          instanceId: 'other-instance',
+          listenPort: 3003,
+          pid: 300,
+          processStartedAt: '2026-07-13T10:00:00.000Z',
+          runtimeProfile: 'primary',
+          service: 'judge-worker-server',
+        },
+      }),
+      createRecord({
+        attrs: {exitCode: 133, pid: 200, restartPlanned: true, role: 'maintenance', signal: 'SIGTRAP'},
+        event: 'server.stack.managed-process-unexpected-exit',
+        severity: 'ERROR',
+      }),
+    ]),
+  )
+
+  const evidence = getRuntimeCrashDiagnosticEvidence({
+    logDir,
+    pidsAfter: [100, 201, 300],
+    pidsBefore: [100, 200, 300],
+    snapshot,
+  })
+  const serializedEvidence = JSON.stringify(evidence)
+
+  expect(evidence).toHaveLength(2)
+  expect(evidence[0]).toMatchObject({
+    attrs: {
+      operation: 'appendTransaction',
+      routeOrJobKey: 'review-serving.projector',
+      statementHash: 'abc123def456',
+      statementKind: 'INSERT',
+      statementTargetTable: 'app.review_serving_snapshot_manifest',
+      workloadClass: 'review-serving',
+    },
+    event: 'duckdb.statement.start',
+  })
+  expect(evidence[1]).toMatchObject({
+    attrs: {exitCode: 133, pid: 200, restartPlanned: true, role: 'maintenance', signal: 'SIGTRAP'},
+    event: 'server.stack.managed-process-unexpected-exit',
+  })
+  expect(serializedEvidence).not.toContain('private_table')
+  expect(serializedEvidence).not.toContain('private_before')
+  expect(serializedEvidence).not.toContain('unchanged-pid')
+  removePathIfExists(logDir)
+})
 
 const waitForRuntimeReadyUntil = async (port: number, deadlineMs: number): Promise<RuntimeReadyBody> => {
   return fetch(`http://127.0.0.1:${port}/api/runtime/ready`)
@@ -436,6 +686,7 @@ const getRuntimeStabilityFailure = ({
   pidsBefore,
   progressed,
   readyAfter,
+  runtimeLogEvidence = [],
 }: RuntimeStabilityObservation) => {
   const crashEvidence = getRuntimeCrashEvidence(output)
 
@@ -476,6 +727,7 @@ const getRuntimeStabilityFailure = ({
         pidsBefore,
         progressed,
         rolesReady,
+        runtimeLogEvidence,
       })}`
 }
 
@@ -721,7 +973,11 @@ test('runtime PID sampling re-waits for ready roles after a transient state endp
   )
 
   expect(result.pids).toEqual(expectedPids)
-  expect(result.ready.map((body) => body.data?.ready)).toEqual([true, true, true])
+  expect(
+    result.ready.map((body) => {
+      return body.data?.ready
+    }),
+  ).toEqual([true, true, true])
   expect(readyCalls).toEqual([3001, 3002, 3003, 3001, 3002, 3003])
 })
 
@@ -733,6 +989,8 @@ const expectCurrentDbReviewServingWarningRouteSurvives = async (
   const outputOffsets = getOutputParts().map((part) => {
     return part.length
   })
+  const runtimeLogDir = getPrimaryRuntimeLogDir()
+  const runtimeLogSnapshot = getRuntimeLogSnapshot(runtimeLogDir)
   const {pids: pidsBefore} = await getReadyRuntimePidsUntil(runtimePorts, Date.now() + 20_000)
   const progressCandidatesBefore = await getReviewServingProgressCandidates(apiPort)
   const {body} = await getReviewServingWarningProbe(
@@ -748,10 +1006,7 @@ const expectCurrentDbReviewServingWarningRouteSurvives = async (
   expect(body.data?.indexing?.status).toBeDefined()
 
   await waitFor(3_000)
-  const {pids: pidsAfter, ready: readyAfter} = await getReadyRuntimePidsUntil(
-    runtimePorts,
-    Date.now() + 20_000,
-  )
+  const {pids: pidsAfter, ready: readyAfter} = await getReadyRuntimePidsUntil(runtimePorts, Date.now() + 20_000)
   const progressAfter = await Promise.all(
     progressCandidatesBefore.map(async (candidate) => {
       return {
@@ -773,6 +1028,12 @@ const expectCurrentDbReviewServingWarningRouteSurvives = async (
     pidsBefore,
     progressed,
     readyAfter,
+    runtimeLogEvidence: getRuntimeCrashDiagnosticEvidence({
+      logDir: runtimeLogDir,
+      pidsAfter,
+      pidsBefore,
+      snapshot: runtimeLogSnapshot,
+    }),
   })
 
   expect(stabilityFailure).toBeNull()
