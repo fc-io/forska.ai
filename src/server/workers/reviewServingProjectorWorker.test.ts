@@ -3377,7 +3377,7 @@ test('worker honors explicit null completed rebuild chunk burst limit', async ()
   expect(harness.runChunkInputs).toEqual(statusChunks)
 })
 
-test('bounded worker restarts after one request-associated native-heavy chunk', async () => {
+test('bounded worker reports a lifecycle boundary after one request-associated native-heavy chunk', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const sleepCalls: number[] = []
   const summaryChunks = Array.from({length: 2}, (_, index) => {
@@ -3419,11 +3419,12 @@ test('bounded worker restarts after one request-associated native-heavy chunk', 
     sleepCalls.push(delayMs)
   }
 
-  await runReviewServingProjectorWorker(
+  const result = await runReviewServingProjectorWorker(
     {maxCompletedRebuildChunksPerRun: 16, rebuildChunkBatchSize: 1, workerId: 'worker-1'},
     harness.dependencies,
   )
 
+  expect(result).toEqual({reason: 'nativeHeavyChunkCompleted'})
   expect(harness.runChunkInputs).toEqual(summaryChunks.slice(0, 1))
   expect(sleepCalls).toEqual([])
 })

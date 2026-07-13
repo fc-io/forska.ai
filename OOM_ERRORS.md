@@ -20,6 +20,14 @@ Entry format:
 - Fix: Request-associated native-heavy chunks retain the shared DuckDB runtime, use forced GC at the RSS cap, and restart bounded heartbeat runs in-process after a delay. Requestless cleanup and fatal-error recovery still recycle DuckDB, while external shutdown retains its existing signal path.
 - Verification: `bun test src/server/utils/reviewServingProjectorWorkerHeartbeat.test.ts src/server/utils/startBackgroundWork.test.ts src/server/workers/reviewServingProjectorWorker.test.ts`; `bun run lint`; live current-DB gate deferred to the main agent.
 
+## 2026-07-13 - Request-Associated Native-Heavy Re-entry Trap
+
+- Error: Maintenance pid `94586` completed summary chunk `chunk:74c615964adbada2452637c3f79a072b`, then exited with code 133 and `SIGTRAP` before its next progress log; replacement pid `94624` completed the next summary child for the same request.
+- Context: Low-memory bounded review-serving maintenance processing request-associated summary children with `maxCompletedRebuildChunksPerRun=1`.
+- Cause: The completed-chunk cap ended one projector invocation, but the heartbeat reset the invocation-local counter and admitted another native-heavy chunk in the same process and DuckDB runtime.
+- Fix: Projector runs now report native-heavy completion explicitly. Dedicated maintenance workers request the existing `SIGTERM` shutdown lifecycle after one such chunk so the supervisor replaces the process before another summary or posting admission; lightweight bounded and dev-single runs remain in process.
+- Verification: Focused worker, heartbeat, and background-work tests plus `bun run lint`; live current-DB gate deferred to the supervisor.
+
 ## 2026-07-12 - Already-Admitted Oversized Rebuild Chunks
 
 - Error: Request-associated payload, summary, and posting chunks with 248,028 estimated input rows remained running without actual rows or duration and could stall the maintenance owner.
