@@ -362,7 +362,7 @@ test('review serving projector worker heartbeat keeps bounded restart timer refe
   expect(result).toEqual({restartTimerCleared: true, restartTimerWasRefed: true})
 })
 
-test('review serving projector worker heartbeat delays deliberate native-heavy clean exit', () => {
+test('review serving projector worker heartbeat restarts native-heavy completion in process after cooldown', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -407,7 +407,6 @@ test('review serving projector worker heartbeat delays deliberate native-heavy c
         const stop = startReviewServingProjectorWorkerHeartbeat({
           maxCompletedRebuildChunksPerRun: 1,
           restartDelayMs: 30,
-          rotateProcessAfterNativeHeavyChunk: true,
         })
 
         await new Promise((resolve) => {
@@ -429,7 +428,7 @@ test('review serving projector worker heartbeat delays deliberate native-heavy c
     throw new Error(
       runScript.stderr.toString()
         || runScript.stdout.toString()
-        || 'Review serving projector worker heartbeat native-heavy rotation test failed',
+        || 'Review serving projector worker heartbeat native-heavy restart test failed',
     )
   }
 
@@ -439,10 +438,10 @@ test('review serving projector worker heartbeat delays deliberate native-heavy c
   }
 
   expect(result.snapshots).toEqual([[['run']]])
-  expect(result.events).toEqual([['run'], ['exit', 0]])
+  expect(result.events).toEqual([['run'], ['run']])
 })
 
-test('review serving projector worker heartbeat cancels pending native-heavy rotation when stopped', () => {
+test('review serving projector worker heartbeat cancels pending native-heavy restart when stopped', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -482,11 +481,10 @@ test('review serving projector worker heartbeat cancels pending native-heavy rot
           events.push(['exit', code])
         }
 
-        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?cancel-rotate=' + Date.now())
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?cancel-restart=' + Date.now())
         const stop = startReviewServingProjectorWorkerHeartbeat({
           maxCompletedRebuildChunksPerRun: 1,
           restartDelayMs: 30,
-          rotateProcessAfterNativeHeavyChunk: true,
         })
 
         await new Promise((resolve) => {
@@ -507,7 +505,7 @@ test('review serving projector worker heartbeat cancels pending native-heavy rot
     throw new Error(
       runScript.stderr.toString()
         || runScript.stdout.toString()
-        || 'Review serving projector worker heartbeat rotation cancellation test failed',
+        || 'Review serving projector worker heartbeat native-heavy restart cancellation test failed',
     )
   }
 
