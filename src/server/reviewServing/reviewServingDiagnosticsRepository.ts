@@ -2,6 +2,7 @@ import {Effect} from 'effect'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getReviewServingRebuildChunkClaimPredicate} from './reviewServingChunkManifestRepository.ts'
 import {
   isReviewServingProjectionComponent,
@@ -12,9 +13,16 @@ import {
 import {defaultReviewServingDirtyWorkStaleClaimSeconds} from './reviewServingDirtyWorkService.ts'
 import {getReviewServingOptionalComponentAvailability} from './reviewServingSnapshotPromotionService.ts'
 
-export type ReviewServingDiagnosticsDatabase = {queryJson: <T>(statement: string) => Promise<T[]>}
+export type ReviewServingDiagnosticsDatabase = {
+  queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+}
 
-export type ReviewServingDiagnosticsInput = {now?: Date | string; projectId: string; reviewConfigHash?: string | null}
+export type ReviewServingDiagnosticsInput = {
+  now?: Date | string
+  projectId: string
+  reviewConfigHash?: string | null
+  workloadContext?: DuckdbWorkloadContext
+}
 
 export type ReviewServingDiagnosticsCountState = {
   completedCount: number
@@ -254,9 +262,13 @@ const getDiagnosticsTimestampLiteral = (value: Date | string) => {
   return value instanceof Date ? getSqlLiteral(value) : `TIMESTAMPTZ ${getSqlLiteral(value)}`
 }
 
-const queryEffect = <T>(database: ReviewServingDiagnosticsDatabase, statement: string) => {
+const queryEffect = <T>(
+  database: ReviewServingDiagnosticsDatabase,
+  statement: string,
+  workloadContext?: DuckdbWorkloadContext,
+) => {
   return Effect.tryPromise(() => {
-    return database.queryJson<T>(statement)
+    return database.queryJson<T>(statement, workloadContext)
   })
 }
 
@@ -417,6 +429,7 @@ const getActiveSnapshotRowsEffect = (
       ORDER BY activated_at DESC NULLS LAST, updated_at DESC
       LIMIT 1
     `,
+    input.workloadContext,
   )
 }
 
@@ -511,6 +524,7 @@ const getSnapshotStatusCountRowsEffect = (
         ${getReviewConfigPredicate(input.reviewConfigHash)}
       GROUP BY snapshot_status
     `,
+    input.workloadContext,
   )
 }
 
@@ -533,6 +547,7 @@ const getDirtyWorkRowsEffect = (input: ReviewServingDiagnosticsInput, database: 
       FROM app.review_serving_dirty_work
       WHERE project_id = ${getSqlLiteral(input.projectId)}
     `,
+    input.workloadContext,
   )
 }
 
@@ -642,6 +657,7 @@ const getRebuildChunkRowsEffect = (
       FROM classified_chunk
       LEFT JOIN latest_request ON TRUE
     `,
+    input.workloadContext,
   )
 }
 
@@ -658,6 +674,7 @@ const getQuarantineRowsEffect = (input: ReviewServingDiagnosticsInput, database:
       FROM app.review_source_change_outbox
       WHERE source_partition IN (${getSqlStringList(partitions)})
     `,
+    input.workloadContext,
   )
 }
 
@@ -681,6 +698,7 @@ const getOldestBarrierRowsEffect = (
       ORDER BY source_high_water_mark ASC, created_at ASC, outbox_id ASC
       LIMIT 1
     `,
+    input.workloadContext,
   )
 }
 
@@ -699,6 +717,7 @@ const getQuarantinedCursorRowsEffect = (
       WHERE source_partition IN (${getSqlStringList(partitions)})
         AND (status = 'quarantined' OR quarantined_at IS NOT NULL)
     `,
+    input.workloadContext,
   )
 }
 

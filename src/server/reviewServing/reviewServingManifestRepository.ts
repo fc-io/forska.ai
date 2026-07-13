@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {
   type ReviewServingComponentRequirements,
@@ -14,7 +15,7 @@ import {
 } from './reviewServingProjectorDomain.ts'
 
 export type ReviewServingManifestRepositoryDatabase = {
-  queryJson: <T>(statement: string) => Promise<T[]>
+  queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
   run: (statement: string) => Promise<void>
   transaction: <T>(operation: (tx: ReviewServingManifestRepositoryTransaction) => Promise<T>) => Promise<T>
 }
@@ -23,6 +24,8 @@ export type ReviewServingManifestRepositoryTransaction = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run: (statement: string) => Promise<void>
 }
+
+export type ReviewServingManifestReaderDatabase = Pick<ReviewServingManifestRepositoryDatabase, 'queryJson'>
 
 export type ReviewServingProjectionManifestStatus = ReviewServingSnapshotStatus
 
@@ -399,57 +402,69 @@ export const markCandidateReviewServingSnapshotManifestFailed = async (
 }
 
 export const getActiveReviewServingSnapshotManifest = async (
-  input: {projectId: string; reviewConfigHash?: string | null},
-  database: ReviewServingManifestRepositoryTransaction = getAppDatabaseService(),
+  input: {projectId: string; reviewConfigHash?: string | null; workloadContext?: DuckdbWorkloadContext},
+  database: ReviewServingManifestReaderDatabase = getAppDatabaseService(),
 ) => {
-  const rows = await database.queryJson<SnapshotManifestRow>(`
+  const rows = await database.queryJson<SnapshotManifestRow>(
+    `
     ${getSnapshotManifestSelect()}
     WHERE project_id = ${getSqlLiteral(input.projectId)}
       AND ${getReviewConfigPredicate(input.reviewConfigHash)}
       AND snapshot_status = 'active'
     ORDER BY activated_at DESC NULLS LAST, updated_at DESC
     LIMIT 1
-  `)
+  `,
+    input.workloadContext,
+  )
 
   return rows[0] === undefined ? null : getSnapshotManifestFromRow(rows[0])
 }
 
 export const getReviewServingSnapshotManifest = async (
-  input: {projectId: string; snapshotId: string},
-  database: ReviewServingManifestRepositoryTransaction = getAppDatabaseService(),
+  input: {projectId: string; snapshotId: string; workloadContext?: DuckdbWorkloadContext},
+  database: ReviewServingManifestReaderDatabase = getAppDatabaseService(),
 ) => {
-  const rows = await database.queryJson<SnapshotManifestRow>(`
+  const rows = await database.queryJson<SnapshotManifestRow>(
+    `
     ${getSnapshotManifestSelect()}
     WHERE project_id = ${getSqlLiteral(input.projectId)}
       AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
     LIMIT 1
-  `)
+  `,
+    input.workloadContext,
+  )
 
   return rows[0] === undefined ? null : getSnapshotManifestFromRow(rows[0])
 }
 
 export const getLastKnownGoodReviewServingSnapshotManifest = async (
-  input: {projectId: string; reviewConfigHash?: string | null},
-  database: ReviewServingManifestRepositoryTransaction = getAppDatabaseService(),
+  input: {projectId: string; reviewConfigHash?: string | null; workloadContext?: DuckdbWorkloadContext},
+  database: ReviewServingManifestReaderDatabase = getAppDatabaseService(),
 ) => {
   const active = await getActiveReviewServingSnapshotManifest(input, database)
   const snapshotId = active?.lastKnownGoodSnapshotId ?? active?.snapshotId ?? null
   const rows =
     snapshotId === null
-      ? await database.queryJson<SnapshotManifestRow>(`
+      ? await database.queryJson<SnapshotManifestRow>(
+          `
           ${getSnapshotManifestSelect()}
           WHERE project_id = ${getSqlLiteral(input.projectId)}
             AND ${getReviewConfigPredicate(input.reviewConfigHash)}
             AND snapshot_status = 'retired'
           ORDER BY activated_at DESC NULLS LAST, updated_at DESC
           LIMIT 1
-        `)
-      : await database.queryJson<SnapshotManifestRow>(`
+        `,
+          input.workloadContext,
+        )
+      : await database.queryJson<SnapshotManifestRow>(
+          `
           ${getSnapshotManifestSelect()}
           WHERE project_id = ${getSqlLiteral(input.projectId)}
             AND snapshot_id = ${getSqlLiteral(snapshotId)}
           LIMIT 1
-        `)
+        `,
+          input.workloadContext,
+        )
 
   return rows[0] === undefined ? null : getSnapshotManifestFromRow(rows[0])
 }

@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
+import type {DuckdbWorkloadContext} from '../../utils/duckdbService.ts'
 import {canCurrentServerOwnDuckdb, getCurrentServerDuckdbOwnerUrl} from '../../utils/serverRuntimeRole.ts'
 import {duckdbOwnerPrivateApiPrefix} from '../apiRouteClassification.ts'
 
@@ -41,8 +42,12 @@ const getProjectAccessFromDuckdbOwner = async (projectId: string): Promise<Proje
   return body.data
 }
 
-const getProjectAccessFromLocalDuckdb = async (projectId: string): Promise<ProjectAccessRow | null> => {
-  const [project] = await getAppDatabaseService().queryJson<ProjectAccessRow>(`
+const getProjectAccessFromLocalDuckdb = async (
+  projectId: string,
+  workloadContext?: DuckdbWorkloadContext,
+): Promise<ProjectAccessRow | null> => {
+  const [project] = await getAppDatabaseService().queryJson<ProjectAccessRow>(
+    `
     SELECT id, name, archived, human_judgment_mode AS humanJudgmentMode
     FROM app.project
     WHERE id = '${escapeSqlString(projectId)}'
@@ -54,19 +59,24 @@ const getProjectAccessFromLocalDuckdb = async (projectId: string): Promise<Proje
           AND tombstone.completed_at IS NULL
       )
     LIMIT 1
-  `)
+  `,
+    workloadContext,
+  )
 
   return project ?? null
 }
 
-export const getProjectAccess = async (projectId: string): Promise<ProjectAccessRow | null> => {
+export const getProjectAccess = async (
+  projectId: string,
+  workloadContext?: DuckdbWorkloadContext,
+): Promise<ProjectAccessRow | null> => {
   return canCurrentServerOwnDuckdb()
-    ? getProjectAccessFromLocalDuckdb(projectId)
+    ? getProjectAccessFromLocalDuckdb(projectId, workloadContext)
     : getProjectAccessFromDuckdbOwner(projectId)
 }
 
-export const assertProjectIsActive = async (projectId: string) => {
-  const project = await getProjectAccess(projectId)
+export const assertProjectIsActive = async (projectId: string, workloadContext?: DuckdbWorkloadContext) => {
+  const project = await getProjectAccess(projectId, workloadContext)
 
   if (!project) {
     throw new Error('Project not found')
