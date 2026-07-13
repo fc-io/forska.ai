@@ -171,7 +171,7 @@ test('duckdb service uses one thread and deferred checkpoints for the 6400MiB wo
   }
 })
 
-test('duckdb service serializes background work with the main queue on low-memory workers', () => {
+test('duckdb service serializes owner route reads with maintenance work regardless of memory limit', () => {
   const duckdbPath = `/tmp/f1-duckdb-service-serialized-background-${Date.now()}.duckdb`
 
   try {
@@ -185,7 +185,7 @@ test('duckdb service serializes background work with the main queue on low-memor
 
             const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
 
-            let activeReads = 0
+            let activeOperations = 0
             const overlaps = []
 
             void mock.module(serverRuntimeRoleModulePath, () => {
@@ -199,19 +199,21 @@ test('duckdb service serializes background work with the main queue on low-memor
 
             void mock.module('@duckdb/node-api', () => {
               class MockConnection {
-                async run() {}
+                async run() {
+                  activeOperations += 1
+                  overlaps.push({activeOperations, label: 'maintenance-write'})
+                  activeOperations -= 1
+                }
 
                 async runAndReadAll(statement) {
-                  const label = statement.includes('background') ? 'background' : 'main'
-
-                  activeReads += 1
-                  overlaps.push({activeReads, label})
-                  await new Promise((resolve) => setTimeout(resolve, label === 'main' ? 50 : 0))
-                  activeReads -= 1
+                  activeOperations += 1
+                  overlaps.push({activeOperations, label: 'route-read'})
+                  await new Promise((resolve) => setTimeout(resolve, statement.includes('route-read') ? 50 : 0))
+                  activeOperations -= 1
 
                   return {
                     getRowObjectsJson() {
-                      return [{label}]
+                      return [{label: 'route-read'}]
                     },
                   }
                 }
@@ -236,11 +238,11 @@ test('duckdb service serializes background work with the main queue on low-memor
             })
 
             const duckdbService = await import('./src/server/utils/duckdbService.ts?serialize-background=' + Date.now())
-            const mainPromise = duckdbService.runDuckdbJsonQuery("SELECT 'main' AS label")
+            const mainPromise = duckdbService.runDuckdbJsonQuery("SELECT 'route-read' AS label")
 
             await new Promise((resolve) => setTimeout(resolve, 10))
 
-            const backgroundPromise = duckdbService.runDuckdbBackgroundJsonQuery("SELECT 'background' AS label")
+            const backgroundPromise = duckdbService.runDuckdbBackgroundStatement("INSERT INTO maintenance-write")
 
             await Promise.all([mainPromise, backgroundPromise])
             console.log(JSON.stringify({overlaps}))
@@ -252,18 +254,18 @@ test('duckdb service serializes background work with the main queue on low-memor
           env: {
             ...process.env,
             DUCKDB_PATH: duckdbPath,
-            DUCKDB_MEMORY_LIMIT: '6400MiB',
+            DUCKDB_MEMORY_LIMIT: '20GB',
             SERVER_ROLE: 'maintenance-worker',
           },
         },
       ),
     )
 
-    const result = JSON.parse(stdout) as {overlaps: Array<{activeReads: number; label: string}>}
+    const result = JSON.parse(stdout) as {overlaps: Array<{activeOperations: number; label: string}>}
 
     expect(result.overlaps).toEqual([
-      {activeReads: 1, label: 'main'},
-      {activeReads: 1, label: 'background'},
+      {activeOperations: 1, label: 'route-read'},
+      {activeOperations: 1, label: 'maintenance-write'},
     ])
   } finally {
     removeDuckdbFiles(duckdbPath)
@@ -500,7 +502,7 @@ test('duckdb recycle barrier blocks foreground work until background work drains
 
     expect(result.backgroundStarted).toBe(true)
     expect(result.barrierActive).toBe(true)
-    expect(result.pendingWhileBarrier).toBe(0)
+    expect(result.pendingWhileBarrier).toBe(2)
     expect(firstCloseIndex).toBeGreaterThan(-1)
     expect(mainReadIndex).toBeGreaterThan(firstCloseIndex)
   } finally {

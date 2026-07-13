@@ -1391,7 +1391,7 @@ const getDuckdbRuntimeConfigValue = () => {
     databasePath: env.DUCKDB_PATH,
     memoryLimit,
     preserveInsertionOrder: false,
-    serializeConcurrentWork: shouldSerializeDuckdbConcurrentWork(memoryLimit),
+    serializeConcurrentWork: canCurrentServerOwnDuckdb() || shouldSerializeDuckdbConcurrentWork(memoryLimit),
     tempDirectory: getTrimmedValue(env.DUCKDB_TEMP_DIRECTORY),
     threads: getDuckdbThreadCountValue(memoryLimit),
   }
@@ -2841,7 +2841,7 @@ const checkpointDuckdbBeforeClose = async (connection: DuckDBConnection | null, 
     return
   }
 
-  if (getDuckdbRuntimeConfigValue().serializeConcurrentWork) {
+  if (shouldSerializeDuckdbConcurrentWork(getDuckdbRuntimeConfigValue().memoryLimit)) {
     return
   }
 
@@ -2924,14 +2924,15 @@ const closeDuckdbServiceWithoutBarrier = async ({
 }
 
 const closeDuckdbServiceDirect = async (options: CloseDuckdbServiceOptions = {}) => {
-  return withDuckdbAppendBarrier(() => {
+  return withDuckdbAppendBarrier(async () => {
+    await duckdbServiceState.duckdbQueue
     return closeDuckdbServiceWithoutBarrier(options)
   })
 }
 
 const closeDuckdbServiceForSignal = async () => {
   duckdbShutdownInProgress = true
-  const shouldCloseRuntime = !getDuckdbRuntimeConfigValue().serializeConcurrentWork
+  const shouldCloseRuntime = !shouldSerializeDuckdbConcurrentWork(getDuckdbRuntimeConfigValue().memoryLimit)
 
   return closeDuckdbServiceWithoutBarrier({
     checkpointBeforeClose: shouldCloseRuntime,
