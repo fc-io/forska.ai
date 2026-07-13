@@ -362,7 +362,7 @@ test('review serving projector worker heartbeat keeps bounded restart timer refe
   expect(result).toEqual({restartTimerCleared: true, restartTimerWasRefed: true})
 })
 
-test('review serving projector worker heartbeat keeps the owner available before native-heavy rotation', () => {
+test('review serving projector worker heartbeat delays deliberate native-heavy clean exit', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -399,6 +399,9 @@ test('review serving projector worker heartbeat keeps the owner available before
           events.push(['kill', pid, signal])
           return true
         }
+        process.exit = (code) => {
+          events.push(['exit', code])
+        }
 
         const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?rotate=' + Date.now())
         const stop = startReviewServingProjectorWorkerHeartbeat({
@@ -416,7 +419,7 @@ test('review serving projector worker heartbeat keeps the owner available before
         })
         stop()
 
-        console.log(JSON.stringify({events, pid: process.pid, snapshots}))
+        console.log(JSON.stringify({events, snapshots}))
       `,
     ],
     {cwd: process.cwd(), env: {...process.env, DUCKDB_MEMORY_LIMIT: ''}},
@@ -432,12 +435,11 @@ test('review serving projector worker heartbeat keeps the owner available before
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
     events: Array<[string, number?, string?]>
-    pid: number
     snapshots: Array<Array<[string, number?, string?]>>
   }
 
   expect(result.snapshots).toEqual([[['run']]])
-  expect(result.events).toEqual([['run'], ['kill', result.pid, 'SIGTERM']])
+  expect(result.events).toEqual([['run'], ['exit', 0]])
 })
 
 test('review serving projector worker heartbeat cancels pending native-heavy rotation when stopped', () => {
@@ -476,6 +478,9 @@ test('review serving projector worker heartbeat cancels pending native-heavy rot
           events.push(['kill', pid, signal])
           return true
         }
+        process.exit = (code) => {
+          events.push(['exit', code])
+        }
 
         const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?cancel-rotate=' + Date.now())
         const stop = startReviewServingProjectorWorkerHeartbeat({
@@ -511,7 +516,7 @@ test('review serving projector worker heartbeat cancels pending native-heavy rot
   expect(result.events).toEqual([['run']])
 })
 
-test('review serving projector worker heartbeat ignores obsolete bounded process-exit requests', () => {
+test('review serving projector worker heartbeat ignores obsolete immediate bounded process-exit requests', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',

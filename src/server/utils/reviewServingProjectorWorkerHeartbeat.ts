@@ -2,6 +2,7 @@ import {runReviewServingProjectorWorker} from '../workers/reviewServingProjector
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {env, getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
+import {exitWithRuntimeLogFlush} from './runtimeLogger.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
 type ReviewServingProjectorWorkerHeartbeatOptions = {
@@ -104,7 +105,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
     }
 
     restartTimer = setTimeout(() => {
-      process.kill(process.pid, 'SIGTERM')
+      void exitWithRuntimeLogFlush({code: 0})
     }, delayMs)
   }
 
