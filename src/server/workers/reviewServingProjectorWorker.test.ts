@@ -2829,7 +2829,7 @@ test('worker keeps draining foreground native-heavy rebuild chunks beyond the he
   expect(result.projector).toMatchObject({status: 'blocked'})
   expect(harness.wakeInputs).toEqual([])
   expect(harness.recycledChunks).toEqual([])
-  expect(harness.garbageCollectedChunks).toEqual([])
+  expect(harness.garbageCollectedChunks).toEqual([foregroundSummaryChunk])
 })
 
 test('worker resumes normal projector work after the foreground drain TTL expires', async () => {
@@ -3132,7 +3132,7 @@ test('worker avoids DuckDB recycle and collects garbage after request-associated
   expect(harness.garbageCollectedChunks).toEqual([summaryChunk])
 })
 
-test('worker avoids DuckDB recycle and collects garbage after request-associated posting chunks at the RSS cap', async () => {
+test('worker avoids DuckDB recycle and collects garbage after request-associated posting chunks below the RSS cap', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const postingChunkInput = {
     ...chunkInput,
@@ -3163,7 +3163,7 @@ test('worker avoids DuckDB recycle and collects garbage after request-associated
     },
   } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
   harness.dependencies.getMemoryUsage = () => {
-    return {rss: 2_000}
+    return {rss: 512}
   }
 
   const result = await runReviewServingProjectorWorkerOnce(
@@ -3426,6 +3426,8 @@ test('bounded worker reports a lifecycle boundary after one request-associated n
 
   expect(result).toEqual({reason: 'nativeHeavyChunkCompleted'})
   expect(harness.runChunkInputs).toEqual(summaryChunks.slice(0, 1))
+  expect(harness.recycledChunks).toEqual([])
+  expect(harness.garbageCollectedChunks).toEqual(summaryChunks.slice(0, 1))
   expect(sleepCalls).toEqual([])
 })
 
@@ -3475,7 +3477,7 @@ test('worker does not fail completed requestless posting chunks when DuckDB recy
   expect(harness.failedChunks).toEqual([])
 })
 
-test('worker defers request-associated native-heavy cleanup while RSS is below cap', async () => {
+test('worker collects garbage without DuckDB recycle after request-associated summary chunks below the RSS cap', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const summaryChunkInput = {
     ...chunkInput,
@@ -3515,7 +3517,7 @@ test('worker defers request-associated native-heavy cleanup while RSS is below c
   )
 
   expect(harness.recycledChunks).toEqual([])
-  expect(harness.garbageCollectedChunks).toEqual([])
+  expect(harness.garbageCollectedChunks).toEqual([summaryChunk])
 })
 
 test('worker uses short progress yield for request-associated native-heavy chunks while RSS is below cap', async () => {
@@ -3566,7 +3568,7 @@ test('worker uses short progress yield for request-associated native-heavy chunk
   expect(sleepCalls).toEqual([lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs])
   expect(harness.runChunkInputs).toEqual([summaryChunk])
   expect(harness.recycledChunks).toEqual([])
-  expect(harness.garbageCollectedChunks).toEqual([])
+  expect(harness.garbageCollectedChunks).toEqual([summaryChunk])
 })
 
 test('worker slows native-heavy progress yield when RSS reaches the cleanup cap', async () => {

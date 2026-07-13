@@ -4548,18 +4548,8 @@ export const getDefaultReviewServingProjectorRunners = (
 
 const shouldRunNativeHeavyCleanupAfterCompletedRebuildChunk = (input: {
   chunk: Pick<ReviewServingRebuildChunkManifest, 'projectionComponent' | 'requestId'>
-  dependencies: ReviewServingProjectorWorkerDependencies
-  options: ReviewServingProjectorWorkerCycleOptions
 }) => {
-  if (!reviewServingNativeHeavyRebuildComponents.has(input.chunk.projectionComponent)) {
-    return false
-  }
-
-  if (input.chunk.requestId === null) {
-    return true
-  }
-
-  return hasReviewServingProjectorWorkerReachedRssCap(input)
+  return reviewServingNativeHeavyRebuildComponents.has(input.chunk.projectionComponent)
 }
 
 const hasRequestAssociatedNativeHeavyChunkReachedRssCap = (input: {
@@ -4567,7 +4557,11 @@ const hasRequestAssociatedNativeHeavyChunkReachedRssCap = (input: {
   dependencies: ReviewServingProjectorWorkerDependencies
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
-  return input.chunk.requestId !== null && shouldRunNativeHeavyCleanupAfterCompletedRebuildChunk(input)
+  return (
+    input.chunk.requestId !== null
+    && reviewServingNativeHeavyRebuildComponents.has(input.chunk.projectionComponent)
+    && hasReviewServingProjectorWorkerReachedRssCap(input)
+  )
 }
 
 const shouldRecycleDuckdbAfterCompletedRebuildChunk = (input: {
@@ -4586,10 +4580,7 @@ const shouldCollectGarbageAfterCompletedRebuildChunk = (input: {
   dependencies: ReviewServingProjectorWorkerDependencies
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
-  return (
-    reviewServingNativeHeavyRebuildComponents.has(input.chunk.projectionComponent)
-    && (input.chunk.requestId === null || hasRequestAssociatedNativeHeavyChunkReachedRssCap(input))
-  )
+  return shouldRunNativeHeavyCleanupAfterCompletedRebuildChunk(input)
 }
 
 const closeDuckdbAfterCompletedRebuildChunk = async () => {
