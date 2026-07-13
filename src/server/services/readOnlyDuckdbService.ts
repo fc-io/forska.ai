@@ -5,7 +5,7 @@ import {DuckDBConnection, DuckDBInstance} from '@duckdb/node-api'
 import {
   type DuckdbWorkloadContext,
   getReadOnlyDuckdbRuntimeOptions,
-  runDuckdbJsonQuery,
+  runDuckdbBackgroundJsonQuery,
   runMeasuredDuckdbJsonWorkload,
 } from '../utils/duckdbService.ts'
 import {getEnv} from '../utils/env.ts'
@@ -220,7 +220,7 @@ const runOwnerGuardedReadQuery = async <T>(
     throw getReadOnlyDuckdbUnavailableError(context, 'owner guarded read path is not available')
   }
 
-  return runDuckdbJsonQuery<T>(statement, workloadContext)
+  return runDuckdbBackgroundJsonQuery<T>(statement, workloadContext)
 }
 
 export const runReadOnlyDuckdbJsonQuery = async <T>(
