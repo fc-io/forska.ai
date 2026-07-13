@@ -1,4 +1,3 @@
-import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getApiReadOnlyAppDatabaseService} from '../services/appReadOnlyDatabaseService.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {admitReviewServingDuckdbWorkload, type ReviewServingAdmissionDiagnostics} from './reviewServingAdmission.ts'
@@ -30,7 +29,7 @@ import {
   getActiveReviewServingSnapshotManifest,
   getLastKnownGoodReviewServingSnapshotManifest,
   getReviewServingSnapshotManifest,
-  type ReviewServingManifestRepositoryDatabase,
+  type ReviewServingManifestReaderDatabase,
   type ReviewServingSnapshotManifest,
 } from './reviewServingManifestRepository.ts'
 import {getReviewServingReadContract} from './reviewServingReadContracts.ts'
@@ -65,6 +64,7 @@ export type ReviewServingReaderRequest = {
   projectId?: string | null
   queueKind?: string | null
   requiresTempSpill?: boolean
+  routeDiagnosticWorkloadContext?: DuckdbWorkloadContext
   reviewConfigHash?: string | null
   searchIdentity?: string | null
   searchMode?: ReviewServingSearchMode | 'substringSync'
@@ -615,7 +615,7 @@ const rejectReaderRequest = <T>(input: {
 
 const getSnapshotManifest = async (
   request: ReviewServingReaderRequest,
-  manifestDatabase: ReviewServingManifestRepositoryDatabase,
+  manifestDatabase: ReviewServingManifestReaderDatabase,
 ) => {
   if (!hasText(request.projectId)) {
     return null
@@ -623,20 +623,32 @@ const getSnapshotManifest = async (
 
   if (hasText(request.snapshotId)) {
     return getReviewServingSnapshotManifest(
-      {projectId: request.projectId as string, snapshotId: request.snapshotId as string},
+      {
+        projectId: request.projectId as string,
+        snapshotId: request.snapshotId as string,
+        workloadContext: request.routeDiagnosticWorkloadContext,
+      },
       manifestDatabase,
     )
   }
 
   const active = await getActiveReviewServingSnapshotManifest(
-    {projectId: request.projectId as string, reviewConfigHash: request.reviewConfigHash},
+    {
+      projectId: request.projectId as string,
+      reviewConfigHash: request.reviewConfigHash,
+      workloadContext: request.routeDiagnosticWorkloadContext,
+    },
     manifestDatabase,
   )
 
   return (
     active
     ?? getLastKnownGoodReviewServingSnapshotManifest(
-      {projectId: request.projectId as string, reviewConfigHash: request.reviewConfigHash},
+      {
+        projectId: request.projectId as string,
+        reviewConfigHash: request.reviewConfigHash,
+        workloadContext: request.routeDiagnosticWorkloadContext,
+      },
       manifestDatabase,
     )
   )
@@ -769,19 +781,20 @@ export const readReviewServingRows = async <T>(
   request: ReviewServingReaderRequest,
   dependencies?: {
     database?: ReviewServingReaderDatabase
-    diagnosticsDatabase?: ReviewServingManifestRepositoryDatabase
-    manifestDatabase?: ReviewServingManifestRepositoryDatabase
+    diagnosticsDatabase?: ReviewServingManifestReaderDatabase
+    manifestDatabase?: ReviewServingManifestReaderDatabase
   },
 ): Promise<ReviewServingReaderResult<T>> => {
   const contract = getReviewServingReadContract(request.contractKey)
-  const manifestDatabase =
-    dependencies?.manifestDatabase
-    ?? dependencies?.diagnosticsDatabase
-    ?? (getAppDatabaseService() as ReviewServingManifestRepositoryDatabase)
+  const manifestDatabase = dependencies?.manifestDatabase ?? dependencies?.diagnosticsDatabase ?? getReaderDatabase()
   const diagnosticsDatabase = dependencies?.diagnosticsDatabase ?? manifestDatabase
   const diagnostics = hasText(request.projectId)
     ? await getReviewServingDiagnostics(
-        {projectId: request.projectId as string, reviewConfigHash: request.reviewConfigHash},
+        {
+          projectId: request.projectId as string,
+          reviewConfigHash: request.reviewConfigHash,
+          workloadContext: request.routeDiagnosticWorkloadContext,
+        },
         diagnosticsDatabase,
       )
     : null

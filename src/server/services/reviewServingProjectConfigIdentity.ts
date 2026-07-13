@@ -3,11 +3,20 @@ import {
   buildReviewConfigHash,
   type ReviewServingIdentityValue,
 } from '../reviewServing/reviewProjectionIdentity.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from './appQueryHelpers.ts'
 
-export const getCurrentReviewConfigHash = async (projectId: string) => {
-  const [project] = await getAppDatabaseService().queryJson<{
+type ReviewConfigHashDatabase = {
+  queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+}
+
+export const getCurrentReviewConfigHash = async (
+  projectId: string,
+  options: {database?: ReviewConfigHashDatabase; workloadContext?: DuckdbWorkloadContext} = {},
+) => {
+  const database = options.database ?? getAppDatabaseService()
+  const [project] = await database.queryJson<{
     humanJudgmentMode: 'prompt' | 'summary' | null
     modelExecutionOptions: unknown
     modelId: string
@@ -20,7 +29,8 @@ export const getCurrentReviewConfigHash = async (projectId: string) => {
     useFulltext: boolean
     useFulltextNoImages: boolean
     useTitle: boolean
-  }>(`
+  }>(
+    `
     SELECT
       app.project.human_judgment_mode AS humanJudgmentMode,
       app.project.model_id AS modelId,
@@ -41,12 +51,15 @@ export const getCurrentReviewConfigHash = async (projectId: string) => {
       ON provider_connection.id = model.provider_connection_id
     WHERE app.project.id = ${getSqlLiteral(projectId)}
     LIMIT 1
-  `)
-  const promptConfigs = await getAppDatabaseService().queryJson<{
+  `,
+    options.workloadContext,
+  )
+  const promptConfigs = await database.queryJson<{
     promptId: string
     promptOrder: number | null
     promptTextHash: string | null
-  }>(`
+  }>(
+    `
     SELECT
       prompt.id AS promptId,
       project_prompt.prompt_order AS promptOrder,
@@ -59,7 +72,9 @@ export const getCurrentReviewConfigHash = async (projectId: string) => {
       AND NOT project_prompt.archived
       AND COALESCE(prompt.archived, FALSE) = FALSE
     ORDER BY COALESCE(project_prompt.prompt_order, 0) ASC, prompt.id ASC
-  `)
+  `,
+    options.workloadContext,
+  )
 
   return project === undefined
     ? null

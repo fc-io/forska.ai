@@ -3107,6 +3107,44 @@ test('reviews warnings production api path remains owner-routed unless an ownerl
   expect(shouldApiRouteProxyToDuckdbOwner(classification)).toBe(true)
 })
 
+test('reviews warnings route classifies foreground DuckDB read workload context', async () => {
+  const projectId = 'project-warning-workload-context'
+  const {getDuckdbWorkloadRuntimeMetricsSnapshot} = await import('../../utils/duckdbService.ts')
+
+  await insertProjectFixture(projectId)
+
+  await withReviewServingProjectorPaused(async () => {
+    const {response} = await postWarningsRequest(projectId)
+
+    expect(response.status).toBe(200)
+  })
+
+  const projectMetrics = getDuckdbWorkloadRuntimeMetricsSnapshot().filter((metric) => {
+    return metric.projectId === projectId
+  })
+  const routeKeys = new Set(
+    projectMetrics.map((metric) => {
+      return metric.routeOrJobKey
+    }),
+  )
+
+  expect(routeKeys).toContain('review.warnings.projectAccess')
+  expect(routeKeys).toContain('review.warnings.reviewConfigHash')
+  expect(routeKeys).toContain('review.warnings.servingDiagnostics')
+  expect(routeKeys).toContain('review.warnings.enabledPromptCount')
+  expect(routeKeys).toContain('review.warnings.articleScopeProbe')
+  expect(
+    projectMetrics.some((metric) => {
+      return metric.routeOrJobKey === 'duckdb.mainQuery'
+    }),
+  ).toBe(false)
+  expect(
+    projectMetrics.some((metric) => {
+      return metric.workloadClass === 'unclassified'
+    }),
+  ).toBe(false)
+})
+
 test('reviews warnings route reuses reader diagnostics instead of duplicate current-db fanout', async () => {
   const source = await globalThis.Bun.file(new URL('./projectsRoutesGetReviewsWarnings.ts', import.meta.url)).text()
 

@@ -7,9 +7,10 @@ import {
 import {readReviewServingRows} from '../../reviewServing/reviewServingReader.ts'
 import {boostActiveReviewServingRebuildRequestForProject} from '../../reviewServing/reviewServingRebuildRequestRepository.ts'
 import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
-import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
+import {getApiReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
+import type {DuckdbWorkloadContext} from '../../utils/duckdbService.ts'
 import {isReviewServingProjectorPaused} from '../../utils/reviewServingProjectorPause.ts'
 import {shouldDisableServerMutationWork} from '../../utils/serverMutationMode.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
@@ -28,8 +29,19 @@ const reviewServingProgressClockSkewToleranceMs = 10_000
 const foregroundReviewServingRepairPriority = 1_000
 const stalledForegroundReviewServingRepairPriority = 10_000
 
+const getReviewWarningsWorkloadContext = (projectId: string, operation: string): DuckdbWorkloadContext => {
+  return {
+    fallbackIntent: 'serveStale',
+    maxResultRows: 64,
+    projectId,
+    routeOrJobKey: `review.warnings.${operation}`,
+    workloadClass: 'foreground-diagnostic',
+  }
+}
+
 const getEnabledPromptCount = async (projectId: string): Promise<number> => {
-  const rows = await getAppDatabaseService().queryJson<{count: number}>(`
+  const rows = await getApiReadOnlyAppDatabaseService().queryJson<{count: number}>(
+    `
     SELECT COUNT(*) AS count
     FROM app.project_prompt project_prompt
     INNER JOIN app.prompt prompt
@@ -38,13 +50,16 @@ const getEnabledPromptCount = async (projectId: string): Promise<number> => {
       AND project_prompt.enabled = TRUE
       AND NOT project_prompt.archived
       AND COALESCE(prompt.archived, FALSE) = FALSE
-  `)
+  `,
+    getReviewWarningsWorkloadContext(projectId, 'enabledPromptCount'),
+  )
 
   return Number(rows[0]?.count ?? 0)
 }
 
 const getHasArticlesInScope = async (projectId: string): Promise<boolean> => {
-  const rows = await getAppDatabaseService().queryJson<{articleId: string}>(`
+  const rows = await getApiReadOnlyAppDatabaseService().queryJson<{articleId: string}>(
+    `
     WITH scoped_article AS (
       SELECT pa.article_id AS articleId
       FROM app.project_article pa
@@ -66,7 +81,9 @@ const getHasArticlesInScope = async (projectId: string): Promise<boolean> => {
     SELECT articleId
     FROM scoped_article
     LIMIT 1
-  `)
+  `,
+    getReviewWarningsWorkloadContext(projectId, 'articleScopeProbe'),
+  )
 
   return rows.length > 0
 }
@@ -233,20 +250,30 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
   '/api/projectsreviewswarnings',
   async ({body}) => {
     const projectId = body.projectId
-    await assertProjectIsActive(projectId)
-    const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
+    await assertProjectIsActive(projectId, getReviewWarningsWorkloadContext(projectId, 'projectAccess'))
+    const routeDiagnosticWorkloadContext = getReviewWarningsWorkloadContext(projectId, 'servingDiagnostics')
+    const reviewConfigHash = await getCurrentReviewConfigHash(projectId, {
+      database: getApiReadOnlyAppDatabaseService(),
+      workloadContext: getReviewWarningsWorkloadContext(projectId, 'reviewConfigHash'),
+    })
     const warningSnapshot = await readReviewServingRows({
       allowStale: true,
       contractKey: 'review.warning.snapshot',
       estimatedResultRows: 1,
       limit: 1,
       projectId,
+      routeDiagnosticWorkloadContext,
       reviewConfigHash,
     })
     const enabledPromptCount = await getEnabledPromptCount(projectId)
     const hasAnyArticlesInScope = await getHasArticlesInScope(projectId)
     const servingDiagnostics =
-      warningSnapshot.diagnostics.diagnostics ?? (await getReviewServingDiagnostics({projectId, reviewConfigHash}))
+      warningSnapshot.diagnostics.diagnostics
+      ?? (await getReviewServingDiagnostics({
+        projectId,
+        reviewConfigHash,
+        workloadContext: routeDiagnosticWorkloadContext,
+      }))
     const hasReviewServingRows =
       warningSnapshot.status === 'accepted'
       && isUsableReviewServingWarningSnapshot(warningSnapshot.diagnostics.manifest.status)
