@@ -111,7 +111,7 @@ test('read-only DuckDB workload context records metrics without using the owner 
   }
 })
 
-test('api read-only DuckDB uses owner queue when this process owns DuckDB', async () => {
+test('api read-only DuckDB uses the owner background query path when this process owns DuckDB', async () => {
   const duckdbServiceModulePath = new URL('../utils/duckdbService.ts', import.meta.url).pathname
   const readOnlyDuckdbServiceModulePath = new URL('./readOnlyDuckdbService.ts', import.meta.url).pathname
   const serverRuntimeRoleModulePath = new URL('../utils/serverRuntimeRole.ts', import.meta.url).pathname
@@ -133,9 +133,12 @@ test('api read-only DuckDB uses owner queue when this process owns DuckDB', asyn
       getReadOnlyDuckdbRuntimeOptions: () => {
         return {}
       },
-      runDuckdbJsonQuery: async <T>(statement: string, workloadContext?: unknown): Promise<T[]> => {
+      runDuckdbBackgroundJsonQuery: async <T>(statement: string, workloadContext?: unknown): Promise<T[]> => {
         calls.push({statement, workloadContext})
         return [{value: 'owner'}] as T[]
+      },
+      runDuckdbJsonQuery: async () => {
+        throw new Error('owner-guarded read used the control connection')
       },
       runMeasuredDuckdbJsonWorkload: async <T>(input: {work: () => Promise<T>}) => {
         return input.work()
