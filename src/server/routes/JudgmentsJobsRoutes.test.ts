@@ -29,7 +29,8 @@ const judgmentDispatchRuntimeModulePath = new URL('../cron/judgmentsJobs/judgmen
 const appReadOnlyDatabaseServiceModulePath = new URL('../services/appReadOnlyDatabaseService.ts', import.meta.url)
   .pathname
 
-let testReadOnlyDatabase: {queryJson: <T>(statement: string) => Promise<T[]>} | null = null
+let testReadOnlyDatabase: {queryJson: <T>(statement: string, workloadContext?: unknown) => Promise<T[]>} | null = null
+let readOnlyDatabaseCalls: Array<{statement: string; workloadContext: unknown}> = []
 
 const getDefaultRuntimeMatch = () => {
   return {
@@ -147,7 +148,12 @@ const registerModuleMocks = () => {
         throw new Error('Test read-only database not initialized')
       }
 
-      return testReadOnlyDatabase
+      return {
+        queryJson: async <T>(statement: string, workloadContext?: unknown): Promise<T[]> => {
+          readOnlyDatabaseCalls.push({statement, workloadContext})
+          return testReadOnlyDatabase.queryJson<T>(statement, workloadContext)
+        },
+      }
     }
 
     return {
@@ -205,6 +211,7 @@ afterAll(async () => {
 })
 
 afterEach(async () => {
+  readOnlyDatabaseCalls = []
   state.assertStoredProviderModelRuntimeMatch.mockImplementation(async (_input: {modelId: string}) => {})
   state.getStoredProviderModelRuntimeMatch.mockImplementation(async (_input: {modelId: string}) => {
     return {message: null, ok: true, reason: null}
@@ -1446,6 +1453,15 @@ test('owner-backed running jobs route returns provider bucket snapshots', async 
   })
   expect(job?.resolvedDefaultCapacity).toBeGreaterThan(0)
   expect(job?.providerLimitVersion).toHaveLength(64)
+  const runningJobsRead = readOnlyDatabaseCalls.find((call) => {
+    return call.statement.includes('FROM app.judgment_job jj')
+  })
+
+  expect(runningJobsRead?.workloadContext).toEqual({
+    maxResultRows: 500,
+    routeOrJobKey: 'judgments.runningJobs',
+    workloadClass: 'foreground-diagnostic',
+  })
 })
 
 test('provider telemetry history route returns empty aligned buckets for valid ranges', async () => {
