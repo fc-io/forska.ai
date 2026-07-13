@@ -1,9 +1,11 @@
-import {existsSync} from 'node:fs'
-
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {startDuckdbOwnerConnectionHeartbeat} from './duckdbOwnerConnectionHeartbeat.ts'
 import {env} from './env.ts'
 import {startReviewBulkOperationWorkerHeartbeat} from './reviewBulkOperationWorkerHeartbeat.ts'
+import {
+  getReviewServingProjectorPauseMarkerPath,
+  isReviewServingProjectorPaused,
+} from './reviewServingProjectorPause.ts'
 import {startReviewServingProjectorWorkerHeartbeat} from './reviewServingProjectorWorkerHeartbeat.ts'
 import {writeRuntimeOperatorLogEvent} from './runtimeLogger.ts'
 import {shouldDisableServerMutationWork} from './serverMutationMode.ts'
@@ -19,16 +21,6 @@ let maintenanceBackgroundWorkStops: Array<() => void> | null = null
 const lowMemoryMaintenanceDuckdbLimitMiB = 6400
 const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 1
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
-const reviewServingProjectorPauseMarkerSuffix = '.review-serving-projector-paused'
-
-export const getReviewServingProjectorPauseMarkerPath = (duckdbPath = env.DUCKDB_PATH) => {
-  return `${duckdbPath}${reviewServingProjectorPauseMarkerSuffix}`
-}
-
-const isReviewServingProjectorPaused = () => {
-  return env.DUCKDB_PATH !== ':memory:' && existsSync(getReviewServingProjectorPauseMarkerPath())
-}
-
 const shouldDeferNonessentialDuckdbMaintenanceWork = () => {
   const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(env.DUCKDB_MEMORY_LIMIT)
 
