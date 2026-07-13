@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {type DuckdbWorkloadContext, runWithDuckdbWorkloadDiagnosticContext} from '../utils/duckdbService.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {
@@ -27,7 +28,10 @@ import {validateReviewServingCandidateSnapshotManifest} from './reviewServingSna
 export type ReviewServingProjectorWriterDatabase = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run: (statement: string) => Promise<void>
-  transaction: <T>(operation: (tx: ReviewServingProjectorWriterTransaction) => Promise<T>) => Promise<T>
+  transaction: <T>(
+    operation: (tx: ReviewServingProjectorWriterTransaction) => Promise<T>,
+    workloadContext?: DuckdbWorkloadContext,
+  ) => Promise<T>
 }
 
 export type ReviewServingProjectorWriterTransaction = {
@@ -155,6 +159,18 @@ const getNonNegativeElapsedMs = (startedAtMs: number) => {
 
 const incrementDiagnosticsCounter = (target: Record<string, number>, key: string, increment: number) => {
   target[key] = (target[key] ?? 0) + increment
+}
+
+const getReviewServingProjectorWriterWorkloadContext = (
+  component: ReviewServingProjectionComponent | 'snapshotPromotion',
+): DuckdbWorkloadContext => {
+  return {
+    allowsTempSpill: true,
+    fallbackIntent: 'reject',
+    routeOrJobKey: `reviewServing.projector.writer.${component}`,
+    searchMode: 'none',
+    workloadClass: 'reviewProjector',
+  }
 }
 
 const getReviewServingProjectorHash = (label: string, value: ReviewServingIdentityValue) => {
@@ -514,7 +530,7 @@ export const promoteReviewServingProjectorSnapshot = async (
     `)
 
     return {promoted: true, snapshotId: input.snapshotId}
-  })
+  }, getReviewServingProjectorWriterWorkloadContext('snapshotPromotion'))
 }
 
 const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServingTitleSearchRebuildRowsInput) => {
@@ -766,8 +782,12 @@ export const writeReviewServingProjectorComponent = async (
           {
             queryJson: tx.queryJson,
             run: tx.run,
-            transaction: async (operation) => {
-              return operation(tx)
+            transaction: async (operation, workloadContext) => {
+              return workloadContext === undefined
+                ? operation(tx)
+                : runWithDuckdbWorkloadDiagnosticContext(workloadContext, () => {
+                    return operation(tx)
+                  })
             },
           },
         )
@@ -783,5 +803,5 @@ export const writeReviewServingProjectorComponent = async (
       } satisfies ReviewServingProjectorWriterDiagnostics,
       promotedSnapshotId: input.snapshotPromotion?.snapshotId ?? null,
     }
-  })
+  }, getReviewServingProjectorWriterWorkloadContext(input.component))
 }

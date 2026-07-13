@@ -1,6 +1,7 @@
 import {expect, test} from 'bun:test'
 import {Effect} from 'effect'
 
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import type {ReviewServingChunkManifestRepositoryDatabase} from './reviewServingChunkManifestRepository.ts'
 import {requestReviewServingV4RebuildEffect} from './reviewServingV4RebuildRequestService.ts'
 
@@ -138,6 +139,8 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
   const requests = new Map<string, FakeRequestRow>()
   const projectionManifests = new Map<string, FakeProjectionManifestRow>()
   const statements: string[] = []
+  const transactionStatements: string[][] = []
+  const transactionWorkloadContexts: Array<DuckdbWorkloadContext | undefined> = []
   const componentStateJson = {
     optional: [],
     required: fakeRebuildComponents.map((component) => {
@@ -316,8 +319,15 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
   const database = {
     queryJson,
     run,
-    transaction: async <T>(operation: (tx: {queryJson: typeof queryJson; run: typeof run}) => Promise<T>) => {
-      return operation({queryJson, run})
+    transaction: async <T>(
+      operation: (tx: {queryJson: typeof queryJson; run: typeof run}) => Promise<T>,
+      workloadContext?: DuckdbWorkloadContext,
+    ) => {
+      const statementStart = statements.length
+      transactionWorkloadContexts.push(workloadContext)
+      const result = await operation({queryJson, run})
+      transactionStatements.push(statements.slice(statementStart))
+      return result
     },
   } satisfies ReviewServingChunkManifestRepositoryDatabase
 
@@ -331,7 +341,7 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     requests.set(requestId, {...request, status})
   }
 
-  return {database, setRequestStatus, statements}
+  return {database, setRequestStatus, statements, transactionStatements, transactionWorkloadContexts}
 }
 
 test('V4 rebuild request service estimates admission budget from project data', async () => {
@@ -437,6 +447,33 @@ test('V4 rebuild request service bootstraps explicit chunks when a project has n
   expect(joined).toContain("'search'")
   expect(joined).toContain('snapshot:')
   expect(joined).toContain('freshReviewServingSnapshot')
+})
+
+test('V4 bootstrap request transaction carries workload context for all published manifests', async () => {
+  const {database, transactionStatements, transactionWorkloadContexts} = createFakeRequestDatabase({
+    ...baseStats,
+    snapshotCount: 0,
+    snapshotUpdatedAt: null,
+  })
+
+  await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+
+  expect(transactionWorkloadContexts).toEqual([
+    {
+      allowsTempSpill: true,
+      fallbackIntent: 'reject',
+      projectId: 'project-v4',
+      routeOrJobKey: 'reviewServing.v4RebuildRequest',
+      searchMode: 'none',
+      workloadClass: 'reviewProjector',
+    },
+  ])
+  expect(transactionStatements).toHaveLength(1)
+  expect(transactionStatements[0]?.join('\n')).toContain('INSERT INTO app.review_rebuild_request')
+  expect(transactionStatements[0]?.join('\n')).toContain('INSERT INTO app.review_rebuild_chunk_manifest')
+  expect(transactionStatements[0]?.join('\n')).toContain('INSERT INTO app.review_serving_snapshot_manifest')
 })
 
 test('V4 rebuild request service returns a no-op rebuild request when there are no scoped articles', async () => {

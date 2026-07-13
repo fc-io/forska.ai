@@ -1,4 +1,5 @@
-import {randomUUID} from 'node:crypto'
+import {AsyncLocalStorage} from 'node:async_hooks'
+import {createHash, randomUUID} from 'node:crypto'
 import {
   constants as fsConstants,
   mkdirSync,
@@ -18,7 +19,12 @@ import {Effect} from 'effect'
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {getEnv} from './env.ts'
 import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
-import {exitWithRuntimeLogFlush, writeRuntimeFailureLogEvent, writeRuntimeOperatorLogEvent} from './runtimeLogger.ts'
+import {
+  exitWithRuntimeLogFlush,
+  writeRuntimeFailureLogEvent,
+  writeRuntimeLogEvent,
+  writeRuntimeOperatorLogEvent,
+} from './runtimeLogger.ts'
 import {
   canCurrentServerOwnDuckdb,
   ensureCurrentDuckdbOwnerLease,
@@ -135,12 +141,23 @@ export type DuckdbBackgroundRuntimeDiagnostics = {
   workloads: DuckdbWorkloadRuntimeMetric[]
 }
 type DuckdbWorkloadResultMetrics = {resultBytes: number | null; resultRows: number | null}
+type DuckdbWorkloadDiagnosticContext = {
+  context?: DuckdbWorkloadContext
+  operation: DuckdbWorkloadOperation
+  queue: DuckdbWorkloadQueue
+  queueDepthAtStart: number
+}
 type DuckdbTransactionRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run: (statement: string) => Promise<void>
 }
 type CloseDuckdbServiceOptions = {checkpointBeforeClose?: boolean; closeRuntime?: boolean; releaseOwnerLease?: boolean}
-type DuckdbAppendBarrier = {promise: Promise<void>; resolve: () => void}
+type DuckdbAppendBarrier = {
+  active: boolean
+  previous: DuckdbAppendBarrier | null
+  promise: Promise<void>
+  resolve: () => void
+}
 type DuckdbBoundValues = DuckDBValue[] | Record<string, DuckDBValue>
 type DuckdbBoundTypes = DuckDBType[] | Record<string, DuckDBType | undefined>
 
@@ -202,6 +219,7 @@ const duckdbRestartRequiredErrorFragments = [
   'must be restarted prior to being used again',
 ]
 const duckdbWorkloadMetricsLimit = 50
+const duckdbWorkloadDiagnosticStorage = new AsyncLocalStorage<DuckdbWorkloadDiagnosticContext>()
 const duckdbCheckpointThresholdMaxMiB = 8192
 const duckdbCheckpointThresholdMinMiB = 64
 const duckdbProactiveStartupPreflightMinMemoryMiB = 6401
@@ -2749,7 +2767,7 @@ const getDuckdbBackgroundConnection = () => {
   return duckdbServiceState.backgroundConnection
 }
 
-const createDuckdbAppendBarrier = (): DuckdbAppendBarrier => {
+const createDuckdbAppendBarrier = (previous: DuckdbAppendBarrier | null): DuckdbAppendBarrier => {
   let resolve: DuckdbAppendBarrier['resolve'] = () => {
     return undefined
   }
@@ -2757,13 +2775,13 @@ const createDuckdbAppendBarrier = (): DuckdbAppendBarrier => {
     resolve = nextResolve
   })
 
-  return {promise, resolve}
+  return {active: true, previous, promise, resolve}
 }
 
 const waitForDuckdbAppendBarrier = async (): Promise<void> => {
   const currentBarrier = duckdbServiceState.appendBarrier
 
-  return currentBarrier === null
+  return currentBarrier === null || !currentBarrier.active
     ? undefined
     : currentBarrier.promise.then(() => {
         return waitForDuckdbAppendBarrier()
@@ -2782,9 +2800,13 @@ const waitForDuckdbBackgroundQueue = async (): Promise<void> => {
   await duckdbServiceState.backgroundQueue
 }
 
+const getActiveDuckdbAppendBarrier = (barrier: DuckdbAppendBarrier | null): DuckdbAppendBarrier | null => {
+  return barrier === null || barrier.active ? barrier : getActiveDuckdbAppendBarrier(barrier.previous)
+}
+
 const withDuckdbAppendBarrier = async <T>(work: () => Promise<T>): Promise<T> => {
   const previousAppendBarrier = duckdbServiceState.appendBarrier
-  const appendBarrier = createDuckdbAppendBarrier()
+  const appendBarrier = createDuckdbAppendBarrier(previousAppendBarrier)
   duckdbServiceState.appendBarrier = appendBarrier
 
   try {
@@ -2792,8 +2814,11 @@ const withDuckdbAppendBarrier = async <T>(work: () => Promise<T>): Promise<T> =>
     await waitForDuckdbBackgroundQueue()
     return await work()
   } finally {
+    appendBarrier.active = false
     duckdbServiceState.appendBarrier =
-      duckdbServiceState.appendBarrier === appendBarrier ? previousAppendBarrier : duckdbServiceState.appendBarrier
+      duckdbServiceState.appendBarrier === appendBarrier
+        ? getActiveDuckdbAppendBarrier(previousAppendBarrier)
+        : getActiveDuckdbAppendBarrier(duckdbServiceState.appendBarrier)
     appendBarrier.resolve()
   }
 }
@@ -3166,12 +3191,13 @@ const ensureStartedDuckdbProcess = async () => {
 
 const enqueueDuckdbWork = async <T>(work: () => Promise<T>): Promise<T> => {
   const queuedAtMs = Date.now()
+  const diagnosticContext = duckdbWorkloadDiagnosticStorage.getStore()
   duckdbServiceState.duckdbPendingCount += 1
   duckdbServiceState.duckdbMaxQueueDepth = Math.max(
     duckdbServiceState.duckdbMaxQueueDepth,
     duckdbServiceState.duckdbPendingCount,
   )
-  const queuedWork = duckdbServiceState.duckdbQueue.then(async () => {
+  const runQueuedWork = async () => {
     const startedAtMs = Date.now()
     const waitMs = startedAtMs - queuedAtMs
     duckdbServiceState.duckdbLastWaitMs = waitMs
@@ -3186,6 +3212,11 @@ const enqueueDuckdbWork = async <T>(work: () => Promise<T>): Promise<T> => {
       duckdbServiceState.duckdbTasksCompleted += 1
       duckdbServiceState.duckdbTotalDurationMs += durationMs
     }
+  }
+  const queuedWork = duckdbServiceState.duckdbQueue.then(() => {
+    return diagnosticContext === undefined
+      ? runQueuedWork()
+      : duckdbWorkloadDiagnosticStorage.run(diagnosticContext, runQueuedWork)
   })
   duckdbServiceState.duckdbQueue = queuedWork.then(
     () => {
@@ -3393,8 +3424,151 @@ const recordDuckdbControlTransactionStatement = (duckdbConnection: DuckDBConnect
   }
 }
 
+const getDuckdbConnectionDiagnosticIdentity = (duckdbConnection: DuckDBConnection) => {
+  if (duckdbConnection === duckdbServiceState.controlConnection) {
+    return {connectionRole: 'control', lane: null}
+  }
+
+  if (duckdbConnection === duckdbServiceState.backgroundConnection) {
+    return {connectionRole: 'background', lane: null}
+  }
+
+  const lane = duckdbServiceState.appendConnections.indexOf(duckdbConnection)
+  return lane === -1 ? {connectionRole: 'unknown', lane: null} : {connectionRole: 'append', lane}
+}
+
+const getDuckdbStatementKind = (statement: string) => {
+  return (
+    statement
+      .trim()
+      .match(/^([A-Za-z]+)/)?.[1]
+      ?.toUpperCase() ?? 'UNKNOWN'
+  )
+}
+
+const getDuckdbStatementHash = (statement: string) => {
+  return createHash('sha256').update(statement).digest('hex').slice(0, 12)
+}
+
+const getDuckdbStatementTargetTable = (statement: string) => {
+  return (
+    statement.match(/\b(?:INSERT\s+INTO|MERGE\s+INTO|UPDATE|DELETE\s+FROM)\s+([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)?)/iu)?.[1]
+    ?? null
+  )
+}
+
+const getDuckdbProgressSnapshot = (duckdbConnection: DuckDBConnection) => {
+  try {
+    const progress = duckdbConnection.progress
+    return {
+      percentage: progress.percentage,
+      rowsProcessed: String(progress.rows_processed),
+      totalRowsToProcess: String(progress.total_rows_to_process),
+    }
+  } catch {
+    return null
+  }
+}
+
+const writeDuckdbStatementDiagnostic = ({
+  duckdbConnection,
+  durationMs,
+  error,
+  phase,
+  statement,
+  statementExecutionId,
+}: {
+  duckdbConnection: DuckDBConnection
+  durationMs: number | null
+  error: unknown
+  phase: 'end' | 'error' | 'start'
+  statement: string
+  statementExecutionId: string
+}) => {
+  const diagnosticContext = duckdbWorkloadDiagnosticStorage.getStore()
+
+  if (diagnosticContext === undefined) {
+    return
+  }
+
+  const {connectionRole, lane} = getDuckdbConnectionDiagnosticIdentity(duckdbConnection)
+  const workloadContext = diagnosticContext.context
+  const progress = phase === 'start' ? null : getDuckdbProgressSnapshot(duckdbConnection)
+
+  try {
+    writeRuntimeLogEvent({
+      attrs: {
+        connectionRole,
+        durationMs,
+        errorName: error instanceof Error ? error.name : error === null ? null : typeof error,
+        lane,
+        operation: diagnosticContext.operation,
+        phase,
+        progress,
+        progressSource: progress === null ? null : 'DuckDBConnection.progress -> @duckdb/node-bindings.query_progress',
+        queue: diagnosticContext.queue,
+        queueDepthAtStart: diagnosticContext.queueDepthAtStart,
+        routeOrJobKey: workloadContext?.routeOrJobKey ?? `duckdb.${diagnosticContext.operation}`,
+        statementExecutionId,
+        statementHash: getDuckdbStatementHash(statement),
+        statementKind: getDuckdbStatementKind(statement),
+        statementTargetTable: getDuckdbStatementTargetTable(statement),
+        workloadClass: workloadContext?.workloadClass ?? 'unclassified',
+      },
+      event: `duckdb.statement.${phase}`,
+      message: `[duckdb] statement ${phase}`,
+      severity: phase === 'error' ? 'ERROR' : 'INFO',
+    })
+  } catch {
+    return
+  }
+}
+
+const withDuckdbStatementDiagnostic = async <T>(
+  duckdbConnection: DuckDBConnection,
+  statement: string,
+  work: () => Promise<T>,
+): Promise<T> => {
+  const statementExecutionId = randomUUID()
+  const startedAtMs = Date.now()
+
+  writeDuckdbStatementDiagnostic({
+    duckdbConnection,
+    durationMs: null,
+    error: null,
+    phase: 'start',
+    statement,
+    statementExecutionId,
+  })
+
+  try {
+    const result = await work()
+    writeDuckdbStatementDiagnostic({
+      duckdbConnection,
+      durationMs: Date.now() - startedAtMs,
+      error: null,
+      phase: 'end',
+      statement,
+      statementExecutionId,
+    })
+    return result
+  } catch (error) {
+    writeDuckdbStatementDiagnostic({
+      duckdbConnection,
+      durationMs: Date.now() - startedAtMs,
+      error,
+      phase: 'error',
+      statement,
+      statementExecutionId,
+    })
+    throw error
+  }
+}
+
 const runDuckdbSingleStatement = async (duckdbConnection: DuckDBConnection, statement: string) => {
-  await duckdbConnection.run(statement)
+  await withDuckdbStatementDiagnostic(duckdbConnection, statement, () => {
+    return duckdbConnection.run(statement)
+  })
   recordDuckdbControlTransactionStatement(duckdbConnection, statement)
 }
 
@@ -3404,8 +3578,10 @@ const runDuckdbSingleStatementAndReadAll = async <T>(
   values?: DuckdbBoundValues,
   types?: DuckdbBoundTypes,
 ): Promise<T[]> => {
-  const reader = await duckdbConnection.runAndReadAll(statement, values, types)
-  return reader.getRowObjectsJson() as T[]
+  return withDuckdbStatementDiagnostic(duckdbConnection, statement, async () => {
+    const reader = await duckdbConnection.runAndReadAll(statement, values, types)
+    return reader.getRowObjectsJson() as T[]
+  })
 }
 
 const runDuckdbStatementsDirect = async (
@@ -3804,14 +3980,20 @@ const withDuckdbWorkloadContext = <T>({
 }) => {
   assertDuckdbWorkloadContextIsAllowed(operation, context)
 
+  const diagnosticContext = context ?? duckdbWorkloadDiagnosticStorage.getStore()?.context
+
+  const runWork = () => {
+    return duckdbWorkloadDiagnosticStorage.run({context: diagnosticContext, operation, queue, queueDepthAtStart}, work)
+  }
+
   if (context === undefined) {
-    return work()
+    return runWork()
   }
 
   const startedAtMs = Date.now()
   const tempBefore = getDuckdbTempSpillMetricsSnapshot()
 
-  return work().then(
+  return runWork().then(
     (result) => {
       const tempAfter = getDuckdbTempSpillMetricsSnapshot()
       const metric = getDuckdbWorkloadRuntimeMetric({
@@ -3847,6 +4029,17 @@ const withDuckdbWorkloadContext = <T>({
       throw error
     },
   )
+}
+
+export const runWithDuckdbWorkloadDiagnosticContext = <T>(
+  workloadContext: DuckdbWorkloadContext,
+  work: () => Promise<T>,
+) => {
+  const diagnosticContext = duckdbWorkloadDiagnosticStorage.getStore()
+
+  return diagnosticContext === undefined
+    ? work()
+    : duckdbWorkloadDiagnosticStorage.run({...diagnosticContext, context: workloadContext}, work)
 }
 
 export const getDuckdbWorkloadRuntimeMetricsSnapshot = () => {
@@ -4136,30 +4329,30 @@ export const runDuckdbTransaction = async <T>(
     queue: 'main',
     queueDepthAtStart: duckdbServiceState.duckdbPendingCount,
     work: async () => {
-      await waitForDuckdbAppendBarrier()
+      return withDuckdbAppendBarrier(async () => {
+        return withNormalizedDuckdbError(() => {
+          return enqueueDuckdbWork(async () => {
+            await ensureStartedDuckdbProcess()
+            await runDuckdbStatementDirect('BEGIN TRANSACTION')
 
-      return withNormalizedDuckdbError(() => {
-        return enqueueDuckdbWork(async () => {
-          await ensureStartedDuckdbProcess()
-          await runDuckdbStatementDirect('BEGIN TRANSACTION')
+            try {
+              const result = await work({
+                queryJson: async <T>(statement: string) => {
+                  return runDuckdbJsonQueryDirect<T>(statement)
+                },
+                run: async (statement: string) => {
+                  await runDuckdbStatementDirect(statement)
+                },
+              })
 
-          try {
-            const result = await work({
-              queryJson: async <T>(statement: string) => {
-                return runDuckdbJsonQueryDirect<T>(statement)
-              },
-              run: async (statement: string) => {
-                await runDuckdbStatementDirect(statement)
-              },
-            })
+              await runDuckdbStatementDirect('COMMIT')
+              return result
+            } catch (error) {
+              const rollbackError = await getDuckdbRollbackError()
 
-            await runDuckdbStatementDirect('COMMIT')
-            return result
-          } catch (error) {
-            const rollbackError = await getDuckdbRollbackError()
-
-            throw rollbackError === null ? error : getChainedDuckdbError(error, rollbackError, 'rollback failed')
-          }
+              throw rollbackError === null ? error : getChainedDuckdbError(error, rollbackError, 'rollback failed')
+            }
+          })
         })
       })
     },
