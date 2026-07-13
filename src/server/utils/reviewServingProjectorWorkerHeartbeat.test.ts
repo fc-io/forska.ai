@@ -362,7 +362,7 @@ test('review serving projector worker heartbeat keeps bounded restart timer refe
   expect(result).toEqual({restartTimerCleared: true, restartTimerWasRefed: true})
 })
 
-test('review serving projector worker heartbeat exits a dedicated process after one bounded run', () => {
+test('review serving projector worker heartbeat ignores obsolete bounded process-exit requests', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -401,11 +401,11 @@ test('review serving projector worker heartbeat exits a dedicated process after 
         const stop = startReviewServingProjectorWorkerHeartbeat({
           exitProcessAfterBoundedRun: true,
           maxCompletedRebuildChunksPerRun: 1,
-          restartDelayMs: 10_000,
+          restartDelayMs: 1,
         })
 
         await new Promise((resolve) => {
-          setTimeout(resolve, 5)
+          setTimeout(resolve, 20)
         })
         stop()
 
@@ -419,16 +419,17 @@ test('review serving projector worker heartbeat exits a dedicated process after 
     throw new Error(
       runScript.stderr.toString()
         || runScript.stdout.toString()
-        || 'Review serving projector worker heartbeat bounded process exit test failed',
+        || 'Review serving projector worker heartbeat obsolete bounded process exit test failed',
     )
   }
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: Array<[string, number]>}
 
-  expect(result.events).toEqual([
+  expect(result.events.slice(0, 2)).toEqual([
     ['run', 1],
-    ['exit', 0],
+    ['run', 1],
   ])
+  expect(result.events).not.toContainEqual(['exit', 0])
 })
 
 test('review serving projector worker heartbeat preserves explicit null burst cap', () => {

@@ -38,7 +38,6 @@ const shouldDeferNonessentialDuckdbMaintenanceWork = () => {
 const getReviewServingProjectorWorkerHeartbeatOptions = () => {
   return shouldDeferNonessentialDuckdbMaintenanceWork()
     ? {
-        exitProcessAfterBoundedRun: env.SERVER_ROLE === 'maintenance-worker',
         maxCompletedRebuildChunksPerRun: lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun,
         restartDelayMs: lowMemoryReviewServingProjectorWorkerRestartDelayMs,
       }

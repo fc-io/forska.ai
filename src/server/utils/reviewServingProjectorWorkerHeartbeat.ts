@@ -5,7 +5,6 @@ import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
 type ReviewServingProjectorWorkerHeartbeatOptions = {
-  exitProcessAfterBoundedRun?: boolean
   maxCompletedRebuildChunksPerRun?: number | null
   maxRunMs?: number | null
   pollIntervalMs?: number
@@ -138,15 +137,6 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       signal: loopController.signal,
     })
       .then(() => {
-        if (
-          options.exitProcessAfterBoundedRun === true
-          && maxCompletedRebuildChunksPerRun !== null
-          && !stopped
-          && !controller.signal.aborted
-        ) {
-          process.exit(0)
-        }
-
         if (endedByMaxRun || maxCompletedRebuildChunksPerRun !== null) {
           scheduleRestart(restartDelayMs, true)
         }

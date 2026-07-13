@@ -16,9 +16,9 @@ Entry format:
 
 - Error: `maintenance pid=70197 exited unexpectedly with code 133 signal=SIGTRAP; restart planned` after request-associated summary child progress.
 - Context: Low-memory review-serving maintenance cycles completing bounded summary rebuild children while the current-DB warning route was active.
-- Cause: An RSS-capped child completion closed the shared DuckDB runtime, and the bounded heartbeat closed it again before scheduling its next run; native DuckDB teardown after the request-associated work could trap Bun instead of yielding safely.
-- Fix: Request-associated native-heavy chunks retain the shared DuckDB runtime, use forced GC at the RSS cap, and restart bounded heartbeat runs without an explicit DuckDB close. Requestless cleanup and fatal-error recovery still recycle DuckDB.
-- Verification: `bun test src/server/workers/reviewServingProjectorWorker.test.ts src/server/utils/reviewServingProjectorWorkerHeartbeat.test.ts`; `bun run lint`; live current-DB gate deferred to the main agent.
+- Cause: Native teardown immediately after bounded request-associated work remained unsafe. Explicit DuckDB recycle was removed, but dedicated maintenance then used `process.exit(0)`, forcing Bun and the live DuckDB addon to tear down immediately after summary completion and reproducing the same trap class.
+- Fix: Request-associated native-heavy chunks retain the shared DuckDB runtime, use forced GC at the RSS cap, and restart bounded heartbeat runs in-process after a delay. Requestless cleanup and fatal-error recovery still recycle DuckDB, while external shutdown retains its existing signal path.
+- Verification: `bun test src/server/utils/reviewServingProjectorWorkerHeartbeat.test.ts src/server/utils/startBackgroundWork.test.ts src/server/workers/reviewServingProjectorWorker.test.ts`; `bun run lint`; live current-DB gate deferred to the main agent.
 
 ## 2026-07-12 - Already-Admitted Oversized Rebuild Chunks
 
