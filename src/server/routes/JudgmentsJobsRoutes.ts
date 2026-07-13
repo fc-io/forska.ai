@@ -582,12 +582,13 @@ const runOwnerBackedClaimRecovery = async ({
 }
 
 const getOwnerBackedRunningJudgmentJobs = async (): Promise<RunningJudgmentJob[]> => {
-  const rows = await getAppDatabaseService().queryJson<
+  const rows = await getApiReadOnlyAppDatabaseService().queryJson<
     Omit<RunningJudgmentJob, 'providerName'> & {
       providerConnectionUpdatedAt: Date | string | null
       providerName: string | null
     }
-  >(`
+  >(
+    `
     SELECT
       jj.id AS id,
       jj.project_id AS projectId,
@@ -610,7 +611,9 @@ const getOwnerBackedRunningJudgmentJobs = async (): Promise<RunningJudgmentJob[]
       AND COALESCE(m.enabled, TRUE) = TRUE
       AND COALESCE(pc.enabled, TRUE) = TRUE
     ORDER BY jj.created_at ASC, jj.id ASC
-  `)
+  `,
+    {maxResultRows: 500, routeOrJobKey: 'judgments.runningJobs', workloadClass: 'foreground-diagnostic'},
+  )
 
   return rows.map((row) => {
     return attachProviderBucketSnapshotToRunningJob(row, true)
