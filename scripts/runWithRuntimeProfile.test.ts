@@ -108,7 +108,7 @@ const runtimeCrashEvidencePatterns = [
   {label: 'background loop failure', pattern: /background loop failed/iu},
 ] as const
 const runtimeCrashEvidenceExcerptRadius = 100
-const runtimeCrashDiagnosticEvidenceLimit = 12
+const runtimeCrashDiagnosticEvidenceLimit = 48
 const runtimeCrashDiagnosticEvents = new Set([
   'duckdb.statement.end',
   'duckdb.statement.error',
@@ -377,7 +377,9 @@ const getRuntimeCrashOutputDiagnosticEvidence = (output: string): RuntimeLogEvid
         return []
       }
 
-      const attrs = parseRuntimeLogRecord(match[1])?.attrs ?? parseRuntimeLogRecord(`{"attrs":${match[1]}}`)?.attrs
+      const diagnosticJson = match[1] ?? ''
+      const attrs =
+        parseRuntimeLogRecord(diagnosticJson)?.attrs ?? parseRuntimeLogRecord(`{"attrs":${diagnosticJson}}`)?.attrs
 
       return attrs === undefined
         ? []
@@ -543,6 +545,29 @@ test('runtime crash diagnostics harvest sanitized DuckDB statement stderr breadc
   ])
   expect(serializedEvidence).not.toContain('private')
   expect(serializedEvidence).not.toContain('secret')
+})
+
+test('runtime crash diagnostics retain a bounded window larger than one warning route', () => {
+  const output = Array.from({length: 49}, (_, index) => {
+    return `[duckdb:statement-diagnostic] ${JSON.stringify({
+      phase: index % 2 === 0 ? 'start' : 'end',
+      rawSql: `SELECT private_${index}`,
+      routeOrJobKey: `review.warnings.operation-${index}`,
+      statementExecutionId: `statement-${index}`,
+    })}`
+  }).join('\n')
+  const evidence = getRuntimeCrashOutputDiagnosticEvidence(output)
+
+  expect(evidence).toHaveLength(48)
+  expect(evidence[0]?.attrs).toMatchObject({
+    routeOrJobKey: 'review.warnings.operation-1',
+    statementExecutionId: 'statement-1',
+  })
+  expect(evidence.at(-1)?.attrs).toMatchObject({
+    routeOrJobKey: 'review.warnings.operation-48',
+    statementExecutionId: 'statement-48',
+  })
+  expect(JSON.stringify(evidence)).not.toContain('private_')
 })
 
 const waitForRuntimeReadyUntil = async (port: number, deadlineMs: number): Promise<RuntimeReadyBody> => {
