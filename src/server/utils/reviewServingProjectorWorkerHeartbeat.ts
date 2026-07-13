@@ -2,7 +2,6 @@ import {runReviewServingProjectorWorker} from '../workers/reviewServingProjector
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {env, getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
-import {exitWithRuntimeLogFlush} from './runtimeLogger.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
 type ReviewServingProjectorWorkerHeartbeatOptions = {
@@ -12,7 +11,6 @@ type ReviewServingProjectorWorkerHeartbeatOptions = {
   rebuildChunkBatchMaxRssBytes?: number
   rebuildChunkBatchSize?: number
   restartDelayMs?: number
-  rotateProcessAfterNativeHeavyChunk?: boolean
 }
 
 const reviewServingProjectorWorkerLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
@@ -99,16 +97,6 @@ export const startReviewServingProjectorWorkerHeartbeat = (
     }
   }
 
-  const scheduleProcessRotation = (delayMs: number) => {
-    if (stopped || controller.signal.aborted) {
-      return
-    }
-
-    restartTimer = setTimeout(() => {
-      void exitWithRuntimeLogFlush({code: 0})
-    }, delayMs)
-  }
-
   const startLoop = () => {
     if (stopped || controller.signal.aborted) {
       return
@@ -149,13 +137,8 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       signal: loopController.signal,
     })
       .then((result) => {
-        if (
-          result?.reason === 'nativeHeavyChunkCompleted'
-          && options.rotateProcessAfterNativeHeavyChunk === true
-          && !stopped
-          && !controller.signal.aborted
-        ) {
-          scheduleProcessRotation(restartDelayMs)
+        if (result?.reason === 'nativeHeavyChunkCompleted') {
+          scheduleRestart(restartDelayMs, true)
           return
         }
 

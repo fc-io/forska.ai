@@ -32,7 +32,6 @@ const getReviewServingProjectorWorkerHeartbeatOptions = () => {
     ? {
         maxCompletedRebuildChunksPerRun: lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun,
         restartDelayMs: lowMemoryReviewServingProjectorWorkerRestartDelayMs,
-        rotateProcessAfterNativeHeavyChunk: env.SERVER_ROLE === 'maintenance-worker',
       }
     : {}
 }
