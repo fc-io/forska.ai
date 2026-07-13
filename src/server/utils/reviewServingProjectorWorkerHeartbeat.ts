@@ -11,6 +11,7 @@ type ReviewServingProjectorWorkerHeartbeatOptions = {
   rebuildChunkBatchMaxRssBytes?: number
   rebuildChunkBatchSize?: number
   restartDelayMs?: number
+  rotateProcessAfterNativeHeavyChunk?: boolean
 }
 
 const reviewServingProjectorWorkerLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
@@ -136,7 +137,17 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       maxCompletedRebuildChunksPerRun,
       signal: loopController.signal,
     })
-      .then(() => {
+      .then((result) => {
+        if (
+          result?.reason === 'nativeHeavyChunkCompleted'
+          && options.rotateProcessAfterNativeHeavyChunk === true
+          && !stopped
+          && !controller.signal.aborted
+        ) {
+          process.kill(process.pid, 'SIGTERM')
+          return
+        }
+
         if (endedByMaxRun || maxCompletedRebuildChunksPerRun !== null) {
           scheduleRestart(restartDelayMs, true)
         }

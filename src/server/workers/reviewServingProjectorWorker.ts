@@ -239,6 +239,11 @@ type ReviewServingProjectorWorkerLoopOptions = ReviewServingProjectorWorkerCycle
   signal?: AbortSignal
 }
 
+type ReviewServingProjectorWorkerRunResult =
+  | {reason: 'aborted'}
+  | {reason: 'completedChunkLimit'}
+  | {reason: 'nativeHeavyChunkCompleted'}
+
 const getMaxCompletedRebuildChunksPerRun = (value: number | null | undefined) => {
   return value === null ? 0 : getPositiveInteger(value, getDefaultMaxCompletedRebuildChunksPerRun())
 }
@@ -7673,9 +7678,9 @@ const shouldRestartAfterCompletedRebuildChunk = (
 export const runReviewServingProjectorWorker = async (
   options: ReviewServingProjectorWorkerLoopOptions = {},
   dependencies: ReviewServingProjectorWorkerDependencies = defaultReviewServingProjectorWorkerDependencies,
-): Promise<void> => {
+): Promise<ReviewServingProjectorWorkerRunResult> => {
   if (options.signal?.aborted) {
-    return
+    return {reason: 'aborted'}
   }
 
   const cycleResult = await runReviewServingProjectorWorkerOnce(options, dependencies)
@@ -7685,15 +7690,15 @@ export const runReviewServingProjectorWorker = async (
   const maxCompletedRebuildChunksPerRun = getMaxCompletedRebuildChunksPerRun(options.maxCompletedRebuildChunksPerRun)
 
   if (options.signal?.aborted) {
-    return
-  }
-
-  if (maxCompletedRebuildChunksPerRun > 0 && completedRebuildChunksInRun >= maxCompletedRebuildChunksPerRun) {
-    return
+    return {reason: 'aborted'}
   }
 
   if (shouldRestartAfterCompletedRebuildChunk(cycleResult.chunk, maxCompletedRebuildChunksPerRun)) {
-    return
+    return {reason: 'nativeHeavyChunkCompleted'}
+  }
+
+  if (maxCompletedRebuildChunksPerRun > 0 && completedRebuildChunksInRun >= maxCompletedRebuildChunksPerRun) {
+    return {reason: 'completedChunkLimit'}
   }
 
   const delayMs =
@@ -7714,7 +7719,7 @@ export const runReviewServingProjectorWorker = async (
   return delayMs > 0
     ? dependencies.sleep(delayMs).then(() => {
         if (options.signal?.aborted) {
-          return
+          return {reason: 'aborted' as const}
         }
 
         return runReviewServingProjectorWorker(nextOptions, dependencies)
@@ -7747,4 +7752,5 @@ export type {
   ReviewServingProjectorWorkerDependencies,
   ReviewServingProjectorWorkerLoopOptions,
   ReviewServingProjectorWorkerRebuildChunkService,
+  ReviewServingProjectorWorkerRunResult,
 }
