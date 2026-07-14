@@ -49,6 +49,7 @@ test('duckdb native statement diagnostics identify workload and connection witho
           const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
           const events = []
           let connectCount = 0
+          let progressReadCount = 0
 
           void mock.module(runtimeLoggerModulePath, () => {
             return {
@@ -84,6 +85,7 @@ test('duckdb native statement diagnostics identify workload and connection witho
               }
 
               get progress() {
+                progressReadCount += 1
                 return {percentage: 100, rows_processed: 3n, total_rows_to_process: 3n}
               }
 
@@ -161,7 +163,7 @@ test('duckdb native statement diagnostics identify workload and connection witho
           ])
 
           await service.closeDuckdbService({checkpointBeforeClose: false})
-          console.log(JSON.stringify({errorName: error?.name ?? null, events, rows}))
+          console.log(JSON.stringify({errorName: error?.name ?? null, events, progressReadCount, rows}))
         `,
       ],
       {
@@ -176,7 +178,12 @@ test('duckdb native statement diagnostics identify workload and connection witho
       },
     ),
   )
-  const result = JSON.parse(stdout) as {errorName: string | null; events: DiagnosticEvent[]; rows: unknown[]}
+  const result = JSON.parse(stdout) as {
+    errorName: string | null
+    events: DiagnosticEvent[]
+    progressReadCount: number
+    rows: unknown[]
+  }
   const [queryStart, queryEnd, readStart, readEnd, appendStart, appendEnd, statementStart, statementError] =
     result.events
   const transactionEvents = result.events.filter((event) => {
@@ -185,6 +192,7 @@ test('duckdb native statement diagnostics identify workload and connection witho
 
   expect(result.rows).toEqual([{value: 1}])
   expect(result.errorName).toBe('Error')
+  expect(result.progressReadCount).toBe(0)
   expect(result.events).toHaveLength(20)
   expect(JSON.stringify(result.events)).not.toContain(privateSqlValue)
   expect(queryStart).toMatchObject({
@@ -209,8 +217,8 @@ test('duckdb native statement diagnostics identify workload and connection witho
       connectionRole: 'control',
       operation: 'mainQuery',
       phase: 'end',
-      progress: {percentage: 100, rowsProcessed: '3', totalRowsToProcess: '3'},
-      progressSource: 'DuckDBConnection.progress -> @duckdb/node-bindings.query_progress',
+      progress: null,
+      progressSource: null,
     },
     event: 'duckdb.statement.end',
     severity: 'INFO',

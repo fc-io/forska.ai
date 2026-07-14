@@ -3466,19 +3466,6 @@ const shouldWriteDuckdbStatementDiagnosticToStderr = () => {
   )
 }
 
-const getDuckdbProgressSnapshot = (duckdbConnection: DuckDBConnection) => {
-  try {
-    const progress = duckdbConnection.progress
-    return {
-      percentage: progress.percentage,
-      rowsProcessed: String(progress.rows_processed),
-      totalRowsToProcess: String(progress.total_rows_to_process),
-    }
-  } catch {
-    return null
-  }
-}
-
 const writeDuckdbStatementDiagnostic = ({
   duckdbConnection,
   durationMs,
@@ -3502,7 +3489,6 @@ const writeDuckdbStatementDiagnostic = ({
 
   const {connectionRole, lane} = getDuckdbConnectionDiagnosticIdentity(duckdbConnection)
   const workloadContext = diagnosticContext.context
-  const progress = phase === 'start' ? null : getDuckdbProgressSnapshot(duckdbConnection)
   const diagnosticAttrs = {
     connectionRole,
     durationMs,
@@ -3510,8 +3496,8 @@ const writeDuckdbStatementDiagnostic = ({
     lane,
     operation: diagnosticContext.operation,
     phase,
-    progress,
-    progressSource: progress === null ? null : 'DuckDBConnection.progress -> @duckdb/node-bindings.query_progress',
+    progress: null,
+    progressSource: null,
     queue: diagnosticContext.queue,
     queueDepthAtStart: diagnosticContext.queueDepthAtStart,
     routeOrJobKey: workloadContext?.routeOrJobKey ?? `duckdb.${diagnosticContext.operation}`,
