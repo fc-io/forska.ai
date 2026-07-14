@@ -420,6 +420,28 @@ export const getActiveReviewServingSnapshotManifest = async (
   return rows[0] === undefined ? null : getSnapshotManifestFromRow(rows[0])
 }
 
+export const getActiveOrLastKnownGoodReviewServingSnapshotManifest = async (
+  input: {projectId: string; reviewConfigHash?: string | null; workloadContext?: DuckdbWorkloadContext},
+  database: ReviewServingManifestReaderDatabase = getAppDatabaseService(),
+) => {
+  const rows = await database.queryJson<SnapshotManifestRow>(
+    `
+    ${getSnapshotManifestSelect()}
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND ${getReviewConfigPredicate(input.reviewConfigHash)}
+      AND snapshot_status IN ('active', 'retired')
+    ORDER BY
+      CASE WHEN snapshot_status = 'active' THEN 0 ELSE 1 END,
+      activated_at DESC NULLS LAST,
+      updated_at DESC
+    LIMIT 1
+  `,
+    input.workloadContext,
+  )
+
+  return rows[0] === undefined ? null : getSnapshotManifestFromRow(rows[0])
+}
+
 export const getReviewServingSnapshotManifest = async (
   input: {projectId: string; snapshotId: string; workloadContext?: DuckdbWorkloadContext},
   database: ReviewServingManifestReaderDatabase = getAppDatabaseService(),

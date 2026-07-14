@@ -26,8 +26,7 @@ import {
 } from './reviewServingCursor.ts'
 import {getReviewServingDiagnostics, type ReviewServingDiagnostics} from './reviewServingDiagnosticsRepository.ts'
 import {
-  getActiveReviewServingSnapshotManifest,
-  getLastKnownGoodReviewServingSnapshotManifest,
+  getActiveOrLastKnownGoodReviewServingSnapshotManifest,
   getReviewServingSnapshotManifest,
   type ReviewServingManifestReaderDatabase,
   type ReviewServingSnapshotManifest,
@@ -633,25 +632,13 @@ const getSnapshotManifest = async (
     )
   }
 
-  const active = await getActiveReviewServingSnapshotManifest(
+  return getActiveOrLastKnownGoodReviewServingSnapshotManifest(
     {
       projectId: request.projectId as string,
       reviewConfigHash: request.reviewConfigHash,
       workloadContext: request.routeDiagnosticWorkloadContext,
     },
     manifestDatabase,
-  )
-
-  return (
-    active
-    ?? getLastKnownGoodReviewServingSnapshotManifest(
-      {
-        projectId: request.projectId as string,
-        reviewConfigHash: request.reviewConfigHash,
-        workloadContext: request.routeDiagnosticWorkloadContext,
-      },
-      manifestDatabase,
-    )
   )
 }
 
