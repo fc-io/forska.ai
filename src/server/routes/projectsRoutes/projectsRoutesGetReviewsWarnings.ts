@@ -39,28 +39,22 @@ const getReviewWarningsWorkloadContext = (projectId: string, operation: string):
   }
 }
 
-const getEnabledPromptCount = async (projectId: string): Promise<number> => {
-  const rows = await getApiReadOnlyAppDatabaseService().queryJson<{count: number}>(
+const getReviewWarningsScopeState = async (projectId: string) => {
+  const [state] = await getApiReadOnlyAppDatabaseService().queryJson<{
+    enabledPromptCount: number
+    hasAnyArticlesInScope: boolean
+  }>(
     `
-    SELECT COUNT(*) AS count
-    FROM app.project_prompt project_prompt
-    INNER JOIN app.prompt prompt
-      ON prompt.id = project_prompt.prompt_id
-    WHERE project_prompt.project_id = '${escapeSqlString(projectId)}'
-      AND project_prompt.enabled = TRUE
-      AND NOT project_prompt.archived
-      AND COALESCE(prompt.archived, FALSE) = FALSE
-  `,
-    getReviewWarningsWorkloadContext(projectId, 'enabledPromptCount'),
-  )
-
-  return Number(rows[0]?.count ?? 0)
-}
-
-const getHasArticlesInScope = async (projectId: string): Promise<boolean> => {
-  const rows = await getApiReadOnlyAppDatabaseService().queryJson<{articleId: string}>(
-    `
-    WITH scoped_article AS (
+    WITH enabled_prompt AS (
+      SELECT COUNT(*) AS enabledPromptCount
+      FROM app.project_prompt project_prompt
+      INNER JOIN app.prompt prompt
+        ON prompt.id = project_prompt.prompt_id
+      WHERE project_prompt.project_id = '${escapeSqlString(projectId)}'
+        AND project_prompt.enabled = TRUE
+        AND NOT project_prompt.archived
+        AND COALESCE(prompt.archived, FALSE) = FALSE
+    ), scoped_article AS (
       SELECT pa.article_id AS articleId
       FROM app.project_article pa
       INNER JOIN app.project p ON p.id = pa.project_id
@@ -78,14 +72,18 @@ const getHasArticlesInScope = async (projectId: string): Promise<boolean> => {
         AND (p.date_from IS NULL OR a.article_created_at >= p.date_from)
         AND (p.date_to IS NULL OR a.article_created_at <= p.date_to)
     )
-    SELECT articleId
-    FROM scoped_article
-    LIMIT 1
+    SELECT
+      CAST(enabled_prompt.enabledPromptCount AS INTEGER) AS enabledPromptCount,
+      EXISTS (SELECT 1 FROM scoped_article) AS hasAnyArticlesInScope
+    FROM enabled_prompt
   `,
-    getReviewWarningsWorkloadContext(projectId, 'articleScopeProbe'),
+    getReviewWarningsWorkloadContext(projectId, 'scopeState'),
   )
 
-  return rows.length > 0
+  return {
+    enabledPromptCount: Number(state?.enabledPromptCount ?? 0),
+    hasAnyArticlesInScope: state?.hasAnyArticlesInScope ?? false,
+  }
 }
 
 const getLatestTimestamp = (...values: Array<string | null>) => {
@@ -266,8 +264,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       routeDiagnosticWorkloadContext,
       reviewConfigHash,
     })
-    const enabledPromptCount = await getEnabledPromptCount(projectId)
-    const hasAnyArticlesInScope = await getHasArticlesInScope(projectId)
+    const {enabledPromptCount, hasAnyArticlesInScope} = await getReviewWarningsScopeState(projectId)
     const servingDiagnostics =
       warningSnapshot.diagnostics.diagnostics
       ?? (await getReviewServingDiagnostics({
