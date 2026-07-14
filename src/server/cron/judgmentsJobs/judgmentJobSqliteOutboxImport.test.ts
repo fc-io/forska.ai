@@ -1,4 +1,4 @@
-import {rmSync} from 'node:fs'
+import {readFileSync, rmSync} from 'node:fs'
 import {writeFile} from 'node:fs/promises'
 import {hostname} from 'node:os'
 import {join} from 'node:path'
@@ -48,6 +48,23 @@ const getLastJsonLine = (stdout: string) => {
 
   return lastLine
 }
+
+test('background sqlite importer uses bounded background DuckDB access', () => {
+  const source = readFileSync(
+    join(process.cwd(), 'src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts'),
+    'utf8',
+  )
+
+  expect(source).toContain('maxImportableJudgmentJobsPerScan = 100')
+  expect(source).toContain("routeOrJobKey: 'judgmentJob.sqliteBackgroundImport'")
+  expect(source).toContain("workloadClass: 'background.judgmentJob.sqliteImport'")
+  expect(source).not.toMatch(/getAppDatabaseService\(\)\.queryJson</)
+  expect(source).not.toMatch(/getAppDatabaseService\(\)\.run\(/)
+  expect(source).toContain('queryJsonBackground')
+  expect(source).toContain('runBackground')
+  expect(source).toContain('maxResultRows: maxImportableJudgmentJobsPerScan')
+  expect(source).toContain('maxResultRows: 1')
+})
 
 beforeAll(async () => {
   const [

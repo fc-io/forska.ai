@@ -13,6 +13,12 @@ import {
 const judgmentJobSqliteBackgroundImportLogger = createRateLimitedLogger({windowMs: 30_000})
 const isolatedImportFailureThreshold = 3
 const drainingRetentionPruneChunkSize = 1_000
+const maxImportableJudgmentJobsPerScan = 100
+const judgmentJobSqliteBackgroundImportWorkloadContext = {
+  fallbackIntent: 'reject' as const,
+  routeOrJobKey: 'judgmentJob.sqliteBackgroundImport',
+  workloadClass: 'background.judgmentJob.sqliteImport',
+}
 
 type ImportableJudgmentJobRow = {id: string; storageState?: string | null}
 type ImportableJudgmentJob = {id: string; storageState: string}
@@ -24,6 +30,23 @@ type BackgroundImportSummary = {
 }
 type BackgroundImportAttempt = {continueToNextJob: boolean; summary: BackgroundImportSummary}
 type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: number}
+
+const queryBackground = async <_T>(
+  statement: string,
+  workloadContext = judgmentJobSqliteBackgroundImportWorkloadContext,
+) => {
+  const database = getAppDatabaseService()
+  const queryJsonBackground = database.queryJsonBackground ?? database.queryJson
+
+  return queryJsonBackground<_T>(statement, workloadContext)
+}
+
+const runBackground = async (statement: string) => {
+  const database = getAppDatabaseService()
+  const runDatabaseBackground = database.runBackground ?? database.run
+
+  await runDatabaseBackground(statement, judgmentJobSqliteBackgroundImportWorkloadContext)
+}
 
 const normalizeImportableJudgmentJob = (row: ImportableJudgmentJobRow): ImportableJudgmentJob => {
   return {id: row.id, storageState: row.storageState ?? 'active'}
@@ -50,24 +73,29 @@ const getNormalizedImportableJudgmentJobs = (rows: ImportableJudgmentJobRow[]) =
 }
 
 const getImportableJudgmentJobs = async () => {
-  const trackedJobIds = getJudgmentJobSqliteJobIds().sort()
+  const trackedJobIds = getJudgmentJobSqliteJobIds().sort().slice(0, maxImportableJudgmentJobsPerScan)
 
   if (trackedJobIds.length === 0) {
-    const rows = await getAppDatabaseService().queryJson<ImportableJudgmentJobRow>(`
+    const rows = await queryBackground<ImportableJudgmentJobRow>(
+      `
       SELECT
         id,
         storage_state AS storageState
       FROM app.judgment_job
       WHERE (${getImportableJudgmentJobWhereSql()})
       ORDER BY CASE WHEN storage_state = 'draining' THEN 0 ELSE 1 END, id ASC
-    `)
+      LIMIT ${maxImportableJudgmentJobsPerScan}
+    `,
+      {...judgmentJobSqliteBackgroundImportWorkloadContext, maxResultRows: maxImportableJudgmentJobsPerScan},
+    )
 
     return getNormalizedImportableJudgmentJobs(rows)
   }
 
   const rows = await Promise.all(
     trackedJobIds.map(async (jobId) => {
-      const [row] = await getAppDatabaseService().queryJson<ImportableJudgmentJobRow>(`
+      const [row] = await queryBackground<ImportableJudgmentJobRow>(
+        `
         SELECT
           id,
           storage_state AS storageState
@@ -75,7 +103,9 @@ const getImportableJudgmentJobs = async () => {
         WHERE id = ${getSqlLiteral(jobId)}
           AND (${getImportableJudgmentJobWhereSql()})
         LIMIT 1
-      `)
+      `,
+        {...judgmentJobSqliteBackgroundImportWorkloadContext, maxResultRows: 1},
+      )
 
       return row ?? null
     }),
@@ -175,16 +205,19 @@ const runImportableJudgmentJob = async ({claimedBy, job}: {claimedBy: string; jo
 }
 
 const recordImportStart = async (jobId: string) => {
-  await getAppDatabaseService().run(`
+  await runBackground(
+    `
     UPDATE app.judgment_job
     SET last_import_started_at = current_timestamp,
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(jobId)}
-  `)
+  `,
+  )
 }
 
 const recordImportSuccess = async ({exitCode, jobId}: {exitCode: number; jobId: string}) => {
-  await getAppDatabaseService().run(`
+  await runBackground(
+    `
     UPDATE app.judgment_job
     SET last_import_completed_at = current_timestamp,
         last_import_error_at = NULL,
@@ -193,7 +226,8 @@ const recordImportSuccess = async ({exitCode, jobId}: {exitCode: number; jobId: 
         import_failure_count = 0,
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(jobId)}
-  `)
+  `,
+  )
 }
 
 const recordImportFailure = async ({
@@ -205,7 +239,8 @@ const recordImportFailure = async ({
   exitCode: number
   jobId: string
 }) => {
-  return getAppDatabaseService().queryJson<{importFailureCount: number; storageState: string}>(`
+  return queryBackground<{importFailureCount: number; storageState: string}>(
+    `
     UPDATE app.judgment_job
     SET last_import_error_at = current_timestamp,
         last_import_error = ${getSqlLiteral(errorMessage)},
@@ -230,7 +265,9 @@ const recordImportFailure = async ({
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(jobId)}
     RETURNING import_failure_count AS importFailureCount, storage_state AS storageState
-  `)
+  `,
+    {...judgmentJobSqliteBackgroundImportWorkloadContext, maxResultRows: 1},
+  )
 }
 
 const recordTransientImportFailure = async ({
@@ -242,7 +279,8 @@ const recordTransientImportFailure = async ({
   exitCode: number
   jobId: string
 }) => {
-  return getAppDatabaseService().queryJson<{importFailureCount: number; storageState: string}>(`
+  return queryBackground<{importFailureCount: number; storageState: string}>(
+    `
     UPDATE app.judgment_job
     SET last_import_error_at = current_timestamp,
         last_import_error = ${getSqlLiteral(errorMessage)},
@@ -250,7 +288,9 @@ const recordTransientImportFailure = async ({
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(jobId)}
     RETURNING import_failure_count AS importFailureCount, storage_state AS storageState
-  `)
+  `,
+    {...judgmentJobSqliteBackgroundImportWorkloadContext, maxResultRows: 1},
+  )
 }
 
 const runJudgmentJobSqliteBackgroundImportAttempt = async ({
