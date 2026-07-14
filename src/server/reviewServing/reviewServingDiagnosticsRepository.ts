@@ -8,7 +8,6 @@ import {
   isReviewServingProjectionComponent,
   type ReviewServingProjectionComponent,
   type ReviewServingSearchAvailability,
-  type ReviewServingSnapshotStatus,
 } from './reviewServingContracts.ts'
 import {defaultReviewServingDirtyWorkStaleClaimSeconds} from './reviewServingDirtyWorkService.ts'
 import {getReviewServingOptionalComponentAvailability} from './reviewServingSnapshotPromotionService.ts'
@@ -88,33 +87,55 @@ type ActiveSnapshotRow = {
   updatedAt: string | null
 }
 
-type SnapshotStatusCountRow = {
-  invalidCandidateCount: number | string | null
-  snapshotCount: number
-  snapshotStatus: ReviewServingSnapshotStatus
-}
-
-type CountStateRow = {
-  completedCount: number
-  failedCount: number
-  oldestQueuedAt: string | null
-  pendingCount: number
-  runningCount: number
-  updatedAt: string | null
-}
-
-type RebuildChunkStateRow = CountStateRow & {
-  blockedQueuedCount: number
-  blockedOverBudgetCount: number
-  claimableCount: number
-  expiredLeaseCount: number
-  oldestClaimableQueuedAt: string | null
-  quarantinedCount: number
-}
-
 type QuarantineStateRow = {quarantinedOutboxCount: number; retryableOutboxCount: number; unresolvedOutboxCount: number}
 
 type QuarantinedCursorCountRow = {quarantinedCursorCount: number}
+
+type DiagnosticsSummaryRow = {
+  activeSnapshotComponentStateJson: unknown
+  activeSnapshotLastKnownGoodSnapshotId: string | null
+  activeSnapshotOptionalComponentsJson: unknown
+  activeSnapshotSnapshotId: string | null
+  activeSnapshotUpdatedAt: string | null
+  dirtyWorkCompletedCount: number
+  dirtyWorkFailedCount: number
+  dirtyWorkOldestQueuedAt: string | null
+  dirtyWorkPendingCount: number
+  dirtyWorkRunningCount: number
+  dirtyWorkUpdatedAt: string | null
+  oldestBarrierOutboxId: string | null
+  oldestBarrierSourceHighWaterMark: number | null
+  oldestBarrierSourcePartition: string | null
+  oldestBarrierStatus: string | null
+  quarantinedCursorCount: number
+  quarantinedOutboxCount: number
+  rebuildChunkBlockedOverBudgetCount: number
+  rebuildChunkBlockedQueuedCount: number
+  rebuildChunkClaimableCount: number
+  rebuildChunkCompletedCount: number
+  rebuildChunkExpiredLeaseCount: number
+  rebuildChunkFailedCount: number
+  rebuildChunkOldestClaimableQueuedAt: string | null
+  rebuildChunkOldestQueuedAt: string | null
+  rebuildChunkPendingCount: number
+  rebuildChunkQuarantinedCount: number
+  rebuildChunkRunningCount: number
+  rebuildChunkUpdatedAt: string | null
+  retryableOutboxCount: number
+  snapshotActiveCount: number
+  snapshotCandidateCount: number
+  snapshotFailedCount: number
+  snapshotInvalidCandidateCount: number
+  snapshotRetiredCount: number
+  unresolvedOutboxCount: number
+}
+
+type OldestBarrierRow = {
+  outboxId: string | null
+  sourceHighWaterMark: number | null
+  sourcePartition: string | null
+  status: string | null
+}
 
 type SnapshotComponentStateEntry = {component: ReviewServingProjectionComponent}
 
@@ -272,42 +293,6 @@ const queryEffect = <T>(
   })
 }
 
-const getCountState = (row: CountStateRow | undefined): ReviewServingDiagnosticsCountState => {
-  return row === undefined
-    ? emptyCountState
-    : {
-        completedCount: Number(row.completedCount),
-        failedCount: Number(row.failedCount),
-        oldestQueuedAt: row.oldestQueuedAt,
-        pendingCount: Number(row.pendingCount),
-        runningCount: Number(row.runningCount),
-        updatedAt: row.updatedAt,
-      }
-}
-
-const getRebuildChunkState = (row: RebuildChunkStateRow | undefined): ReviewServingDiagnosticsRebuildChunkState => {
-  return row === undefined
-    ? emptyRebuildChunkState
-    : {
-        ...getCountState(row),
-        blockedQueuedCount: Number(row.blockedQueuedCount),
-        blockedOverBudgetCount: Number(row.blockedOverBudgetCount),
-        claimableCount: Number(row.claimableCount),
-        expiredLeaseCount: Number(row.expiredLeaseCount),
-        oldestClaimableQueuedAt: row.oldestClaimableQueuedAt,
-        quarantinedCount: Number(row.quarantinedCount),
-      }
-}
-
-const getSnapshotStatusCounts = (rows: readonly SnapshotStatusCountRow[]) => {
-  return rows.reduce<Record<ReviewServingSnapshotStatus, number>>(
-    (counts, row) => {
-      return {...counts, [row.snapshotStatus]: Number(row.snapshotCount)}
-    },
-    {active: 0, candidate: 0, failed: 0, retired: 0},
-  )
-}
-
 const getOptionalComponents = (optionalComponentsJson: unknown) => {
   const parsed = getJsonValue(optionalComponentsJson)
 
@@ -373,26 +358,6 @@ const getSearchDiagnostics = (activeSnapshot: ActiveSnapshotRow | undefined): Re
   }
 }
 
-const getSnapshotDiagnostics = (
-  activeSnapshot: ActiveSnapshotRow | undefined,
-  snapshotStatusCounts: readonly SnapshotStatusCountRow[],
-): ReviewServingDiagnostics['snapshot'] => {
-  const counts = getSnapshotStatusCounts(snapshotStatusCounts)
-
-  return {
-    activeCount: counts.active,
-    activeSnapshotId: activeSnapshot?.snapshotId ?? null,
-    activeUpdatedAt: activeSnapshot?.updatedAt ?? null,
-    candidateCount: counts.candidate,
-    invalidCandidateCount: snapshotStatusCounts.reduce((count, row) => {
-      return count + Number(row.invalidCandidateCount ?? 0)
-    }, 0),
-    failedCount: counts.failed,
-    lastKnownGoodSnapshotId: activeSnapshot?.lastKnownGoodSnapshotId ?? null,
-    retiredCount: counts.retired,
-  }
-}
-
 const getQuarantineDiagnostics = (input: {
   oldestBarrier: ReviewServingDiagnosticsQuarantineBarrier | undefined
   quarantineState: QuarantineStateRow | undefined
@@ -409,38 +374,44 @@ const getQuarantineDiagnostics = (input: {
   }
 }
 
-const getActiveSnapshotRowsEffect = (
+const getDiagnosticsSummaryRowsEffect = (
   input: ReviewServingDiagnosticsInput,
   database: ReviewServingDiagnosticsDatabase,
 ) => {
-  return queryEffect<ActiveSnapshotRow>(
-    database,
-    `
-      SELECT
-        snapshot_id AS snapshotId,
-        last_known_good_snapshot_id AS lastKnownGoodSnapshotId,
-        optional_components_json AS optionalComponentsJson,
-        component_state_json AS componentStateJson,
-        updated_at AS updatedAt
-      FROM app.review_serving_snapshot_manifest
-      WHERE project_id = ${getSqlLiteral(input.projectId)}
-        ${getReviewConfigPredicate(input.reviewConfigHash)}
-        AND snapshot_status = 'active'
-      ORDER BY activated_at DESC NULLS LAST, updated_at DESC
-      LIMIT 1
-    `,
-    input.workloadContext,
-  )
-}
+  const now = input.now ?? new Date()
+  const retryableDirtyWorkPredicate = `updated_at <= ${getDiagnosticsTimestampLiteral(now)} - INTERVAL '${defaultReviewServingDirtyWorkStaleClaimSeconds} seconds'`
+  const staleLeasePredicate = `
+    visible_chunk.status = 'running'
+    AND (
+      visible_chunk.lease_expires_at IS NULL
+      OR visible_chunk.lease_expires_at <= ${getDiagnosticsTimestampLiteral(now)}
+    )
+  `
+  const queuedPredicate = `
+    visible_chunk.status IN ('pending', 'failed')
+    OR (${staleLeasePredicate})
+  `
+  const claimablePredicate = getReviewServingRebuildChunkClaimPredicate({now}, 'visible_chunk')
+  const partitions = getProjectSourcePartitions(input.projectId)
 
-const getSnapshotStatusCountRowsEffect = (
-  input: ReviewServingDiagnosticsInput,
-  database: ReviewServingDiagnosticsDatabase,
-) => {
-  return queryEffect<SnapshotStatusCountRow>(
+  return queryEffect<DiagnosticsSummaryRow>(
     database,
     `
-      WITH snapshot_candidates AS (
+      WITH active_snapshot AS (
+        SELECT
+          snapshot_id AS snapshotId,
+          last_known_good_snapshot_id AS lastKnownGoodSnapshotId,
+          optional_components_json AS optionalComponentsJson,
+          component_state_json AS componentStateJson,
+          updated_at AS updatedAt
+        FROM app.review_serving_snapshot_manifest
+        WHERE project_id = ${getSqlLiteral(input.projectId)}
+          ${getReviewConfigPredicate(input.reviewConfigHash)}
+          AND snapshot_status = 'active'
+        ORDER BY activated_at DESC NULLS LAST, updated_at DESC
+        LIMIT 1
+      ),
+      snapshot_candidates AS (
         SELECT *
         FROM app.review_serving_snapshot_manifest
         WHERE project_id = ${getSqlLiteral(input.projectId)}
@@ -511,68 +482,32 @@ const getSnapshotStatusCountRowsEffect = (
         SELECT snapshot_id FROM invalid_required_state_candidate
         UNION
         SELECT snapshot_id FROM invalid_optional_state_candidate
-      )
-      SELECT
-        snapshot_status AS snapshotStatus,
-        CAST(COUNT(*) AS INTEGER) AS snapshotCount,
-        CAST(COUNT(*) FILTER (
-          WHERE snapshot_status = 'candidate'
-            AND snapshot.snapshot_id IN (SELECT snapshot_id FROM invalid_candidate)
-        ) AS INTEGER) AS invalidCandidateCount
-      FROM app.review_serving_snapshot_manifest snapshot
-      WHERE snapshot.project_id = ${getSqlLiteral(input.projectId)}
-        ${getReviewConfigPredicate(input.reviewConfigHash)}
-      GROUP BY snapshot_status
-    `,
-    input.workloadContext,
-  )
-}
-
-const getDirtyWorkRowsEffect = (input: ReviewServingDiagnosticsInput, database: ReviewServingDiagnosticsDatabase) => {
-  const now = input.now ?? new Date()
-  const retryableDirtyWorkPredicate = `updated_at <= ${getDiagnosticsTimestampLiteral(now)} - INTERVAL '${defaultReviewServingDirtyWorkStaleClaimSeconds} seconds'`
-
-  return queryEffect<CountStateRow>(
-    database,
-    `
-      SELECT
-        CAST(COUNT(*) FILTER (
-          WHERE status = 'pending' OR (status IN ('failed', 'running') AND ${retryableDirtyWorkPredicate})
-        ) AS INTEGER) AS pendingCount,
-        CAST(COUNT(*) FILTER (WHERE status = 'running' AND NOT (${retryableDirtyWorkPredicate})) AS INTEGER) AS runningCount,
-        CAST(COUNT(*) FILTER (WHERE status = 'failed' AND NOT (${retryableDirtyWorkPredicate})) AS INTEGER) AS failedCount,
-        CAST(COUNT(*) FILTER (WHERE status = 'completed') AS INTEGER) AS completedCount,
-        MIN(created_at) FILTER (WHERE status IN ('pending', 'failed')) AS oldestQueuedAt,
-        MAX(updated_at) FILTER (WHERE status IN ('running', 'completed')) AS updatedAt
-      FROM app.review_serving_dirty_work
-      WHERE project_id = ${getSqlLiteral(input.projectId)}
-    `,
-    input.workloadContext,
-  )
-}
-
-const getRebuildChunkRowsEffect = (
-  input: ReviewServingDiagnosticsInput,
-  database: ReviewServingDiagnosticsDatabase,
-) => {
-  const now = input.now ?? new Date()
-  const staleLeasePredicate = `
-    visible_chunk.status = 'running'
-    AND (
-      visible_chunk.lease_expires_at IS NULL
-      OR visible_chunk.lease_expires_at <= ${getDiagnosticsTimestampLiteral(now)}
-    )
-  `
-  const queuedPredicate = `
-    visible_chunk.status IN ('pending', 'failed')
-    OR (${staleLeasePredicate})
-  `
-  const claimablePredicate = getReviewServingRebuildChunkClaimPredicate({now}, 'visible_chunk')
-
-  return queryEffect<RebuildChunkStateRow>(
-    database,
-    `
-      WITH latest_request AS (
+      ), snapshot_status_counts AS (
+        SELECT
+          CAST(COUNT(*) FILTER (WHERE snapshot_status = 'active') AS INTEGER) AS activeCount,
+          CAST(COUNT(*) FILTER (WHERE snapshot_status = 'candidate') AS INTEGER) AS candidateCount,
+          CAST(COUNT(*) FILTER (WHERE snapshot_status = 'failed') AS INTEGER) AS failedCount,
+          CAST(COUNT(*) FILTER (WHERE snapshot_status = 'retired') AS INTEGER) AS retiredCount,
+          CAST(COUNT(*) FILTER (
+            WHERE snapshot_status = 'candidate'
+              AND snapshot.snapshot_id IN (SELECT snapshot_id FROM invalid_candidate)
+          ) AS INTEGER) AS invalidCandidateCount
+        FROM app.review_serving_snapshot_manifest snapshot
+        WHERE snapshot.project_id = ${getSqlLiteral(input.projectId)}
+          ${getReviewConfigPredicate(input.reviewConfigHash)}
+      ), dirty_work AS (
+        SELECT
+          CAST(COUNT(*) FILTER (
+            WHERE status = 'pending' OR (status IN ('failed', 'running') AND ${retryableDirtyWorkPredicate})
+          ) AS INTEGER) AS pendingCount,
+          CAST(COUNT(*) FILTER (WHERE status = 'running' AND NOT (${retryableDirtyWorkPredicate})) AS INTEGER) AS runningCount,
+          CAST(COUNT(*) FILTER (WHERE status = 'failed' AND NOT (${retryableDirtyWorkPredicate})) AS INTEGER) AS failedCount,
+          CAST(COUNT(*) FILTER (WHERE status = 'completed') AS INTEGER) AS completedCount,
+          MIN(created_at) FILTER (WHERE status IN ('pending', 'failed')) AS oldestQueuedAt,
+          MAX(updated_at) FILTER (WHERE status IN ('running', 'completed')) AS updatedAt
+        FROM app.review_serving_dirty_work
+        WHERE project_id = ${getSqlLiteral(input.projectId)}
+      ), latest_request AS (
         SELECT request_id, admission_state, status
         FROM app.review_rebuild_request
         WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
@@ -582,8 +517,7 @@ const getRebuildChunkRowsEffect = (
           created_at DESC,
           request_id DESC
         LIMIT 1
-      ),
-      visible_chunk AS (
+      ), visible_chunk AS (
         SELECT chunk.*
         FROM app.review_rebuild_chunk_manifest chunk
         LEFT JOIN latest_request ON TRUE
@@ -593,15 +527,13 @@ const getRebuildChunkRowsEffect = (
             OR chunk.request_id IS NULL
             OR chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
           )
-      ),
-      classified_chunk AS (
+      ), classified_chunk AS (
         SELECT
           visible_chunk.*,
           CASE WHEN (${queuedPredicate}) THEN 1 ELSE 0 END AS queued,
           CASE WHEN (${claimablePredicate}) THEN 1 ELSE 0 END AS claimable
         FROM visible_chunk
-      ),
-      terminal_request AS (
+      ), terminal_request AS (
         SELECT CAST(COUNT(*) AS INTEGER) AS failed_count
         FROM latest_request
         WHERE latest_request.status IN ('failed', 'quarantined')
@@ -611,114 +543,204 @@ const getRebuildChunkRowsEffect = (
             WHERE classified_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
               AND classified_chunk.claimable = 1
           )
+      ), rebuild_chunk AS (
+        SELECT
+          CAST(COUNT(*) FILTER (WHERE classified_chunk.status IN ('pending', 'failed')) AS INTEGER) AS pendingCount,
+          CAST(COUNT(*) FILTER (WHERE classified_chunk.status = 'running') AS INTEGER) AS runningCount,
+          COALESCE((SELECT failed_count FROM terminal_request), 0) AS failedCount,
+          CAST(COUNT(*) FILTER (WHERE classified_chunk.status = 'completed') AS INTEGER) AS completedCount,
+          CAST(COUNT(*) FILTER (WHERE classified_chunk.claimable = 1) AS INTEGER) AS claimableCount,
+          CAST(COUNT(*) FILTER (WHERE classified_chunk.queued = 1 AND classified_chunk.claimable = 0) AS INTEGER) AS blockedQueuedCount,
+          CAST(COUNT(*) FILTER (
+            WHERE classified_chunk.status = 'blocked_over_budget'
+              AND (
+                latest_request.request_id IS NULL
+                OR (
+                  classified_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
+                  AND latest_request.status IN ('blocked_over_budget', 'failed')
+                  AND latest_request.admission_state = 'blocked_over_budget'
+                )
+              )
+          ) AS INTEGER) AS blockedOverBudgetCount,
+          CAST(COUNT(*) FILTER (
+            WHERE classified_chunk.status = 'quarantined'
+              AND (
+                latest_request.request_id IS NULL
+                OR (
+                  classified_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
+                  AND latest_request.status IN ('quarantined', 'failed')
+                )
+              )
+          ) AS INTEGER) AS quarantinedCount,
+          CAST(COUNT(*) FILTER (
+            WHERE classified_chunk.status = 'running'
+              AND (
+                classified_chunk.lease_expires_at IS NULL
+                OR classified_chunk.lease_expires_at <= ${getDiagnosticsTimestampLiteral(now)}
+              )
+          ) AS INTEGER) AS expiredLeaseCount,
+          MIN(classified_chunk.created_at) FILTER (WHERE classified_chunk.queued = 1) AS oldestQueuedAt,
+          MIN(classified_chunk.created_at) FILTER (WHERE classified_chunk.claimable = 1) AS oldestClaimableQueuedAt,
+          MAX(classified_chunk.updated_at) FILTER (WHERE classified_chunk.status IN ('running', 'completed')) AS updatedAt
+        FROM classified_chunk
+        LEFT JOIN latest_request ON TRUE
+      ), quarantine_state AS (
+        SELECT
+          CAST(COUNT(*) FILTER (WHERE status NOT IN (${getOutboxTerminalStatusList()})) AS INTEGER) AS unresolvedOutboxCount,
+          CAST(COUNT(*) FILTER (WHERE status = 'quarantined') AS INTEGER) AS quarantinedOutboxCount,
+          CAST(COUNT(*) FILTER (WHERE status NOT IN (${getOutboxTerminalStatusList()}) AND status <> 'quarantined') AS INTEGER) AS retryableOutboxCount
+        FROM app.review_source_change_outbox
+        WHERE source_partition IN (${getSqlStringList(partitions)})
+      ), oldest_barrier AS (
+        SELECT
+          outbox_id AS outboxId,
+          source_partition AS sourcePartition,
+          source_high_water_mark AS sourceHighWaterMark,
+          status
+        FROM app.review_source_change_outbox
+        WHERE source_partition IN (${getSqlStringList(partitions)})
+          AND status NOT IN (${getOutboxTerminalStatusList()})
+        ORDER BY source_high_water_mark ASC, created_at ASC, outbox_id ASC
+        LIMIT 1
+      ), quarantined_cursor AS (
+        SELECT CAST(COUNT(*) AS INTEGER) AS quarantinedCursorCount
+        FROM app.review_delta_reconciliation_cursor
+        WHERE source_partition IN (${getSqlStringList(partitions)})
+          AND (status = 'quarantined' OR quarantined_at IS NOT NULL)
       )
       SELECT
-        CAST(COUNT(*) FILTER (WHERE classified_chunk.status IN ('pending', 'failed')) AS INTEGER) AS pendingCount,
-        CAST(COUNT(*) FILTER (WHERE classified_chunk.status = 'running') AS INTEGER) AS runningCount,
-        COALESCE((SELECT failed_count FROM terminal_request), 0) AS failedCount,
-        CAST(COUNT(*) FILTER (WHERE classified_chunk.status = 'completed') AS INTEGER) AS completedCount,
-        CAST(COUNT(*) FILTER (WHERE classified_chunk.claimable = 1) AS INTEGER) AS claimableCount,
-        CAST(COUNT(*) FILTER (WHERE classified_chunk.queued = 1 AND classified_chunk.claimable = 0) AS INTEGER) AS blockedQueuedCount,
-        CAST(COUNT(*) FILTER (
-          WHERE classified_chunk.status = 'blocked_over_budget'
-            AND (
-              latest_request.request_id IS NULL
-              OR (
-                classified_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
-                AND latest_request.status IN ('blocked_over_budget', 'failed')
-                AND latest_request.admission_state = 'blocked_over_budget'
-              )
-            )
-        ) AS INTEGER) AS blockedOverBudgetCount,
-        CAST(COUNT(*) FILTER (
-          WHERE classified_chunk.status = 'quarantined'
-            AND (
-              latest_request.request_id IS NULL
-              OR (
-                classified_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
-                AND latest_request.status IN ('quarantined', 'failed')
-              )
-            )
-        ) AS INTEGER) AS quarantinedCount,
-        CAST(COUNT(*) FILTER (
-          WHERE classified_chunk.status = 'running'
-            AND (
-              classified_chunk.lease_expires_at IS NULL
-              OR classified_chunk.lease_expires_at <= ${getDiagnosticsTimestampLiteral(now)}
-            )
-        ) AS INTEGER) AS expiredLeaseCount,
-        MIN(classified_chunk.created_at) FILTER (
-          WHERE classified_chunk.queued = 1
-        ) AS oldestQueuedAt,
-        MIN(classified_chunk.created_at) FILTER (
-          WHERE classified_chunk.claimable = 1
-        ) AS oldestClaimableQueuedAt,
-        MAX(classified_chunk.updated_at) FILTER (WHERE classified_chunk.status IN ('running', 'completed')) AS updatedAt
-      FROM classified_chunk
-      LEFT JOIN latest_request ON TRUE
+        active_snapshot.snapshotId AS activeSnapshotSnapshotId,
+        active_snapshot.lastKnownGoodSnapshotId AS activeSnapshotLastKnownGoodSnapshotId,
+        active_snapshot.optionalComponentsJson AS activeSnapshotOptionalComponentsJson,
+        active_snapshot.componentStateJson AS activeSnapshotComponentStateJson,
+        active_snapshot.updatedAt AS activeSnapshotUpdatedAt,
+        snapshot_status_counts.activeCount AS snapshotActiveCount,
+        snapshot_status_counts.candidateCount AS snapshotCandidateCount,
+        snapshot_status_counts.failedCount AS snapshotFailedCount,
+        snapshot_status_counts.retiredCount AS snapshotRetiredCount,
+        snapshot_status_counts.invalidCandidateCount AS snapshotInvalidCandidateCount,
+        dirty_work.pendingCount AS dirtyWorkPendingCount,
+        dirty_work.runningCount AS dirtyWorkRunningCount,
+        dirty_work.failedCount AS dirtyWorkFailedCount,
+        dirty_work.completedCount AS dirtyWorkCompletedCount,
+        dirty_work.oldestQueuedAt AS dirtyWorkOldestQueuedAt,
+        dirty_work.updatedAt AS dirtyWorkUpdatedAt,
+        rebuild_chunk.pendingCount AS rebuildChunkPendingCount,
+        rebuild_chunk.runningCount AS rebuildChunkRunningCount,
+        rebuild_chunk.failedCount AS rebuildChunkFailedCount,
+        rebuild_chunk.completedCount AS rebuildChunkCompletedCount,
+        rebuild_chunk.claimableCount AS rebuildChunkClaimableCount,
+        rebuild_chunk.blockedQueuedCount AS rebuildChunkBlockedQueuedCount,
+        rebuild_chunk.blockedOverBudgetCount AS rebuildChunkBlockedOverBudgetCount,
+        rebuild_chunk.quarantinedCount AS rebuildChunkQuarantinedCount,
+        rebuild_chunk.expiredLeaseCount AS rebuildChunkExpiredLeaseCount,
+        rebuild_chunk.oldestQueuedAt AS rebuildChunkOldestQueuedAt,
+        rebuild_chunk.oldestClaimableQueuedAt AS rebuildChunkOldestClaimableQueuedAt,
+        rebuild_chunk.updatedAt AS rebuildChunkUpdatedAt,
+        quarantine_state.unresolvedOutboxCount AS unresolvedOutboxCount,
+        quarantine_state.quarantinedOutboxCount AS quarantinedOutboxCount,
+        quarantine_state.retryableOutboxCount AS retryableOutboxCount,
+        oldest_barrier.outboxId AS oldestBarrierOutboxId,
+        oldest_barrier.sourcePartition AS oldestBarrierSourcePartition,
+        oldest_barrier.sourceHighWaterMark AS oldestBarrierSourceHighWaterMark,
+        oldest_barrier.status AS oldestBarrierStatus,
+        quarantined_cursor.quarantinedCursorCount AS quarantinedCursorCount
+      FROM snapshot_status_counts
+      CROSS JOIN dirty_work
+      CROSS JOIN rebuild_chunk
+      CROSS JOIN quarantine_state
+      CROSS JOIN quarantined_cursor
+      LEFT JOIN active_snapshot ON TRUE
+      LEFT JOIN oldest_barrier ON TRUE
     `,
     input.workloadContext,
   )
 }
 
-const getQuarantineRowsEffect = (input: ReviewServingDiagnosticsInput, database: ReviewServingDiagnosticsDatabase) => {
-  const partitions = getProjectSourcePartitions(input.projectId)
+const getDiagnosticsCountState = (
+  row: DiagnosticsSummaryRow | undefined,
+  prefix: 'dirtyWork' | 'rebuildChunk',
+): ReviewServingDiagnosticsCountState => {
+  if (row === undefined) {
+    return emptyCountState
+  }
 
-  return queryEffect<QuarantineStateRow>(
-    database,
-    `
-      SELECT
-        CAST(COUNT(*) FILTER (WHERE status NOT IN (${getOutboxTerminalStatusList()})) AS INTEGER) AS unresolvedOutboxCount,
-        CAST(COUNT(*) FILTER (WHERE status = 'quarantined') AS INTEGER) AS quarantinedOutboxCount,
-        CAST(COUNT(*) FILTER (WHERE status NOT IN (${getOutboxTerminalStatusList()}) AND status <> 'quarantined') AS INTEGER) AS retryableOutboxCount
-      FROM app.review_source_change_outbox
-      WHERE source_partition IN (${getSqlStringList(partitions)})
-    `,
-    input.workloadContext,
-  )
+  return {
+    completedCount: Number(row[`${prefix}CompletedCount`]),
+    failedCount: Number(row[`${prefix}FailedCount`]),
+    oldestQueuedAt: row[`${prefix}OldestQueuedAt`],
+    pendingCount: Number(row[`${prefix}PendingCount`]),
+    runningCount: Number(row[`${prefix}RunningCount`]),
+    updatedAt: row[`${prefix}UpdatedAt`],
+  }
 }
 
-const getOldestBarrierRowsEffect = (
-  input: ReviewServingDiagnosticsInput,
-  database: ReviewServingDiagnosticsDatabase,
-) => {
-  const partitions = getProjectSourcePartitions(input.projectId)
-
-  return queryEffect<ReviewServingDiagnosticsQuarantineBarrier>(
-    database,
-    `
-      SELECT
-        outbox_id AS outboxId,
-        source_partition AS sourcePartition,
-        source_high_water_mark AS sourceHighWaterMark,
-        status
-      FROM app.review_source_change_outbox
-      WHERE source_partition IN (${getSqlStringList(partitions)})
-        AND status NOT IN (${getOutboxTerminalStatusList()})
-      ORDER BY source_high_water_mark ASC, created_at ASC, outbox_id ASC
-      LIMIT 1
-    `,
-    input.workloadContext,
-  )
+const getDiagnosticsRebuildChunkState = (row: DiagnosticsSummaryRow | undefined) => {
+  return row === undefined
+    ? emptyRebuildChunkState
+    : {
+        ...getDiagnosticsCountState(row, 'rebuildChunk'),
+        blockedQueuedCount: Number(row.rebuildChunkBlockedQueuedCount),
+        blockedOverBudgetCount: Number(row.rebuildChunkBlockedOverBudgetCount),
+        claimableCount: Number(row.rebuildChunkClaimableCount),
+        expiredLeaseCount: Number(row.rebuildChunkExpiredLeaseCount),
+        oldestClaimableQueuedAt: row.rebuildChunkOldestClaimableQueuedAt,
+        quarantinedCount: Number(row.rebuildChunkQuarantinedCount),
+      }
 }
 
-const getQuarantinedCursorRowsEffect = (
-  input: ReviewServingDiagnosticsInput,
-  database: ReviewServingDiagnosticsDatabase,
-) => {
-  const partitions = getProjectSourcePartitions(input.projectId)
+const getDiagnosticsActiveSnapshot = (row: DiagnosticsSummaryRow | undefined): ActiveSnapshotRow | undefined => {
+  return row === undefined || row.activeSnapshotSnapshotId === null
+    ? undefined
+    : {
+        componentStateJson: row.activeSnapshotComponentStateJson,
+        lastKnownGoodSnapshotId: row.activeSnapshotLastKnownGoodSnapshotId,
+        optionalComponentsJson: row.activeSnapshotOptionalComponentsJson,
+        snapshotId: row.activeSnapshotSnapshotId,
+        updatedAt: row.activeSnapshotUpdatedAt,
+      }
+}
 
-  return queryEffect<QuarantinedCursorCountRow>(
-    database,
-    `
-      SELECT
-        CAST(COUNT(*) AS INTEGER) AS quarantinedCursorCount
-      FROM app.review_delta_reconciliation_cursor
-      WHERE source_partition IN (${getSqlStringList(partitions)})
-        AND (status = 'quarantined' OR quarantined_at IS NOT NULL)
-    `,
-    input.workloadContext,
-  )
+const getDiagnosticsSnapshot = (row: DiagnosticsSummaryRow | undefined): ReviewServingDiagnostics['snapshot'] => {
+  const activeSnapshot = getDiagnosticsActiveSnapshot(row)
+
+  return {
+    activeCount: Number(row?.snapshotActiveCount ?? 0),
+    activeSnapshotId: activeSnapshot?.snapshotId ?? null,
+    activeUpdatedAt: activeSnapshot?.updatedAt ?? null,
+    candidateCount: Number(row?.snapshotCandidateCount ?? 0),
+    invalidCandidateCount: Number(row?.snapshotInvalidCandidateCount ?? 0),
+    failedCount: Number(row?.snapshotFailedCount ?? 0),
+    lastKnownGoodSnapshotId: activeSnapshot?.lastKnownGoodSnapshotId ?? null,
+    retiredCount: Number(row?.snapshotRetiredCount ?? 0),
+  }
+}
+
+const getDiagnosticsOldestBarrier = (row: DiagnosticsSummaryRow | undefined): OldestBarrierRow | undefined => {
+  return row === undefined || row.oldestBarrierOutboxId === null
+    ? undefined
+    : {
+        outboxId: row.oldestBarrierOutboxId,
+        sourceHighWaterMark: row.oldestBarrierSourceHighWaterMark,
+        sourcePartition: row.oldestBarrierSourcePartition,
+        status: row.oldestBarrierStatus,
+      }
+}
+
+const getDiagnosticsQuarantine = (row: DiagnosticsSummaryRow | undefined): ReviewServingDiagnostics['quarantine'] => {
+  return getQuarantineDiagnostics({
+    oldestBarrier: getDiagnosticsOldestBarrier(row) as ReviewServingDiagnosticsQuarantineBarrier | undefined,
+    quarantineState:
+      row === undefined
+        ? undefined
+        : {
+            quarantinedOutboxCount: Number(row.quarantinedOutboxCount),
+            retryableOutboxCount: Number(row.retryableOutboxCount),
+            unresolvedOutboxCount: Number(row.unresolvedOutboxCount),
+          },
+    quarantinedCursorCount:
+      row === undefined ? undefined : {quarantinedCursorCount: Number(row.quarantinedCursorCount)},
+  })
 }
 
 export const getReviewServingDiagnosticsEffect = (
@@ -726,16 +748,10 @@ export const getReviewServingDiagnosticsEffect = (
   database: ReviewServingDiagnosticsDatabase = getDiagnosticsDatabase(),
 ) => {
   return Effect.gen(function* () {
-    const activeSnapshots = yield* getActiveSnapshotRowsEffect(input, database)
-    const snapshotStatusCounts = yield* getSnapshotStatusCountRowsEffect(input, database)
-    const dirtyWorkRows = yield* getDirtyWorkRowsEffect(input, database)
-    const rebuildChunkRows = yield* getRebuildChunkRowsEffect(input, database)
-    const quarantineRows = yield* getQuarantineRowsEffect(input, database)
-    const barrierRows = yield* getOldestBarrierRowsEffect(input, database)
-    const cursorRows = yield* getQuarantinedCursorRowsEffect(input, database)
-    const activeSnapshot = activeSnapshots[0]
-    const dirtyWork = getCountState(dirtyWorkRows[0])
-    const rebuildChunks = getRebuildChunkState(rebuildChunkRows[0])
+    const [summaryRow] = yield* getDiagnosticsSummaryRowsEffect(input, database)
+    const activeSnapshot = getDiagnosticsActiveSnapshot(summaryRow)
+    const dirtyWork = getDiagnosticsCountState(summaryRow, 'dirtyWork')
+    const rebuildChunks = getDiagnosticsRebuildChunkState(summaryRow)
 
     return {
       dirtyWork,
@@ -746,15 +762,11 @@ export const getReviewServingDiagnosticsEffect = (
         requiredConsumerRole: 'maintenance-worker' as const,
       },
       projectId: input.projectId,
-      quarantine: getQuarantineDiagnostics({
-        oldestBarrier: barrierRows[0],
-        quarantinedCursorCount: cursorRows[0],
-        quarantineState: quarantineRows[0],
-      }),
+      quarantine: getDiagnosticsQuarantine(summaryRow),
       rebuildChunks,
       reviewConfigHash: input.reviewConfigHash ?? null,
       search: getSearchDiagnostics(activeSnapshot),
-      snapshot: getSnapshotDiagnostics(activeSnapshot, snapshotStatusCounts),
+      snapshot: getDiagnosticsSnapshot(summaryRow),
     }
   })
 }

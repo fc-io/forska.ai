@@ -11,6 +11,61 @@ const createDiagnosticsDatabase = () => {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
 
+      if (statement.includes('WITH active_snapshot AS')) {
+        return [
+          {
+            activeSnapshotComponentStateJson: {
+              optional: [
+                {baseGeneration: '1', component: 'search', patchWatermark: '7', projectionIdentity: 'search:project-1'},
+              ],
+              required: [
+                {
+                  baseGeneration: '1',
+                  component: 'display',
+                  patchWatermark: '7',
+                  projectionIdentity: 'display:project-1',
+                },
+              ],
+            },
+            activeSnapshotLastKnownGoodSnapshotId: 'snapshot-0',
+            activeSnapshotOptionalComponentsJson: ['search'],
+            activeSnapshotSnapshotId: 'snapshot-1',
+            activeSnapshotUpdatedAt: '2026-06-18T10:00:00.000Z',
+            dirtyWorkCompletedCount: 5,
+            dirtyWorkFailedCount: 1,
+            dirtyWorkOldestQueuedAt: '2026-06-18T09:00:00.000Z',
+            dirtyWorkPendingCount: 3,
+            dirtyWorkRunningCount: 2,
+            dirtyWorkUpdatedAt: '2026-06-18T10:01:00.000Z',
+            oldestBarrierOutboxId: 'outbox-1',
+            oldestBarrierSourceHighWaterMark: 4,
+            oldestBarrierSourcePartition: 'reviewChange:project-1',
+            oldestBarrierStatus: 'quarantined',
+            quarantinedCursorCount: 1,
+            quarantinedOutboxCount: 1,
+            rebuildChunkBlockedOverBudgetCount: 2,
+            rebuildChunkBlockedQueuedCount: 4,
+            rebuildChunkClaimableCount: 1,
+            rebuildChunkCompletedCount: 8,
+            rebuildChunkExpiredLeaseCount: 1,
+            rebuildChunkFailedCount: 0,
+            rebuildChunkOldestClaimableQueuedAt: '2026-06-18T08:30:00.000Z',
+            rebuildChunkOldestQueuedAt: '2026-06-18T08:00:00.000Z',
+            rebuildChunkPendingCount: 5,
+            rebuildChunkQuarantinedCount: 1,
+            rebuildChunkRunningCount: 2,
+            rebuildChunkUpdatedAt: '2026-06-18T10:02:00.000Z',
+            retryableOutboxCount: 2,
+            snapshotActiveCount: 1,
+            snapshotCandidateCount: 1,
+            snapshotFailedCount: 2,
+            snapshotInvalidCandidateCount: 1,
+            snapshotRetiredCount: 0,
+            unresolvedOutboxCount: 3,
+          },
+        ] as T[]
+      }
+
       if (statement.includes("snapshot_status = 'active'")) {
         return [
           {
@@ -212,13 +267,24 @@ test('review serving diagnostics query sequentially instead of fanning out owner
   expect(maxActiveQueryCount).toBe(1)
 })
 
+test('review serving diagnostics batch warning state into one owner read', async () => {
+  const {database, statements} = createDiagnosticsDatabase()
+
+  await getReviewServingDiagnostics(
+    {now: '2026-06-18T10:05:00.000Z', projectId: 'project-1', reviewConfigHash: 'review-config-1'},
+    database,
+  )
+
+  expect(statements).toHaveLength(1)
+})
+
 test('review serving diagnostics preserve project-wide snapshot status counts when review config is omitted', async () => {
   const {database, statements} = createDiagnosticsDatabase()
 
   await getReviewServingDiagnostics({now: '2026-06-18T10:05:00.000Z', projectId: 'project-1'}, database)
 
   const snapshotStatusStatement = statements.find((statement) => {
-    return statement.includes('GROUP BY snapshot_status')
+    return statement.includes('snapshot_status_counts AS')
   })
 
   expect(snapshotStatusStatement).toBeDefined()
