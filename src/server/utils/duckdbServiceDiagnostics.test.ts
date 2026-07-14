@@ -213,13 +213,7 @@ test('duckdb native statement diagnostics identify workload and connection witho
     severity: 'INFO',
   })
   expect(queryEnd).toMatchObject({
-    attrs: {
-      connectionRole: 'control',
-      operation: 'mainQuery',
-      phase: 'end',
-      progress: null,
-      progressSource: null,
-    },
+    attrs: {connectionRole: 'control', operation: 'mainQuery', phase: 'end', progress: null, progressSource: null},
     event: 'duckdb.statement.end',
     severity: 'INFO',
   })

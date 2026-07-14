@@ -15,5 +15,7 @@ export const getReviewServingProjectorPauseMarkerPath = (duckdbPath = getCurrent
 
 export const isReviewServingProjectorPaused = (duckdbPath = getCurrentDuckdbPath()) => {
   const normalizedDuckdbPath = getDuckdbPath({duckdbPath})
-  return normalizedDuckdbPath !== ':memory:' && existsSync(getReviewServingProjectorPauseMarkerPath(normalizedDuckdbPath))
+  return (
+    normalizedDuckdbPath !== ':memory:' && existsSync(getReviewServingProjectorPauseMarkerPath(normalizedDuckdbPath))
+  )
 }
