@@ -4,6 +4,7 @@ import {requestReviewServingV4Rebuild} from '../src/server/reviewServing/reviewS
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getMaintenanceWorkLeaseService} from '../src/server/services/maintenanceWorkLeaseService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
+import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 import {legacyDirtyRefreshAckValue, requireLegacyAdminAck} from './legacyAdminAck.ts'
 
 type CliOptions = {heartbeatMs: number | undefined; leaseMs: number; projectId: string | undefined; workerId: string}
@@ -145,38 +146,56 @@ export const requestReviewServingForDirtyRefreshClaim = async () => {
     return
   }
 
-  const options = getCliOptions()
-  const stateService = getProjectMartDirtyRefreshStateService()
-
-  try {
-    const claim = await claimProject({
-      leaseMs: options.leaseMs,
-      projectId: options.projectId,
-      workerId: options.workerId,
-    })
-
-    if (!claim) {
-      console.log(JSON.stringify({projectId: null, status: 'idle', workerId: options.workerId}))
-      return
-    }
-
-    const stopHeartbeat = startHeartbeat(claim, options.heartbeatMs ?? defaultHeartbeatMs, options.leaseMs)
+  await withDuckdbMaintenanceAccess('request review serving for dirty refresh claim', async () => {
+    const options = getCliOptions()
+    const stateService = getProjectMartDirtyRefreshStateService()
 
     try {
-      const dirtyArticles = await stateService.getDirtyArticlesForClaim({
-        claimedToken: claim.claimedToken,
-        lastCompletedToken: claim.lastCompletedToken,
-        projectId: claim.projectId,
-      })
-      const dirtyArticleIds = dirtyArticles.map((row) => {
-        return row.articleId
+      const claim = await claimProject({
+        leaseMs: options.leaseMs,
+        projectId: options.projectId,
+        workerId: options.workerId,
       })
 
-      if (dirtyArticleIds.length > 0) {
-        const request = await requestReviewServingV4Rebuild({
+      if (!claim) {
+        console.log(JSON.stringify({projectId: null, status: 'idle', workerId: options.workerId}))
+        return
+      }
+
+      const stopHeartbeat = startHeartbeat(claim, options.heartbeatMs ?? defaultHeartbeatMs, options.leaseMs)
+
+      try {
+        const dirtyArticles = await stateService.getDirtyArticlesForClaim({
+          claimedToken: claim.claimedToken,
+          lastCompletedToken: claim.lastCompletedToken,
           projectId: claim.projectId,
-          reason: 'requestReviewServingForDirtyRefreshClaim.dirtyRefreshClaim',
         })
+        const dirtyArticleIds = dirtyArticles.map((row) => {
+          return row.articleId
+        })
+
+        if (dirtyArticleIds.length > 0) {
+          const request = await requestReviewServingV4Rebuild({
+            projectId: claim.projectId,
+            reason: 'requestReviewServingForDirtyRefreshClaim.dirtyRefreshClaim',
+          })
+          await stateService.completeProjectRefresh({
+            completedToken: claim.claimedToken,
+            projectId: claim.projectId,
+            workerId: options.workerId,
+          })
+          console.log(
+            JSON.stringify({
+              claimedToken: claim.claimedToken,
+              projectId: claim.projectId,
+              requestId: request.requestId,
+              status: 'v4_rebuild_requested',
+              workerId: options.workerId,
+            }),
+          )
+          return
+        }
+
         await stateService.completeProjectRefresh({
           completedToken: claim.claimedToken,
           projectId: claim.projectId,
@@ -186,47 +205,35 @@ export const requestReviewServingForDirtyRefreshClaim = async () => {
           JSON.stringify({
             claimedToken: claim.claimedToken,
             projectId: claim.projectId,
-            requestId: request.requestId,
-            status: 'v4_rebuild_requested',
+            status: 'completed',
             workerId: options.workerId,
           }),
         )
-        return
-      }
+      } catch (error) {
+        const errorText = getErrorText(error)
 
-      await stateService.completeProjectRefresh({
-        completedToken: claim.claimedToken,
-        projectId: claim.projectId,
-        workerId: options.workerId,
-      })
-      console.log(
-        JSON.stringify({
-          claimedToken: claim.claimedToken,
-          projectId: claim.projectId,
-          status: 'completed',
-          workerId: options.workerId,
-        }),
-      )
-    } catch (error) {
-      const errorText = getErrorText(error)
-
-      await stateService.failProjectRefresh({error: errorText, projectId: claim.projectId, workerId: options.workerId})
-      console.log(
-        JSON.stringify({
-          claimedToken: claim.claimedToken,
+        await stateService.failProjectRefresh({
           error: errorText,
           projectId: claim.projectId,
-          status: 'failed',
           workerId: options.workerId,
-        }),
-      )
-      process.exitCode = 1
+        })
+        console.log(
+          JSON.stringify({
+            claimedToken: claim.claimedToken,
+            error: errorText,
+            projectId: claim.projectId,
+            status: 'failed',
+            workerId: options.workerId,
+          }),
+        )
+        process.exitCode = 1
+      } finally {
+        stopHeartbeat()
+      }
     } finally {
-      stopHeartbeat()
+      await getAppDatabaseService().close()
     }
-  } finally {
-    await getAppDatabaseService().close()
-  }
+  })
 }
 
 void requestReviewServingForDirtyRefreshClaim()

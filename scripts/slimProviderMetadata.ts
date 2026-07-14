@@ -6,6 +6,7 @@ import {getPersistedProviderModelMetadata} from '../src/server/providers/provide
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {normalizeProviderKind} from '../src/server/services/providerCatalog.ts'
+import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 
 const getConnectionUpdates = async () => {
   const rows = await getAppDatabaseService().queryJson<{configJson: unknown; id: string; providerKind: string | null}>(`
@@ -104,4 +105,4 @@ const run = async () => {
   )
 }
 
-await run()
+await withDuckdbMaintenanceAccess('slim provider metadata', run)
