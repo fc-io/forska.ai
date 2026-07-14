@@ -3149,6 +3149,7 @@ test('reviews warnings route reuses reader diagnostics instead of duplicate curr
   const source = await globalThis.Bun.file(new URL('./projectsRoutesGetReviewsWarnings.ts', import.meta.url)).text()
 
   expect(source).toContain('warningSnapshot.diagnostics.diagnostics')
+  expect(source).toContain('metadataOnly: true')
   expect(source).not.toContain('const [servingDiagnostics, warningSnapshot')
   expect(source).not.toContain('Promise.all([\n      readReviewServingRows')
 })

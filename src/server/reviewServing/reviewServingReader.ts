@@ -60,6 +60,7 @@ export type ReviewServingReaderRequest = {
   jobState?: ReviewServingBulkState | null
   limit: number
   listMode?: ReviewServingListMode | null
+  metadataOnly?: boolean
   namedCountKey?: NamedReviewFastCountKey | null
   projectId?: string | null
   queueKind?: string | null
@@ -916,6 +917,26 @@ export const readReviewServingRows = async <T>(
       manifest,
       reason: admission.reason === 'staleSnapshotRequired' ? 'manifestStatusRejected' : 'admissionRejected',
     })
+  }
+
+  if (request.metadataOnly) {
+    return {
+      contract,
+      diagnostics: getReaderDiagnostics({
+        admission: admission.diagnostics,
+        contractKey: contract.key,
+        diagnostics,
+        filterSignature,
+        manifest,
+        rejectionReason: null,
+      }),
+      getCursorForRow: () => {
+        return ''
+      },
+      rows: [],
+      sql: '',
+      status: 'accepted',
+    }
   }
 
   let sql: string

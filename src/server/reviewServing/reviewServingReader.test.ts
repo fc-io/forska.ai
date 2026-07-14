@@ -154,6 +154,34 @@ test('readReviewServingRows admits ready manifests and executes serving SQL only
   expect(reader.workloads[0]).toMatchObject({fallbackIntent: 'reject', routeOrJobKey: 'review.llm.rows'})
 })
 
+test('readReviewServingRows metadata-only probes preserve accepted diagnostics without row SQL', async () => {
+  const reader = createReaderDatabase()
+  const manifestDatabase = createManifestDatabase({
+    active: getSnapshotRow({
+      components: ['projectScope', 'posting', 'queue', 'summary'],
+      snapshotId: 'active-warning-snapshot',
+      status: 'active',
+    }),
+  })
+  const result = await readReviewServingRows(
+    {
+      allowStale: true,
+      contractKey: 'review.warning.snapshot',
+      limit: 1,
+      metadataOnly: true,
+      projectId: 'project-1',
+      reviewConfigHash: 'config-1',
+    },
+    {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase},
+  )
+
+  expect(result.status).toBe('accepted')
+  expect(result.status === 'accepted' ? result.rows : []).toEqual([])
+  expect(result.diagnostics.manifest).toMatchObject({snapshotId: 'active-warning-snapshot', status: 'active'})
+  expect(result.diagnostics.admission).not.toBe(null)
+  expect(reader.statements).toHaveLength(0)
+})
+
 test('readReviewServingRows rejects unsupported contracts before DuckDB execution', async () => {
   const reader = createReaderDatabase()
   const manifestDatabase = createManifestDatabase({

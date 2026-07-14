@@ -261,6 +261,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       contractKey: 'review.warning.snapshot',
       estimatedResultRows: 1,
       limit: 1,
+      metadataOnly: true,
       projectId,
       routeDiagnosticWorkloadContext,
       reviewConfigHash,
