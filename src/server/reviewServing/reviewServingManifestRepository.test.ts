@@ -2,6 +2,7 @@ import {expect, test} from 'bun:test'
 
 import {
   createCandidateReviewServingSnapshotManifest,
+  getActiveOrLastKnownGoodReviewServingSnapshotManifest,
   getActiveReviewServingSnapshotManifest,
   getLastKnownGoodReviewServingSnapshotManifest,
   getReviewServingProjectionIdentityManifest,
@@ -312,6 +313,25 @@ const createFakeManifestDatabase = (
       ) as T[]
     }
 
+    if (statement.includes("snapshot_status IN ('active', 'retired')")) {
+      return [...snapshots.values()]
+        .filter((snapshot) => {
+          return (
+            snapshot.projectId === (getWhereLiteral(statement, 'project_id') ?? '')
+            && (snapshot.status === 'active' || snapshot.status === 'retired')
+          )
+        })
+        .sort((left, right) => {
+          const statusOrder = Number(left.status !== 'active') - Number(right.status !== 'active')
+          const leftActivatedAt = left.activatedAt ?? left.updatedAt
+          const rightActivatedAt = right.activatedAt ?? right.updatedAt
+
+          return statusOrder === 0 ? rightActivatedAt.localeCompare(leftActivatedAt) : statusOrder
+        })
+        .slice(0, 1)
+        .map(getSnapshotQueryRow) as T[]
+    }
+
     if (statement.includes('snapshot_id =')) {
       const projectId = getWhereLiteral(statement, 'project_id') ?? 'project-1'
       const snapshotId = getWhereLiteral(statement, 'snapshot_id') ?? ''
@@ -523,6 +543,68 @@ test('failed candidate snapshot preserves active and last-known-good manifests',
   expect(active?.status).toBe('active')
   expect(lastKnownGood?.snapshotId).toBe('snapshot-lkg')
   expect(lastKnownGood?.status).toBe('retired')
+})
+
+test('active-or-last-known-good manifest selection uses one statement and prefers active', async () => {
+  const retiredSnapshot: FakeSnapshotRow = {
+    ...baseSnapshotInput,
+    activatedAt: '2026-06-16T11:00:00.000Z',
+    lastError: null,
+    lastKnownGoodSnapshotId: null,
+    optionalComponents: [],
+    requiredComponents: ['display'],
+    snapshotId: 'snapshot-retired',
+    status: 'retired',
+    updatedAt: '2026-06-16T11:00:00.000Z',
+    validationResult: null,
+  }
+  const activeSnapshot: FakeSnapshotRow = {
+    ...retiredSnapshot,
+    activatedAt: '2026-06-16T10:00:00.000Z',
+    snapshotId: 'snapshot-active',
+    status: 'active',
+    updatedAt: '2026-06-16T10:00:00.000Z',
+  }
+  const {database, statements} = createFakeManifestDatabase([retiredSnapshot, activeSnapshot])
+
+  const manifest = await getActiveOrLastKnownGoodReviewServingSnapshotManifest(
+    {projectId: 'project-1', reviewConfigHash: 'review-config-1'},
+    database,
+  )
+
+  expect(manifest?.snapshotId).toBe('snapshot-active')
+  expect(statements).toHaveLength(1)
+  expect(statements[0]).toContain("snapshot_status IN ('active', 'retired')")
+})
+
+test('active-or-last-known-good manifest selection returns the latest retired snapshot in one statement', async () => {
+  const olderSnapshot: FakeSnapshotRow = {
+    ...baseSnapshotInput,
+    activatedAt: '2026-06-16T09:00:00.000Z',
+    lastError: null,
+    lastKnownGoodSnapshotId: null,
+    optionalComponents: [],
+    requiredComponents: ['display'],
+    snapshotId: 'snapshot-older',
+    status: 'retired',
+    updatedAt: '2026-06-16T09:00:00.000Z',
+    validationResult: null,
+  }
+  const latestSnapshot: FakeSnapshotRow = {
+    ...olderSnapshot,
+    activatedAt: '2026-06-16T10:00:00.000Z',
+    snapshotId: 'snapshot-latest',
+    updatedAt: '2026-06-16T10:00:00.000Z',
+  }
+  const {database, statements} = createFakeManifestDatabase([olderSnapshot, latestSnapshot])
+
+  const manifest = await getActiveOrLastKnownGoodReviewServingSnapshotManifest(
+    {projectId: 'project-1', reviewConfigHash: 'review-config-1'},
+    database,
+  )
+
+  expect(manifest?.snapshotId).toBe('snapshot-latest')
+  expect(statements).toHaveLength(1)
 })
 
 test('promotion reports invalid candidates without mutating snapshot manifests', async () => {

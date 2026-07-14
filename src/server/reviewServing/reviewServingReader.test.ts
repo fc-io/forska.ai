@@ -87,6 +87,12 @@ const createManifestDatabase = (input: {active?: unknown; bySnapshot?: Record<st
         return getDiagnosticsRows(statement) as T[]
       }
 
+      if (statement.includes("snapshot_status IN ('active', 'retired')")) {
+        const snapshot = input.active ?? input.retired
+
+        return snapshot ? ([snapshot] as T[]) : []
+      }
+
       if (statement.includes("snapshot_status = 'active'")) {
         return input.active ? ([input.active] as T[]) : []
       }
