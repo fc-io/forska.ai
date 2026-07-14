@@ -206,3 +206,11 @@ test('package no longer exposes legacy mart refresh or large-rebuild worker scri
   expect(packageJson.scripts['db:duck:unquarantine-dirty-refresh-article']).toBeUndefined()
   expect(packageJson.scripts['db:duck:recover-dirty-refresh-claims']).toBeUndefined()
 })
+
+test('direct non-test DB scripts are explicitly isolated', () => {
+  expect(readSource('scripts/requestReviewServingForDirtyRefreshClaim.ts')).toContain('withDuckdbMaintenanceAccess')
+  expect(readSource('scripts/requestReviewServingForDirtyRefreshClaim.ts')).toContain('requireLegacyAdminAck')
+  expect(readSource('scripts/slimProviderMetadata.ts')).toContain('withDuckdbMaintenanceAccess')
+  expect(readSource('scripts/benchmarkDuckdbAppendLanes.ts')).toContain('DUCKDB_PATH = duckdbPath')
+  expect(readSource('scripts/benchmarkDuckdbAppendLanes.ts')).toContain('getTempDbPath')
+})
