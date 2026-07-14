@@ -1761,6 +1761,7 @@ test('single-job sqlite importer emits structured JSON success output', () => {
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
         const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
         const importModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts')
+        const scriptAccessModulePath = getModulePath('./src/server/utils/duckdbScriptAccess.ts')
         const scriptModulePath = getModulePath('./scripts/runJudgmentJobSqliteSingleJobImport.ts')
 
         process.argv = [
@@ -1803,6 +1804,14 @@ test('single-job sqlite importer emits structured JSON success output', () => {
                 outboxRowCount: 6,
                 status: 'imported',
               }
+            },
+          }
+        })
+
+        void mock.module(scriptAccessModulePath, () => {
+          return {
+            withDuckdbMaintenanceAccess: async (_taskName, work) => {
+              return work()
             },
           }
         })
@@ -1860,6 +1869,7 @@ test('single-job sqlite importer emits structured JSON failure output and exits 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
         const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
         const importModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts')
+        const scriptAccessModulePath = getModulePath('./src/server/utils/duckdbScriptAccess.ts')
         const scriptModulePath = getModulePath('./scripts/runJudgmentJobSqliteSingleJobImport.ts')
 
         process.argv = [
@@ -1893,6 +1903,14 @@ test('single-job sqlite importer emits structured JSON failure output and exits 
           return {
             runJudgmentJobSqliteOutboxImportCycle: async () => {
               throw new Error('boom')
+            },
+          }
+        })
+
+        void mock.module(scriptAccessModulePath, () => {
+          return {
+            withDuckdbMaintenanceAccess: async (_taskName, work) => {
+              return work()
             },
           }
         })
