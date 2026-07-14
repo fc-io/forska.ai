@@ -1,6 +1,7 @@
-import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {runJudgmentJobSqliteOutboxImportCycle} from '../src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
 import {getJudgmentJobSqliteService} from '../src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
+import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 
 type CliOptions = {claimedBy: string | null; jobId: string | null}
 
@@ -42,7 +43,9 @@ export const runJudgmentJobSqliteSingleJobImport = async () => {
   }
 
   try {
-    const result = await runJudgmentJobSqliteOutboxImportCycle({claimedBy: options.claimedBy, jobId: options.jobId})
+    const result = await withDuckdbMaintenanceAccess('judgment job sqlite import', async () => {
+      return runJudgmentJobSqliteOutboxImportCycle({claimedBy: options.claimedBy, jobId: options.jobId})
+    })
 
     console.log(JSON.stringify({...result, cycleStatus: result.status, status: 'ok'}))
   } catch (error) {

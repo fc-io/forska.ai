@@ -136,8 +136,8 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     path: 'scripts/runJudgmentJobRepair.ts',
   },
   'db:judgment-job:sqlite-import': {
-    description: 'job sqlite outbox import',
-    mustContain: ['runJudgmentJobSqliteOutboxImportCycle'],
+    description: 'job sqlite outbox import under maintenance access',
+    mustContain: ['withDuckdbMaintenanceAccess', 'runJudgmentJobSqliteOutboxImportCycle'],
     path: 'scripts/runJudgmentJobSqliteSingleJobImport.ts',
   },
   'db:mig': {
