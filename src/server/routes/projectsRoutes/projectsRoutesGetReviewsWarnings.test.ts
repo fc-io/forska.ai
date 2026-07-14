@@ -3131,8 +3131,14 @@ test('reviews warnings route classifies foreground DuckDB read workload context'
   expect(routeKeys).toContain('review.warnings.projectAccess')
   expect(routeKeys).toContain('review.warnings.reviewConfigHash')
   expect(routeKeys).toContain('review.warnings.servingDiagnostics')
-  expect(routeKeys).toContain('review.warnings.enabledPromptCount')
-  expect(routeKeys).toContain('review.warnings.articleScopeProbe')
+  expect(routeKeys).toContain('review.warnings.scopeState')
+  expect(
+    projectMetrics.filter((metric) => {
+      return metric.routeOrJobKey === 'review.warnings.scopeState'
+    }),
+  ).toHaveLength(1)
+  expect(routeKeys).not.toContain('review.warnings.enabledPromptCount')
+  expect(routeKeys).not.toContain('review.warnings.articleScopeProbe')
   expect(
     projectMetrics.some((metric) => {
       return metric.routeOrJobKey === 'duckdb.mainQuery'
