@@ -154,7 +154,7 @@ export const reviewServingResidualReadAllowlist = [
       }),
       sourceRead({
         cap: 'project-scoped V4 diagnostic summary repository call',
-        marker: 'getReviewServingDiagnostics({projectId',
+        marker: '?? (await getReviewServingDiagnostics({',
         migrationTarget: 'keep as V4 diagnostics source and stop mixing with legacy mart state in route code',
         purpose: 'read V4 serving diagnostics and manifest readiness for the warning payload',
         workloadClass: 'foreground-diagnostic',
