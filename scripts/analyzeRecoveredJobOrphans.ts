@@ -2,6 +2,7 @@ import {getJudgmentJobSqlitePath} from '../src/server/cron/judgmentsJobs/judgmen
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 
 type CliOptions = {jobId: string | null}
 type JobInfoRow = {
@@ -12,6 +13,8 @@ type JobInfoRow = {
   useTitle: number
 }
 type OrphanQueuePromptRow = {articleId: string; promptId: string; queuePromptId: string}
+
+const workloadContext = getMaintenanceDuckdbWorkloadContext('analyzeRecoveredJobOrphans')
 
 const getArgValue = (names: string[]) => {
   const matchedArgument = process.argv.slice(2).find((argument) => {
@@ -115,7 +118,8 @@ export const runAnalyzeRecoveredJobOrphans = async () => {
           .join(' OR ')
 
         const [[currentModelRow = {count: 0}], [anyModelRow = {count: 0}]] = await Promise.all([
-          getAppDatabaseService().queryJson<{count: number | string}>(`
+          getAppDatabaseService().queryJson<{count: number | string}>(
+            `
           SELECT COUNT(*) AS count
           FROM app.judgment
           WHERE model_id = ${getSqlLiteral(jobInfo.modelId)}
@@ -126,14 +130,19 @@ export const runAnalyzeRecoveredJobOrphans = async () => {
             AND delete_generation = 0
             AND deleted_at IS NULL
             AND (${pairPredicate})
-        `),
-          getAppDatabaseService().queryJson<{count: number | string}>(`
+        `,
+            {...workloadContext, maxResultRows: 1},
+          ),
+          getAppDatabaseService().queryJson<{count: number | string}>(
+            `
           SELECT COUNT(*) AS count
           FROM app.judgment
           WHERE delete_generation = 0
             AND deleted_at IS NULL
             AND (${pairPredicate})
-        `),
+        `,
+            {...workloadContext, maxResultRows: 1},
+          ),
         ])
 
         return {
