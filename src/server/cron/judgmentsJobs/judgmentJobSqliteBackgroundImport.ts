@@ -15,6 +15,7 @@ const isolatedImportFailureThreshold = 3
 const drainingRetentionPruneChunkSize = 1_000
 const maxImportableJudgmentJobsPerScan = 100
 const maxTrackedJudgmentJobIdsPerLookup = 100
+let trackedImportableJudgmentJobScanOffset = 0
 const judgmentJobSqliteBackgroundImportWorkloadContext = {
   fallbackIntent: 'reject' as const,
   routeOrJobKey: 'judgmentJob.sqliteBackgroundImport',
@@ -65,15 +66,31 @@ const sortImportableJudgmentJobs = (jobs: ImportableJudgmentJob[]) => {
   })
 }
 
+const rotateImportableJudgmentJobsForTrackedScan = (jobs: ImportableJudgmentJob[]) => {
+  if (jobs.length <= maxImportableJudgmentJobsPerScan) {
+    trackedImportableJudgmentJobScanOffset = 0
+    return jobs
+  }
+
+  const scanOffset = trackedImportableJudgmentJobScanOffset % jobs.length
+  trackedImportableJudgmentJobScanOffset = (scanOffset + maxImportableJudgmentJobsPerScan) % jobs.length
+
+  return [...jobs.slice(scanOffset), ...jobs.slice(0, scanOffset)]
+}
+
 const getNormalizedImportableJudgmentJobs = (
   rows: ImportableJudgmentJobRow[],
-  {limit = maxImportableJudgmentJobsPerScan}: {limit?: number | null} = {},
+  {
+    limit = maxImportableJudgmentJobsPerScan,
+    rotateTrackedScan = false,
+  }: {limit?: number | null; rotateTrackedScan?: boolean} = {},
 ) => {
-  const jobs = sortImportableJudgmentJobs(
+  const sortedJobs = sortImportableJudgmentJobs(
     rows.map((row) => {
       return normalizeImportableJudgmentJob(row)
     }),
   )
+  const jobs = rotateTrackedScan ? rotateImportableJudgmentJobsForTrackedScan(sortedJobs) : sortedJobs
 
   return limit === null ? jobs : jobs.slice(0, limit)
 }
@@ -132,7 +149,7 @@ const getImportableJudgmentJobs = async () => {
     )
   }
 
-  return getNormalizedImportableJudgmentJobs(rows)
+  return getNormalizedImportableJudgmentJobs(rows, {rotateTrackedScan: true})
 }
 
 const getEmptyRetentionPruneResult = (): RetentionPruneResult => {
