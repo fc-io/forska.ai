@@ -62,6 +62,10 @@ const providerModelUpsertDiscoveredWorkloadContext = getProviderModelWorkloadCon
 const providerModelGetByIdsWorkloadContext = getProviderModelWorkloadContext({
   routeOrJobKey: 'providers.models.getByIds',
 })
+const providerModelNaturalKeyLookupWorkloadContext = getProviderModelWorkloadContext({
+  maxResultRows: 1,
+  routeOrJobKey: 'providers.models.naturalKeyLookup',
+})
 
 const getProviderModelUpdateMutationTimestamp = (updatedAt: unknown) => {
   const stringUpdatedAt = typeof updatedAt === 'string' ? updatedAt : new Date().toISOString()
@@ -122,21 +126,26 @@ const getExistingProviderModelId = async ({
   databaseRunner,
   providerConnectionId,
   remoteModelId,
+  workloadContext = providerModelNaturalKeyLookupWorkloadContext,
   variant,
 }: {
   databaseRunner: DatabaseQueryRunner
   providerConnectionId: string
   remoteModelId: string
+  workloadContext?: DuckdbWorkloadContext
   variant: string | null
 }): Promise<string | null> => {
-  const [existing] = await databaseRunner.queryJson<{id: string}>(`
+  const [existing] = await databaseRunner.queryJson<{id: string}>(
+    `
     SELECT id
     FROM app.model
     WHERE provider_connection_id = ${getSqlLiteral(providerConnectionId)}
       AND remote_model_id = ${getSqlLiteral(remoteModelId)}
       AND COALESCE(variant, '') = ${getSqlLiteral(variant ?? '')}
     LIMIT 1
-  `)
+  `,
+    workloadContext,
+  )
 
   return existing?.id ?? null
 }
@@ -185,16 +194,24 @@ const getProviderModelRowByNaturalKey = async ({
   databaseRunner,
   providerConnectionId,
   remoteModelId,
+  workloadContext = providerModelNaturalKeyLookupWorkloadContext,
   variant,
 }: {
   databaseRunner: DatabaseQueryRunner
   providerConnectionId: string
   remoteModelId: string
+  workloadContext?: DuckdbWorkloadContext
   variant: string | null
 }) => {
-  const existingId = await getExistingProviderModelId({databaseRunner, providerConnectionId, remoteModelId, variant})
+  const existingId = await getExistingProviderModelId({
+    databaseRunner,
+    providerConnectionId,
+    remoteModelId,
+    workloadContext,
+    variant,
+  })
 
-  return existingId ? getProviderModelRowByIdWithRunner(databaseRunner, existingId) : null
+  return existingId ? getProviderModelRowByIdWithRunner(databaseRunner, existingId, workloadContext) : null
 }
 
 const isProviderModelNaturalKeyConflict = (error: unknown) => {

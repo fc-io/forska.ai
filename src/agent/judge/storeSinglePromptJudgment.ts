@@ -18,6 +18,7 @@ import {
 } from '../../server/cron/judgmentsJobs/judgmentRequestAttemptManifestStore.ts'
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString} from '../../server/services/appQueryHelpers.ts'
+import type {DuckdbWorkloadContext} from '../../server/utils/duckdbService.ts'
 import type {ContentSettings} from './judgeGetPrompt.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 import type {SinglePromptJudgmentResult} from './parseSinglePromptJudgment.ts'
@@ -27,6 +28,13 @@ export class JudgmentPersistenceError extends Error {
     super(message, options)
     this.name = 'JudgmentPersistenceError'
   }
+}
+
+const singlePromptJudgmentPersistenceWorkloadContext: DuckdbWorkloadContext = {
+  fallbackIntent: 'reject',
+  maxResultRows: 1,
+  routeOrJobKey: 'judge.storeSinglePromptJudgment.persistence',
+  workloadClass: 'background.judgmentPersistence',
 }
 
 const recordJudgmentPersistenceFailure = async ({
@@ -178,7 +186,8 @@ export const storeSinglePromptJudgment = async ({
     const answeredQuotes = judgment.quotes
 
     // Check if judgment already exists (must match full unique constraint including content config)
-    const existing = await getAppDatabaseService().queryJson<{id: string; createdAt: string}>(`
+    const existing = await getAppDatabaseService().queryJson<{id: string; createdAt: string}>(
+      `
       SELECT id, created_at AS createdAt
       FROM app.judgment
       WHERE article_id = '${escapeSqlString(article.id)}'
@@ -190,7 +199,9 @@ export const storeSinglePromptJudgment = async ({
         AND use_fulltext_no_images = ${useFulltextNoImages ? 'TRUE' : 'FALSE'}
         AND deleted_at IS NULL
       LIMIT 1
-    `)
+    `,
+      singlePromptJudgmentPersistenceWorkloadContext,
+    )
 
     const existingId = existing[0]?.id ?? null
     const existingCreatedAt = existing[0]?.createdAt ?? null

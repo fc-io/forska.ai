@@ -6,6 +6,7 @@ import {
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../server/services/appQueryHelpers.ts'
 import {getComparisonProjectServingInvalidationService} from '../../server/services/comparisonProjectServingInvalidationService.ts'
+import type {DuckdbWorkloadContext} from '../../server/utils/duckdbService.ts'
 import {getShortIdForPrompt, type ShortIdMapping} from './judgeGetPrompt.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 
@@ -27,6 +28,17 @@ type StoredJudgmentRow = {
   useTitle: boolean
 }
 type AffectedLlmJudgmentProjectRow = {projectId: string}
+
+const legacyJudgmentPersistenceWorkloadContext: DuckdbWorkloadContext = {
+  fallbackIntent: 'reject',
+  routeOrJobKey: 'judge.storeJudgment.legacyPersistence',
+  workloadClass: 'background.judgmentPersistence',
+}
+const legacyJudgmentPersistenceLookupWorkloadContext: DuckdbWorkloadContext = {
+  ...legacyJudgmentPersistenceWorkloadContext,
+  maxResultRows: 1,
+  routeOrJobKey: 'judge.storeJudgment.legacyPersistence.lookup',
+}
 
 const findAnswer = <T>(entries: [string, unknown][], fragment: string): T => {
   const match = entries.find(([key]) => {
@@ -264,9 +276,12 @@ export const judgeStoreJudgment = async (
             FROM app.project
             WHERE id = '${escapeSqlString(projectId)}'
             LIMIT 1
-          `)
+          `,
+            legacyJudgmentPersistenceLookupWorkloadContext,
+          )
         : [null]
-    const [modelRow] = await getAppDatabaseService().queryJson<{modelName: string | null; provider: string | null}>(`
+    const [modelRow] = await getAppDatabaseService().queryJson<{modelName: string | null; provider: string | null}>(
+      `
       SELECT
         COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
         pc.provider_kind AS provider
@@ -274,7 +289,9 @@ export const judgeStoreJudgment = async (
       LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
       WHERE m.id = '${escapeSqlString(modelId)}'
       LIMIT 1
-    `)
+    `,
+      legacyJudgmentPersistenceLookupWorkloadContext,
+    )
     const snapshotValues = {
       snapshotProjectId: projectRow?.id ?? null,
       snapshotProjectModelName: modelRow?.modelName ?? null,
@@ -351,7 +368,7 @@ export const judgeStoreJudgment = async (
           {runner},
         )
       }
-    })
+    }, legacyJudgmentPersistenceWorkloadContext)
   } catch (error) {
     console.error(
       `${articleId} | Failed to store judgment for article ${articleTitle}`,

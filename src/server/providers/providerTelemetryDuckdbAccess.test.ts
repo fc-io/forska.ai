@@ -39,6 +39,7 @@ test('provider admission and repository DuckDB calls carry scoped workload conte
   expect(providerModelRepositorySource).toContain('providerModelCreateWorkloadContext')
   expect(providerModelRepositorySource).toContain('providerModelUpdateWorkloadContext')
   expect(providerModelRepositorySource).toContain('providerModelUpsertDiscoveredWorkloadContext')
+  expect(providerModelRepositorySource).toContain('providerModelNaturalKeyLookupWorkloadContext')
   expect(providerModelRoutesSource).toContain('providerModelRouteWorkloadContext')
 })
 
