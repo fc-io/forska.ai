@@ -1,6 +1,7 @@
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 
 type FailedRequestDetailsRow = {id: string; failedRequestsDetailsJson: unknown}
 type FailedRequestDetailsPatch = {id: string; failedRequestsDetails: unknown[]}
@@ -18,13 +19,15 @@ type FailedRequestDetailsRowAnalysis = {
 type TransactionRunner = {run: (statement: string) => Promise<void>}
 
 const updateBatchSize = 200
+const workloadContext = getMaintenanceDuckdbWorkloadContext('backfillFailedRequestDetails')
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 const getFailedRequestDetailsRows = async (): Promise<FailedRequestDetailsRow[]> => {
-  return getAppDatabaseService().queryJson<FailedRequestDetailsRow>(`
+  return getAppDatabaseService().queryJson<FailedRequestDetailsRow>(
+    `
     SELECT
       id,
       TO_JSON(failed_requests_details) AS failedRequestsDetailsJson
@@ -32,7 +35,9 @@ const getFailedRequestDetailsRows = async (): Promise<FailedRequestDetailsRow[]>
     WHERE has_failed_requests = TRUE
       AND failed_requests_details IS NOT NULL
     ORDER BY created_at DESC
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const getFailedRequestDetailsArray = (value: unknown) => {
@@ -161,8 +166,8 @@ const runBackfillFailedRequestDetails = async () => {
 
     await getAppDatabaseService().transaction(async (tx) => {
       return applyUpdateChunks(tx, getUpdateChunks(beforeSummary.patches, updateBatchSize))
-    })
-    await getAppDatabaseService().maintenance('checkpoint')
+    }, workloadContext)
+    await getAppDatabaseService().maintenance('checkpoint', workloadContext)
 
     const afterSummary = getBackfillSummary(
       (await getFailedRequestDetailsRows()).map((row) => {

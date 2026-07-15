@@ -214,15 +214,27 @@ test('direct non-test DB scripts are explicitly isolated', () => {
   expect(readSource('scripts/checkRecoveredJudgmentBatch.ts')).toContain(
     "getMaintenanceDuckdbWorkloadContext('checkRecoveredJudgmentBatch')",
   )
+  expect(readSource('scripts/backfillFailedRequestDetails.ts')).toContain(
+    "getMaintenanceDuckdbWorkloadContext('backfillFailedRequestDetails')",
+  )
+  expect(readSource('scripts/repairOwnedProjectPrompts.ts')).toContain(
+    "getMaintenanceDuckdbWorkloadContext('repairOwnedProjectPrompts')",
+  )
   expect(readSource('scripts/reconcileRecoveredJudgmentJob.ts')).toContain(
     "getMaintenanceDuckdbWorkloadContext('reconcileRecoveredJudgmentJob')",
   )
   expect(readSource('scripts/recoverJudgmentJobWithSystemSqlite.ts')).toContain(
     "getMaintenanceDuckdbWorkloadContext('recoverJudgmentJobWithSystemSqlite')",
   )
+  expect(readSource('scripts/requestReviewServingForDirtyRefreshClaim.ts')).toContain(
+    "getMaintenanceDuckdbWorkloadContext('requestReviewServingForDirtyRefreshClaim')",
+  )
   expect(readSource('scripts/requestReviewServingForDirtyRefreshClaim.ts')).toContain('withDuckdbMaintenanceAccess')
   expect(readSource('scripts/requestReviewServingForDirtyRefreshClaim.ts')).toContain('requireLegacyAdminAck')
   expect(readSource('scripts/slimProviderMetadata.ts')).toContain('withDuckdbMaintenanceAccess')
+  expect(readSource('scripts/slimProviderMetadata.ts')).toContain(
+    "getMaintenanceDuckdbWorkloadContext('slimProviderMetadata')",
+  )
   expect(readSource('scripts/benchmarkDuckdbAppendLanes.ts')).toContain('DUCKDB_PATH = duckdbPath')
   expect(readSource('scripts/benchmarkDuckdbAppendLanes.ts')).toContain('getTempDbPath')
 })

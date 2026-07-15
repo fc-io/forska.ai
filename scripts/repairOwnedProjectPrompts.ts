@@ -3,6 +3,7 @@ import {getJudgmentJobSqliteService} from '../src/server/cron/judgmentsJobs/judg
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 
 type RepairOptions = {apply: boolean; deleteEmptyJobs: boolean; flush: boolean; projectId: string | null}
 
@@ -34,6 +35,8 @@ type EmptyJobInspection = {
   unexportedOutboxCount: number
 }
 
+const workloadContext = getMaintenanceDuckdbWorkloadContext('repairOwnedProjectPrompts')
+
 const quoteSqlString = (value: string) => {
   return `'${value.replaceAll("'", "''")}'`
 }
@@ -56,7 +59,8 @@ const getProjectFilterClause = (projectId: string | null) => {
 }
 
 const getSafeCandidateRows = async (options: RepairOptions) => {
-  return getAppDatabaseService().queryJson<CandidateRow>(`
+  return getAppDatabaseService().queryJson<CandidateRow>(
+    `
     SELECT
       pp.id AS projectPromptId,
       pp.project_id AS projectId,
@@ -90,11 +94,14 @@ const getSafeCandidateRows = async (options: RepairOptions) => {
     GROUP BY 1,2,3,4,5,6,7,8,9
     HAVING COUNT(judgment.id) = 0 AND COUNT(judgment_human.id) = 0
     ORDER BY projectName ASC, projectId ASC, promptHeading ASC NULLS LAST, promptId ASC
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const getRepairSummary = async (options: RepairOptions) => {
-  const [row] = await getAppDatabaseService().queryJson<SummaryRow>(`
+  const [row] = await getAppDatabaseService().queryJson<SummaryRow>(
+    `
     WITH candidate_rows AS (
       SELECT pp.project_id AS projectId, pp.prompt_id AS promptId
       FROM app.project_prompt pp
@@ -127,7 +134,9 @@ const getRepairSummary = async (options: RepairOptions) => {
       (SELECT COUNT(*) FROM candidate_rows) - (SELECT COUNT(*) FROM safe_rows) AS blockedLinks,
       (SELECT COUNT(DISTINCT projectId) FROM candidate_rows)
         - (SELECT COUNT(DISTINCT projectId) FROM safe_rows) AS blockedProjects
-  `)
+  `,
+    {...workloadContext, maxResultRows: 1},
+  )
 
   return {
     blockedLinks: Number(row?.blockedLinks ?? 0),
@@ -138,7 +147,8 @@ const getRepairSummary = async (options: RepairOptions) => {
 }
 
 const getEmptyJobCandidates = async (options: RepairOptions) => {
-  return getAppDatabaseService().queryJson<EmptyJobCandidateRow>(`
+  return getAppDatabaseService().queryJson<EmptyJobCandidateRow>(
+    `
     SELECT DISTINCT
       job.id AS jobId,
       job.status AS jobStatus,
@@ -166,7 +176,9 @@ const getEmptyJobCandidates = async (options: RepairOptions) => {
     GROUP BY 1,2,3,4
     HAVING COUNT(judgment.id) = 0 AND COUNT(judgment_human.id) = 0
     ORDER BY projectName ASC, projectId ASC
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const inspectEmptyJobCandidate = async (row: EmptyJobCandidateRow): Promise<EmptyJobInspection> => {
@@ -229,7 +241,7 @@ const deleteEmptyJob = async (row: EmptyJobInspection) => {
   const {deleteJudgmentJobSafelyTx} = await import('../src/server/services/judgmentJobDeleteService.ts')
   await getAppDatabaseService().transaction(async (tx) => {
     await deleteJudgmentJobSafelyTx({jobId: row.jobId, tx})
-  })
+  }, workloadContext)
 }
 
 const deleteEmptyJobs = async (rows: EmptyJobInspection[], index = 0): Promise<string[]> => {
@@ -373,7 +385,7 @@ const main = async () => {
     const repairedDirtyStates = (await getAppDatabaseService().transaction(async (tx) => {
       const projectIds = getUniqueProjectIds(await repairCandidateRows(tx, safeRows))
       return markProjectWideDirtyRefreshStates(tx, projectIds)
-    })) as Array<{dirtyToken: number; projectId: string}>
+    }, workloadContext)) as Array<{dirtyToken: number; projectId: string}>
 
     console.log(`[repairOwnedProjectPrompts] repaired projects: ${repairedDirtyStates.length}`)
     console.log(`[repairOwnedProjectPrompts] repaired prompt links: ${safeRows.length}`)
@@ -383,7 +395,7 @@ const main = async () => {
       console.log('[repairOwnedProjectPrompts] --flush skipped; project dirty state is drained by project mart workers')
     }
 
-    await getAppDatabaseService().maintenance('checkpoint')
+    await getAppDatabaseService().maintenance('checkpoint', workloadContext)
   })
 }
 
