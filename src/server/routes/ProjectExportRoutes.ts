@@ -67,6 +67,16 @@ const projectExportLogger = createRateLimitedLogger({sink: 'file-only', windowMs
 const exportPayloadBudgetBytes = 10_000_000
 const exportBatchSize = 500
 
+const getProjectExportWorkloadContext = (params: {maxResultRows?: number; operation: string; projectId: string}) => {
+  return {
+    fallbackIntent: 'reject' as const,
+    maxResultRows: params.maxResultRows,
+    projectId: params.projectId,
+    routeOrJobKey: `projectExport.${params.operation}`,
+    workloadClass: 'owner.product.projectExport',
+  }
+}
+
 const getStringArray = (value: unknown) => {
   return Array.isArray(value)
     ? value.filter((item): item is string => {
@@ -160,7 +170,8 @@ const buildPromptHeaderLabel = (
 }
 
 const getProjectReviewConfig = async (projectId: string) => {
-  const [project] = await appDatabaseService.queryJson<ExportReviewConfig>(`
+  const [project] = await appDatabaseService.queryJson<ExportReviewConfig>(
+    `
     SELECT
       model_id AS modelId,
       use_title AS useTitle,
@@ -170,13 +181,16 @@ const getProjectReviewConfig = async (projectId: string) => {
     FROM app.project
     WHERE id = ${getSqlLiteral(projectId)}
     LIMIT 1
-  `)
+  `,
+    getProjectExportWorkloadContext({maxResultRows: 1, operation: 'projectReviewConfig', projectId}),
+  )
 
   return project ?? null
 }
 
 const getExportJob = async (projectId: string, jobId: string) => {
-  const [job] = await appDatabaseService.queryJson<ExportJobRow>(`
+  const [job] = await appDatabaseService.queryJson<ExportJobRow>(
+    `
     SELECT
       criteria_json AS criteriaJson,
       latest_snapshot_semantics AS latestSnapshotSemantics,
@@ -189,7 +203,9 @@ const getExportJob = async (projectId: string, jobId: string) => {
       AND project_id = ${getSqlLiteral(projectId)}
       AND job_kind = 'review.export.selection'
     LIMIT 1
-  `)
+  `,
+    getProjectExportWorkloadContext({maxResultRows: 1, operation: 'jobLookup', projectId}),
+  )
 
   return job ?? null
 }
@@ -228,10 +244,11 @@ const buildPromptInfoCsv = (promptIds: string[], promptDetails: PromptDetails[])
   return [headerRow, ...dataRows].join('\n') + '\n'
 }
 
-const getPromptDetails = async (promptIds: string[]) => {
+const getPromptDetails = async (projectId: string, promptIds: string[]) => {
   return promptIds.length === 0
     ? []
-    : appDatabaseService.queryJson<PromptDetails>(`
+    : appDatabaseService.queryJson<PromptDetails>(
+        `
         SELECT
           id,
           prompt_heading AS promptHeading,
@@ -239,12 +256,15 @@ const getPromptDetails = async (promptIds: string[]) => {
           type
         FROM app.prompt
         WHERE id IN (${getQuotedStringList(promptIds).join(', ')})
-      `)
+      `,
+        getProjectExportWorkloadContext({maxResultRows: promptIds.length, operation: 'promptDetails', projectId}),
+      )
 }
 
 const getExportPromptDetails = async (input: {
   articleIds: string[]
   promptIds: string[]
+  projectId: string
   snapshotScopes: ExportServingSnapshotScope[]
 }) => {
   if (input.articleIds.length === 0 || input.promptIds.length === 0 || input.snapshotScopes.length === 0) {
@@ -268,7 +288,9 @@ const getExportPromptDetails = async (input: {
       return `(${getSqlLiteral(promptId)})`
     })
     .join(', ')
-  const rows = await appDatabaseService.queryJson<PromptDetailsRow>(`
+  const maxResultRows = input.articleIds.length * input.promptIds.length * Math.max(input.snapshotScopes.length, 1)
+  const rows = await appDatabaseService.queryJson<PromptDetailsRow>(
+    `
     WITH
       export_scope(project_id, review_config_hash, snapshot_id, source_project_order) AS (VALUES ${scopeRows}),
       export_article(article_id) AS (VALUES ${articleRows}),
@@ -290,8 +312,10 @@ const getExportPromptDetails = async (input: {
     INNER JOIN export_prompt
       ON export_prompt.prompt_id = detail.prompt_id
     ORDER BY detail.prompt_order ASC NULLS LAST, detail.prompt_id ASC, export_scope.source_project_order ASC
-    LIMIT ${getSqlLiteral(input.articleIds.length * input.promptIds.length * Math.max(input.snapshotScopes.length, 1))}
-  `)
+    LIMIT ${getSqlLiteral(maxResultRows)}
+  `,
+    getProjectExportWorkloadContext({maxResultRows, operation: 'servingPromptDetails', projectId: input.projectId}),
+  )
   const rowByPromptId = rows.reduce<Map<string, PromptDetails>>((details, row) => {
     return details.has(row.id) ? details : details.set(row.id, row)
   }, new Map())
@@ -341,6 +365,7 @@ const getExportArticles = async (input: {articleIds: string[]; snapshotScopes: E
 const getExportJudgments = async (input: {
   articleIds: string[]
   promptIds: string[]
+  projectId: string
   snapshotScopes: ExportServingSnapshotScope[]
 }) => {
   if (input.promptIds.length === 0 || input.articleIds.length === 0 || input.snapshotScopes.length === 0) {
@@ -362,7 +387,9 @@ const getExportJudgments = async (input: {
       return `(${getSqlLiteral(promptId)})`
     })
     .join(', ')
-  const rows = await appDatabaseService.queryJson<ExportJudgmentRow & {sourceProjectOrder: number}>(`
+  const maxResultRows = input.articleIds.length * input.promptIds.length * Math.max(input.snapshotScopes.length, 1)
+  const rows = await appDatabaseService.queryJson<ExportJudgmentRow & {sourceProjectOrder: number}>(
+    `
     WITH
       export_scope(project_id, review_config_hash, snapshot_id, source_project_order) AS (VALUES ${scopeRows}),
       export_article(article_id) AS (VALUES ${articleRows}),
@@ -396,8 +423,10 @@ const getExportJudgments = async (input: {
     FROM ranked_export_judgment
     WHERE exportJudgmentRank = 1
     ORDER BY articleId ASC, promptId ASC, sourceProjectOrder ASC
-    LIMIT ${getSqlLiteral(input.articleIds.length * input.promptIds.length * Math.max(input.snapshotScopes.length, 1))}
-  `)
+    LIMIT ${getSqlLiteral(maxResultRows)}
+  `,
+    getProjectExportWorkloadContext({maxResultRows, operation: 'servingJudgments', projectId: input.projectId}),
+  )
 
   return rows.reduce<ExportJudgmentRow[]>((judgments, row) => {
     return judgments.some((judgment) => {
@@ -518,6 +547,7 @@ const buildExportCsvRows = (input: {
 const buildExportCsvStream = (input: {
   articleIdBatches: string[][]
   contract: ExportContract
+  projectId: string
   snapshotScopes: ExportServingSnapshotScope[]
 }) => {
   const encoder = new TextEncoder()
@@ -531,6 +561,7 @@ const buildExportCsvStream = (input: {
         const promptDetails = await getExportPromptDetails({
           articleIds: input.articleIdBatches[0] ?? [],
           promptIds,
+          projectId: input.projectId,
           snapshotScopes: input.snapshotScopes,
         })
         const promptDetailsById = new Map(
@@ -553,7 +584,12 @@ const buildExportCsvStream = (input: {
           await previousBatch
           const [articles, judgments] = await Promise.all([
             getExportArticles({articleIds, snapshotScopes: input.snapshotScopes}),
-            getExportJudgments({articleIds, promptIds, snapshotScopes: input.snapshotScopes}),
+            getExportJudgments({
+              articleIds,
+              promptIds,
+              projectId: input.projectId,
+              snapshotScopes: input.snapshotScopes,
+            }),
           ])
           const batchCsvRows = buildExportCsvRows({
             articles,
@@ -577,12 +613,15 @@ const buildExportCsvStream = (input: {
 }
 
 const getProject = async (projectId: string) => {
-  const [project] = await appDatabaseService.queryJson<{id: string; name: string}>(`
+  const [project] = await appDatabaseService.queryJson<{id: string; name: string}>(
+    `
     SELECT id, name
     FROM app.project
     WHERE id = ${getSqlLiteral(projectId)}
     LIMIT 1
-  `)
+  `,
+    getProjectExportWorkloadContext({maxResultRows: 1, operation: 'projectLookup', projectId}),
+  )
 
   return project ?? null
 }
@@ -633,8 +672,12 @@ const getMissingExportSnapshotSourceProjectIds = async (input: {
   })
 }
 
-const getExportPromptFilters = async (promptSelections: Array<{promptId: string; types: string[]}>) => {
+const getExportPromptFilters = async (
+  projectId: string,
+  promptSelections: Array<{promptId: string; types: string[]}>,
+) => {
   const promptDetails = await getPromptDetails(
+    projectId,
     promptSelections.map((selection) => {
       return selection.promptId
     }),
@@ -680,7 +723,7 @@ export const projectExportRoutes = new Elysia()
       }
 
       const promptSelections = body.promptSelections ?? []
-      const prompts = await getExportPromptFilters(promptSelections)
+      const prompts = await getExportPromptFilters(projectId, promptSelections)
       const selectedMetadata = {
         includeArticleAuthors: body.includeArticleAuthors ?? false,
         includeArticleCreatedAt: body.includeArticleCreatedAt ?? false,
@@ -859,6 +902,7 @@ export const projectExportRoutes = new Elysia()
       const csv = buildExportCsvStream({
         articleIdBatches,
         contract: getExportContract(job.criteriaJson),
+        projectId: params.id,
         snapshotScopes,
       })
       const filename = `${project.name.replace(/[^a-zA-Z0-9]/g, '_')}_export_${new Date().toISOString().slice(0, 10)}.csv`
@@ -891,7 +935,8 @@ export const projectExportRoutes = new Elysia()
         return {data: null, error: 'No prompts selected for export'}
       }
 
-      const promptDetails = await appDatabaseService.queryJson<PromptDetails>(`
+      const promptDetails = await appDatabaseService.queryJson<PromptDetails>(
+        `
         SELECT
           id,
           prompt_heading AS promptHeading,
@@ -899,7 +944,13 @@ export const projectExportRoutes = new Elysia()
           type
         FROM app.prompt
         WHERE id IN (${getQuotedStringList(body.promptIds).join(', ')})
-      `)
+      `,
+        getProjectExportWorkloadContext({
+          maxResultRows: body.promptIds.length,
+          operation: 'exportPrompts.promptDetails',
+          projectId: params.id,
+        }),
+      )
       const csv = buildPromptInfoCsv(body.promptIds, promptDetails)
       const filename = `${project.name.replace(/[^a-zA-Z0-9]/g, '_')}_prompts_${new Date().toISOString().slice(0, 10)}.csv`
 
