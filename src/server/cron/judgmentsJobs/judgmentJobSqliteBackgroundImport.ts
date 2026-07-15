@@ -132,7 +132,7 @@ const getImportableJudgmentJobs = async () => {
     )
   }
 
-  return getNormalizedImportableJudgmentJobs(rows, {limit: null})
+  return getNormalizedImportableJudgmentJobs(rows)
 }
 
 const getEmptyRetentionPruneResult = (): RetentionPruneResult => {
