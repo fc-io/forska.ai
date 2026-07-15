@@ -10,6 +10,7 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
 import {syncPendingHumanJudgmentsForArticle} from './humanAssessmentPendingJudgments.ts'
+import {getHumanAssessmentWorkloadContext} from './humanAssessmentWorkloadContext.ts'
 
 type InitResponse = {
   project: {id: string; name: string}
@@ -116,12 +117,15 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     humanJudgmentMode: 'prompt' | 'summary' | null
     id: string
     name: string
-  }>(`
+  }>(
+    `
     SELECT id, name, human_judgment_mode AS humanJudgmentMode
     FROM app.project
     WHERE id = '${escapeSqlString(body.projectId)}'
     LIMIT 1
-  `)
+  `,
+    getHumanAssessmentWorkloadContext({maxResultRows: 1, operation: 'init.projectLookup', projectId: body.projectId}),
+  )
   if (!project) {
     set.status = 404
     return {data: null, error: 'Project not found'}
@@ -133,7 +137,8 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     return {data: null, error: summaryModeBlockedMessage}
   }
 
-  const projectPromptRows = await getAppDatabaseService().queryJson<InitResponse['prompts'][number]>(`
+  const projectPromptRows = await getAppDatabaseService().queryJson<InitResponse['prompts'][number]>(
+    `
     SELECT
       p.id AS id,
       p.original_text AS originalText,
@@ -144,21 +149,34 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     INNER JOIN app.prompt p ON pp.prompt_id = p.id
     WHERE pp.project_id = '${escapeSqlString(body.projectId)}'
     ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC
-  `)
+  `,
+    getHumanAssessmentWorkloadContext({
+      maxResultRows: 500,
+      operation: 'init.projectPrompts',
+      projectId: body.projectId,
+    }),
+  )
 
   if (projectPromptRows.length === 0) {
     set.status = 400
     return {data: null, error: 'Project has no prompts configured'}
   }
 
-  const existingUnanswered = await getAppDatabaseService().queryJson<{id: string; articleId: string}>(`
+  const existingUnanswered = await getAppDatabaseService().queryJson<{id: string; articleId: string}>(
+    `
     SELECT id, article_id AS articleId
     FROM app.judgment_human
     WHERE project_id = '${escapeSqlString(body.projectId)}'
       AND is_answered = FALSE
     ORDER BY created_at DESC
     LIMIT 50
-  `)
+  `,
+    getHumanAssessmentWorkloadContext({
+      maxResultRows: 50,
+      operation: 'init.existingUnanswered',
+      projectId: body.projectId,
+    }),
+  )
   let targetArticleId: string | null = null
   const firstUnanswered = existingUnanswered[0]
   if (firstUnanswered) {
@@ -200,12 +218,15 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     id: string
     articleTitle: string
     articleSummary: string | null
-  }>(`
+  }>(
+    `
     SELECT id, article_title AS articleTitle, article_summary AS articleSummary
     FROM app.article
     WHERE id = '${escapeSqlString(targetId)}'
     LIMIT 1
-  `)
+  `,
+    getHumanAssessmentWorkloadContext({maxResultRows: 1, operation: 'init.articleLookup', projectId: body.projectId}),
+  )
 
   if (!articleRow) {
     set.status = 404

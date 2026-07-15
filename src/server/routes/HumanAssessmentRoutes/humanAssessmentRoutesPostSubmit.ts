@@ -6,6 +6,7 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getComparisonProjectServingInvalidationService} from '../../services/comparisonProjectServingInvalidationService.ts'
 import {syncPendingHumanJudgmentsForArticle} from './humanAssessmentPendingJudgments.ts'
+import {getHumanAssessmentWorkloadContext} from './humanAssessmentWorkloadContext.ts'
 
 export const humanAssessmentRoutesPostSubmit = async ({
   body,
@@ -14,12 +15,19 @@ export const humanAssessmentRoutesPostSubmit = async ({
   body: {projectId: string; answers: Array<{judgmentHumanId: string; answer: string; comment?: string}>}
   set: Context['set']
 }) => {
-  const [project] = await getAppDatabaseService().queryJson<{humanJudgmentMode: 'prompt' | 'summary' | null}>(`
+  const [project] = await getAppDatabaseService().queryJson<{humanJudgmentMode: 'prompt' | 'summary' | null}>(
+    `
     SELECT human_judgment_mode AS humanJudgmentMode
     FROM app.project
     WHERE id = '${escapeSqlString(body.projectId)}'
     LIMIT 1
-  `)
+  `,
+    getHumanAssessmentWorkloadContext({
+      maxResultRows: 1,
+      operation: 'submit.projectModeLookup',
+      projectId: body.projectId,
+    }),
+  )
   const humanJudgmentMode = project?.humanJudgmentMode ?? 'prompt'
 
   if (humanJudgmentMode === 'summary') {
@@ -27,13 +35,20 @@ export const humanAssessmentRoutesPostSubmit = async ({
     return {data: null, error: 'Summary-mode projects do not support prompt-based human assessment'}
   }
 
-  const pendingArticleRows = await getAppDatabaseService().queryJson<{articleId: string}>(`
+  const pendingArticleRows = await getAppDatabaseService().queryJson<{articleId: string}>(
+    `
     SELECT DISTINCT article_id AS articleId
     FROM app.judgment_human
     WHERE project_id = '${escapeSqlString(body.projectId)}'
       AND is_answered = FALSE
     LIMIT 2
-  `)
+  `,
+    getHumanAssessmentWorkloadContext({
+      maxResultRows: 2,
+      operation: 'submit.pendingArticleCheck',
+      projectId: body.projectId,
+    }),
+  )
 
   if (pendingArticleRows.length === 0) {
     set.status = 400
@@ -47,13 +62,20 @@ export const humanAssessmentRoutesPostSubmit = async ({
 
   const [pendingArticle] = pendingArticleRows
   const currentArticleId = pendingArticle?.articleId ?? ''
-  const projectPromptRows = await getAppDatabaseService().queryJson<{id: string}>(`
+  const projectPromptRows = await getAppDatabaseService().queryJson<{id: string}>(
+    `
     SELECT p.id AS id
     FROM app.project_prompt pp
     INNER JOIN app.prompt p ON pp.prompt_id = p.id
     WHERE pp.project_id = '${escapeSqlString(body.projectId)}'
     ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC
-  `)
+  `,
+    getHumanAssessmentWorkloadContext({
+      maxResultRows: 500,
+      operation: 'submit.projectPrompts',
+      projectId: body.projectId,
+    }),
+  )
 
   await syncPendingHumanJudgmentsForArticle({
     articleId: currentArticleId,
@@ -66,7 +88,8 @@ export const humanAssessmentRoutesPostSubmit = async ({
     promptId: string
     articleId: string
     type: string | null
-  }>(`
+  }>(
+    `
     SELECT
       jh.id AS id,
       jh.prompt_id AS promptId,
@@ -78,7 +101,13 @@ export const humanAssessmentRoutesPostSubmit = async ({
     WHERE jh.project_id = '${escapeSqlString(body.projectId)}'
       AND jh.article_id = '${escapeSqlString(currentArticleId)}'
       AND jh.is_answered = FALSE
-  `)
+  `,
+    getHumanAssessmentWorkloadContext({
+      maxResultRows: 500,
+      operation: 'submit.pendingPromptJudgments',
+      projectId: body.projectId,
+    }),
+  )
 
   if (pending.length === 0) {
     set.status = 400
@@ -175,8 +204,9 @@ export const humanAssessmentRoutesPostSubmit = async ({
       return `WHEN id = '${escapeSqlString(id)}' THEN ${getSqlLiteral(byId[id]?.comment ?? null)}`
     })
     .join(' ')
-  await getAppDatabaseService().transaction(async (tx) => {
-    const rows = await tx.queryJson<{id: string}>(`
+  await getAppDatabaseService().transaction(
+    async (tx) => {
+      const rows = await tx.queryJson<{id: string}>(`
       SELECT id
       FROM app.judgment_human
       WHERE id IN (${getQuotedStringList(idsToUpdate).join(', ')})
@@ -184,11 +214,11 @@ export const humanAssessmentRoutesPostSubmit = async ({
         AND is_answered = FALSE
     `)
 
-    if (rows.length !== idsToUpdate.length) {
-      throw new Error('One or more submitted answers could not be validated for update')
-    }
+      if (rows.length !== idsToUpdate.length) {
+        throw new Error('One or more submitted answers could not be validated for update')
+      }
 
-    await tx.run(`
+      await tx.run(`
       UPDATE app.judgment_human
       SET answer = CASE ${answerCase} ELSE answer END,
           comment = CASE ${commentCase} ELSE comment END,
@@ -199,39 +229,45 @@ export const humanAssessmentRoutesPostSubmit = async ({
         AND is_answered = FALSE
     `)
 
-    await appendHumanJudgmentReviewServingDeltas(
-      tx,
-      pending
-        .filter((row) => {
-          return submittedIds.has(row.id) && preparedAnswersById[row.id] !== null
-        })
-        .map((row) => {
-          return {
-            answer: preparedAnswersById[row.id] ?? null,
-            articleId: row.articleId,
-            comment: byId[row.id]?.comment ?? null,
-            humanJudgmentKey: row.id,
-            projectId: body.projectId,
-            promptId: row.promptId,
-            reviewerOverlay: {readSurface: 'row' as const},
-            sourceMutationKey: `humanAssessmentSubmit|${body.projectId}|${row.id}`,
-            sourceOperation: 'update' as const,
-            sourceUpdatedAt: updatedAt,
-          }
-        }),
-    )
+      await appendHumanJudgmentReviewServingDeltas(
+        tx,
+        pending
+          .filter((row) => {
+            return submittedIds.has(row.id) && preparedAnswersById[row.id] !== null
+          })
+          .map((row) => {
+            return {
+              answer: preparedAnswersById[row.id] ?? null,
+              articleId: row.articleId,
+              comment: byId[row.id]?.comment ?? null,
+              humanJudgmentKey: row.id,
+              projectId: body.projectId,
+              promptId: row.promptId,
+              reviewerOverlay: {readSurface: 'row' as const},
+              sourceMutationKey: `humanAssessmentSubmit|${body.projectId}|${row.id}`,
+              sourceOperation: 'update' as const,
+              sourceUpdatedAt: updatedAt,
+            }
+          }),
+      )
 
-    await getComparisonProjectServingInvalidationService().markComparisonProjectsServingStaleForHumanPromptJudgments(
-      pending
-        .filter((row) => {
-          return submittedIds.has(row.id)
-        })
-        .map((row) => {
-          return {articleId: row.articleId, promptId: row.promptId}
-        }),
-      {runner: tx},
-    )
-  })
+      await getComparisonProjectServingInvalidationService().markComparisonProjectsServingStaleForHumanPromptJudgments(
+        pending
+          .filter((row) => {
+            return submittedIds.has(row.id)
+          })
+          .map((row) => {
+            return {articleId: row.articleId, promptId: row.promptId}
+          }),
+        {runner: tx},
+      )
+    },
+    getHumanAssessmentWorkloadContext({
+      maxResultRows: idsToUpdate.length,
+      operation: 'submit.applyAnswers',
+      projectId: body.projectId,
+    }),
+  )
 
   return {data: {updated: idsToUpdate.length}}
 }
