@@ -14,6 +14,7 @@ import {
   isTransientJudgmentJobSqliteLockMessage,
 } from './judgmentJobSqliteTransientLock.ts'
 import {getJudgmentJobRepairMode} from './judgmentJobStoragePolicy.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../../utils/duckdbService.ts'
 
 export type JudgmentJobRepairAction =
   | 'checkpoint'
@@ -157,6 +158,7 @@ const defaultManualQuarantineReason = 'Manually quarantined by operator'
 const retentionPruneChunkSize = 1_000
 const automaticOrphanedQueueRepairMaxBatches = 100
 const automaticOrphanedQueueRepairMaxDurationMs = 30_000
+const judgmentJobRepairWorkloadContext = getMaintenanceDuckdbWorkloadContext('judgmentJobRepair')
 const allowedSystemSqliteFallbackSteps = new Set<JudgmentJobSystemSqliteFallbackStep>([
   'checkpoint',
   'diagnostic',
@@ -199,7 +201,9 @@ const getRepairJob = async (jobId: string): Promise<JudgmentJobRepairJobState> =
     FROM app.judgment_job
     WHERE id = ${getSqlLiteral(jobId)}
     LIMIT 1
-  `)
+  `,
+    judgmentJobRepairWorkloadContext,
+  )
 
   if (!job) {
     throw new HttpError(404, `Job ${jobId} not found`)
@@ -343,7 +347,9 @@ const getRunningStartupLocalSqliteJobIds = async () => {
             AND status = ${getSqlLiteral('running')}
             AND storage_state = ${getSqlLiteral('active')}
           ORDER BY updated_at ASC NULLS FIRST, id ASC
-        `)
+        `,
+          judgmentJobRepairWorkloadContext,
+        )
       ).map((row) => {
         return row.id
       })
@@ -674,7 +680,9 @@ const setJobQuarantine = async ({jobId, reason}: {jobId: string; reason: string}
         quarantine_reason = ${getSqlLiteral(reason)},
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(jobId)}
-  `)
+  `,
+    judgmentJobRepairWorkloadContext,
+  )
 }
 
 const clearJobQuarantine = async (jobId: string) => {
@@ -689,7 +697,9 @@ const clearJobQuarantine = async (jobId: string) => {
         last_import_error_at = NULL,
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(jobId)}
-  `)
+  `,
+    judgmentJobRepairWorkloadContext,
+  )
 }
 
 const restoreJobForResumedLocalQueue = async (jobId: string) => {
@@ -704,7 +714,9 @@ const restoreJobForResumedLocalQueue = async (jobId: string) => {
         quarantine_reason = NULL,
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(jobId)}
-  `)
+  `,
+    judgmentJobRepairWorkloadContext,
+  )
 }
 
 const markJobDraining = async (jobId: string) => {
@@ -715,7 +727,9 @@ const markJobDraining = async (jobId: string) => {
         pause_requested_at = current_timestamp,
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(jobId)}
-  `)
+  `,
+    judgmentJobRepairWorkloadContext,
+  )
 }
 
 const getRepairMode = ({hasLocalSqlite, job}: {hasLocalSqlite: boolean; job: JudgmentJobRepairJobState}) => {
