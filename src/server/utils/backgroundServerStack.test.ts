@@ -33,6 +33,16 @@ test('background server stack keeps direct DuckDB access behind shared utilities
   expect(source).toContain('runEphemeralReadOnlyDuckdbFileJsonQuery')
 })
 
+test('ephemeral read-only DuckDB helper applies caller workload context', () => {
+  const source = readFileSync(join(projectRoot, 'src/server/utils/duckdbEphemeralReadOnly.ts'), 'utf8')
+
+  expect(source).toContain('runMeasuredDuckdbJsonWorkload')
+  expect(source).toContain('workloadContext')
+  expect(source).toContain("operation: 'readOnlyQuery'")
+  expect(source).toContain("queue: 'readOnly'")
+  expect(source).toContain('connection.runAndReadAll(statement)')
+})
+
 test('background server stack derives a low-memory maintenance-worker DuckDB limit', () => {
   expect(getDefaultBackgroundMaintenanceDuckdbMemoryLimit(8 * gibibyte, 'linux')).toBe('4GB')
 })
