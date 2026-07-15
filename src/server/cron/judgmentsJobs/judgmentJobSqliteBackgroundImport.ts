@@ -14,6 +14,7 @@ const judgmentJobSqliteBackgroundImportLogger = createRateLimitedLogger({windowM
 const isolatedImportFailureThreshold = 3
 const drainingRetentionPruneChunkSize = 1_000
 const maxImportableJudgmentJobsPerScan = 100
+const maxTrackedJudgmentJobIdsPerLookup = 100
 const judgmentJobSqliteBackgroundImportWorkloadContext = {
   fallbackIntent: 'reject' as const,
   routeOrJobKey: 'judgmentJob.sqliteBackgroundImport',
@@ -69,11 +70,21 @@ const getNormalizedImportableJudgmentJobs = (rows: ImportableJudgmentJobRow[]) =
     rows.map((row) => {
       return normalizeImportableJudgmentJob(row)
     }),
-  )
+  ).slice(0, maxImportableJudgmentJobsPerScan)
+}
+
+const getChunks = <T>(items: T[], chunkSize: number) => {
+  const chunks: T[][] = []
+
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize))
+  }
+
+  return chunks
 }
 
 const getImportableJudgmentJobs = async () => {
-  const trackedJobIds = getJudgmentJobSqliteJobIds().sort().slice(0, maxImportableJudgmentJobsPerScan)
+  const trackedJobIds = getJudgmentJobSqliteJobIds().sort()
 
   if (trackedJobIds.length === 0) {
     const rows = await queryBackground<ImportableJudgmentJobRow>(
@@ -92,30 +103,31 @@ const getImportableJudgmentJobs = async () => {
     return getNormalizedImportableJudgmentJobs(rows)
   }
 
-  const rows = await Promise.all(
-    trackedJobIds.map(async (jobId) => {
-      const [row] = await queryBackground<ImportableJudgmentJobRow>(
+  const rows: ImportableJudgmentJobRow[] = []
+
+  for (const jobIds of getChunks(trackedJobIds, maxTrackedJudgmentJobIdsPerLookup)) {
+    rows.push(
+      ...(await queryBackground<ImportableJudgmentJobRow>(
         `
         SELECT
           id,
           storage_state AS storageState
         FROM app.judgment_job
-        WHERE id = ${getSqlLiteral(jobId)}
+        WHERE id IN (${jobIds
+          .map((jobId) => {
+            return getSqlLiteral(jobId)
+          })
+          .join(', ')})
           AND (${getImportableJudgmentJobWhereSql()})
-        LIMIT 1
+        ORDER BY CASE WHEN storage_state = 'draining' THEN 0 ELSE 1 END, id ASC
+        LIMIT ${jobIds.length}
       `,
-        {...judgmentJobSqliteBackgroundImportWorkloadContext, maxResultRows: 1},
-      )
+        {...judgmentJobSqliteBackgroundImportWorkloadContext, maxResultRows: jobIds.length},
+      )),
+    )
+  }
 
-      return row ?? null
-    }),
-  )
-
-  return getNormalizedImportableJudgmentJobs(
-    rows.filter((row): row is ImportableJudgmentJobRow => {
-      return row !== null
-    }),
-  )
+  return getNormalizedImportableJudgmentJobs(rows)
 }
 
 const getEmptyRetentionPruneResult = (): RetentionPruneResult => {
