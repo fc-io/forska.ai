@@ -1,10 +1,8 @@
 import {existsSync} from 'node:fs'
 
-import {DuckDBInstance} from '@duckdb/node-api'
-
 import {DEFAULT_API_SERVER_PORT} from '../../utils/runtimePortDefaults.ts'
 import {getDefaultMaintenanceDuckdbMemoryLimit} from './duckdbMemoryDefaults.ts'
-import {getReadOnlyDuckdbRuntimeOptions} from './duckdbService.ts'
+import {runEphemeralReadOnlyDuckdbFileJsonQuery} from './duckdbEphemeralReadOnly.ts'
 import {getConfiguredDuckdbPath} from './getDuckdbPath.ts'
 import {type LocalAppSettings, readLocalAppSettings} from './localAppSettings.ts'
 
@@ -70,29 +68,32 @@ const getStoredBackgroundMaintenanceDuckdbMemoryLimitFromDb = async (
   envValues: Record<string, string | undefined> = process.env,
 ): Promise<string | null> => {
   const duckdbPath = getConfiguredDuckdbPath({envValues})
+  const workloadContext = {
+    allowsTempSpill: true,
+    fallbackIntent: 'reject' as const,
+    routeOrJobKey: 'maintenance.backgroundServerStack.memoryLimitConfigRead',
+    workloadClass: 'maintenance',
+  }
 
   if (duckdbPath === ':memory:' || !existsSync(duckdbPath)) {
     return null
   }
 
-  let duckdbInstance: DuckDBInstance | null = null
-
   try {
-    duckdbInstance = await DuckDBInstance.create(duckdbPath, getReadOnlyDuckdbRuntimeOptions())
-    const connection = await duckdbInstance.connect()
-    const reader = await connection.runAndReadAll(`
+    const [row] = await runEphemeralReadOnlyDuckdbFileJsonQuery<{value?: unknown}>({
+      databasePath: duckdbPath,
+      memoryLimit: envValues.DUCKDB_MEMORY_LIMIT,
+      statement: `
       SELECT maintenance_worker_duckdb_memory_limit AS value
       FROM app.user_config
       LIMIT 1
-    `)
-    const [row] = reader.getRowObjectsJson() as Array<{value?: unknown}>
+    `,
+      workloadContext,
+    })
 
-    connection.closeSync()
     return getTrimmedValue(typeof row?.value === 'string' ? row.value : undefined)
   } catch {
     return null
-  } finally {
-    duckdbInstance?.closeSync()
   }
 }
 

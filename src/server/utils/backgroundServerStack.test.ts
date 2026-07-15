@@ -1,4 +1,6 @@
+import {readFileSync} from 'node:fs'
 import {rm} from 'node:fs/promises'
+import {join} from 'node:path'
 
 import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
@@ -12,6 +14,7 @@ import {
 } from './backgroundServerStack.ts'
 
 const gibibyte = 1024 ** 3
+const projectRoot = process.cwd()
 const defaultLocalAppSettings = {
   maintenanceWorkerDuckdbMemoryLimit: null,
   codexBin: null,
@@ -22,6 +25,13 @@ const defaultLocalAppSettings = {
   projectMartLargeRebuildPollIntervalMs: null,
   projectMartLargeRebuildTuningMode: 'automatic' as const,
 }
+
+test('background server stack keeps direct DuckDB access behind shared utilities', () => {
+  const source = readFileSync(join(projectRoot, 'src/server/utils/backgroundServerStack.ts'), 'utf8')
+
+  expect(source).not.toContain('@duckdb/node-api')
+  expect(source).toContain('runEphemeralReadOnlyDuckdbFileJsonQuery')
+})
 
 test('background server stack derives a low-memory maintenance-worker DuckDB limit', () => {
   expect(getDefaultBackgroundMaintenanceDuckdbMemoryLimit(8 * gibibyte, 'linux')).toBe('4GB')
