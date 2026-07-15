@@ -593,9 +593,12 @@ test('background import caps tracked importable jobs after database filtering', 
         })
 
         const {runJudgmentJobSqliteBackgroundImport} = await import(backgroundImportModulePath + '?tracked-importable-cap=' + Date.now())
-        const summary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'})
+        const firstSummary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'})
+        const firstFlushJobIds = [...flushJobIds]
+        flushJobIds.length = 0
+        const secondSummary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'})
 
-        console.log(JSON.stringify({flushJobIds, summary}))
+        console.log(JSON.stringify({firstFlushJobIds, firstSummary, secondFlushJobIds: flushJobIds, secondSummary}))
       `,
     ],
     {cwd: process.cwd(), env: {...process.env}},
@@ -610,13 +613,18 @@ test('background import caps tracked importable jobs after database filtering', 
   }
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
-    flushJobIds: string[]
-    summary: {attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}
+    firstFlushJobIds: string[]
+    firstSummary: {attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}
+    secondFlushJobIds: string[]
+    secondSummary: {attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}
   }
 
-  expect(result.flushJobIds).toHaveLength(100)
-  expect(result.flushJobIds).not.toContain('d-importable-100')
-  expect(result.summary).toEqual({attemptedCount: 100, failedCount: 0, skippedCount: 100, succeededCount: 0})
+  expect(result.firstFlushJobIds).toHaveLength(100)
+  expect(result.firstFlushJobIds).not.toContain('d-importable-100')
+  expect(result.firstSummary).toEqual({attemptedCount: 100, failedCount: 0, skippedCount: 100, succeededCount: 0})
+  expect(result.secondFlushJobIds).toHaveLength(100)
+  expect(result.secondFlushJobIds).toContain('d-importable-100')
+  expect(result.secondSummary).toEqual({attemptedCount: 100, failedCount: 0, skippedCount: 100, succeededCount: 0})
 })
 
 test('background import fast flushes draining jobs before active jobs', () => {
