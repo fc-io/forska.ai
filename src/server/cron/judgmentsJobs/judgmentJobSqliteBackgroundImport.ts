@@ -65,12 +65,17 @@ const sortImportableJudgmentJobs = (jobs: ImportableJudgmentJob[]) => {
   })
 }
 
-const getNormalizedImportableJudgmentJobs = (rows: ImportableJudgmentJobRow[]) => {
-  return sortImportableJudgmentJobs(
+const getNormalizedImportableJudgmentJobs = (
+  rows: ImportableJudgmentJobRow[],
+  {limit = maxImportableJudgmentJobsPerScan}: {limit?: number | null} = {},
+) => {
+  const jobs = sortImportableJudgmentJobs(
     rows.map((row) => {
       return normalizeImportableJudgmentJob(row)
     }),
-  ).slice(0, maxImportableJudgmentJobsPerScan)
+  )
+
+  return limit === null ? jobs : jobs.slice(0, limit)
 }
 
 const getChunks = <T>(items: T[], chunkSize: number) => {
@@ -127,7 +132,7 @@ const getImportableJudgmentJobs = async () => {
     )
   }
 
-  return getNormalizedImportableJudgmentJobs(rows)
+  return getNormalizedImportableJudgmentJobs(rows, {limit: null})
 }
 
 const getEmptyRetentionPruneResult = (): RetentionPruneResult => {
