@@ -10,6 +10,7 @@ import {readReviewServingRows, type ReviewServingReaderDatabase} from '../../rev
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
 import {getSystemActor} from '../../utils/getSystemActor.ts'
+import {getHumanAssessmentWorkloadContext} from './humanAssessmentWorkloadContext.ts'
 
 type HumanAssessmentOverviewProjectRow = {id: string; name: string}
 type HumanAssessmentOverviewCountRow = {availability?: string; count_value?: number | null; countValue?: number | null}
@@ -72,12 +73,15 @@ export const getHumanAssessmentOverviewProjectCountFromServing = async (
 export const getHumanAssessmentOverviewProjectsFromServing = async (
   contractKey: 'review.both.count' | 'review.human.count',
 ) => {
-  const projects = await getAppDatabaseService().queryJson<HumanAssessmentOverviewProjectRow>(`
+  const projects = await getAppDatabaseService().queryJson<HumanAssessmentOverviewProjectRow>(
+    `
     SELECT id, name
     FROM app.project
     WHERE COALESCE(archived, FALSE) = FALSE
     ORDER BY created_at DESC, id ASC
-  `)
+  `,
+    getHumanAssessmentWorkloadContext({maxResultRows: 500, operation: 'overview.activeProjects'}),
+  )
 
   const projectsWithCounts = await Promise.all(
     projects.map(async (project) => {
