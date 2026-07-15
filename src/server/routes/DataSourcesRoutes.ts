@@ -4,6 +4,7 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getCovidencePackageConfig} from '../services/covidenceImportService.ts'
 import {getStructuredFileImportConfig} from '../services/structuredFileImportService.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 type AppDatabaseService = ReturnType<typeof getAppDatabaseService>
@@ -35,6 +36,23 @@ type DataSourceImportState = {
   linkedPromptIds: string[]
   reimportable: boolean
   structuredFileConfig: StructuredFileConfig | null
+}
+
+const dataSourceListLimit = 500
+const covidencePromptLinksPerImportRouteLimit = 100
+const getDataSourcesWorkloadContext = ({
+  maxResultRows,
+  operation,
+}: {
+  maxResultRows?: number
+  operation: string
+}): DuckdbWorkloadContext => {
+  return {
+    fallbackIntent: 'reject',
+    maxResultRows,
+    routeOrJobKey: `dataSources.${operation}`,
+    workloadClass: 'owner.product.dataSources',
+  }
 }
 
 const parseOptionalDate = (value?: string | null) => {
@@ -88,7 +106,8 @@ const getCovidenceProjectIdByImportRoute = async (db: AppQueryRunner, importRout
   const rows =
     importRoutes.length === 0
       ? []
-      : await db.queryJson<CovidenceProjectLinkRow>(`
+      : await db.queryJson<CovidenceProjectLinkRow>(
+          `
         SELECT
           ir.route AS importRoute,
           pir.project_id AS projectId
@@ -99,7 +118,9 @@ const getCovidenceProjectIdByImportRoute = async (db: AppQueryRunner, importRout
             return getSqlLiteral(importRoute)
           })
           .join(', ')})
-      `)
+      `,
+          getDataSourcesWorkloadContext({maxResultRows: importRoutes.length, operation: 'covidenceProjectLinks'}),
+        )
 
   return new Map(
     rows.map((row) => {
@@ -112,7 +133,8 @@ const getCovidencePromptIdsByImportRoute = async (db: AppQueryRunner, importRout
   const rows =
     importRoutes.length === 0
       ? []
-      : await db.queryJson<CovidencePromptLinkRow>(`
+      : await db.queryJson<CovidencePromptLinkRow>(
+          `
         SELECT
           ir.route AS importRoute,
           pp.prompt_id AS promptId
@@ -127,7 +149,12 @@ const getCovidencePromptIdsByImportRoute = async (db: AppQueryRunner, importRout
           AND pp.archived = FALSE
           AND pp.enabled = TRUE
         ORDER BY pp.prompt_order ASC, pp.prompt_id ASC
-      `)
+      `,
+          getDataSourcesWorkloadContext({
+            maxResultRows: importRoutes.length * covidencePromptLinksPerImportRouteLimit,
+            operation: 'covidencePromptLinks',
+          }),
+        )
 
   return rows.reduce<Map<string, string[]>>((promptIdsByImportRoute, row) => {
     const existingPromptIds = promptIdsByImportRoute.get(row.importRoute) ?? []
@@ -226,16 +253,22 @@ const getDataSourceRowSql = (dataSourceId: string) => {
 }
 
 const getDataSourceRow = async (db: AppQueryRunner, dataSourceId: string) => {
-  const [row] = await db.queryJson<DataSourceRow>(getDataSourceRowSql(dataSourceId))
+  const [row] = await db.queryJson<DataSourceRow>(
+    getDataSourceRowSql(dataSourceId),
+    getDataSourcesWorkloadContext({maxResultRows: 1, operation: 'detail'}),
+  )
   return row ?? null
 }
 
 const updateDataSourceTx = async (tx: AppTx, params: {dataSourceId: string; updateParts: string[]}) => {
-  await tx.run(`
+  await tx.run(
+    `
     UPDATE app.data_source
     SET ${params.updateParts.join(', ')}
     WHERE id = '${escapeSqlString(params.dataSourceId)}'
-  `)
+  `,
+    getDataSourcesWorkloadContext({operation: 'update'}),
+  )
 
   return getDataSourceRow(tx, params.dataSourceId)
 }
@@ -256,7 +289,8 @@ export const dataSourcesRoutes = new Elysia()
       itemsAfterLastImport: number | null
       importRoute: string | null
       cursor: string | null
-    }>(`
+    }>(
+      `
       SELECT
         id,
         title,
@@ -273,7 +307,10 @@ export const dataSourcesRoutes = new Elysia()
       FROM app.data_source
       WHERE archived = FALSE
       ORDER BY created_at DESC
-    `)
+      LIMIT ${dataSourceListLimit}
+    `,
+      getDataSourcesWorkloadContext({maxResultRows: dataSourceListLimit, operation: 'listActive'}),
+    )
     return {data: await normalizeDataSourceRows(getAppDatabaseService(), rows)}
   })
   .get('/api/datasources/archived', async () => {
@@ -290,7 +327,8 @@ export const dataSourcesRoutes = new Elysia()
       itemsAfterLastImport: number | null
       importRoute: string | null
       cursor: string | null
-    }>(`
+    }>(
+      `
       SELECT
         id,
         title,
@@ -307,7 +345,10 @@ export const dataSourcesRoutes = new Elysia()
       FROM app.data_source
       WHERE archived = TRUE
       ORDER BY created_at DESC
-    `)
+      LIMIT ${dataSourceListLimit}
+    `,
+      getDataSourcesWorkloadContext({maxResultRows: dataSourceListLimit, operation: 'listArchived'}),
+    )
     return {data: await normalizeDataSourceRows(getAppDatabaseService(), rows)}
   })
   .get('/api/datasources/:id', async ({params}) => {
@@ -324,7 +365,8 @@ export const dataSourcesRoutes = new Elysia()
       updatedAt: unknown
       dateFrom: unknown
       dateTo: unknown
-    }>(`
+    }>(
+      `
       SELECT
         id,
         title,
@@ -341,7 +383,9 @@ export const dataSourcesRoutes = new Elysia()
       FROM app.data_source
       WHERE id = '${escapeSqlString(params.id)}'
       LIMIT 1
-    `)
+    `,
+      getDataSourcesWorkloadContext({maxResultRows: 1, operation: 'detail'}),
+    )
 
     if (!entry) {
       throw new Error('Data source not found')
@@ -372,7 +416,8 @@ export const dataSourcesRoutes = new Elysia()
         dateFrom: unknown
         dateTo: unknown
         archived: boolean
-      }>(`
+      }>(
+        `
         INSERT INTO app.data_source (id, title, description, import_route, date_from, date_to)
         VALUES (
           '${escapeSqlString(crypto.randomUUID())}',
@@ -394,7 +439,9 @@ export const dataSourcesRoutes = new Elysia()
           date_from AS dateFrom,
           date_to AS dateTo,
           archived
-      `)
+      `,
+        getDataSourcesWorkloadContext({maxResultRows: 1, operation: 'create'}),
+      )
 
       return {
         data: created
@@ -452,9 +499,12 @@ export const dataSourcesRoutes = new Elysia()
         return part !== null
       })
 
-      const updated = (await getAppDatabaseService().transaction(async (tx) => {
-        return updateDataSourceTx(tx, {dataSourceId: params.id, updateParts})
-      })) as DataSourceRow | null
+      const updated = (await getAppDatabaseService().transaction(
+        async (tx) => {
+          return updateDataSourceTx(tx, {dataSourceId: params.id, updateParts})
+        },
+        getDataSourcesWorkloadContext({operation: 'updateTransaction'}),
+      )) as DataSourceRow | null
 
       if (!updated) {
         throw new Error('Data source not found')
@@ -476,12 +526,15 @@ export const dataSourcesRoutes = new Elysia()
     },
   )
   .delete('/api/datasources/:id', async ({params}) => {
-    const archived = (await getAppDatabaseService().transaction(async (tx) => {
-      return updateDataSourceTx(tx, {
-        dataSourceId: params.id,
-        updateParts: ['archived = TRUE', 'updated_at = current_timestamp'],
-      })
-    })) as DataSourceRow | null
+    const archived = (await getAppDatabaseService().transaction(
+      async (tx) => {
+        return updateDataSourceTx(tx, {
+          dataSourceId: params.id,
+          updateParts: ['archived = TRUE', 'updated_at = current_timestamp'],
+        })
+      },
+      getDataSourcesWorkloadContext({operation: 'archiveTransaction'}),
+    )) as DataSourceRow | null
 
     if (!archived) {
       throw new Error('Data source not found')
