@@ -1,3 +1,5 @@
+import {readFileSync} from 'node:fs'
+
 import {expect, test} from 'bun:test'
 
 type StructuredFileConfigResponse = {
@@ -189,6 +191,16 @@ const runDataSourcesRoute = (params: {
     {cwd: process.cwd(), env: process.env},
   )
 }
+
+test('covidence project link lookup returns one bounded row per import route', () => {
+  const routeText = readFileSync('src/server/routes/DataSourcesRoutes.ts', 'utf8')
+
+  expect(routeText).toContain('SELECT DISTINCT ON (ir.route)')
+  expect(routeText).toContain('ORDER BY ir.route ASC, pir.project_id ASC')
+  expect(routeText).toContain(
+    "getDataSourcesWorkloadContext({maxResultRows: importRoutes.length, operation: 'covidenceProjectLinks'})",
+  )
+})
 
 test('datasource list responses omit raw cursor while including structured file config', () => {
   const runRoute = runDataSourcesRoute({row: structuredRow, url: 'http://localhost/api/datasources'})
