@@ -245,6 +245,120 @@ test('background import selects the next active or draining job for a single imp
   expect(result.summary).toEqual({attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0})
 })
 
+test('background import filters tracked sqlite jobs before applying the importable work cap', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
+        const judgmentJobPathsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobPaths.ts')
+        const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const outboxImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts')
+        const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
+        const importedJobIds = []
+        const lookupStatements = []
+        const trackedJobIds = [
+          ...Array.from({length: 100}, (_, index) => 'a-retained-' + String(index).padStart(3, '0')),
+          'z-importable',
+        ]
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                run: async () => {},
+                queryJson: async (statement) => {
+                  if (!statement.includes('FROM app.judgment_job') || !statement.includes('id IN')) {
+                    return []
+                  }
+
+                  lookupStatements.push(statement)
+
+                  return statement.includes("'z-importable'")
+                    ? [{id: 'z-importable', storageState: 'active'}]
+                    : []
+                },
+              }
+            },
+          }
+        })
+
+        void mock.module(judgmentJobPathsModulePath, () => {
+          return {
+            getJudgmentJobSqliteJobIds: () => {
+              return trackedJobIds
+            },
+          }
+        })
+
+        void mock.module(sqliteServiceModulePath, () => {
+          return {
+            JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
+            getJudgmentJobSqliteService: () => {
+              return {
+                getHealthSnapshot: async () => {
+                  return null
+                },
+                hasOwnedLease: () => false,
+                syncOwnedLeases: async () => {},
+              }
+            },
+          }
+        })
+
+        void mock.module(outboxImportModulePath, () => {
+          return {
+            runJudgmentJobSqliteOutboxImportCycle: async ({jobId}) => {
+              importedJobIds.push(jobId)
+              return {
+                claimedBy: 'test-server',
+                discardedCount: 0,
+                duplicateCount: 0,
+                importedCount: 1,
+                jobId,
+                outboxClaimId: 'claim-1',
+                outboxRowCount: 1,
+                status: 'imported',
+              }
+            },
+          }
+        })
+
+        const {runJudgmentJobSqliteBackgroundImport} = await import(backgroundImportModulePath + '?tracked-cap=' + Date.now())
+        const summary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'})
+
+        console.log(JSON.stringify({importedJobIds, lookupStatements, summary}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'SQLite tracked import cap regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    importedJobIds: string[]
+    lookupStatements: string[]
+    summary: {attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}
+  }
+
+  expect(result.lookupStatements).toHaveLength(2)
+  expect(result.lookupStatements[0]).not.toContain("'z-importable'")
+  expect(result.lookupStatements[1]).toContain("'z-importable'")
+  expect(result.importedJobIds).toEqual(['z-importable'])
+  expect(result.summary).toEqual({attemptedCount: 1, failedCount: 0, skippedCount: 0, succeededCount: 1})
+})
+
 test('background import fast flushes draining jobs before active jobs', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
