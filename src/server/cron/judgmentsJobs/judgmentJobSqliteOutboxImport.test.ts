@@ -66,6 +66,21 @@ test('background sqlite importer uses bounded background DuckDB access', () => {
   expect(source).toContain('maxResultRows: 1')
 })
 
+test('sqlite outbox import uses bounded background DuckDB lookups', () => {
+  const source = readFileSync(
+    join(process.cwd(), 'src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'),
+    'utf8',
+  )
+
+  expect(source).toContain('maxImportCandidateJobsPerScan = 100')
+  expect(source).toContain("routeOrJobKey: 'judgmentJob.sqliteOutboxImport.lookup'")
+  expect(source).toContain("workloadClass: 'background.judgmentJob.sqliteImport'")
+  expect(source).toContain('queryOutboxImportBackground')
+  expect(source).toContain('queryJsonBackground')
+  expect(source).toContain('maxResultRows: maxImportCandidateJobsPerScan')
+  expect(source).toContain('maxResultRows: 1')
+})
+
 beforeAll(async () => {
   const [
     {migrateDuckdb},
