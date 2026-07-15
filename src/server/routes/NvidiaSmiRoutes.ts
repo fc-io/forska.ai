@@ -1,16 +1,32 @@
 import {Elysia} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
+const nvidiaSmiRowsLimit = 30
+const nvidiaSmiRouteWorkloadContext: DuckdbWorkloadContext = {
+  fallbackIntent: 'serveStale',
+  routeOrJobKey: 'nvidiaSmi.route',
+  workloadClass: 'foreground-diagnostic',
+}
+const nvidiaSmiTableLookupWorkloadContext: DuckdbWorkloadContext = {...nvidiaSmiRouteWorkloadContext, maxResultRows: 1}
+const nvidiaSmiRowsWorkloadContext: DuckdbWorkloadContext = {
+  ...nvidiaSmiRouteWorkloadContext,
+  maxResultRows: nvidiaSmiRowsLimit,
+}
+
 export const nvidiaSmiRoutes = new Elysia().use(withErrorHandler()).get('/api/nvidiasmi', async () => {
-  const [tableRow] = await getAppDatabaseService().queryJson<{tableName: string}>(`
+  const [tableRow] = await getAppDatabaseService().queryJson<{tableName: string}>(
+    `
     SELECT table_name AS tableName
     FROM information_schema.tables
     WHERE table_schema = 'app'
       AND table_name = 'nvidia_smi'
     LIMIT 1
-  `)
+  `,
+    nvidiaSmiTableLookupWorkloadContext,
+  )
 
   if (!tableRow) {
     return {data: []}
@@ -31,7 +47,8 @@ export const nvidiaSmiRoutes = new Elysia().use(withErrorHandler()).get('/api/nv
     powerLimitWatts: number | null
     fanSpeed: number | null
     pstate: string | null
-  }>(`
+  }>(
+    `
     SELECT
       ts,
       instance_id AS instanceId,
@@ -49,8 +66,10 @@ export const nvidiaSmiRoutes = new Elysia().use(withErrorHandler()).get('/api/nv
       pstate
     FROM app.nvidia_smi
     ORDER BY ts DESC
-    LIMIT 30
-  `)
+    LIMIT ${nvidiaSmiRowsLimit}
+  `,
+    nvidiaSmiRowsWorkloadContext,
+  )
 
   return {data}
 })

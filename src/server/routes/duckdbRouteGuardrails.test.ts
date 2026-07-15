@@ -132,6 +132,23 @@ const normalForegroundSqlAllowlist = new Set([
   'src/server/routes/tokensRoutes/tokensRoutesGetFailedRequests.ts',
   'src/server/routes/tokensRoutes/tokensRoutesTimelineUtils.ts',
 ])
+const ownerRoutedDiagnosticRouteContextRequirements = [
+  {
+    maxResultRowsMarkers: ['maxResultRows: importRoutesListLimit'],
+    path: 'src/server/routes/ImportRoutes.ts',
+    routeOrJobKeyMarkers: ["routeOrJobKey: 'importRoutes.list'"],
+  },
+  {
+    maxResultRowsMarkers: ['maxResultRows: 1', 'maxResultRows: llmStatusRowsLimit'],
+    path: 'src/server/routes/LlmStatusRoutes.ts',
+    routeOrJobKeyMarkers: ["routeOrJobKey: 'llmStatus.route'"],
+  },
+  {
+    maxResultRowsMarkers: ['maxResultRows: 1', 'maxResultRows: nvidiaSmiRowsLimit'],
+    path: 'src/server/routes/NvidiaSmiRoutes.ts',
+    routeOrJobKeyMarkers: ["routeOrJobKey: 'nvidiaSmi.route'"],
+  },
+]
 
 test('api proxy routes are registered before public product API handlers in serverMain', () => {
   const serverMainText = readFileSync(serverMainPath, 'utf8')
@@ -226,6 +243,31 @@ test('route handlers cannot add new unallowlisted generic DuckDB imports', () =>
         return `${routeFile}: ${entry.label}`
       })
   })
+
+  expect(violations).toEqual([])
+})
+
+test('owner-routed diagnostic route DuckDB reads keep explicit workload contexts and caps', () => {
+  const violations = ownerRoutedDiagnosticRouteContextRequirements.flatMap(
+    ({maxResultRowsMarkers, path: routePath, routeOrJobKeyMarkers}) => {
+      const fileText = readFileSync(join(workspaceRoot, routePath), 'utf8')
+      const requiredMarkers = [
+        'import type {DuckdbWorkloadContext}',
+        'fallbackIntent:',
+        'workloadClass:',
+        ...routeOrJobKeyMarkers,
+        ...maxResultRowsMarkers,
+      ]
+
+      return requiredMarkers
+        .filter((marker) => {
+          return !fileText.includes(marker)
+        })
+        .map((marker) => {
+          return `${routePath}: missing ${marker}`
+        })
+    },
+  )
 
   expect(violations).toEqual([])
 })
