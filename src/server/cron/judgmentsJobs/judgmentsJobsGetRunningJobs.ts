@@ -15,6 +15,14 @@ const runningJobsLogger = createRateLimitedLogger({windowMs: 30_000})
 const ownerBackedRunningJobsCacheTtlMs = 300_000
 let ownerBackedRunningJobsCache: {jobs: RunningJudgmentJob[]; updatedAt: number} | null = null
 
+const isOwnerBackedRunningJobsOwnerStartupTimeout = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error)
+
+  return (
+    message.includes('The operation timed out.') || message.includes('fetch failed') || message.includes('ECONNREFUSED')
+  )
+}
+
 const getRuntimeCheckFailureLogMessage = ({
   provider,
   reason,
@@ -143,6 +151,15 @@ const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {
           {error: error instanceof Error ? error.message : String(error), fallbackJobCount: fallbackJobs.length},
         )
         return fallbackJobs
+      }
+
+      if (isOwnerBackedRunningJobsOwnerStartupTimeout(error)) {
+        runningJobsLogger.warn(
+          'judgments-owner-backed-running-jobs-owner-not-ready',
+          '[judgments] DuckDB owner not ready for running jobs; skipping this dispatch tick',
+          {error: error instanceof Error ? error.message : String(error), ownerState: 'startup-or-repair'},
+        )
+        return []
       }
 
       runningJobsLogger.warn(

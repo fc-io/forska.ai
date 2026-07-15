@@ -354,6 +354,12 @@ const getLlmJudgmentDirectInsertStatement = (input: ProjectReviewServingJudgment
           AND judgment.use_fulltext_no_images = ${getSqlLiteral(input.useFulltextNoImages)}
           AND judgment.deleted_at IS NULL
       ),
+      latest_assessment AS (
+        SELECT
+          assessment.*,
+          ${rowNumberSql}() OVER (PARTITION BY assessment.judgment_id ORDER BY assessment.updated_at DESC NULLS LAST, assessment.created_at DESC NULLS LAST, assessment.id DESC) AS assessment_rank
+        FROM app."judgment_assessment" assessment
+      ),
       payload AS (
         SELECT
           active.article_id,
@@ -397,8 +403,9 @@ const getLlmJudgmentDirectInsertStatement = (input: ProjectReviewServingJudgment
           ON model.id = COALESCE(judgment.model_id, ${getSqlLiteral(input.modelId)})
         LEFT JOIN app.provider_connection provider_connection
           ON provider_connection.id = model.provider_connection_id
-        LEFT JOIN app."judgment_assessment" assessment
+        LEFT JOIN latest_assessment assessment
           ON assessment.judgment_id = judgment.id
+          AND assessment.assessment_rank = 1
       )
       SELECT
         ${getSqlLiteral(input.projectId)} AS project_id,

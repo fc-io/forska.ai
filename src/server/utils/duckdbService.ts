@@ -3053,7 +3053,7 @@ const getDuckdbIndexedTableRepairScript = () => {
         return createSql
       }
 
-      return primaryKeyColumns.reduce((sql, columnName) => {
+      const withoutInlinePrimaryKeys = primaryKeyColumns.reduce((sql, columnName) => {
         if (typeof columnName !== 'string' || columnName.trim().length === 0) {
           return sql
         }
@@ -3063,6 +3063,10 @@ const getDuckdbIndexedTableRepairScript = () => {
           '$1',
         )
       }, createSql)
+
+      return withoutInlinePrimaryKeys
+        .replace(/,\\s*(?:CONSTRAINT\\s+[^\\s]+\\s+)?PRIMARY\\s+KEY\\s*\\([^)]*\\)/i, '')
+        .replace(/\\(\\s*(?:CONSTRAINT\\s+[^\\s]+\\s+)?PRIMARY\\s+KEY\\s*\\([^)]*\\)\\s*,/i, '(')
     }
 
     const getRepairPrimaryKeyIndexSql = (spec, sourceName) => {
@@ -3083,6 +3087,66 @@ const getDuckdbIndexedTableRepairScript = () => {
         primaryKeyColumns.join(', ') +
         ')'
       )
+    }
+
+    const normalizeIndexColumnName = (columnName) => {
+      return String(columnName).trim().replace(/^["']|["']$/g, '').toLowerCase()
+    }
+
+    const getIndexSqlColumns = (indexSql) => {
+      const match = String(indexSql).match(/\\(([^()]*)\\)\\s*;?\\s*$/u)
+
+      if (match === null) {
+        return []
+      }
+
+      return match[1].split(',').map(normalizeIndexColumnName)
+    }
+
+    const hasUniqueIndexForPrimaryKeyColumns = async (spec) => {
+      const expectedColumns = Array.isArray(spec.repairPrimaryKeyColumns)
+        ? spec.repairPrimaryKeyColumns.map(normalizeIndexColumnName)
+        : []
+
+      if (expectedColumns.length === 0) {
+        return true
+      }
+
+      const rows = await getRows(
+        "SELECT sql FROM duckdb_indexes() " +
+          "WHERE schema_name = " + getSqlLiteral(spec.schemaName) +
+          " AND table_name = " + getSqlLiteral(spec.tableName),
+      )
+
+      return rows.some((row) => {
+        if (typeof row.sql !== 'string' || !/^\\s*CREATE\\s+UNIQUE\\s+INDEX\\b/iu.test(row.sql)) {
+          return false
+        }
+
+        const columns = getIndexSqlColumns(row.sql)
+
+        return columns.length === expectedColumns.length && columns.every((column, index) => {
+          return column === expectedColumns[index]
+        })
+      })
+    }
+
+    const assertRepairPostconditions = async (spec) => {
+      const tableRows = await getRows(
+        "SELECT sql FROM duckdb_tables() " +
+          "WHERE schema_name = " + getSqlLiteral(spec.schemaName) +
+          " AND table_name = " + getSqlLiteral(spec.tableName) +
+          " LIMIT 1",
+      )
+      const createSql = String(tableRows[0]?.sql ?? '')
+
+      if (/\\bPRIMARY\\s+KEY\\b/iu.test(createSql)) {
+        throw new Error('repaired table DDL still contains PRIMARY KEY for ' + getQualifiedName(spec.schemaName, spec.tableName))
+      }
+
+      if (!(await hasUniqueIndexForPrimaryKeyColumns(spec))) {
+        throw new Error('repaired table is missing replacement unique index for ' + getQualifiedName(spec.schemaName, spec.tableName))
+      }
     }
 
     const tableExists = async (schemaName, tableName) => {
@@ -3224,6 +3288,8 @@ const getDuckdbIndexedTableRepairScript = () => {
         ) {
           await connection.run(spec.postRepairSql)
         }
+
+        await assertRepairPostconditions(spec)
       }
 
     } finally {
@@ -3237,7 +3303,11 @@ const getDuckdbIndexedTableRepairScript = () => {
   `
 }
 
-const getDuckdbStartupPreflightError = (runtimeConfig: DuckdbRuntimeConfig, hadWalBeforePreflight: boolean) => {
+const getDuckdbStartupPreflightError = (
+  runtimeConfig: DuckdbRuntimeConfig,
+  hadWalBeforePreflight: boolean,
+  pendingPostRepairPreflightSpecs: DuckdbStartupIndexedTableRepairSpec[] = [],
+) => {
   if (
     runtimeConfig.databasePath === ':memory:'
     || process.env.FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT === duckdbStartupWalPreflightDisabledEnvValue
@@ -3263,9 +3333,10 @@ const getDuckdbStartupPreflightError = (runtimeConfig: DuckdbRuntimeConfig, hadW
     return error
   }
 
+  const targetedPreflightSpecs = activeRepairSpecs.length > 0 ? activeRepairSpecs : pendingPostRepairPreflightSpecs
   const preflightRepairSpecs = hadWalBeforePreflight
     ? []
-    : getDuckdbStartupPreflightSpecsForRuntime(runtimeConfig, activeRepairSpecs)
+    : getDuckdbStartupPreflightSpecsForRuntime(runtimeConfig, targetedPreflightSpecs)
 
   if (preflightRepairSpecs.length === 0 && !hadWalBeforePreflight) {
     writeRuntimeOperatorLogEvent({
@@ -3341,6 +3412,30 @@ const getDuckdbStartupFileLockProbeScript = () => {
   `
 }
 
+const getDuckdbStartupWalCheckpointScript = () => {
+  return `
+    const databasePath = JSON.parse(process.argv[1])
+    const options = JSON.parse(process.argv[2])
+    const {DuckDBInstance} = await import('@duckdb/node-api')
+
+    let connection = null
+    let instance = null
+
+    try {
+      instance = await DuckDBInstance.create(databasePath, options)
+      connection = await instance.connect()
+      await connection.run('CHECKPOINT')
+    } finally {
+      try {
+        connection?.closeSync()
+      } catch {}
+      try {
+        instance?.closeSync()
+      } catch {}
+    }
+  `
+}
+
 const getDuckdbStartupChildOutputText = (result: ReturnType<typeof globalThis.Bun.spawnSync>) => {
   const stderr = result.stderr.toString().trim()
   const stdout = result.stdout.toString().trim()
@@ -3399,6 +3494,43 @@ const waitForDuckdbStartupRepairFileLock = async (runtimeConfig: DuckdbRuntimeCo
   throw new Error(
     `DuckDB startup repair lock probe failed for ${runtimeConfig.databasePath}: ${
       outputText === '' ? `exitCode=${result?.exitCode ?? 'unknown'}` : outputText
+    }`,
+  )
+}
+
+const checkpointDuckdbStartupWalReplay = async (runtimeConfig: DuckdbRuntimeConfig) => {
+  const result = globalThis.Bun.spawnSync(
+    [
+      process.execPath,
+      '-e',
+      getDuckdbStartupWalCheckpointScript(),
+      JSON.stringify(runtimeConfig.databasePath),
+      JSON.stringify(getDuckdbInstanceOptions(runtimeConfig)),
+    ],
+    {
+      cwd: process.cwd(),
+      env: {...process.env, FORSKA_DUCKDB_STARTUP_WAL_CHECKPOINT_CHILD: 'true'},
+      stderr: 'pipe',
+      stdin: 'ignore',
+      stdout: 'pipe',
+    },
+  )
+
+  if (result.exitCode === 0) {
+    writeRuntimeOperatorLogEvent({
+      attrs: {databasePath: runtimeConfig.databasePath},
+      event: 'duckdb.startup.wal-checkpoint',
+      message: '[duckdb] checkpointed replayed WAL before startup mutation preflight',
+      severity: 'INFO',
+    })
+    return
+  }
+
+  const outputText = getDuckdbStartupChildOutputText(result)
+
+  throw new Error(
+    `DuckDB startup WAL checkpoint failed for ${runtimeConfig.databasePath}: ${
+      outputText === '' ? `exitCode=${result.exitCode ?? 'unknown'}` : outputText
     }`,
   )
 }
@@ -3521,13 +3653,39 @@ const repairDuckdbStartupIndexedTables = async (runtimeConfig: DuckdbRuntimeConf
 
 const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) => {
   let attemptedIndexedTableRepair = false
+  let checkpointedWalReplay = false
   let lockRetryCount = 0
+  let pendingPostRepairPreflightSpecs: DuckdbStartupIndexedTableRepairSpec[] = []
 
   for (let recoveryAttempt = 0; recoveryAttempt < 3; ) {
     const hadWalBeforePreflight = hasNonEmptyDuckdbWal(runtimeConfig.databasePath)
-    const error = getDuckdbStartupPreflightError(runtimeConfig, hadWalBeforePreflight)
+    const error = getDuckdbStartupPreflightError(runtimeConfig, hadWalBeforePreflight, pendingPostRepairPreflightSpecs)
 
     if (error === null) {
+      if (!hadWalBeforePreflight) {
+        pendingPostRepairPreflightSpecs = []
+      }
+
+      if (hadWalBeforePreflight && !checkpointedWalReplay) {
+        checkpointedWalReplay = true
+        try {
+          await checkpointDuckdbStartupWalReplay(runtimeConfig)
+        } catch (checkpointError) {
+          if (hasNonEmptyDuckdbWal(runtimeConfig.databasePath)) {
+            await quarantineFailedDuckdbWalReplay(runtimeConfig, checkpointError, {
+              event: 'duckdb.startup.wal-checkpoint-quarantine',
+              message: '[duckdb] quarantined WAL after startup checkpoint failure',
+              recovery: 'wal-checkpoint-quarantine-retry-from-last-checkpoint',
+              walFileSuffix: 'failed-checkpoint',
+            })
+            continue
+          }
+
+          throw checkpointError
+        }
+        continue
+      }
+
       return
     }
 
@@ -3578,13 +3736,14 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
 
     if (!attemptedIndexedTableRepair) {
       attemptedIndexedTableRepair = true
+      const repairSpecs = getDuckdbStartupIndexedTableRepairSpecs(error)
       await repairDuckdbStartupIndexedTables(runtimeConfig, error)
       const repairMarkerPath = error instanceof Error ? error.repairMarkerPath : undefined
 
       if (typeof repairMarkerPath === 'string') {
         clearDuckdbStartupPreflightActiveRepairSpec(repairMarkerPath)
-        return
       }
+      pendingPostRepairPreflightSpecs = repairSpecs
       continue
     }
 

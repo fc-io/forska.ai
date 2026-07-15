@@ -246,6 +246,65 @@ test('judge-worker running jobs skip a dispatch tick when the owner is unavailab
   expect(result.jobs).toEqual([])
 })
 
+test('judge-worker running jobs classify owner startup timeout as owner not ready', async () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const judgmentsJobsGetRunningJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts')
+        const judgeWorkerCompletionJournalModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts')
+        const sqlitePreflightModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqlitePreflight.ts')
+        const warnings = []
+        const originalWarn = console.warn
+        console.warn = (...args) => {
+          warnings.push(args.map((arg) => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' '))
+        }
+
+        void mock.module(judgeWorkerCompletionJournalModulePath, () => {
+          return {
+            getAcceptedJudgeWorkerClaimRunningJobs: () => [],
+            getOwnerBackedRunningJudgmentJobs: async () => {
+              throw new Error('The operation timed out.')
+            },
+            shouldUseJudgeWorkerOwnerHandoff: () => true,
+          }
+        })
+        void mock.module(sqlitePreflightModulePath, () => {
+          return {
+            filterRunningJobsBySqlitePreflight: async (jobs) => jobs,
+          }
+        })
+
+        const {judgmentsJobsGetRunningJobs} = await import(judgmentsJobsGetRunningJobsModulePath + '?owner-backed-startup-timeout=' + Date.now())
+        const jobs = await judgmentsJobsGetRunningJobs()
+        console.warn = originalWarn
+        console.log(JSON.stringify({jobs, warnings}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'owner-backed startup timeout test failed',
+    )
+  }
+
+  const result = JSON.parse(runScript.stdout.toString()) as {jobs: RunningJudgmentJob[]; warnings: string[]}
+
+  expect(result.jobs).toEqual([])
+  expect(result.warnings.join('\n')).toContain('DuckDB owner not ready for running jobs')
+  expect(result.warnings.join('\n')).toContain('startup-or-repair')
+  expect(result.warnings.join('\n')).not.toContain('owner-backed running jobs unavailable')
+})
+
 test('filterRunningJobsByRuntimeMatch filters out jobs with runtime mismatch', async () => {
   const getRuntimeMatch = mock(async ({modelId}: {modelId: string}) => {
     return {
