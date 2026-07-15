@@ -1,8 +1,8 @@
 import {existsSync} from 'node:fs'
 
 import {DEFAULT_API_SERVER_PORT} from '../../utils/runtimePortDefaults.ts'
-import {getDefaultMaintenanceDuckdbMemoryLimit} from './duckdbMemoryDefaults.ts'
 import {runEphemeralReadOnlyDuckdbFileJsonQuery} from './duckdbEphemeralReadOnly.ts'
+import {getDefaultMaintenanceDuckdbMemoryLimit} from './duckdbMemoryDefaults.ts'
 import {getConfiguredDuckdbPath} from './getDuckdbPath.ts'
 import {type LocalAppSettings, readLocalAppSettings} from './localAppSettings.ts'
 

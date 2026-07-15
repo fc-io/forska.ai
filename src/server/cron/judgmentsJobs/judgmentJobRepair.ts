@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../../utils/duckdbService.ts'
 import {HttpError} from '../../utils/httpError.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 import {runJudgmentJobSqliteIsolatedFlush} from './judgmentJobSqliteIsolatedImport.ts'
@@ -14,7 +15,6 @@ import {
   isTransientJudgmentJobSqliteLockMessage,
 } from './judgmentJobSqliteTransientLock.ts'
 import {getJudgmentJobRepairMode} from './judgmentJobStoragePolicy.ts'
-import {getMaintenanceDuckdbWorkloadContext} from '../../utils/duckdbService.ts'
 
 export type JudgmentJobRepairAction =
   | 'checkpoint'
@@ -183,7 +183,8 @@ const getEmptyRepairChanges = (): JudgmentJobRepairChanges => {
 }
 
 const getRepairJob = async (jobId: string): Promise<JudgmentJobRepairJobState> => {
-  const [job] = await getAppDatabaseService().queryJson<RawRepairJobRow>(`
+  const [job] = await getAppDatabaseService().queryJson<RawRepairJobRow>(
+    `
     SELECT
       id,
       status,
@@ -340,7 +341,8 @@ const getRunningStartupLocalSqliteJobIds = async () => {
   return sqliteJobIds.length === 0
     ? []
     : (
-        await getAppDatabaseService().queryJson<{id: string}>(`
+        await getAppDatabaseService().queryJson<{id: string}>(
+          `
           SELECT id
           FROM app.judgment_job
           WHERE id IN (${getQuotedStringList(sqliteJobIds).join(', ')})
@@ -672,7 +674,8 @@ const runSystemSqliteFallback = async ({
 }
 
 const setJobQuarantine = async ({jobId, reason}: {jobId: string; reason: string}) => {
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     UPDATE app.judgment_job
     SET status = 'failed',
         storage_state = 'quarantined',
@@ -686,7 +689,8 @@ const setJobQuarantine = async ({jobId, reason}: {jobId: string; reason: string}
 }
 
 const clearJobQuarantine = async (jobId: string) => {
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     UPDATE app.judgment_job
     SET status = CASE WHEN status = 'failed' THEN 'paused' ELSE status END,
         storage_state = 'active',
@@ -703,7 +707,8 @@ const clearJobQuarantine = async (jobId: string) => {
 }
 
 const restoreJobForResumedLocalQueue = async (jobId: string) => {
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     UPDATE app.judgment_job
     SET status = CASE
           WHEN status IN ('completed', 'failed', 'project_removed') THEN 'paused'
@@ -720,7 +725,8 @@ const restoreJobForResumedLocalQueue = async (jobId: string) => {
 }
 
 const markJobDraining = async (jobId: string) => {
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     UPDATE app.judgment_job
     SET status = CASE WHEN status = 'running' THEN 'paused' ELSE status END,
         storage_state = 'draining',

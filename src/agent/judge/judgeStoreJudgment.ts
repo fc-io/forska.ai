@@ -266,7 +266,8 @@ export const judgeStoreJudgment = async (
             useAbstract: boolean
             useFulltext: boolean
             useFulltextNoImages: boolean
-          }>(`
+          }>(
+            `
             SELECT
               id,
               use_title AS useTitle,

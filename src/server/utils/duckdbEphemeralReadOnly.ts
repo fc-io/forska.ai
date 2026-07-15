@@ -10,11 +10,7 @@ type EphemeralReadOnlyDuckdbFileQueryInput = {
 }
 
 const getReadOnlyOptions = (memoryLimit: string | undefined) => {
-  return {
-    access_mode: 'READ_ONLY',
-    memory_limit: memoryLimit ?? '6400MiB',
-    preserve_insertion_order: 'false',
-  }
+  return {access_mode: 'READ_ONLY', memory_limit: memoryLimit ?? '6400MiB', preserve_insertion_order: 'false'}
 }
 
 export const runEphemeralReadOnlyDuckdbFileJsonQuery = async <T>({
