@@ -257,6 +257,22 @@ const upsertPromptRow = (promptRowsById: Map<string, ProjectPromptRow>, promptRo
 }
 
 const detailReaderPageSize = 512
+const covidenceRelatedRecordsLimit = 500
+const legacyArticleJudgmentRowsLimit = detailReaderPageSize
+
+const getProjectReviewDetailsWorkloadContext = (params: {
+  maxResultRows?: number
+  operation: string
+  projectId: string
+}) => {
+  return {
+    fallbackIntent: 'reject' as const,
+    maxResultRows: params.maxResultRows,
+    projectId: params.projectId,
+    routeOrJobKey: `projects.reviewDetails.${params.operation}`,
+    workloadClass: 'owner.product.reviewDetails',
+  }
+}
 
 const readAllReviewServingRows = async <T>(
   request: ReviewServingDetailRowsRequest,
@@ -399,7 +415,8 @@ const getArticleJudgmentRows = async (params: {
   articleId: string
   projectId: string
 }): Promise<ArticleJudgmentRow[]> => {
-  return getAppDatabaseService().queryJson<ArticleJudgmentRow>(`
+  return getAppDatabaseService().queryJson<ArticleJudgmentRow>(
+    `
     WITH project_scope_article AS (
       SELECT pir.project_id, air.article_id
       FROM app.project_import_route pir
@@ -459,7 +476,14 @@ const getArticleJudgmentRows = async (params: {
       })}
       AND j.deleted_at IS NULL
     ORDER BY j.created_at DESC NULLS LAST, j.id ASC
-  `)
+    LIMIT ${legacyArticleJudgmentRowsLimit}
+  `,
+    getProjectReviewDetailsWorkloadContext({
+      maxResultRows: legacyArticleJudgmentRowsLimit,
+      operation: 'legacyArticleJudgments',
+      projectId: params.projectId,
+    }),
+  )
 }
 
 const getProjectReviewDetailJudgmentValue = (row: ProjectReviewDetailJudgmentRow): JudgmentRecord => {
@@ -546,7 +570,8 @@ const getCovidenceRelatedRecords = async (params: {
     rawPayload: unknown
     sourceMetadata: unknown
     url: string | null
-  }>(`
+  }>(
+    `
     WITH project_route AS (
       SELECT import_route_id
       FROM app.project_import_route
@@ -599,7 +624,14 @@ const getCovidenceRelatedRecords = async (params: {
       WHERE source_record.id = legacy_related_record.id
     )
     ORDER BY articleTitle ASC, articleExternalId ASC NULLS LAST, id ASC
-  `)
+    LIMIT ${covidenceRelatedRecordsLimit}
+  `,
+    getProjectReviewDetailsWorkloadContext({
+      maxResultRows: covidenceRelatedRecordsLimit,
+      operation: 'covidenceRelatedRecords',
+      projectId: params.projectId,
+    }),
+  )
 
   return rows.map((row) => {
     const sourceMetadata = getJsonValue(row.sourceMetadata)
@@ -774,7 +806,8 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       const [articlePayload, articleFullTextRows, allArticleJudgments] = await Promise.all([
         Promise.resolve(articlePayloadResult.status === 'accepted' ? (articlePayloadResult.rows[0] ?? null) : null),
-        getAppDatabaseService().queryJson<ArticleFullTextRow>(`
+        getAppDatabaseService().queryJson<ArticleFullTextRow>(
+          `
           SELECT
             full_text AS fullText,
             full_text_char_count AS fullTextCharCount,
@@ -785,7 +818,9 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           FROM app.article
           WHERE id = ${getSqlLiteral(articleId)}
           LIMIT 1
-        `),
+        `,
+          getProjectReviewDetailsWorkloadContext({maxResultRows: 1, operation: 'articleFullText', projectId}),
+        ),
         getArticleJudgmentRows({articleId, projectId}),
       ])
       const article = getArticleRecordFromServing({
@@ -999,11 +1034,18 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       )
       const projectNameRows =
         snapshotProjectIds.length > 0
-          ? await getAppDatabaseService().queryJson<{id: string; name: string}>(`
+          ? await getAppDatabaseService().queryJson<{id: string; name: string}>(
+              `
               SELECT id, name
               FROM app.project
               WHERE id IN (${getQuotedStringList(snapshotProjectIds).join(', ')})
-            `)
+            `,
+              getProjectReviewDetailsWorkloadContext({
+                maxResultRows: snapshotProjectIds.length,
+                operation: 'snapshotProjectNames',
+                projectId,
+              }),
+            )
           : []
       const projectsById = projectNameRows.reduce<Record<string, {name: string}>>((acc, row) => {
         return {...acc, [row.id]: {name: row.name}}
