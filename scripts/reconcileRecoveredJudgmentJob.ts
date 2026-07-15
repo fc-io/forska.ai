@@ -4,6 +4,7 @@ import {getJudgmentJobSqlitePath} from '../src/server/cron/judgmentsJobs/judgmen
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 
 type CliOptions = {jobId: string | null}
 type JobInfoRow = {
@@ -24,6 +25,8 @@ type RecoverySummary = {
   sqlUpdatePath: string
   totalRows: number
 }
+
+const workloadContext = getMaintenanceDuckdbWorkloadContext('reconcileRecoveredJudgmentJob')
 
 const getArgValue = (names: string[]) => {
   const matchedArgument = process.argv.slice(2).find((argument) => {
@@ -125,7 +128,8 @@ const getExistingJudgmentPairs = async ({jobInfo, rows}: {jobInfo: JobInfoRow; r
       return current
     }
 
-    const chunkRows = await getAppDatabaseService().queryJson<{articleId: string; promptId: string}>(`
+    const chunkRows = await getAppDatabaseService().queryJson<{articleId: string; promptId: string}>(
+      `
       SELECT article_id AS articleId, prompt_id AS promptId
       FROM app.judgment
       WHERE model_id = ${getSqlLiteral(jobInfo.modelId)}
@@ -140,7 +144,9 @@ const getExistingJudgmentPairs = async ({jobInfo, rows}: {jobInfo: JobInfoRow; r
             return `(article_id = ${getSqlLiteral(row.articleId)} AND prompt_id = ${getSqlLiteral(row.promptId)})`
           })
           .join(' OR ')})
-    `)
+    `,
+      {...workloadContext, maxResultRows: chunk.length},
+    )
 
     return chunkRows.reduce((set, row) => {
       set.add(`${row.articleId}|${row.promptId}`)
@@ -213,7 +219,8 @@ const updateRecoveredJobState = async ({
   remainingQueueRows: number
   totalRows: number
 }) => {
-  await getAppDatabaseService().run(`
+  await getAppDatabaseService().run(
+    `
     UPDATE app.judgment_job
     SET status = CASE
           WHEN ${fullyRecovered ? 'TRUE' : 'FALSE'} AND status = 'failed' THEN 'paused'
@@ -240,7 +247,9 @@ const updateRecoveredJobState = async ({
         import_failure_count = 0,
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(jobId)}
-  `)
+  `,
+    workloadContext,
+  )
 }
 
 const reconcileRecoveredJob = async (jobId: string): Promise<RecoverySummary> => {

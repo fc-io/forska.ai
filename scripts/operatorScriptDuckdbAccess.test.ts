@@ -208,6 +208,18 @@ test('package no longer exposes legacy mart refresh or large-rebuild worker scri
 })
 
 test('direct non-test DB scripts are explicitly isolated', () => {
+  expect(readSource('scripts/analyzeRecoveredJobOrphans.ts')).toContain(
+    "getMaintenanceDuckdbWorkloadContext('analyzeRecoveredJobOrphans')",
+  )
+  expect(readSource('scripts/checkRecoveredJudgmentBatch.ts')).toContain(
+    "getMaintenanceDuckdbWorkloadContext('checkRecoveredJudgmentBatch')",
+  )
+  expect(readSource('scripts/reconcileRecoveredJudgmentJob.ts')).toContain(
+    "getMaintenanceDuckdbWorkloadContext('reconcileRecoveredJudgmentJob')",
+  )
+  expect(readSource('scripts/recoverJudgmentJobWithSystemSqlite.ts')).toContain(
+    "getMaintenanceDuckdbWorkloadContext('recoverJudgmentJobWithSystemSqlite')",
+  )
   expect(readSource('scripts/requestReviewServingForDirtyRefreshClaim.ts')).toContain('withDuckdbMaintenanceAccess')
   expect(readSource('scripts/requestReviewServingForDirtyRefreshClaim.ts')).toContain('requireLegacyAdminAck')
   expect(readSource('scripts/slimProviderMetadata.ts')).toContain('withDuckdbMaintenanceAccess')

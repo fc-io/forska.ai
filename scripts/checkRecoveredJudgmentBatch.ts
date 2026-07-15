@@ -4,6 +4,7 @@ import {getJudgmentJobSqlitePath} from '../src/server/cron/judgmentsJobs/judgmen
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 
 type CliOptions = {jobId: string | null; limit: number; offset: number}
 type ExportedOutboxRow = {
@@ -16,6 +17,8 @@ type ExportedOutboxRow = {
   useFulltextNoImages: number
   useTitle: number
 }
+
+const workloadContext = getMaintenanceDuckdbWorkloadContext('checkRecoveredJudgmentBatch')
 
 const getArgValue = (names: string[]) => {
   const matchedArgument = process.argv.slice(2).find((argument) => {
@@ -46,7 +49,8 @@ const checkBatch = async ({jobId, limit, offset}: {jobId: string; limit: number;
     const missingOutboxSeqs = await withDuckdbMaintenanceAccess('check recovered judgment batch', async () => {
       return batch.reduce<Promise<number[]>>(async (promise, row) => {
         const missing = await promise
-        const result = await db.queryJson<{count: number | string}>(`
+        const result = await db.queryJson<{count: number | string}>(
+          `
           SELECT COUNT(*) AS count
           FROM app.judgment
           WHERE article_id = ${getSqlLiteral(row.articleId)}
@@ -58,7 +62,9 @@ const checkBatch = async ({jobId, limit, offset}: {jobId: string; limit: number;
             AND use_fulltext_no_images = ${getSqlLiteral(row.useFulltextNoImages === 1)}
             AND delete_generation = 0
             AND deleted_at IS NULL
-        `)
+        `,
+          {...workloadContext, maxResultRows: 1},
+        )
 
         return Number(result[0]?.count ?? 0) > 0 ? missing : [...missing, row.outboxSeq]
       }, Promise.resolve([]))
