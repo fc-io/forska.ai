@@ -6,6 +6,7 @@ import {appendProjectScopeArticleReviewServingDelta} from '../reviewServing/proj
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 
 type ProjectArticleMembershipCursor = {articleCreatedAt: string | null; articleId: string}
 
@@ -14,6 +15,24 @@ type ProjectArticleMembershipScopeRow = {articleCreatedAt: string | null; id: st
 type ProjectArticleMembershipArticleRow = {articleTitle: string; id: string}
 
 const maxProjectArticleMembershipLimit = 100
+
+const getProjectArticleMembershipWorkloadContext = ({
+  maxResultRows,
+  operation,
+  projectId,
+}: {
+  maxResultRows?: number
+  operation: string
+  projectId: string
+}): DuckdbWorkloadContext => {
+  return {
+    fallbackIntent: 'reject',
+    maxResultRows,
+    projectId,
+    routeOrJobKey: `projectArticles.${operation}`,
+    workloadClass: 'owner.product.projectArticles',
+  }
+}
 
 const decodeProjectArticleMembershipCursor = (cursor: string | null | undefined) => {
   if (!cursor) {
@@ -80,7 +99,8 @@ const getProjectArticleMembershipRows = async (params: {
   limit: number
   projectId: string
 }) => {
-  const rows = await getAppDatabaseService().queryJson<ProjectArticleMembershipScopeRow>(`
+  const rows = await getAppDatabaseService().queryJson<ProjectArticleMembershipScopeRow>(
+    `
     SELECT
       scope.article_id AS id,
       CAST(scope.article_created_at AS VARCHAR) AS articleCreatedAt
@@ -90,23 +110,36 @@ const getProjectArticleMembershipRows = async (params: {
       ${getProjectArticleMembershipCursorClause(params.cursor)}
     ORDER BY scope.article_created_at DESC NULLS LAST, scope.article_id DESC
     LIMIT ${params.limit + 1}
-  `)
+  `,
+    getProjectArticleMembershipWorkloadContext({
+      maxResultRows: params.limit + 1,
+      operation: 'membershipScope',
+      projectId: params.projectId,
+    }),
+  )
 
   return rows
 }
 
-const getProjectArticleMembershipArticleRows = async (articleIds: string[]) => {
+const getProjectArticleMembershipArticleRows = async (projectId: string, articleIds: string[]) => {
   if (articleIds.length === 0) {
     return []
   }
 
-  return getAppDatabaseService().queryJson<ProjectArticleMembershipArticleRow>(`
+  return getAppDatabaseService().queryJson<ProjectArticleMembershipArticleRow>(
+    `
     SELECT
       id,
       article_title AS articleTitle
     FROM app.article
     WHERE id IN (${articleIds.map(getSqlLiteral).join(', ')})
-  `)
+  `,
+    getProjectArticleMembershipWorkloadContext({
+      maxResultRows: articleIds.length,
+      operation: 'membershipArticleHydration',
+      projectId,
+    }),
+  )
 }
 
 export const projectArticlesRoutes = new Elysia()
@@ -137,7 +170,7 @@ export const projectArticlesRoutes = new Elysia()
       const articleIds = pageRows.map((row) => {
         return row.id
       })
-      const articleRows = await getProjectArticleMembershipArticleRows(articleIds)
+      const articleRows = await getProjectArticleMembershipArticleRows(projectId, articleIds)
       const articleById = articleRows.reduce((map, row) => {
         return map.has(row.id) ? map : map.set(row.id, row)
       }, new Map<string, ProjectArticleMembershipArticleRow>())
@@ -191,8 +224,10 @@ export const projectArticlesRoutes = new Elysia()
   .delete('/api/projects/:id/articles/:articleId', async ({params}) => {
     const {id: projectId, articleId} = params
 
-    await getAppDatabaseService().transaction(async (tx) => {
-      const [existingProjectArticle] = await tx.queryJson<{articleId: string; projectArticleId: string}>(`
+    await getAppDatabaseService().transaction(
+      async (tx) => {
+        const [existingProjectArticle] = await tx.queryJson<{articleId: string; projectArticleId: string}>(
+          `
         SELECT
           id AS projectArticleId,
           article_id AS articleId
@@ -200,38 +235,53 @@ export const projectArticlesRoutes = new Elysia()
         WHERE project_id = '${escapeSqlString(projectId)}'
           AND article_id = '${escapeSqlString(articleId)}'
         LIMIT 1
-      `)
+      `,
+          getProjectArticleMembershipWorkloadContext({
+            maxResultRows: 1,
+            operation: 'deleteProjectArticleLookup',
+            projectId,
+          }),
+        )
 
-      if (!existingProjectArticle) {
-        return
-      }
+        if (!existingProjectArticle) {
+          return
+        }
 
-      await tx.run(`
+        await tx.run(`
         DELETE FROM app.project_article
         WHERE project_id = '${escapeSqlString(projectId)}'
           AND article_id = '${escapeSqlString(articleId)}'
       `)
 
-      const [remainingImportScope] = await tx.queryJson<{articleId: string}>(`
+        const [remainingImportScope] = await tx.queryJson<{articleId: string}>(
+          `
         SELECT air.article_id AS articleId
         FROM app.article_import_route air
         INNER JOIN app.project_import_route pir ON pir.import_route_id = air.import_route_id
         WHERE pir.project_id = '${escapeSqlString(projectId)}'
           AND air.article_id = '${escapeSqlString(articleId)}'
         LIMIT 1
-      `)
+      `,
+          getProjectArticleMembershipWorkloadContext({
+            maxResultRows: 1,
+            operation: 'deleteRemainingImportScope',
+            projectId,
+          }),
+        )
 
-      if (!remainingImportScope) {
-        await appendProjectScopeArticleReviewServingDelta(tx, {
-          articleId,
-          changeKind: 'projectScope.article.removed',
-          projectArticleId: existingProjectArticle.projectArticleId,
-          projectId,
-          sourceMutationKey: `ProjectArticlesRoutes.delete|${projectId}|${existingProjectArticle.projectArticleId}`,
-          sourceOperation: 'delete',
-        })
-      }
-    })
+        if (!remainingImportScope) {
+          await appendProjectScopeArticleReviewServingDelta(tx, {
+            articleId,
+            changeKind: 'projectScope.article.removed',
+            projectArticleId: existingProjectArticle.projectArticleId,
+            projectId,
+            sourceMutationKey: `ProjectArticlesRoutes.delete|${projectId}|${existingProjectArticle.projectArticleId}`,
+            sourceOperation: 'delete',
+          })
+        }
+      },
+      getProjectArticleMembershipWorkloadContext({operation: 'deleteProjectArticle', projectId}),
+    )
 
     return {success: true}
   })
