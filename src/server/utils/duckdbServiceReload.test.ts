@@ -523,7 +523,18 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
       parsed.preflightSpecs.map((spec) => {
         return `${spec.schemaName}.${spec.tableName}`
       }),
-    ).toEqual(['app.review_rebuild_chunk_manifest'])
+    ).toEqual([
+      'app.review_serving_projector_watermark',
+      'app.review_rebuild_chunk_manifest',
+      'mart.review_article_count_serving_v4',
+      'mart.review_filter_facet_serving_v4',
+      'mart.review_filter_option_serving_v4',
+      'mart.review_article_judgment_detail_serving_v4',
+      'mart.review_title_search_serving_v4',
+      'mart.review_unassessed_queue_serving_v4',
+      'mart.review_article_filter_posting_serving_v4',
+      'mart.review_filter_posting_stats_v4',
+    ])
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
   } finally {
@@ -813,6 +824,129 @@ test('duckdb service marks startup repair after fatal index-delete runtime recov
     })
     expect(parsed.createCount).toBeGreaterThanOrEqual(0)
     expect(parsed.runCount).toBeGreaterThanOrEqual(0)
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
+test('duckdb service marks recent mutating target after anonymous fatal index-delete runtime recovery', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-anonymous-fatal-index-marker-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const activeRepairSpecPath = join(`${duckdbPath}.startup-recovery`, 'startup-preflight-active-table.json')
+
+  mkdirSync(dataRoot, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {existsSync, readFileSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        const originalSpawnSync = globalThis.Bun.spawnSync
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          return {
+            exitCode: 0,
+            signalCode: null,
+            stdout: Buffer.from(''),
+            stderr: Buffer.from(''),
+          }
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run() {
+              throw new Error('FATAL Error: Failed: database has been invalidated because of a previous fatal error. The database must be restarted prior to being used again. FatalException: Invalid Input Error: Failed to delete all rows from index. Only deleted 0 out of 1 rows.')
+            }
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?anonymous-fatal-index-marker-test=' + Date.now())
+        try {
+          await duckdbService.runDuckdbStatement('DELETE FROM mart.review_filter_option_serving_v4 WHERE 1 = 0')
+        } catch {}
+
+        const marker = existsSync(activeRepairSpecPath) ? JSON.parse(readFileSync(activeRepairSpecPath, 'utf8')) : null
+        console.log(JSON.stringify({marker}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT: 'false',
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB anonymous fatal index marker subprocess failed',
+      )
+    }
+
+    const parsed = JSON.parse(result.stdout.toString()) as {
+      marker: {phase: string; schemaName: string; tableName: string} | null
+    }
+
+    expect(parsed.marker).toEqual({
+      phase: 'runtime-fatal-index-delete',
+      schemaName: 'mart',
+      tableName: 'review_filter_option_serving_v4',
+    })
   } finally {
     removePathIfExists(dataRoot)
   }
@@ -1803,6 +1937,11 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
         return {schemaName: spec.schemaName, tableName: spec.tableName}
       }),
     ).toContainEqual({schemaName: 'mart', tableName: 'review_article_judgment_detail_serving_v4'})
+    const watermarkProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'app' && spec.tableName === 'review_serving_projector_watermark'
+    })
+    expect(watermarkProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(watermarkProbe?.repairPrimaryKeyColumns).toEqual(['watermark_id'])
     const articleServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_article_serving_v4'
     })
@@ -1846,11 +1985,122 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     const judgmentDetailProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_article_judgment_detail_serving_v4'
     })
+    expect(judgmentDetailProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(judgmentDetailProbe?.repairPrimaryKeyColumns).toEqual([
+      'project_id',
+      'review_config_hash',
+      'snapshot_id',
+      'list_mode_key',
+      'payload_kind',
+      'article_id',
+      'prompt_id',
+    ])
     expect(judgmentDetailProbe?.mutationProbeSql).toContain("projection_component = 'judgmentInputContent'")
     expect(judgmentDetailProbe?.mutationProbeSql).toContain('Failed to delete all rows from index')
     expect(judgmentDetailProbe?.mutationProbeSql).toContain(
       'INSERT INTO mart.review_article_judgment_detail_serving_v4 BY NAME',
     )
+    const titleSearchProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_title_search_serving_v4'
+    })
+    expect(titleSearchProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(titleSearchProbe?.repairPrimaryKeyColumns).toEqual([
+      'project_id',
+      'search_identity',
+      'project_scope_identity',
+      'snapshot_id',
+      'token',
+      'article_id',
+    ])
+    expect(titleSearchProbe?.mutationProbeSql).toContain('UPDATE mart.review_title_search_serving_v4')
+    const queueServingProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_unassessed_queue_serving_v4'
+    })
+    expect(queueServingProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(queueServingProbe?.repairPrimaryKeyColumns).toEqual([
+      'project_id',
+      'review_config_hash',
+      'snapshot_id',
+      'queue_kind',
+      'priority_bucket',
+      'activity_sort_at',
+      'article_id',
+      'prompt_id',
+      'queue_identity',
+    ])
+    expect(queueServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_unassessed_queue_serving_v4')
+    const countServingProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_article_count_serving_v4'
+    })
+    expect(countServingProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(countServingProbe?.repairPrimaryKeyColumns).toEqual([
+      'project_id',
+      'review_config_hash',
+      'snapshot_id',
+      'list_mode_key',
+      'count_kind',
+      'summary_definition_version',
+      'filter_key',
+    ])
+    expect(countServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_article_count_serving_v4')
+    const facetServingProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_filter_facet_serving_v4'
+    })
+    expect(facetServingProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(facetServingProbe?.repairPrimaryKeyColumns).toEqual([
+      'project_id',
+      'review_config_hash',
+      'snapshot_id',
+      'summary_identity',
+      'facet_kind',
+      'facet_key',
+      'facet_value',
+      'summary_definition_version',
+    ])
+    expect(facetServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_filter_facet_serving_v4')
+    const filterOptionServingProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_filter_option_serving_v4'
+    })
+    expect(filterOptionServingProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(filterOptionServingProbe?.repairPrimaryKeyColumns).toEqual([
+      'project_id',
+      'review_config_hash',
+      'snapshot_id',
+      'search_identity',
+      'filter_option_identity',
+      'filter_kind',
+      'facet_key',
+      'option_value_key',
+    ])
+    expect(filterOptionServingProbe?.mutationProbeSql).toContain('UPDATE mart.review_filter_option_serving_v4')
+    const articleFilterPostingProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_article_filter_posting_serving_v4'
+    })
+    expect(articleFilterPostingProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(articleFilterPostingProbe?.repairPrimaryKeyColumns).toEqual([
+      'project_id',
+      'review_config_hash',
+      'snapshot_id',
+      'filter_kind',
+      'filter_value',
+      'list_mode_key',
+      'article_id',
+    ])
+    expect(articleFilterPostingProbe?.mutationProbeSql).toContain(
+      'UPDATE mart.review_article_filter_posting_serving_v4',
+    )
+    const postingStatsProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_filter_posting_stats_v4'
+    })
+    expect(postingStatsProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(postingStatsProbe?.repairPrimaryKeyColumns).toEqual([
+      'project_id',
+      'review_config_hash',
+      'snapshot_id',
+      'filter_kind',
+      'filter_value',
+      'list_mode_key',
+    ])
     const legacyPatchProbeTables = parsed.firstPreflightSpecs
       .filter((spec) => {
         return (
