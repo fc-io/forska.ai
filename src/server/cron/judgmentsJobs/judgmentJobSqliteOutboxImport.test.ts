@@ -517,6 +517,10 @@ test('background import caps tracked importable jobs after database filtering', 
         const isolatedImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteIsolatedImport.ts')
         const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
         const flushJobIds = []
+        const nonImportableJobIds = Array.from(
+          {length: 100},
+          (_, index) => 'a-non-importable-' + String(index).padStart(3, '0'),
+        )
         const importableJobIds = Array.from({length: 101}, (_, index) => 'd-importable-' + String(index).padStart(3, '0'))
 
         void mock.module(appDatabaseServiceModulePath, () => {
@@ -545,7 +549,7 @@ test('background import caps tracked importable jobs after database filtering', 
         void mock.module(judgmentJobPathsModulePath, () => {
           return {
             getJudgmentJobSqliteJobIds: () => {
-              return importableJobIds
+              return [...nonImportableJobIds, ...importableJobIds]
             },
           }
         })
