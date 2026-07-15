@@ -7,15 +7,21 @@ import {getAppDatabaseService} from '../src/server/services/appDatabaseService.t
 import {getJsonValue, getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {normalizeProviderKind} from '../src/server/services/providerCatalog.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
+
+const workloadContext = getMaintenanceDuckdbWorkloadContext('slimProviderMetadata')
 
 const getConnectionUpdates = async () => {
-  const rows = await getAppDatabaseService().queryJson<{configJson: unknown; id: string; providerKind: string | null}>(`
+  const rows = await getAppDatabaseService().queryJson<{configJson: unknown; id: string; providerKind: string | null}>(
+    `
     SELECT
       id,
       provider_kind AS providerKind,
       TO_JSON(config_json) AS configJson
     FROM app.provider_connection
-  `)
+  `,
+    workloadContext,
+  )
 
   return rows.flatMap((row) => {
     const persistedConfig = getPersistedProviderConnectionConfigValue({
@@ -39,7 +45,8 @@ const getModelUpdates = async () => {
     source: string | null
     variant: string | null
     version: string | null
-  }>(`
+  }>(
+    `
     SELECT
       m.id,
       COALESCE(m.display_name, m.name) AS displayName,
@@ -52,7 +59,9 @@ const getModelUpdates = async () => {
       TO_JSON(m.metadata_json) AS metadataJson
     FROM app.model m
     INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
-  `)
+  `,
+    workloadContext,
+  )
 
   return rows.flatMap((row) => {
     const displayName = String(row.displayName ?? row.remoteModelId ?? row.modelName ?? row.id)
@@ -83,21 +92,27 @@ const run = async () => {
   const [connectionUpdates, modelUpdates] = await Promise.all([getConnectionUpdates(), getModelUpdates()])
 
   for (const update of connectionUpdates) {
-    await getAppDatabaseService().run(`
+    await getAppDatabaseService().run(
+      `
       UPDATE app.provider_connection
       SET config_json = ${update.persistedConfig === null ? 'NULL' : `CAST(${getSqlLiteral(JSON.stringify(update.persistedConfig))} AS JSON)`},
           updated_at = current_timestamp
       WHERE id = ${getSqlLiteral(update.id)}
-    `)
+    `,
+      workloadContext,
+    )
   }
 
   for (const update of modelUpdates) {
-    await getAppDatabaseService().run(`
+    await getAppDatabaseService().run(
+      `
       UPDATE app.model
       SET metadata_json = ${update.persistedMetadata === null ? 'NULL' : `CAST(${getSqlLiteral(JSON.stringify(update.persistedMetadata))} AS JSON)`},
           updated_at = current_timestamp
       WHERE id = ${getSqlLiteral(update.id)}
-    `)
+    `,
+      workloadContext,
+    )
   }
 
   console.log(

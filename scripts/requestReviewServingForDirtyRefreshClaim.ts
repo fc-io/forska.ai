@@ -5,6 +5,7 @@ import {getAppDatabaseService} from '../src/server/services/appDatabaseService.t
 import {getMaintenanceWorkLeaseService} from '../src/server/services/maintenanceWorkLeaseService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
+import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbService.ts'
 import {legacyDirtyRefreshAckValue, requireLegacyAdminAck} from './legacyAdminAck.ts'
 
 type CliOptions = {heartbeatMs: number | undefined; leaseMs: number; projectId: string | undefined; workerId: string}
@@ -13,6 +14,7 @@ type Claim = {claimedToken: number; lastCompletedToken: number; projectId: strin
 
 const defaultLeaseMs = 30_000
 const defaultHeartbeatMs = 10_000
+const workloadContext = getMaintenanceDuckdbWorkloadContext('requestReviewServingForDirtyRefreshClaim')
 
 const getArgValue = (names: string[]) => {
   const matchedArgument = process.argv.slice(2).find((argument) => {
@@ -66,7 +68,8 @@ const claimProject = async ({
 
   const currentNow = new Date()
   const leaseExpiresAt = new Date(currentNow.getTime() + leaseMs).toISOString()
-  const [claim] = await getAppDatabaseService().queryJson<Claim>(`
+  const [claim] = await getAppDatabaseService().queryJson<Claim>(
+    `
     UPDATE app.project_mart_refresh_state
     SET
       active_dirty_token = dirty_token,
@@ -106,7 +109,9 @@ const claimProject = async ({
       worker_id AS workerId,
       CAST(active_dirty_token AS INTEGER) AS claimedToken,
       CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedToken
-  `)
+  `,
+    {...workloadContext, maxResultRows: 1},
+  )
 
   if (claim) {
     await getMaintenanceWorkLeaseService().claimMaintenanceWorkLease({
