@@ -44,6 +44,16 @@ type PromptPreviewDetailRow = {
 }
 type PromptPreviewFullTextRow = {fullText: string | null}
 
+const getPromptPreviewWorkloadContext = (params: {maxResultRows?: number; operation: string; projectId: string}) => {
+  return {
+    fallbackIntent: 'reject' as const,
+    maxResultRows: params.maxResultRows,
+    projectId: params.projectId,
+    routeOrJobKey: `projects.promptPreview.${params.operation}`,
+    workloadClass: 'owner.product.promptPreview',
+  }
+}
+
 const getUnavailablePromptPreview = (input: {
   articleId: string | null
   articleTitle?: string | null
@@ -89,13 +99,16 @@ const getPromptPreviewArticleDetailFromServing = async (input: {
   })
 }
 
-const getPromptPreviewArticleFullText = async (articleId: string) => {
-  const rows = await getAppDatabaseService().queryJson<PromptPreviewFullTextRow>(`
+const getPromptPreviewArticleFullText = async (params: {articleId: string; projectId: string}) => {
+  const rows = await getAppDatabaseService().queryJson<PromptPreviewFullTextRow>(
+    `
     SELECT full_text AS fullText
     FROM app.article
-    WHERE id = ${getSqlLiteral(articleId)}
+    WHERE id = ${getSqlLiteral(params.articleId)}
     LIMIT 1
-  `)
+  `,
+    getPromptPreviewWorkloadContext({maxResultRows: 1, operation: 'articleFullText', projectId: params.projectId}),
+  )
 
   return rows[0]?.fullText ?? null
 }
@@ -161,7 +174,8 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         useFulltext: boolean
         useFulltextNoImages: boolean
         useTitle: boolean
-      }>(`
+      }>(
+        `
         SELECT
           model_id AS modelId,
           use_abstract AS useAbstract,
@@ -171,13 +185,16 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         FROM app.project
         WHERE id = '${escapeSqlString(params.id)}'
         LIMIT 1
-      `),
+      `,
+        getPromptPreviewWorkloadContext({maxResultRows: 1, operation: 'projectConfig', projectId: params.id}),
+      ),
       getAppDatabaseService().queryJson<{
         id: string
         originalText: string
         promptHeading: string | null
         type: string | null
-      }>(`
+      }>(
+        `
         SELECT
           p.id AS id,
           p.original_text AS originalText,
@@ -189,7 +206,9 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
           AND pp.prompt_id = '${escapeSqlString(params.promptId)}'
           AND pp.enabled = TRUE
         LIMIT 1
-      `),
+      `,
+        getPromptPreviewWorkloadContext({maxResultRows: 1, operation: 'promptLookup', projectId: params.id}),
+      ),
     ])
 
     const [projectRow] = project
@@ -234,7 +253,8 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       })
     }
 
-    const modelRow = await getAppDatabaseService().queryJson<{modelMetadataJson: unknown; provider: string | null}>(`
+    const modelRow = await getAppDatabaseService().queryJson<{modelMetadataJson: unknown; provider: string | null}>(
+      `
         SELECT
           TO_JSON(m.metadata_json) AS modelMetadataJson,
           pc.provider_kind AS provider
@@ -242,14 +262,18 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
         WHERE m.id = '${escapeSqlString(projectRow.modelId)}'
         LIMIT 1
-      `)
+      `,
+      getPromptPreviewWorkloadContext({maxResultRows: 1, operation: 'modelMetadata', projectId: params.id}),
+    )
 
     const [projectModel] = modelRow
     const modelContext =
       getProviderModelMetadataPromptTokenLimit(getJsonValue(projectModel?.modelMetadataJson), MAX_COMPLETION_TOKENS)
       ?? defaultJudgmentPromptTokenLimit
     const needsFulltext = projectRow.useFulltext || projectRow.useFulltextNoImages
-    const previewFullText = needsFulltext ? await getPromptPreviewArticleFullText(firstArticleId) : null
+    const previewFullText = needsFulltext
+      ? await getPromptPreviewArticleFullText({articleId: firstArticleId, projectId: params.id})
+      : null
     const fullTextResult =
       needsFulltext && previewFullText
         ? processFulltextForLLM(previewFullText, {
