@@ -108,7 +108,7 @@ const getCovidenceProjectIdByImportRoute = async (db: AppQueryRunner, importRout
       ? []
       : await db.queryJson<CovidenceProjectLinkRow>(
           `
-        SELECT
+        SELECT DISTINCT ON (ir.route)
           ir.route AS importRoute,
           pir.project_id AS projectId
         FROM app.project_import_route pir
@@ -118,6 +118,7 @@ const getCovidenceProjectIdByImportRoute = async (db: AppQueryRunner, importRout
             return getSqlLiteral(importRoute)
           })
           .join(', ')})
+        ORDER BY ir.route ASC, pir.project_id ASC
       `,
           getDataSourcesWorkloadContext({maxResultRows: importRoutes.length, operation: 'covidenceProjectLinks'}),
         )
