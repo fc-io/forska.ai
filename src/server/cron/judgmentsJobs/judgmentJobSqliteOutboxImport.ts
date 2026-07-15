@@ -6,6 +6,7 @@ import {
 } from '../../services/articleIdCompatibilityAdapter.ts'
 import {getMaintenanceWorkLeaseService} from '../../services/maintenanceWorkLeaseService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import type {DuckdbWorkloadContext} from '../../utils/duckdbService.ts'
 import {getImportableJudgmentJobWhereSql} from './judgmentJobImportScope.ts'
 import {getJudgmentJobSqliteJobIds} from './judgmentJobPaths.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
@@ -23,6 +24,19 @@ const judgmentOutboxBatchMaxRows = 100
 const judgmentOutboxBatchMaxBytes = 4 * 1024 * 1024
 const judgmentOutboxImportLeaseMs = 30_000
 const judgmentOutboxImportLogger = createRateLimitedLogger({windowMs: 30_000})
+const maxImportCandidateJobsPerScan = 100
+const judgmentOutboxImportLookupWorkloadContext: DuckdbWorkloadContext = {
+  fallbackIntent: 'reject',
+  routeOrJobKey: 'judgmentJob.sqliteOutboxImport.lookup',
+  workloadClass: 'background.judgmentJob.sqliteImport',
+}
+
+const queryOutboxImportBackground = async <T>(statement: string, workloadContext: DuckdbWorkloadContext) => {
+  const database = getAppDatabaseService()
+  const queryJsonBackground = database.queryJsonBackground ?? database.queryJson
+
+  return queryJsonBackground<T>(statement, workloadContext)
+}
 
 type JudgmentOutboxDiscardedEntry = {entry: JudgmentJobSqliteOutboxEntry; errorMessage: string}
 type ClaimedOutboxBatch = Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['claimPendingOutboxBatch']>>
@@ -108,12 +122,15 @@ const getExistingIds = async (
 
   const rows = await Promise.all(
     uniqueIds.map(async (id) => {
-      const [row] = await getAppDatabaseService().queryJson<{id: string}>(`
+      const [row] = await queryOutboxImportBackground<{id: string}>(
+        `
         SELECT id
         FROM ${tableName}
         WHERE id = ${getSqlLiteral(id)}
         LIMIT 1
-      `)
+      `,
+        {...judgmentOutboxImportLookupWorkloadContext, maxResultRows: 1},
+      )
 
       return row?.id ?? null
     }),
@@ -231,12 +248,16 @@ const getImportCandidateJobIds = async (jobId?: string) => {
   const trackedJobIds = getJudgmentJobSqliteJobIds().sort()
 
   if (trackedJobIds.length === 0) {
-    const rows = await getAppDatabaseService().queryJson<{id: string}>(`
+    const rows = await queryOutboxImportBackground<{id: string}>(
+      `
       SELECT id
       FROM app.judgment_job
       WHERE (${getImportableJudgmentJobWhereSql()})
       ORDER BY id ASC
-    `)
+      LIMIT ${maxImportCandidateJobsPerScan}
+    `,
+      {...judgmentOutboxImportLookupWorkloadContext, maxResultRows: maxImportCandidateJobsPerScan},
+    )
 
     return rows.map((row) => {
       return row.id
@@ -245,13 +266,16 @@ const getImportCandidateJobIds = async (jobId?: string) => {
 
   const rows = await Promise.all(
     trackedJobIds.map(async (trackedJobId) => {
-      const [row] = await getAppDatabaseService().queryJson<{id: string}>(`
+      const [row] = await queryOutboxImportBackground<{id: string}>(
+        `
         SELECT id
         FROM app.judgment_job
         WHERE id = ${getSqlLiteral(trackedJobId)}
           AND (${getImportableJudgmentJobWhereSql()})
         LIMIT 1
-      `)
+      `,
+        {...judgmentOutboxImportLookupWorkloadContext, maxResultRows: 1},
+      )
 
       return row?.id ?? null
     }),
@@ -319,12 +343,15 @@ const getFailureDiagnostics = ({
 }
 
 const getJudgmentJobProjectId = async (jobId: string) => {
-  const [row] = await getAppDatabaseService().queryJson<{projectId: string}>(`
+  const [row] = await queryOutboxImportBackground<{projectId: string}>(
+    `
     SELECT project_id AS projectId
     FROM app.judgment_job
     WHERE id = ${getSqlLiteral(jobId)}
     LIMIT 1
-  `)
+  `,
+    {...judgmentOutboxImportLookupWorkloadContext, maxResultRows: 1},
+  )
 
   return row?.projectId ?? null
 }
