@@ -9,9 +9,19 @@ import {
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
 const projectsAddArticlesLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const getAddArticlesJobWorkloadContext = (sourceProjectId: string): DuckdbWorkloadContext => {
+  return {
+    fallbackIntent: 'reject',
+    maxResultRows: 1,
+    projectId: sourceProjectId,
+    routeOrJobKey: 'projects.addArticles.jobStatus',
+    workloadClass: 'owner.product.addArticles',
+  }
+}
 
 type AddArticlesJobRow = {
   criteriaJson: unknown
@@ -34,7 +44,8 @@ const getTargetProjectId = (criteriaJson: unknown) => {
 }
 
 const getAddArticlesJob = async (sourceProjectId: string, jobId: string) => {
-  const [row] = await getAppDatabaseService().queryJson<AddArticlesJobRow>(`
+  const [row] = await getAppDatabaseService().queryJson<AddArticlesJobRow>(
+    `
     SELECT
       job_id AS jobId,
       job_kind AS jobKind,
@@ -48,7 +59,9 @@ const getAddArticlesJob = async (sourceProjectId: string, jobId: string) => {
       AND project_id = ${getSqlLiteral(sourceProjectId)}
       AND job_kind = 'review.bulk.selection'
     LIMIT 1
-  `)
+  `,
+    getAddArticlesJobWorkloadContext(sourceProjectId),
+  )
 
   return row
     ? {
