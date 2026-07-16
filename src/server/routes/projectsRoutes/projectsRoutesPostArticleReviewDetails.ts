@@ -620,7 +620,7 @@ const getCovidenceRelatedRecords = async (params: {
       FROM source_record_related_record source_record
       WHERE source_record.id = legacy_related_record.id
     )
-    ORDER BY articleTitle ASC, articleExternalId ASC NULLS LAST, id ASC
+    ORDER BY isCurrentRecord DESC, articleTitle ASC, articleExternalId ASC NULLS LAST, id ASC
     LIMIT ${covidenceRelatedRecordsQueryLimit}
   `,
     getProjectReviewDetailsWorkloadContext({
