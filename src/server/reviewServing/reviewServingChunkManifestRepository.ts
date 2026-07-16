@@ -286,7 +286,8 @@ const getWriteOutputValidationResult = (value: unknown) => {
     : undefined
 }
 
-const releasableRebuildChunkStatusSql = "('completed', 'running', 'failed', 'blocked_over_budget', 'quarantined')"
+const releasableInactiveRequestRebuildChunkStatusSql =
+  "('pending', 'completed', 'running', 'failed', 'blocked_over_budget', 'quarantined')"
 const preservedRebuildChunkStatusSql = "('completed', 'running', 'failed')"
 const activeRebuildChunkPreservePredicate = `
   app.review_rebuild_chunk_manifest.status IN ${preservedRebuildChunkStatusSql}
@@ -394,13 +395,13 @@ const getComponentSqlList = (components: readonly ReviewServingProjectionCompone
   return `(${components.map(getSqlLiteral).join(', ')})`
 }
 
-export const releaseInactiveRequestRebuildChunkManifestsForUpsert = async (
-  chunkIds: readonly string[],
+export const releaseInactiveRequestRebuildChunkManifests = async (
   database: ReviewServingChunkManifestRepositoryTransaction,
+  chunkIds?: readonly string[],
 ) => {
-  const uniqueChunkIds = [...new Set(chunkIds)]
+  const uniqueChunkIds = chunkIds === undefined ? null : [...new Set(chunkIds)]
 
-  if (uniqueChunkIds.length === 0) {
+  if (uniqueChunkIds !== null && uniqueChunkIds.length === 0) {
     return
   }
 
@@ -429,8 +430,8 @@ export const releaseInactiveRequestRebuildChunkManifestsForUpsert = async (
         started_at = NULL,
         completed_at = NULL,
         updated_at = current_timestamp
-    WHERE chunk_id IN (${uniqueChunkIds.map(getSqlLiteral).join(', ')})
-      AND status IN ${releasableRebuildChunkStatusSql}
+    WHERE ${uniqueChunkIds === null ? '' : `chunk_id IN (${uniqueChunkIds.map(getSqlLiteral).join(', ')}) AND`}
+      status IN ${releasableInactiveRequestRebuildChunkStatusSql}
       AND request_id IS NOT NULL
       AND NOT EXISTS (
         SELECT 1
@@ -439,6 +440,13 @@ export const releaseInactiveRequestRebuildChunkManifestsForUpsert = async (
           AND request.status IN ('admitted', 'running')
       )
   `)
+}
+
+export const releaseInactiveRequestRebuildChunkManifestsForUpsert = async (
+  chunkIds: readonly string[],
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  await releaseInactiveRequestRebuildChunkManifests(database, chunkIds)
 }
 
 const getRebuildChunkComponentPrerequisitePredicate = (tableAlias?: string) => {
@@ -937,6 +945,8 @@ export const getNextClaimableReviewServingRebuildChunk = async (
   input: {now: Date | string; projectId?: string | null},
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
 ) => {
+  await releaseInactiveRequestRebuildChunkManifests(database)
+
   const rows = await database.queryJson<ReviewServingRebuildChunkManifestRow>(`
     ${getReviewServingRebuildChunkSelect({tableAlias: 'candidate'})}
     WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}

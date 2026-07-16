@@ -9,6 +9,7 @@ import {
   heartbeatReviewServingRebuildChunkLease,
   isReviewServingRebuildChunkComplete,
   markReviewServingRebuildChunkFailed,
+  releaseInactiveRequestRebuildChunkManifests,
   type ReviewServingChunkManifestRepositoryDatabase,
   type ReviewServingChunkManifestRepositoryTransaction,
   type ReviewServingRebuildChunkIdentity,
@@ -390,11 +391,54 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       })
     }
   }
+  const releaseInactiveRequestChunks = () => {
+    rows.forEach((existing, chunkId) => {
+      if (
+        existing.requestId === 'rebuild:missing'
+        && ['pending', 'completed', 'running', 'failed', 'blocked_over_budget', 'quarantined'].includes(existing.status)
+      ) {
+        rows.set(chunkId, {
+          ...existing,
+          actualInputRows: null,
+          actualOutputBytes: null,
+          actualOutputRows: null,
+          actualPayloadBytes: null,
+          actualPromptCount: null,
+          actualTempBytes: null,
+          admissionState: 'admitted',
+          budgetJson: {},
+          checksum: null,
+          completedAt: null,
+          diagnosticsJson: {},
+          durationMs: null,
+          lastError: null,
+          leaseExpiresAt: null,
+          leaseOwner: null,
+          oomCategory: null,
+          overBudgetReason: null,
+          requestId: null,
+          retryAfter: null,
+          retryCount: 0,
+          startedAt: null,
+          status: 'pending',
+          updatedAt: getClock(statements),
+        })
+      }
+    })
+  }
   const run = async (statement: string) => {
     statements.push(statement)
 
     if (statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')) {
       upsertChunk(statement)
+    }
+
+    if (
+      statement.includes('UPDATE app.review_rebuild_chunk_manifest')
+      && statement.includes('request_id = NULL')
+      && statement.includes('NOT EXISTS')
+    ) {
+      releaseInactiveRequestChunks()
     }
 
     if (
@@ -1299,6 +1343,51 @@ test('next claimable chunk discovery reclaims expired running leases before newe
   )
 
   expect(next).toMatchObject({inputDigest: 'digest-expired-running', requestId: 'rebuild:older'})
+})
+
+test('next claimable chunk discovery releases chunks for missing rebuild requests', async () => {
+  const orphanedExpiredRunning = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-orphaned-running'}, []),
+    leaseExpiresAt: '2026-06-16T13:59:00.000Z',
+    leaseOwner: 'worker-gone',
+    requestId: 'rebuild:missing',
+    status: 'running' as const,
+    updatedAt: '2026-06-16T14:00:00.000Z',
+  }
+  const {database, rows, statements} = createFakeChunkManifestDatabase([orphanedExpiredRunning])
+
+  const next = await getNextClaimableReviewServingRebuildChunk(
+    {now: '2026-06-16T14:05:00.000Z', projectId: 'project-1'},
+    database,
+  )
+
+  expect(next).toMatchObject({inputDigest: 'digest-orphaned-running', requestId: null})
+  expect(rows.get(orphanedExpiredRunning.chunkId)).toMatchObject({
+    lastError: null,
+    leaseExpiresAt: null,
+    leaseOwner: null,
+    requestId: null,
+    retryCount: 0,
+    status: 'pending',
+  })
+  expect(statements.join('\n')).toContain('NOT EXISTS')
+  expect(statements.join('\n')).toContain('FROM app.review_rebuild_request request')
+})
+
+test('inactive request release detaches pending chunks with missing rebuild requests', async () => {
+  const orphanedPending = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-orphaned-pending'}, []),
+    requestId: 'rebuild:missing',
+    status: 'pending' as const,
+    updatedAt: '2026-06-16T14:00:00.000Z',
+  }
+  const {database, rows, statements} = createFakeChunkManifestDatabase([orphanedPending])
+
+  await releaseInactiveRequestRebuildChunkManifests(database)
+
+  expect(rows.get(orphanedPending.chunkId)).toMatchObject({requestId: null, retryCount: 0, status: 'pending'})
+  expect(statements.join('\n')).toContain("'pending'")
+  expect(statements.join('\n')).toContain('NOT EXISTS')
 })
 
 test('over-budget chunks are parked before claim and cannot hot-loop', async () => {

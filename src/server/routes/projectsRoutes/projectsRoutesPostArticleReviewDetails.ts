@@ -217,6 +217,8 @@ type CovidenceRelatedRecord = {
   stageMembership: Record<string, boolean>
 }
 
+type CovidenceRelatedRecordsResult = {overflow: boolean; records: CovidenceRelatedRecord[]}
+
 const getJsonObjectValue = (value: unknown): Record<string, unknown> => {
   const parsed = getJsonValue(value)
 
@@ -258,6 +260,7 @@ const upsertPromptRow = (promptRowsById: Map<string, ProjectPromptRow>, promptRo
 
 const detailReaderPageSize = 512
 const covidenceRelatedRecordsLimit = 500
+const covidenceRelatedRecordsQueryLimit = covidenceRelatedRecordsLimit + 1
 
 const getProjectReviewDetailsWorkloadContext = (params: {
   maxResultRows?: number
@@ -543,12 +546,12 @@ const getAssessmentValue = (row: {
 const getCovidenceRelatedRecords = async (params: {
   article: ArticleRecord
   projectId: string
-}): Promise<CovidenceRelatedRecord[]> => {
+}): Promise<CovidenceRelatedRecordsResult> => {
   const article = params.article
   const covidence = getArticleSourceMetadataValue(article.sourceMetadata)?.covidence
 
   if (!covidence?.studyKey) {
-    return []
+    return {overflow: false, records: []}
   }
 
   const rows = await getAppDatabaseService().queryJson<{
@@ -618,44 +621,49 @@ const getCovidenceRelatedRecords = async (params: {
       WHERE source_record.id = legacy_related_record.id
     )
     ORDER BY articleTitle ASC, articleExternalId ASC NULLS LAST, id ASC
-    LIMIT ${covidenceRelatedRecordsLimit}
+    LIMIT ${covidenceRelatedRecordsQueryLimit}
   `,
     getProjectReviewDetailsWorkloadContext({
-      maxResultRows: covidenceRelatedRecordsLimit,
+      maxResultRows: covidenceRelatedRecordsQueryLimit,
       operation: 'covidenceRelatedRecords',
       projectId: params.projectId,
     }),
   )
 
-  return rows.map((row) => {
-    const sourceMetadata = getJsonValue(row.sourceMetadata)
-    const relatedCovidence = getArticleSourceMetadataValue(sourceMetadata)?.covidence
+  const visibleRows = rows.slice(0, covidenceRelatedRecordsLimit)
 
-    return {
-      articleExternalId: row.articleExternalId,
-      articleTitle: row.articleTitle,
-      articleUrl:
-        getArticleUrl({
-          arxivId: row.arxivId,
-          biorxivId: row.biorxivId,
-          doi: row.doi,
-          medrxivId: row.medrxivId,
-          originalData: getJsonValue(row.rawPayload),
-          pubmedId: row.pubmedId,
-          sourceMetadata,
-          url: row.url,
-        }) || null,
-      covidenceIds: relatedCovidence?.covidenceIds ?? [],
-      hasDuplicateStudyRecords: relatedCovidence?.hasDuplicateStudyRecords ?? false,
-      hasStudyDecisionConflict: relatedCovidence?.hasStudyDecisionConflict ?? false,
-      id: row.id,
-      isCurrentRecord: row.isCurrentRecord || row.id === article.id,
-      isSeededHumanJudgmentAnswered: relatedCovidence?.isSeededHumanJudgmentAnswered ?? false,
-      referenceIds: relatedCovidence?.referenceIds ?? [],
-      seededHumanJudgmentAnswer: relatedCovidence?.seededHumanJudgmentAnswer ?? null,
-      stageMembership: relatedCovidence?.stageMembership ?? {},
-    }
-  })
+  return {
+    overflow: rows.length > covidenceRelatedRecordsLimit,
+    records: visibleRows.map((row) => {
+      const sourceMetadata = getJsonValue(row.sourceMetadata)
+      const relatedCovidence = getArticleSourceMetadataValue(sourceMetadata)?.covidence
+
+      return {
+        articleExternalId: row.articleExternalId,
+        articleTitle: row.articleTitle,
+        articleUrl:
+          getArticleUrl({
+            arxivId: row.arxivId,
+            biorxivId: row.biorxivId,
+            doi: row.doi,
+            medrxivId: row.medrxivId,
+            originalData: getJsonValue(row.rawPayload),
+            pubmedId: row.pubmedId,
+            sourceMetadata,
+            url: row.url,
+          }) || null,
+        covidenceIds: relatedCovidence?.covidenceIds ?? [],
+        hasDuplicateStudyRecords: relatedCovidence?.hasDuplicateStudyRecords ?? false,
+        hasStudyDecisionConflict: relatedCovidence?.hasStudyDecisionConflict ?? false,
+        id: row.id,
+        isCurrentRecord: row.isCurrentRecord || row.id === article.id,
+        isSeededHumanJudgmentAnswered: relatedCovidence?.isSeededHumanJudgmentAnswered ?? false,
+        referenceIds: relatedCovidence?.referenceIds ?? [],
+        seededHumanJudgmentAnswer: relatedCovidence?.seededHumanJudgmentAnswer ?? null,
+        stageMembership: relatedCovidence?.stageMembership ?? {},
+      }
+    }),
+  }
 }
 
 const getUnavailableReviewDetail = (input: {
@@ -667,6 +675,7 @@ const getUnavailableReviewDetail = (input: {
     article: null,
     allJudgments: [],
     covidenceRelatedRecords: [],
+    covidenceRelatedRecordsOverflow: false,
     diagnostics: input.diagnostics ?? null,
     humanAnswersByPrompt: undefined,
     humanAssessmentsByUser: [],
@@ -823,7 +832,8 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         fullText: articleFullTextRows[0] ?? null,
         payload: articlePayload,
       })
-      const covidenceRelatedRecords = await getCovidenceRelatedRecords({article, projectId})
+      const covidenceRelatedRecordsResult = await getCovidenceRelatedRecords({article, projectId})
+      const covidenceRelatedRecords = covidenceRelatedRecordsResult.records
 
       const projectReviewDetailJudgmentResult = await getProjectReviewDetailJudgmentRows({
         projectId,
@@ -1112,6 +1122,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       return {
         article,
         covidenceRelatedRecords,
+        covidenceRelatedRecordsOverflow: covidenceRelatedRecordsResult.overflow,
         humanJudgmentMode: projectReviewConfig.humanJudgmentMode,
         humanSummaryAnswer,
         llmSummaryAnswer,

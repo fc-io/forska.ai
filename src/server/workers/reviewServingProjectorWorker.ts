@@ -130,6 +130,7 @@ type ClaimReviewServingProjectorWorkerRebuildChunkResult =
 
 type RebuildChunkSplitRangeRow = {articleCount: number; chunkEndKey: string; chunkStartKey: string}
 type CompletedUnfinalizedRebuildRequestChunkRow = {chunkId: string}
+type TerminalFailedRebuildRequestChunkRow = {chunkId: string}
 type RebuildChunkOutputValidationInput = {
   chunk: ReviewServingRebuildChunkManifest
   getChecksum: () => Promise<RebuildChunkOutputChecksumRow>
@@ -4867,6 +4868,14 @@ const readmitRetryableFailedRebuildRequests = async (input: {
         WHERE chunk.request_id = request.request_id
           AND chunk.status IN ('blocked_over_budget', 'quarantined')
       )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_request active_request
+        WHERE active_request.project_id = request.project_id
+          AND active_request.request_id <> request.request_id
+          AND active_request.status IN ('admitted', 'running')
+          AND active_request.admission_state = 'admitted'
+      )
   `)
 }
 
@@ -5333,6 +5342,62 @@ const finalizeFailedReviewServingRebuildRequest = async (
     {chunkId: chunk.chunkId, lastError: chunk.lastError, requestId: chunk.requestId, status: chunk.status},
     database,
   )
+}
+
+const getTerminalFailedRebuildRequestChunks = async (input: {
+  database: ReviewServingChunkManifestRepositoryDatabase
+  projectId?: string | null
+}) => {
+  const projectCondition = input.projectId ? `AND request.project_id = ${getSqlLiteral(input.projectId)}` : ''
+
+  return input.database.queryJson<TerminalFailedRebuildRequestChunkRow>(`
+    WITH active_request AS (
+      SELECT request.request_id
+      FROM app.review_rebuild_request request
+      WHERE request.status IN ('admitted', 'running')
+        AND request.admission_state = 'admitted'
+        ${projectCondition}
+    ),
+    terminal_failed_rebuild_chunk AS (
+      SELECT
+        chunk.chunk_id AS chunkId,
+        chunk.request_id AS requestId,
+        chunk.updated_at AS updatedAt
+      FROM app.review_rebuild_chunk_manifest chunk
+      INNER JOIN active_request request
+        ON request.request_id = chunk.request_id
+      WHERE chunk.status IN ('blocked_over_budget', 'quarantined')
+    )
+    SELECT chunkId
+    FROM terminal_failed_rebuild_chunk
+    ORDER BY updatedAt ASC, requestId ASC, chunkId ASC
+    LIMIT 50
+  `)
+}
+
+const finalizeTerminalFailedRebuildRequests = async (input: {
+  database: ReviewServingChunkManifestRepositoryDatabase
+  projectId?: string | null
+}): Promise<ReviewServingProjectorWorkerChunkResult | null> => {
+  const terminalChunks = await getTerminalFailedRebuildRequestChunks(input)
+  let firstFinalizedResult: ReviewServingProjectorWorkerChunkResult | null = null
+
+  await terminalChunks.reduce<Promise<void>>(async (previous, row) => {
+    await previous
+
+    const chunk = await getReviewServingRebuildChunkManifest({chunkId: row.chunkId}, input.database)
+
+    if (chunk === null || !isTerminalRebuildChunkFailure(chunk)) {
+      return
+    }
+
+    if (firstFinalizedResult === null) {
+      firstFinalizedResult = {chunkId: chunk.chunkId, requestId: chunk.requestId, status: 'failed'}
+    }
+    await finalizeFailedReviewServingRebuildRequest(chunk, input.database)
+  }, Promise.resolve())
+
+  return firstFinalizedResult
 }
 
 const finalizeErroredCompletedReviewServingRebuildRequest = async (
@@ -7601,14 +7666,23 @@ export const runReviewServingProjectorWorkerCycle = async (
   const wakeId = `${workerId}:${getWorkerNowMs(dependencies, options)}`
   const workloadContext = getReviewServingProjectorWorkerWorkloadContext(workerId)
   const database = getReviewServingProjectorWorkerDatabase(dependencies, workloadContext)
-  await readmitRetryableFailedRebuildRequests({database, projectId: options.rebuildProjectId})
-  const chunkBatch = await runReviewServingProjectorWorkerRebuildChunkBatch({
+  const terminalFailedChunk = await finalizeTerminalFailedRebuildRequests({
     database,
-    dependencies,
-    options,
-    workloadContext,
-    workerId,
+    projectId: options.rebuildProjectId,
   })
+  if (terminalFailedChunk === null) {
+    await readmitRetryableFailedRebuildRequests({database, projectId: options.rebuildProjectId})
+  }
+  const chunkBatch =
+    terminalFailedChunk === null
+      ? await runReviewServingProjectorWorkerRebuildChunkBatch({
+          database,
+          dependencies,
+          options,
+          workloadContext,
+          workerId,
+        })
+      : {chunk: terminalFailedChunk, completedCount: 1}
   const finalizedChunkBatch =
     chunkBatch.chunk.status === 'idle'
       ? ((await finalizeNextCompletedUnfinalizedRebuildRequest({database, projectId: options.rebuildProjectId}))
@@ -7616,7 +7690,10 @@ export const runReviewServingProjectorWorkerCycle = async (
       : chunkBatch
   const chunk = finalizedChunkBatch.chunk
   const nowMs = getWorkerNowMs(dependencies, options)
-  const shouldRunOnlyRebuildChunk = shouldPrioritizeNextRebuildChunk({chunk, dependencies, nowMs, options})
+  const shouldRunOnlyRebuildChunk =
+    terminalFailedChunk !== null
+    || chunk.status === 'failed'
+    || shouldPrioritizeNextRebuildChunk({chunk, dependencies, nowMs, options})
   const deltaIntake = shouldRunOnlyRebuildChunk
     ? getIdleReviewServingProjectorWorkerDeltaIntakeResult()
     : await runReviewServingProjectorWorkerDeltaIntake({database, dependencies, options})
