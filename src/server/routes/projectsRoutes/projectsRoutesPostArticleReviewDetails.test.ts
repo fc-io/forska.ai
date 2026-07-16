@@ -349,7 +349,9 @@ test('covidence related record cap reserves the reviewed article before sorting 
 
   expect(orderIndex).toBeGreaterThan(-1)
   expect(limitIndex).toBeGreaterThan(orderIndex)
-  expect(covidenceRelatedRecordRead).toContain('source_record.article_id = ${getSqlLiteral(article.id)} AS isCurrentRecord')
+  expect(covidenceRelatedRecordRead).toContain(
+    'source_record.article_id = ${getSqlLiteral(article.id)} AS isCurrentRecord',
+  )
   expect(covidenceRelatedRecordRead).toContain('article.id = ${getSqlLiteral(article.id)} AS isCurrentRecord')
   expect(covidenceRelatedRecordRead).toContain('isCurrentRecord: row.isCurrentRecord || row.id === article.id')
 })
