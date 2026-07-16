@@ -607,11 +607,15 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
   const duckdbPath = join(dataRoot, 'test.duckdb')
   const recoveryDirectory = duckdbPath + '.startup-recovery'
   const activeRepairSpecPath = join(recoveryDirectory, 'startup-preflight-active-table.json')
+  const staleRecoveryPathPart = '2000-01-01T00-00-00.000Z.00000000-0000-4000-8000-000000000001'
 
   mkdirSync(recoveryDirectory, {recursive: true})
   writeFileSync(duckdbPath, 'database')
   writeFileSync(`${duckdbPath}.wal`, 'committed-wal')
   writeFileSync(activeRepairSpecPath, JSON.stringify({schemaName: 'app', tableName: 'review_serving_dirty_work'}))
+  writeFileSync(join(recoveryDirectory, `${staleRecoveryPathPart}.pre-repair.duckdb`), 'stale-database')
+  writeFileSync(join(recoveryDirectory, `${staleRecoveryPathPart}.recovery.json`), '{}')
+  writeFileSync(join(recoveryDirectory, 'operator-note.json'), '{}')
 
   const result = globalThis.Bun.spawnSync(
     [
@@ -770,6 +774,22 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
     expect(parsed.activeMarkerExists).toBe(false)
     expect(parsed.checkpointCount).toBe(1)
     expect(parsed.repairCount).toBe(1)
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.pre-repair.duckdb')
+      }),
+    ).toHaveLength(1)
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.recovery.json')
+      }),
+    ).toHaveLength(1)
+    expect(parsed.recoveryFiles).toContain('operator-note.json')
+    expect(
+      parsed.recoveryFiles.some((fileName) => {
+        return fileName.startsWith(staleRecoveryPathPart)
+      }),
+    ).toBe(false)
     expect(
       parsed.recoveryFiles.some((fileName) => {
         return fileName.endsWith('.failed-replay.wal')
@@ -1546,11 +1566,17 @@ test('duckdb service retries startup after a recoverable WAL replay failure', ()
 test('duckdb service quarantines a WAL that repeatedly fails replay during startup', async () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-wal-recovery-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
+  const recoveryDirectory = duckdbPath + '.startup-recovery'
+  const staleRecoveryPathPart = '2000-01-01T00-00-00.000Z.00000000-0000-4000-8000-000000000002'
 
-  mkdirSync(dataRoot, {recursive: true})
+  mkdirSync(recoveryDirectory, {recursive: true})
   const duckdbInstance = await DuckDBInstance.create(duckdbPath)
   duckdbInstance.closeSync()
   writeFileSync(`${duckdbPath}.wal`, 'wal')
+  writeFileSync(join(recoveryDirectory, `${staleRecoveryPathPart}.duckdb`), 'stale-database')
+  writeFileSync(join(recoveryDirectory, `${staleRecoveryPathPart}.failed-replay.wal`), 'stale-wal')
+  writeFileSync(join(recoveryDirectory, `${staleRecoveryPathPart}.recovery.json`), '{}')
+  writeFileSync(join(recoveryDirectory, 'operator-note.json'), '{}')
 
   const result = globalThis.Bun.spawnSync(
     [
@@ -1654,6 +1680,17 @@ test('duckdb service quarantines a WAL that repeatedly fails replay during start
         return fileName.endsWith('.failed-replay.wal')
       }),
     ).toHaveLength(1)
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.recovery.json')
+      }),
+    ).toHaveLength(1)
+    expect(parsed.recoveryFiles).toContain('operator-note.json')
+    expect(
+      parsed.recoveryFiles.some((fileName) => {
+        return fileName.startsWith(staleRecoveryPathPart)
+      }),
+    ).toBe(false)
   } finally {
     removePathIfExists(dataRoot)
   }
@@ -2475,8 +2512,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
     expect(parsed.walExists).toBe(false)
-    expect(parsed.preflightWalManifest?.recovery).toBe('startup-preflight-mutation-wal-quarantine')
-    expect(parsed.preflightWalManifest?.error).toContain('PRIMARY_review_article_judgment_detail_serving_v4')
+    expect(parsed.preflightWalManifest).toBeNull()
     expect(parsed.repairManifest?.recovery).toBe('indexed-table-rebuild')
     expect(parsed.repairManifest?.error).toContain('PRIMARY_review_article_judgment_detail_serving_v4')
     expect(parsed.repairManifest?.repairedTables).toEqual(['mart.review_article_judgment_detail_serving_v4'])
@@ -2707,12 +2743,12 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       parsed.recoveryFiles.filter((fileName) => {
         return fileName.endsWith('.failed-startup-probe.wal')
       }),
-    ).toHaveLength(1)
+    ).toHaveLength(0)
     expect(
       parsed.recoveryFiles.filter((fileName) => {
         return fileName.endsWith('.recovery.json')
       }),
-    ).toHaveLength(2)
+    ).toHaveLength(1)
   } finally {
     removePathIfExists(dataRoot)
   }

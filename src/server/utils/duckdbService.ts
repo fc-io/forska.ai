@@ -2692,6 +2692,64 @@ const copyDuckdbDatabaseBeforeWalRecovery = async ({
   return databaseBackupPath
 }
 
+const duckdbStartupRecoveryArtifactPattern =
+  /^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z\.[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\.(?:duckdb|pre-repair\.duckdb|[^/]+\.wal|recovery\.json)$/iu
+
+const getDuckdbStartupRecoveryArtifactPathPart = (fileName: string) => {
+  return fileName.match(duckdbStartupRecoveryArtifactPattern)?.[1] ?? null
+}
+
+const pruneDuckdbStartupRecoveryArtifacts = async (recoveryDirectory: string, retainedRecoveryPathPart: string) => {
+  const prunedArtifactFileNames = readdirSync(recoveryDirectory).filter((fileName) => {
+    const recoveryPathPart = getDuckdbStartupRecoveryArtifactPathPart(fileName)
+
+    return recoveryPathPart !== null && recoveryPathPart !== retainedRecoveryPathPart
+  })
+
+  await Promise.all(
+    prunedArtifactFileNames.map((fileName) => {
+      return rm(join(recoveryDirectory, fileName), {force: true})
+    }),
+  )
+
+  return prunedArtifactFileNames
+}
+
+const pruneDuckdbStartupRecoveryArtifactsSafely = async (
+  runtimeConfig: DuckdbRuntimeConfig,
+  recoveryDirectory: string,
+  retainedRecoveryPathPart: string,
+) => {
+  try {
+    const prunedArtifactFileNames = await pruneDuckdbStartupRecoveryArtifacts(
+      recoveryDirectory,
+      retainedRecoveryPathPart,
+    )
+
+    if (prunedArtifactFileNames.length > 0) {
+      writeRuntimeOperatorLogEvent({
+        attrs: {
+          databasePath: runtimeConfig.databasePath,
+          prunedArtifactCount: prunedArtifactFileNames.length,
+          recoveryDirectory,
+          retainedRecoveryPathPart,
+        },
+        event: 'duckdb.startup.recovery-retention-prune',
+        message: '[duckdb] pruned obsolete startup recovery artifacts',
+        severity: 'INFO',
+      })
+    }
+  } catch (error) {
+    writeRuntimeFailureLogEvent({
+      attrs: {databasePath: runtimeConfig.databasePath, error, recoveryDirectory, retainedRecoveryPathPart},
+      event: 'duckdb.startup.recovery-retention-prune-failure',
+      message: '[duckdb] failed to prune obsolete startup recovery artifacts',
+      severity: 'WARN',
+      terminalArgs: [error],
+    })
+  }
+}
+
 const quarantineFailedDuckdbWalReplay = async (
   runtimeConfig: DuckdbRuntimeConfig,
   error: unknown,
@@ -2740,6 +2798,9 @@ const quarantineFailedDuckdbWalReplay = async (
       2,
     ),
   )
+  if (preservedDatabasePath !== null) {
+    await pruneDuckdbStartupRecoveryArtifactsSafely(runtimeConfig, recoveryDirectory, recoveryPathPart)
+  }
   writeRuntimeFailureLogEvent({
     attrs: {
       databasePath: runtimeConfig.databasePath,
@@ -3671,6 +3732,10 @@ const repairDuckdbStartupIndexedTables = async (runtimeConfig: DuckdbRuntimeConf
     databaseBackupPath,
     databasePath: runtimeConfig.databasePath,
   })
+
+  if (preservedDatabasePath !== null) {
+    await pruneDuckdbStartupRecoveryArtifactsSafely(runtimeConfig, recoveryDirectory, recoveryPathPart)
+  }
 
   let result: ReturnType<typeof globalThis.Bun.spawnSync> | null = null
   let outputText = ''
