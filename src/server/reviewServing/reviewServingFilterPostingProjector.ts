@@ -602,14 +602,18 @@ const getInsertFullRebuildServingRowsStatement = (input: ProjectReviewServingFil
     WITH posting_source AS (${getFullRebuildPostingContributionRowsStatement(input)}),
     serving_source AS (
       SELECT
-        posting.filterKind,
-        posting.filterValue,
-        posting.listModeKey,
-        posting.articleId,
+        CAST(posting.filterKind AS VARCHAR) AS filterKind,
+        CAST(posting.filterValue AS VARCHAR) AS filterValue,
+        CAST(posting.listModeKey AS VARCHAR) AS listModeKey,
+        CAST(posting.articleId AS VARCHAR) AS articleId,
         MAX(posting.sortKey) AS sortKey
       FROM posting_source posting
       WHERE NOT posting.tombstone
-      GROUP BY posting.filterKind, posting.filterValue, posting.listModeKey, posting.articleId
+      GROUP BY
+        CAST(posting.filterKind AS VARCHAR),
+        CAST(posting.filterValue AS VARCHAR),
+        CAST(posting.listModeKey AS VARCHAR),
+        CAST(posting.articleId AS VARCHAR)
     )
     SELECT
       ${getSqlLiteral(input.projectId)} AS project_id,
@@ -623,10 +627,17 @@ const getInsertFullRebuildServingRowsStatement = (input: ProjectReviewServingFil
       posting.sortKey AS sort_key,
       current_timestamp AS posting_updated_at
     FROM serving_source posting
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO UPDATE SET
-      posting_identity = excluded.posting_identity,
-      sort_key = excluded.sort_key,
-      posting_updated_at = excluded.posting_updated_at`
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM mart.review_article_filter_posting_serving_v4 existing
+      WHERE existing.project_id = ${getSqlLiteral(input.projectId)}
+        AND existing.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+        AND existing.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        AND existing.filter_kind = posting.filterKind
+        AND existing.filter_value = posting.filterValue
+        AND existing.list_mode_key = posting.listModeKey
+        AND existing.article_id = posting.articleId
+    )`
 }
 
 const getDeleteFullRebuildStatsRowsStatement = (

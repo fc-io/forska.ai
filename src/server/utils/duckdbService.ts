@@ -2176,7 +2176,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     `,
     lowMemoryStartupPreflight: true,
     repairPrimaryKeyColumns: ['project_id', 'display_identity', 'payload_identity', 'snapshot_id', 'article_id'],
-    repairStrategy: 'empty-derived',
     schemaName: 'mart',
     schemaRequirements: [
       {
@@ -3787,21 +3786,7 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
 
       if (hadWalBeforePreflight && !checkpointedWalReplay) {
         checkpointedWalReplay = true
-        try {
-          await checkpointDuckdbStartupWalReplay(runtimeConfig)
-        } catch (checkpointError) {
-          if (hasNonEmptyDuckdbWal(runtimeConfig.databasePath)) {
-            await quarantineFailedDuckdbWalReplay(runtimeConfig, checkpointError, {
-              event: 'duckdb.startup.wal-checkpoint-quarantine',
-              message: '[duckdb] quarantined WAL after startup checkpoint failure',
-              recovery: 'wal-checkpoint-quarantine-retry-from-last-checkpoint',
-              walFileSuffix: 'failed-checkpoint',
-            })
-            continue
-          }
-
-          throw checkpointError
-        }
+        await checkpointDuckdbStartupWalReplay(runtimeConfig)
         continue
       }
 

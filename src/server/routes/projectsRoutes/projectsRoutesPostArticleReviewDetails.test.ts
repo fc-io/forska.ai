@@ -318,3 +318,17 @@ test('legacy judgment fallback does not cap visible project judgment history', (
   expect(legacyQuery).not.toContain('maxResultRows')
   expect(legacyQuery).toContain('ORDER BY j.created_at DESC NULLS LAST, j.id ASC')
 })
+
+test('covidence related records expose an overflow sentinel instead of silently truncating', () => {
+  const routeText = readFileSync('src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts', 'utf8')
+  const covidenceRelatedRecordRead = routeText.slice(
+    routeText.indexOf('const getCovidenceRelatedRecords'),
+    routeText.indexOf('const getUnavailableReviewDetail'),
+  )
+
+  expect(routeText).toContain('const covidenceRelatedRecordsQueryLimit = covidenceRelatedRecordsLimit + 1')
+  expect(covidenceRelatedRecordRead).toContain('LIMIT ${covidenceRelatedRecordsQueryLimit}')
+  expect(covidenceRelatedRecordRead).toContain('maxResultRows: covidenceRelatedRecordsQueryLimit')
+  expect(covidenceRelatedRecordRead).toContain('overflow: rows.length > covidenceRelatedRecordsLimit')
+  expect(covidenceRelatedRecordRead).toContain('records: visibleRows.map')
+})

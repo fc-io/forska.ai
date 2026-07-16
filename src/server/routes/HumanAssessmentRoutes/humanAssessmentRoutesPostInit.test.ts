@@ -1,3 +1,5 @@
+import {readFileSync} from 'node:fs'
+
 import {afterEach, expect, mock, test} from 'bun:test'
 
 const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
@@ -218,6 +220,19 @@ test('human assessment init inserts project id before the answered flag', async 
       prompts: [{id: 'prompt-1', order: 0, originalText: 'Prompt 1', promptHeading: 'Heading 1', type: 'string'}],
     },
   })
+})
+
+test('human assessment init project prompt read is not capped after materialization', () => {
+  const routeText = readFileSync('src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts', 'utf8')
+  const promptRead = routeText.slice(
+    routeText.indexOf('const projectPromptRows = await getAppDatabaseService().queryJson'),
+    routeText.indexOf('if (projectPromptRows.length === 0)'),
+  )
+
+  expect(promptRead).toContain('ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC')
+  expect(promptRead).toContain("getHumanAssessmentWorkloadContext({operation: 'init.projectPrompts'")
+  expect(promptRead).not.toContain('maxResultRows')
+  expect(promptRead).not.toContain('LIMIT')
 })
 
 test('human assessment init rejects summary-mode projects before creating pending rows', async () => {

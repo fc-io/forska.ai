@@ -1820,6 +1820,118 @@ test('duckdb service preflights startup WAL replay in a child before opening in-
   }
 })
 
+test('duckdb service keeps replayable WAL when startup checkpoint fails', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-wal-checkpoint-failure-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+
+  mkdirSync(dataRoot, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+  writeFileSync(`${duckdbPath}.wal`, 'wal')
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {existsSync, readdirSync, writeFileSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const duckdbPath = ${JSON.stringify(duckdbPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        let childCount = 0
+        const originalSpawnSync = globalThis.Bun.spawnSync
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          childCount += 1
+
+          return childCount === 1
+            ? {
+                exitCode: 0,
+                signalCode: null,
+                stdout: Buffer.from(''),
+                stderr: Buffer.from(''),
+              }
+            : {
+                exitCode: 7,
+                signalCode: null,
+                stdout: Buffer.from(''),
+                stderr: Buffer.from('checkpoint temporarily failed'),
+              }
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        let errorMessage = null
+
+        try {
+          const duckdbService = await import('./src/server/utils/duckdbService.ts?wal-checkpoint-failure-test=' + Date.now())
+          await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+        } catch (error) {
+          errorMessage = error instanceof Error ? error.message : String(error)
+        }
+
+        const recoveryDirectory = duckdbPath + '.startup-recovery'
+        const recoveryFiles = existsSync(recoveryDirectory) ? readdirSync(recoveryDirectory).sort() : []
+        console.log(JSON.stringify({
+          childCount,
+          errorMessage,
+          recoveryFiles,
+          walExists: existsSync(duckdbPath + '.wal'),
+        }))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB WAL checkpoint subprocess failed')
+    }
+
+    const parsed = parseJsonSubprocessStdout<{
+      childCount: number
+      errorMessage: string | null
+      recoveryFiles: string[]
+      walExists: boolean
+    }>(result.stdout.toString())
+
+    expect(parsed.childCount).toBe(2)
+    expect(parsed.errorMessage).toContain('DuckDB startup WAL checkpoint failed')
+    expect(parsed.errorMessage).toContain('checkpoint temporarily failed')
+    expect(parsed.walExists).toBe(true)
+    expect(parsed.recoveryFiles).toEqual([])
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
 test('duckdb service retries startup WAL preflight locks without quarantining WAL', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-wal-preflight-lock-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
@@ -2568,7 +2680,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'snapshot_id',
       'article_id',
     ])
-    expect(payloadProbe?.repairStrategy).toBe('empty-derived')
+    expect(payloadProbe?.repairStrategy).toBeUndefined()
     expect(payloadProbe?.mutationProbeSql).toContain("projection_component = 'payload'")
     expect(payloadProbe?.mutationProbeSql).toContain('INSERT INTO mart.review_article_serving_payload_v4 BY NAME')
     expect(payloadProbe?.schemaRequirements).toContainEqual({

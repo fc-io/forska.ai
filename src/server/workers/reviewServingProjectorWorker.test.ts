@@ -3658,6 +3658,51 @@ test('worker marks rebuild requests failed after terminal chunk failure', async 
   expect(joined).toContain("request_id = 'rebuild-terminal'")
 })
 
+test('worker finalizes active rebuild requests that already have terminal chunks before claiming more work', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const terminalChunk = {
+    ...chunkManifest,
+    lastError: 'prior fatal index-delete failure',
+    requestId: 'rebuild-stale-terminal',
+    status: 'quarantined' as const,
+  } satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      throw new Error('stale terminal request should be finalized before claiming more chunks')
+    },
+    getNextChunk: async () => {
+      throw new Error('stale terminal request should be finalized before selecting chunks')
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.database.queryJson = async <T>(statement: string) => {
+    if (statement.includes('terminal_failed_rebuild_chunk')) {
+      return [{chunkId: terminalChunk.chunkId}] as T[]
+    }
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+      return [terminalChunk] as T[]
+    }
+
+    return [] as T[]
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildProjectId: 'project-1', workerId: 'worker-1'},
+    harness.dependencies,
+  )
+  const joined = harness.runStatements.join('\n')
+
+  expect(result.chunk).toEqual({chunkId: terminalChunk.chunkId, requestId: terminalChunk.requestId, status: 'failed'})
+  expect(harness.claimInputs).toEqual([])
+  expect(harness.wakeInputs).toEqual([])
+  expect(joined).toContain('UPDATE app.review_rebuild_request')
+  expect(joined).toContain("status = 'failed'")
+  expect(joined).toContain("last_error = 'prior fatal index-delete failure'")
+  expect(joined).toContain("request_id = 'rebuild-stale-terminal'")
+})
+
 test('worker marks rebuild requests failed when completion finalization throws', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const requestChunk = {...chunkManifest, requestId: 'rebuild-finalizer'} satisfies ReviewServingRebuildChunkManifest
@@ -3717,6 +3762,8 @@ test('worker readmits failed rebuild requests that still have retryable chunks',
   expect(readmissionStatement).toContain("chunk.status = 'failed'")
   expect(readmissionStatement).toContain("chunk.status IN ('blocked_over_budget', 'quarantined')")
   expect(readmissionStatement).toContain("AND request.project_id = 'project-1'")
+  expect(readmissionStatement).toContain('FROM app.review_rebuild_request active_request')
+  expect(readmissionStatement).toContain("active_request.status IN ('admitted', 'running')")
   expect(readmissionStatement).toContain("status = 'admitted'")
   expect(readmissionStatement).toContain('failed_at = NULL')
   expect(readmissionStatement).toContain('last_error = NULL')

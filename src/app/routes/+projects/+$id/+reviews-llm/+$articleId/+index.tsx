@@ -127,8 +127,9 @@ export const ReviewDetail = () => {
                           <div>
                             <h2 class="text-sm font-semibold text-amber-900">Covidence duplicate study group</h2>
                             <p class="mt-1 text-sm text-amber-800">
-                              {data().covidenceRelatedRecords.length} records share the same study identity in this
-                              import.
+                              {data().covidenceRelatedRecords.length}
+                              {data().covidenceRelatedRecordsOverflow ? '+' : ''} records share the same study identity
+                              in this import.
                             </p>
                           </div>
                           <ReviewsCovidenceBadges sourceMetadata={data().article.sourceMetadata} />

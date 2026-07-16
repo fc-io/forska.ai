@@ -1,3 +1,5 @@
+import {readFileSync} from 'node:fs'
+
 import {afterEach, expect, mock, test} from 'bun:test'
 
 const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
@@ -10,6 +12,7 @@ const reviewServingProjectConfigIdentityModulePath = new URL(
   '../../services/reviewServingProjectConfigIdentity.ts',
   import.meta.url,
 ).pathname
+const systemActorModulePath = new URL('../../utils/getSystemActor.ts', import.meta.url).pathname
 
 const queryJsonRef = {
   current: async (_statement: string): Promise<unknown[]> => {
@@ -77,6 +80,18 @@ const registerModuleMocks = () => {
     return {
       getCurrentReviewConfigHash: (projectId: string) => {
         return currentReviewConfigHashRef.current(projectId)
+      },
+    }
+  })
+
+  void mock.module(systemActorModulePath, () => {
+    return {
+      getSystemActor: () => {
+        return {
+          email: 'local-uv2Idd2BF6VNSNjwY5IKmIeoYMKq6zXw@forska.local',
+          id: 'uv2Idd2BF6VNSNjwY5IKmIeoYMKq6zXw',
+          name: 'Local User',
+        }
       },
     }
   })
@@ -162,6 +177,19 @@ test('human assessment overview reads V4 human count contracts instead of raw ju
   expect(statements.join('\n')).not.toContain('FROM app.judgment_human')
   expect(statements.join('\n')).not.toContain('FROM app.project_prompt')
   expect(statements.join('\n')).not.toContain('OFFSET')
+})
+
+test('human assessment overview active project read is not capped after materialization', () => {
+  const routeText = readFileSync('src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverview.ts', 'utf8')
+  const projectRead = routeText.slice(
+    routeText.indexOf('const projects = await getAppDatabaseService().queryJson'),
+    routeText.indexOf('const projectsWithCounts = await Promise.all'),
+  )
+
+  expect(projectRead).toContain('ORDER BY created_at DESC, id ASC')
+  expect(projectRead).toContain("getHumanAssessmentWorkloadContext({operation: 'overview.activeProjects'})")
+  expect(projectRead).not.toContain('maxResultRows')
+  expect(projectRead).not.toContain('LIMIT')
 })
 
 test('human assessment both-project overview reads V4 both count contracts', async () => {

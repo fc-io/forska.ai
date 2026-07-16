@@ -228,6 +228,19 @@ test('datasource lists are not silently truncated by a hard SQL limit', () => {
   expect(listArchivedSql).not.toContain('maxResultRows')
 })
 
+test('active datasource list keeps the unpaginated product contract explicit', () => {
+  const routeText = readFileSync('src/server/routes/DataSourcesRoutes.ts', 'utf8')
+  const listActiveRoute = routeText.slice(
+    routeText.indexOf(".get('/api/datasources'"),
+    routeText.indexOf(".get('/api/datasources/archived'"),
+  )
+
+  expect(listActiveRoute).toContain('ORDER BY created_at DESC')
+  expect(listActiveRoute).toContain("getDataSourcesWorkloadContext({operation: 'listActive'})")
+  expect(listActiveRoute).not.toContain('maxResultRows')
+  expect(listActiveRoute).not.toContain('LIMIT')
+})
+
 test('datasource list responses omit raw cursor while including structured file config', () => {
   const runRoute = runDataSourcesRoute({row: structuredRow, url: 'http://localhost/api/datasources'})
 
