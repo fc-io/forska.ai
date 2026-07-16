@@ -272,6 +272,71 @@ test('owner-routed diagnostic route DuckDB reads keep explicit workload contexts
   expect(violations).toEqual([])
 })
 
+test('unpaginated product route lists do not silently truncate with hard SQL limits', () => {
+  const routePaths = [
+    'src/server/routes/DataSourcesRoutes.ts',
+    'src/server/routes/ImportRoutes.ts',
+    'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverview.ts',
+  ]
+
+  const violations = routePaths.flatMap((routePath) => {
+    const fileText = readFileSync(join(workspaceRoot, routePath), 'utf8')
+    const listSqlFragments =
+      routePath === 'src/server/routes/DataSourcesRoutes.ts'
+        ? [
+            fileText.slice(
+              fileText.indexOf("operation: 'listActive'") - 500,
+              fileText.indexOf("operation: 'listActive'") + 120,
+            ),
+            fileText.slice(
+              fileText.indexOf("operation: 'listArchived'") - 500,
+              fileText.indexOf("operation: 'listArchived'") + 120,
+            ),
+          ]
+        : [fileText]
+
+    return listSqlFragments.flatMap((fragment, index) => {
+      return [/\bLIMIT\s+\d+\b/iu, /maxResultRows\s*:/u]
+        .filter((pattern) => {
+          return pattern.test(fragment)
+        })
+        .map((pattern) => {
+          return `${routePath} fragment ${index}: unexpected ${pattern}`
+        })
+    })
+  })
+
+  expect(violations).toEqual([])
+})
+
+test('human assessment prompt reads support full configured prompt sets', () => {
+  const routePaths = [
+    'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts',
+    'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts',
+  ]
+
+  const violations = routePaths.flatMap((routePath) => {
+    const fileText = readFileSync(join(workspaceRoot, routePath), 'utf8')
+    const promptQueryContext = routePath.endsWith('PostInit.ts')
+      ? "operation: 'init.projectPrompts'"
+      : "operation: 'submit.projectPrompts'"
+    const promptQueryFragment = fileText.slice(
+      fileText.indexOf('const projectPromptRows'),
+      fileText.indexOf(promptQueryContext) + 120,
+    )
+
+    return [/\bLIMIT\s+\d+\b/iu, /maxResultRows\s*:/u]
+      .filter((pattern) => {
+        return pattern.test(promptQueryFragment)
+      })
+      .map((pattern) => {
+        return `${routePath}: unexpected ${pattern}`
+      })
+  })
+
+  expect(violations).toEqual([])
+})
+
 test('normal foreground route SQL cannot add unallowlisted raw OOM-prone shapes', () => {
   const violations = getRouteSourceFiles().flatMap((filePath) => {
     const routeFile = getRelativeWorkspacePath(filePath)

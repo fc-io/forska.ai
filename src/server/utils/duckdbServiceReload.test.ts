@@ -593,6 +593,7 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
       'mart.review_unassessed_queue_serving_v4',
       'mart.review_article_filter_posting_serving_v4',
       'mart.review_filter_posting_stats_v4',
+      'mart.review_article_serving_payload_v4',
     ])
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
@@ -1198,6 +1199,19 @@ test('duckdb service marks startup repair after fatal index-delete runtime recov
   } finally {
     removePathIfExists(dataRoot)
   }
+})
+
+test('duckdb fatal index-delete repair target prefers table named by error over stale mutation target', () => {
+  const source = readFileSync('src/server/utils/duckdbService.ts', 'utf8')
+  const targetMatcherSource = source.slice(
+    source.indexOf('const getDuckdbStartupRepairSpecForFatalIndexedTableError'),
+    source.indexOf('const isDuckdbStartupRetryableError'),
+  )
+
+  expect(targetMatcherSource).toContain('message.includes(spec.tableName)')
+  expect(targetMatcherSource.indexOf('const unqualifiedMessageSpec')).toBeLessThan(
+    targetMatcherSource.indexOf('return getDuckdbStartupRepairSpecForTableName(lastMutatingTargetTable)'),
+  )
 })
 
 test('duckdb service marks recent mutating target after anonymous fatal index-delete runtime recovery', () => {
@@ -2359,6 +2373,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(parsed.repairScript).not.toContain("await connection.run('CHECKPOINT')")
     expect(parsed.repairScript).toContain("spec.repairStrategy !== 'empty-derived'")
     expect(parsed.repairScript).toContain('spec.postRepairSql')
+    expect(parsed.repairScript).toContain("duplicateCount > 0 && spec.repairStrategy !== 'empty-derived'")
     expect(parsed.repairScript).toContain('stripInlinePrimaryKeyConstraints')
     expect(parsed.repairScript).toContain('PRIMARY\\s+KEY\\s*\\([^)]*\\)')
     expect(parsed.repairScript).toContain('getRepairPrimaryKeyIndexSql')
@@ -2542,6 +2557,25 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'filter_value',
       'list_mode_key',
     ])
+    const payloadProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'mart' && spec.tableName === 'review_article_serving_payload_v4'
+    })
+    expect(payloadProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(payloadProbe?.repairPrimaryKeyColumns).toEqual([
+      'project_id',
+      'display_identity',
+      'payload_identity',
+      'snapshot_id',
+      'article_id',
+    ])
+    expect(payloadProbe?.repairStrategy).toBe('empty-derived')
+    expect(payloadProbe?.mutationProbeSql).toContain("projection_component = 'payload'")
+    expect(payloadProbe?.mutationProbeSql).toContain('INSERT INTO mart.review_article_serving_payload_v4 BY NAME')
+    expect(payloadProbe?.schemaRequirements).toContainEqual({
+      columnNames: ['chunk_end_key', 'chunk_start_key', 'last_error', 'projection_component', 'project_id', 'status'],
+      schemaName: 'app',
+      tableName: 'review_rebuild_chunk_manifest',
+    })
     const legacyPatchProbeTables = parsed.firstPreflightSpecs
       .filter((spec) => {
         return (
