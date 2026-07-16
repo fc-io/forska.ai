@@ -2070,6 +2070,123 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     schemaName: 'mart',
     tableName: 'review_filter_posting_stats_v4',
   },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT
+          project_id,
+          display_identity,
+          payload_identity,
+          snapshot_id,
+          article_id
+        FROM mart.review_article_serving_payload_v4
+        GROUP BY
+          project_id,
+          display_identity,
+          payload_identity,
+          snapshot_id,
+          article_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_article_serving_payload_v4;
+      CREATE TEMP TABLE startup_probe_review_article_serving_payload_v4 AS
+      WITH running_payload_ranges AS (
+        SELECT
+          project_id,
+          chunk_start_key,
+          chunk_end_key
+        FROM app.review_rebuild_chunk_manifest
+        WHERE projection_component = 'payload'
+          AND (
+            status = 'running'
+            OR COALESCE(last_error, '') LIKE '%Failed to delete all rows from index%'
+            OR COALESCE(last_error, '') LIKE '%DuckDB%'
+          )
+        ORDER BY updated_at DESC, chunk_id ASC
+        LIMIT 8
+      ),
+      running_payload_rows AS (
+        SELECT payload.*
+        FROM mart.review_article_serving_payload_v4 payload
+        INNER JOIN running_payload_ranges running_range
+          ON running_range.project_id = payload.project_id
+         AND (
+              running_range.chunk_start_key IS NULL
+              OR payload.article_id >= running_range.chunk_start_key
+            )
+         AND (
+              running_range.chunk_end_key IS NULL
+              OR payload.article_id <= running_range.chunk_end_key
+            )
+        ORDER BY
+          payload.project_id,
+          payload.display_identity,
+          payload.payload_identity,
+          payload.snapshot_id,
+          payload.article_id
+        LIMIT 64
+      ),
+      fallback_row AS (
+        SELECT payload.*
+        FROM mart.review_article_serving_payload_v4 payload
+        WHERE NOT EXISTS (SELECT 1 FROM running_payload_rows)
+        ORDER BY
+          payload.project_id,
+          payload.display_identity,
+          payload.payload_identity,
+          payload.snapshot_id,
+          payload.article_id
+        LIMIT 1
+      )
+      SELECT *
+      FROM running_payload_rows
+      UNION ALL
+      SELECT *
+      FROM fallback_row;
+      BEGIN;
+      UPDATE mart.review_article_serving_payload_v4
+      SET payload_updated_at = current_timestamp
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_review_article_serving_payload_v4 probe
+        WHERE mart.review_article_serving_payload_v4.project_id IS NOT DISTINCT FROM probe.project_id
+          AND mart.review_article_serving_payload_v4.display_identity IS NOT DISTINCT FROM probe.display_identity
+          AND mart.review_article_serving_payload_v4.payload_identity IS NOT DISTINCT FROM probe.payload_identity
+          AND mart.review_article_serving_payload_v4.snapshot_id IS NOT DISTINCT FROM probe.snapshot_id
+          AND mart.review_article_serving_payload_v4.article_id IS NOT DISTINCT FROM probe.article_id
+      );
+      DELETE FROM mart.review_article_serving_payload_v4
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_review_article_serving_payload_v4 probe
+        WHERE mart.review_article_serving_payload_v4.project_id IS NOT DISTINCT FROM probe.project_id
+          AND mart.review_article_serving_payload_v4.display_identity IS NOT DISTINCT FROM probe.display_identity
+          AND mart.review_article_serving_payload_v4.payload_identity IS NOT DISTINCT FROM probe.payload_identity
+          AND mart.review_article_serving_payload_v4.snapshot_id IS NOT DISTINCT FROM probe.snapshot_id
+          AND mart.review_article_serving_payload_v4.article_id IS NOT DISTINCT FROM probe.article_id
+      );
+      INSERT INTO mart.review_article_serving_payload_v4 BY NAME
+      SELECT *
+      FROM startup_probe_review_article_serving_payload_v4;
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_article_serving_payload_v4;
+    `,
+    lowMemoryStartupPreflight: true,
+    repairPrimaryKeyColumns: ['project_id', 'display_identity', 'payload_identity', 'snapshot_id', 'article_id'],
+    repairStrategy: 'empty-derived',
+    schemaName: 'mart',
+    schemaRequirements: [
+      {
+        columnNames: ['chunk_end_key', 'chunk_start_key', 'last_error', 'projection_component', 'project_id', 'status'],
+        schemaName: 'app',
+        tableName: 'review_rebuild_chunk_manifest',
+      },
+    ],
+    tableName: 'review_article_serving_payload_v4',
+  },
 ] as const
 const enforcedForegroundDuckdbOperations = new Set<DuckdbWorkloadOperation>([
   'mainQuery',
@@ -3217,7 +3334,7 @@ const getDuckdbIndexedTableRepairScript = () => {
         const duplicateRows = await getRows(spec.duplicateKeySelectSql)
         const duplicateCount = Number(duplicateRows[0]?.duplicateCount ?? 0)
 
-        if (duplicateCount > 0) {
+        if (duplicateCount > 0 && spec.repairStrategy !== 'empty-derived') {
           throw new Error(
             'cannot rebuild ' + getQualifiedName(spec.schemaName, spec.tableName)
               + ' because table data contains ' + duplicateCount + ' duplicate primary keys',
@@ -3246,11 +3363,11 @@ const getDuckdbIndexedTableRepairScript = () => {
         const repairTableName = spec.tableName + '_startup_repair_' + repairId
         const sourceName = getQualifiedName(spec.schemaName, spec.tableName)
         const repairName = getQualifiedName(spec.schemaName, repairTableName)
-	        let createRepairSql = createSql.replace(
-	          'CREATE TABLE ' + sourceName + '(',
-	          'CREATE TABLE ' + repairName + '(',
-	        )
-	        createRepairSql = stripInlinePrimaryKeyConstraints(createRepairSql, spec.repairPrimaryKeyColumns)
+        let createRepairSql = createSql.replace(
+          'CREATE TABLE ' + sourceName + '(',
+          'CREATE TABLE ' + repairName + '(',
+        )
+        createRepairSql = stripInlinePrimaryKeyConstraints(createRepairSql, spec.repairPrimaryKeyColumns)
 
         if (createRepairSql === createSql) {
           throw new Error('could not rewrite table DDL for ' + sourceName)
@@ -3261,18 +3378,18 @@ const getDuckdbIndexedTableRepairScript = () => {
         if (spec.repairStrategy !== 'empty-derived') {
           await connection.run('INSERT INTO ' + repairName + ' BY NAME SELECT * FROM ' + sourceName)
         }
-	        await connection.run('DROP TABLE ' + sourceName)
-	        await connection.run('ALTER TABLE ' + repairName + ' RENAME TO ' + spec.tableName)
-	        await connection.run(
-	          'DROP INDEX IF EXISTS ' + spec.schemaName + '.idx_' + spec.tableName + '_repaired_pk',
-	        )
-	        const repairPrimaryKeyIndexSql = getRepairPrimaryKeyIndexSql(spec, sourceName)
+        await connection.run('DROP TABLE ' + sourceName)
+        await connection.run('ALTER TABLE ' + repairName + ' RENAME TO ' + spec.tableName)
+        await connection.run(
+          'DROP INDEX IF EXISTS ' + spec.schemaName + '.idx_' + spec.tableName + '_repaired_pk',
+        )
+        const repairPrimaryKeyIndexSql = getRepairPrimaryKeyIndexSql(spec, sourceName)
 
-	        if (repairPrimaryKeyIndexSql !== null) {
-	          await connection.run(repairPrimaryKeyIndexSql)
-	        }
+        if (repairPrimaryKeyIndexSql !== null) {
+          await connection.run(repairPrimaryKeyIndexSql)
+        }
 
-	        for (const indexRow of indexRows) {
+        for (const indexRow of indexRows) {
           if (String(indexRow.indexName).startsWith('idx_' + spec.tableName + '_repaired_pk')) {
             continue
           }
