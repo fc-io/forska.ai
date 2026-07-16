@@ -1417,7 +1417,64 @@ test('claim discovery only releases chunks whose rebuild request row is missing'
     retryCount: 2,
     status: 'failed',
   })
-  expect(statements.join('\n')).not.toContain("request.status IN ('admitted', 'running')")
+  const releaseStatement = statements.find((statement) => {
+    return statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('request_id = NULL')
+  })
+
+  expect(releaseStatement).toBeDefined()
+  expect(releaseStatement).not.toContain("request.status IN ('admitted', 'running')")
+})
+
+test('claim discovery preserves finalized chunks for inactive but present rebuild requests', async () => {
+  const completed = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-completed-request'}, []),
+    completedAt: '2026-06-16T14:00:00.000Z',
+    lastError: 'completed request retained diagnostics',
+    requestId: 'rebuild:completed',
+    status: 'completed' as const,
+  }
+  const quarantined = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-quarantined-request'}, []),
+    admissionState: 'blocked_over_budget' as const,
+    lastError: 'quarantined request retained diagnostics',
+    overBudgetReason: 'manual quarantine',
+    requestId: 'rebuild:quarantined',
+    retryCount: 3,
+    status: 'quarantined' as const,
+  }
+  const claimable = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-claimable'}, []),
+    requestId: null,
+    status: 'pending' as const,
+  }
+  const {database, rows, statements} = createFakeChunkManifestDatabase([completed, quarantined, claimable])
+
+  const next = await getNextClaimableReviewServingRebuildChunk(
+    {now: '2026-06-16T14:05:00.000Z', projectId: 'project-1'},
+    database,
+  )
+
+  expect(next).toMatchObject({inputDigest: 'digest-claimable', requestId: null})
+  expect(rows.get(completed.chunkId)).toMatchObject({
+    completedAt: '2026-06-16T14:00:00.000Z',
+    lastError: 'completed request retained diagnostics',
+    requestId: 'rebuild:completed',
+    status: 'completed',
+  })
+  expect(rows.get(quarantined.chunkId)).toMatchObject({
+    admissionState: 'blocked_over_budget',
+    lastError: 'quarantined request retained diagnostics',
+    overBudgetReason: 'manual quarantine',
+    requestId: 'rebuild:quarantined',
+    retryCount: 3,
+    status: 'quarantined',
+  })
+  const releaseStatement = statements.find((statement) => {
+    return statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('request_id = NULL')
+  })
+
+  expect(releaseStatement).toBeDefined()
+  expect(releaseStatement).not.toContain("request.status IN ('admitted', 'running')")
 })
 
 test('over-budget chunks are parked before claim and cannot hot-loop', async () => {

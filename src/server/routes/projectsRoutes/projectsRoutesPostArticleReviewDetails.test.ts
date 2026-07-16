@@ -335,3 +335,21 @@ test('covidence related records expose an overflow sentinel instead of silently 
   expect(covidenceRelatedRecordRead).toContain('overflow: rows.length > covidenceRelatedRecordsLimit')
   expect(covidenceRelatedRecordRead).toContain('records: visibleRows.map')
 })
+
+test('covidence related record cap reserves the reviewed article before sorting by title', () => {
+  const routeText = readFileSync('src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts', 'utf8')
+  const covidenceRelatedRecordRead = routeText.slice(
+    routeText.indexOf('const getCovidenceRelatedRecords'),
+    routeText.indexOf('const getUnavailableReviewDetail'),
+  )
+  const orderIndex = covidenceRelatedRecordRead.indexOf(
+    'ORDER BY isCurrentRecord DESC, articleTitle ASC, articleExternalId ASC NULLS LAST, id ASC',
+  )
+  const limitIndex = covidenceRelatedRecordRead.indexOf('LIMIT ${covidenceRelatedRecordsQueryLimit}')
+
+  expect(orderIndex).toBeGreaterThan(-1)
+  expect(limitIndex).toBeGreaterThan(orderIndex)
+  expect(covidenceRelatedRecordRead).toContain('source_record.article_id = ${getSqlLiteral(article.id)} AS isCurrentRecord')
+  expect(covidenceRelatedRecordRead).toContain('article.id = ${getSqlLiteral(article.id)} AS isCurrentRecord')
+  expect(covidenceRelatedRecordRead).toContain('isCurrentRecord: row.isCurrentRecord || row.id === article.id')
+})
