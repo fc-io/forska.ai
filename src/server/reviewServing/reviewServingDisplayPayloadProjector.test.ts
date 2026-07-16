@@ -171,6 +171,31 @@ test('display routine updates write component-narrow patches for only claimed ar
   expect(joined).not.toContain("'humanStatus'")
 })
 
+test('display no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
+  const {database, statements} = createDisplayPayloadDatabase({displayPatchRows: []})
+
+  await projectReviewServingDisplayPatches(
+    {
+      acknowledgeClaims: false,
+      baseGeneration: 3,
+      claims: [displayClaim()],
+      definitionVersion: 'display-v4-test',
+      displayIdentity: 'display:identity-1',
+      projectId: 'project-1',
+      projectScopeIdentity: 'projectScope:identity-1',
+      projectionIdentity: 'display:identity-1',
+      selectedImportSnapshotId: 'selected-import-snapshot-1',
+      snapshotId: 'snapshot-1',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+})
+
 test('payload projection preserves prompt-preview ordering inputs and avoids import JSON paths', async () => {
   const {database, statements} = createDisplayPayloadDatabase({
     payloadRows: [

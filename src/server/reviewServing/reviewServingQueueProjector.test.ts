@@ -109,6 +109,17 @@ test('LLM answer changes acknowledge queue work without legacy patch rows', asyn
   expect(servingDelete).toContain("article_id IN ('article-1')")
 })
 
+test('queue no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
+  const {database, statements} = createQueueDatabase({queueRows: [queueRow()]})
+
+  await projectReviewServingQueuePatches({...projectInput([queueClaim()]), acknowledgeClaims: false}, database)
+  const joined = statements.join('\n')
+
+  expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+})
+
 test('human status changes write related review queue patches without raw human judgment reads', async () => {
   const {database, statements} = createQueueDatabase({
     queueRows: [queueRow({queueKind: 'human-unreviewed', reviewConfigHash: 'review-config-1'})],
@@ -330,7 +341,7 @@ test('membership removals write tombstones and keep queue projection component n
 
   expect(joined).not.toContain('mart.review_queue_patch_v4')
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
-  expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).toContain('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
   expect(joined).toContain("'queue'")
   expect(joined).not.toContain('FROM app."judgment"')
   expect(joined).not.toContain('FROM app."judgment_human"')

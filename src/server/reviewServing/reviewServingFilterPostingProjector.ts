@@ -700,12 +700,7 @@ const getInsertFullRebuildStatsRowsStatement = (
       END AS selectivity,
       current_timestamp AS stats_updated_at
     FROM stats_source stats
-    CROSS JOIN total_article total
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key) DO UPDATE SET
-      posting_identity = excluded.posting_identity,
-      cardinality = excluded.cardinality,
-      selectivity = excluded.selectivity,
-      stats_updated_at = excluded.stats_updated_at`
+    CROSS JOIN total_article total`
 }
 
 export const refreshReviewServingFilterPostingStats = async (
@@ -1061,26 +1056,27 @@ export const projectReviewServingFilterPostings = async (
     }
   })
   const writerResult = await measure('writerMs', async () => {
+    const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
+
     return writeReviewServingProjectorComponent(
       {
-        acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
+        acknowledgements: shouldAcknowledgeClaims ? input.claims : [],
         component: 'posting',
-        projectionManifests: input.claims.length === 0 ? [] : [getPostingManifest(input)],
+        projectionManifests: shouldAcknowledgeClaims ? [getPostingManifest(input)] : [],
         records: [...servingRecords, ...statsRecords],
         repairDirtyWork: [],
         statements: [deleteServingRowsStatement, deleteStatsRowsStatement].flatMap((statement) => {
           return statement === null ? [] : [statement]
         }),
-        watermark:
-          input.claims.length === 0
-            ? undefined
-            : {
-                projectId: input.projectId,
-                projectionComponent: 'posting',
-                projectorName: filterPostingProjectorName,
-                sourceHighWaterMark: patchWatermark,
-                sourcePartition: getClaimSourcePartition(input.claims),
-              },
+        watermark: !shouldAcknowledgeClaims
+          ? undefined
+          : {
+              projectId: input.projectId,
+              projectionComponent: 'posting',
+              projectorName: filterPostingProjectorName,
+              sourceHighWaterMark: patchWatermark,
+              sourcePartition: getClaimSourcePartition(input.claims),
+            },
       },
       database,
     )

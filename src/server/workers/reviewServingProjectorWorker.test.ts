@@ -3561,7 +3561,12 @@ test('worker uses short progress yield for request-associated native-heavy chunk
   }
 
   await runReviewServingProjectorWorker(
-    {rebuildChunkBatchMaxRssBytes: 1_000, signal: controller.signal, workerId: 'worker-1'},
+    {
+      maxCompletedRebuildChunksPerRun: null,
+      rebuildChunkBatchMaxRssBytes: 1_000,
+      signal: controller.signal,
+      workerId: 'worker-1',
+    },
     harness.dependencies,
   )
 
@@ -3612,7 +3617,12 @@ test('worker slows native-heavy progress yield when RSS reaches the cleanup cap'
   }
 
   await runReviewServingProjectorWorker(
-    {rebuildChunkBatchMaxRssBytes: 1_000, signal: controller.signal, workerId: 'worker-1'},
+    {
+      maxCompletedRebuildChunksPerRun: null,
+      rebuildChunkBatchMaxRssBytes: 1_000,
+      signal: controller.signal,
+      workerId: 'worker-1',
+    },
     harness.dependencies,
   )
 

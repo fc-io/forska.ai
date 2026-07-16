@@ -317,7 +317,7 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
   ).toBe(true)
   expect(
     statements.some((statement) => {
-      return statement.includes('INSERT INTO app.review_serving_projector_watermark')
+      return statement.includes('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
     }),
   ).toBe(true)
   expect(

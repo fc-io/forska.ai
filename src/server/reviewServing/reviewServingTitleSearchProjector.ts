@@ -365,18 +365,19 @@ export const projectReviewServingTitleSearchRows = async (
   })
   const patchWatermark = getPatchWatermark(claims)
   const hasClaimedWork = claims.length > 0 && definitionVersion !== undefined && projectionIdentity !== undefined
+  const shouldAcknowledgeClaims = hasClaimedWork && input.acknowledgeClaims !== false
 
   const writer = await measure('writerMs', async () => {
     return writeReviewServingProjectorComponent(
       {
-        acknowledgements: hasClaimedWork && input.acknowledgeClaims !== false ? claims : [],
+        acknowledgements: shouldAcknowledgeClaims ? claims : [],
         component: 'search',
-        projectionManifests: hasClaimedWork
+        projectionManifests: shouldAcknowledgeClaims
           ? [getTitleSearchManifest({...input, claims, definitionVersion, projectionIdentity})]
           : [],
         records,
         statements: getDeleteDirtyTitleSearchRowsStatements(input),
-        watermark: hasClaimedWork
+        watermark: shouldAcknowledgeClaims
           ? {
               projectId: input.projectId,
               projectionComponent: 'search',

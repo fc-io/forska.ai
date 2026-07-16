@@ -877,6 +877,7 @@ export const projectReviewServingDisplayPatches = async (
     return getDisplayPatchRows(input, database)
   })
   const patchWatermark = getPatchWatermark(input.claims)
+  const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
   const statements = measureSync('recordTransformMs', () => {
     return rows.map((row) => {
       return getApplyDisplayPatchServingStatement(input, row)
@@ -886,21 +887,20 @@ export const projectReviewServingDisplayPatches = async (
   const writer = await measure('writerMs', async () => {
     return writeReviewServingProjectorComponent(
       {
-        acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
+        acknowledgements: shouldAcknowledgeClaims ? input.claims : [],
         component: 'display',
-        projectionManifests: input.claims.length === 0 ? [] : [getReviewServingPayloadPatchManifest(input, 'display')],
+        projectionManifests: shouldAcknowledgeClaims ? [getReviewServingPayloadPatchManifest(input, 'display')] : [],
         records: [],
         statements,
-        watermark:
-          input.claims.length === 0
-            ? undefined
-            : {
-                projectId: input.projectId,
-                projectionComponent: 'display',
-                projectorName: displayProjectorName,
-                sourceHighWaterMark: patchWatermark,
-                sourcePartition: getClaimSourcePartition(input.claims),
-              },
+        watermark: !shouldAcknowledgeClaims
+          ? undefined
+          : {
+              projectId: input.projectId,
+              projectionComponent: 'display',
+              projectorName: displayProjectorName,
+              sourceHighWaterMark: patchWatermark,
+              sourcePartition: getClaimSourcePartition(input.claims),
+            },
       },
       database,
     )

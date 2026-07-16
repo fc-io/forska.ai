@@ -690,11 +690,13 @@ export const projectReviewServingHumanStatusPatches = async (
     })
   })
   const writer = await measure('writerMs', async () => {
+    const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
+
     return writeReviewServingProjectorComponent(
       {
-        acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
+        acknowledgements: shouldAcknowledgeClaims ? input.claims : [],
         component: 'humanStatus',
-        projectionManifests: input.claims.length === 0 ? [] : [getHumanStatusPatchManifest(input)],
+        projectionManifests: shouldAcknowledgeClaims ? [getHumanStatusPatchManifest(input)] : [],
         records: [],
         statements: [
           getApplyHumanStatusServingStatement({
@@ -710,16 +712,15 @@ export const projectReviewServingHumanStatusPatches = async (
         ].flatMap((statement) => {
           return statement === null ? [] : [statement]
         }),
-        watermark:
-          input.claims.length === 0
-            ? undefined
-            : {
-                projectId: input.projectId,
-                projectionComponent: 'humanStatus',
-                projectorName: humanStatusProjectorName,
-                sourceHighWaterMark: patchWatermark,
-                sourcePartition: getClaimSourcePartition(input.claims),
-              },
+        watermark: !shouldAcknowledgeClaims
+          ? undefined
+          : {
+              projectId: input.projectId,
+              projectionComponent: 'humanStatus',
+              projectorName: humanStatusProjectorName,
+              sourceHighWaterMark: patchWatermark,
+              sourcePartition: getClaimSourcePartition(input.claims),
+            },
       },
       database,
     )

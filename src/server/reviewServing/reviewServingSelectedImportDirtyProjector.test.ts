@@ -164,11 +164,26 @@ test('selected-import projector advances watermark for the max source partition'
     database,
   )
   const watermarkStatement = statements.find((statement) => {
-    return statement.includes('INSERT INTO app.review_serving_projector_watermark')
+    return statement.includes('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
   })
 
   expect(watermarkStatement).toContain("'reviewChange'")
   expect(watermarkStatement).toContain('9')
+})
+
+test('selected-import no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
+  const {database, statements} = createSelectedImportDirtyDatabase({dirtyRows: []})
+
+  await projectReviewServingSelectedImportDirty(
+    {...projectDirtyInput([selectedImportClaim()]), acknowledgeClaims: false},
+    database,
+  )
+
+  const joined = statements.join('\n')
+
+  expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
 })
 
 test('selected-import projector keeps explicit manifest watermarks separate from dirty watermarks', async () => {
@@ -311,7 +326,7 @@ test('selected-import dirty projection promotes manifest and watermark atomicall
   expect(joined).toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).toContain("'selectedImport'")
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
-  expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).toContain('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
   expect(joined).not.toContain("'display'")
   expect(joined).not.toContain("'projectScope'")
 })

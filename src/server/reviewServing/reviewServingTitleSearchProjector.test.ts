@@ -106,6 +106,40 @@ test('title search projection writes token rows and search-only component state 
   expect(joined).not.toContain("'selectedImport'")
 })
 
+test('title search no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
+  const {database, statements} = createTitleSearchDatabase({
+    rows: [
+      {
+        activitySortAt: '2026-01-02T00:00:00.000Z',
+        articleId: 'article-1',
+        articleTitle: 'Alpha Beta',
+        tombstone: false,
+      },
+    ],
+  })
+
+  await projectReviewServingTitleSearchRows(
+    {
+      acknowledgeClaims: false,
+      baseGeneration: 2,
+      claims: [searchClaim()],
+      definitionVersion: 'search-v4-test',
+      projectId: 'project-1',
+      projectScopeIdentity: 'projectScope:identity-1',
+      projectionIdentity: 'search:identity-1',
+      searchIdentity: 'search:identity-1',
+      selectedImportSnapshotId: 'selected-import-snapshot-1',
+      snapshotId: 'snapshot-1',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+})
+
 test('title search direct projection reads selected import base rows without patch overlay', async () => {
   const {database, statements} = createTitleSearchDatabase({
     rows: [

@@ -1017,6 +1017,9 @@ test('duckdb service startup repair strips table primary key constraints once', 
         await connection.run(
           'CREATE TABLE app.review_serving_projector_watermark(watermark_id VARCHAR, updated_at TIMESTAMP, PRIMARY KEY(watermark_id))',
         )
+        await connection.run(
+          'CREATE INDEX idx_review_serving_projector_watermark_duplicate_lookup ON app.review_serving_projector_watermark(watermark_id)',
+        )
         await connection.run("INSERT INTO app.review_serving_projector_watermark VALUES ('watermark', current_timestamp)")
         await connection.run('CHECKPOINT')
         connection.closeSync()
@@ -1078,6 +1081,9 @@ test('duckdb service startup repair strips table primary key constraints once', 
       }),
     ).toBe(true)
     expect(parsed.secondCatalog.indexSql.join('\n')).toContain('(watermark_id)')
+    expect(parsed.secondCatalog.indexSql.join('\n')).not.toContain(
+      'idx_review_serving_projector_watermark_duplicate_lookup',
+    )
     expect(parsed.rows).toEqual([{watermark_id: 'watermark'}])
   } finally {
     removePathIfExists(dataRoot)
@@ -1211,6 +1217,7 @@ test('duckdb service marks startup repair after fatal index-delete runtime recov
 
     expect(parsed.marker).toEqual({
       phase: 'runtime-fatal-index-delete',
+      reason: 'index-delete',
       schemaName: 'mart',
       tableName: 'review_article_serving_v4',
     })
@@ -1230,7 +1237,7 @@ test('duckdb fatal index-delete repair target prefers table named by error over 
 
   expect(targetMatcherSource).toContain('message.includes(spec.tableName)')
   expect(targetMatcherSource.indexOf('const unqualifiedMessageSpec')).toBeLessThan(
-    targetMatcherSource.indexOf('return getDuckdbStartupRepairSpecForTableName(lastMutatingTargetTable)'),
+    targetMatcherSource.indexOf('getDuckdbStartupRepairSpecForTableName(failedMutatingTargetTable)'),
   )
 })
 
@@ -1347,8 +1354,170 @@ test('duckdb service marks recent mutating target after anonymous fatal index-de
 
     expect(parsed.marker).toEqual({
       phase: 'runtime-fatal-index-delete',
+      reason: 'index-delete',
       schemaName: 'mart',
       tableName: 'review_filter_option_serving_v4',
+    })
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
+test('duckdb service keeps the repairable indexed target when a transaction fails on commit', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-commit-fatal-index-marker-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const activeRepairSpecPath = join(`${duckdbPath}.startup-recovery`, 'startup-preflight-active-table.json')
+
+  mkdirSync(dataRoot, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {existsSync, readFileSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        let createCount = 0
+        const originalSpawnSync = globalThis.Bun.spawnSync
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          return {
+            exitCode: 0,
+            signalCode: null,
+            stdout: Buffer.from(''),
+            stderr: Buffer.from(''),
+          }
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            constructor(instanceId) {
+              this.instanceId = instanceId
+            }
+
+            async run(statement) {
+              if (this.instanceId === 1 && /^(COMMIT|ROLLBACK)\\b/i.test(statement.trim())) {
+                throw new Error('FATAL Error: Failed: database has been invalidated because of a previous fatal error. The database must be restarted prior to being used again. FatalException: Invalid Input Error: Failed to delete all rows from index. Only deleted 0 out of 8 rows. Chunk: Chunk - [10 Columns]')
+              }
+            }
+
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return []
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              createCount += 1
+              return new MockInstance(createCount)
+            }
+
+            constructor(instanceId) {
+              this.instanceId = instanceId
+            }
+
+            async connect() {
+              return new MockConnection(this.instanceId)
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?commit-fatal-index-marker-test=' + Date.now())
+        let indexedTargetAfterStats = null
+        await duckdbService.runDuckdbTransaction(async (tx) => {
+          await tx.run('DELETE FROM mart.review_article_filter_posting_serving_v4 WHERE 1 = 0')
+          await tx.run(\`
+            INSERT INTO mart.review_filter_posting_stats_v4 (
+              project_id,
+              review_config_hash,
+              snapshot_id,
+              posting_identity,
+              filter_kind,
+              filter_value,
+              list_mode_key,
+              cardinality,
+              selectivity,
+              stats_updated_at
+            ) VALUES ('project-1', 'review-1', 'snapshot-1', 'posting-1', 'kind', 'value', 'both', 1, 1, current_timestamp)
+            ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)
+            DO UPDATE SET cardinality = excluded.cardinality
+          \`)
+          indexedTargetAfterStats = globalThis.__forskaDuckdbServiceState.controlTransactionIndexedMutationTarget
+          await tx.run('UPDATE app.review_serving_dirty_work SET status = status WHERE 1 = 0')
+          await tx.run(\`
+            INSERT INTO app.review_serving_projector_watermark (watermark_id, updated_at)
+            VALUES ('watermark-1', current_timestamp)
+          \`)
+        })
+
+        const marker = existsSync(activeRepairSpecPath) ? JSON.parse(readFileSync(activeRepairSpecPath, 'utf8')) : null
+        console.log(JSON.stringify({indexedTargetAfterStats, marker}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT: 'false',
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB commit fatal index marker subprocess failed',
+      )
+    }
+
+    const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult & {indexedTargetAfterStats: string | null}>(
+      result.stdout.toString(),
+    )
+
+    expect(parsed.indexedTargetAfterStats).toBe('mart.review_filter_posting_stats_v4')
+    expect(parsed.marker).toEqual({
+      phase: 'runtime-fatal-index-delete',
+      reason: 'index-delete',
+      schemaName: 'mart',
+      tableName: 'review_filter_posting_stats_v4',
     })
   } finally {
     removePathIfExists(dataRoot)
@@ -1467,6 +1636,7 @@ test('duckdb service prefers fatal error table name before stale mutating target
 
     expect(parsed.marker).toEqual({
       phase: 'runtime-fatal-index-delete',
+      reason: 'index-delete',
       schemaName: 'mart',
       tableName: 'review_article_count_serving_v4',
     })
@@ -2518,7 +2688,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(parsed.repairManifest?.repairedTables).toEqual(['mart.review_article_judgment_detail_serving_v4'])
     expect(parsed.repairBackupContent).toBe('database-after-lock-holder')
     expect(parsed.repairOptions?.checkpoint_threshold).toBe('8GB')
-    expect(parsed.repairScript).not.toContain("await connection.run('CHECKPOINT')")
+    expect(parsed.repairScript).toContain("await connection.run('CHECKPOINT')")
     expect(parsed.repairScript).toContain("spec.repairStrategy !== 'empty-derived'")
     expect(parsed.repairScript).toContain('spec.postRepairSql')
     expect(parsed.repairScript).toContain("duplicateCount > 0 && spec.repairStrategy !== 'empty-derived'")
