@@ -134,7 +134,7 @@ const normalForegroundSqlAllowlist = new Set([
 ])
 const ownerRoutedDiagnosticRouteContextRequirements = [
   {
-    maxResultRowsMarkers: ['maxResultRows: importRoutesListLimit'],
+    maxResultRowsMarkers: [],
     path: 'src/server/routes/ImportRoutes.ts',
     routeOrJobKeyMarkers: ["routeOrJobKey: 'importRoutes.list'"],
   },
@@ -247,7 +247,7 @@ test('route handlers cannot add new unallowlisted generic DuckDB imports', () =>
   expect(violations).toEqual([])
 })
 
-test('owner-routed diagnostic route DuckDB reads keep explicit workload contexts and caps', () => {
+test('owner-routed diagnostic route DuckDB reads keep explicit workload contexts and required caps', () => {
   const violations = ownerRoutedDiagnosticRouteContextRequirements.flatMap(
     ({maxResultRowsMarkers, path: routePath, routeOrJobKeyMarkers}) => {
       const fileText = readFileSync(join(workspaceRoot, routePath), 'utf8')

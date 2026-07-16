@@ -1321,6 +1321,126 @@ test('duckdb service marks recent mutating target after anonymous fatal index-de
   }
 })
 
+test('duckdb service prefers fatal error table name before stale mutating target', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-stale-fatal-index-marker-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const activeRepairSpecPath = join(`${duckdbPath}.startup-recovery`, 'startup-preflight-active-table.json')
+
+  mkdirSync(dataRoot, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {existsSync, readFileSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        const originalSpawnSync = globalThis.Bun.spawnSync
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          return {
+            exitCode: 0,
+            signalCode: null,
+            stdout: Buffer.from(''),
+            stderr: Buffer.from(''),
+          }
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run() {}
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?stale-fatal-index-marker-test=' + Date.now())
+        await duckdbService.runDuckdbStatement('DELETE FROM mart.review_filter_option_serving_v4 WHERE 1 = 0')
+        await duckdbService.recoverDuckdbServiceAfterFatalError(
+          new Error('FatalException: Invalid Input Error: Failed to delete all rows from index review_article_count_serving_v4. Only deleted 0 out of 1 rows.'),
+        )
+
+        const marker = existsSync(activeRepairSpecPath) ? JSON.parse(readFileSync(activeRepairSpecPath, 'utf8')) : null
+        console.log(JSON.stringify({marker}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT: 'false',
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB stale fatal index marker subprocess failed',
+      )
+    }
+
+    const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
+
+    expect(parsed.marker).toEqual({
+      phase: 'runtime-fatal-index-delete',
+      schemaName: 'mart',
+      tableName: 'review_article_count_serving_v4',
+    })
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
 test('duckdb service retries startup after a recoverable WAL replay failure', () => {
   const result = globalThis.Bun.spawnSync(
     [
@@ -2242,6 +2362,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(parsed.repairScript).toContain('stripInlinePrimaryKeyConstraints')
     expect(parsed.repairScript).toContain('PRIMARY\\s+KEY\\s*\\([^)]*\\)')
     expect(parsed.repairScript).toContain('getRepairPrimaryKeyIndexSql')
+    expect(parsed.repairScript).toContain('primaryKeyColumns.length > 0')
     expect(parsed.repairScript).toContain("'DROP INDEX IF EXISTS ' + spec.schemaName")
     expect(parsed.repairScript).toContain('CREATE UNIQUE INDEX IF NOT EXISTS idx_')
     expect(parsed.repairScript).toContain("'_repaired_pk_' + repairId")

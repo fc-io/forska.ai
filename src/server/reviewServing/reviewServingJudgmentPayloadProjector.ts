@@ -359,6 +359,8 @@ const getLlmJudgmentDirectInsertStatement = (input: ProjectReviewServingJudgment
           assessment.*,
           ${rowNumberSql}() OVER (PARTITION BY assessment.judgment_id ORDER BY assessment.updated_at DESC NULLS LAST, assessment.created_at DESC NULLS LAST, assessment.id DESC) AS assessment_rank
         FROM app."judgment_assessment" assessment
+        INNER JOIN latest_judgment judgment
+          ON judgment.id = assessment.judgment_id
       ),
       payload AS (
         SELECT

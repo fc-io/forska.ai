@@ -150,11 +150,7 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     WHERE pp.project_id = '${escapeSqlString(body.projectId)}'
     ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC
   `,
-    getHumanAssessmentWorkloadContext({
-      maxResultRows: 500,
-      operation: 'init.projectPrompts',
-      projectId: body.projectId,
-    }),
+    getHumanAssessmentWorkloadContext({operation: 'init.projectPrompts', projectId: body.projectId}),
   )
 
   if (projectPromptRows.length === 0) {

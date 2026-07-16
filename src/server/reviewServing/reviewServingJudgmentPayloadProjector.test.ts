@@ -142,6 +142,8 @@ test('judgment payload projection replaces only dirty article detail rows', asyn
   expect(llmInsert).toContain('COALESCE(prompt.archived, FALSE) = FALSE')
   expect(llmInsert).toContain('ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC')
   expect(llmInsert).toContain('latest_assessment AS')
+  expect(llmInsert).toContain('INNER JOIN latest_judgment judgment')
+  expect(llmInsert).toContain('ON judgment.id = assessment.judgment_id')
   expect(llmInsert).toContain('PARTITION BY assessment.judgment_id')
   expect(llmInsert).toContain('assessment.assessment_rank = 1')
   expect(llmInsert).toContain('prompt.original_text AS prompt_original_text')

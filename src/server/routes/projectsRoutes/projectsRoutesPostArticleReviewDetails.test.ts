@@ -1,3 +1,5 @@
+import {readFileSync} from 'node:fs'
+
 import {afterEach, beforeEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
@@ -302,4 +304,17 @@ test('project review details does not fall back to app judgments when V4 judgmen
 
   expect(response.status).toBe(200)
   expect(body).toMatchObject({judgments: [], reason: 'detail judgments unavailable', status: 'unavailable'})
+})
+
+test('legacy judgment fallback does not cap visible project judgment history', () => {
+  const routeText = readFileSync('src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts', 'utf8')
+  const legacyQuery = routeText.slice(
+    routeText.indexOf('const getArticleJudgmentRows'),
+    routeText.indexOf('const getProjectReviewDetailJudgmentValue'),
+  )
+
+  expect(legacyQuery).not.toContain('legacyArticleJudgmentRowsLimit')
+  expect(legacyQuery).not.toContain('LIMIT ${detailReaderPageSize}')
+  expect(legacyQuery).not.toContain('maxResultRows')
+  expect(legacyQuery).toContain('ORDER BY j.created_at DESC NULLS LAST, j.id ASC')
 })

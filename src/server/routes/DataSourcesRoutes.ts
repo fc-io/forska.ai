@@ -38,7 +38,6 @@ type DataSourceImportState = {
   structuredFileConfig: StructuredFileConfig | null
 }
 
-const dataSourceListLimit = 500
 const covidencePromptLinksPerImportRouteLimit = 100
 const getDataSourcesWorkloadContext = ({
   maxResultRows,
@@ -136,20 +135,32 @@ const getCovidencePromptIdsByImportRoute = async (db: AppQueryRunner, importRout
       ? []
       : await db.queryJson<CovidencePromptLinkRow>(
           `
+        WITH selected_import_route AS (
+          SELECT id, route
+          FROM app.import_route
+          WHERE route IN (${importRoutes
+            .map((importRoute) => {
+              return getSqlLiteral(importRoute)
+            })
+            .join(', ')})
+        )
         SELECT
-          ir.route AS importRoute,
-          pp.prompt_id AS promptId
-        FROM app.project_import_route pir
-        INNER JOIN app.import_route ir ON ir.id = pir.import_route_id
-        INNER JOIN app.project_prompt pp ON pp.project_id = pir.project_id
-        WHERE ir.route IN (${importRoutes
-          .map((importRoute) => {
-            return getSqlLiteral(importRoute)
-          })
-          .join(', ')})
-          AND pp.archived = FALSE
-          AND pp.enabled = TRUE
-        ORDER BY pp.prompt_order ASC, pp.prompt_id ASC
+          selected_import_route.route AS importRoute,
+          route_prompt.promptId
+        FROM selected_import_route
+        INNER JOIN LATERAL (
+          SELECT
+            pp.prompt_id AS promptId,
+            pp.prompt_order AS promptOrder
+          FROM app.project_import_route pir
+          INNER JOIN app.project_prompt pp ON pp.project_id = pir.project_id
+          WHERE pir.import_route_id = selected_import_route.id
+            AND pp.archived = FALSE
+            AND pp.enabled = TRUE
+          ORDER BY pp.prompt_order ASC, pp.prompt_id ASC
+          LIMIT ${covidencePromptLinksPerImportRouteLimit}
+        ) route_prompt ON TRUE
+        ORDER BY selected_import_route.route ASC, route_prompt.promptOrder ASC, route_prompt.promptId ASC
       `,
           getDataSourcesWorkloadContext({
             maxResultRows: importRoutes.length * covidencePromptLinksPerImportRouteLimit,
@@ -308,9 +319,8 @@ export const dataSourcesRoutes = new Elysia()
       FROM app.data_source
       WHERE archived = FALSE
       ORDER BY created_at DESC
-      LIMIT ${dataSourceListLimit}
     `,
-      getDataSourcesWorkloadContext({maxResultRows: dataSourceListLimit, operation: 'listActive'}),
+      getDataSourcesWorkloadContext({operation: 'listActive'}),
     )
     return {data: await normalizeDataSourceRows(getAppDatabaseService(), rows)}
   })
@@ -346,9 +356,8 @@ export const dataSourcesRoutes = new Elysia()
       FROM app.data_source
       WHERE archived = TRUE
       ORDER BY created_at DESC
-      LIMIT ${dataSourceListLimit}
     `,
-      getDataSourcesWorkloadContext({maxResultRows: dataSourceListLimit, operation: 'listArchived'}),
+      getDataSourcesWorkloadContext({operation: 'listArchived'}),
     )
     return {data: await normalizeDataSourceRows(getAppDatabaseService(), rows)}
   })

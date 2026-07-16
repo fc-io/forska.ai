@@ -70,11 +70,7 @@ export const humanAssessmentRoutesPostSubmit = async ({
     WHERE pp.project_id = '${escapeSqlString(body.projectId)}'
     ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC
   `,
-    getHumanAssessmentWorkloadContext({
-      maxResultRows: 500,
-      operation: 'submit.projectPrompts',
-      projectId: body.projectId,
-    }),
+    getHumanAssessmentWorkloadContext({operation: 'submit.projectPrompts', projectId: body.projectId}),
   )
 
   await syncPendingHumanJudgmentsForArticle({
@@ -102,11 +98,7 @@ export const humanAssessmentRoutesPostSubmit = async ({
       AND jh.article_id = '${escapeSqlString(currentArticleId)}'
       AND jh.is_answered = FALSE
   `,
-    getHumanAssessmentWorkloadContext({
-      maxResultRows: 500,
-      operation: 'submit.pendingPromptJudgments',
-      projectId: body.projectId,
-    }),
+    getHumanAssessmentWorkloadContext({operation: 'submit.pendingPromptJudgments', projectId: body.projectId}),
   )
 
   if (pending.length === 0) {
