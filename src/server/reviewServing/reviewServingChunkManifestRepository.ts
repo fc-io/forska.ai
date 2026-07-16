@@ -405,6 +405,20 @@ export const releaseInactiveRequestRebuildChunkManifests = async (
     return
   }
 
+  const inactiveRequestPredicate =
+    uniqueChunkIds === null
+      ? `NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_request request
+        WHERE request.request_id = app.review_rebuild_chunk_manifest.request_id
+      )`
+      : `NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_request request
+        WHERE request.request_id = app.review_rebuild_chunk_manifest.request_id
+          AND request.status IN ('admitted', 'running')
+      )`
+
   await database.run(`
     UPDATE app.review_rebuild_chunk_manifest
     SET status = 'pending',
@@ -433,12 +447,7 @@ export const releaseInactiveRequestRebuildChunkManifests = async (
     WHERE ${uniqueChunkIds === null ? '' : `chunk_id IN (${uniqueChunkIds.map(getSqlLiteral).join(', ')}) AND`}
       status IN ${releasableInactiveRequestRebuildChunkStatusSql}
       AND request_id IS NOT NULL
-      AND NOT EXISTS (
-        SELECT 1
-        FROM app.review_rebuild_request request
-        WHERE request.request_id = app.review_rebuild_chunk_manifest.request_id
-          AND request.status IN ('admitted', 'running')
-      )
+      AND ${inactiveRequestPredicate}
   `)
 }
 

@@ -329,6 +329,9 @@ test('covidence related records expose an overflow sentinel instead of silently 
   expect(routeText).toContain('const covidenceRelatedRecordsQueryLimit = covidenceRelatedRecordsLimit + 1')
   expect(covidenceRelatedRecordRead).toContain('LIMIT ${covidenceRelatedRecordsQueryLimit}')
   expect(covidenceRelatedRecordRead).toContain('maxResultRows: covidenceRelatedRecordsQueryLimit')
+  expect(covidenceRelatedRecordRead).toContain(
+    'ORDER BY isCurrentRecord DESC, articleTitle ASC, articleExternalId ASC NULLS LAST, id ASC',
+  )
   expect(covidenceRelatedRecordRead).toContain('overflow: rows.length > covidenceRelatedRecordsLimit')
   expect(covidenceRelatedRecordRead).toContain('records: visibleRows.map')
 })

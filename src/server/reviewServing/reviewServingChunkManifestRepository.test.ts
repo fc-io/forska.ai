@@ -391,10 +391,13 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       })
     }
   }
-  const releaseInactiveRequestChunks = () => {
+  const releaseInactiveRequestChunks = (statement: string) => {
+    const scopedChunkIds = statement.includes('chunk_id IN') ? new Set(getSqlStrings(statement)) : null
+
     rows.forEach((existing, chunkId) => {
       if (
-        existing.requestId === 'rebuild:missing'
+        (scopedChunkIds === null || scopedChunkIds.has(chunkId))
+        && existing.requestId === 'rebuild:missing'
         && ['pending', 'completed', 'running', 'failed', 'blocked_over_budget', 'quarantined'].includes(existing.status)
       ) {
         rows.set(chunkId, {
@@ -438,7 +441,7 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       && statement.includes('request_id = NULL')
       && statement.includes('NOT EXISTS')
     ) {
-      releaseInactiveRequestChunks()
+      releaseInactiveRequestChunks(statement)
     }
 
     if (
@@ -1388,6 +1391,33 @@ test('inactive request release detaches pending chunks with missing rebuild requ
   expect(rows.get(orphanedPending.chunkId)).toMatchObject({requestId: null, retryCount: 0, status: 'pending'})
   expect(statements.join('\n')).toContain("'pending'")
   expect(statements.join('\n')).toContain('NOT EXISTS')
+})
+
+test('claim discovery only releases chunks whose rebuild request row is missing', async () => {
+  const missingRequest = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-missing-request'}, []),
+    requestId: 'rebuild:missing',
+    status: 'pending' as const,
+  }
+  const inactiveButPresentRequest = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-inactive-request'}, []),
+    lastError: 'request completed with retained diagnostics',
+    requestId: 'rebuild:completed',
+    retryCount: 2,
+    status: 'failed' as const,
+  }
+  const {database, rows, statements} = createFakeChunkManifestDatabase([missingRequest, inactiveButPresentRequest])
+
+  await releaseInactiveRequestRebuildChunkManifests(database)
+
+  expect(rows.get(missingRequest.chunkId)).toMatchObject({requestId: null, retryCount: 0, status: 'pending'})
+  expect(rows.get(inactiveButPresentRequest.chunkId)).toMatchObject({
+    lastError: 'request completed with retained diagnostics',
+    requestId: 'rebuild:completed',
+    retryCount: 2,
+    status: 'failed',
+  })
+  expect(statements.join('\n')).not.toContain("request.status IN ('admitted', 'running')")
 })
 
 test('over-budget chunks are parked before claim and cannot hot-loop', async () => {
