@@ -500,11 +500,15 @@ const getDiagnosticsSummaryRowsEffect = (
           CAST(COUNT(*) FILTER (
             WHERE status = 'pending' OR (status IN ('failed', 'running') AND ${retryableDirtyWorkPredicate})
           ) AS INTEGER) AS pendingCount,
-          CAST(COUNT(*) FILTER (WHERE status = 'running' AND NOT (${retryableDirtyWorkPredicate})) AS INTEGER) AS runningCount,
-          CAST(COUNT(*) FILTER (WHERE status = 'failed' AND NOT (${retryableDirtyWorkPredicate})) AS INTEGER) AS failedCount,
+          CAST(COUNT(*) FILTER (
+            WHERE status IN ('failed', 'running') AND NOT (${retryableDirtyWorkPredicate})
+          ) AS INTEGER) AS runningCount,
+          CAST(0 AS INTEGER) AS failedCount,
           CAST(COUNT(*) FILTER (WHERE status = 'completed') AS INTEGER) AS completedCount,
-          MIN(created_at) FILTER (WHERE status IN ('pending', 'failed')) AS oldestQueuedAt,
-          MAX(updated_at) FILTER (WHERE status IN ('running', 'completed')) AS updatedAt
+          MIN(created_at) FILTER (
+            WHERE status = 'pending' OR (status IN ('failed', 'running') AND ${retryableDirtyWorkPredicate})
+          ) AS oldestQueuedAt,
+          MAX(updated_at) FILTER (WHERE status IN ('failed', 'running', 'completed')) AS updatedAt
         FROM app.review_serving_dirty_work
         WHERE project_id = ${getSqlLiteral(input.projectId)}
       ), latest_request AS (
@@ -540,8 +544,11 @@ const getDiagnosticsSummaryRowsEffect = (
           AND NOT EXISTS (
             SELECT 1
             FROM classified_chunk
-            WHERE classified_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
-              AND classified_chunk.claimable = 1
+            WHERE classified_chunk.claimable = 1
+              AND (
+                classified_chunk.request_id IS NULL
+                OR classified_chunk.request_id IS NOT DISTINCT FROM latest_request.request_id
+              )
           )
       ), rebuild_chunk AS (
         SELECT

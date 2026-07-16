@@ -51,6 +51,16 @@ test('DuckDB migrations rebuild review rebuild request indexes instead of updati
   expect(migrationSql).not.toContain('UPDATE app.review_rebuild_request')
 })
 
+test('DuckDB migrations drop the posting stats index that duplicates the repaired unique key', () => {
+  const migrationSql = readFileSync(
+    resolve(migrationsFolder, '0114_dropReviewFilterPostingStatsLookupIndex.sql'),
+    'utf8',
+  ).trim()
+
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS mart.idx_review_filter_posting_stats_v4_lookup;')
+  expect(migrationSql).toContain('DROP INDEX IF EXISTS idx_review_filter_posting_stats_v4_lookup;')
+})
+
 test('DuckDB migrations repair legacy review serving judgment detail payload-kind schema drift', async () => {
   const duckdbPath = `/tmp/forska-review-serving-judgment-detail-payload-kind-${Date.now()}.duckdb`
   const targetMigrationFile = '0109_reviewServingJudgmentDetailPayloadKindForwardMigration.sql'

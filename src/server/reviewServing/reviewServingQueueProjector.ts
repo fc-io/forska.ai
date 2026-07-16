@@ -579,6 +579,7 @@ export const projectReviewServingQueuePatches = async (
       })
   })
   const patchWatermark = getPatchWatermark(input.claims)
+  const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
   const deleteReplacedQueueServingStatement = measureSync('deleteStatementBuildMs', () => {
     return getDeleteReplacedQueueServingStatement(input, rows)
   })
@@ -586,21 +587,20 @@ export const projectReviewServingQueuePatches = async (
   const writer = await measure('writerMs', async () => {
     return writeReviewServingProjectorComponent(
       {
-        acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
+        acknowledgements: shouldAcknowledgeClaims ? input.claims : [],
         component: 'queue',
-        projectionManifests: input.claims.length === 0 ? [] : [getQueuePatchManifest(input)],
+        projectionManifests: shouldAcknowledgeClaims ? [getQueuePatchManifest(input)] : [],
         records: servingRecords,
         statements: deleteReplacedQueueServingStatement === null ? [] : [deleteReplacedQueueServingStatement],
-        watermark:
-          input.claims.length === 0
-            ? undefined
-            : {
-                projectId: input.projectId,
-                projectionComponent: 'queue',
-                projectorName: queueProjectorName,
-                sourceHighWaterMark: patchWatermark,
-                sourcePartition: getClaimSourcePartition(input.claims),
-              },
+        watermark: !shouldAcknowledgeClaims
+          ? undefined
+          : {
+              projectId: input.projectId,
+              projectionComponent: 'queue',
+              projectorName: queueProjectorName,
+              sourceHighWaterMark: patchWatermark,
+              sourcePartition: getClaimSourcePartition(input.claims),
+            },
       },
       database,
     )

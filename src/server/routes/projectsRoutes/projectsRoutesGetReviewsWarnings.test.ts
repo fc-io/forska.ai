@@ -1835,7 +1835,7 @@ test('reviews warnings report quarantine barriers before mutation-disabled dirty
   expect(body.data.indexing.status).toBe('failed')
 })
 
-test('reviews warnings keep terminal rebuild requests visible when orphan chunks are claimable', async () => {
+test('reviews warnings prefer claimable orphan recovery chunks over older terminal rebuild requests', async () => {
   const projectId = 'project-v4-terminal-request-orphan-chunk-warning'
 
   await insertProjectFixture(projectId)
@@ -1861,9 +1861,9 @@ test('reviews warnings keep terminal rebuild requests visible when orphan chunks
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
-  expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({claimableCount: 1, failedCount: 1})
-  expect(body.data.indexing.progressState).toBe('failed')
-  expect(body.data.indexing.status).toBe('failed')
+  expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({claimableCount: 1, failedCount: 0})
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.status).toBe('refreshing')
 })
 
 test('reviews warnings search diagnostic ignores active snapshots for older review configs', async () => {
@@ -2684,7 +2684,7 @@ test('reviews warnings report candidate serving generation as pending activation
   expect(body.data.indexing.status).toBe('refreshing')
 })
 
-test('reviews warnings wait for failed serving generation before queueing bootstrap rebuild', async () => {
+test('reviews warnings wait for retryable failed serving generation before queueing bootstrap rebuild', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
@@ -2725,8 +2725,8 @@ test('reviews warnings wait for failed serving generation before queueing bootst
   expect(body.data.indexing.largeRebuild).toBe(null)
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
   expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
-  expect(body.data.indexing.progressState).toBe('failed')
-  expect(body.data.indexing.status).toBe('failed')
+  expect(body.data.indexing.progressState).toBe('processing')
+  expect(body.data.indexing.status).toBe('refreshing')
 })
 
 test('reviews warnings do not queue bootstrap rebuild for articles outside project dates', async () => {

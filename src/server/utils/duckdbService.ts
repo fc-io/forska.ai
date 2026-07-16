@@ -182,6 +182,7 @@ type DuckdbServiceState = {
   backgroundTotalDurationMs: number
   backgroundTotalWaitMs: number
   controlConnection: DuckDBConnection | null
+  controlTransactionIndexedMutationTarget: string | null
   controlTransactionDepth: number
   duckdbInstance: DuckDBInstance | null
   duckdbLastDurationMs: number | null
@@ -232,6 +233,7 @@ type DuckdbStartupIndexedTableRepairSpec = {
   mutationProbeSql: string
   postRepairSql?: string
   postRepairSchemaRequirements?: DuckdbStartupSchemaRequirement[]
+  recreateRepairPrimaryKeyIndex?: boolean
   repairPrimaryKeyColumns?: string[]
   repairStrategy?: 'copy' | 'empty-derived'
   schemaRequirements?: DuckdbStartupSchemaRequirement[]
@@ -2067,6 +2069,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       'filter_value',
       'list_mode_key',
     ],
+    recreateRepairPrimaryKeyIndex: false,
     schemaName: 'mart',
     tableName: 'review_filter_posting_stats_v4',
   },
@@ -2236,6 +2239,7 @@ const getDuckdbServiceState = () => {
     backgroundTotalDurationMs: 0,
     backgroundTotalWaitMs: 0,
     controlConnection: null,
+    controlTransactionIndexedMutationTarget: null,
     controlTransactionDepth: 0,
     duckdbInstance: null,
     duckdbLastDurationMs: null,
@@ -2258,6 +2262,7 @@ const getDuckdbServiceState = () => {
 }
 
 const duckdbServiceState = getDuckdbServiceState()
+duckdbServiceState.controlTransactionIndexedMutationTarget ??= null
 
 const getTrimmedValue = (value: string | null | undefined) => {
   const normalized = String(value ?? '').trim()
@@ -2454,6 +2459,7 @@ const getChainedDuckdbError = (error: unknown, nextError: unknown, context: stri
 }
 
 let duckdbFatalRecoveryPromise: Promise<void> | null = null
+let duckdbFailedMutatingStatementTargetTable: string | null = null
 let duckdbLastMutatingStatementTargetTable: string | null = null
 let duckdbShutdownInProgress = false
 
@@ -2463,6 +2469,25 @@ const isDuckdbRestartRequiredError = (error: unknown) => {
   return duckdbRestartRequiredErrorFragments.some((fragment) => {
     return message.includes(fragment)
   })
+}
+
+const isDuckdbUniqueIndexDuplicateError = (error: unknown) => {
+  const message = getNormalizedDuckdbError(error).message
+
+  return message.includes('Constraint Error: Duplicate key') && message.includes('violates unique constraint')
+}
+
+const getDuckdbRepairSpecForRecentMutatingTarget = () => {
+  return (
+    getDuckdbStartupRepairSpecForTableName(duckdbFailedMutatingStatementTargetTable)
+    ?? getDuckdbStartupRepairSpecForTableName(duckdbServiceState.controlTransactionIndexedMutationTarget)
+    ?? getDuckdbStartupRepairSpecForTableName(duckdbLastMutatingStatementTargetTable)
+    ?? null
+  )
+}
+
+const isDuckdbIndexedTableRepairableRuntimeError = (error: unknown) => {
+  return isDuckdbUniqueIndexDuplicateError(error) && getDuckdbRepairSpecForRecentMutatingTarget() !== null
 }
 
 const isDuckdbAbortedTransactionError = (error: unknown) => {
@@ -2568,7 +2593,10 @@ const recoverDuckdbRuntimeAfterFatalError = async (error: unknown, options: Clos
 const markDuckdbStartupRepairForFatalIndexedTableError = (error: unknown) => {
   const normalizedError = getNormalizedDuckdbError(error)
 
-  if (!normalizedError.message.includes('Failed to delete all rows from index')) {
+  const isIndexDeleteFailure = normalizedError.message.includes('Failed to delete all rows from index')
+  const isRepairableDuplicateFailure = isDuckdbIndexedTableRepairableRuntimeError(normalizedError)
+
+  if (!isIndexDeleteFailure && !isRepairableDuplicateFailure) {
     return
   }
 
@@ -2579,16 +2607,25 @@ const markDuckdbStartupRepairForFatalIndexedTableError = (error: unknown) => {
   }
 
   const markerPath = getDuckdbStartupPreflightActiveRepairSpecPath(runtimeConfig)
-  const repairSpec = getDuckdbStartupRepairSpecForFatalIndexedTableError(
-    normalizedError,
-    duckdbLastMutatingStatementTargetTable,
-  )
+  const repairSpec = isIndexDeleteFailure
+    ? getDuckdbStartupRepairSpecForFatalIndexedTableError(
+        normalizedError,
+        duckdbFailedMutatingStatementTargetTable,
+        duckdbServiceState.controlTransactionIndexedMutationTarget,
+        duckdbLastMutatingStatementTargetTable,
+      )
+    : getDuckdbRepairSpecForRecentMutatingTarget()
+
+  if (repairSpec === null) {
+    return
+  }
 
   mkdirSync(`${runtimeConfig.databasePath}.startup-recovery`, {recursive: true})
   writeFileSync(
     markerPath,
     JSON.stringify({
       phase: 'runtime-fatal-index-delete',
+      reason: isIndexDeleteFailure ? 'index-delete' : 'unique-index-duplicate',
       schemaName: repairSpec.schemaName,
       tableName: repairSpec.tableName,
     }),
@@ -2601,7 +2638,7 @@ const markDuckdbStartupRepairForFatalIndexedTableError = (error: unknown) => {
       repairedTable: `${repairSpec.schemaName}.${repairSpec.tableName}`,
     },
     event: 'duckdb.recovery.indexed-table-repair-marker',
-    message: '[duckdb] marked indexed table repair for next startup after fatal index-delete error',
+    message: '[duckdb] marked indexed table repair for next startup after indexed-table runtime error',
     severity: 'WARN',
     terminalArgs: [`marker=${markerPath}`],
   })
@@ -2617,7 +2654,12 @@ const getDuckdbStartupRepairSpecForTableName = (tableName: string | null) => {
   })
 }
 
-const getDuckdbStartupRepairSpecForFatalIndexedTableError = (error: Error, lastMutatingTargetTable: string | null) => {
+const getDuckdbStartupRepairSpecForFatalIndexedTableError = (
+  error: Error,
+  failedMutatingTargetTable: string | null,
+  transactionIndexedMutationTarget: string | null,
+  lastMutatingTargetTable: string | null,
+) => {
   const message = error.message
   const matchedSpec = duckdbStartupIndexedTableRepairSpecs.find((spec) => {
     return message.includes(`${spec.schemaName}.${spec.tableName}`)
@@ -2643,7 +2685,12 @@ const getDuckdbStartupRepairSpecForFatalIndexedTableError = (error: Error, lastM
     throw new Error('missing DuckDB startup repair fallback spec')
   }
 
-  return getDuckdbStartupRepairSpecForTableName(lastMutatingTargetTable) ?? fallbackSpec
+  return (
+    getDuckdbStartupRepairSpecForTableName(failedMutatingTargetTable)
+    ?? getDuckdbStartupRepairSpecForTableName(transactionIndexedMutationTarget)
+    ?? getDuckdbStartupRepairSpecForTableName(lastMutatingTargetTable)
+    ?? fallbackSpec
+  )
 }
 
 const isDuckdbStartupRetryableError = (error: unknown) => {
@@ -2934,7 +2981,10 @@ const getDuckdbStartupPreflightScript = () => {
 
       const createSql = await getTableCreateSql(spec.schemaName, spec.tableName)
 
-      return createSql.toUpperCase().includes('PRIMARY KEY') || !(await hasUniqueIndexForColumns(spec))
+      return (
+        createSql.toUpperCase().includes('PRIMARY KEY')
+        || (spec.recreateRepairPrimaryKeyIndex !== false && !(await hasUniqueIndexForColumns(spec)))
+      )
     }
 
     const schemaRequirementsSatisfied = async (requirements) => {
@@ -3245,6 +3295,10 @@ const getDuckdbIndexedTableRepairScript = () => {
     }
 
     const getRepairPrimaryKeyIndexSql = (spec, sourceName) => {
+      if (spec.recreateRepairPrimaryKeyIndex === false) {
+        return null
+      }
+
       const primaryKeyColumns = Array.isArray(spec.repairPrimaryKeyColumns)
         ? spec.repairPrimaryKeyColumns.filter((columnName) => {
             return typeof columnName === 'string' && columnName.trim().length > 0
@@ -3306,6 +3360,22 @@ const getDuckdbIndexedTableRepairScript = () => {
       })
     }
 
+    const indexDuplicatesRepairPrimaryKey = (spec, indexSql) => {
+      const expectedColumns = Array.isArray(spec.repairPrimaryKeyColumns)
+        ? spec.repairPrimaryKeyColumns.map(normalizeIndexColumnName)
+        : []
+
+      if (expectedColumns.length === 0) {
+        return false
+      }
+
+      const columns = getIndexSqlColumns(indexSql)
+
+      return columns.length === expectedColumns.length && columns.every((column, index) => {
+        return column === expectedColumns[index]
+      })
+    }
+
     const assertRepairPostconditions = async (spec) => {
       const tableRows = await getRows(
         "SELECT sql FROM duckdb_tables() " +
@@ -3322,7 +3392,7 @@ const getDuckdbIndexedTableRepairScript = () => {
           throw new Error('repaired table DDL still contains PRIMARY KEY for ' + getQualifiedName(spec.schemaName, spec.tableName))
         }
 
-        if (!(await hasUniqueIndexForPrimaryKeyColumns(spec))) {
+        if (spec.recreateRepairPrimaryKeyIndex !== false && !(await hasUniqueIndexForPrimaryKeyColumns(spec))) {
           throw new Error('repaired table is missing replacement unique index for ' + getQualifiedName(spec.schemaName, spec.tableName))
         }
       }
@@ -3455,9 +3525,14 @@ const getDuckdbIndexedTableRepairScript = () => {
           }
 
           const indexSql = String(indexRow.sql)
+          if (indexDuplicatesRepairPrimaryKey(spec, indexSql)) {
+            continue
+          }
+
+          const recreatedIndexSql = indexSql
             .replace(/^CREATE UNIQUE INDEX /, 'CREATE UNIQUE INDEX IF NOT EXISTS ')
             .replace(/^CREATE INDEX /, 'CREATE INDEX IF NOT EXISTS ')
-          await connection.run(indexSql)
+          await connection.run(recreatedIndexSql)
         }
 
         if (
@@ -3471,6 +3546,7 @@ const getDuckdbIndexedTableRepairScript = () => {
         await assertRepairPostconditions(spec)
       }
 
+      await connection.run('CHECKPOINT')
     } finally {
       try {
         connection?.closeSync()
@@ -3932,7 +4008,10 @@ const withNormalizedDuckdbError = async <T>(work: () => Promise<T>, canRetryAfte
       throw normalizedError
     }
 
-    if (!canRetryAfterRestart || !isDuckdbRestartRequiredError(normalizedError)) {
+    const shouldRepairAndRetry =
+      isDuckdbRestartRequiredError(normalizedError) || isDuckdbIndexedTableRepairableRuntimeError(normalizedError)
+
+    if (!canRetryAfterRestart || !shouldRepairAndRetry) {
       throw normalizedError
     }
 
@@ -3969,6 +4048,7 @@ const resetDuckdbRuntimeState = () => {
   duckdbServiceState.backgroundTotalDurationMs = 0
   duckdbServiceState.backgroundTotalWaitMs = 0
   duckdbServiceState.controlConnection = null
+  duckdbServiceState.controlTransactionIndexedMutationTarget = null
   duckdbServiceState.controlTransactionDepth = 0
   duckdbServiceState.duckdbInstance = null
   duckdbServiceState.duckdbLastDurationMs = null
@@ -3982,6 +4062,8 @@ const resetDuckdbRuntimeState = () => {
   duckdbServiceState.duckdbTotalDurationMs = 0
   duckdbServiceState.duckdbTotalWaitMs = 0
   duckdbServiceState.duckdbWorkloadMetrics = []
+  duckdbFailedMutatingStatementTargetTable = null
+  duckdbLastMutatingStatementTargetTable = null
   duckdbServiceState.nextAppendLaneIndex = 0
   duckdbServiceState.startupPromise = null
 }
@@ -4666,6 +4748,7 @@ const recordDuckdbControlTransactionStatement = (duckdbConnection: DuckDBConnect
 
   if (/^(COMMIT|ROLLBACK)\b/i.test(normalizedStatement)) {
     duckdbServiceState.controlTransactionDepth = Math.max(0, duckdbServiceState.controlTransactionDepth - 1)
+    duckdbServiceState.controlTransactionIndexedMutationTarget = null
   }
 }
 
@@ -4703,13 +4786,44 @@ const getDuckdbStatementTargetTable = (statement: string) => {
   )
 }
 
-const recordDuckdbMutatingStatementTarget = (statement: string) => {
-  const targetTable =
+const getDuckdbMutatingStatementTarget = (statement: string) => {
+  return (
     statement.match(/\b(?:INSERT\s+INTO|MERGE\s+INTO|UPDATE|DELETE\s+FROM)\s+([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)?)/iu)?.[1]
     ?? null
+  )
+}
+
+const canDuckdbStatementDeleteIndexedRows = (statement: string) => {
+  return (
+    /\b(?:DELETE\s+FROM|MERGE\s+INTO|UPDATE)\b/iu.test(statement)
+    || (/\bINSERT\s+INTO\b/iu.test(statement) && /\bON\s+CONFLICT\b[\s\S]*\bDO\s+UPDATE\b/iu.test(statement))
+  )
+}
+
+const recordDuckdbMutatingStatementTarget = (duckdbConnection: DuckDBConnection, statement: string) => {
+  if (duckdbConnection === duckdbServiceState.controlConnection && statement.trim().match(/^BEGIN\b/iu) !== null) {
+    duckdbServiceState.controlTransactionIndexedMutationTarget = null
+  }
+
+  const targetTable = getDuckdbMutatingStatementTarget(statement)
 
   if (targetTable !== null) {
     duckdbLastMutatingStatementTargetTable = targetTable
+  }
+
+  if (
+    targetTable === null
+    || duckdbConnection !== duckdbServiceState.controlConnection
+    || duckdbServiceState.controlTransactionDepth === 0
+    || !canDuckdbStatementDeleteIndexedRows(statement)
+  ) {
+    return
+  }
+
+  const repairSpec = getDuckdbStartupRepairSpecForTableName(targetTable)
+
+  if ((repairSpec?.repairPrimaryKeyColumns?.length ?? 0) > 0) {
+    duckdbServiceState.controlTransactionIndexedMutationTarget = targetTable
   }
 }
 
@@ -4739,7 +4853,12 @@ const writeDuckdbStatementDiagnostic = ({
   const diagnosticContext = duckdbWorkloadDiagnosticStorage.getStore()
 
   if (phase === 'start') {
-    recordDuckdbMutatingStatementTarget(statement)
+    duckdbFailedMutatingStatementTargetTable = null
+    recordDuckdbMutatingStatementTarget(duckdbConnection, statement)
+  }
+
+  if (phase === 'error') {
+    duckdbFailedMutatingStatementTargetTable = getDuckdbMutatingStatementTarget(statement)
   }
 
   if (diagnosticContext === undefined) {

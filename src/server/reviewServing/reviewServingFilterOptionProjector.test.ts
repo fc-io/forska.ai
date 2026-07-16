@@ -125,6 +125,17 @@ test('projects supported enum option payloads into scoped option rows', async ()
   expect(joined).not.toContain('numeric_options')
 })
 
+test('filter-option no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
+  const {database, statements} = createFilterOptionDatabase({sourceRows: [sourceRow()]})
+
+  await projectReviewServingFilterOptions({...projectInput(), acknowledgeClaims: false}, database)
+  const joined = statements.join('\n')
+
+  expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+})
+
 test('filter option refresh can upsert rows without deleting existing scoped options', async () => {
   const {database, statements} = createFilterOptionDatabase({sourceRows: [sourceRow()]})
 

@@ -900,15 +900,16 @@ export const projectReviewServingSelectedImportDirty = async (
   const rows = await getSelectedImportDirtyRows(input, database)
   const templates = await getSelectedImportServingTemplates(input, database)
   const dirtyWatermark = getDirtyWatermark(input.claims)
+  const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
   const baseRecords = rows.map((row) => {
     return getSelectedImportBaseRecord(input, row)
   })
 
   await writeReviewServingProjectorComponent(
     {
-      acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
+      acknowledgements: shouldAcknowledgeClaims ? input.claims : [],
       component: 'selectedImport',
-      projectionManifests: input.claims.length === 0 ? [] : [getSelectedImportDirtyManifest(input)],
+      projectionManifests: shouldAcknowledgeClaims ? [getSelectedImportDirtyManifest(input)] : [],
       records: baseRecords,
       statements: getApplySelectedImportServingStatements({
         baseGeneration: input.baseGeneration,
@@ -919,16 +920,15 @@ export const projectReviewServingSelectedImportDirty = async (
         rows,
         templates,
       }),
-      watermark:
-        input.claims.length === 0
-          ? undefined
-          : {
-              projectId: input.projectId,
-              projectionComponent: 'selectedImport',
-              projectorName: selectedImportDirtyProjectorName,
-              sourceHighWaterMark: dirtyWatermark,
-              sourcePartition: getDirtyWatermarkSourcePartition(input.claims),
-            },
+      watermark: shouldAcknowledgeClaims
+        ? {
+            projectId: input.projectId,
+            projectionComponent: 'selectedImport',
+            projectorName: selectedImportDirtyProjectorName,
+            sourceHighWaterMark: dirtyWatermark,
+            sourcePartition: getDirtyWatermarkSourcePartition(input.claims),
+          }
+        : undefined,
     },
     database,
   )

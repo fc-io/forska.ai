@@ -224,11 +224,13 @@ test('projector watermark advancement proceeds only after reconciliation or oper
   })
 
   expect(statements.join('\n')).toContain("status NOT IN ('operator_terminal', 'reconciled')")
-  expect(statements.join('\n')).toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(statements.join('\n')).toContain('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
   expect(statements.join('\n')).not.toContain('ON CONFLICT(watermark_id) DO UPDATE SET')
+  expect(statements.join('\n')).toContain('UPDATE app.review_serving_projector_watermark')
+  expect(statements.join('\n')).toContain('GREATEST(')
 })
 
-test('projector watermark advancement skips no-op writes', async () => {
+test('projector watermark advancement keeps no-op advances idempotent without conflict upserts', async () => {
   const {statements, tx} = createFakeReconciliationTransaction({barrier: null, currentWatermark: 10})
 
   await advanceReviewServingProjectorWatermark(tx, {
@@ -238,12 +240,13 @@ test('projector watermark advancement skips no-op writes', async () => {
     sourcePartition: 'judgment:project-1',
   })
 
-  expect(statements.join('\n')).toContain('FROM app.review_serving_projector_watermark')
-  expect(statements.join('\n')).not.toContain('INSERT INTO app.review_serving_projector_watermark')
-  expect(statements.join('\n')).not.toContain('UPDATE app.review_serving_projector_watermark')
+  expect(statements.join('\n')).toContain('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
+  expect(statements.join('\n')).not.toContain('ON CONFLICT(watermark_id) DO UPDATE SET')
+  expect(statements.join('\n')).toContain('UPDATE app.review_serving_projector_watermark')
+  expect(statements.join('\n')).toContain('GREATEST(')
 })
 
-test('projector watermark advancement updates only when the source high-water mark increases', async () => {
+test('projector watermark advancement only refreshes updated_at when the source high-water mark increases', async () => {
   const {statements, tx} = createFakeReconciliationTransaction({barrier: null, currentWatermark: 7})
 
   await advanceReviewServingProjectorWatermark(tx, {
@@ -254,6 +257,7 @@ test('projector watermark advancement updates only when the source high-water ma
   })
 
   expect(statements.join('\n')).toContain('UPDATE app.review_serving_projector_watermark')
-  expect(statements.join('\n')).toContain('source_high_water_mark < 10')
-  expect(statements.join('\n')).not.toContain('ON CONFLICT(watermark_id) DO UPDATE SET')
+  expect(statements.join('\n')).toContain('WHEN source_high_water_mark < 10')
+  expect(statements.join('\n')).toContain('THEN now()')
+  expect(statements.join('\n')).toContain('ELSE updated_at')
 })

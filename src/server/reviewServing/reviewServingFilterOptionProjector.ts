@@ -307,16 +307,17 @@ export const projectReviewServingFilterOptions = async (
     })
   })
   const patchWatermark = getPatchWatermark(input.claims)
-  const shouldPublishManifest = input.acknowledgeClaims !== false && input.claims.length > 0
+  const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
+  const shouldPublishManifest = shouldAcknowledgeClaims
 
   await writeReviewServingProjectorComponent(
     {
-      acknowledgements: shouldPublishManifest ? [] : input.acknowledgeClaims === false ? [] : input.claims,
+      acknowledgements: shouldPublishManifest ? [] : shouldAcknowledgeClaims ? input.claims : [],
       component: 'summary',
       records,
       statements: input.deleteExisting === false ? [] : [getDeleteFilterOptionRowsStatement(input)],
       watermark:
-        shouldPublishManifest || input.claims.length === 0
+        shouldPublishManifest || !shouldAcknowledgeClaims
           ? undefined
           : {
               projectId: input.projectId,

@@ -13,6 +13,7 @@ import {
 export type ReviewServingProjectScopeProjectorDatabase = ReviewServingProjectorWriterDatabase
 
 export type ProjectReviewServingProjectScopeInput = {
+  acknowledgeClaims?: boolean
   baseGeneration: number
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
@@ -81,22 +82,22 @@ export const projectReviewServingProjectScopePatches = async (
   database: ReviewServingProjectScopeProjectorDatabase = getAppDatabaseService(),
 ) => {
   const patchWatermark = getPatchWatermark(input.claims)
+  const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
 
   await writeReviewServingProjectorComponent(
     {
-      acknowledgements: input.claims,
+      acknowledgements: shouldAcknowledgeClaims ? input.claims : [],
       component: 'projectScope',
-      projectionManifests: input.claims.length === 0 ? [] : [getProjectScopePatchManifest(input)],
-      watermark:
-        input.claims.length === 0
-          ? undefined
-          : {
-              projectId: input.projectId,
-              projectionComponent: 'projectScope',
-              projectorName: projectScopeProjectorName,
-              sourceHighWaterMark: patchWatermark,
-              sourcePartition: getClaimSourcePartition(input.claims),
-            },
+      projectionManifests: shouldAcknowledgeClaims ? [getProjectScopePatchManifest(input)] : [],
+      watermark: !shouldAcknowledgeClaims
+        ? undefined
+        : {
+            projectId: input.projectId,
+            projectionComponent: 'projectScope',
+            projectorName: projectScopeProjectorName,
+            sourceHighWaterMark: patchWatermark,
+            sourcePartition: getClaimSourcePartition(input.claims),
+          },
     },
     database,
   )

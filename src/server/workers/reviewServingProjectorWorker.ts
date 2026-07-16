@@ -4474,7 +4474,7 @@ export const getDefaultReviewServingProjectorRunners = (
       const results = await runSnapshotProjectors(snapshots, async (snapshot, acknowledgeClaims) => {
         const result = await projectReviewServingSummaries(
           {
-            acknowledgeClaims: false,
+            acknowledgeClaims,
             baseGeneration: manifest.baseGeneration,
             claims: context.claims,
             listModeKeys: reviewServingListModes,
@@ -4494,6 +4494,7 @@ export const getDefaultReviewServingProjectorRunners = (
             baseGeneration: manifest.baseGeneration,
             claims: context.claims,
             definitionVersion: manifest.definitionVersion,
+            deleteExisting: false,
             filterOptionIdentity: getReviewServingFilterOptionIdentity({
               filterKeys: defaultReviewFilterOptionKeys,
               listModeKeys: reviewServingListModes,
@@ -4512,10 +4513,11 @@ export const getDefaultReviewServingProjectorRunners = (
         )
         const humanFilterOptionsResult = await projectReviewServingFilterOptions(
           {
-            acknowledgeClaims,
+            acknowledgeClaims: false,
             baseGeneration: manifest.baseGeneration,
             claims: context.claims,
             definitionVersion: manifest.definitionVersion,
+            deleteExisting: false,
             filterOptionIdentity: getReviewServingFilterOptionIdentity({
               filterKeys: defaultHumanFilterOptionKeys,
               listModeKeys: defaultReviewServingHumanListModeKeys,

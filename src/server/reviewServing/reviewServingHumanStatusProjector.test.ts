@@ -173,6 +173,17 @@ test('human prompt answer deltas update serving directly', async () => {
   expect(joined).not.toContain("'selectedImport'")
 })
 
+test('human-status no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
+  const {database, statements} = createHumanStatusDatabase({judgmentRows: []})
+
+  await projectReviewServingHumanStatusPatches({...projectInput([humanClaim()]), acknowledgeClaims: false}, database)
+  const joined = statements.join('\n')
+
+  expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+})
+
 test('human status review config hash includes model execution identity', async () => {
   const promptRows = [promptConfigRow()]
   const projectRows = [projectSettingsRow()]
@@ -201,7 +212,7 @@ test('summary human answers do not require prompt IDs and update summary-key ser
   expect(joined).toContain("'summary', 'answered', FALSE")
   expect(joined).toContain("'humanStatus'")
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
-  expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).toContain('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
   expect(joined).not.toContain("'llmStatus'")
 })
 

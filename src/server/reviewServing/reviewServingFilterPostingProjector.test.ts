@@ -175,6 +175,9 @@ test('answer changes update posting stats from old and new contribution diffs', 
 
   const result = await projectReviewServingFilterPostings(projectInput([postingClaim()]), database)
   const joined = statements.join('\n')
+  const statsInsert = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_filter_posting_stats_v4')
+  })
 
   expect(result.patchRowCount).toBe(0)
   expect(result.servingRowCount).toBe(1)
@@ -201,7 +204,19 @@ test('answer changes update posting stats from old and new contribution diffs', 
   })
   expect(joined).not.toContain('mart.review_article_filter_posting_patch_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
-  expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
+  expect(statsInsert).toBeDefined()
+  expect(statsInsert).not.toContain('ON CONFLICT')
+})
+
+test('posting no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
+  const {database, statements} = createPostingDatabase({newRows: [postingRow()]})
+
+  await projectReviewServingFilterPostings({...projectInput([postingClaim()]), acknowledgeClaims: false}, database)
+  const joined = statements.join('\n')
+
+  expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
 })
 
 test('full posting rebuilds refresh stats from serving state without JS contribution totals', async () => {
@@ -224,6 +239,9 @@ test('full posting rebuilds refresh stats from serving state without JS contribu
   expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
   expect(joined).toContain('COUNT(*) AS cardinality')
   expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).not.toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
+  )
   expectNoLegacyPostingSourcePatchTables(joined)
   expect(joined).not.toContain('SUM(contribution.contribution_value)')
   expect(joined).not.toContain('343341342341341300000')
@@ -348,7 +366,7 @@ test('deletes write tombstones, remove serving rows, and decrement stats in the 
   expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
-  expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).toContain('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
 })
 
 test('membership removals scope through project_scope_article and tombstone existing postings', async () => {

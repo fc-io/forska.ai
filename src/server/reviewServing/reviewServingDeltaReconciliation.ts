@@ -22,7 +22,6 @@ export type ReviewServingOutboxReconciliationResult =
 export type ReviewServingOutboxReconciliationOptions = {maxRetries?: number; outboxId: string}
 
 export type ReviewServingOutboxBarrier = {outboxId: string; sourceHighWaterMark: number; status: string}
-type ReviewServingProjectorWatermarkRow = {sourceHighWaterMark: number}
 
 export type ReviewServingProjectorWatermarkAdvanceInput = {
   importRouteId?: string | null
@@ -41,6 +40,36 @@ const getProjectorWatermarkId = (input: ReviewServingProjectorWatermarkAdvanceIn
     projectorName: input.projectorName,
     sourcePartition: input.sourcePartition,
   })
+}
+
+const projectorWatermarkAdvanceLocks = new Map<string, Promise<void>>()
+
+const runWithProjectorWatermarkAdvanceLock = async <T>(watermarkId: string, operation: () => Promise<T>) => {
+  const previous = projectorWatermarkAdvanceLocks.get(watermarkId) ?? Promise.resolve()
+  let releaseCurrent!: () => void
+  const current = previous
+    .catch(() => {
+      return undefined
+    })
+    .then(() => {
+      return new Promise<void>((resolve) => {
+        releaseCurrent = resolve
+      })
+    })
+
+  projectorWatermarkAdvanceLocks.set(watermarkId, current)
+  await previous.catch(() => {
+    return undefined
+  })
+
+  try {
+    return await operation()
+  } finally {
+    releaseCurrent()
+    if (projectorWatermarkAdvanceLocks.get(watermarkId) === current) {
+      projectorWatermarkAdvanceLocks.delete(watermarkId)
+    }
+  }
 }
 
 type ReviewServingSourceChangeOutboxRow = {
@@ -304,49 +333,41 @@ export const advanceReviewServingProjectorWatermark = async (
   tx: ReviewServingDeltaLedgerTransaction,
   input: ReviewServingProjectorWatermarkAdvanceInput,
 ) => {
-  await assertReviewServingProjectorWatermarkCanAdvance(tx, input)
   const watermarkId = getProjectorWatermarkId(input)
-  const currentRows = await tx.queryJson<ReviewServingProjectorWatermarkRow>(`
-    SELECT source_high_water_mark AS sourceHighWaterMark
-    FROM app.review_serving_projector_watermark
-    WHERE watermark_id = ${getSqlLiteral(watermarkId)}
-    LIMIT 1
-  `)
-  const currentHighWaterMark = currentRows[0]?.sourceHighWaterMark
 
-  if (currentHighWaterMark !== undefined && currentHighWaterMark >= input.sourceHighWaterMark) {
-    return
-  }
+  await runWithProjectorWatermarkAdvanceLock(watermarkId, async () => {
+    await assertReviewServingProjectorWatermarkCanAdvance(tx, input)
 
-  if (currentHighWaterMark !== undefined) {
+    await tx.run(`
+      INSERT OR IGNORE INTO app.review_serving_projector_watermark (
+        watermark_id,
+        projector_name,
+        project_id,
+        import_route_id,
+        projection_component,
+        source_partition,
+        source_high_water_mark
+      ) VALUES (
+        ${getSqlLiteral(watermarkId)},
+        ${getSqlLiteral(input.projectorName)},
+        ${getSqlLiteral(input.projectId ?? null)},
+        ${getSqlLiteral(input.importRouteId ?? null)},
+        ${getSqlLiteral(input.projectionComponent)},
+        ${getSqlLiteral(input.sourcePartition)},
+        ${input.sourceHighWaterMark}
+      )
+    `)
+
     await tx.run(`
       UPDATE app.review_serving_projector_watermark
       SET
-        source_high_water_mark = ${input.sourceHighWaterMark},
-        updated_at = current_timestamp
+        source_high_water_mark = GREATEST(source_high_water_mark, ${input.sourceHighWaterMark}),
+        updated_at = CASE
+          WHEN source_high_water_mark < ${input.sourceHighWaterMark}
+            THEN now()
+          ELSE updated_at
+        END
       WHERE watermark_id = ${getSqlLiteral(watermarkId)}
-        AND source_high_water_mark < ${input.sourceHighWaterMark}
     `)
-    return
-  }
-
-  await tx.run(`
-    INSERT INTO app.review_serving_projector_watermark (
-      watermark_id,
-      projector_name,
-      project_id,
-      import_route_id,
-      projection_component,
-      source_partition,
-      source_high_water_mark
-    ) VALUES (
-      ${getSqlLiteral(watermarkId)},
-      ${getSqlLiteral(input.projectorName)},
-      ${getSqlLiteral(input.projectId ?? null)},
-      ${getSqlLiteral(input.importRouteId ?? null)},
-      ${getSqlLiteral(input.projectionComponent)},
-      ${getSqlLiteral(input.sourcePartition)},
-      ${input.sourceHighWaterMark}
-    )
-  `)
+  })
 }

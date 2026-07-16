@@ -111,6 +111,7 @@ const reviewServingProjectorDeleteScopedInsertOnlyTables = new Set<string>([
   'app.review_selected_article_import_v4',
   'mart.review_article_summary_contribution_rebuild_partial_v4',
   'mart.review_article_summary_rebuild_partial_v4',
+  'mart.review_filter_posting_stats_v4',
 ])
 
 export type WriteReviewServingQueueRebuildRowsInput = {
