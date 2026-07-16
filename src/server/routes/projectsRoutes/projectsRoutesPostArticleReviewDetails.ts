@@ -258,7 +258,6 @@ const upsertPromptRow = (promptRowsById: Map<string, ProjectPromptRow>, promptRo
 
 const detailReaderPageSize = 512
 const covidenceRelatedRecordsLimit = 500
-const legacyArticleJudgmentRowsLimit = detailReaderPageSize
 
 const getProjectReviewDetailsWorkloadContext = (params: {
   maxResultRows?: number
@@ -476,13 +475,8 @@ const getArticleJudgmentRows = async (params: {
       })}
       AND j.deleted_at IS NULL
     ORDER BY j.created_at DESC NULLS LAST, j.id ASC
-    LIMIT ${legacyArticleJudgmentRowsLimit}
   `,
-    getProjectReviewDetailsWorkloadContext({
-      maxResultRows: legacyArticleJudgmentRowsLimit,
-      operation: 'legacyArticleJudgments',
-      projectId: params.projectId,
-    }),
+    getProjectReviewDetailsWorkloadContext({operation: 'legacyArticleJudgments', projectId: params.projectId}),
   )
 }
 

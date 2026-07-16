@@ -202,6 +202,32 @@ test('covidence project link lookup returns one bounded row per import route', (
   )
 })
 
+test('covidence prompt link lookup bounds rows per import route in SQL before budget enforcement', () => {
+  const routeText = readFileSync('src/server/routes/DataSourcesRoutes.ts', 'utf8')
+
+  expect(routeText).toContain('INNER JOIN LATERAL (')
+  expect(routeText).toContain('WHERE pir.import_route_id = selected_import_route.id')
+  expect(routeText).toContain('LIMIT ${covidencePromptLinksPerImportRouteLimit}')
+  expect(routeText).toContain('maxResultRows: importRoutes.length * covidencePromptLinksPerImportRouteLimit')
+})
+
+test('datasource lists are not silently truncated by a hard SQL limit', () => {
+  const routeText = readFileSync('src/server/routes/DataSourcesRoutes.ts', 'utf8')
+  const listActiveSql = routeText.slice(
+    routeText.indexOf("operation: 'listActive'") - 500,
+    routeText.indexOf("operation: 'listActive'") + 120,
+  )
+  const listArchivedSql = routeText.slice(
+    routeText.indexOf("operation: 'listArchived'") - 500,
+    routeText.indexOf("operation: 'listArchived'") + 120,
+  )
+
+  expect(listActiveSql).not.toContain('LIMIT')
+  expect(listActiveSql).not.toContain('maxResultRows')
+  expect(listArchivedSql).not.toContain('LIMIT')
+  expect(listArchivedSql).not.toContain('maxResultRows')
+})
+
 test('datasource list responses omit raw cursor while including structured file config', () => {
   const runRoute = runDataSourcesRoute({row: structuredRow, url: 'http://localhost/api/datasources'})
 

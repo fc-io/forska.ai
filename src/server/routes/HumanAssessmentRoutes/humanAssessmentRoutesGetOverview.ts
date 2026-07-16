@@ -80,7 +80,7 @@ export const getHumanAssessmentOverviewProjectsFromServing = async (
     WHERE COALESCE(archived, FALSE) = FALSE
     ORDER BY created_at DESC, id ASC
   `,
-    getHumanAssessmentWorkloadContext({maxResultRows: 500, operation: 'overview.activeProjects'}),
+    getHumanAssessmentWorkloadContext({operation: 'overview.activeProjects'}),
   )
 
   const projectsWithCounts = await Promise.all(

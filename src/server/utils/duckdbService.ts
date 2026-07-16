@@ -2511,10 +2511,12 @@ const getDuckdbStartupRepairSpecForFatalIndexedTableError = (error: Error, lastM
     return matchedSpec
   }
 
-  const lastMutatingTargetSpec = getDuckdbStartupRepairSpecForTableName(lastMutatingTargetTable)
+  const unqualifiedMessageSpec = duckdbStartupIndexedTableRepairSpecs.find((spec) => {
+    return message.includes(spec.tableName)
+  })
 
-  if (lastMutatingTargetSpec !== undefined) {
-    return lastMutatingTargetSpec
+  if (unqualifiedMessageSpec !== undefined) {
+    return unqualifiedMessageSpec
   }
 
   const fallbackSpec = duckdbStartupIndexedTableRepairSpecs.find((spec) => {
@@ -2525,11 +2527,7 @@ const getDuckdbStartupRepairSpecForFatalIndexedTableError = (error: Error, lastM
     throw new Error('missing DuckDB startup repair fallback spec')
   }
 
-  return (
-    duckdbStartupIndexedTableRepairSpecs.find((spec) => {
-      return message.includes(spec.tableName)
-    }) ?? fallbackSpec
-  )
+  return getDuckdbStartupRepairSpecForTableName(lastMutatingTargetTable) ?? fallbackSpec
 }
 
 const isDuckdbStartupRetryableError = (error: unknown) => {
@@ -3140,12 +3138,16 @@ const getDuckdbIndexedTableRepairScript = () => {
       )
       const createSql = String(tableRows[0]?.sql ?? '')
 
-      if (/\\bPRIMARY\\s+KEY\\b/iu.test(createSql)) {
-        throw new Error('repaired table DDL still contains PRIMARY KEY for ' + getQualifiedName(spec.schemaName, spec.tableName))
-      }
+      const primaryKeyColumns = Array.isArray(spec.repairPrimaryKeyColumns) ? spec.repairPrimaryKeyColumns : []
 
-      if (!(await hasUniqueIndexForPrimaryKeyColumns(spec))) {
-        throw new Error('repaired table is missing replacement unique index for ' + getQualifiedName(spec.schemaName, spec.tableName))
+      if (primaryKeyColumns.length > 0) {
+        if (/\\bPRIMARY\\s+KEY\\b/iu.test(createSql)) {
+          throw new Error('repaired table DDL still contains PRIMARY KEY for ' + getQualifiedName(spec.schemaName, spec.tableName))
+        }
+
+        if (!(await hasUniqueIndexForPrimaryKeyColumns(spec))) {
+          throw new Error('repaired table is missing replacement unique index for ' + getQualifiedName(spec.schemaName, spec.tableName))
+        }
       }
     }
 
