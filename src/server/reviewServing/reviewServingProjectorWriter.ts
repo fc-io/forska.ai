@@ -612,16 +612,28 @@ export const writeReviewServingTitleSearchRebuildRanges = async (
   input: WriteReviewServingTitleSearchRebuildRangesInput,
   database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
 ) => {
-  return writeReviewServingProjectorComponent(
-    {
-      component: 'search',
-      projectionManifests: [],
-      records: [],
-      statements: input.ranges.flatMap((range) => {
-        return getReviewServingTitleSearchRebuildRowsStatements(range)
-      }),
-    },
-    database,
+  const results: Array<Awaited<ReturnType<typeof writeReviewServingProjectorComponent>>> = []
+
+  for (const range of input.ranges) {
+    results.push(
+      await writeReviewServingProjectorComponent(
+        {
+          component: 'search',
+          projectionManifests: [],
+          records: [],
+          statements: getReviewServingTitleSearchRebuildRowsStatements(range),
+        },
+        database,
+      ),
+    )
+  }
+
+  return (
+    results.at(-1)
+    ?? writeReviewServingProjectorComponent(
+      {component: 'search', projectionManifests: [], records: [], statements: []},
+      database,
+    )
   )
 }
 
@@ -647,20 +659,47 @@ const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQue
       prompt_id,
       queue_updated_at
     )
-    WITH ${input.rebuildSourceCtesSql}
-    SELECT DISTINCT
-      ${getSqlLiteral(input.projectId)} AS project_id,
-      queue.review_config_hash,
-      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-      ${input.queueIdentitySql} AS queue_identity,
-      queue.queue_kind,
-      queue.priority_bucket,
-      queue.activity_sort_at,
-      queue.article_id,
-      queue.prompt_id,
-      current_timestamp AS queue_updated_at
-    FROM queue_union queue
-    WHERE NOT queue.tombstone
+    WITH ${input.rebuildSourceCtesSql},
+    queue_rows AS (
+      SELECT
+        ${getSqlLiteral(input.projectId)} AS project_id,
+        queue.review_config_hash,
+        ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+        ${input.queueIdentitySql} AS queue_identity,
+        queue.queue_kind,
+        queue.priority_bucket,
+        queue.activity_sort_at,
+        queue.article_id,
+        queue.prompt_id,
+        current_timestamp AS queue_updated_at
+      FROM queue_union queue
+      WHERE NOT queue.tombstone
+    )
+    SELECT
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      queue_identity,
+      queue_kind,
+      priority_bucket,
+      activity_sort_at,
+      article_id,
+      prompt_id,
+      queue_updated_at
+    FROM queue_rows
+    QUALIFY ROW_NUMBER() OVER (
+      PARTITION BY
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        queue_kind,
+        priority_bucket,
+        activity_sort_at,
+        article_id,
+        prompt_id,
+        queue_identity
+      ORDER BY queue_updated_at DESC
+    ) = 1
     ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id, queue_identity) DO UPDATE SET
       queue_updated_at = excluded.queue_updated_at
   `,

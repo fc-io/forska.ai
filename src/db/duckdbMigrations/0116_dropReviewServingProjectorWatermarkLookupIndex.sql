@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS app.idx_review_serving_projector_watermark_lookup;
+DROP INDEX IF EXISTS idx_review_serving_projector_watermark_lookup;

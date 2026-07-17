@@ -1230,7 +1230,7 @@ test('worker writes compatible payload rebuild chunks through one batch writer',
   expect(joined).toContain('payloadBatchWriter')
 })
 
-test('worker writes compatible search rebuild chunks through one batch writer', async () => {
+test('worker writes compatible search rebuild chunks in separate range transactions', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const statements: string[] = []
   const firstChunkInput = {

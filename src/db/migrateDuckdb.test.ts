@@ -61,6 +61,23 @@ test('DuckDB migrations drop the posting stats index that duplicates the repaire
   expect(migrationSql).toContain('DROP INDEX IF EXISTS idx_review_filter_posting_stats_v4_lookup;')
 })
 
+test('DuckDB migrations keep projector watermark unindexed after primary-key repair', () => {
+  const foundationSql = readFileSync(resolve(migrationsFolder, '0097_reviewServingV4Foundation.sql'), 'utf8')
+  const repairSql = readFileSync(
+    resolve(migrationsFolder, '0115_rebuildReviewServingProjectorWatermarkWithoutPrimaryKey.sql'),
+    'utf8',
+  )
+  const dropSql = readFileSync(
+    resolve(migrationsFolder, '0116_dropReviewServingProjectorWatermarkLookupIndex.sql'),
+    'utf8',
+  ).trim()
+
+  expect(foundationSql).not.toContain('idx_review_serving_projector_watermark_lookup')
+  expect(repairSql).not.toContain('idx_review_serving_projector_watermark_lookup')
+  expect(dropSql).toContain('DROP INDEX IF EXISTS app.idx_review_serving_projector_watermark_lookup;')
+  expect(dropSql).toContain('DROP INDEX IF EXISTS idx_review_serving_projector_watermark_lookup;')
+})
+
 test('DuckDB migrations repair legacy review serving judgment detail payload-kind schema drift', async () => {
   const duckdbPath = `/tmp/forska-review-serving-judgment-detail-payload-kind-${Date.now()}.duckdb`
   const targetMigrationFile = '0109_reviewServingJudgmentDetailPayloadKindForwardMigration.sql'

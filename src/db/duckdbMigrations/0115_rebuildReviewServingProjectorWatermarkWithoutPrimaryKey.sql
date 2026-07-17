@@ -52,6 +52,3 @@ GROUP BY watermark_id;
 DROP TABLE app.review_serving_projector_watermark;
 
 ALTER TABLE app.review_serving_projector_watermark_repair RENAME TO review_serving_projector_watermark;
-
-CREATE INDEX IF NOT EXISTS idx_review_serving_projector_watermark_lookup
-ON app.review_serving_projector_watermark(projector_name, project_id, projection_component, source_high_water_mark);

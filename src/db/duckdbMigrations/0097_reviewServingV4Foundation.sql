@@ -846,9 +846,6 @@ ON app.review_serving_dirty_work_ack(projection_component, projection_identity, 
 CREATE INDEX IF NOT EXISTS idx_review_project_import_delta_cursor_route
 ON app.review_project_import_delta_cursor(import_route_id, source_delta_high_water);
 
-CREATE INDEX IF NOT EXISTS idx_review_serving_projector_watermark_lookup
-ON app.review_serving_projector_watermark(projector_name, project_id, projection_component, source_high_water_mark);
-
 CREATE INDEX IF NOT EXISTS idx_review_projection_identity_manifest_component
 ON app.review_projection_identity_manifest(project_id, projection_component, status, base_generation, patch_watermark);
 

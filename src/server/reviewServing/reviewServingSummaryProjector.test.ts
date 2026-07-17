@@ -845,6 +845,63 @@ test('summary rebuild request finalization deduplicates overlapping contribution
   }
 })
 
+test('summary rebuild request finalization collapses count rows by serving primary key', async () => {
+  const duckdbPath = `/tmp/forska-summary-count-serving-key-finalize-${Date.now()}.duckdb`
+
+  try {
+    const {close, database} = await createDuckdbSummaryDatabase(duckdbPath)
+
+    try {
+      await createSummaryReductionSchema(database)
+      await insertSummaryChunkManifestRows(database, {chunkIds: ['chunk-001']})
+      await database.run(`
+        INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+          request_id,
+          chunk_id,
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          serving_key,
+          summary_kind,
+          summary_identity,
+          list_mode_key,
+          count_kind,
+          summary_definition_version,
+          filter_key,
+          count_value
+        ) VALUES
+          ('rebuild-summary-1', 'chunk-001', 'project-1', 'review-config-1', 'snapshot-1', 'count-key-a', 'count', 'review.list.total', 'llm', 'review.list.total', 'review-list-total:v1', 'list:all', 2),
+          ('rebuild-summary-1', 'chunk-001', 'project-1', 'review-config-1', 'snapshot-1', 'count-key-b', 'count', 'review.list.total.alias', 'llm', 'review.list.total', 'review-list-total:v1', 'list:all', 3)
+      `)
+
+      await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+        {
+          requestId: 'rebuild-summary-1',
+          snapshots: [
+            {
+              hasSummaryRebuildChunks: true,
+              projectId: 'project-1',
+              reviewConfigHash: 'review-config-1',
+              snapshotId: 'snapshot-1',
+            },
+          ],
+        },
+        database,
+      )
+      const countRows = await database.queryJson<{countValue: string; total: string}>(`
+        SELECT CAST(COUNT(*) AS VARCHAR) AS total, CAST(SUM(count_value) AS VARCHAR) AS countValue
+        FROM mart.review_article_count_serving_v4
+      `)
+
+      expect(countRows).toEqual([{countValue: '5', total: '1'}])
+    } finally {
+      close()
+    }
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
 test('summary rebuild request finalization retries from retained contribution partials without main contribution state', async () => {
   const duckdbPath = `/tmp/forska-summary-retained-contribution-finalize-${Date.now()}.duckdb`
   const countContributionKey = contributionKey({
