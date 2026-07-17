@@ -3169,35 +3169,32 @@ const runSearchRebuildChunkBatch = async (
   })
 
   const batchWriteStartedAtMs = Date.now()
-  await database.transaction(async (tx) => {
-    await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
-      await previous
-      await requireClaimedRebuildChunk({chunk, leaseOwner: input.leaseOwner}, tx)
+  await snapshots.reduce<Promise<void>>(async (previousSnapshot, snapshot) => {
+    await previousSnapshot
+    await input.chunks.reduce<Promise<void>>(async (previousChunk, chunk) => {
+      await previousChunk
+      await database.transaction(async (tx) => {
+        await requireClaimedRebuildChunk({chunk, leaseOwner: input.leaseOwner}, tx)
+        await projectReviewServingTitleSearchRebuildRanges(
+          {
+            ranges: [
+              {
+                baseGeneration: chunk.outputBaseGeneration,
+                chunkEndArticleId: chunk.chunkEndKey,
+                chunkStartArticleId: chunk.chunkStartKey,
+                projectId,
+                projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+                searchIdentity: chunk.projectionIdentity,
+                selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+                snapshotId: snapshot.snapshotId,
+              },
+            ],
+          },
+          getChunkProjectorDatabase(tx),
+        )
+      })
     }, Promise.resolve())
-
-    const chunkDatabase = getChunkProjectorDatabase(tx)
-
-    await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
-      await previous
-      await projectReviewServingTitleSearchRebuildRanges(
-        {
-          ranges: input.chunks.map((chunk) => {
-            return {
-              baseGeneration: chunk.outputBaseGeneration,
-              chunkEndArticleId: chunk.chunkEndKey,
-              chunkStartArticleId: chunk.chunkStartKey,
-              projectId,
-              projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
-              searchIdentity: chunk.projectionIdentity,
-              selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-              snapshotId: snapshot.snapshotId,
-            }
-          }),
-        },
-        chunkDatabase,
-      )
-    }, Promise.resolve())
-  })
+  }, Promise.resolve())
   const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
 
   await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {

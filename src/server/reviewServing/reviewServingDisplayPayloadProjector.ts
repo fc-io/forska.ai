@@ -674,20 +674,39 @@ const getPayloadRebuildRowsStatements = (input: ProjectReviewServingPayloadInput
     )
     WITH payload_source AS (
       ${getPayloadRowsSql(input, {includeSelectedPatchOverlay: false, orderBy: false})}
+    ),
+    payload_rows AS (
+      SELECT
+        payload_source.abstractText AS abstract_text,
+        payload_source.articleCreatedAt AS article_created_at,
+        payload_source.articleId AS article_id,
+        ${getSqlLiteral(input.displayIdentity)} AS display_identity,
+        payload_source.fullTextPreview AS full_text_preview,
+        payload_source.payloadBytes AS payload_bytes,
+        ${getSqlLiteral(input.payloadIdentity)} AS payload_identity,
+        current_timestamp AS payload_updated_at,
+        ${getSqlLiteral(input.projectId)} AS project_id,
+        ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+        payload_source.sourceMetadata AS source_metadata
+      FROM payload_source
     )
     SELECT
-      payload_source.abstractText AS abstract_text,
-      payload_source.articleCreatedAt AS article_created_at,
-      payload_source.articleId AS article_id,
-      ${getSqlLiteral(input.displayIdentity)} AS display_identity,
-      payload_source.fullTextPreview AS full_text_preview,
-      payload_source.payloadBytes AS payload_bytes,
-      ${getSqlLiteral(input.payloadIdentity)} AS payload_identity,
-      current_timestamp AS payload_updated_at,
-      ${getSqlLiteral(input.projectId)} AS project_id,
-      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-      payload_source.sourceMetadata AS source_metadata
-    FROM payload_source
+      abstract_text,
+      article_created_at,
+      article_id,
+      display_identity,
+      full_text_preview,
+      payload_bytes,
+      payload_identity,
+      payload_updated_at,
+      project_id,
+      snapshot_id,
+      source_metadata
+    FROM payload_rows
+    QUALIFY ROW_NUMBER() OVER (
+      PARTITION BY project_id, display_identity, payload_identity, snapshot_id, article_id
+      ORDER BY article_created_at DESC NULLS LAST, payload_updated_at DESC
+    ) = 1
     ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id) DO UPDATE SET
       abstract_text = excluded.abstract_text,
       article_created_at = excluded.article_created_at,

@@ -4,11 +4,12 @@ import {join, relative} from 'node:path'
 import {expect, test} from 'bun:test'
 
 import {type DuckdbWorkloadContext} from '../utils/duckdbService.ts'
-import {type ReviewServingProjectorWriterDatabase} from './reviewServingProjectorWriter.ts'
 import {
   getReviewServingProjectorReplayKey,
+  type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
   writeReviewServingQueueRebuildRows,
+  writeReviewServingTitleSearchRebuildRanges,
 } from './reviewServingProjectorWriter.ts'
 
 const workspaceRoot = join(import.meta.dir, '../../..')
@@ -181,6 +182,48 @@ test('queue rebuild rows upsert overlapping split chunk boundary rows', async ()
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id, queue_identity) DO UPDATE SET',
   )
   expect(insertStatement).toContain('queue_updated_at = excluded.queue_updated_at')
+})
+
+test('title search rebuild ranges commit each range separately', async () => {
+  const {database, getTransactionCount, statements, workloadContexts} = createWriterDatabase()
+  const baseRange = {
+    activitySortAtSql: 'article.created_at',
+    articleRangePredicateSql: "AND scope.article_id >= 'article-1' AND scope.article_id <= 'article-2'",
+    articleTitleSql: 'article.title',
+    projectId: 'project-1',
+    projectScopeIdentity: 'scope:identity-1',
+    searchIdentity: 'search:identity-1',
+    selectedImportJoinSql: '',
+    snapshotId: 'snapshot-1',
+    targetArticleRangePredicateSql: "AND search.article_id >= 'article-1' AND search.article_id <= 'article-2'",
+    titlePrefixLength: 64,
+  }
+
+  await writeReviewServingTitleSearchRebuildRanges(
+    {
+      ranges: [
+        baseRange,
+        {
+          ...baseRange,
+          articleRangePredicateSql: "AND scope.article_id >= 'article-3' AND scope.article_id <= 'article-4'",
+          targetArticleRangePredicateSql: "AND search.article_id >= 'article-3' AND search.article_id <= 'article-4'",
+        },
+      ],
+    },
+    database,
+  )
+
+  expect(getTransactionCount()).toBe(2)
+  expect(
+    workloadContexts.map((workloadContext) => {
+      return workloadContext.routeOrJobKey
+    }),
+  ).toEqual(['reviewServing.projector.writer.search', 'reviewServing.projector.writer.search'])
+  expect(
+    statements.filter((statement) => {
+      return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
+    }),
+  ).toHaveLength(2)
 })
 
 test('projector writer updates rows, manifests, acknowledgements, watermarks, and promotion in one transaction', async () => {

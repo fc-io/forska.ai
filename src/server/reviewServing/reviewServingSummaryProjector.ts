@@ -1059,7 +1059,7 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         project_id,
         review_config_hash,
         snapshot_id,
-        summary_identity,
+        ANY_VALUE(summary_identity) AS summary_identity,
         COALESCE(list_mode_key, 'global') AS list_mode_key,
         count_kind,
         summary_definition_version,
@@ -1072,7 +1072,7 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
       WHERE ${scopePredicate}
         AND chunk_id = ${getSqlLiteral(accumulatorChunkId)}
         AND summary_kind = 'count'
-      GROUP BY project_id, review_config_hash, snapshot_id, summary_identity, COALESCE(list_mode_key, 'global'), count_kind, summary_definition_version, filter_key
+      GROUP BY project_id, review_config_hash, snapshot_id, COALESCE(list_mode_key, 'global'), count_kind, summary_definition_version, filter_key
     `)
     await tx.run(`
       INSERT INTO mart.review_filter_facet_serving_v4 (

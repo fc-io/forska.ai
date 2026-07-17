@@ -20,6 +20,8 @@ type StartupRepairSpecJson = {
   mutationProbeSql?: string
   postRepairSql?: string
   postRepairSchemaRequirements?: Array<{columnNames?: string[]; schemaName: string; tableName: string}>
+  recreateRepairPrimaryKeyIndex?: boolean
+  recreateSecondaryIndexes?: boolean
   repairPrimaryKeyColumns?: string[]
   repairStrategy?: string
   schemaName: string
@@ -35,7 +37,13 @@ type DuckdbReloadSubprocessResult = {
   firstPreflightSpecs: StartupRepairSpecJson[]
   firstRow: {value: number}
   manifest: {error?: string; recovery?: string; walQuarantinePath?: string} | null
-  marker: {phase: string; schemaName: string; tableName: string} | null
+  marker: {
+    phase: string
+    reason?: string
+    repairSpecs?: Array<{schemaName: string; tableName: string}>
+    schemaName: string
+    tableName: string
+  } | null
   preflightCount: number
   preflightScript: string
   preflightSpecs: StartupRepairSpecJson[]
@@ -1080,6 +1088,8 @@ test('duckdb service startup repair strips table primary key constraints once', 
         return /^CREATE UNIQUE INDEX\b/i.test(sql)
       }),
     ).toBe(false)
+    expect(parsed.firstCatalog.indexSql).toEqual([])
+    expect(parsed.secondCatalog.indexSql).toEqual([])
     expect(parsed.secondCatalog.indexSql.join('\n')).not.toContain(
       'idx_review_serving_projector_watermark_duplicate_lookup',
     )
@@ -1217,6 +1227,7 @@ test('duckdb service marks startup repair after fatal index-delete runtime recov
     expect(parsed.marker).toEqual({
       phase: 'runtime-fatal-index-delete',
       reason: 'index-delete',
+      repairSpecs: [{schemaName: 'mart', tableName: 'review_article_serving_v4'}],
       schemaName: 'mart',
       tableName: 'review_article_serving_v4',
     })
@@ -1230,7 +1241,7 @@ test('duckdb service marks startup repair after fatal index-delete runtime recov
 test('duckdb fatal index-delete repair target prefers table named by error over stale mutation target', () => {
   const source = readFileSync('src/server/utils/duckdbService.ts', 'utf8')
   const targetMatcherSource = source.slice(
-    source.indexOf('const getDuckdbStartupRepairSpecForFatalIndexedTableError'),
+    source.indexOf('const getDuckdbStartupRepairSpecsForFatalIndexedTableError'),
     source.indexOf('const isDuckdbStartupRetryableError'),
   )
 
@@ -1354,6 +1365,7 @@ test('duckdb service marks recent mutating target after anonymous fatal index-de
     expect(parsed.marker).toEqual({
       phase: 'runtime-fatal-index-delete',
       reason: 'index-delete',
+      repairSpecs: [{schemaName: 'mart', tableName: 'review_filter_option_serving_v4'}],
       schemaName: 'mart',
       tableName: 'review_filter_option_serving_v4',
     })
@@ -1515,8 +1527,13 @@ test('duckdb service keeps the repairable indexed target when a transaction fail
     expect(parsed.marker).toEqual({
       phase: 'runtime-fatal-index-delete',
       reason: 'index-delete',
+      repairSpecs: [
+        {schemaName: 'mart', tableName: 'review_article_filter_posting_serving_v4'},
+        {schemaName: 'mart', tableName: 'review_filter_posting_stats_v4'},
+        {schemaName: 'app', tableName: 'review_serving_projector_watermark'},
+      ],
       schemaName: 'mart',
-      tableName: 'review_filter_posting_stats_v4',
+      tableName: 'review_article_filter_posting_serving_v4',
     })
   } finally {
     removePathIfExists(dataRoot)
@@ -1665,6 +1682,7 @@ test('duckdb service marks insert-ignore indexed targets when a duplicate-key tr
     expect(parsed.marker).toEqual({
       phase: 'runtime-fatal-index-delete',
       reason: 'unique-index-duplicate',
+      repairSpecs: [{schemaName: 'app', tableName: 'review_serving_projector_watermark'}],
       schemaName: 'app',
       tableName: 'review_serving_projector_watermark',
     })
@@ -1786,6 +1804,7 @@ test('duckdb service prefers fatal error table name before stale mutating target
     expect(parsed.marker).toEqual({
       phase: 'runtime-fatal-index-delete',
       reason: 'index-delete',
+      repairSpecs: [{schemaName: 'mart', tableName: 'review_article_count_serving_v4'}],
       schemaName: 'mart',
       tableName: 'review_article_count_serving_v4',
     })
@@ -2866,6 +2885,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(watermarkProbe?.lowMemoryStartupPreflight).toBe(true)
     expect(watermarkProbe?.repairPrimaryKeyColumns).toEqual(['watermark_id'])
     expect(watermarkProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(watermarkProbe?.recreateSecondaryIndexes).toBe(false)
     const articleServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_article_serving_v4'
     })
