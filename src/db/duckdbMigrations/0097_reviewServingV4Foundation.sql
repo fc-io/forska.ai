@@ -208,7 +208,7 @@ CREATE TABLE IF NOT EXISTS app.review_project_import_delta_cursor (
 );
 
 CREATE TABLE IF NOT EXISTS app.review_serving_projector_watermark (
-  watermark_id VARCHAR PRIMARY KEY,
+  watermark_id VARCHAR NOT NULL,
   projector_name VARCHAR NOT NULL,
   project_id VARCHAR,
   import_route_id VARCHAR,

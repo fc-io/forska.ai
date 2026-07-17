@@ -366,7 +366,8 @@ test('deletes write tombstones, remove serving rows, and decrement stats in the 
   expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
-  expect(joined).toContain('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
+  expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).toContain('WHERE NOT EXISTS')
 })
 
 test('membership removals scope through project_scope_article and tombstone existing postings', async () => {

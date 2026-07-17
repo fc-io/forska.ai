@@ -291,6 +291,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       DROP TABLE IF EXISTS startup_probe_review_serving_projector_watermark;
     `,
     lowMemoryStartupPreflight: true,
+    recreateRepairPrimaryKeyIndex: false,
     repairPrimaryKeyColumns: ['watermark_id'],
     schemaName: 'app',
     tableName: 'review_serving_projector_watermark',
@@ -4788,14 +4789,16 @@ const getDuckdbStatementTargetTable = (statement: string) => {
 
 const getDuckdbMutatingStatementTarget = (statement: string) => {
   return (
-    statement.match(/\b(?:INSERT\s+INTO|MERGE\s+INTO|UPDATE|DELETE\s+FROM)\s+([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)?)/iu)?.[1]
-    ?? null
+    statement.match(
+      /\b(?:INSERT(?:\s+OR\s+IGNORE)?\s+INTO|MERGE\s+INTO|UPDATE|DELETE\s+FROM)\s+([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)?)/iu,
+    )?.[1] ?? null
   )
 }
 
 const canDuckdbStatementDeleteIndexedRows = (statement: string) => {
   return (
     /\b(?:DELETE\s+FROM|MERGE\s+INTO|UPDATE)\b/iu.test(statement)
+    || /\bINSERT\s+OR\s+IGNORE\s+INTO\b/iu.test(statement)
     || (/\bINSERT\s+INTO\b/iu.test(statement) && /\bON\s+CONFLICT\b[\s\S]*\bDO\s+UPDATE\b/iu.test(statement))
   )
 }

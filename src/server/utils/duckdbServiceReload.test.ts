@@ -1079,8 +1079,7 @@ test('duckdb service startup repair strips table primary key constraints once', 
       parsed.secondCatalog.indexSql.some((sql) => {
         return /^CREATE UNIQUE INDEX\b/i.test(sql)
       }),
-    ).toBe(true)
-    expect(parsed.secondCatalog.indexSql.join('\n')).toContain('(watermark_id)')
+    ).toBe(false)
     expect(parsed.secondCatalog.indexSql.join('\n')).not.toContain(
       'idx_review_serving_projector_watermark_duplicate_lookup',
     )
@@ -1518,6 +1517,156 @@ test('duckdb service keeps the repairable indexed target when a transaction fail
       reason: 'index-delete',
       schemaName: 'mart',
       tableName: 'review_filter_posting_stats_v4',
+    })
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
+test('duckdb service marks insert-ignore indexed targets when a duplicate-key transaction fails on commit', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-commit-duplicate-index-marker-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const activeRepairSpecPath = join(`${duckdbPath}.startup-recovery`, 'startup-preflight-active-table.json')
+
+  mkdirSync(dataRoot, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {existsSync, readFileSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        let createCount = 0
+        const originalSpawnSync = globalThis.Bun.spawnSync
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          return {
+            exitCode: 0,
+            signalCode: null,
+            stdout: Buffer.from(''),
+            stderr: Buffer.from(''),
+          }
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            constructor(instanceId) {
+              this.instanceId = instanceId
+            }
+
+            async run(statement) {
+              if (this.instanceId === 1 && /^COMMIT\\b/i.test(statement.trim())) {
+                throw new Error('FATAL Error: Failed: database has been invalidated because of a previous fatal error. The database must be restarted prior to being used again. Constraint Error: Duplicate key "watermark_id: watermark:cc3cf4724ec839766a0c74871dc2011b" violates unique constraint.')
+              }
+            }
+
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return []
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              createCount += 1
+              return new MockInstance(createCount)
+            }
+
+            constructor(instanceId) {
+              this.instanceId = instanceId
+            }
+
+            async connect() {
+              return new MockConnection(this.instanceId)
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?commit-duplicate-index-marker-test=' + Date.now())
+        let indexedTargetAfterWatermark = null
+        await duckdbService.runDuckdbTransaction(async (tx) => {
+          await tx.run(\`
+            INSERT OR IGNORE INTO app.review_serving_projector_watermark (
+              watermark_id,
+              updated_at
+            ) VALUES (
+              'watermark:cc3cf4724ec839766a0c74871dc2011b',
+              current_timestamp
+            )
+          \`)
+          indexedTargetAfterWatermark = globalThis.__forskaDuckdbServiceState.controlTransactionIndexedMutationTarget
+        })
+
+        const marker = existsSync(activeRepairSpecPath) ? JSON.parse(readFileSync(activeRepairSpecPath, 'utf8')) : null
+        console.log(JSON.stringify({indexedTargetAfterWatermark, marker}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT: 'false',
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString()
+          || result.stdout.toString()
+          || 'DuckDB commit duplicate index marker subprocess failed',
+      )
+    }
+
+    const parsed = parseJsonSubprocessStdout<
+      DuckdbReloadSubprocessResult & {indexedTargetAfterWatermark: string | null}
+    >(result.stdout.toString())
+
+    expect(parsed.indexedTargetAfterWatermark).toBe('app.review_serving_projector_watermark')
+    expect(parsed.marker).toEqual({
+      phase: 'runtime-fatal-index-delete',
+      reason: 'unique-index-duplicate',
+      schemaName: 'app',
+      tableName: 'review_serving_projector_watermark',
     })
   } finally {
     removePathIfExists(dataRoot)
@@ -2716,6 +2865,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     })
     expect(watermarkProbe?.lowMemoryStartupPreflight).toBe(true)
     expect(watermarkProbe?.repairPrimaryKeyColumns).toEqual(['watermark_id'])
+    expect(watermarkProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
     const articleServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_article_serving_v4'
     })

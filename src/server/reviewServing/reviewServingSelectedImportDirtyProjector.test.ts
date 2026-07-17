@@ -164,7 +164,9 @@ test('selected-import projector advances watermark for the max source partition'
     database,
   )
   const watermarkStatement = statements.find((statement) => {
-    return statement.includes('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
+    return (
+      statement.includes('INSERT INTO app.review_serving_projector_watermark') && statement.includes('WHERE NOT EXISTS')
+    )
   })
 
   expect(watermarkStatement).toContain("'reviewChange'")
@@ -326,7 +328,8 @@ test('selected-import dirty projection promotes manifest and watermark atomicall
   expect(joined).toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).toContain("'selectedImport'")
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
-  expect(joined).toContain('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
+  expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).toContain('WHERE NOT EXISTS')
   expect(joined).not.toContain("'display'")
   expect(joined).not.toContain("'projectScope'")
 })
