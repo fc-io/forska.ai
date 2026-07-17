@@ -341,7 +341,8 @@ test('membership removals write tombstones and keep queue projection component n
 
   expect(joined).not.toContain('mart.review_queue_patch_v4')
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
-  expect(joined).toContain('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
+  expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).toContain('WHERE NOT EXISTS')
   expect(joined).toContain("'queue'")
   expect(joined).not.toContain('FROM app."judgment"')
   expect(joined).not.toContain('FROM app."judgment_human"')

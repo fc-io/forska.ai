@@ -212,7 +212,8 @@ test('summary human answers do not require prompt IDs and update summary-key ser
   expect(joined).toContain("'summary', 'answered', FALSE")
   expect(joined).toContain("'humanStatus'")
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
-  expect(joined).toContain('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
+  expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).toContain('WHERE NOT EXISTS')
   expect(joined).not.toContain("'llmStatus'")
 })
 

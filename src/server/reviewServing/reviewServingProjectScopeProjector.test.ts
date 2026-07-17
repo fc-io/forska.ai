@@ -56,7 +56,8 @@ test('project scope projector writes manifest and acknowledges scoped article wo
   expect(joined).toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).toContain("'projectScope'")
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
-  expect(joined).toContain('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
+  expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).toContain('WHERE NOT EXISTS')
 })
 
 test('project scope no-ack snapshot passes do not publish shared manifests or watermarks', async () => {

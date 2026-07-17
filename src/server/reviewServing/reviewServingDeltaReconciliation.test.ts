@@ -224,7 +224,9 @@ test('projector watermark advancement proceeds only after reconciliation or oper
   })
 
   expect(statements.join('\n')).toContain("status NOT IN ('operator_terminal', 'reconciled')")
-  expect(statements.join('\n')).toContain('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
+  expect(statements.join('\n')).toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(statements.join('\n')).toContain('WHERE NOT EXISTS')
+  expect(statements.join('\n')).not.toContain('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
   expect(statements.join('\n')).not.toContain('ON CONFLICT(watermark_id) DO UPDATE SET')
   expect(statements.join('\n')).toContain('UPDATE app.review_serving_projector_watermark')
   expect(statements.join('\n')).toContain('GREATEST(')
@@ -240,7 +242,9 @@ test('projector watermark advancement keeps no-op advances idempotent without co
     sourcePartition: 'judgment:project-1',
   })
 
-  expect(statements.join('\n')).toContain('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
+  expect(statements.join('\n')).toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(statements.join('\n')).toContain('WHERE NOT EXISTS')
+  expect(statements.join('\n')).not.toContain('INSERT OR IGNORE INTO app.review_serving_projector_watermark')
   expect(statements.join('\n')).not.toContain('ON CONFLICT(watermark_id) DO UPDATE SET')
   expect(statements.join('\n')).toContain('UPDATE app.review_serving_projector_watermark')
   expect(statements.join('\n')).toContain('GREATEST(')

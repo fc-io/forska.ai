@@ -339,26 +339,6 @@ export const advanceReviewServingProjectorWatermark = async (
     await assertReviewServingProjectorWatermarkCanAdvance(tx, input)
 
     await tx.run(`
-      INSERT OR IGNORE INTO app.review_serving_projector_watermark (
-        watermark_id,
-        projector_name,
-        project_id,
-        import_route_id,
-        projection_component,
-        source_partition,
-        source_high_water_mark
-      ) VALUES (
-        ${getSqlLiteral(watermarkId)},
-        ${getSqlLiteral(input.projectorName)},
-        ${getSqlLiteral(input.projectId ?? null)},
-        ${getSqlLiteral(input.importRouteId ?? null)},
-        ${getSqlLiteral(input.projectionComponent)},
-        ${getSqlLiteral(input.sourcePartition)},
-        ${input.sourceHighWaterMark}
-      )
-    `)
-
-    await tx.run(`
       UPDATE app.review_serving_projector_watermark
       SET
         source_high_water_mark = GREATEST(source_high_water_mark, ${input.sourceHighWaterMark}),
@@ -368,6 +348,31 @@ export const advanceReviewServingProjectorWatermark = async (
           ELSE updated_at
         END
       WHERE watermark_id = ${getSqlLiteral(watermarkId)}
+    `)
+
+    await tx.run(`
+      INSERT INTO app.review_serving_projector_watermark (
+        watermark_id,
+        projector_name,
+        project_id,
+        import_route_id,
+        projection_component,
+        source_partition,
+        source_high_water_mark
+      )
+      SELECT
+        ${getSqlLiteral(watermarkId)},
+        ${getSqlLiteral(input.projectorName)},
+        ${getSqlLiteral(input.projectId ?? null)},
+        ${getSqlLiteral(input.importRouteId ?? null)},
+        ${getSqlLiteral(input.projectionComponent)},
+        ${getSqlLiteral(input.sourcePartition)},
+        ${input.sourceHighWaterMark}
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM app.review_serving_projector_watermark
+        WHERE watermark_id = ${getSqlLiteral(watermarkId)}
+      )
     `)
   })
 }
