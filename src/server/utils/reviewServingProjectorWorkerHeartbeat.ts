@@ -53,6 +53,44 @@ const getReviewServingProjectorWorkerMaxCompletedChunksPerRun = (
     : options.maxCompletedRebuildChunksPerRun
 }
 
+const getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = (
+  options: ReviewServingProjectorWorkerHeartbeatOptions,
+) => {
+  return (
+    options.rebuildChunkBatchMaxRssBytes
+    ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES
+    ?? getDefaultReviewServingRebuildChunkBatchMaxRssBytes()
+  )
+}
+
+const shouldRecycleDuckdbBeforeReviewServingProjectorRestart = (
+  options: ReviewServingProjectorWorkerHeartbeatOptions,
+) => {
+  const maxRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(options)
+
+  return maxRssBytes > 0 && process.memoryUsage().rss >= maxRssBytes
+}
+
+const recycleDuckdbBeforeReviewServingProjectorRestart = async (
+  options: ReviewServingProjectorWorkerHeartbeatOptions,
+) => {
+  if (!shouldRecycleDuckdbBeforeReviewServingProjectorRestart(options)) {
+    return
+  }
+
+  const maxRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(options)
+  const rssBytes = process.memoryUsage().rss
+
+  reviewServingProjectorWorkerWarningLogger.warn(
+    'review-serving-projector.heartbeat-recycle-duckdb',
+    '[reviewServingProjectorWorker] recycling DuckDB before bounded loop restart',
+    {maxRssBytes, rssBytes},
+  )
+  const {closeDuckdbService} = await import('./duckdbService.ts')
+  await closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
+  globalThis.Bun.gc(true)
+}
+
 export const startReviewServingProjectorWorkerHeartbeat = (
   options: ReviewServingProjectorWorkerHeartbeatOptions = {},
 ) => {
@@ -125,10 +163,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
 
     void runReviewServingProjectorWorker({
       pollIntervalMs: options.pollIntervalMs,
-      rebuildChunkBatchMaxRssBytes:
-        options.rebuildChunkBatchMaxRssBytes
-        ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES
-        ?? getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
+      rebuildChunkBatchMaxRssBytes: getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(options),
       rebuildChunkBatchSize:
         options.rebuildChunkBatchSize
         ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
@@ -136,13 +171,15 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       maxCompletedRebuildChunksPerRun,
       signal: loopController.signal,
     })
-      .then((result) => {
+      .then(async (result) => {
         if (result?.reason === 'nativeHeavyChunkCompleted') {
+          await recycleDuckdbBeforeReviewServingProjectorRestart(options)
           scheduleRestart(restartDelayMs, true)
           return
         }
 
         if (endedByMaxRun || maxCompletedRebuildChunksPerRun !== null) {
+          await recycleDuckdbBeforeReviewServingProjectorRestart(options)
           scheduleRestart(restartDelayMs, true)
         }
       })

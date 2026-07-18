@@ -3156,6 +3156,10 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(judgmentDetailProbe?.mutationProbeSql).toContain(
       'INSERT INTO mart.review_article_judgment_detail_serving_v4 BY NAME',
     )
+    expect(judgmentDetailProbe?.repairStrategy).toBe('empty-derived')
+    expect(judgmentDetailProbe?.postRepairSql).toContain("projection_component = 'judgmentInputContent'")
+    expect(judgmentDetailProbe?.postRepairSql).toContain("status = 'pending'")
+    expect(judgmentDetailProbe?.postRepairSql).toContain('app.review_rebuild_request')
     const titleSearchProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_title_search_serving_v4'
     })
@@ -3268,7 +3272,10 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'snapshot_id',
       'article_id',
     ])
-    expect(payloadProbe?.repairStrategy).toBeUndefined()
+    expect(payloadProbe?.repairStrategy).toBe('empty-derived')
+    expect(payloadProbe?.postRepairSql).toContain("projection_component = 'payload'")
+    expect(payloadProbe?.postRepairSql).toContain("status = 'pending'")
+    expect(payloadProbe?.postRepairSql).toContain('app.review_rebuild_request')
     expect(payloadProbe?.mutationProbeSql).toContain("projection_component = 'payload'")
     expect(payloadProbe?.mutationProbeSql).toContain('INSERT INTO mart.review_article_serving_payload_v4 BY NAME')
     expect(payloadProbe?.schemaRequirements).toContainEqual({

@@ -28,6 +28,7 @@ import {startRequestAttemptCloseoutBackfillScheduler} from './startRequestAttemp
 let maintenanceBackgroundWorkStops: Array<() => void> | null = null
 const lowMemoryMaintenanceDuckdbLimitMiB = 6400
 const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 1
+const lowMemoryReviewServingProjectorWorkerMaxRunMs = 60_000
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
 const reviewServingProjectorPauseRecoveryPollIntervalMs = 30_000
 const reviewServingProjectorPauseRecoveryMinAgeMs = 5 * 60_000
@@ -56,6 +57,7 @@ const getReviewServingProjectorWorkerHeartbeatOptions = () => {
   return shouldDeferNonessentialDuckdbMaintenanceWork()
     ? {
         maxCompletedRebuildChunksPerRun: lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun,
+        maxRunMs: lowMemoryReviewServingProjectorWorkerMaxRunMs,
         restartDelayMs: lowMemoryReviewServingProjectorWorkerRestartDelayMs,
       }
     : {}

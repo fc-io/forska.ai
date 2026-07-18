@@ -297,7 +297,6 @@ const getDefaultRebuildArticleBounds = async (
 const defaultRebuildMaxAdmissionSplitCount = 64
 const defaultRebuildNonPresplittableComponents = new Set<ReviewServingProjectionComponent>([
   'display',
-  'humanStatus',
   'judgmentInputContent',
   'llmStatus',
   'projectScope',
