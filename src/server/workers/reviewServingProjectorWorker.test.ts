@@ -5079,7 +5079,8 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(filterOptionDeletes).toHaveLength(0)
   expect(joined).toContain('"summaryProjectorSnapshots"')
-  expect(joined).toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('"judgmentPayloadProjectorSnapshots"')
   expect(joined).toContain("article_id >= 'article-001'")
   expect(joined).toContain("article_id <= 'article-099'")
@@ -6353,7 +6354,7 @@ test('judgment input content rebuild chunk splits only after DuckDB OOM', async 
     run: async (statement: string) => {
       statements.push(statement)
 
-      if (statement.includes('DELETE FROM mart.review_article_judgment_detail_serving_v4')) {
+      if (statement.includes('INSERT INTO mart.review_article_judgment_detail_serving_v4')) {
         throw new Error('DuckDB Out of Memory Error: failed to allocate 32KiB (18.6 GiB/18.6 GiB used)')
       }
     },
@@ -6374,7 +6375,8 @@ test('judgment input content rebuild chunk splits only after DuckDB OOM', async 
   expect(result).toEqual({status: 'completed'})
   expect(joined).toContain('NTILE(48)')
   expect(joined).not.toContain('scope.project_scope_identity')
-  expect(joined).toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('lease_expires_at > current_timestamp')
   expect(joined).toContain('RETURNING chunk_id AS chunkId')
   expect(childInserts).toHaveLength(2)

@@ -265,7 +265,11 @@ const getReplacementDeleteStatements = (
   })
   const shouldReplaceChunkRange = hasChunkArticleRange(input)
 
-  return articleIds.length === 0 && !shouldReplaceBroadScope && !shouldReplaceChunkRange
+  if (shouldReplaceChunkRange) {
+    return []
+  }
+
+  return articleIds.length === 0 && !shouldReplaceBroadScope
     ? []
     : payloadKinds.flatMap((payloadKind) => {
         const listModeKeys =
@@ -273,16 +277,6 @@ const getReplacementDeleteStatements = (
 
         return listModeKeys.map((listModeKey) => {
           const articlePredicate = articleIds.length === 0 ? {} : {article_id: articleIds}
-
-          if (shouldReplaceChunkRange && articleIds.length === 0) {
-            return `DELETE FROM mart.review_article_judgment_detail_serving_v4
-              WHERE project_id = ${getSqlLiteral(input.projectId)}
-                AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-                AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-                AND list_mode_key = ${getSqlLiteral(listModeKey)}
-                AND payload_kind = ${getSqlLiteral(payloadKind)}
-                ${getArticleRangePredicate(input)}`
-          }
 
           return getDeleteReviewServingProjectorRowsStatement({
             predicates: {
