@@ -107,6 +107,8 @@ import {parseDuckdbMemoryLimitToMiB} from '../utils/duckdbMemoryLimit.ts'
 import {
   closeDuckdbService,
   type DuckdbWorkloadContext,
+  getDuckdbAppendRuntimeMetrics,
+  getDuckdbQueueRuntimeMetricsSnapshot,
   recoverDuckdbServiceAfterFatalError,
 } from '../utils/duckdbService.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
@@ -185,6 +187,8 @@ type ReviewServingProjectorWorkerDependencies = {
     & ReviewServingChunkManifestRepositoryDatabase
     & ReviewServingRetentionServiceDatabase
   getMemoryUsage?: () => ReviewServingProjectorWorkerMemoryUsage
+  getAppendQueueDepth?: () => number
+  getForegroundQueueDepth?: () => number
   intakeImportDeltas?: typeof intakeReviewImportDeltasToDirtyWork
   intakeReviewChangeDeltas?: typeof intakeReviewChangeDeltasToDirtyWork
   nowMs?: () => number
@@ -574,6 +578,7 @@ const statusArticleRangeRebuildChunkPresplitMaxBucketCount = 512
 const admittedOversizedRebuildChunkInputRowLimits: Partial<Record<ReviewServingProjectionComponent, number>> = {
   payload: 10_000,
   posting: 512,
+  search: 512,
   summary: 512,
 }
 const splittableArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjectionComponent> = new Set([
@@ -604,9 +609,14 @@ const statusArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjectionCo
   'llmStatus',
 ])
 const requestlessSummaryRangeRebuildRequestPrefix = 'requestless-summary'
+const requestlessBootstrapRebuildRequestPrefix = 'requestless-bootstrap'
 
 const isRequestlessSummaryRangeRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
   return chunk.projectionComponent === 'summary' && chunk.requestId === null
+}
+
+const isRequestlessRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
+  return chunk.requestId === null
 }
 
 const getRequestlessSummaryRangeRebuildRequestId = (chunk: ReviewServingRebuildChunkManifest) => {
@@ -625,6 +635,23 @@ const getRequestlessSummaryRangeRebuildRequestId = (chunk: ReviewServingRebuildC
     .slice(0, 24)
 
   return `${requestlessSummaryRangeRebuildRequestPrefix}:${digest}`
+}
+
+const getRequestlessBootstrapRebuildRequestId = (chunk: ReviewServingRebuildChunkManifest) => {
+  const digest = createHash('sha256')
+    .update(
+      [
+        chunk.projectId ?? '',
+        chunk.snapshotId ?? '',
+        chunk.outputBaseGeneration,
+        chunk.inputWatermark,
+        chunk.inputDigest,
+      ].join('\0'),
+    )
+    .digest('hex')
+    .slice(0, 24)
+
+  return `${requestlessBootstrapRebuildRequestPrefix}:${digest}`
 }
 
 const getArticleRangeRebuildChunkPresplitRowLimit = (chunk: ReviewServingRebuildChunkManifest) => {
@@ -3829,7 +3856,7 @@ export const runReviewServingProjectorWorkerClaimedRebuildChunk = async (
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
   const effectiveInput = isRequestlessSummaryRangeRebuildChunk(input.chunk)
-    ? {...input, chunk: await adoptRequestlessSummaryRangeRebuildChunk(input, database)}
+    ? {...input, chunk: await adoptRequestlessRebuildChunk(input, database)}
     : input
 
   try {
@@ -4599,8 +4626,14 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
   collectGarbageAfterCompletedRebuildChunk,
   cleanupRetentionState: cleanupReviewServingRetentionState,
   getDatabase: getAppDatabaseService as ReviewServingProjectorWorkerDependencies['getDatabase'],
+  getAppendQueueDepth: () => {
+    return getDuckdbAppendRuntimeMetrics().queueDepth
+  },
   getCleanupTargets: (database) => {
     return getReviewServingRetentionCleanupTargets({}, database)
+  },
+  getForegroundQueueDepth: () => {
+    return getDuckdbQueueRuntimeMetricsSnapshot().main.queueDepth
   },
   rebuildChunkService: {
     claimChunk: claimReviewServingRebuildChunk,
@@ -5637,8 +5670,21 @@ const getIdleReviewServingProjectorWorkerDeltaIntakeResult = (): ReviewServingPr
   return {convertedPartitions: 0, dirtyWorkCount: 0, status: 'idle'}
 }
 
+const getIdleReviewServingProjectorWorkerCycleChunkResult = (): {
+  chunk: ReviewServingProjectorWorkerChunkResult
+  completedCount: number
+} => {
+  return {chunk: {chunkId: null, status: 'idle'}, completedCount: 0}
+}
+
 const getBlockedReviewServingProjectorWakeResult = (): WakeReviewServingProjectorServiceResult => {
   return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
+}
+
+const hasForegroundDuckdbWorkQueuedForReviewServingProjectorWorker = (
+  dependencies: ReviewServingProjectorWorkerDependencies,
+) => {
+  return (dependencies.getForegroundQueueDepth?.() ?? 0) > 0 || (dependencies.getAppendQueueDepth?.() ?? 0) > 0
 }
 
 const getForegroundRebuildDrainStartedAtMs = (input: {
@@ -6043,18 +6089,67 @@ const shouldClaimNextReviewServingProjectorWorkerRebuildChunkForBatch = (
   )
 }
 
-const adoptRequestlessSummaryRangeRebuildChunk = async (
+const getRequestlessRebuildChunkAdoption = async (
   input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
   database: ReviewServingChunkManifestRepositoryDatabase,
 ) => {
-  if (!isRequestlessSummaryRangeRebuildChunk(input.chunk)) {
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const components = await database.queryJson<{projectionComponent: ReviewServingProjectionComponent}>(`
+    SELECT DISTINCT projection_component AS "projectionComponent"
+    FROM app.review_rebuild_chunk_manifest
+    WHERE request_id IS NULL
+      AND project_id IS NOT DISTINCT FROM ${getSqlLiteral(projectId)}
+      AND snapshot_id IS NOT DISTINCT FROM ${getSqlLiteral(input.chunk.snapshotId)}
+      AND output_base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
+      AND input_watermark = ${getSqlLiteral(input.chunk.inputWatermark)}
+      AND input_digest IS NOT DISTINCT FROM ${getSqlLiteral(input.chunk.inputDigest)}
+      AND status NOT IN ('completed', 'blocked_over_budget', 'quarantined')
+    ORDER BY projection_component
+  `)
+  const requestedComponents = components.map((component) => {
+    return component.projectionComponent
+  })
+
+  if (requestedComponents.length === 0) {
+    return null
+  }
+
+  if (
+    requestedComponents.length === 1
+    && requestedComponents[0] === 'summary'
+    && isRequestlessSummaryRangeRebuildChunk(input.chunk)
+  ) {
+    return {
+      diagnostics: {adoptedRequestlessSummaryChunks: true},
+      reason: 'requestless_summary_range_rebuild',
+      requestId: getRequestlessSummaryRangeRebuildRequestId(input.chunk),
+      requestedComponents,
+    }
+  }
+
+  return {
+    diagnostics: {adoptedRequestlessBootstrapChunks: true},
+    reason: 'requestless_bootstrap_rebuild',
+    requestId: getRequestlessBootstrapRebuildRequestId(input.chunk),
+    requestedComponents,
+  }
+}
+
+const adoptRequestlessRebuildChunk = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  if (!isRequestlessRebuildChunk(input.chunk)) {
     return input.chunk
   }
 
   const projectId = requireRebuildChunkProjectId(input.chunk)
-  const requestId = getRequestlessSummaryRangeRebuildRequestId(input.chunk)
 
   return database.transaction(async (tx) => {
+    const adoption = await getRequestlessRebuildChunkAdoption(input, tx)
+    if (adoption === null) {
+      return input.chunk
+    }
     await requireClaimedRebuildChunk(input, tx)
     await tx.run(`
       INSERT INTO app.review_rebuild_request (
@@ -6072,13 +6167,15 @@ const adoptRequestlessSummaryRangeRebuildChunk = async (
         admitted_at,
         updated_at
       ) VALUES (
-        ${getSqlLiteral(requestId)},
+        ${getSqlLiteral(adoption.requestId)},
         ${getSqlLiteral(projectId)},
-        'requestless_summary_range_rebuild',
-        '["summary"]'::JSON,
+        ${getSqlLiteral(adoption.reason)},
+        ${getSqlLiteral(JSON.stringify(adoption.requestedComponents))}::JSON,
         '{}'::JSON,
         ${getSqlLiteral(
           JSON.stringify({
+            inputDigest: input.chunk.inputDigest,
+            inputWatermark: input.chunk.inputWatermark,
             outputBaseGeneration: input.chunk.outputBaseGeneration,
             projectionIdentity: input.chunk.projectionIdentity,
             snapshotId: input.chunk.snapshotId,
@@ -6088,7 +6185,7 @@ const adoptRequestlessSummaryRangeRebuildChunk = async (
         'admitted',
         'admitted',
         '{}'::JSON,
-        ${getSqlLiteral(JSON.stringify({adoptedRequestlessSummaryChunks: true}))}::JSON,
+        ${getSqlLiteral(JSON.stringify(adoption.diagnostics))}::JSON,
         now(),
         now()
       )
@@ -6106,22 +6203,21 @@ const adoptRequestlessSummaryRangeRebuildChunk = async (
     await tx.run(`
       UPDATE app.review_rebuild_chunk_manifest
       SET
-        request_id = ${getSqlLiteral(requestId)},
+        request_id = ${getSqlLiteral(adoption.requestId)},
         updated_at = now()
       WHERE request_id IS NULL
         AND project_id IS NOT DISTINCT FROM ${getSqlLiteral(projectId)}
         AND snapshot_id IS NOT DISTINCT FROM ${getSqlLiteral(input.chunk.snapshotId)}
-        AND projection_component = 'summary'
-        AND projection_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
         AND output_base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
         AND input_watermark = ${getSqlLiteral(input.chunk.inputWatermark)}
+        AND input_digest IS NOT DISTINCT FROM ${getSqlLiteral(input.chunk.inputDigest)}
         AND status NOT IN ('completed', 'blocked_over_budget', 'quarantined')
     `)
 
     const adoptedChunk = await getReviewServingRebuildChunkManifest({chunkId: input.chunk.chunkId}, tx)
 
-    if (adoptedChunk === null || adoptedChunk.requestId !== requestId) {
-      throw new Error(`failed to adopt requestless summary rebuild chunk ${input.chunk.chunkId}`)
+    if (adoptedChunk === null || adoptedChunk.requestId !== adoption.requestId) {
+      throw new Error(`failed to adopt requestless rebuild chunk ${input.chunk.chunkId}`)
     }
 
     return adoptedChunk
@@ -6224,15 +6320,12 @@ const runClaimedReviewServingProjectorWorkerRebuildChunk = async ({
     await measureReviewServingProjectorWorkerPhase(timings, 'heartbeatMs', async () => {
       await heartbeatClaimedRebuildChunkLease({chunk: claimedChunk, database, dependencies, options, service, workerId})
     })
-    if (isRequestlessSummaryRangeRebuildChunk(effectiveClaimedChunk)) {
+    if (isRequestlessRebuildChunk(effectiveClaimedChunk)) {
       effectiveClaimedChunk = await measureReviewServingProjectorWorkerPhase(
         timings,
-        'adoptRequestlessSummaryMs',
+        'adoptRequestlessMs',
         async () => {
-          return adoptRequestlessSummaryRangeRebuildChunk(
-            {chunk: effectiveClaimedChunk, leaseOwner: workerId},
-            database,
-          )
+          return adoptRequestlessRebuildChunk({chunk: effectiveClaimedChunk, leaseOwner: workerId}, database)
         },
       )
     }
@@ -7672,8 +7765,11 @@ export const runReviewServingProjectorWorkerCycle = async (
   if (terminalFailedChunk === null) {
     await readmitRetryableFailedRebuildRequests({database, projectId: options.rebuildProjectId})
   }
-  const chunkBatch =
-    terminalFailedChunk === null
+  const shouldDeferForForegroundDuckdbWork =
+    terminalFailedChunk === null && hasForegroundDuckdbWorkQueuedForReviewServingProjectorWorker(dependencies)
+  const chunkBatch = shouldDeferForForegroundDuckdbWork
+    ? getIdleReviewServingProjectorWorkerCycleChunkResult()
+    : terminalFailedChunk === null
       ? await runReviewServingProjectorWorkerRebuildChunkBatch({
           database,
           dependencies,
@@ -7690,7 +7786,8 @@ export const runReviewServingProjectorWorkerCycle = async (
   const chunk = finalizedChunkBatch.chunk
   const nowMs = getWorkerNowMs(dependencies, options)
   const shouldRunOnlyRebuildChunk =
-    terminalFailedChunk !== null
+    shouldDeferForForegroundDuckdbWork
+    || terminalFailedChunk !== null
     || chunk.status === 'failed'
     || shouldPrioritizeNextRebuildChunk({chunk, dependencies, nowMs, options})
   const deltaIntake = shouldRunOnlyRebuildChunk

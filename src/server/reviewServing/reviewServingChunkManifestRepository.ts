@@ -64,6 +64,7 @@ export type ReviewServingRebuildChunkBudgetFields = {
 }
 
 export type ReviewServingRebuildChunkIdentity = {
+  chunkId?: string
   chunkEndKey: string
   chunkStartKey: string
   inputDigest: string | null
@@ -470,7 +471,7 @@ const getRebuildChunkComponentPrerequisitePredicate = (tableAlias?: string) => {
           AND NOT EXISTS (
             SELECT 1
             FROM app.review_rebuild_chunk_manifest prerequisite
-            WHERE prerequisite.request_id = ${source}request_id
+            WHERE prerequisite.request_id IS NOT DISTINCT FROM ${source}request_id
               AND prerequisite.project_id IS NOT DISTINCT FROM ${source}project_id
               AND prerequisite.projection_component IN ${getComponentSqlList(prerequisites)}
               AND prerequisite.status <> 'completed'
@@ -494,7 +495,7 @@ const getRebuildChunkSingleComponentPrerequisitePredicate = (
       AND NOT EXISTS (
         SELECT 1
         FROM app.review_rebuild_chunk_manifest prerequisite
-        WHERE prerequisite.request_id = ${source}request_id
+        WHERE prerequisite.request_id IS NOT DISTINCT FROM ${source}request_id
           AND prerequisite.project_id IS NOT DISTINCT FROM ${source}project_id
           AND prerequisite.projection_component IN ${getComponentSqlList(prerequisites)}
           AND prerequisite.status <> 'completed'
@@ -993,6 +994,7 @@ export const getNextClaimableReviewServingRebuildChunk = async (
   return row === undefined
     ? null
     : {
+        chunkId: row.chunkId,
         checksum: row.checksum,
         chunkEndKey: row.chunkEndKey,
         chunkStartKey: row.chunkStartKey,
@@ -1213,10 +1215,14 @@ export const isReviewServingRebuildChunkComplete = async (
 ) => {
   const checksumPredicate =
     input.checksum === undefined ? '' : `AND checksum IS NOT DISTINCT FROM ${getSqlLiteral(input.checksum)}`
+  const identityPredicate =
+    input.chunkId === undefined
+      ? getReviewServingRebuildChunkIdentityPredicate(input)
+      : `chunk_id = ${getSqlLiteral(input.chunkId)}`
   const rows = await database.queryJson<{chunkId: string}>(`
     SELECT chunk_id AS chunkId
     FROM app.review_rebuild_chunk_manifest
-    WHERE ${getReviewServingRebuildChunkIdentityPredicate(input)}
+    WHERE ${identityPredicate}
       AND status = 'completed'
       ${checksumPredicate}
     LIMIT 1
@@ -1229,7 +1235,7 @@ export const claimReviewServingRebuildChunk = async (
   input: ReviewServingRebuildChunkIdentity & {leaseExpiresAt: Date | string; leaseOwner: string; now: Date | string},
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
 ) => {
-  const chunkId = getReviewServingRebuildChunkId(input)
+  const chunkId = input.chunkId ?? getReviewServingRebuildChunkId(input)
 
   await database.run(`
     UPDATE app.review_rebuild_chunk_manifest AS manifest
@@ -1371,7 +1377,7 @@ export const writeReviewServingRebuildChunkOutput = async (
   },
   database: ReviewServingChunkManifestRepositoryDatabase = getReviewServingChunkManifestDatabase(),
 ) => {
-  const chunkId = getReviewServingRebuildChunkId(input)
+  const chunkId = input.chunkId ?? getReviewServingRebuildChunkId(input)
   const startedAtMs = Date.now()
   const phaseTimings: Record<string, number> = {}
   let writeOutputDiagnosticsJson: unknown
