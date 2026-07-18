@@ -240,6 +240,7 @@ type DuckdbStartupIndexedTableRepairSpec = {
   repairStrategy?: 'copy' | 'empty-derived'
   schemaRequirements?: DuckdbStartupSchemaRequirement[]
   schemaName: string
+  skipGenericDeleteInsertProbe?: boolean
   tableName: string
 }
 type DuckdbStartupIndexedTableRepairResult = {checkpointSkipped: boolean}
@@ -1608,7 +1609,14 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           AND mart.review_article_judgment_detail_serving_v4.article_id IS NOT DISTINCT FROM probe.article_id
           AND mart.review_article_judgment_detail_serving_v4.prompt_id IS NOT DISTINCT FROM probe.prompt_id
       );
-      DELETE FROM mart.review_article_judgment_detail_serving_v4
+      COMMIT;
+      BEGIN;
+      UPDATE mart.review_article_judgment_detail_serving_v4
+      SET detail_updated_at = (
+        SELECT detail_updated_at
+        FROM startup_probe_review_article_judgment_detail_serving_v4
+        LIMIT 1
+      )
       WHERE EXISTS (
         SELECT 1
         FROM startup_probe_review_article_judgment_detail_serving_v4 probe
@@ -1620,9 +1628,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           AND mart.review_article_judgment_detail_serving_v4.article_id IS NOT DISTINCT FROM probe.article_id
           AND mart.review_article_judgment_detail_serving_v4.prompt_id IS NOT DISTINCT FROM probe.prompt_id
       );
-      INSERT INTO mart.review_article_judgment_detail_serving_v4 BY NAME
-      SELECT *
-      FROM startup_probe_review_article_judgment_detail_serving_v4;
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_article_judgment_detail_serving_v4;
     `,
@@ -1681,6 +1686,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     ],
     repairStrategy: 'empty-derived',
     schemaName: 'mart',
+    skipGenericDeleteInsertProbe: true,
     tableName: 'review_article_judgment_detail_serving_v4',
   },
   {
@@ -2125,6 +2131,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       'article_id',
     ],
     schemaName: 'mart',
+    skipGenericDeleteInsertProbe: true,
     tableName: 'review_article_filter_posting_serving_v4',
   },
   {
@@ -2254,6 +2261,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     ],
     recreateRepairPrimaryKeyIndex: false,
     schemaName: 'mart',
+    skipGenericDeleteInsertProbe: true,
     tableName: 'review_filter_posting_stats_v4',
   },
   {
@@ -2344,7 +2352,14 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           AND mart.review_article_serving_payload_v4.snapshot_id IS NOT DISTINCT FROM probe.snapshot_id
           AND mart.review_article_serving_payload_v4.article_id IS NOT DISTINCT FROM probe.article_id
       );
-      DELETE FROM mart.review_article_serving_payload_v4
+      COMMIT;
+      BEGIN;
+      UPDATE mart.review_article_serving_payload_v4
+      SET payload_updated_at = (
+        SELECT payload_updated_at
+        FROM startup_probe_review_article_serving_payload_v4
+        LIMIT 1
+      )
       WHERE EXISTS (
         SELECT 1
         FROM startup_probe_review_article_serving_payload_v4 probe
@@ -2354,9 +2369,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           AND mart.review_article_serving_payload_v4.snapshot_id IS NOT DISTINCT FROM probe.snapshot_id
           AND mart.review_article_serving_payload_v4.article_id IS NOT DISTINCT FROM probe.article_id
       );
-      INSERT INTO mart.review_article_serving_payload_v4 BY NAME
-      SELECT *
-      FROM startup_probe_review_article_serving_payload_v4;
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_article_serving_payload_v4;
     `,
@@ -2415,6 +2427,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       },
     ],
     tableName: 'review_article_serving_payload_v4',
+    skipGenericDeleteInsertProbe: true,
   },
 ] as const
 const enforcedForegroundDuckdbOperations = new Set<DuckdbWorkloadOperation>([
@@ -3402,8 +3415,10 @@ const getDuckdbStartupPreflightScript = () => {
             markActiveRepairSpec(spec, 'custom-mutation-probe')
             await connection.run(spec.mutationProbeSql)
           }
-          markActiveRepairSpec(spec, 'generic-delete-insert-probe')
-          await runDeleteInsertMutationProbe(spec.schemaName, spec.tableName)
+          if (!spec.skipGenericDeleteInsertProbe) {
+            markActiveRepairSpec(spec, 'generic-delete-insert-probe')
+            await runDeleteInsertMutationProbe(spec.schemaName, spec.tableName)
+          }
         }
       }
     } finally {

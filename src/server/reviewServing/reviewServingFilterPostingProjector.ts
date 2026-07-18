@@ -576,16 +576,6 @@ const getDeleteServingRowsStatement = (
           AND serving.list_mode_key = deleted.list_mode_key`
 }
 
-const getDeleteFullRebuildServingRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
-  const rangePredicate = hasChunkArticleRange(input) ? getArticleRangePredicate({alias: 'serving', ...input}) : ''
-
-  return `DELETE FROM mart.review_article_filter_posting_serving_v4 serving
-    WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-      AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-      AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      ${rangePredicate}`
-}
-
 const getInsertFullRebuildServingRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
   return `INSERT INTO mart.review_article_filter_posting_serving_v4 (
       project_id,
@@ -627,17 +617,10 @@ const getInsertFullRebuildServingRowsStatement = (input: ProjectReviewServingFil
       posting.sortKey AS sort_key,
       current_timestamp AS posting_updated_at
     FROM serving_source posting
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM mart.review_article_filter_posting_serving_v4 existing
-      WHERE existing.project_id = ${getSqlLiteral(input.projectId)}
-        AND existing.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND existing.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-        AND existing.filter_kind = posting.filterKind
-        AND existing.filter_value = posting.filterValue
-        AND existing.list_mode_key = posting.listModeKey
-        AND existing.article_id = posting.articleId
-    )`
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO UPDATE SET
+      posting_identity = excluded.posting_identity,
+      sort_key = excluded.sort_key,
+      posting_updated_at = excluded.posting_updated_at`
 }
 
 const getDeleteFullRebuildStatsRowsStatement = (
@@ -700,7 +683,12 @@ const getInsertFullRebuildStatsRowsStatement = (
       END AS selectivity,
       current_timestamp AS stats_updated_at
     FROM stats_source stats
-    CROSS JOIN total_article total`
+    CROSS JOIN total_article total
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key) DO UPDATE SET
+      posting_identity = excluded.posting_identity,
+      cardinality = excluded.cardinality,
+      selectivity = excluded.selectivity,
+      stats_updated_at = excluded.stats_updated_at`
 }
 
 export const refreshReviewServingFilterPostingStats = async (
@@ -722,12 +710,9 @@ export const refreshReviewServingFilterPostingStats = async (
 
 const getFullRebuildWriteStatements = (input: ProjectReviewServingFilterPostingsInput) => {
   const insertStatements = input.listModeKeys.length === 0 ? [] : [getInsertFullRebuildServingRowsStatement(input)]
-  const statsStatements =
-    input.refreshFullRebuildStats === false
-      ? []
-      : [getDeleteFullRebuildStatsRowsStatement(input), getInsertFullRebuildStatsRowsStatement(input)]
+  const statsStatements = input.refreshFullRebuildStats === false ? [] : [getInsertFullRebuildStatsRowsStatement(input)]
 
-  return [getDeleteFullRebuildServingRowsStatement(input), ...insertStatements, ...statsStatements]
+  return [...insertStatements, ...statsStatements]
 }
 
 const getDeleteStatsRowsStatement = (

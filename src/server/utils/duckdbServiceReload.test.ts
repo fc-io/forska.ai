@@ -3153,9 +3153,13 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     ])
     expect(judgmentDetailProbe?.mutationProbeSql).toContain("projection_component = 'judgmentInputContent'")
     expect(judgmentDetailProbe?.mutationProbeSql).toContain('Failed to delete all rows from index')
-    expect(judgmentDetailProbe?.mutationProbeSql).toContain(
+    expect(judgmentDetailProbe?.mutationProbeSql).not.toContain(
+      'DELETE FROM mart.review_article_judgment_detail_serving_v4',
+    )
+    expect(judgmentDetailProbe?.mutationProbeSql).not.toContain(
       'INSERT INTO mart.review_article_judgment_detail_serving_v4 BY NAME',
     )
+    expect(judgmentDetailProbe?.skipGenericDeleteInsertProbe).toBe(true)
     expect(judgmentDetailProbe?.repairStrategy).toBe('empty-derived')
     expect(judgmentDetailProbe?.postRepairSql).toContain("projection_component = 'judgmentInputContent'")
     expect(judgmentDetailProbe?.postRepairSql).toContain("status = 'pending'")
@@ -3249,6 +3253,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(articleFilterPostingProbe?.mutationProbeSql).toContain(
       'UPDATE mart.review_article_filter_posting_serving_v4',
     )
+    expect(articleFilterPostingProbe?.skipGenericDeleteInsertProbe).toBe(true)
     const postingStatsProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_filter_posting_stats_v4'
     })
@@ -3261,6 +3266,7 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'filter_value',
       'list_mode_key',
     ])
+    expect(postingStatsProbe?.skipGenericDeleteInsertProbe).toBe(true)
     const payloadProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_article_serving_payload_v4'
     })
@@ -3277,7 +3283,9 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(payloadProbe?.postRepairSql).toContain("status = 'pending'")
     expect(payloadProbe?.postRepairSql).toContain('app.review_rebuild_request')
     expect(payloadProbe?.mutationProbeSql).toContain("projection_component = 'payload'")
-    expect(payloadProbe?.mutationProbeSql).toContain('INSERT INTO mart.review_article_serving_payload_v4 BY NAME')
+    expect(payloadProbe?.mutationProbeSql).not.toContain('DELETE FROM mart.review_article_serving_payload_v4')
+    expect(payloadProbe?.mutationProbeSql).not.toContain('INSERT INTO mart.review_article_serving_payload_v4 BY NAME')
+    expect(payloadProbe?.skipGenericDeleteInsertProbe).toBe(true)
     expect(payloadProbe?.schemaRequirements).toContainEqual({
       columnNames: ['chunk_end_key', 'chunk_start_key', 'last_error', 'projection_component', 'project_id', 'status'],
       schemaName: 'app',
