@@ -200,6 +200,7 @@ const runStartBackgroundWork = (input: {
               ),
             }),
         FORSKA_REVIEW_SERVING_PROJECTOR_PAUSE_RECOVERY_POLL_INTERVAL_MS: '10',
+        FORSKA_REVIEW_SERVING_PROJECTOR_PAUSE_RECOVERY_QUEUE_RESAMPLE_DELAY_MS: '1',
       },
     },
   )

@@ -31,11 +31,19 @@ const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 1
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
 const reviewServingProjectorPauseRecoveryPollIntervalMs = 30_000
 const reviewServingProjectorPauseRecoveryMinAgeMs = 5 * 60_000
+const reviewServingProjectorPauseRecoveryQueueResampleDelayMs = 250
+const reviewServingProjectorPauseRecoveryDuckdbRecycleCooldownMs = 60_000
 
 const getPositiveIntegerEnv = (key: string, fallback: number) => {
   const value = Number(process.env[key])
 
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
+}
+
+const sleep = (ms: number) => {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms)
+  })
 }
 
 const shouldDeferNonessentialDuckdbMaintenanceWork = () => {
@@ -59,7 +67,24 @@ const getReviewServingProjectorPauseRecoveryMaxRssBytes = () => {
   )
 }
 
-const shouldRecoverReviewServingProjectorPause = () => {
+const getReviewServingProjectorPauseRecoveryQueueState = () => {
+  const queueMetrics = getDuckdbQueueRuntimeMetricsSnapshot()
+  const appendMetrics = getDuckdbAppendRuntimeMetrics()
+
+  return {
+    appendQueueDepth: appendMetrics.queueDepth,
+    backgroundQueueDepth: queueMetrics.background.queueDepth,
+    foregroundQueueDepth: queueMetrics.main.queueDepth,
+  }
+}
+
+const getHasActiveReviewServingProjectorPauseRecoveryQueueWork = (
+  queueState: ReturnType<typeof getReviewServingProjectorPauseRecoveryQueueState>,
+) => {
+  return queueState.foregroundQueueDepth > 0 || queueState.backgroundQueueDepth > 0 || queueState.appendQueueDepth > 0
+}
+
+const shouldRecoverReviewServingProjectorPause = async () => {
   const pauseMarkerState = getReviewServingProjectorPauseMarkerState()
 
   if (!pauseMarkerState.exists) {
@@ -77,17 +102,27 @@ const shouldRecoverReviewServingProjectorPause = () => {
     return {pauseMarkerState, reason: 'marker-too-new' as const, recover: false as const}
   }
 
-  const queueMetrics = getDuckdbQueueRuntimeMetricsSnapshot()
-  const appendMetrics = getDuckdbAppendRuntimeMetrics()
+  let queueState = getReviewServingProjectorPauseRecoveryQueueState()
+  let resampledQueueState: typeof queueState | null = null
 
-  if (queueMetrics.main.queueDepth > 0 || queueMetrics.background.queueDepth > 0 || appendMetrics.queueDepth > 0) {
+  if (getHasActiveReviewServingProjectorPauseRecoveryQueueWork(queueState)) {
+    await sleep(
+      getPositiveIntegerEnv(
+        'FORSKA_REVIEW_SERVING_PROJECTOR_PAUSE_RECOVERY_QUEUE_RESAMPLE_DELAY_MS',
+        reviewServingProjectorPauseRecoveryQueueResampleDelayMs,
+      ),
+    )
+    resampledQueueState = getReviewServingProjectorPauseRecoveryQueueState()
+    queueState = resampledQueueState
+  }
+
+  if (getHasActiveReviewServingProjectorPauseRecoveryQueueWork(queueState)) {
     return {
-      appendQueueDepth: appendMetrics.queueDepth,
-      backgroundQueueDepth: queueMetrics.background.queueDepth,
-      foregroundQueueDepth: queueMetrics.main.queueDepth,
+      ...queueState,
       pauseMarkerState,
       reason: 'duckdb-work-active' as const,
       recover: false as const,
+      resampledQueueState,
     }
   }
 
@@ -105,7 +140,7 @@ const startReviewServingProjectorPauseRecoveryHeartbeat = (startProjector: () =>
   let stopped = false
   let running = false
   let recovered = false
-  let attemptedDuckdbRecycle = false
+  let lastDuckdbRecycleAtMs = 0
   let initialTimer: ReturnType<typeof setTimeout> | null = null
   let timer: ReturnType<typeof setInterval> | null = null
 
@@ -116,11 +151,17 @@ const startReviewServingProjectorPauseRecoveryHeartbeat = (startProjector: () =>
 
     running = true
     try {
-      const recoveryState = shouldRecoverReviewServingProjectorPause()
+      const recoveryState = await shouldRecoverReviewServingProjectorPause()
 
       if (!recoveryState.recover) {
-        if (recoveryState.reason === 'rss-above-cap' && !attemptedDuckdbRecycle) {
-          attemptedDuckdbRecycle = true
+        const nowMs = Date.now()
+        const duckdbRecycleCooldownMs = getPositiveIntegerEnv(
+          'FORSKA_REVIEW_SERVING_PROJECTOR_PAUSE_RECOVERY_DUCKDB_RECYCLE_COOLDOWN_MS',
+          reviewServingProjectorPauseRecoveryDuckdbRecycleCooldownMs,
+        )
+
+        if (recoveryState.reason === 'rss-above-cap' && nowMs - lastDuckdbRecycleAtMs >= duckdbRecycleCooldownMs) {
+          lastDuckdbRecycleAtMs = nowMs
           writeRuntimeOperatorLogEvent({
             attrs: recoveryState,
             event: 'review-serving-projector.pause-recovery-recycle-duckdb',
