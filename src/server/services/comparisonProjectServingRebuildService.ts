@@ -27,10 +27,7 @@ type ComparisonProjectServingCellBuilder = Pick<
 
 type ComparisonProjectServingGenerationService = Pick<
   ReturnType<typeof getComparisonProjectServingGenerationService>,
-  | 'cleanupOldComparisonProjectServingGenerations'
-  | 'cleanupComparisonProjectServingGeneration'
-  | 'createInactiveComparisonProjectServingGeneration'
-  | 'promoteComparisonProjectServingGeneration'
+  'promoteComparisonProjectServingGeneration'
 >
 
 type ComparisonProjectServingRollupBuilder = Pick<
@@ -69,11 +66,18 @@ type ComparisonProjectServingProgress = {
   stagedFilterMemberCount: number
   stagedFilterStatsCount: number
   startedAt: Date | null
+  totalArticleCount: number | null
+  totalCellCount: number | null
 }
 
 type ComparisonProjectServingProgressCounts = Pick<
   ComparisonProjectServingProgress,
   'stagedArticleCount' | 'stagedCellCount' | 'stagedFilterMemberCount' | 'stagedFilterStatsCount'
+>
+
+type ComparisonProjectServingProgressTotals = Pick<
+  ComparisonProjectServingProgress,
+  'totalArticleCount' | 'totalCellCount'
 >
 
 type ComparisonProjectServingStatusRow = {
@@ -92,6 +96,8 @@ type ComparisonProjectServingStatusRow = {
   servingStagedFilterMemberCount: number
   servingStagedFilterStatsCount: number
   servingStatus: ComparisonProjectServingStatus
+  servingTotalArticleCount: number | null
+  servingTotalCellCount: number | null
 }
 
 type ComparisonProjectServingStatusRecordRow = {
@@ -110,6 +116,8 @@ type ComparisonProjectServingStatusRecordRow = {
   servingStagedFilterMemberCount: unknown
   servingStagedFilterStatsCount: unknown
   servingStatus: string | null
+  servingTotalArticleCount: unknown
+  servingTotalCellCount: unknown
 }
 
 const comparisonProjectServingGenerationTable = 'app.comparison_project_serving_generation'
@@ -192,8 +200,22 @@ const getComparisonProjectServingProgressCountValue = (value: unknown) => {
   return Number.isSafeInteger(count) && count > 0 ? count : 0
 }
 
+const getComparisonProjectServingProgressTotalValue = (value: unknown) => {
+  if (value === null || value === undefined) {
+    return null
+  }
+
+  const count = typeof value === 'bigint' ? Number(value) : Number(value)
+
+  return Number.isSafeInteger(count) && count >= 0 ? count : null
+}
+
 const getComparisonProjectServingRebuildClaimExpiredBefore = (now: Date) => {
   return new Date(now.getTime() - comparisonProjectServingRebuildClaimTimeoutMs)
+}
+
+const getComparisonProjectServingRebuildRetryableFailedBefore = (now: Date) => {
+  return getComparisonProjectServingRebuildClaimExpiredBefore(now)
 }
 
 const getComparisonProjectServingStatusRowValue = (
@@ -215,15 +237,8 @@ const getComparisonProjectServingStatusRowValue = (
     servingStagedFilterMemberCount: getComparisonProjectServingProgressCountValue(row?.servingStagedFilterMemberCount),
     servingStagedFilterStatsCount: getComparisonProjectServingProgressCountValue(row?.servingStagedFilterStatsCount),
     servingStatus: getComparisonProjectServingStatusValue(row?.servingStatus ?? null),
-  }
-}
-
-const getComparisonProjectServingGenerationDependencies = (runner: ComparisonProjectServingRebuildRunner) => {
-  return {
-    queryJson: runner.queryJson,
-    transaction: <T>(operation: (operationRunner: ComparisonProjectServingRebuildRunner) => Promise<T>) => {
-      return operation(runner)
-    },
+    servingTotalArticleCount: getComparisonProjectServingProgressTotalValue(row?.servingTotalArticleCount),
+    servingTotalCellCount: getComparisonProjectServingProgressTotalValue(row?.servingTotalCellCount),
   }
 }
 
@@ -231,6 +246,40 @@ const getComparisonProjectServingDatabaseGenerationDependencies = (
   database: ComparisonProjectServingRebuildDatabase,
 ) => {
   return {queryJson: database.queryJson, transaction: database.transaction}
+}
+
+const getComparisonProjectServingNextGenerationSql = () => {
+  return `
+    GREATEST(
+      active_generation,
+      COALESCE(serving_generation, 0),
+      COALESCE((
+        SELECT MAX(generation)
+        FROM mart.comparison_article_serving
+        WHERE comparison_project_id = ${comparisonProjectServingGenerationTable}.comparison_project_id
+      ), 0),
+      COALESCE((
+        SELECT MAX(generation)
+        FROM mart.comparison_article_identifier_serving
+        WHERE comparison_project_id = ${comparisonProjectServingGenerationTable}.comparison_project_id
+      ), 0),
+      COALESCE((
+        SELECT MAX(generation)
+        FROM mart.comparison_cell_serving
+        WHERE comparison_project_id = ${comparisonProjectServingGenerationTable}.comparison_project_id
+      ), 0),
+      COALESCE((
+        SELECT MAX(generation)
+        FROM mart.comparison_filter_member
+        WHERE comparison_project_id = ${comparisonProjectServingGenerationTable}.comparison_project_id
+      ), 0),
+      COALESCE((
+        SELECT MAX(generation)
+        FROM mart.comparison_filter_stats
+        WHERE comparison_project_id = ${comparisonProjectServingGenerationTable}.comparison_project_id
+      ), 0)
+    ) + 1
+  `
 }
 
 const ensureComparisonProjectServingStatusRow = async (
@@ -307,7 +356,7 @@ const claimComparisonProjectServingRebuild = async ({
       UPDATE ${comparisonProjectServingGenerationTable}
       SET
         serving_status = 'refreshing',
-        serving_generation = GREATEST(active_generation, COALESCE(serving_generation, 0)) + 1,
+        serving_generation = ${getComparisonProjectServingNextGenerationSql()},
         serving_started_at = ${getTimestampLiteral(now)},
         serving_completed_at = NULL,
         serving_failed_at = NULL,
@@ -319,6 +368,8 @@ const claimComparisonProjectServingRebuild = async ({
         serving_staged_cell_count = 0,
         serving_staged_filter_member_count = 0,
         serving_staged_filter_stats_count = 0,
+        serving_total_article_count = NULL,
+        serving_total_cell_count = NULL,
         generation_updated_at = ${getTimestampLiteral(now)}
       WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
         AND EXISTS (
@@ -340,12 +391,6 @@ const claimComparisonProjectServingRebuild = async ({
     if (generation === null) {
       return null
     }
-
-    await dependencies.generationService.cleanupComparisonProjectServingGeneration(
-      comparisonProjectId,
-      generation,
-      getComparisonProjectServingGenerationDependencies(runner),
-    )
 
     return generation
   })
@@ -379,6 +424,8 @@ const recordComparisonProjectServingRebuildReady = async ({
       serving_staged_cell_count = ${getSqlLiteral(counts.stagedCellCount)},
       serving_staged_filter_member_count = ${getSqlLiteral(counts.stagedFilterMemberCount)},
       serving_staged_filter_stats_count = ${getSqlLiteral(counts.stagedFilterStatsCount)},
+      serving_total_article_count = ${getSqlLiteral(counts.stagedArticleCount)},
+      serving_total_cell_count = ${getSqlLiteral(counts.stagedCellCount)},
       generation_updated_at = ${getTimestampLiteral(now)}
     WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
       AND serving_status = 'refreshing'
@@ -448,6 +495,8 @@ const recordComparisonProjectServingStale = async ({
       serving_staged_cell_count = 0,
       serving_staged_filter_member_count = 0,
       serving_staged_filter_stats_count = 0,
+      serving_total_article_count = NULL,
+      serving_total_cell_count = NULL,
       generation_updated_at = ${getTimestampLiteral(now)}
     WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
       AND EXISTS (
@@ -494,6 +543,8 @@ const recordComparisonProjectsServingStale = async ({
       serving_staged_cell_count = 0,
       serving_staged_filter_member_count = 0,
       serving_staged_filter_stats_count = 0,
+      serving_total_article_count = NULL,
+      serving_total_cell_count = NULL,
       generation_updated_at = ${getTimestampLiteral(now)}
     WHERE comparison_project_id IN (${getQuotedStringList(uniqueComparisonProjectIds).join(', ')})
       AND EXISTS (
@@ -520,6 +571,15 @@ const getComparisonProjectServingProgressCountAssignments = (counts?: Comparison
     : ''
 }
 
+const getComparisonProjectServingProgressTotalAssignments = (totals?: ComparisonProjectServingProgressTotals) => {
+  return totals
+    ? `
+      serving_total_article_count = ${getSqlLiteral(totals.totalArticleCount)},
+      serving_total_cell_count = ${getSqlLiteral(totals.totalCellCount)},
+    `
+    : ''
+}
+
 const recordComparisonProjectServingRebuildProgress = async ({
   comparisonProjectId,
   counts,
@@ -527,6 +587,7 @@ const recordComparisonProjectServingRebuildProgress = async ({
   now,
   phase,
   runner,
+  totals,
 }: {
   comparisonProjectId: string
   counts?: ComparisonProjectServingProgressCounts
@@ -534,6 +595,7 @@ const recordComparisonProjectServingRebuildProgress = async ({
   now: Date
   phase: ComparisonProjectServingProgressPhase
   runner: ComparisonProjectServingRebuildRunner
+  totals?: ComparisonProjectServingProgressTotals
 }) => {
   const phaseLiteral = getSqlLiteral(phase)
 
@@ -549,6 +611,7 @@ const recordComparisonProjectServingRebuildProgress = async ({
       END,
       serving_last_progressed_at = ${getTimestampLiteral(now)},
       ${getComparisonProjectServingProgressCountAssignments(counts)}
+      ${getComparisonProjectServingProgressTotalAssignments(totals)}
       generation_updated_at = ${getTimestampLiteral(now)}
     WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
       AND serving_status = 'refreshing'
@@ -581,12 +644,49 @@ const getComparisonProjectServingProgressCounts = async (
   }
 }
 
+const getComparisonProjectServingTotalArticleCount = async (
+  runner: Pick<ComparisonProjectServingRebuildRunner, 'queryJson'>,
+  comparisonProjectId: string,
+) => {
+  const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
+  const [row] = await runner.queryJson<{totalArticleCount: unknown}>(`
+    SELECT
+      CASE
+        WHEN EXISTS (
+          SELECT 1
+          FROM app.comparison_project_source_project
+          WHERE comparison_project_id = ${comparisonProjectLiteral}
+        ) THEN (
+          SELECT COUNT(DISTINCT project_article.article_id)
+          FROM app.comparison_project_source_project source_project
+          INNER JOIN app.project_article project_article ON project_article.project_id = source_project.source_project_id
+          WHERE source_project.comparison_project_id = ${comparisonProjectLiteral}
+        )
+        WHEN EXISTS (
+          SELECT 1
+          FROM app.comparison_project_import_route
+          WHERE comparison_project_id = ${comparisonProjectLiteral}
+        ) THEN (
+          SELECT COUNT(DISTINCT article_import_route.article_id)
+          FROM app.comparison_project_import_route comparison_import_route
+          INNER JOIN app.article_import_route article_import_route
+            ON article_import_route.import_route_id = comparison_import_route.import_route_id
+          WHERE comparison_import_route.comparison_project_id = ${comparisonProjectLiteral}
+        )
+        ELSE NULL
+      END AS totalArticleCount
+  `)
+
+  return getComparisonProjectServingProgressTotalValue(row?.totalArticleCount)
+}
+
 const recordComparisonProjectServingProgressPhase = async (params: {
   comparisonProjectId: string
   counts?: ComparisonProjectServingProgressCounts
   dependencies: ComparisonProjectServingRebuildDependencies
   generation: number
   phase: ComparisonProjectServingProgressPhase
+  totals?: ComparisonProjectServingProgressTotals
 }) => {
   const {dependencies, ...progressParams} = params
 
@@ -604,6 +704,7 @@ const runComparisonProjectServingBuildPhase = async (params: {
     phaseParams: ComparisonProjectServingRollupBuilderParams,
     runner: ComparisonProjectServingRebuildRunner,
   ) => Promise<void>
+  totals?: ComparisonProjectServingProgressTotals
 }) => {
   const phaseParams = {comparisonProjectId: params.comparisonProjectId, generation: params.generation}
 
@@ -613,7 +714,7 @@ const runComparisonProjectServingBuildPhase = async (params: {
     throw new Error(`Comparison serving generation ${params.generation} is no longer claimed`)
   }
 
-  const recordBatchProgress = async () => {
+  const getAndRecordBatchProgress = async () => {
     const counts = await getComparisonProjectServingProgressCounts(params.dependencies.database, phaseParams)
     const isStillClaimed = await recordComparisonProjectServingProgressPhase({...params, counts})
 
@@ -623,10 +724,13 @@ const runComparisonProjectServingBuildPhase = async (params: {
 
     return counts
   }
+  const recordBatchProgress = async () => {
+    await getAndRecordBatchProgress()
+  }
 
   await params.run({...phaseParams, onBatchProgress: recordBatchProgress}, params.dependencies.database)
 
-  return recordBatchProgress()
+  return getAndRecordBatchProgress()
 }
 
 const stageComparisonProjectServingGeneration = async ({
@@ -651,6 +755,11 @@ const buildComparisonProjectServingGeneration = async ({
   generation: number
 }) => {
   const phaseParams: ComparisonProjectServingRollupBuilderParams = {comparisonProjectId, generation}
+  const totalArticleCount = await getComparisonProjectServingTotalArticleCount(
+    dependencies.database,
+    comparisonProjectId,
+  )
+  const pendingTotals = {totalArticleCount, totalCellCount: null}
 
   await runComparisonProjectServingBuildPhase({
     comparisonProjectId,
@@ -658,21 +767,26 @@ const buildComparisonProjectServingGeneration = async ({
     generation,
     phase: 'prompt_cells',
     run: dependencies.cellBuilder.insertPromptModeComparisonProjectCells,
+    totals: pendingTotals,
   })
-  await runComparisonProjectServingBuildPhase({
+  const cellCounts = await runComparisonProjectServingBuildPhase({
     comparisonProjectId,
     dependencies,
     generation,
     phase: 'summary_cells',
     run: dependencies.cellBuilder.insertSummaryModeComparisonProjectCells,
+    totals: pendingTotals,
   })
+  const cellTotals = {totalArticleCount, totalCellCount: cellCounts.stagedCellCount}
   const rollupCounts = await runComparisonProjectServingBuildPhase({
     comparisonProjectId,
     dependencies,
     generation,
     phase: 'rollups',
     run: dependencies.rollupBuilder.insertComparisonProjectServingRollups,
+    totals: cellTotals,
   })
+  const finalTotals = {totalArticleCount: rollupCounts.stagedArticleCount, totalCellCount: cellCounts.stagedCellCount}
 
   await recordComparisonProjectServingProgressPhase({
     comparisonProjectId,
@@ -680,40 +794,23 @@ const buildComparisonProjectServingGeneration = async ({
     dependencies,
     generation,
     phase: 'promoting',
+    totals: finalTotals,
   })
 
-  return dependencies.database.transaction(async (runner) => {
-    const generationDependencies = getComparisonProjectServingGenerationDependencies(runner)
-    const promoted = await dependencies.generationService.promoteComparisonProjectServingGeneration(
-      comparisonProjectId,
-      generation,
-      generationDependencies,
-      {requireServingGenerationClaim: true},
-    )
+  const promoted = await dependencies.generationService.promoteComparisonProjectServingGeneration(
+    comparisonProjectId,
+    generation,
+    getComparisonProjectServingDatabaseGenerationDependencies(dependencies.database),
+    {requireServingGenerationClaim: true},
+  )
 
-    if (!promoted) {
-      throw new Error(`Comparison serving generation ${generation} was not promoted`)
-    }
+  if (!promoted) {
+    throw new Error(`Comparison serving generation ${generation} was not promoted`)
+  }
 
-    const isClaimedForCleanup = await recordComparisonProjectServingRebuildProgress({
-      comparisonProjectId,
-      counts: rollupCounts,
-      generation,
-      now: new Date(),
-      phase: 'cleanup',
-      runner,
-    })
+  const finalCounts = await getComparisonProjectServingProgressCounts(dependencies.database, phaseParams)
 
-    if (!isClaimedForCleanup) {
-      throw new Error(`Comparison serving generation ${generation} is no longer claimed`)
-    }
-
-    const cleanupResult = await dependencies.generationService.cleanupOldComparisonProjectServingGenerations(
-      comparisonProjectId,
-      generationDependencies,
-    )
-    const finalCounts = await getComparisonProjectServingProgressCounts(runner, phaseParams)
-
+  await dependencies.database.transaction(async (runner) => {
     const isClaimedForReady = await recordComparisonProjectServingRebuildReady({
       comparisonProjectId,
       counts: finalCounts,
@@ -725,37 +822,9 @@ const buildComparisonProjectServingGeneration = async ({
     if (!isClaimedForReady) {
       throw new Error(`Comparison serving generation ${generation} is no longer claimed`)
     }
-
-    return cleanupResult
   })
-}
 
-const cleanupFailedComparisonProjectServingGeneration = async ({
-  comparisonProjectId,
-  dependencies,
-  generation,
-}: {
-  comparisonProjectId: string
-  dependencies: ComparisonProjectServingRebuildDependencies
-  generation: number | null
-}) => {
-  if (generation === null) {
-    return
-  }
-
-  try {
-    await dependencies.generationService.cleanupComparisonProjectServingGeneration(
-      comparisonProjectId,
-      generation,
-      getComparisonProjectServingDatabaseGenerationDependencies(dependencies.database),
-    )
-  } catch (cleanupError) {
-    console.error('[comparison-project-serving] failed generation cleanup failed', {
-      cleanupError: getComparisonProjectServingRebuildErrorMessage(cleanupError),
-      comparisonProjectId,
-      generation,
-    })
-  }
+  return emptyComparisonProjectServingCleanupResult
 }
 
 const rebuildComparisonProjectServing = async (
@@ -792,12 +861,6 @@ const rebuildComparisonProjectServing = async (
 
     return {cleanupResult, generation: stagedGeneration, status}
   } catch (error) {
-    await cleanupFailedComparisonProjectServingGeneration({
-      comparisonProjectId,
-      dependencies,
-      generation: stagedGeneration,
-    })
-
     if (stagedGeneration !== null) {
       const failedGeneration = stagedGeneration
 
@@ -814,6 +877,66 @@ const rebuildComparisonProjectServing = async (
 
     throw error
   }
+}
+
+const getNextUnavailableComparisonProjectServingRebuildCandidate = async (
+  now: Date,
+  dependencies: ComparisonProjectServingRebuildDependencies,
+) => {
+  const staleBefore = getComparisonProjectServingRebuildClaimExpiredBefore(now)
+  const retryableFailedBefore = getComparisonProjectServingRebuildRetryableFailedBefore(now)
+  const [candidate] = await dependencies.database.queryJson<{comparisonProjectId: string}>(`
+    SELECT project.id AS comparisonProjectId
+    FROM ${comparisonProjectTable} project
+    LEFT JOIN ${comparisonProjectServingGenerationTable} status
+      ON status.comparison_project_id = project.id
+    WHERE project.archived = FALSE
+      AND (
+        status.comparison_project_id IS NULL
+        OR COALESCE(status.serving_status, 'missing') IN ('missing', 'stale')
+        OR (
+          status.serving_status = 'failed'
+          AND status.serving_failed_at IS NOT NULL
+          AND status.serving_failed_at < ${getTimestampLiteral(retryableFailedBefore)}
+        )
+        OR (
+          status.serving_status = 'refreshing'
+          AND (
+            status.serving_generation IS NULL
+            OR status.serving_last_progressed_at IS NULL
+            OR status.serving_last_progressed_at < ${getTimestampLiteral(staleBefore)}
+          )
+        )
+      )
+    ORDER BY
+      CASE
+        WHEN status.comparison_project_id IS NULL THEN 0
+        WHEN COALESCE(status.serving_status, 'missing') = 'missing' THEN 1
+        WHEN COALESCE(status.serving_status, 'missing') = 'stale' THEN 2
+        WHEN COALESCE(status.serving_status, 'missing') = 'failed' THEN 3
+        ELSE 4
+      END ASC,
+      COALESCE(status.generation_updated_at, project.updated_at, project.created_at) ASC,
+      project.id ASC
+    LIMIT 1
+  `)
+
+  return candidate?.comparisonProjectId ?? null
+}
+
+const rebuildNextUnavailableComparisonProjectServing = async (
+  overrides: ComparisonProjectServingRebuildDependencyOverrides = {},
+) => {
+  const dependencies = getComparisonProjectServingRebuildDependencies(overrides)
+  const comparisonProjectId = await getNextUnavailableComparisonProjectServingRebuildCandidate(new Date(), dependencies)
+
+  if (comparisonProjectId === null) {
+    return {comparisonProjectId: null, rebuilt: false as const, rebuildResult: null}
+  }
+
+  const rebuildResult = await rebuildComparisonProjectServing(comparisonProjectId, overrides)
+
+  return {comparisonProjectId, rebuilt: rebuildResult.skipped !== true, rebuildResult}
 }
 
 const getComparisonProjectServingStatus = async (
@@ -837,7 +960,9 @@ const getComparisonProjectServingStatus = async (
       serving_staged_article_count AS servingStagedArticleCount,
       serving_staged_cell_count AS servingStagedCellCount,
       serving_staged_filter_member_count AS servingStagedFilterMemberCount,
-      serving_staged_filter_stats_count AS servingStagedFilterStatsCount
+      serving_staged_filter_stats_count AS servingStagedFilterStatsCount,
+      serving_total_article_count AS servingTotalArticleCount,
+      serving_total_cell_count AS servingTotalCellCount
     FROM ${comparisonProjectServingGenerationTable}
     WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
     LIMIT 1
@@ -901,6 +1026,7 @@ const comparisonProjectServingRebuildService = {
   markComparisonProjectServingStale,
   markComparisonProjectsServingStale,
   markComparisonProjectsServingStaleTx,
+  rebuildNextUnavailableComparisonProjectServing,
   rebuildComparisonProjectServing,
 }
 

@@ -330,6 +330,7 @@ const summaryPromptId = 'summary'
 const summaryPromptLabel = 'Overall decision'
 const comparisonProjectJudgmentArticleBatchSize = 20000
 const comparisonProjectRoutesLoadedAt = new Date()
+const pendingComparisonProjectServingRecoveryIds = new Set<string>()
 
 const getRequestedPositiveInteger = (value: string | number | null | undefined, fallback: number) => {
   const parsedValue = Number.parseInt(String(value ?? ''), 10)
@@ -366,6 +367,8 @@ const getEmptyComparisonProjectServingProgress = (): ComparisonProjectServingPro
     stagedFilterMemberCount: 0,
     stagedFilterStatsCount: 0,
     startedAt: null,
+    totalArticleCount: null,
+    totalCellCount: null,
   }
 }
 
@@ -405,6 +408,8 @@ const getComparisonProjectServingProgress = (
     stagedFilterMemberCount: status.servingStagedFilterMemberCount ?? 0,
     stagedFilterStatsCount: status.servingStagedFilterStatsCount ?? 0,
     startedAt: status.servingStartedAt,
+    totalArticleCount: status.servingTotalArticleCount ?? null,
+    totalCellCount: status.servingTotalCellCount ?? null,
   }
 }
 
@@ -425,7 +430,7 @@ const getComparisonProjectServingQueueErrorMessage = (error: unknown) => {
 }
 
 const queueComparisonProjectServingRebuild = (comparisonProjectId: string) => {
-  void comparisonProjectServingRebuildService
+  return comparisonProjectServingRebuildService
     .rebuildComparisonProjectServing(comparisonProjectId)
     .catch((error: unknown) => {
       console.error('[comparison-project-serving] rebuild failed', {
@@ -476,12 +481,19 @@ const queueUnavailableComparisonProjectServingRebuild = (
     return
   }
 
-  queueComparisonProjectServingRebuild(comparisonProject.id)
+  if (pendingComparisonProjectServingRecoveryIds.has(comparisonProject.id)) {
+    return
+  }
+
+  pendingComparisonProjectServingRecoveryIds.add(comparisonProject.id)
+  void queueComparisonProjectServingRebuild(comparisonProject.id).finally(() => {
+    pendingComparisonProjectServingRecoveryIds.delete(comparisonProject.id)
+  })
 }
 
 const markComparisonProjectServingStaleAndQueueRebuild = async (comparisonProjectId: string) => {
   await comparisonProjectServingRebuildService.markComparisonProjectServingStale(comparisonProjectId)
-  queueComparisonProjectServingRebuild(comparisonProjectId)
+  void queueComparisonProjectServingRebuild(comparisonProjectId)
 }
 
 const getComparisonProjectServingGenerationTxDependencies = (tx: AppTx) => {

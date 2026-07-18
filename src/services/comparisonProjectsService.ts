@@ -226,6 +226,8 @@ export type ComparisonProjectServingProgress = {
   stagedFilterMemberCount: number
   stagedFilterStatsCount: number
   startedAt: Date | string | null
+  totalArticleCount: number | null
+  totalCellCount: number | null
 }
 
 export type ComparisonProjectSummarySourceProject = {

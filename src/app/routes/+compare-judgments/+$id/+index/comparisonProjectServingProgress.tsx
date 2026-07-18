@@ -30,6 +30,14 @@ const getCountLabel = (count: number) => {
   return count.toLocaleString()
 }
 
+const getProgressCountLabel = (count: number, total: number | null, noun: string, unknownTotalLabel: string) => {
+  const countLabel = getCountLabel(count)
+
+  return total === null
+    ? `${countLabel} ${noun} (${unknownTotalLabel})`
+    : `${countLabel} / ${getCountLabel(total)} ${noun}`
+}
+
 const joinLabelParts = (parts: Array<string | null>) => {
   return parts
     .filter((part): part is string => {
@@ -44,15 +52,25 @@ const getPhaseLabel = (progress: ComparisonProjectServingProgressData) => {
 
 const getStagedRowsLabel = (progress: ComparisonProjectServingProgressData) => {
   const label = joinLabelParts([
-    `${getCountLabel(progress.stagedArticleCount)} articles`,
-    `${getCountLabel(progress.stagedCellCount)} cells`,
+    getProgressCountLabel(
+      progress.stagedArticleCount,
+      progress.totalArticleCount,
+      'articles',
+      'total known after rollups',
+    ),
+    getProgressCountLabel(
+      progress.stagedCellCount,
+      progress.totalCellCount,
+      'cells',
+      'total known after cell materialization',
+    ),
     progress.stagedFilterMemberCount > 0
       ? `${getCountLabel(progress.stagedFilterMemberCount)} filter memberships`
       : null,
     progress.stagedFilterStatsCount > 0 ? `${getCountLabel(progress.stagedFilterStatsCount)} filter totals` : null,
   ])
 
-  return label === '0 articles, 0 cells' ? 'waiting for first staged rows' : label
+  return label
 }
 
 const getTimingLabel = (progress: ComparisonProjectServingProgressData) => {
@@ -82,6 +100,11 @@ export const ComparisonProjectServingProgress = (props: {
   return (
     <Show when={shouldShowProgress(props.progress, props.showWaiting ?? false)}>
       <div class="mt-3 space-y-1.5 text-xs text-slate-600">
+        <p>
+          Staged rows belong to the new, inactive generation. Cells are built first, then article rows and filters; the
+          existing generation stays readable until promotion. The exact cell total appears after cell materialization
+          because empty or missing answers do not create cells.
+        </p>
         <p>
           <span class="font-medium text-slate-700">Materialization:</span> {getPhaseLabel(props.progress)}
         </p>

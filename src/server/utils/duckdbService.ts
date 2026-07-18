@@ -363,6 +363,140 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     duplicateKeySelectSql: `
       SELECT COUNT(*) AS duplicateCount
       FROM (
+        SELECT comparison_project_id
+        FROM app.comparison_project_serving_generation
+        GROUP BY comparison_project_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_comparison_project_serving_generation;
+      CREATE TEMP TABLE startup_probe_comparison_project_serving_generation AS
+      SELECT
+        comparison_project_id,
+        generation_updated_at
+      FROM app.comparison_project_serving_generation
+      ORDER BY generation_updated_at DESC, comparison_project_id ASC
+      LIMIT 1;
+      BEGIN;
+      UPDATE app.comparison_project_serving_generation
+      SET generation_updated_at = current_timestamp
+      WHERE comparison_project_id = (
+        SELECT comparison_project_id
+        FROM startup_probe_comparison_project_serving_generation
+        LIMIT 1
+      );
+      COMMIT;
+      BEGIN;
+      UPDATE app.comparison_project_serving_generation
+      SET generation_updated_at = (
+        SELECT generation_updated_at
+        FROM startup_probe_comparison_project_serving_generation
+        LIMIT 1
+      )
+      WHERE comparison_project_id = (
+        SELECT comparison_project_id
+        FROM startup_probe_comparison_project_serving_generation
+        LIMIT 1
+      );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_comparison_project_serving_generation;
+    `,
+    lowMemoryStartupPreflight: true,
+    postRepairSchemaRequirements: [
+      {columnNames: ['id', 'archived'], schemaName: 'app', tableName: 'comparison_project'},
+      {
+        columnNames: ['comparison_project_id', 'generation'],
+        schemaName: 'mart',
+        tableName: 'comparison_article_serving',
+      },
+      {
+        columnNames: [
+          'comparison_project_id',
+          'active_generation',
+          'generation_updated_at',
+          'serving_status',
+          'serving_generation',
+          'serving_started_at',
+          'serving_completed_at',
+          'serving_failed_at',
+          'serving_error',
+          'serving_phase',
+          'serving_phase_started_at',
+          'serving_last_progressed_at',
+          'serving_staged_article_count',
+          'serving_staged_cell_count',
+          'serving_staged_filter_member_count',
+          'serving_staged_filter_stats_count',
+        ],
+        schemaName: 'app',
+        tableName: 'comparison_project_serving_generation',
+      },
+    ],
+    postRepairSql: `
+      INSERT INTO app.comparison_project_serving_generation (
+        comparison_project_id,
+        active_generation,
+        generation_updated_at,
+        serving_status,
+        serving_generation,
+        serving_started_at,
+        serving_completed_at,
+        serving_failed_at,
+        serving_error,
+        serving_phase,
+        serving_phase_started_at,
+        serving_last_progressed_at,
+        serving_staged_article_count,
+        serving_staged_cell_count,
+        serving_staged_filter_member_count,
+        serving_staged_filter_stats_count
+      )
+      WITH active_comparison_generation AS (
+        SELECT
+          comparison_project_id,
+          MAX(generation) AS active_generation
+        FROM mart.comparison_article_serving
+        GROUP BY comparison_project_id
+      )
+      SELECT
+        project.id,
+        COALESCE(active_generation.active_generation, 0),
+        current_timestamp,
+        'stale',
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        0,
+        0,
+        0,
+        0
+      FROM app.comparison_project project
+      LEFT JOIN active_comparison_generation active_generation
+        ON active_generation.comparison_project_id = project.id
+      WHERE project.archived = FALSE
+    `,
+    repairPrimaryKeyColumns: ['comparison_project_id'],
+    repairStrategy: 'empty-derived',
+    schemaRequirements: [
+      {
+        columnNames: ['comparison_project_id', 'generation_updated_at'],
+        schemaName: 'app',
+        tableName: 'comparison_project_serving_generation',
+      },
+    ],
+    schemaName: 'app',
+    tableName: 'comparison_project_serving_generation',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
         SELECT dirty_ack_id
         FROM app.review_serving_dirty_work_ack
         GROUP BY dirty_ack_id

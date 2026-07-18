@@ -109,13 +109,13 @@ test('review indexing stalled copy does not claim active progress', () => {
   expect(copy.title).not.toContain('in progress')
 })
 
-test('review indexing blocked copy distinguishes worker wait from memory cooldown', () => {
+test('review indexing blocked copy distinguishes worker wait from automatic memory recovery', () => {
   expect(getReviewIndexingBlockedTitle('waiting_for_maintenance_worker')).toBe(
     'Review indexing blocked: waiting for maintenance worker',
   )
   expect(getReviewIndexingBlockedBody('waiting_for_maintenance_worker')).toContain('waiting for a maintenance worker')
-  expect(getReviewIndexingBlockedTitle('paused_by_policy')).toBe('Review indexing cooling down after memory pressure')
-  expect(getReviewIndexingBlockedBody('paused_by_policy')).toContain('cooling down after memory pressure')
+  expect(getReviewIndexingBlockedTitle('paused_by_policy')).toBe('Review indexing recovering after memory pressure')
+  expect(getReviewIndexingBlockedBody('paused_by_policy')).toContain('will resume review refresh work automatically')
 })
 
 test('legacy large rebuild fields do not change product warning copy', () => {

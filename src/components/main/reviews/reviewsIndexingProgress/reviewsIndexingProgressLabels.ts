@@ -83,7 +83,7 @@ export const getIndexingStatusLabel = (indexing: ReviewsIndexing) => {
       : indexing.progressState === 'queued'
         ? 'queued for the maintenance worker'
         : indexing.progressState === 'blocked' && indexing.blockedReason === 'paused_by_policy'
-          ? 'cooling down after memory pressure'
+          ? 'recovering after memory pressure'
           : indexing.progressState === 'blocked'
             ? 'waiting for maintenance worker'
             : indexing.progressState === 'stalled'

@@ -157,6 +157,7 @@ type MockDatabaseState = {
   queryStatements: string[]
   queuedServingRebuildIds: string[]
   routeLinks: Array<{id: string; importRouteId: string}>
+  servingRebuildGate?: Promise<void>
   servingStatus: MockServingStatus
   sourceProjectLinks: Array<{id: string; sourceProjectId: string}>
   staleServingIds: string[]
@@ -1988,12 +1989,12 @@ const registerModuleMocks = () => {
             return state.servingStatus
           },
           rebuildComparisonProjectServing: async (comparisonProjectId: string) => {
-            getMockDatabaseState().queuedServingRebuildIds.push(comparisonProjectId)
-            return {
-              cleanupResult: {deletedRowCount: 0, tables: []},
-              generation: 1,
-              status: getMockDatabaseState().servingStatus,
-            }
+            const state = getMockDatabaseState()
+
+            state.queuedServingRebuildIds.push(comparisonProjectId)
+            await state.servingRebuildGate
+
+            return {cleanupResult: {deletedRowCount: 0, tables: []}, generation: 1, status: state.servingStatus}
           },
         }
       },
@@ -4708,6 +4709,47 @@ test('comparison project metadata queues a rebuild when serving refresh was aban
   expect(response.status).toBe(200)
   expect(state.queuedServingRebuildIds).toEqual(['comparison-project-1'])
   expect(state.staleServingIds).toEqual([])
+})
+
+test('comparison project metadata deduplicates a pending abandoned refresh recovery', async () => {
+  let releaseServingRebuild = () => {}
+  const servingRebuildGate = new Promise<void>((resolve) => {
+    releaseServingRebuild = resolve
+  })
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    failPromptInsert: false,
+    servingRebuildGate,
+    servingStatus: getMockServingStatus({
+      activeGeneration: 1,
+      generationUpdatedAt: new Date('2026-04-04T00:00:00.000Z'),
+      servingGeneration: 2,
+      servingStartedAt: new Date(0),
+      servingStatus: 'refreshing',
+    }),
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const request = () => {
+    return app.handle(new Request('http://localhost/api/comparison-projects/comparison-project-1'))
+  }
+
+  const [firstResponse, secondResponse] = await Promise.all([request(), request()])
+  const state = getMockDatabaseState()
+
+  expect(firstResponse.status).toBe(200)
+  expect(secondResponse.status).toBe(200)
+  expect(state.queuedServingRebuildIds).toEqual(['comparison-project-1'])
+
+  releaseServingRebuild()
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0)
+  })
+  const retryResponse = await request()
+
+  expect(retryResponse.status).toBe(200)
+  expect(state.queuedServingRebuildIds).toEqual(['comparison-project-1', 'comparison-project-1'])
 })
 
 test('comparison project metadata queues a rebuild when serving failed before route load', async () => {

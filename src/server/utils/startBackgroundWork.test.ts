@@ -21,11 +21,17 @@ const getLastJsonLine = (value: string) => {
 }
 
 const runStartBackgroundWork = (input: {
+  appendQueueDepth?: number
+  backgroundQueueDepth?: number
   disableServerMutations?: boolean
   duckdbMemoryLimit?: string
+  foregroundQueueDepth?: number
+  pauseRecoveryMinAgeMs?: number
   pauseReviewServingProjector?: boolean
+  reviewServingRebuildChunkBatchMaxRssBytes?: number
   promoteAfterStart?: boolean
   role: 'api' | 'dev-single' | 'judge-worker' | 'maintenance-worker'
+  waitAfterStartMs?: number
 }) => {
   const duckdbPath = `/tmp/forska-start-background-work-${process.pid}-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(
@@ -42,6 +48,8 @@ const runStartBackgroundWork = (input: {
 
         const startBackgroundWorkModulePath = getModulePath('./src/server/utils/startBackgroundWork.ts')
         const reviewServingProjectorWorkerHeartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const comparisonProjectServingMaintenanceWorkerHeartbeatModulePath = getModulePath('./src/server/utils/comparisonProjectServingMaintenanceWorkerHeartbeat.ts')
+        const duckdbServiceModulePath = getModulePath('./src/server/utils/duckdbService.ts')
         const requestAttemptCloseoutBackfillSchedulerModulePath = getModulePath('./src/server/utils/startRequestAttemptCloseoutBackfillScheduler.ts')
         const runtimeLoggerModulePath = getModulePath('./src/server/utils/runtimeLogger.ts')
         const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
@@ -84,6 +92,32 @@ const runStartBackgroundWork = (input: {
               calls.push('reviewBulkOperationWorkerHeartbeat')
               return () => {
                 calls.push('stopReviewBulkOperationWorkerHeartbeat')
+              }
+            },
+          }
+        })
+        void mock.module(comparisonProjectServingMaintenanceWorkerHeartbeatModulePath, () => {
+          return {
+            startComparisonProjectServingMaintenanceWorkerHeartbeat: () => {
+              calls.push('comparisonProjectServingMaintenanceWorkerHeartbeat')
+              return () => {
+                calls.push('stopComparisonProjectServingMaintenanceWorkerHeartbeat')
+              }
+            },
+          }
+        })
+        void mock.module(duckdbServiceModulePath, () => {
+          return {
+            closeDuckdbService: async () => {
+              calls.push('closeDuckdbService')
+            },
+            getDuckdbAppendRuntimeMetrics: () => {
+              return {queueDepth: input.appendQueueDepth ?? 0}
+            },
+            getDuckdbQueueRuntimeMetricsSnapshot: () => {
+              return {
+                background: {queueDepth: input.backgroundQueueDepth ?? 0},
+                main: {queueDepth: input.foregroundQueueDepth ?? 0},
               }
             },
           }
@@ -141,6 +175,9 @@ const runStartBackgroundWork = (input: {
           currentRole = 'maintenance-worker'
           await Promise.all(promotionHandlers.map((handler) => handler('test-promotion')))
         }
+        if ((input.waitAfterStartMs ?? 0) > 0) {
+          await new Promise((resolve) => setTimeout(resolve, input.waitAfterStartMs))
+        }
         rmSync(pauseMarkerPath, {force: true})
         console.log(JSON.stringify({calls}))
       `,
@@ -152,6 +189,17 @@ const runStartBackgroundWork = (input: {
         DUCKDB_PATH: duckdbPath,
         SERVER_ROLE: input.role,
         ...(input.duckdbMemoryLimit === undefined ? {} : {DUCKDB_MEMORY_LIMIT: input.duckdbMemoryLimit}),
+        ...(input.pauseRecoveryMinAgeMs === undefined
+          ? {}
+          : {FORSKA_REVIEW_SERVING_PROJECTOR_PAUSE_RECOVERY_MIN_AGE_MS: String(input.pauseRecoveryMinAgeMs)}),
+        ...(input.reviewServingRebuildChunkBatchMaxRssBytes === undefined
+          ? {}
+          : {
+              FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES: String(
+                input.reviewServingRebuildChunkBatchMaxRssBytes,
+              ),
+            }),
+        FORSKA_REVIEW_SERVING_PROJECTOR_PAUSE_RECOVERY_POLL_INTERVAL_MS: '10',
       },
     },
   )
@@ -171,6 +219,7 @@ test('startBackgroundWork starts shared infrastructure and maintenance work for 
     'duckdbOwnerConnectionHeartbeat',
     'requestAttemptCloseoutBackfillScheduler',
     'reviewBulkOperationWorkerHeartbeat',
+    'comparisonProjectServingMaintenanceWorkerHeartbeat',
     'reviewServingProjectorWorkerHeartbeat:default:default:false',
   ])
 })
@@ -189,6 +238,7 @@ test('startBackgroundWork starts maintenance work after auto owner promotion', (
     'duckdbOwnerConnectionHeartbeat',
     'requestAttemptCloseoutBackfillScheduler',
     'reviewBulkOperationWorkerHeartbeat',
+    'comparisonProjectServingMaintenanceWorkerHeartbeat',
     'reviewServingProjectorWorkerHeartbeat:default:default:false',
   ])
 })
@@ -199,6 +249,7 @@ test('startBackgroundWork defers nonessential DuckDB maintenance under low-memor
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
+    'comparisonProjectServingMaintenanceWorkerHeartbeat',
     'reviewServingProjectorWorkerHeartbeat:default:1:false',
   ])
 })
@@ -209,6 +260,7 @@ test('startBackgroundWork defers nonessential DuckDB maintenance under normalize
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
+    'comparisonProjectServingMaintenanceWorkerHeartbeat',
     'reviewServingProjectorWorkerHeartbeat:default:1:false',
   ])
 })
@@ -219,6 +271,7 @@ test('startBackgroundWork keeps low-memory dev-single review serving restarts in
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
+    'comparisonProjectServingMaintenanceWorkerHeartbeat',
     'reviewServingProjectorWorkerHeartbeat:default:1:false',
   ])
 })
@@ -234,7 +287,62 @@ test('startBackgroundWork keeps owner infrastructure active while the review-ser
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
     'review-serving-projector.paused',
+    'comparisonProjectServingMaintenanceWorkerHeartbeat',
   ])
+})
+
+test('startBackgroundWork auto-resumes paused review serving projector when queues are idle', () => {
+  const result = runStartBackgroundWork({
+    duckdbMemoryLimit: '6400MiB',
+    pauseRecoveryMinAgeMs: 1,
+    pauseReviewServingProjector: true,
+    role: 'maintenance-worker',
+    waitAfterStartMs: 25,
+  })
+
+  expect(result.calls).toEqual([
+    'serverRuntimeRoleMonitor',
+    'duckdbOwnerConnectionHeartbeat',
+    'review-serving-projector.paused',
+    'comparisonProjectServingMaintenanceWorkerHeartbeat',
+    'review-serving-projector.pause-recovered',
+    'reviewServingProjectorWorkerHeartbeat:default:1:false',
+  ])
+})
+
+test('startBackgroundWork keeps paused review serving projector stopped while DuckDB queues are active', () => {
+  const result = runStartBackgroundWork({
+    backgroundQueueDepth: 1,
+    duckdbMemoryLimit: '6400MiB',
+    pauseRecoveryMinAgeMs: 1,
+    pauseReviewServingProjector: true,
+    role: 'maintenance-worker',
+    waitAfterStartMs: 25,
+  })
+
+  expect(result.calls.slice(0, 5)).toEqual([
+    'serverRuntimeRoleMonitor',
+    'duckdbOwnerConnectionHeartbeat',
+    'review-serving-projector.paused',
+    'comparisonProjectServingMaintenanceWorkerHeartbeat',
+    'review-serving-projector.pause-recovery-wait',
+  ])
+  expect(result.calls).not.toContain('reviewServingProjectorWorkerHeartbeat:default:1:false')
+})
+
+test('startBackgroundWork recycles DuckDB once before resuming paused review serving projector above RSS cap', () => {
+  const result = runStartBackgroundWork({
+    duckdbMemoryLimit: '6400MiB',
+    pauseRecoveryMinAgeMs: 1,
+    pauseReviewServingProjector: true,
+    reviewServingRebuildChunkBatchMaxRssBytes: 1,
+    role: 'maintenance-worker',
+    waitAfterStartMs: 25,
+  })
+
+  expect(result.calls).toContain('review-serving-projector.pause-recovery-recycle-duckdb')
+  expect(result.calls).toContain('closeDuckdbService')
+  expect(result.calls).not.toContain('reviewServingProjectorWorkerHeartbeat:default:1:false')
 })
 
 test('startBackgroundWork skips all background work when server mutations are disabled', () => {
