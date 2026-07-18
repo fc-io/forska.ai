@@ -81,6 +81,23 @@ const getRequestlessSummaryRangeRebuildRequestId = (chunk: ReviewServingRebuildC
   return `requestless-summary:${digest}`
 }
 
+const getRequestlessBootstrapRebuildRequestId = (chunk: ReviewServingRebuildChunkManifest) => {
+  const digest = createHash('sha256')
+    .update(
+      [
+        chunk.projectId ?? '',
+        chunk.snapshotId ?? '',
+        chunk.outputBaseGeneration,
+        chunk.inputWatermark,
+        chunk.inputDigest,
+      ].join('\0'),
+    )
+    .digest('hex')
+    .slice(0, 24)
+
+  return `requestless-bootstrap:${digest}`
+}
+
 const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {
     unlinkSync(filePath)
@@ -248,6 +265,30 @@ test('worker calls projector orchestration with bounded wake budgets and reviewP
     fallbackIntent: 'reject',
     workloadClass: 'reviewProjector',
   })
+})
+
+test('worker skips background review work while foreground DuckDB work is queued', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+
+  harness.dependencies.getForegroundQueueDepth = () => {
+    return 1
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  expect(result).toMatchObject({
+    chunk: {chunkId: null, status: 'idle'},
+    chunkBatchCount: 0,
+    cleanup: {status: 'skipped'},
+    deltaIntake: {status: 'idle'},
+    projector: {status: 'blocked'},
+    status: 'idle',
+  })
+  expect(harness.getNextChunkInputs).toEqual([])
+  expect(harness.claimInputs).toEqual([])
+  expect(harness.runChunkInputs).toEqual([])
+  expect(harness.wakeInputs).toEqual([])
+  expect(harness.cleanupInputs).toEqual([])
 })
 
 test('worker can drain multiple rebuild chunks in one opt-in batch', async () => {
@@ -710,6 +751,10 @@ test('worker excludes requestless summary chunks from component batch preclaimin
 
   harness.database.queryJson = async <T>(statement: string) => {
     statements.push(statement)
+
+    if (statement.includes('SELECT DISTINCT projection_component')) {
+      return [{projectionComponent: 'summary'}] as T[]
+    }
 
     if (statement.includes('pendingChunkCount')) {
       return [{pendingChunkCount: 1}] as T[]
@@ -5552,6 +5597,100 @@ test('worker adopts requestless summary chunks into request finalization before 
   expect(clearIntervalMock).toHaveBeenCalledWith(intervalToken)
 })
 
+test('worker adopts requestless bootstrap chunks into one rebuild request before projection', async () => {
+  const harness = createWorkerHarness()
+  const statements: string[] = []
+  const originalSetInterval = globalThis.setInterval
+  const originalClearInterval = globalThis.clearInterval
+  const intervalToken = {unref: mock(() => {})}
+  const setIntervalMock = mock(() => {
+    return intervalToken
+  })
+  const clearIntervalMock = mock((_token: unknown) => {})
+  const projectScopeChunkInput = {
+    ...chunkInput,
+    outputBaseGeneration: 11,
+    projectionComponent: 'projectScope' as const,
+    projectionIdentity: 'projectScope:project-1',
+    requestId: null,
+    snapshotId: 'snapshot-bootstrap-1',
+  }
+  const projectScopeChunk = {
+    ...chunkManifest,
+    ...projectScopeChunkInput,
+    chunkId: 'chunk-project-scope-requestless',
+    requestId: null,
+  } satisfies ReviewServingRebuildChunkManifest
+  const requestId = getRequestlessBootstrapRebuildRequestId(projectScopeChunk)
+  const adoptedProjectScopeChunk = {...projectScopeChunk, requestId}
+  let adopted = false
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return projectScopeChunk
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return projectScopeChunkInput
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('SELECT DISTINCT projection_component')) {
+      return [
+        {projectionComponent: 'display'},
+        {projectionComponent: 'projectScope'},
+        {projectionComponent: 'selectedImport'},
+      ] as T[]
+    }
+
+    if (statement.includes('pendingChunkCount')) {
+      return [{pendingChunkCount: 1}] as T[]
+    }
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+      return [adopted ? adoptedProjectScopeChunk : projectScopeChunk] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+    if (statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('request_id =')) {
+      adopted = true
+    }
+  }
+
+  globalThis.setInterval = setIntervalMock as unknown as typeof setInterval
+  globalThis.clearInterval = clearIntervalMock as unknown as typeof clearInterval
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies).finally(() => {
+    globalThis.setInterval = originalSetInterval
+    globalThis.clearInterval = originalClearInterval
+  })
+  const joined = statements.join('\n')
+
+  expect(result.chunk).toMatchObject({chunkId: projectScopeChunk.chunkId, requestId, status: 'completed'})
+  expect(harness.runChunkInputs).toHaveLength(1)
+  expect(harness.runChunkInputs[0]).toMatchObject(adoptedProjectScopeChunk)
+  expect(harness.failedChunks).toEqual([])
+  expect(joined).toContain('INSERT INTO app.review_rebuild_request')
+  expect(joined).toContain('requestless_bootstrap_rebuild')
+  expect(joined).toContain('adoptedRequestlessBootstrapChunks')
+  expect(joined).toContain('"display"')
+  expect(joined).toContain('"projectScope"')
+  expect(joined).toContain('"selectedImport"')
+  expect(joined).toContain(`request_id = '${requestId}'`)
+  expect(joined).not.toContain("projection_component = 'summary'")
+  expect(joined).not.toContain("status = 'quarantined'")
+  expect(setIntervalMock).toHaveBeenCalledTimes(1)
+  expect(clearIntervalMock).toHaveBeenCalledWith(intervalToken)
+})
+
 test('requestless summary adoption persists request linkage in DuckDB', () => {
   const duckdbPath = `/tmp/forska-requestless-summary-adoption-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`
   const script = `
@@ -5785,6 +5924,10 @@ test('claimed requestless summary chunks stage partials through an adopted reque
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
 
+      if (statement.includes('SELECT DISTINCT projection_component')) {
+        return [{projectionComponent: 'summary'}] as T[]
+      }
+
       if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
         return [adopted ? adoptedSummaryChunk : summaryChunk] as T[]
       }
@@ -5886,8 +6029,8 @@ test('request-associated summary chunks stage partials without refreshing filter
   expect(statements.join('\n')).not.toContain('INSERT INTO mart.review_filter_option_serving_v4')
 })
 
-test('worker splits already-admitted oversized payload summary and posting chunks before execution', async () => {
-  for (const component of ['payload', 'summary', 'posting'] as const) {
+test('worker splits already-admitted oversized payload search summary and posting chunks before execution', async () => {
+  for (const component of ['payload', 'search', 'summary', 'posting'] as const) {
     const harness = createWorkerHarness({wakeStatus: 'completed'})
     const statements: string[] = []
     const oversizedChunkInput = {

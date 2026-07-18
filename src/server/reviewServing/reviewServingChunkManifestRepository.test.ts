@@ -168,10 +168,6 @@ const getFakeClaimPriority = (row: FakeChunkRow) => {
 }
 
 const isFakeChunkReady = (row: FakeChunkRow, rows: Iterable<FakeChunkRow>) => {
-  if (row.requestId === null) {
-    return true
-  }
-
   const prerequisites = fakeComponentPrerequisites[row.projectionComponent]
 
   return prerequisites.every((component) => {
@@ -810,7 +806,7 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
     database,
   )
 
-  expect(next).toEqual({...baseChunkIdentity, checksum: null, requestId: null})
+  expect(next).toEqual({...baseChunkIdentity, checksum: null, chunkId: pending.chunkId, requestId: null})
   expect(statements.join('\n')).toContain("candidate.status = 'pending'")
   expect(statements.join('\n')).toContain("candidate.status = 'failed'")
   expect(statements.join('\n')).toContain("request.status IN ('admitted', 'running')")
@@ -818,7 +814,7 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).toContain("candidate.projection_component = 'selectedImport'")
   expect(statements.join('\n')).toContain("candidate.projection_component = 'summary'")
   expect(statements.join('\n')).toContain('FROM app.review_rebuild_chunk_manifest prerequisite')
-  expect(statements.join('\n')).toContain('prerequisite.request_id = candidate.request_id')
+  expect(statements.join('\n')).toContain('prerequisite.request_id IS NOT DISTINCT FROM candidate.request_id')
   expect(statements.join('\n')).toContain("prerequisite.projection_component IN ('projectScope')")
   expect(statements.join('\n')).toMatch(
     /candidate\.projection_component = 'search'[\s\S]*prerequisite\.projection_component IN \('projectScope', 'selectedImport'\)/,
@@ -891,6 +887,34 @@ test('next claimable chunk discovery preserves component priority before chunk a
   )
 
   expect(next).toMatchObject({inputDigest: 'digest-new-project-scope', projectionComponent: 'projectScope'})
+})
+
+test('next claimable chunk discovery gates requestless bootstrap chunks with null-safe prerequisites', async () => {
+  const oldSelectedImport = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-requestless-selected-import', projectionComponent: 'selectedImport'},
+      [],
+    ),
+    requestId: null,
+    updatedAt: '2026-06-16T14:00:00.000Z',
+  }
+  const newProjectScope = {
+    ...getChunkRowFromIdentity(
+      {...baseChunkIdentity, inputDigest: 'digest-requestless-project-scope', projectionComponent: 'projectScope'},
+      [],
+    ),
+    requestId: null,
+    updatedAt: '2026-06-16T14:10:00.000Z',
+  }
+  const {database, statements} = createFakeChunkManifestDatabase([oldSelectedImport, newProjectScope])
+
+  const next = await getNextClaimableReviewServingRebuildChunk(
+    {now: '2026-06-16T14:05:00.000Z', projectId: 'project-1'},
+    database,
+  )
+
+  expect(next).toMatchObject({inputDigest: 'digest-requestless-project-scope', projectionComponent: 'projectScope'})
+  expect(statements.join('\n')).toContain('prerequisite.request_id IS NOT DISTINCT FROM candidate.request_id')
 })
 
 test('next claimable chunk discovery allows independent critical components before unrelated bulk work finishes', async () => {
@@ -1699,7 +1723,7 @@ test('rebuild timing diagnostics summarize phase timings and claimable pending c
   expect(statements[0]).toContain("json_extract_string(chunk.diagnostics_json, '$.phaseTimings.writeOutputMs')")
   expect(statements[0]).toContain("json_extract_string(chunk.diagnostics_json, '$.phaseTimings.validationMs')")
   expect(statements[1]).toContain("chunk.admission_state = 'admitted'")
-  expect(statements[1]).toContain('prerequisite.request_id = chunk.request_id')
+  expect(statements[1]).toContain('prerequisite.request_id IS NOT DISTINCT FROM chunk.request_id')
   expect(statements[1]).toContain('LIMIT 7')
 })
 
