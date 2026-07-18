@@ -590,6 +590,71 @@ test('posting default rebuilds presplit into non-overlapping bounded chunks', as
   expect(joined).toContain('{"admissionPresplit":true}')
 })
 
+test('human status default rebuilds presplit into bounded article chunks', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    activeComponentStateJson: {
+      optional: [],
+      required: [
+        {
+          baseGeneration: 4,
+          component: 'humanStatus',
+          patchWatermark: 12,
+          projectionIdentity: 'humanStatus:active-identity-1',
+        },
+      ],
+    },
+    articleRangeRows: [
+      {chunkEndKey: 'article-064', chunkStartKey: 'article-001', scopedArticleCount: 64},
+      {chunkEndKey: 'article-128', chunkStartKey: 'article-064', scopedArticleCount: 64},
+      {chunkEndKey: 'article-192', chunkStartKey: 'article-128', scopedArticleCount: 64},
+      {chunkEndKey: 'article-256', chunkStartKey: 'article-192', scopedArticleCount: 64},
+    ],
+    componentStateJson: {
+      optional: [],
+      required: [
+        {baseGeneration: 2, component: 'humanStatus', patchWatermark: 10, projectionIdentity: 'humanStatus:identity-1'},
+      ],
+    },
+    projectionManifestRows: [
+      {
+        baseGeneration: 2,
+        inputDigest: 'human-status-digest-v1',
+        inputWatermark: 10,
+        projectionComponent: 'humanStatus',
+        projectionIdentity: 'humanStatus:identity-1',
+      },
+      {
+        baseGeneration: 4,
+        inputDigest: 'human-status-active-digest-v1',
+        inputWatermark: 12,
+        projectionComponent: 'humanStatus',
+        projectionIdentity: 'humanStatus:active-identity-1',
+      },
+    ],
+  })
+
+  await createReviewServingRebuildRequest(
+    {
+      estimate: {estimatedInputRows: 256},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['humanStatus'],
+      requestId: 'rebuild:human-status-presplit',
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const humanStatusChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'humanStatus'")
+  })
+
+  expect(joined).toContain('NTILE(4)')
+  expect(joined).toContain("ELSE previous_scoped_end_key || ' '")
+  expect(humanStatusChunkInserts).toHaveLength(8)
+  expect(joined).toContain('{"admissionPresplit":true}')
+})
+
 test('judgment input content default rebuilds avoid admission presplit boundary overlap', async () => {
   const {database, statements} = createFakeRequestDatabase({
     activeComponentStateJson: {

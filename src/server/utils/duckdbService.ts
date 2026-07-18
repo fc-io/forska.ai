@@ -1627,6 +1627,49 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       DROP TABLE IF EXISTS startup_probe_review_article_judgment_detail_serving_v4;
     `,
     lowMemoryStartupPreflight: true,
+    postRepairSchemaRequirements: [
+      {
+        columnNames: ['projection_component', 'status', 'admission_state', 'retry_after', 'last_error', 'updated_at'],
+        schemaName: 'app',
+        tableName: 'review_rebuild_chunk_manifest',
+      },
+      {
+        columnNames: ['request_id', 'status', 'admission_state', 'retry_after', 'last_error', 'updated_at'],
+        schemaName: 'app',
+        tableName: 'review_rebuild_request',
+      },
+    ],
+    postRepairSql: `
+      UPDATE app.review_rebuild_chunk_manifest
+      SET
+        status = 'pending',
+        admission_state = 'admitted',
+        retry_after = NULL,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        last_error = NULL,
+        updated_at = current_timestamp
+      WHERE projection_component = 'judgmentInputContent'
+        AND status IN ('running', 'failed', 'blocked_over_budget', 'quarantined');
+
+      UPDATE app.review_rebuild_request AS request
+      SET
+        status = 'admitted',
+        admission_state = 'admitted',
+        retry_after = NULL,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        last_error = NULL,
+        updated_at = current_timestamp
+      WHERE request.status IN ('running', 'failed', 'blocked_over_budget')
+        AND EXISTS (
+          SELECT 1
+          FROM app.review_rebuild_chunk_manifest chunk
+          WHERE chunk.request_id = request.request_id
+            AND chunk.projection_component = 'judgmentInputContent'
+            AND chunk.status = 'pending'
+        )
+    `,
     repairPrimaryKeyColumns: [
       'project_id',
       'review_config_hash',
@@ -1636,6 +1679,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       'article_id',
       'prompt_id',
     ],
+    repairStrategy: 'empty-derived',
     schemaName: 'mart',
     tableName: 'review_article_judgment_detail_serving_v4',
   },
@@ -2317,7 +2361,51 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       DROP TABLE IF EXISTS startup_probe_review_article_serving_payload_v4;
     `,
     lowMemoryStartupPreflight: true,
+    postRepairSchemaRequirements: [
+      {
+        columnNames: ['projection_component', 'status', 'admission_state', 'retry_after', 'last_error', 'updated_at'],
+        schemaName: 'app',
+        tableName: 'review_rebuild_chunk_manifest',
+      },
+      {
+        columnNames: ['request_id', 'status', 'admission_state', 'retry_after', 'last_error', 'updated_at'],
+        schemaName: 'app',
+        tableName: 'review_rebuild_request',
+      },
+    ],
+    postRepairSql: `
+      UPDATE app.review_rebuild_chunk_manifest
+      SET
+        status = 'pending',
+        admission_state = 'admitted',
+        retry_after = NULL,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        last_error = NULL,
+        updated_at = current_timestamp
+      WHERE projection_component = 'payload'
+        AND status IN ('running', 'failed', 'blocked_over_budget', 'quarantined');
+
+      UPDATE app.review_rebuild_request AS request
+      SET
+        status = 'admitted',
+        admission_state = 'admitted',
+        retry_after = NULL,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        last_error = NULL,
+        updated_at = current_timestamp
+      WHERE request.status IN ('running', 'failed', 'blocked_over_budget')
+        AND EXISTS (
+          SELECT 1
+          FROM app.review_rebuild_chunk_manifest chunk
+          WHERE chunk.request_id = request.request_id
+            AND chunk.projection_component = 'payload'
+            AND chunk.status = 'pending'
+        )
+    `,
     repairPrimaryKeyColumns: ['project_id', 'display_identity', 'payload_identity', 'snapshot_id', 'article_id'],
+    repairStrategy: 'empty-derived',
     schemaName: 'mart',
     schemaRequirements: [
       {
