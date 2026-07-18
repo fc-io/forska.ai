@@ -4680,8 +4680,10 @@ test('strict posting rebuild validation rescans output instead of reusing projec
     expect(result).toEqual({status: 'completed'})
     expect(postingChunk.requestId).toBeNull()
     expect(joined).toContain('string_agg(')
-    expect(joined).toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
     expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
+    expect(joined).toContain(
+      'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
+    )
     expect(joined).toContain('"validationMode":"debug-strict-checksum"')
     expect(joined).not.toContain('"validationMode":"reused-source-posting-checksum"')
   } finally {
@@ -5076,7 +5078,10 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   expect(joined).toContain('llm_status_identity')
   expect(joined).toContain('human_status_identity')
   expect(joined).toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
-  expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)',
+  )
   expect(filterOptionDeletes).toHaveLength(0)
   expect(joined).toContain('"summaryProjectorSnapshots"')
   expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
@@ -5335,8 +5340,10 @@ test('worker refreshes posting stats once when a posting rebuild request is fina
   const joined = statements.join('\n')
 
   expect(result.chunk).toMatchObject({chunkId: postingChunk.chunkId, status: 'completed'})
-  expect(joined).toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
   expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
+  expect(joined).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
+  )
   expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).not.toContain('snapshot-non-posting-null-config')
 })
@@ -6220,7 +6227,10 @@ test('admission-presplit posting rebuild chunk executes directly above the old r
   })
 
   expect(result).toEqual({status: 'completed'})
-  expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)',
+  )
   expect(joined).not.toContain('NTILE(')
   expect(childInserts).toHaveLength(0)
   expect(joined).toContain('"admissionPresplit":true')
