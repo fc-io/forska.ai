@@ -652,12 +652,6 @@ const getDeletePayloadRowsStatement = (input: ProjectReviewServingPayloadInput) 
 
 const getPayloadRebuildRowsStatements = (input: ProjectReviewServingPayloadInput) => {
   return [
-    `DELETE FROM mart.review_article_serving_payload_v4
-      WHERE project_id = ${getSqlLiteral(input.projectId)}
-        AND display_identity = ${getSqlLiteral(input.displayIdentity)}
-        AND payload_identity = ${getSqlLiteral(input.payloadIdentity)}
-        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-        ${getServingArticleRangePredicate(input)}`,
     `
     INSERT INTO mart.review_article_serving_payload_v4 (
       abstract_text,
