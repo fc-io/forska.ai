@@ -13,6 +13,8 @@ type StatusRow = {
   servingError: string | null
   servingGeneration: string | null
   servingStatus: string
+  servingTotalArticleCount: string | null
+  servingTotalCellCount: string | null
 }
 
 type RebuildBoundaryEvent = {activeTransaction: boolean; kind: string}
@@ -276,7 +278,9 @@ const getScript = (body: string) => {
           CAST(active_generation AS VARCHAR) AS activeGeneration,
           serving_status AS servingStatus,
           CAST(serving_generation AS VARCHAR) AS servingGeneration,
-          serving_error AS servingError
+          serving_error AS servingError,
+          CAST(serving_total_article_count AS VARCHAR) AS servingTotalArticleCount,
+          CAST(serving_total_cell_count AS VARCHAR) AS servingTotalCellCount
         FROM app.comparison_project_serving_generation
         WHERE comparison_project_id = '\${comparisonProjectId}'
         LIMIT 1
@@ -375,29 +379,6 @@ test('comparison serving rebuild invokes bulk phases outside transactions and ke
     },
     database,
     generationService: {
-      cleanupComparisonProjectServingGeneration: async (_comparisonProjectId, _generation, dependencies) => {
-        const generationDependencies = dependencies ?? database
-
-        recordEvent('generation:cleanup-staged')
-
-        return generationDependencies.transaction(async () => {
-          return {deletedRowCount: 0, tables: []}
-        })
-      },
-      cleanupOldComparisonProjectServingGenerations: async (_comparisonProjectId, dependencies) => {
-        const generationDependencies = dependencies ?? database
-
-        recordEvent('generation:cleanup-old')
-
-        return generationDependencies.transaction(async () => {
-          return {deletedRowCount: 0, tables: []}
-        })
-      },
-      createInactiveComparisonProjectServingGeneration: async () => {
-        recordEvent('generation:create-inactive')
-
-        return 1
-      },
       promoteComparisonProjectServingGeneration: async (_comparisonProjectId, _generation, dependencies) => {
         const generationDependencies = dependencies ?? database
 
@@ -418,8 +399,8 @@ test('comparison serving rebuild invokes bulk phases outside transactions and ke
     .map((event) => {
       return event.kind
     })
-  const transactionalEvents = events.filter((event) => {
-    return event.kind.startsWith('status:') || event.kind.startsWith('generation:')
+  const statusEvents = events.filter((event) => {
+    return event.kind.startsWith('status:')
   })
   const bulkEvents = events.filter((event) => {
     return event.kind.startsWith('bulk:') || event.kind.startsWith('bulk-run:')
@@ -437,11 +418,10 @@ test('comparison serving rebuild invokes bulk phases outside transactions and ke
     'bulk:rollups',
     'status:rollups',
     'status:promoting',
-    'status:cleanup',
     'status:ready',
   ])
   expect(
-    transactionalEvents.every((event) => {
+    statusEvents.every((event) => {
       return event.activeTransaction
     }),
   ).toBe(true)
@@ -475,6 +455,10 @@ test('comparison serving rebuild persists staged counts from batch progress call
 
     if (statement.includes('(SELECT COUNT(*) FROM mart.comparison_article_serving')) {
       return [getCountRow()] as T[]
+    }
+
+    if (statement.includes('END AS totalArticleCount')) {
+      return [{totalArticleCount: 2}] as T[]
     }
 
     if (statement.includes('RETURNING comparison_project_id AS comparisonProjectId')) {
@@ -528,23 +512,6 @@ test('comparison serving rebuild persists staged counts from batch progress call
     },
     database,
     generationService: {
-      cleanupComparisonProjectServingGeneration: async (_comparisonProjectId, _generation, dependencies) => {
-        const generationDependencies = dependencies ?? database
-
-        return generationDependencies.transaction(async () => {
-          return {deletedRowCount: 0, tables: []}
-        })
-      },
-      cleanupOldComparisonProjectServingGenerations: async (_comparisonProjectId, dependencies) => {
-        const generationDependencies = dependencies ?? database
-
-        return generationDependencies.transaction(async () => {
-          return {deletedRowCount: 0, tables: []}
-        })
-      },
-      createInactiveComparisonProjectServingGeneration: async () => {
-        return 1
-      },
       promoteComparisonProjectServingGeneration: async (_comparisonProjectId, _generation, dependencies) => {
         const generationDependencies = dependencies ?? database
 
@@ -568,7 +535,19 @@ test('comparison serving rebuild persists staged counts from batch progress call
   ).toBe(true)
   expect(
     progressStatements.some((statement) => {
+      return (
+        statement.includes("serving_phase = 'prompt_cells'") && statement.includes('serving_total_article_count = 2')
+      )
+    }),
+  ).toBe(true)
+  expect(
+    progressStatements.some((statement) => {
       return statement.includes("serving_phase = 'rollups'") && statement.includes('serving_staged_article_count = 1')
+    }),
+  ).toBe(true)
+  expect(
+    progressStatements.some((statement) => {
+      return statement.includes("serving_phase = 'rollups'") && statement.includes('serving_total_cell_count = 4')
     }),
   ).toBe(true)
   expect(
@@ -636,6 +615,8 @@ test('comparison serving rebuild stages builds promotes and records ready status
     servingError: null,
     servingGeneration: '1',
     servingStatus: 'ready',
+    servingTotalArticleCount: '2',
+    servingTotalCellCount: '4',
   })
   expect(rowsByTable.article?.rowCount).toBe('2')
   expect(rowsByTable.cell?.rowCount).toBe('4')
@@ -778,7 +759,12 @@ test('comparison serving rebuild reclaims expired refreshing status with a newer
   expect(result.statusRow.servingGeneration).toBe('3')
   expect(result.statusRow.servingStatus).toBe('ready')
   expect(
-    result.rows.every((row) => {
+    result.rows.some((row) => {
+      return row.generation === '1'
+    }),
+  ).toBe(true)
+  expect(
+    result.rows.some((row) => {
       return row.generation === '3'
     }),
   ).toBe(true)
@@ -850,8 +836,13 @@ test('comparison serving rebuild failure records error and preserves the active 
   expect(result.statusRow.servingGeneration).toBe('2')
   expect(result.statusRow.servingError).toContain('simulated comparison serving rebuild failure')
   expect(
-    result.rows.every((row) => {
+    result.rows.some((row) => {
       return row.generation === '1'
+    }),
+  ).toBe(true)
+  expect(
+    result.rows.some((row) => {
+      return row.generation === '2'
     }),
   ).toBe(true)
 })
@@ -931,13 +922,18 @@ test('comparison serving rebuild treats stale promotion as failed', () => {
   expect(result.statusRow.servingGeneration).toBe('2')
   expect(result.statusRow.servingStatus).toBe('failed')
   expect(
-    result.rows.every((row) => {
+    result.rows.some((row) => {
       return row.generation === '1'
+    }),
+  ).toBe(true)
+  expect(
+    result.rows.some((row) => {
+      return row.generation === '2'
     }),
   ).toBe(true)
 })
 
-test('comparison serving rebuild cleans old generations after a successful promotion', () => {
+test('comparison serving rebuild retains old generations after a successful promotion', () => {
   const result = runScript<{
     rebuildResult: {cleanupResult: {deletedRowCount: number}; generation: number}
     rows: GenerationRow[]
@@ -953,12 +949,17 @@ test('comparison serving rebuild cleans old generations after a successful promo
   `)
 
   expect(result.rebuildResult.generation).toBe(2)
-  expect(result.rebuildResult.cleanupResult.deletedRowCount).toBeGreaterThan(0)
+  expect(result.rebuildResult.cleanupResult.deletedRowCount).toBe(0)
   expect(result.statusRow.activeGeneration).toBe('2')
   expect(result.statusRow.servingGeneration).toBe('2')
   expect(result.statusRow.servingStatus).toBe('ready')
   expect(
-    result.rows.every((row) => {
+    result.rows.some((row) => {
+      return row.generation === '1'
+    }),
+  ).toBe(true)
+  expect(
+    result.rows.some((row) => {
       return row.generation === '2'
     }),
   ).toBe(true)

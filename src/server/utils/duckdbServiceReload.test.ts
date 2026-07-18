@@ -592,6 +592,7 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
       }),
     ).toEqual([
       'app.review_serving_projector_watermark',
+      'app.comparison_project_serving_generation',
       'app.review_rebuild_chunk_manifest',
       'mart.review_article_count_serving_v4',
       'mart.review_filter_facet_serving_v4',
@@ -1094,6 +1095,190 @@ test('duckdb service startup repair strips table primary key constraints once', 
       'idx_review_serving_projector_watermark_duplicate_lookup',
     )
     expect(parsed.rows).toEqual([{watermark_id: 'watermark'}])
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
+test('duckdb service startup repair rebuilds comparison serving generation as stale derived rows', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-comparison-generation-repair-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const recoveryDirectory = `${duckdbPath}.startup-recovery`
+  const activeRepairSpecPath = join(recoveryDirectory, 'startup-preflight-active-table.json')
+
+  mkdirSync(recoveryDirectory, {recursive: true})
+  writeFileSync(
+    activeRepairSpecPath,
+    JSON.stringify({
+      phase: 'runtime-fatal-index-delete',
+      repairSpecs: [{schemaName: 'app', tableName: 'comparison_project_serving_generation'}],
+      schemaName: 'app',
+      tableName: 'comparison_project_serving_generation',
+    }),
+  )
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+        const {DuckDBInstance} = await import('@duckdb/node-api')
+
+        const duckdbPath = ${JSON.stringify(duckdbPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        const instance = await DuckDBInstance.create(duckdbPath, {
+          checkpoint_threshold: '64MiB',
+          memory_limit: '2GB',
+          preserve_insertion_order: 'false',
+          threads: '1',
+        })
+        const connection = await instance.connect()
+        await connection.run('CREATE SCHEMA app')
+        await connection.run('CREATE SCHEMA mart')
+        await connection.run(
+          'CREATE TABLE app.comparison_project(id VARCHAR NOT NULL PRIMARY KEY, archived BOOLEAN NOT NULL)',
+        )
+        await connection.run(
+          'CREATE TABLE mart.comparison_article_serving(comparison_project_id VARCHAR NOT NULL, generation BIGINT NOT NULL)',
+        )
+        await connection.run(\`
+          CREATE TABLE app.comparison_project_serving_generation(
+            comparison_project_id VARCHAR NOT NULL PRIMARY KEY,
+            active_generation BIGINT NOT NULL,
+            generation_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            serving_status VARCHAR DEFAULT 'missing',
+            serving_generation BIGINT,
+            serving_started_at TIMESTAMPTZ,
+            serving_completed_at TIMESTAMPTZ,
+            serving_failed_at TIMESTAMPTZ,
+            serving_error VARCHAR,
+            serving_phase VARCHAR,
+            serving_phase_started_at TIMESTAMPTZ,
+            serving_last_progressed_at TIMESTAMPTZ,
+            serving_staged_article_count BIGINT DEFAULT 0,
+            serving_staged_cell_count BIGINT DEFAULT 0,
+            serving_staged_filter_member_count BIGINT DEFAULT 0,
+            serving_staged_filter_stats_count BIGINT DEFAULT 0,
+            serving_total_article_count BIGINT,
+            serving_total_cell_count BIGINT
+          )
+        \`)
+        await connection.run("INSERT INTO app.comparison_project VALUES ('comparison-active', false), ('comparison-archived', true)")
+        await connection.run("INSERT INTO mart.comparison_article_serving VALUES ('comparison-active', 7)")
+        await connection.run(\`
+          INSERT INTO app.comparison_project_serving_generation (
+            comparison_project_id,
+            active_generation,
+            generation_updated_at,
+            serving_status,
+            serving_generation,
+            serving_phase,
+            serving_staged_cell_count
+          ) VALUES (
+            'comparison-active',
+            7,
+            current_timestamp,
+            'refreshing',
+            8,
+            'prompt_cells',
+            123
+          )
+        \`)
+        await connection.run('CHECKPOINT')
+        connection.closeSync()
+        instance.closeSync()
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?comparison-generation-repair=' + Date.now())
+        const rows = await duckdbService.runDuckdbJsonQuery(\`
+          SELECT
+            comparison_project_id AS comparisonProjectId,
+            CAST(active_generation AS INTEGER) AS activeGeneration,
+            serving_status AS servingStatus,
+            CAST(serving_generation AS INTEGER) AS servingGeneration,
+            serving_phase AS servingPhase,
+            CAST(serving_staged_cell_count AS INTEGER) AS servingStagedCellCount
+          FROM app.comparison_project_serving_generation
+          ORDER BY comparison_project_id
+        \`)
+        const tableRows = await duckdbService.runDuckdbJsonQuery(
+          "SELECT sql FROM duckdb_tables() WHERE schema_name = 'app' AND table_name = 'comparison_project_serving_generation' LIMIT 1",
+        )
+        const indexRows = await duckdbService.runDuckdbJsonQuery(
+          "SELECT sql FROM duckdb_indexes() WHERE schema_name = 'app' AND table_name = 'comparison_project_serving_generation' ORDER BY index_name",
+        )
+        await duckdbService.closeDuckdbService()
+
+        console.log(JSON.stringify({
+          indexSql: indexRows.map((row) => String(row.sql ?? '')),
+          rows,
+          tableSql: String(tableRows[0]?.sql ?? ''),
+        }))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB comparison generation repair failed',
+      )
+    }
+
+    const parsed = parseJsonSubprocessStdout<{
+      indexSql: string[]
+      rows: Array<{
+        activeGeneration: number
+        comparisonProjectId: string
+        servingGeneration: number | null
+        servingPhase: string | null
+        servingStagedCellCount: number
+        servingStatus: string
+      }>
+      tableSql: string
+    }>(result.stdout.toString())
+
+    expect(parsed.tableSql).not.toMatch(/\bPRIMARY\s+KEY\b/i)
+    expect(
+      parsed.indexSql.some((sql) => {
+        return /^CREATE UNIQUE INDEX\b/i.test(sql) && sql.includes('comparison_project_id')
+      }),
+    ).toBe(true)
+    expect(parsed.rows).toEqual([
+      {
+        activeGeneration: 7,
+        comparisonProjectId: 'comparison-active',
+        servingGeneration: null,
+        servingPhase: null,
+        servingStagedCellCount: 0,
+        servingStatus: 'stale',
+      },
+    ])
   } finally {
     removePathIfExists(dataRoot)
   }
@@ -2886,6 +3071,33 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(watermarkProbe?.repairPrimaryKeyColumns).toEqual(['watermark_id'])
     expect(watermarkProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
     expect(watermarkProbe?.recreateSecondaryIndexes).toBe(false)
+    const comparisonServingGenerationProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'app' && spec.tableName === 'comparison_project_serving_generation'
+    })
+    expect(comparisonServingGenerationProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(comparisonServingGenerationProbe?.repairPrimaryKeyColumns).toEqual(['comparison_project_id'])
+    expect(comparisonServingGenerationProbe?.repairStrategy).toBe('empty-derived')
+    expect(comparisonServingGenerationProbe?.mutationProbeSql).toContain(
+      'UPDATE app.comparison_project_serving_generation',
+    )
+    expect(comparisonServingGenerationProbe?.postRepairSql).toContain("'stale'")
+    expect(comparisonServingGenerationProbe?.postRepairSql).toContain('FROM app.comparison_project project')
+    expect(comparisonServingGenerationProbe?.postRepairSql).toContain('MAX(generation) AS active_generation')
+    expect(comparisonServingGenerationProbe?.postRepairSchemaRequirements).toContainEqual({
+      columnNames: ['id', 'archived'],
+      schemaName: 'app',
+      tableName: 'comparison_project',
+    })
+    expect(comparisonServingGenerationProbe?.postRepairSchemaRequirements).toContainEqual({
+      columnNames: ['comparison_project_id', 'generation'],
+      schemaName: 'mart',
+      tableName: 'comparison_article_serving',
+    })
+    expect(comparisonServingGenerationProbe?.schemaRequirements).toContainEqual({
+      columnNames: ['comparison_project_id', 'generation_updated_at'],
+      schemaName: 'app',
+      tableName: 'comparison_project_serving_generation',
+    })
     const articleServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_article_serving_v4'
     })

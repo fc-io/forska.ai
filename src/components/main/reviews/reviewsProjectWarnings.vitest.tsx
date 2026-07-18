@@ -166,7 +166,7 @@ test('renders blocked review indexing without active progress copy', async () =>
   }
 })
 
-test('renders memory-pressure cooldown without active progress copy', async () => {
+test('renders automatic memory-pressure recovery without active progress copy', async () => {
   const {container, dispose} = await renderWarnings(
     getWarningsData({
       blockedReason: 'paused_by_policy',
@@ -177,8 +177,8 @@ test('renders memory-pressure cooldown without active progress copy', async () =
   )
 
   try {
-    expect(container.textContent).toContain('Review indexing cooling down after memory pressure')
-    expect(container.textContent).toContain('cooling down after memory pressure')
+    expect(container.textContent).toContain('Review indexing recovering after memory pressure')
+    expect(container.textContent).toContain('will resume review refresh work automatically')
     expect(container.textContent).not.toContain('Review indexing in progress')
   } finally {
     dispose()

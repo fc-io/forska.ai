@@ -35,7 +35,7 @@ export const getReviewIndexingBlockedTitle = (blockedReason: ReviewIndexingBlock
     : blockedReason === 'operator_intervention_required'
       ? 'Review indexing requires operator intervention'
       : blockedReason === 'paused_by_policy'
-        ? 'Review indexing cooling down after memory pressure'
+        ? 'Review indexing recovering after memory pressure'
         : 'Review indexing blocked: waiting for maintenance worker'
 }
 
@@ -45,7 +45,7 @@ export const getReviewIndexingBlockedBody = (blockedReason: ReviewIndexingBlocke
     : blockedReason === 'operator_intervention_required'
       ? 'The review index candidate is incomplete and needs operator repair before it can become readable.'
       : blockedReason === 'paused_by_policy'
-        ? 'Review index work is queued, but the maintenance worker is cooling down after memory pressure before starting more review refresh work.'
+        ? 'Review index work is queued. The maintenance worker will resume review refresh work automatically once memory and DuckDB queues are quiet.'
         : 'Review index work is queued and waiting for a maintenance worker to become available.'
 }
 
