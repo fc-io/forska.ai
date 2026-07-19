@@ -896,7 +896,26 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       DROP TABLE IF EXISTS startup_probe_review_rebuild_chunk_manifest;
     `,
     lowMemoryStartupPreflight: true,
+    repairDedupeOrderSql: `
+      CASE
+        WHEN status = 'completed' THEN 0
+        WHEN status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at > current_timestamp) THEN 1
+        WHEN admission_state = 'admitted' AND status = 'pending' THEN 2
+        WHEN status = 'running' THEN 3
+        WHEN status = 'failed' THEN 4
+        WHEN status = 'blocked_over_budget' THEN 5
+        WHEN status = 'quarantined' THEN 6
+        ELSE 7
+      END ASC,
+      updated_at DESC NULLS LAST,
+      completed_at DESC NULLS LAST,
+      started_at DESC NULLS LAST,
+      created_at DESC NULLS LAST,
+      request_id DESC NULLS LAST,
+      chunk_id DESC
+    `,
     repairPrimaryKeyColumns: ['chunk_id'],
+    repairStrategy: 'dedupe-latest',
     schemaName: 'app',
     schemaRequirements: [
       {
