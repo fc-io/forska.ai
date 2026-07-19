@@ -18,6 +18,8 @@ export type ReviewServingChunkManifestRepositoryDatabase = ReviewServingChunkMan
   ) => Promise<T>
 }
 
+export type ReviewServingRebuildChunkTimingSink = Record<string, number>
+
 export type ReviewServingRebuildChunkStatus =
   | 'pending'
   | 'running'
@@ -265,6 +267,22 @@ const getObjectValue = (value: unknown): Record<string, unknown> => {
 
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
   return Math.max(0, Date.now() - startedAtMs)
+}
+
+const measureReviewServingRebuildChunkTiming = async <T>(
+  timings: ReviewServingRebuildChunkTimingSink | undefined,
+  phase: string,
+  operation: () => Promise<T>,
+) => {
+  const startedAtMs = Date.now()
+
+  try {
+    return await operation()
+  } finally {
+    if (timings !== undefined) {
+      timings[phase] = getNonNegativeElapsedMs(startedAtMs)
+    }
+  }
 }
 
 const getMergedRebuildChunkDiagnosticsJson = (input: {
@@ -947,60 +965,66 @@ export const getReviewServingRebuildChunkManifestForIdentity = async (
 }
 
 export const getNextClaimableReviewServingRebuildChunk = async (
-  input: {now: Date | string; projectId?: string | null},
+  input: {now: Date | string; projectId?: string | null; timings?: ReviewServingRebuildChunkTimingSink},
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
 ) => {
-  await releaseInactiveRequestRebuildChunkManifests(database)
+  await measureReviewServingRebuildChunkTiming(input.timings, 'claimSelect.releaseInactiveMs', async () => {
+    await releaseInactiveRequestRebuildChunkManifests(database)
+  })
 
-  const rows = await database.queryJson<ReviewServingRebuildChunkManifestRow>(`
-    ${getReviewServingRebuildChunkSelect({tableAlias: 'candidate'})}
-    WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
-    ORDER BY
-      ${getRebuildChunkClaimRequestPrioritySql('candidate')} DESC NULLS LAST,
-      CASE
-        WHEN ${getRebuildChunkClaimRequestPrioritySql('candidate')} >= ${getSqlLiteral(stalledForegroundRebuildRequestPriority)}
-        THEN ${getRebuildChunkClaimRequestUpdatedAtSql('candidate')}
-        ELSE NULL
-      END DESC NULLS LAST,
-      CASE
-        WHEN ${getRebuildChunkClaimRequestPrioritySql('candidate')} >= ${getSqlLiteral(stalledForegroundRebuildRequestPriority)}
-        THEN candidate.updated_at
-        ELSE NULL
-      END ASC NULLS LAST,
-      ${getRebuildChunkClaimLaneSql('candidate')} ASC,
-      ${getRebuildChunkClaimPrioritySql('candidate')} ASC,
-      CASE
-        WHEN candidate.status = 'running'
-          AND (
-            candidate.lease_expires_at IS NULL
-            OR candidate.lease_expires_at <= ${getReviewServingChunkTimestampLiteral(input.now)}
-          )
-        THEN 0
-        ELSE 1
-      END ASC,
-      ${getRebuildChunkClaimRequestUpdatedAtSql('candidate')} ASC NULLS LAST,
-      candidate.updated_at ASC,
-      candidate.created_at ASC,
-      candidate.chunk_id ASC
-    LIMIT 1
-  `)
+  const rows = await measureReviewServingRebuildChunkTiming(input.timings, 'claimSelect.queryMs', async () => {
+    return database.queryJson<ReviewServingRebuildChunkManifestRow>(`
+      ${getReviewServingRebuildChunkSelect({tableAlias: 'candidate'})}
+      WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
+      ORDER BY
+        ${getRebuildChunkClaimRequestPrioritySql('candidate')} DESC NULLS LAST,
+        CASE
+          WHEN ${getRebuildChunkClaimRequestPrioritySql('candidate')} >= ${getSqlLiteral(stalledForegroundRebuildRequestPriority)}
+          THEN ${getRebuildChunkClaimRequestUpdatedAtSql('candidate')}
+          ELSE NULL
+        END DESC NULLS LAST,
+        CASE
+          WHEN ${getRebuildChunkClaimRequestPrioritySql('candidate')} >= ${getSqlLiteral(stalledForegroundRebuildRequestPriority)}
+          THEN candidate.updated_at
+          ELSE NULL
+        END ASC NULLS LAST,
+        ${getRebuildChunkClaimLaneSql('candidate')} ASC,
+        ${getRebuildChunkClaimPrioritySql('candidate')} ASC,
+        CASE
+          WHEN candidate.status = 'running'
+            AND (
+              candidate.lease_expires_at IS NULL
+              OR candidate.lease_expires_at <= ${getReviewServingChunkTimestampLiteral(input.now)}
+            )
+          THEN 0
+          ELSE 1
+        END ASC,
+        ${getRebuildChunkClaimRequestUpdatedAtSql('candidate')} ASC NULLS LAST,
+        candidate.updated_at ASC,
+        candidate.created_at ASC,
+        candidate.chunk_id ASC
+      LIMIT 1
+    `)
+  })
   const row = rows[0]
 
-  return row === undefined
-    ? null
-    : {
-        chunkId: row.chunkId,
-        checksum: row.checksum,
-        chunkEndKey: row.chunkEndKey,
-        chunkStartKey: row.chunkStartKey,
-        inputDigest: row.inputDigest,
-        inputWatermark: Number(row.inputWatermark),
-        outputBaseGeneration: Number(row.outputBaseGeneration),
-        projectId: row.projectId,
-        projectionComponent: row.projectionComponent,
-        projectionIdentity: row.projectionIdentity,
-        requestId: row.requestId ?? null,
-      }
+  return measureReviewServingRebuildChunkTiming(input.timings, 'claimSelect.mapMs', async () => {
+    return row === undefined
+      ? null
+      : {
+          chunkId: row.chunkId,
+          checksum: row.checksum,
+          chunkEndKey: row.chunkEndKey,
+          chunkStartKey: row.chunkStartKey,
+          inputDigest: row.inputDigest,
+          inputWatermark: Number(row.inputWatermark),
+          outputBaseGeneration: Number(row.outputBaseGeneration),
+          projectId: row.projectId,
+          projectionComponent: row.projectionComponent,
+          projectionIdentity: row.projectionIdentity,
+          requestId: row.requestId ?? null,
+        }
+  })
 }
 
 export const upsertReviewServingRebuildChunkManifests = async (
