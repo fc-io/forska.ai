@@ -823,6 +823,173 @@ test('duckdb service keeps targeted startup preflight recovery on low-memory wor
   }
 })
 
+test('duckdb service retries stale mutation-probe repair markers before rebuilding indexed tables', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-stale-mutation-marker-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const recoveryDirectory = duckdbPath + '.startup-recovery'
+  const activeRepairSpecPath = join(recoveryDirectory, 'startup-preflight-active-table.json')
+
+  mkdirSync(recoveryDirectory, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+  writeFileSync(
+    activeRepairSpecPath,
+    JSON.stringify({phase: 'custom-mutation-probe', schemaName: 'app', tableName: 'review_serving_dirty_work'}),
+  )
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Buffer} = await import('node:buffer')
+        const {existsSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        let createCount = 0
+        let preflightCount = 0
+        const preflightSpecsHistory = []
+        let repairCount = 0
+        const originalSpawnSync = globalThis.Bun.spawnSync
+
+        globalThis.Bun.spawnSync = ((command, options) => {
+          if (!String(command[0]).includes('bun') || command[1] !== '-e') {
+            return originalSpawnSync(command, options)
+          }
+
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_LOCK_PROBE_CHILD === 'true') {
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
+          }
+
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_INDEX_REPAIR_CHILD === 'true') {
+            repairCount += 1
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
+          }
+
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT_CHILD === 'true') {
+            preflightCount += 1
+            preflightSpecsHistory.push(JSON.parse(String(command[5] ?? '[]')))
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
+          }
+
+          return {
+            exitCode: 0,
+            signalCode: null,
+            stdout: Buffer.from(''),
+            stderr: Buffer.from(''),
+          }
+        })
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run() {}
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              createCount += 1
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?stale-mutation-marker-test=' + Date.now())
+        const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+        console.log(JSON.stringify({
+          activeMarkerExists: existsSync(activeRepairSpecPath),
+          createCount,
+          preflightCount,
+          preflightSpecsHistory,
+          repairCount,
+          rows,
+        }))
+        await duckdbService.closeDuckdbService()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '6400MiB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB stale mutation marker preflight failed',
+      )
+    }
+
+    const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
+
+    expect(parsed.preflightCount).toBe(1)
+    expect(
+      parsed.preflightSpecsHistory[0]?.map((spec) => {
+        return `${spec.schemaName}.${spec.tableName}`
+      }),
+    ).toEqual(['app.review_serving_dirty_work'])
+    expect(parsed.activeMarkerExists).toBe(false)
+    expect(parsed.repairCount).toBe(0)
+    expect(parsed.createCount).toBe(1)
+    expect(parsed.rows).toEqual([{value: 1}])
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
 test('duckdb service checkpoints replayed WAL before indexed-table startup preflight', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-wal-checkpoint-preflight-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
