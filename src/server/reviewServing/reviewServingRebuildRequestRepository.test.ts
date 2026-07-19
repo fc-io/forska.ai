@@ -530,6 +530,41 @@ test('search-only default rebuild presplit chunks preserve sparse article-id gap
   expect(joined).toContain('{"admissionPresplit":true}')
 })
 
+test('search-only default rebuild admission compares per-chunk budget after presplit', async () => {
+  const {database, statements} = createFakeRequestDatabase({
+    articleRangeRows: [
+      {chunkEndKey: 'article-050', chunkStartKey: 'article-001', scopedArticleCount: 50},
+      {chunkEndKey: 'article-100', chunkStartKey: 'article-050', scopedArticleCount: 50},
+      {chunkEndKey: 'article-150', chunkStartKey: 'article-100', scopedArticleCount: 50},
+      {chunkEndKey: 'article-200', chunkStartKey: 'article-150', scopedArticleCount: 50},
+    ],
+  })
+
+  const request = await createReviewServingRebuildRequest(
+    {
+      budget: {maxInputRows: 250_000, maxOutputBytes: 128 * 1024 * 1024},
+      estimate: {estimatedInputRows: 544_684, estimatedOutputBytes: 544_684 * 512},
+      projectId: 'project-v4',
+      reason: 'broadSearchDirtyWork',
+      requestedComponents: ['search'],
+      requestId: 'rebuild:search-budget-presplit',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(request).toMatchObject({
+    admissionState: 'admitted',
+    overBudgetReason: null,
+    requestId: 'rebuild:search-budget-presplit',
+    status: 'admitted',
+  })
+  expect(joined).toContain('{"admissionPresplit":true}')
+  expect(joined).toContain("'admitted'")
+  expect(joined).toContain('136171')
+  expect(joined).toContain('250000')
+})
+
 test('posting default rebuilds presplit into non-overlapping bounded chunks', async () => {
   const {database, statements} = createFakeRequestDatabase({
     activeComponentStateJson: {

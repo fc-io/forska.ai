@@ -440,6 +440,68 @@ const getChunkEstimate = (input: {
       }
 }
 
+const maxDefinedEstimateValue = (values: Array<number | null | undefined>) => {
+  const definedValues = values.filter((value): value is number => {
+    return value !== null && value !== undefined
+  })
+
+  return definedValues.length === 0 ? undefined : Math.max(...definedValues)
+}
+
+const getChunkedAdmissionEstimate = (input: {
+  chunks: readonly ReviewServingRebuildChunkManifestInput[]
+  estimate: ReviewServingRebuildRequestEstimate | undefined
+}) => {
+  if (input.chunks.length <= 1) {
+    return input.estimate
+  }
+
+  const hasChunkEstimate = input.chunks.some((chunk) => {
+    return (
+      chunk.estimatedInputRows !== undefined
+      || chunk.estimatedOutputBytes !== undefined
+      || chunk.estimatedOutputRows !== undefined
+      || chunk.estimatedPayloadBytes !== undefined
+      || chunk.estimatedPromptCount !== undefined
+      || chunk.estimatedTempBytes !== undefined
+    )
+  })
+
+  if (!hasChunkEstimate) {
+    return input.estimate
+  }
+
+  return {
+    estimatedInputRows: maxDefinedEstimateValue(
+      input.chunks.map((chunk) => {
+        return chunk.estimatedInputRows
+      }),
+    ),
+    estimatedOutputBytes: maxDefinedEstimateValue(
+      input.chunks.map((chunk) => {
+        return chunk.estimatedOutputBytes
+      }),
+    ),
+    estimatedOutputRows: maxDefinedEstimateValue(
+      input.chunks.map((chunk) => {
+        return chunk.estimatedOutputRows
+      }),
+    ),
+    estimatedPayloadBytes: maxDefinedEstimateValue(
+      input.chunks.map((chunk) => {
+        return chunk.estimatedPayloadBytes
+      }),
+    ),
+    estimatedPromptCount: input.estimate?.estimatedPromptCount,
+    estimatedSnapshotCount: input.estimate?.estimatedSnapshotCount,
+    estimatedTempBytes: maxDefinedEstimateValue(
+      input.chunks.map((chunk) => {
+        return chunk.estimatedTempBytes
+      }),
+    ),
+  } satisfies ReviewServingRebuildRequestEstimate
+}
+
 const getDefaultRebuildSnapshotStates = async (
   input: {projectId: string; requestedComponents: readonly ReviewServingProjectionComponent[]},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -877,12 +939,6 @@ export const createReviewServingRebuildRequestEffect = (
       }
 
       const requestId = input.requestId ?? getReviewServingRebuildRequestId(input)
-      const overBudgetReason = getOverBudgetReason(input.estimate, input.budget)
-      const admissionState: ReviewServingRebuildRequestAdmissionState =
-        overBudgetReason === null ? 'admitted' : 'blocked_over_budget'
-      const status: ReviewServingRebuildRequestStatus = overBudgetReason === null ? 'admitted' : 'blocked_over_budget'
-      const chunkStatus = overBudgetReason === null ? 'pending' : 'blocked_over_budget'
-      const chunkAdmissionState = overBudgetReason === null ? 'admitted' : 'blocked_over_budget'
       const nowSql = getSqlLiteral(new Date())
 
       return database.transaction(async (tx) => {
@@ -892,6 +948,13 @@ export const createReviewServingRebuildRequestEffect = (
             {estimate: input.estimate, projectId: input.projectId, requestedComponents},
             tx,
           ))
+        const admissionEstimate = getChunkedAdmissionEstimate({chunks, estimate: input.estimate})
+        const overBudgetReason = getOverBudgetReason(admissionEstimate, input.budget)
+        const admissionState: ReviewServingRebuildRequestAdmissionState =
+          overBudgetReason === null ? 'admitted' : 'blocked_over_budget'
+        const status: ReviewServingRebuildRequestStatus = overBudgetReason === null ? 'admitted' : 'blocked_over_budget'
+        const chunkStatus = overBudgetReason === null ? 'pending' : 'blocked_over_budget'
+        const chunkAdmissionState = overBudgetReason === null ? 'admitted' : 'blocked_over_budget'
 
         if (chunks.length === 0) {
           throw new Error(`Review rebuild request ${requestId} created no rebuild chunks`)
