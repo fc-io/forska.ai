@@ -6468,7 +6468,7 @@ const getRequestlessRebuildChunkAdoption = async (
       AND output_base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
       AND input_watermark = ${getSqlLiteral(input.chunk.inputWatermark)}
       AND input_digest IS NOT DISTINCT FROM ${getSqlLiteral(input.chunk.inputDigest)}
-      AND status NOT IN ('completed', 'blocked_over_budget', 'quarantined')
+      AND status NOT IN ('blocked_over_budget', 'quarantined')
     ORDER BY projection_component
   `)
   const requestedComponents = components.map((component) => {
@@ -6555,6 +6555,16 @@ const adoptRequestlessRebuildChunk = async (
         now()
       )
       ON CONFLICT(request_id) DO UPDATE SET
+        requested_components_json = CASE
+          WHEN app.review_rebuild_request.status IN ('completed', 'failed')
+            THEN app.review_rebuild_request.requested_components_json
+          ELSE excluded.requested_components_json
+        END,
+        diagnostics_json = CASE
+          WHEN app.review_rebuild_request.status IN ('completed', 'failed')
+            THEN app.review_rebuild_request.diagnostics_json
+          ELSE excluded.diagnostics_json
+        END,
         status = CASE
           WHEN app.review_rebuild_request.status IN ('completed', 'failed') THEN app.review_rebuild_request.status
           ELSE 'admitted'
@@ -6576,7 +6586,7 @@ const adoptRequestlessRebuildChunk = async (
         AND output_base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
         AND input_watermark = ${getSqlLiteral(input.chunk.inputWatermark)}
         AND input_digest IS NOT DISTINCT FROM ${getSqlLiteral(input.chunk.inputDigest)}
-        AND status NOT IN ('completed', 'blocked_over_budget', 'quarantined')
+        AND status NOT IN ('blocked_over_budget', 'quarantined')
     `)
 
     const adoptedChunk = await getReviewServingRebuildChunkManifest({chunkId: input.chunk.chunkId}, tx)
