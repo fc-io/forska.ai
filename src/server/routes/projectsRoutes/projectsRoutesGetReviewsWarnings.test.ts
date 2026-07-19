@@ -2291,7 +2291,7 @@ test('reviews warnings leave recently progressing foreground V4 repair priority 
   expect(after.updatedAt).toBe(before.updatedAt)
 })
 
-test('reviews warnings do not mutate stale foreground V4 repairs that already have progressable chunks', async () => {
+test('reviews warnings boost stale foreground V4 repairs that already have progressable chunks', async () => {
   const projectId = 'project-missing-serving-stale-foreground-warning'
   const requestId = 'request-missing-serving-stale-foreground-warning'
   const oldTimestamp = '2026-04-02T12:00:00.000Z'
@@ -2331,8 +2331,8 @@ test('reviews warnings do not mutate stale foreground V4 repairs that already ha
   expect(body.data.indexing.status).toBe('refreshing')
   expect(await getReviewRebuildRequestCount(projectId)).toBe(1)
   expect(before.priority).toBe(1_000)
-  expect(after.priority).toBe(before.priority)
-  expect(after.updatedAt).toBe(before.updatedAt)
+  expect(after.priority).toBe(10_000)
+  expect(after.updatedAt).not.toBe(before.updatedAt)
 })
 
 test('reviews warnings do not mutate stale queued V4 repairs even when serving rows are readable', async () => {
