@@ -1928,10 +1928,13 @@ const runSummaryRebuildChunk = async (
 }
 
 const canRunSummaryRebuildChunkBatch = (chunks: readonly ReviewServingRebuildChunkManifest[]) => {
+  const requestId = chunks[0]?.requestId ?? null
+
   return (
     chunks.length > 1
+    && requestId !== null
     && chunks.every((chunk) => {
-      return chunk.projectionComponent === 'summary' && chunk.requestId === chunks[0]?.requestId
+      return chunk.projectionComponent === 'summary' && chunk.requestId === requestId
     })
   )
 }
