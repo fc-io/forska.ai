@@ -5080,6 +5080,67 @@ const readmitRetryableFailedRebuildRequests = async (input: {
   `)
 }
 
+const repairRequestlessBootstrapRebuildAdoptions = async (input: {
+  database: ReviewServingChunkManifestRepositoryDatabase
+  projectId?: string | null
+}) => {
+  const projectCondition = input.projectId ? `AND request.project_id = ${getSqlLiteral(input.projectId)}` : ''
+  const requestScope = `
+    SELECT
+      request.request_id,
+      request.project_id,
+      json_extract_string(request.identity_json, '$.snapshotId') AS snapshot_id,
+      TRY_CAST(json_extract_string(request.identity_json, '$.outputBaseGeneration') AS BIGINT) AS output_base_generation,
+      TRY_CAST(json_extract_string(request.identity_json, '$.inputWatermark') AS BIGINT) AS input_watermark,
+      json_extract_string(request.identity_json, '$.inputDigest') AS input_digest
+    FROM app.review_rebuild_request request
+    WHERE request.request_id LIKE ${getSqlLiteral(`${requestlessBootstrapRebuildRequestPrefix}:%`)}
+      AND request.status IN ('admitted', 'running')
+      AND request.admission_state = 'admitted'
+      ${projectCondition}
+  `
+
+  await input.database.run(`
+    WITH request_scope AS (${requestScope})
+    UPDATE app.review_rebuild_chunk_manifest AS chunk
+    SET
+      request_id = request_scope.request_id,
+      updated_at = current_timestamp
+    FROM request_scope
+    WHERE chunk.request_id IS NULL
+      AND chunk.project_id IS NOT DISTINCT FROM request_scope.project_id
+      AND chunk.snapshot_id IS NOT DISTINCT FROM request_scope.snapshot_id
+      AND chunk.output_base_generation = request_scope.output_base_generation
+      AND chunk.input_watermark = request_scope.input_watermark
+      AND chunk.input_digest IS NOT DISTINCT FROM request_scope.input_digest
+      AND chunk.status NOT IN ('blocked_over_budget', 'quarantined')
+  `)
+
+  await input.database.run(`
+    WITH request_scope AS (${requestScope}),
+    request_components AS (
+      SELECT
+        request_scope.request_id,
+        TO_JSON(list(DISTINCT chunk.projection_component ORDER BY chunk.projection_component)) AS requested_components_json
+      FROM request_scope
+      INNER JOIN app.review_rebuild_chunk_manifest chunk
+        ON chunk.request_id = request_scope.request_id
+      WHERE chunk.status NOT IN ('blocked_over_budget', 'quarantined')
+      GROUP BY request_scope.request_id
+    )
+    UPDATE app.review_rebuild_request AS request
+    SET
+      requested_components_json = request_components.requested_components_json,
+      diagnostics_json = json_merge_patch(
+        COALESCE(request.diagnostics_json, '{}'::JSON),
+        '{"repairedRequestlessBootstrapAdoption":true}'::JSON
+      ),
+      updated_at = current_timestamp
+    FROM request_components
+    WHERE request.request_id = request_components.request_id
+  `)
+}
+
 const getRebuildRequestPendingChunkCount = async (
   requestId: string,
   database: ReviewServingChunkManifestRepositoryDatabase,
@@ -8159,6 +8220,7 @@ export const runReviewServingProjectorWorkerCycle = async (
   const wakeId = `${workerId}:${getWorkerNowMs(dependencies, options)}`
   const workloadContext = getReviewServingProjectorWorkerWorkloadContext(workerId)
   const database = getReviewServingProjectorWorkerDatabase(dependencies, workloadContext)
+  await repairRequestlessBootstrapRebuildAdoptions({database, projectId: options.rebuildProjectId})
   const terminalFailedChunk = await finalizeTerminalFailedRebuildRequests({
     database,
     projectId: options.rebuildProjectId,

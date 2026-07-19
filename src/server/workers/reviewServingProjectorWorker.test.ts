@@ -3915,7 +3915,10 @@ test('worker readmits failed rebuild requests that still have retryable chunks',
   await runReviewServingProjectorWorkerOnce({rebuildProjectId: 'project-1', workerId: 'worker-1'}, harness.dependencies)
 
   const readmissionStatement = harness.runStatements.find((statement) => {
-    return statement.includes('UPDATE app.review_rebuild_request AS request')
+    return (
+      statement.includes('UPDATE app.review_rebuild_request AS request')
+      && statement.includes("request.status = 'failed'")
+    )
   })
 
   expect(readmissionStatement).toContain("request.status = 'failed'")
