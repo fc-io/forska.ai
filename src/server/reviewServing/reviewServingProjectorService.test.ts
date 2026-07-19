@@ -89,6 +89,7 @@ const createDependencyHarness = (
 ) => {
   const failedClaimIds: string[] = []
   const releasedClaimIds: string[] = []
+  const completedClaimIds: string[] = []
   const claimedComponents: ReviewServingProjectionComponent[] = []
   const database = {
     queryJson: async <T>(_statement: string) => {
@@ -114,6 +115,15 @@ const createDependencyHarness = (
 
       return claimed
     },
+    completeDirtyWork: async (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+      completedClaimIds.push(
+        ...claims.map((claim) => {
+          return claim.dirtyWorkId
+        }),
+      )
+
+      return {completedCount: claims.length}
+    },
     database,
     failDirtyWork: async (dirtyWorkIds: readonly string[]) => {
       failedClaimIds.push(...dirtyWorkIds)
@@ -128,7 +138,7 @@ const createDependencyHarness = (
     runners: {},
   }
 
-  return {claimedComponents, dependencies, failedClaimIds, releasedClaimIds}
+  return {claimedComponents, completedClaimIds, dependencies, failedClaimIds, releasedClaimIds}
 }
 
 test('component run plan starts at the invalidation registry first affected component', () => {
@@ -406,6 +416,63 @@ test('wake requests V4 rebuild and releases claims when a snapshot is not ready 
   expect(rebuildRequests).toEqual([{projectId: 'project-1', reason: 'missingReviewServingSnapshot'}])
   expect(releasedClaimIds).toEqual(['queue-1'])
   expect(failedClaimIds).toEqual([])
+})
+
+test('wake routes broad search dirty work through chunked rebuilds instead of direct projection', async () => {
+  const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+    search: [
+      {
+        ...getClaim({component: 'search', dirtyWorkId: 'search-project-1'}),
+        articleId: null,
+        dirtyKind: 'project.reviewConfig.updated',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+        sourcePartition: 'projectReviewConfig:project-1',
+      },
+    ],
+  })
+  const rebuildRequests: Array<{
+    components: readonly ReviewServingProjectionComponent[] | undefined
+    priority: number | undefined
+    projectId: string
+    reason: string
+  }> = []
+  let runnerCalled = false
+
+  dependencies.requestRebuild = (input) => {
+    rebuildRequests.push({
+      components: input.components,
+      priority: input.priority,
+      projectId: input.projectId,
+      reason: input.reason,
+    })
+
+    return Effect.succeed({status: 'admitted'} as never)
+  }
+  dependencies.runners = {
+    search: async () => {
+      runnerCalled = true
+
+      return {processedCount: 1}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['search'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('completed')
+  expect(result.runs).toEqual([
+    {attempts: 1, claimCount: 1, component: 'search', processedCount: 0, status: 'completed'},
+  ])
+  expect(runnerCalled).toBe(false)
+  expect(rebuildRequests).toEqual([
+    {components: ['search'], priority: 5_000, projectId: 'project-1', reason: 'broadSearchDirtyWork'},
+  ])
+  expect(completedClaimIds).toEqual(['search-project-1'])
+  expect(failedClaimIds).toEqual([])
+  expect(releasedClaimIds).toEqual([])
 })
 
 test('wake fails claimed work when missing-snapshot rebuild request is blocked', async () => {
