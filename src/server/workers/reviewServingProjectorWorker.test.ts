@@ -3461,10 +3461,10 @@ test('worker honors explicit null completed rebuild chunk burst limit', async ()
   expect(harness.runChunkInputs).toEqual(statusChunks)
 })
 
-test('bounded worker reports a lifecycle boundary after one request-associated native-heavy chunk', async () => {
+test('bounded worker drains request-associated native-heavy chunks up to the completed chunk cap below RSS cap', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const sleepCalls: number[] = []
-  const summaryChunks = Array.from({length: 2}, (_, index) => {
+  const summaryChunks = Array.from({length: 3}, (_, index) => {
     return {
       ...chunkManifest,
       chunkId: `chunk-summary-bounded-${index + 1}`,
@@ -3502,17 +3502,76 @@ test('bounded worker reports a lifecycle boundary after one request-associated n
   harness.dependencies.sleep = async (delayMs: number) => {
     sleepCalls.push(delayMs)
   }
+  harness.dependencies.getMemoryUsage = () => {
+    return {rss: 512}
+  }
 
   const result = await runReviewServingProjectorWorker(
-    {maxCompletedRebuildChunksPerRun: 16, rebuildChunkBatchSize: 1, workerId: 'worker-1'},
+    {
+      maxCompletedRebuildChunksPerRun: 2,
+      rebuildChunkBatchMaxRssBytes: 1_000,
+      rebuildChunkBatchSize: 1,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  expect(result).toEqual({reason: 'completedChunkLimit'})
+  expect(harness.runChunkInputs).toEqual(summaryChunks.slice(0, 2))
+  expect(harness.recycledChunks).toEqual([])
+  expect(harness.garbageCollectedChunks).toEqual(summaryChunks.slice(0, 2))
+  expect(sleepCalls).toEqual([lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs])
+})
+
+test('bounded worker reports a native-heavy lifecycle boundary when request chunks reach RSS cap', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const summaryChunkInput = {
+    ...chunkInput,
+    projectionComponent: 'summary' as const,
+    projectionIdentity: 'summary:project-1',
+  }
+  const summaryChunk = {
+    ...chunkManifest,
+    ...summaryChunkInput,
+    chunkId: 'chunk-summary-bounded-rss-cap',
+    requestId: 'rebuild-summary-bounded-rss-cap',
+  } satisfies ReviewServingRebuildChunkManifest
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return summaryChunk
+    },
+    getNextChunk: async () => {
+      return summaryChunkInput
+    },
+    heartbeatChunk: async () => {
+      return summaryChunk
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.getMemoryUsage = () => {
+    return {rss: 2_000}
+  }
+
+  const result = await runReviewServingProjectorWorker(
+    {
+      maxCompletedRebuildChunksPerRun: 16,
+      rebuildChunkBatchMaxRssBytes: 1_000,
+      rebuildChunkBatchSize: 1,
+      workerId: 'worker-1',
+    },
     harness.dependencies,
   )
 
   expect(result).toEqual({reason: 'nativeHeavyChunkCompleted'})
-  expect(harness.runChunkInputs).toEqual(summaryChunks.slice(0, 1))
+  expect(harness.runChunkInputs).toEqual([summaryChunk])
   expect(harness.recycledChunks).toEqual([])
-  expect(harness.garbageCollectedChunks).toEqual(summaryChunks.slice(0, 1))
-  expect(sleepCalls).toEqual([])
+  expect(harness.garbageCollectedChunks).toEqual([summaryChunk])
 })
 
 test('worker does not fail completed requestless posting chunks when DuckDB recycle fails', async () => {
