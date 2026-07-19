@@ -184,7 +184,7 @@ test('queue rebuild rows upsert overlapping split chunk boundary rows', async ()
   expect(insertStatement).toContain('queue_updated_at = excluded.queue_updated_at')
 })
 
-test('title search rebuild ranges commit each range separately', async () => {
+test('title search rebuild ranges commit compatible ranges in one transaction', async () => {
   const {database, getTransactionCount, statements, workloadContexts} = createWriterDatabase()
   const baseRange = {
     activitySortAtSql: 'article.created_at',
@@ -213,12 +213,12 @@ test('title search rebuild ranges commit each range separately', async () => {
     database,
   )
 
-  expect(getTransactionCount()).toBe(2)
+  expect(getTransactionCount()).toBe(1)
   expect(
     workloadContexts.map((workloadContext) => {
       return workloadContext.routeOrJobKey
     }),
-  ).toEqual(['reviewServing.projector.writer.search', 'reviewServing.projector.writer.search'])
+  ).toEqual(['reviewServing.projector.writer.search'])
   expect(
     statements.filter((statement) => {
       return statement.includes('INSERT INTO mart.review_title_search_serving_v4')

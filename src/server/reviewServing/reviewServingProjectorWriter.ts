@@ -612,28 +612,16 @@ export const writeReviewServingTitleSearchRebuildRanges = async (
   input: WriteReviewServingTitleSearchRebuildRangesInput,
   database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
 ) => {
-  const results: Array<Awaited<ReturnType<typeof writeReviewServingProjectorComponent>>> = []
-
-  for (const range of input.ranges) {
-    results.push(
-      await writeReviewServingProjectorComponent(
-        {
-          component: 'search',
-          projectionManifests: [],
-          records: [],
-          statements: getReviewServingTitleSearchRebuildRowsStatements(range),
-        },
-        database,
-      ),
-    )
-  }
-
-  return (
-    results.at(-1)
-    ?? writeReviewServingProjectorComponent(
-      {component: 'search', projectionManifests: [], records: [], statements: []},
-      database,
-    )
+  return writeReviewServingProjectorComponent(
+    {
+      component: 'search',
+      projectionManifests: [],
+      records: [],
+      statements: input.ranges.flatMap((range) => {
+        return getReviewServingTitleSearchRebuildRowsStatements(range)
+      }),
+    },
+    database,
   )
 }
 
