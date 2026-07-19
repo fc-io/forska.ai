@@ -3525,6 +3525,12 @@ const getDuckdbStartupPreflightRepairSpecs = (markerPath: string) => {
   }
 }
 
+const shouldRetryDuckdbStartupPreflightForActiveRepairMarker = (marker: DuckdbStartupPreflightRepairMarker | null) => {
+  const phase = typeof marker?.phase === 'string' ? marker.phase : null
+
+  return phase === 'custom-mutation-probe' || phase === 'generic-delete-insert-probe'
+}
+
 const shouldRunProactiveDuckdbStartupPreflight = (runtimeConfig: DuckdbRuntimeConfig) => {
   const memoryLimitMiB = parseDuckdbMemoryLimitToMiB(runtimeConfig.memoryLimit)
 
@@ -3964,7 +3970,7 @@ const getDuckdbStartupPreflightError = (
   const activeRepairMarker = getDuckdbStartupPreflightRepairMarker(activeRepairSpecPath)
   const activeRepairSpecs = getDuckdbStartupPreflightRepairSpecs(activeRepairSpecPath)
 
-  if (activeRepairSpecs.length > 0) {
+  if (activeRepairSpecs.length > 0 && !shouldRetryDuckdbStartupPreflightForActiveRepairMarker(activeRepairMarker)) {
     const error = new Error(
       `DuckDB startup indexed-table repair marker requested repair for ${runtimeConfig.databasePath}`,
     ) as DuckdbStartupPreflightError
