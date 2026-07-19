@@ -145,6 +145,16 @@ const getHasReviewServingStateThatCanProgress = (diagnostics: ReviewServingDiagn
   )
 }
 
+const getHasPendingReviewServingWork = (diagnostics: ReviewServingDiagnostics) => {
+  return (
+    diagnostics.dirtyWork.pendingCount
+      + diagnostics.dirtyWork.runningCount
+      + diagnostics.rebuildChunks.pendingCount
+      + diagnostics.rebuildChunks.runningCount
+    > 0
+  )
+}
+
 const getReviewsIndexingStatus = (params: {
   enabledPromptCount: number
   hasAnyArticlesInScope: boolean
@@ -304,13 +314,14 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
 
     const hasRecentProgress = getHasRecentReviewServingProgress(lastProgressedAt)
     const hasReviewServingStateThatCanProgress = getHasReviewServingStateThatCanProgress(servingDiagnostics)
+    const hasPendingReviewServingWork = getHasPendingReviewServingWork(servingDiagnostics)
     const shouldRequestForegroundRepair =
       !isServerMutationWorkDisabled
       && !reviewServingProjectorPaused
       && shouldPrioritizeMissingSnapshotRepair
       && pendingCandidateSnapshotActivationCount === 0
       && !hasRecentProgress
-      && !hasReviewServingStateThatCanProgress
+      && (!hasReviewServingStateThatCanProgress || hasPendingReviewServingWork)
 
     if (shouldRequestForegroundRepair) {
       const priority = hasRecentProgress
