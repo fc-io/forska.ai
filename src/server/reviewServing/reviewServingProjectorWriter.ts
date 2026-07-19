@@ -569,7 +569,7 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
         AND (scope.in_curated_scope OR scope.in_route_scope)
         AND article.id IS NOT NULL
         ${input.articleRangePredicateSql}
-    ), tokenized AS (
+    ), tokenized_source AS (
       SELECT DISTINCT
         source.article_id,
         token_rows.token,
@@ -578,6 +578,14 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
       FROM source
       CROSS JOIN unnest(regexp_split_to_array(source.normalized_title, '[^a-z0-9]+')) AS token_rows(token)
       WHERE token_rows.token <> ''
+    ), tokenized AS (
+      SELECT
+        article_id,
+        token,
+        ANY_VALUE(title_prefix) AS title_prefix,
+        MAX(activity_sort_at) AS activity_sort_at
+      FROM tokenized_source
+      GROUP BY article_id, token
     )
     SELECT
       ${getSqlLiteral(input.projectId)} AS project_id,
