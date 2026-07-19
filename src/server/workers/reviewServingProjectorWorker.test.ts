@@ -6113,6 +6113,9 @@ test('worker splits already-admitted oversized payload search summary and postin
     expect(prepared).toBe(false)
     expect(harness.runChunkInputs).toHaveLength(0)
     expect(joined).toContain('FROM mart.project_scope_article scope')
+    expect(joined).toContain(
+      `NTILE(${component === 'payload' ? 25 : component === 'summary' ? 485 : 64}) OVER (ORDER BY scope.article_id)`,
+    )
     expect(joined).toContain("status = 'completed'")
     expect(joined).toContain('lease_expires_at > current_timestamp')
     expect(joined).toContain('last_error = last_error')

@@ -696,9 +696,16 @@ const isAdmittedOversizedRebuildChunk = (chunk: ReviewServingRebuildChunkManifes
     : false
 }
 
-const getArticleRangeRebuildChunkSplitBucketCount = (chunk: ReviewServingRebuildChunkManifest) => {
+const getArticleRangeRebuildChunkSplitBucketCount = (
+  chunk: ReviewServingRebuildChunkManifest,
+  input: {splitReason?: 'admitted_oversized' | 'duckdb_oom'} = {},
+) => {
   const estimatedRows = getArticleRangeRebuildChunkEstimatedRows(chunk)
-  const presplitRowLimit = getArticleRangeRebuildChunkPresplitRowLimit(chunk)
+  const admittedOversizedInputRowLimit =
+    input.splitReason === 'admitted_oversized'
+      ? admittedOversizedRebuildChunkInputRowLimits[chunk.projectionComponent]
+      : undefined
+  const presplitRowLimit = admittedOversizedInputRowLimit ?? getArticleRangeRebuildChunkPresplitRowLimit(chunk)
   const maxBucketCount =
     chunk.projectionComponent === 'summary'
       ? summaryArticleRangeRebuildChunkPresplitMaxBucketCount
@@ -729,8 +736,9 @@ const formatUuidArticleId = (value: bigint) => {
 
 const getUuidArticleRangeRebuildChunkSplitRanges = (
   chunk: ReviewServingRebuildChunkManifest,
+  input: {splitReason?: 'admitted_oversized' | 'duckdb_oom'} = {},
 ): RebuildChunkSplitRangeRow[] | null => {
-  const splitBucketCount = getArticleRangeRebuildChunkSplitBucketCount(chunk)
+  const splitBucketCount = getArticleRangeRebuildChunkSplitBucketCount(chunk, input)
   const start = parseUuidArticleId(chunk.chunkStartKey)
   const end = parseUuidArticleId(chunk.chunkEndKey)
 
@@ -763,11 +771,15 @@ const getUuidArticleRangeRebuildChunkSplitRanges = (
 }
 
 const getArticleRangeRebuildChunkSplitRanges = async (
-  input: {chunk: ReviewServingRebuildChunkManifest; projectId: string},
+  input: {
+    chunk: ReviewServingRebuildChunkManifest
+    projectId: string
+    splitReason?: 'admitted_oversized' | 'duckdb_oom'
+  },
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
-  const splitBucketCount = getArticleRangeRebuildChunkSplitBucketCount(input.chunk)
-  const uuidRanges = getUuidArticleRangeRebuildChunkSplitRanges(input.chunk)
+  const splitBucketCount = getArticleRangeRebuildChunkSplitBucketCount(input.chunk, {splitReason: input.splitReason})
+  const uuidRanges = getUuidArticleRangeRebuildChunkSplitRanges(input.chunk, {splitReason: input.splitReason})
 
   if (uuidRanges !== null) {
     return uuidRanges
