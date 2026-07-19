@@ -21,6 +21,7 @@ import {
   type ReviewServingChunkManifestRepositoryTransaction,
   type ReviewServingRebuildChunkIdentity,
   type ReviewServingRebuildChunkManifest,
+  type ReviewServingRebuildChunkTimingSink,
   type ReviewServingRebuildChunkValidationResult,
   upsertReviewServingRebuildChunkManifests,
   writeReviewServingRebuildChunkOutput,
@@ -152,6 +153,7 @@ type ReviewServingProjectorWorkerRebuildChunkService = {
     database: ReviewServingChunkManifestRepositoryDatabase
     now: Date
     projectId?: string | null
+    timings?: ReviewServingRebuildChunkTimingSink
   }) => Promise<ReviewServingProjectorWorkerChunkInput | null>
   getCompatibleStatusChunks?: (input: {
     database: ReviewServingChunkManifestRepositoryDatabase
@@ -1930,6 +1932,7 @@ const splitClaimedArticleRangeRebuildChunk = async (
     leaseOwner: string
     projectId: string
     splitReason: 'admitted_oversized' | 'duckdb_oom'
+    timings?: Record<string, number>
   },
   database: ReviewServingChunkManifestRepositoryDatabase,
 ) => {
@@ -1938,101 +1941,121 @@ const splitClaimedArticleRangeRebuildChunk = async (
   }
 
   return database.transaction(async (tx) => {
-    const ranges = await getArticleRangeRebuildChunkSplitRanges(input, tx)
-    const splittableRanges = ranges.filter((range) => {
-      return range.chunkStartKey !== null && range.chunkEndKey !== null
-    })
+    const ranges = await measureReviewServingProjectorWorkerPhase(
+      input.timings,
+      'recoverOversized.splitRangeMs',
+      async () => {
+        return getArticleRangeRebuildChunkSplitRanges(input, tx)
+      },
+    )
+    const splittableRanges = await measureReviewServingProjectorWorkerPhase(
+      input.timings,
+      'recoverOversized.filterRangesMs',
+      async () => {
+        return ranges.filter((range) => {
+          return range.chunkStartKey !== null && range.chunkEndKey !== null
+        })
+      },
+    )
 
     if (splittableRanges.length < 2) {
       return false
     }
 
-    const acceptedParentRows = await tx.queryJson<{chunkId: string}>(`
-      UPDATE app.review_rebuild_chunk_manifest
-      SET
-        status = 'completed',
-        checksum = ${getSqlLiteral(`split:${input.chunk.chunkId}`)},
-        oom_category = ${input.splitReason === 'duckdb_oom' ? "'duckdb_oom_split'" : 'NULL'},
-        over_budget_reason = NULL,
-        last_error = ${input.splitReason === 'duckdb_oom' ? 'NULL' : 'last_error'},
-        lease_owner = NULL,
-        lease_expires_at = NULL,
-        completed_at = current_timestamp,
-        updated_at = current_timestamp
-      WHERE chunk_id = ${getSqlLiteral(input.chunk.chunkId)}
-        AND status = 'running'
-        AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
-        AND (lease_expires_at IS NULL OR lease_expires_at > current_timestamp)
-      RETURNING chunk_id AS chunkId
-    `)
+    const acceptedParentRows = await measureReviewServingProjectorWorkerPhase(
+      input.timings,
+      'recoverOversized.parentCompleteMs',
+      async () => {
+        return tx.queryJson<{chunkId: string}>(`
+          UPDATE app.review_rebuild_chunk_manifest
+          SET
+            status = 'completed',
+            checksum = ${getSqlLiteral(`split:${input.chunk.chunkId}`)},
+            oom_category = ${input.splitReason === 'duckdb_oom' ? "'duckdb_oom_split'" : 'NULL'},
+            over_budget_reason = NULL,
+            last_error = ${input.splitReason === 'duckdb_oom' ? 'NULL' : 'last_error'},
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            completed_at = current_timestamp,
+            updated_at = current_timestamp
+          WHERE chunk_id = ${getSqlLiteral(input.chunk.chunkId)}
+            AND status = 'running'
+            AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
+            AND (lease_expires_at IS NULL OR lease_expires_at > current_timestamp)
+          RETURNING chunk_id AS chunkId
+        `)
+      },
+    )
 
     if (acceptedParentRows.length !== 1) {
       throw new Error(`review serving rebuild chunk ${input.chunk.chunkId} is no longer claimed by ${input.leaseOwner}`)
     }
 
-    await upsertReviewServingRebuildChunkManifests(
-      splittableRanges.map((range) => {
-        return {
-          actualInputRows: null,
-          actualOutputBytes: null,
-          actualOutputRows: null,
-          actualPayloadBytes: null,
-          actualPromptCount: null,
-          actualTempBytes: null,
-          admissionState: 'admitted' as const,
-          budgetJson: input.chunk.budgetJson,
-          checksum: null,
-          chunkEndKey: range.chunkEndKey ?? input.chunk.chunkEndKey,
-          chunkStartKey: range.chunkStartKey ?? input.chunk.chunkStartKey,
-          diagnosticsJson: {
-            ...(input.chunk.diagnosticsJson && typeof input.chunk.diagnosticsJson === 'object'
-              ? input.chunk.diagnosticsJson
-              : {}),
+    await measureReviewServingProjectorWorkerPhase(input.timings, 'recoverOversized.childUpsertMs', async () => {
+      await upsertReviewServingRebuildChunkManifests(
+        splittableRanges.map((range) => {
+          return {
+            actualInputRows: null,
+            actualOutputBytes: null,
+            actualOutputRows: null,
+            actualPayloadBytes: null,
+            actualPromptCount: null,
+            actualTempBytes: null,
+            admissionState: 'admitted' as const,
+            budgetJson: input.chunk.budgetJson,
+            checksum: null,
+            chunkEndKey: range.chunkEndKey ?? input.chunk.chunkEndKey,
+            chunkStartKey: range.chunkStartKey ?? input.chunk.chunkStartKey,
+            diagnosticsJson: {
+              ...(input.chunk.diagnosticsJson && typeof input.chunk.diagnosticsJson === 'object'
+                ? input.chunk.diagnosticsJson
+                : {}),
+              parentChunkId: input.chunk.chunkId,
+              parentLastError: input.chunk.lastError,
+              parentRetryCount: input.chunk.retryCount,
+              splitReason: input.splitReason,
+            },
+            estimatedInputRows: Math.ceil((input.chunk.estimatedInputRows ?? 0) / splittableRanges.length),
+            estimatedOutputBytes: Math.ceil((input.chunk.estimatedOutputBytes ?? 0) / splittableRanges.length),
+            estimatedOutputRows: Math.ceil((input.chunk.estimatedOutputRows ?? 0) / splittableRanges.length),
+            estimatedPayloadBytes: Math.ceil((input.chunk.estimatedPayloadBytes ?? 0) / splittableRanges.length),
+            estimatedPromptCount: input.chunk.estimatedPromptCount,
+            estimatedTempBytes: input.chunk.estimatedTempBytes,
+            inputDigest: input.chunk.inputDigest,
+            inputWatermark: input.chunk.inputWatermark,
+            maxInputRows: input.chunk.maxInputRows,
+            maxOutputBytes: input.chunk.maxOutputBytes,
+            maxOutputRows: input.chunk.maxOutputRows,
+            maxPayloadBytes: input.chunk.maxPayloadBytes,
+            maxPromptCount: input.chunk.maxPromptCount,
+            maxTempBytes: input.chunk.maxTempBytes,
+            oomCategory: null,
+            outputBaseGeneration: input.chunk.outputBaseGeneration,
+            overBudgetReason: null,
             parentChunkId: input.chunk.chunkId,
-            parentLastError: input.chunk.lastError,
-            parentRetryCount: input.chunk.retryCount,
-            splitReason: input.splitReason,
-          },
-          estimatedInputRows: Math.ceil((input.chunk.estimatedInputRows ?? 0) / splittableRanges.length),
-          estimatedOutputBytes: Math.ceil((input.chunk.estimatedOutputBytes ?? 0) / splittableRanges.length),
-          estimatedOutputRows: Math.ceil((input.chunk.estimatedOutputRows ?? 0) / splittableRanges.length),
-          estimatedPayloadBytes: Math.ceil((input.chunk.estimatedPayloadBytes ?? 0) / splittableRanges.length),
-          estimatedPromptCount: input.chunk.estimatedPromptCount,
-          estimatedTempBytes: input.chunk.estimatedTempBytes,
-          inputDigest: input.chunk.inputDigest,
-          inputWatermark: input.chunk.inputWatermark,
-          maxInputRows: input.chunk.maxInputRows,
-          maxOutputBytes: input.chunk.maxOutputBytes,
-          maxOutputRows: input.chunk.maxOutputRows,
-          maxPayloadBytes: input.chunk.maxPayloadBytes,
-          maxPromptCount: input.chunk.maxPromptCount,
-          maxTempBytes: input.chunk.maxTempBytes,
-          oomCategory: null,
-          outputBaseGeneration: input.chunk.outputBaseGeneration,
-          overBudgetReason: null,
-          parentChunkId: input.chunk.chunkId,
-          projectId: input.chunk.projectId,
-          projectionComponent: input.chunk.projectionComponent,
-          projectionIdentity: input.chunk.projectionIdentity,
-          requestId: input.chunk.requestId,
-          retryAfter: null,
-          retryCount: 0,
-          snapshotCount: input.chunk.snapshotCount,
-          snapshotId: input.chunk.snapshotId,
-          splitDepth: (input.chunk.splitDepth ?? 0) + 1,
-          status: 'pending' as const,
-          workloadClass: input.chunk.workloadClass,
-        }
-      }),
-      tx,
-    )
+            projectId: input.chunk.projectId,
+            projectionComponent: input.chunk.projectionComponent,
+            projectionIdentity: input.chunk.projectionIdentity,
+            requestId: input.chunk.requestId,
+            retryAfter: null,
+            retryCount: 0,
+            snapshotCount: input.chunk.snapshotCount,
+            snapshotId: input.chunk.snapshotId,
+            splitDepth: (input.chunk.splitDepth ?? 0) + 1,
+            status: 'pending' as const,
+            workloadClass: input.chunk.workloadClass,
+          }
+        }),
+        tx,
+      )
+    })
 
     return true
   })
 }
 
 const recoverAdmittedOversizedRebuildChunk = async (
-  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string},
+  input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string; timings?: Record<string, number>},
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
 ) => {
   if (!isAdmittedOversizedRebuildChunk(input.chunk)) {
@@ -2053,6 +2076,7 @@ const recoverAdmittedOversizedRebuildChunk = async (
       leaseOwner: input.leaseOwner,
       projectId: requireRebuildChunkProjectId(input.chunk),
       splitReason: 'admitted_oversized',
+      timings: input.timings,
     },
     database,
   )
@@ -4657,8 +4681,8 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
   rebuildChunkService: {
     claimChunk: claimReviewServingRebuildChunk,
     failChunk: markReviewServingRebuildChunkFailed,
-    getNextChunk: ({database, now, projectId}) => {
-      return getNextClaimableReviewServingRebuildChunk({now, projectId}, database)
+    getNextChunk: ({database, now, projectId, timings}) => {
+      return getNextClaimableReviewServingRebuildChunk({now, projectId, timings}, database)
     },
     getCompatibleStatusChunks: ({database, excludeChunkIds, firstChunk, limit, now, projectId}) => {
       return getCompatibleStatusRebuildChunkBatchInputs({database, excludeChunkIds, firstChunk, limit, now, projectId})
@@ -5815,7 +5839,7 @@ const getNextForegroundRebuildDrainOptions = (input: {
 }
 
 const measureReviewServingProjectorWorkerPhase = async <T>(
-  timings: Record<string, number>,
+  timings: Record<string, number> | undefined,
   phase: string,
   operation: () => Promise<T>,
 ) => {
@@ -5824,7 +5848,9 @@ const measureReviewServingProjectorWorkerPhase = async <T>(
   try {
     return await operation()
   } finally {
-    timings[phase] = Math.max(0, Date.now() - startedAtMs)
+    if (timings !== undefined) {
+      timings[phase] = Math.max(0, Date.now() - startedAtMs)
+    }
   }
 }
 
@@ -5878,7 +5904,11 @@ const getRoundedMs = (value: number) => {
 }
 
 const getTimingsTotalMs = (timings: Record<string, number>) => {
-  return Object.values(timings).reduce((sum, value) => {
+  return Object.entries(timings).reduce((sum, [phase, value]) => {
+    if (phase.includes('.')) {
+      return sum
+    }
+
     return sum + Math.max(0, value)
   }, 0)
 }
@@ -6487,7 +6517,7 @@ const claimNextReviewServingProjectorWorkerRebuildChunk = async ({
   const service = dependencies.rebuildChunkService
   const timings: Record<string, number> = {}
   const chunkInput = await measureReviewServingProjectorWorkerPhase(timings, 'claimSelectMs', async () => {
-    return service?.getNextChunk({database, now: getWorkerNow(options), projectId: options.rebuildProjectId})
+    return service?.getNextChunk({database, now: getWorkerNow(options), projectId: options.rebuildProjectId, timings})
   })
 
   return !service || chunkInput === null || chunkInput === undefined
@@ -6538,7 +6568,10 @@ const runClaimedReviewServingProjectorWorkerRebuildChunk = async ({
       )
     }
     const recovered = await measureReviewServingProjectorWorkerPhase(timings, 'recoverOversizedMs', async () => {
-      return recoverAdmittedOversizedRebuildChunk({chunk: effectiveClaimedChunk, leaseOwner: workerId}, database)
+      return recoverAdmittedOversizedRebuildChunk(
+        {chunk: effectiveClaimedChunk, leaseOwner: workerId, timings},
+        database,
+      )
     })
     if (!recovered) {
       await measureReviewServingProjectorWorkerPhase(timings, 'executeMs', async () => {
@@ -6787,6 +6820,7 @@ const claimCompatibleReviewServingProjectorWorkerRebuildChunkBatch = async (
         database: input.database,
         now: getWorkerNow(input.options),
         projectId: input.options.rebuildProjectId,
+        timings,
       })
     })
 
