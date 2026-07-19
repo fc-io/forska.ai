@@ -205,6 +205,11 @@ type ReviewServingProjectorWorkerDependencies = {
 }
 
 const reviewServingProjectorWorkerCycleLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const reviewServingProjectorWorkerTimingLogger = createRateLimitedLogger({
+  showSuppressedCount: false,
+  sink: 'file-only',
+  windowMs: 0,
+})
 
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
   return Math.max(0, Date.now() - startedAtMs)
@@ -5823,6 +5828,188 @@ const measureReviewServingProjectorWorkerPhase = async <T>(
   }
 }
 
+type ReviewServingProjectorWorkerTimingBucketKey = {
+  component: ReviewServingProjectionComponent
+  projectId: string | null
+  requestId: string | null
+  status: 'completed' | 'failed'
+}
+
+type ReviewServingProjectorWorkerTimingBucket = ReviewServingProjectorWorkerTimingBucketKey & {
+  count: number
+  estimatedInputRows: number
+  estimatedOutputRows: number
+  firstObservedAtMs: number
+  lastObservedAtMs: number
+  maxTotalMs: number
+  minTotalMs: number
+  phaseMaxMs: Record<string, number>
+  phaseTotalMs: Record<string, number>
+  slowestChunkId: string | null
+  splitDepthMax: number | null
+  totalMs: number
+}
+
+type ReviewServingProjectorWorkerTimingSummary = ReviewServingProjectorWorkerTimingBucketKey & {
+  avgTotalMs: number
+  count: number
+  estimatedInputRows: number
+  estimatedOutputRows: number
+  maxTotalMs: number
+  minTotalMs: number
+  phaseAvgMs: Record<string, number>
+  phaseMaxMs: Record<string, number>
+  slowestChunkId: string | null
+  splitDepthMax: number | null
+  totalMs: number
+  windowMs: number
+}
+
+const reviewServingProjectorWorkerTimingFlushIntervalMs = 60_000
+const reviewServingProjectorWorkerTimingBuckets = new Map<string, ReviewServingProjectorWorkerTimingBucket>()
+const reviewServingProjectorWorkerTimingLastFlushAtMs = new Map<string, number>()
+
+const getReviewServingProjectorWorkerTimingBucketKey = (input: ReviewServingProjectorWorkerTimingBucketKey) => {
+  return [input.requestId ?? 'no-request', input.projectId ?? 'no-project', input.component, input.status].join(':')
+}
+
+const getRoundedMs = (value: number) => {
+  return Math.round(Math.max(0, value))
+}
+
+const getTimingsTotalMs = (timings: Record<string, number>) => {
+  return Object.values(timings).reduce((sum, value) => {
+    return sum + Math.max(0, value)
+  }, 0)
+}
+
+const getMergedTimingTotals = (
+  target: Record<string, number>,
+  timings: Record<string, number>,
+  merge: (current: number, next: number) => number,
+) => {
+  const nextTarget = {...target}
+
+  for (const [phase, value] of Object.entries(timings)) {
+    nextTarget[phase] = merge(nextTarget[phase] ?? 0, Math.max(0, value))
+  }
+
+  return nextTarget
+}
+
+const summarizeReviewServingProjectorWorkerTimingBucket = (
+  bucket: ReviewServingProjectorWorkerTimingBucket,
+): ReviewServingProjectorWorkerTimingSummary => {
+  const count = Math.max(1, bucket.count)
+  const phaseAvgMs = Object.entries(bucket.phaseTotalMs).reduce<Record<string, number>>((summary, [phase, totalMs]) => {
+    summary[phase] = getRoundedMs(totalMs / count)
+
+    return summary
+  }, {})
+
+  return {
+    avgTotalMs: getRoundedMs(bucket.totalMs / count),
+    component: bucket.component,
+    count: bucket.count,
+    estimatedInputRows: bucket.estimatedInputRows,
+    estimatedOutputRows: bucket.estimatedOutputRows,
+    maxTotalMs: getRoundedMs(bucket.maxTotalMs),
+    minTotalMs: getRoundedMs(bucket.minTotalMs),
+    phaseAvgMs,
+    phaseMaxMs: Object.fromEntries(
+      Object.entries(bucket.phaseMaxMs).map(([phase, value]) => {
+        return [phase, getRoundedMs(value)]
+      }),
+    ),
+    projectId: bucket.projectId,
+    requestId: bucket.requestId,
+    slowestChunkId: bucket.slowestChunkId,
+    splitDepthMax: bucket.splitDepthMax,
+    status: bucket.status,
+    totalMs: getRoundedMs(bucket.totalMs),
+    windowMs: Math.max(0, bucket.lastObservedAtMs - bucket.firstObservedAtMs),
+  }
+}
+
+const recordReviewServingProjectorWorkerTimingSample = (input: {
+  chunk: ReviewServingRebuildChunkManifest
+  nowMs: number
+  status: 'completed' | 'failed'
+  timings: Record<string, number>
+  workerId: string
+}) => {
+  const keyInput = {
+    component: input.chunk.projectionComponent,
+    projectId: input.chunk.projectId ?? null,
+    requestId: input.chunk.requestId ?? null,
+    status: input.status,
+  }
+  const key = getReviewServingProjectorWorkerTimingBucketKey(keyInput)
+  const totalMs = getTimingsTotalMs(input.timings)
+  const currentBucket = reviewServingProjectorWorkerTimingBuckets.get(key)
+  const estimatedInputRows = Math.max(0, input.chunk.estimatedInputRows ?? 0)
+  const estimatedOutputRows = Math.max(0, input.chunk.estimatedOutputRows ?? 0)
+  const nextBucket: ReviewServingProjectorWorkerTimingBucket =
+    currentBucket === undefined
+      ? {
+          ...keyInput,
+          count: 1,
+          estimatedInputRows,
+          estimatedOutputRows,
+          firstObservedAtMs: input.nowMs,
+          lastObservedAtMs: input.nowMs,
+          maxTotalMs: totalMs,
+          minTotalMs: totalMs,
+          phaseMaxMs: getMergedTimingTotals({}, input.timings, Math.max),
+          phaseTotalMs: getMergedTimingTotals({}, input.timings, (current, next) => {
+            return current + next
+          }),
+          slowestChunkId: input.chunk.chunkId,
+          splitDepthMax: input.chunk.splitDepth ?? null,
+          totalMs,
+        }
+      : {
+          ...currentBucket,
+          count: currentBucket.count + 1,
+          estimatedInputRows: currentBucket.estimatedInputRows + estimatedInputRows,
+          estimatedOutputRows: currentBucket.estimatedOutputRows + estimatedOutputRows,
+          lastObservedAtMs: input.nowMs,
+          maxTotalMs: Math.max(currentBucket.maxTotalMs, totalMs),
+          minTotalMs: Math.min(currentBucket.minTotalMs, totalMs),
+          phaseMaxMs: getMergedTimingTotals(currentBucket.phaseMaxMs, input.timings, Math.max),
+          phaseTotalMs: getMergedTimingTotals(currentBucket.phaseTotalMs, input.timings, (current, next) => {
+            return current + next
+          }),
+          slowestChunkId: totalMs >= currentBucket.maxTotalMs ? input.chunk.chunkId : currentBucket.slowestChunkId,
+          splitDepthMax:
+            input.chunk.splitDepth === null || input.chunk.splitDepth === undefined
+              ? currentBucket.splitDepthMax
+              : Math.max(currentBucket.splitDepthMax ?? 0, input.chunk.splitDepth),
+          totalMs: currentBucket.totalMs + totalMs,
+        }
+
+  reviewServingProjectorWorkerTimingBuckets.set(key, nextBucket)
+
+  const lastFlushAtMs = reviewServingProjectorWorkerTimingLastFlushAtMs.get(key) ?? nextBucket.firstObservedAtMs
+
+  if (input.nowMs - lastFlushAtMs < reviewServingProjectorWorkerTimingFlushIntervalMs) {
+    return
+  }
+
+  reviewServingProjectorWorkerTimingLastFlushAtMs.set(key, input.nowMs)
+  reviewServingProjectorWorkerTimingBuckets.delete(key)
+  reviewServingProjectorWorkerTimingLogger.force(
+    `review-serving-projector-worker:rebuild-chunk-timing:${key}`,
+    '[reviewServingProjectorWorker] rebuild chunk timing summary',
+    'log',
+    {
+      event: 'rebuildChunkTimingSummary',
+      summary: summarizeReviewServingProjectorWorkerTimingBucket(nextBucket),
+      workerId: input.workerId,
+    },
+  )
+}
+
 const shouldRunCleanup = (input: {cleanupIntervalMs: number; lastCleanupAtMs: number | null; nowMs: number}) => {
   return input.lastCleanupAtMs === null || input.nowMs - input.lastCleanupAtMs >= input.cleanupIntervalMs
 }
@@ -5854,6 +6041,13 @@ const logReviewServingProjectorWorkerRebuildChunkProgress = (input: {
   timings: Record<string, number>
   workerId: string
 }) => {
+  recordReviewServingProjectorWorkerTimingSample({
+    chunk: input.chunk,
+    nowMs: Date.now(),
+    status: input.status,
+    timings: input.timings,
+    workerId: input.workerId,
+  })
   reviewServingProjectorWorkerCycleLogger.log(
     `review-serving-projector-worker:rebuild-chunk:${input.chunk.requestId ?? 'no-request'}:${input.chunk.projectionComponent}`,
     '[reviewServingProjectorWorker] rebuild chunk progress',
@@ -7921,6 +8115,7 @@ export {
   defaultReviewServingProjectorWorkerRebuildChunkBatchSize,
   lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs,
   nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
+  summarizeReviewServingProjectorWorkerTimingBucket,
 }
 
 export type {
@@ -7932,4 +8127,6 @@ export type {
   ReviewServingProjectorWorkerLoopOptions,
   ReviewServingProjectorWorkerRebuildChunkService,
   ReviewServingProjectorWorkerRunResult,
+  ReviewServingProjectorWorkerTimingBucket,
+  ReviewServingProjectorWorkerTimingSummary,
 }
