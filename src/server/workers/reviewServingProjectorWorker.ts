@@ -571,6 +571,7 @@ const articleRangeRebuildChunkPresplitInputRowLimit = 50_000
 const highFanoutArticleRangeRebuildChunkPresplitRowLimit = 5_000
 const summaryArticleRangeRebuildChunkPresplitRowLimit = 512
 const statusArticleRangeRebuildChunkPresplitRowLimit = 512
+const searchArticleRangeRebuildRuntimeRowLimit = 512
 const articleRangeRebuildChunkPresplitMaxBucketCount = 16
 const highFanoutArticleRangeRebuildChunkPresplitMaxBucketCount = 64
 const summaryArticleRangeRebuildChunkPresplitMaxBucketCount = 512
@@ -578,7 +579,7 @@ const statusArticleRangeRebuildChunkPresplitMaxBucketCount = 512
 const admittedOversizedRebuildChunkInputRowLimits: Partial<Record<ReviewServingProjectionComponent, number>> = {
   payload: 10_000,
   posting: 512,
-  search: 512,
+  search: searchArticleRangeRebuildRuntimeRowLimit,
   summary: 512,
 }
 const splittableArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjectionComponent> = new Set([
