@@ -69,7 +69,20 @@ test('normalizes runtime log filtering env and resolves explicit log dirs', () =
       cwd: '/repo/forska',
       envValues: {LOG_DIR: 'tmp/logs', LOG_LEVEL: 'debug', LOG_STDERR_LEVEL: 'error'},
     }),
-  ).toEqual({logDir: '/repo/forska/tmp/logs', logLevel: 'DEBUG', logStderrLevel: 'ERROR', runtimeProfile: 'local'})
+  ).toEqual({
+    logDir: '/repo/forska/tmp/logs',
+    logLevel: 'DEBUG',
+    logStderrLevel: 'ERROR',
+    maxFileBytes: 104_857_600,
+    runtimeProfile: 'local',
+  })
+})
+
+test('normalizes runtime log max file bytes env', () => {
+  expect(getRuntimeLogConfig({cwd: '/repo/forska', envValues: {RUNTIME_LOG_MAX_BYTES: '512'}}).maxFileBytes).toBe(512)
+  expect(getRuntimeLogConfig({cwd: '/repo/forska', envValues: {RUNTIME_LOG_MAX_BYTES: 'bad'}}).maxFileBytes).toBe(
+    104_857_600,
+  )
 })
 
 test('selects shared runtime log files only on tested platform allowlist', () => {
@@ -180,6 +193,53 @@ test('runtime JSONL sink writes one structured record to the service daily file'
     severity: 'INFO',
     timestamp,
   })
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+})
+
+test('runtime JSONL sink truncates active log file when size cap is reached', () => {
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const logPath = join(logDir, 'maintenance-worker-server-2026-04-20.jsonl')
+  const timestamp = '2026-04-20T12:30:00.000Z'
+
+  initializeRuntimeProcessIdentity({
+    hostnameValue: 'test-host',
+    listenPort: 4011,
+    pid: 222,
+    processStartedAt: '2026-04-20T12:00:00.000Z',
+    service: 'maintenance-worker-server',
+  })
+  installRuntimeJsonlSink({
+    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'INFO', RUNTIME_LOG_MAX_BYTES: '128', SERVER_ROLE: 'maintenance-worker'},
+    timestamp,
+  })
+  writeFileSync(logPath, `${'x'.repeat(256)}\n`, 'utf8')
+
+  expect(
+    writeRuntimeLogEvent({
+      attrs: {attempt: 1},
+      event: 'runtime.logger.after-truncate',
+      message: 'after truncate',
+      severity: 'INFO',
+      timestamp,
+    }),
+  ).toBe(true)
+
+  const records = readFileSync(logPath, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      return JSON.parse(line) as {attrs: Record<string, unknown>; event: string}
+    })
+
+  expect(
+    records.map((record) => {
+      return record.event
+    }),
+  ).toEqual(['runtime.log.file-truncated', 'runtime.logger.after-truncate'])
+  expect(records[0]?.attrs).toMatchObject({currentSizeBytes: 257, maxFileBytes: 128})
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
 })
