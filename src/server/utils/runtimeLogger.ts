@@ -1,4 +1,4 @@
-import {appendFileSync, mkdirSync, readdirSync, rmSync} from 'node:fs'
+import {appendFileSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -55,6 +55,7 @@ type RuntimeJsonlSinkState = {
   installed: boolean
   logDir: string | null
   logLevel: RuntimeLogLevel
+  maxFileBytes: number
   serverRole: RuntimeProcessServerRole | undefined
 }
 
@@ -69,6 +70,7 @@ const runtimeLogLevelWeights: Record<RuntimeLogLevel, number> = {DEBUG: 10, ERRO
 const runtimeLogSharedFilePlatforms = ['darwin', 'linux'] as const
 const runtimeLogRetentionDays = 7
 const runtimeLogFlushTimeoutMs = 1_000
+const runtimeLogDefaultMaxFileBytes = 100 * 1024 * 1024
 const runtimeLogManagedFilePattern =
   /^(api-server|app-server|dev-single-server|judge-worker-server|maintenance-worker-server|single-server)-(\d{4}-\d{2}-\d{2})(?:-[A-Za-z0-9_.-]+)?\.jsonl$/
 
@@ -85,6 +87,7 @@ const getRuntimeJsonlSinkState = () => {
     installed: false,
     logDir: null,
     logLevel: 'INFO',
+    maxFileBytes: runtimeLogDefaultMaxFileBytes,
     serverRole: undefined,
   }
 
@@ -113,6 +116,12 @@ const resolveRuntimeLogLevel = (value: string | null | undefined, fallback: Runt
   })
 
   return matchedLevel ?? fallback
+}
+
+const resolveRuntimeLogMaxFileBytes = (value: string | null | undefined) => {
+  const parsedValue = Number.parseInt(getTrimmedValue(value) ?? '', 10)
+
+  return Number.isInteger(parsedValue) && parsedValue > 0 ? parsedValue : runtimeLogDefaultMaxFileBytes
 }
 
 const getJsonlDateFromTimestamp = (timestamp: string) => {
@@ -228,6 +237,43 @@ const getJsonLine = (record: RuntimeLogRecord) => {
   return `${JSON.stringify(getSerializableValue(record))}\n`
 }
 
+const getRuntimeLogFileSizeBytes = (filePath: string) => {
+  try {
+    return statSync(filePath).size
+  } catch {
+    return 0
+  }
+}
+
+const ensureRuntimeLogFileBelowSizeCap = ({
+  filePath,
+  maxFileBytes,
+  record,
+}: {
+  filePath: string
+  maxFileBytes: number
+  record: RuntimeLogRecord
+}) => {
+  const currentSizeBytes = getRuntimeLogFileSizeBytes(filePath)
+
+  if (currentSizeBytes < maxFileBytes) {
+    return
+  }
+
+  writeFileSync(
+    filePath,
+    getJsonLine({
+      attrs: {currentSizeBytes, maxFileBytes},
+      event: 'runtime.log.file-truncated',
+      message: '[runtime] JSONL log file truncated after size cap',
+      runtime: record.runtime,
+      severity: 'WARN',
+      timestamp: record.timestamp,
+    }),
+    'utf8',
+  )
+}
+
 export const getRuntimeLogFileMode = ({platform = process.platform}: {platform?: string} = {}) => {
   const matchedPlatform = runtimeLogSharedFilePlatforms.find((item) => {
     return item === platform
@@ -290,6 +336,7 @@ export const getRuntimeLogConfig = ({
     logDir,
     logLevel: resolveRuntimeLogLevel(envValues.LOG_LEVEL, 'INFO'),
     logStderrLevel: resolveRuntimeLogLevel(envValues.LOG_STDERR_LEVEL, 'WARN'),
+    maxFileBytes: resolveRuntimeLogMaxFileBytes(envValues.RUNTIME_LOG_MAX_BYTES),
     runtimeProfile,
   }
 }
@@ -330,6 +377,7 @@ export const installRuntimeJsonlSink = ({
   state.installed = true
   state.logDir = runtimeLogConfig.logDir
   state.logLevel = runtimeLogConfig.logLevel
+  state.maxFileBytes = runtimeLogConfig.maxFileBytes
   state.serverRole = getRuntimeProcessServerRole(envValues)
 
   return state
@@ -358,17 +406,16 @@ const writeRuntimeLogEventToJsonl = ({force, input}: {force: boolean; input: Run
     state.activeDate = recordDate
   }
 
-  appendFileSync(
-    getRuntimeLogFilePath({
-      fileMode: state.fileMode,
-      instanceId: record.runtime.instanceId,
-      logDir: state.logDir,
-      service: record.runtime.service,
-      timestamp: record.timestamp,
-    }),
-    getJsonLine(record),
-    'utf8',
-  )
+  const logFilePath = getRuntimeLogFilePath({
+    fileMode: state.fileMode,
+    instanceId: record.runtime.instanceId,
+    logDir: state.logDir,
+    service: record.runtime.service,
+    timestamp: record.timestamp,
+  })
+
+  ensureRuntimeLogFileBelowSizeCap({filePath: logFilePath, maxFileBytes: state.maxFileBytes, record})
+  appendFileSync(logFilePath, getJsonLine(record), 'utf8')
 
   return true
 }
@@ -460,5 +507,6 @@ export const resetRuntimeJsonlSinkForTests = () => {
   state.installed = false
   state.logDir = null
   state.logLevel = 'INFO'
+  state.maxFileBytes = runtimeLogDefaultMaxFileBytes
   state.serverRole = undefined
 }
