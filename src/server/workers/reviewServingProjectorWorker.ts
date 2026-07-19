@@ -5080,6 +5080,33 @@ const readmitRetryableFailedRebuildRequests = async (input: {
   `)
 }
 
+const failSupersededRequestlessBootstrapRebuildRequests = async (input: {
+  database: ReviewServingChunkManifestRepositoryDatabase
+  projectId?: string | null
+}) => {
+  const projectCondition = input.projectId ? `AND request.project_id = ${getSqlLiteral(input.projectId)}` : ''
+
+  await input.database.run(`
+    UPDATE app.review_rebuild_request AS request
+    SET
+      status = 'failed',
+      failed_at = current_timestamp,
+      last_error = 'superseded requestless bootstrap snapshot',
+      updated_at = current_timestamp
+    WHERE request.request_id LIKE ${getSqlLiteral(`${requestlessBootstrapRebuildRequestPrefix}:%`)}
+      AND request.status IN ('admitted', 'running')
+      AND request.admission_state = 'admitted'
+      ${projectCondition}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_serving_snapshot_manifest snapshot
+        WHERE snapshot.project_id = request.project_id
+          AND snapshot.snapshot_id = json_extract_string(request.identity_json, '$.snapshotId')
+          AND snapshot.snapshot_status IN ('candidate', 'active')
+      )
+  `)
+}
+
 const repairRequestlessBootstrapRebuildAdoptions = async (input: {
   database: ReviewServingChunkManifestRepositoryDatabase
   projectId?: string | null
@@ -8238,6 +8265,7 @@ export const runReviewServingProjectorWorkerCycle = async (
   const wakeId = `${workerId}:${getWorkerNowMs(dependencies, options)}`
   const workloadContext = getReviewServingProjectorWorkerWorkloadContext(workerId)
   const database = getReviewServingProjectorWorkerDatabase(dependencies, workloadContext)
+  await failSupersededRequestlessBootstrapRebuildRequests({database, projectId: options.rebuildProjectId})
   await repairRequestlessBootstrapRebuildAdoptions({database, projectId: options.rebuildProjectId})
   const terminalFailedChunk = await finalizeTerminalFailedRebuildRequests({
     database,
