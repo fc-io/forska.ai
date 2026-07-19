@@ -53,7 +53,18 @@ type DuckdbReloadSubprocessResult = {
   repairBackupContent: string | null
   repairCount: number
   repairLockProbeCount: number
-  repairManifest: {error?: string; preservedDatabasePath?: string; recovery?: string; repairedTables?: string[]} | null
+  repairManifest: {
+    error?: string
+    preservedDatabasePath?: string
+    recovery?: string
+    repairedTables?: string[]
+    repairMarker?: {
+      phase?: string
+      repairSpecs?: Array<{schemaName: string; tableName: string}>
+      schemaName?: string
+      tableName?: string
+    } | null
+  } | null
   repairOptions: {checkpoint_threshold?: string} | null
   repairScript: string
   repairSpecs: Array<{schemaName: string; tableName: string}>
@@ -3038,6 +3049,10 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(parsed.preflightWalManifest).toBeNull()
     expect(parsed.repairManifest?.recovery).toBe('indexed-table-rebuild')
     expect(parsed.repairManifest?.error).toContain('PRIMARY_review_article_judgment_detail_serving_v4')
+    expect(parsed.repairManifest?.repairMarker).toMatchObject({
+      schemaName: 'mart',
+      tableName: 'review_article_judgment_detail_serving_v4',
+    })
     expect(parsed.repairManifest?.repairedTables).toEqual(['mart.review_article_judgment_detail_serving_v4'])
     expect(parsed.repairBackupContent).toBe('database-after-lock-holder')
     expect(parsed.repairOptions?.checkpoint_threshold).toBe('8GB')
