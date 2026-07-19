@@ -603,6 +603,7 @@ test('duckdb service runs only low-memory safe startup mutation preflight on low
       }),
     ).toEqual([
       'app.review_serving_projector_watermark',
+      'app.review_serving_snapshot_manifest',
       'app.comparison_project_serving_generation',
       'app.review_rebuild_chunk_manifest',
       'mart.review_article_count_serving_v4',
@@ -1611,6 +1612,27 @@ test('duckdb fatal index-delete repair target prefers table named by error over 
   expect(targetMatcherSource).toContain('message.includes(spec.tableName)')
   expect(targetMatcherSource.indexOf('const unqualifiedMessageSpec')).toBeLessThan(
     targetMatcherSource.indexOf('getDuckdbStartupRepairSpecForTableName(failedMutatingTargetTable)'),
+  )
+})
+
+test('duckdb fatal index-delete repair target recognizes snapshot manifest row dumps', () => {
+  const source = readFileSync('src/server/utils/duckdbService.ts', 'utf8')
+  const snapshotMatcherSource = source.slice(
+    source.indexOf('const getDuckdbStartupRepairSpecForSnapshotManifestIndexError'),
+    source.indexOf('const getDuckdbStartupRepairSpecsForFatalIndexedTableError'),
+  )
+  const targetMatcherSource = source.slice(
+    source.indexOf('const getDuckdbStartupRepairSpecsForFatalIndexedTableError'),
+    source.indexOf('const isDuckdbStartupRetryableError'),
+  )
+
+  expect(snapshotMatcherSource).toContain("message.includes('Chunk - [17 Columns]')")
+  expect(snapshotMatcherSource).toContain("message.includes('snapshot:')")
+  expect(snapshotMatcherSource).toContain(
+    "getDuckdbStartupRepairSpecForTableName('app.review_serving_snapshot_manifest')",
+  )
+  expect(targetMatcherSource.indexOf('getDuckdbStartupRepairSpecForSnapshotManifestIndexError')).toBeLessThan(
+    targetMatcherSource.indexOf('const fallbackSpec'),
   )
 })
 
@@ -3295,6 +3317,15 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     })
     expect(selectedImportProbe?.mutationProbeSql).toContain("projection_component = 'selectedImport'")
     expect(selectedImportProbe?.mutationProbeSql).toContain('INSERT INTO app.review_selected_article_import_v4 BY NAME')
+    const snapshotManifestProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'app' && spec.tableName === 'review_serving_snapshot_manifest'
+    })
+    expect(snapshotManifestProbe?.lowMemoryStartupPreflight).toBe(true)
+    expect(snapshotManifestProbe?.repairPrimaryKeyColumns).toEqual(['project_id', 'snapshot_id'])
+    expect(snapshotManifestProbe?.repairStrategy).toBe('dedupe-latest')
+    expect(snapshotManifestProbe?.repairDedupeOrderSql).toContain("snapshot_status = 'active'")
+    expect(snapshotManifestProbe?.mutationProbeSql).toContain('startup_probe_review_serving_snapshot_manifest')
+    expect(snapshotManifestProbe?.mutationProbeSql).toContain('UPDATE app.review_serving_snapshot_manifest')
     const rebuildRequestProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'app' && spec.tableName === 'review_rebuild_request'
     })
