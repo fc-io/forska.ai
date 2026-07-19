@@ -5111,7 +5111,6 @@ const repairRequestlessBootstrapRebuildAdoptions = async (input: {
       AND chunk.project_id IS NOT DISTINCT FROM request_scope.project_id
       AND chunk.snapshot_id IS NOT DISTINCT FROM request_scope.snapshot_id
       AND chunk.output_base_generation = request_scope.output_base_generation
-      AND chunk.input_watermark = request_scope.input_watermark
       AND chunk.input_digest IS NOT DISTINCT FROM request_scope.input_digest
       AND chunk.status NOT IN ('blocked_over_budget', 'quarantined')
   `)
@@ -6520,7 +6519,7 @@ const getRequestlessRebuildChunkAdoption = async (
   database: ReviewServingChunkManifestRepositoryDatabase,
 ) => {
   const projectId = requireRebuildChunkProjectId(input.chunk)
-  const components = await database.queryJson<{projectionComponent: ReviewServingProjectionComponent}>(`
+  const exactComponents = await database.queryJson<{projectionComponent: ReviewServingProjectionComponent}>(`
     SELECT DISTINCT projection_component AS "projectionComponent"
     FROM app.review_rebuild_chunk_manifest
     WHERE request_id IS NULL
@@ -6532,26 +6531,41 @@ const getRequestlessRebuildChunkAdoption = async (
       AND status NOT IN ('blocked_over_budget', 'quarantined')
     ORDER BY projection_component
   `)
-  const requestedComponents = components.map((component) => {
+  const exactRequestedComponents = exactComponents.map((component) => {
     return component.projectionComponent
   })
 
-  if (requestedComponents.length === 0) {
+  if (exactRequestedComponents.length === 0) {
     return null
   }
 
   if (
-    requestedComponents.length === 1
-    && requestedComponents[0] === 'summary'
+    exactRequestedComponents.length === 1
+    && exactRequestedComponents[0] === 'summary'
     && isRequestlessSummaryRangeRebuildChunk(input.chunk)
   ) {
     return {
       diagnostics: {adoptedRequestlessSummaryChunks: true},
       reason: 'requestless_summary_range_rebuild',
       requestId: getRequestlessSummaryRangeRebuildRequestId(input.chunk),
-      requestedComponents,
+      requestedComponents: exactRequestedComponents,
     }
   }
+
+  const bootstrapComponents = await database.queryJson<{projectionComponent: ReviewServingProjectionComponent}>(`
+    SELECT DISTINCT projection_component AS "projectionComponent"
+    FROM app.review_rebuild_chunk_manifest
+    WHERE request_id IS NULL
+      AND project_id IS NOT DISTINCT FROM ${getSqlLiteral(projectId)}
+      AND snapshot_id IS NOT DISTINCT FROM ${getSqlLiteral(input.chunk.snapshotId)}
+      AND output_base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
+      AND input_digest IS NOT DISTINCT FROM ${getSqlLiteral(input.chunk.inputDigest)}
+      AND status NOT IN ('blocked_over_budget', 'quarantined')
+    ORDER BY projection_component
+  `)
+  const requestedComponents = bootstrapComponents.map((component) => {
+    return component.projectionComponent
+  })
 
   return {
     diagnostics: {adoptedRequestlessBootstrapChunks: true},
@@ -6576,6 +6590,10 @@ const adoptRequestlessRebuildChunk = async (
     if (adoption === null) {
       return input.chunk
     }
+    const adoptionInputWatermarkPredicate =
+      adoption.reason === 'requestless_summary_range_rebuild'
+        ? `AND input_watermark = ${getSqlLiteral(input.chunk.inputWatermark)}`
+        : ''
     await requireClaimedRebuildChunk(input, tx)
     await tx.run(`
       INSERT INTO app.review_rebuild_request (
@@ -6645,7 +6663,7 @@ const adoptRequestlessRebuildChunk = async (
         AND project_id IS NOT DISTINCT FROM ${getSqlLiteral(projectId)}
         AND snapshot_id IS NOT DISTINCT FROM ${getSqlLiteral(input.chunk.snapshotId)}
         AND output_base_generation = ${getSqlLiteral(input.chunk.outputBaseGeneration)}
-        AND input_watermark = ${getSqlLiteral(input.chunk.inputWatermark)}
+        ${adoptionInputWatermarkPredicate}
         AND input_digest IS NOT DISTINCT FROM ${getSqlLiteral(input.chunk.inputDigest)}
         AND status NOT IN ('blocked_over_budget', 'quarantined')
     `)
