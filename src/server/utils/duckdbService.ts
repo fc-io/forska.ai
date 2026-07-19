@@ -5262,6 +5262,7 @@ const writeDuckdbStatementDiagnostic = ({
   const diagnosticAttrs = {
     connectionRole,
     durationMs,
+    errorMessage: phase === 'error' ? getCompactDuckdbErrorMessage(error) : null,
     errorName: error instanceof Error ? error.name : error === null ? null : typeof error,
     lane,
     operation: diagnosticContext.operation,
