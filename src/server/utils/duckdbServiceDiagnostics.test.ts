@@ -4,6 +4,7 @@ type DiagnosticEvent = {
   attrs: {
     connectionRole: string
     durationMs: number | null
+    errorMessage: string | null
     errorName: string | null
     lane: number | null
     operation: string
@@ -251,7 +252,13 @@ test('duckdb native statement diagnostics identify workload and connection witho
     },
   })
   expect(statementError).toMatchObject({
-    attrs: {connectionRole: 'background', errorName: 'TypeError', operation: 'backgroundStatement', phase: 'error'},
+    attrs: {
+      connectionRole: 'background',
+      errorMessage: 'native failure',
+      errorName: 'TypeError',
+      operation: 'backgroundStatement',
+      phase: 'error',
+    },
     event: 'duckdb.statement.error',
     severity: 'ERROR',
   })
