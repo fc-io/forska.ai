@@ -3044,7 +3044,11 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(parsed.repairScript).toContain("await connection.run('CHECKPOINT')")
     expect(parsed.repairScript).toContain("spec.repairStrategy !== 'empty-derived'")
     expect(parsed.repairScript).toContain('spec.postRepairSql')
-    expect(parsed.repairScript).toContain("duplicateCount > 0 && spec.repairStrategy !== 'empty-derived'")
+    expect(parsed.repairScript).toContain(
+      "duplicateCount > 0 && !['dedupe-latest', 'empty-derived'].includes(spec.repairStrategy)",
+    )
+    expect(parsed.repairScript).toContain("spec.repairStrategy !== 'dedupe-latest'")
+    expect(parsed.repairScript).toContain('ROW_NUMBER() OVER (PARTITION BY')
     expect(parsed.repairScript).toContain('stripInlinePrimaryKeyConstraints')
     expect(parsed.repairScript).toContain('PRIMARY\\s+KEY\\s*\\([^)]*\\)')
     expect(parsed.repairScript).toContain('getRepairPrimaryKeyIndexSql')
@@ -3114,6 +3118,8 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     })
     expect(rebuildRequestProbe?.lowMemoryStartupPreflight).toBeUndefined()
     expect(rebuildRequestProbe?.repairPrimaryKeyColumns).toEqual(['request_id'])
+    expect(rebuildRequestProbe?.repairStrategy).toBe('dedupe-latest')
+    expect(rebuildRequestProbe?.repairDedupeOrderSql).toContain("status IN ('admitted', 'running')")
     expect(rebuildRequestProbe?.mutationProbeSql).toContain('UPDATE app.review_rebuild_request')
     expect(rebuildRequestProbe?.mutationProbeSql).toContain('startup_probe_review_rebuild_request')
     const chunkManifestProbe = parsed.firstPreflightSpecs.find((spec) => {

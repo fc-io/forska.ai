@@ -831,11 +831,11 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).toContain('candidate.lease_expires_at <=')
   expect(statements.join('\n')).toContain('ORDER BY')
   expect(statements.join('\n')).toContain("WHEN candidate.status = 'running'")
-  expect(statements.join('\n')).toContain('SELECT request.priority')
-  expect(statements.join('\n')).toContain('SELECT request.updated_at')
+  expect(statements.join('\n')).toContain('SELECT MAX(request.priority)')
+  expect(statements.join('\n')).toContain('SELECT MAX(request.updated_at)')
   expect(statements.join('\n')).toContain('candidate.updated_at ASC')
   expect(statements.join('\n')).toMatch(
-    /SELECT request\.priority[\s\S]*\) DESC NULLS LAST,[\s\S]*SELECT request\.updated_at[\s\S]*candidate\.updated_at[\s\S]*candidate\.projection_component IN \('projectScope', 'selectedImport', 'display'[\s\S]*CASE candidate\.projection_component/,
+    /SELECT MAX\(request\.priority\)[\s\S]*\) DESC NULLS LAST,[\s\S]*SELECT MAX\(request\.updated_at\)[\s\S]*candidate\.updated_at[\s\S]*candidate\.projection_component IN \('projectScope', 'selectedImport', 'display'[\s\S]*CASE candidate\.projection_component/,
   )
   expect(statements.join('\n')).toContain('CASE candidate.projection_component')
 })
@@ -860,7 +860,7 @@ test('next claimable chunk discovery does not favor newer pending requests over 
 
   expect(next).toMatchObject({inputDigest: 'digest-older-pending', requestId: 'rebuild:older'})
   expect(statements.join('\n')).toMatch(
-    /candidate\.projection_component IN \('projectScope', 'selectedImport', 'display'[\s\S]*CASE candidate\.projection_component[\s\S]*SELECT request\.updated_at[\s\S]*candidate\.updated_at ASC/,
+    /candidate\.projection_component IN \('projectScope', 'selectedImport', 'display'[\s\S]*CASE candidate\.projection_component[\s\S]*SELECT MAX\(request\.updated_at\)[\s\S]*candidate\.updated_at ASC/,
   )
 })
 
@@ -2016,6 +2016,37 @@ test('expired running rebuild chunk leases are reclaimed without retry delay', a
   expect(claimStatement).toContain("manifest.status = 'running'")
   expect(claimStatement).toContain('manifest.lease_expires_at IS NULL')
   expect(claimStatement).not.toContain('FROM app.review_rebuild_chunk_manifest prerequisite')
+})
+
+test('failed rebuild chunk retry claims tolerate duplicate request policy rows', async () => {
+  const retryIdentity = {
+    ...baseChunkIdentity,
+    requestId: 'rebuild:duplicate-policy',
+  } satisfies ReviewServingRebuildChunkIdentity
+  const failed = {
+    ...getChunkRowFromIdentity(retryIdentity, []),
+    retryAfter: '2026-06-16T13:59:00.000Z',
+    retryCount: 1,
+    status: 'failed' as const,
+  }
+  const {database, statements} = createFakeChunkManifestDatabase([failed])
+
+  await claimReviewServingRebuildChunk(
+    {
+      ...retryIdentity,
+      leaseExpiresAt: '2026-06-16T14:05:00.000Z',
+      leaseOwner: 'worker-retry',
+      now: '2026-06-16T14:00:00.000Z',
+    },
+    database,
+  )
+
+  const claimStatement = statements.find((statement) => {
+    return statement.includes('UPDATE app.review_rebuild_chunk_manifest AS manifest')
+  })
+
+  expect(claimStatement).toContain('MAX(TRY_CAST(json_extract_string(policy.retry_policy_json')
+  expect(claimStatement).not.toContain('WHERE policy.request_id = manifest.request_id\n            LIMIT 1')
 })
 
 test('changed maintained input digest creates a different chunk and avoids stale completed skips', async () => {
