@@ -6,6 +6,7 @@ import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts
 import {
   claimReviewServingDirtyWork,
   type ClaimReviewServingDirtyWorkParams,
+  completeReviewServingDirtyWorkClaims,
   failReviewServingDirtyWorkClaims,
   releaseReviewServingDirtyWorkClaims,
   type ReviewServingDirtyWorkClaim,
@@ -59,6 +60,7 @@ export type ReviewServingProjectorServiceDependencies = {
     params: ClaimReviewServingDirtyWorkParams,
     database?: ReviewServingDirtyWorkDatabase,
   ) => Promise<ReviewServingDirtyWorkClaim[]>
+  completeDirtyWork?: typeof completeReviewServingDirtyWorkClaims
   database?: ReviewServingProjectorServiceDatabase
   ensureClaimManifests?: ReviewServingClaimManifestEnsurer
   failDirtyWork?: typeof failReviewServingDirtyWorkClaims
@@ -242,6 +244,22 @@ const isMissingSnapshotDiagnostic = (diagnostic: string) => {
   )
 }
 
+const isBroadSearchDirtyWorkClaim = (claim: ReviewServingDirtyWorkClaim) => {
+  return (
+    claim.projectionComponent === 'search'
+    && claim.scopeKind === 'project'
+    && claim.projectId !== null
+    && claim.articleId === null
+  )
+}
+
+const getBroadSearchDirtyWorkProjectIds = (
+  component: ReviewServingProjectionComponent,
+  claims: readonly ReviewServingDirtyWorkClaim[],
+) => {
+  return component === 'search' && claims.some(isBroadSearchDirtyWorkClaim) ? getClaimProjectIds(claims) : []
+}
+
 const getClaimInputWatermarks = (claim: ReviewServingDirtyWorkClaim): ReviewServingSourcePartitionWatermarks => {
   return {[claim.sourcePartition]: claim.latestSourceHighWaterMark}
 }
@@ -402,6 +420,7 @@ export const wakeReviewServingProjectorService = async (
 ): Promise<WakeReviewServingProjectorServiceResult> => {
   const database = dependencies.database ?? getDefaultDatabase()
   const claimDirtyWork = dependencies.claimDirtyWork ?? claimReviewServingDirtyWork
+  const completeDirtyWork = dependencies.completeDirtyWork ?? completeReviewServingDirtyWorkClaims
   const failDirtyWork = dependencies.failDirtyWork ?? failReviewServingDirtyWorkClaims
   const releaseDirtyWork = dependencies.releaseDirtyWork ?? releaseReviewServingDirtyWorkClaims
   const ensureClaimManifests = dependencies.ensureClaimManifests ?? ensureReviewServingClaimManifests
@@ -458,6 +477,68 @@ export const wakeReviewServingProjectorService = async (
         await releaseDirtyWork(claimIds, database)
 
         return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
+      }
+
+      const broadSearchProjectIds = getBroadSearchDirtyWorkProjectIds(component, claims)
+
+      if (broadSearchProjectIds.length > 0) {
+        const rebuildResult = await Effect.runPromise(
+          Effect.either(
+            Effect.forEach(
+              broadSearchProjectIds,
+              (projectId) => {
+                return requestRebuild(
+                  {components: ['search'], priority: 5_000, projectId, reason: 'broadSearchDirtyWork'},
+                  database,
+                )
+              },
+              {concurrency: 1},
+            ),
+          ),
+        )
+
+        if (rebuildResult._tag === 'Left') {
+          const rebuildDiagnostic = getDiagnostic(rebuildResult.left)
+          await failDirtyWork(claimIds, database)
+          logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic: rebuildDiagnostic})
+
+          return {
+            ...state,
+            failures: [
+              ...state.failures,
+              {attempts: 1, claimIds, component, diagnostic: rebuildDiagnostic, status: 'failed' as const},
+            ],
+            processedRows: state.processedRows + claims.length,
+          }
+        }
+
+        const blockedRebuildRequests = getBlockedRebuildRequests(rebuildResult.right)
+
+        if (blockedRebuildRequests.length > 0) {
+          const blockedDiagnostic = getBlockedRebuildRequestDiagnostic(blockedRebuildRequests)
+          await failDirtyWork(claimIds, database)
+          logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic: blockedDiagnostic})
+
+          return {
+            ...state,
+            failures: [
+              ...state.failures,
+              {attempts: 1, claimIds, component, diagnostic: blockedDiagnostic, status: 'failed' as const},
+            ],
+            processedRows: state.processedRows + claims.length,
+          }
+        }
+
+        await completeDirtyWork(claims, database)
+
+        return {
+          ...state,
+          processedRows: state.processedRows + claims.length,
+          runs: [
+            ...state.runs,
+            {attempts: 1, claimCount: claims.length, component, processedCount: 0, status: 'completed' as const},
+          ],
+        }
       }
 
       try {
