@@ -8063,13 +8063,18 @@ export const runReviewServingProjectorWorkerOnce = async (
 
 const shouldRestartAfterCompletedRebuildChunk = (
   chunk: ReviewServingProjectorWorkerChunkResult,
-  maxCompletedRebuildChunksPerRun: number,
+  input: {
+    dependencies: ReviewServingProjectorWorkerDependencies
+    maxCompletedRebuildChunksPerRun: number
+    options: ReviewServingProjectorWorkerCycleOptions
+  },
 ) => {
   return (
-    maxCompletedRebuildChunksPerRun > 0
+    input.maxCompletedRebuildChunksPerRun > 0
     && chunk.status === 'completed'
     && chunk.requestId !== null
     && reviewServingNativeHeavyRebuildComponents.has(chunk.projectionComponent)
+    && hasReviewServingProjectorWorkerReachedRssCap(input)
   )
 }
 
@@ -8091,7 +8096,9 @@ export const runReviewServingProjectorWorker = async (
     return {reason: 'aborted'}
   }
 
-  if (shouldRestartAfterCompletedRebuildChunk(cycleResult.chunk, maxCompletedRebuildChunksPerRun)) {
+  if (
+    shouldRestartAfterCompletedRebuildChunk(cycleResult.chunk, {dependencies, maxCompletedRebuildChunksPerRun, options})
+  ) {
     return {reason: 'nativeHeavyChunkCompleted'}
   }
 
