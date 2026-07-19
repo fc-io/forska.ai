@@ -59,8 +59,12 @@ const createDiagnosticsDatabase = () => {
             snapshotActiveCount: 1,
             snapshotCandidateCount: 1,
             snapshotFailedCount: 2,
+            snapshotInvalidOptionalStateCandidateCount: 1,
+            snapshotInvalidRequiredStateCandidateCount: 1,
             snapshotInvalidCandidateCount: 1,
+            snapshotMissingRequiredCandidateCount: 1,
             snapshotRetiredCount: 0,
+            snapshotSelectedImportIncompleteCandidateCount: 1,
             unresolvedOutboxCount: 3,
           },
         ] as T[]
@@ -200,6 +204,12 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
       activeSnapshotId: 'snapshot-1',
       candidateCount: 1,
       failedCount: 2,
+      invalidCandidateReasons: {
+        invalidOptionalStateCount: 1,
+        invalidRequiredStateCount: 1,
+        missingRequiredCount: 1,
+        selectedImportIncompleteCount: 1,
+      },
       invalidCandidateCount: 1,
       lastKnownGoodSnapshotId: 'snapshot-0',
     },
@@ -209,6 +219,9 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   expect(statements.join('\n')).toContain('missing_required_candidate')
   expect(statements.join('\n')).toContain('invalid_required_state_candidate')
   expect(statements.join('\n')).toContain('invalid_optional_state_candidate')
+  expect(statements.join('\n')).toContain('selected_import_incomplete_candidate')
+  expect(statements.join('\n')).toContain('selectedImportIncompleteCandidateCount')
+  expect(statements.join('\n')).toContain('invalidRequiredStateCandidateCount')
   expect(statements.join('\n')).toContain("json_extract(snapshot.component_state_json, '$.optional')")
   expect(statements.join('\n')).toContain('app.review_projection_identity_manifest')
   expect(statements.join('\n')).toContain("manifest.status IN ('active', 'candidate')")

@@ -2144,6 +2144,15 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
       validationTable: 'FROM mart.review_article_filter_posting_serving_v4 serving',
       writerName: 'postingBatchWriter',
     },
+    {
+      component: 'summary',
+      endKeys: ['article-033', 'article-066', 'article-099'],
+      identity: 'summary:project-1',
+      preclaimTailLimit: 7,
+      startKeys: ['article-001', 'article-034', 'article-067'],
+      validationTable: 'FROM mart.review_article_count_serving_v4',
+      writerName: 'summaryBatchWriter',
+    },
   ] as const
 
   for (const batchCase of cases) {

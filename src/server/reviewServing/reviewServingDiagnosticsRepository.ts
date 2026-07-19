@@ -72,6 +72,12 @@ export type ReviewServingDiagnostics = {
     activeSnapshotId: string | null
     activeUpdatedAt: string | null
     candidateCount: number
+    invalidCandidateReasons: {
+      invalidOptionalStateCount: number
+      invalidRequiredStateCount: number
+      missingRequiredCount: number
+      selectedImportIncompleteCount: number
+    }
     invalidCandidateCount: number
     failedCount: number
     lastKnownGoodSnapshotId: string | null
@@ -125,8 +131,12 @@ type DiagnosticsSummaryRow = {
   snapshotActiveCount: number
   snapshotCandidateCount: number
   snapshotFailedCount: number
+  snapshotInvalidOptionalStateCandidateCount: number
+  snapshotInvalidRequiredStateCandidateCount: number
   snapshotInvalidCandidateCount: number
+  snapshotMissingRequiredCandidateCount: number
   snapshotRetiredCount: number
+  snapshotSelectedImportIncompleteCandidateCount: number
   unresolvedOutboxCount: number
 }
 
@@ -469,13 +479,15 @@ const getDiagnosticsSummaryRowsEffect = (
             AND manifest.input_watermark >= TRY_CAST(json_extract_string(optional_state.value, '$.patchWatermark') AS BIGINT)
             ${getComponentSourceWatermarkSql('optional_state')}
         )
-      ), invalid_candidate AS (
+      ), selected_import_incomplete_candidate AS (
         SELECT snapshot.snapshot_id
         FROM snapshot_candidates snapshot
         LEFT JOIN app.review_selected_import_snapshot selected_import
           ON selected_import.selected_import_snapshot_id = snapshot.selected_import_snapshot_id
         WHERE snapshot.selected_import_snapshot_id IS NOT NULL
           AND COALESCE(selected_import.status, 'missing') <> 'completed'
+      ), invalid_candidate AS (
+        SELECT snapshot_id FROM selected_import_incomplete_candidate
         UNION
         SELECT snapshot_id FROM missing_required_candidate
         UNION
@@ -488,6 +500,10 @@ const getDiagnosticsSummaryRowsEffect = (
           CAST(COUNT(*) FILTER (WHERE snapshot_status = 'candidate') AS INTEGER) AS candidateCount,
           CAST(COUNT(*) FILTER (WHERE snapshot_status = 'failed') AS INTEGER) AS failedCount,
           CAST(COUNT(*) FILTER (WHERE snapshot_status = 'retired') AS INTEGER) AS retiredCount,
+          CAST((SELECT COUNT(DISTINCT snapshot_id) FROM selected_import_incomplete_candidate) AS INTEGER) AS selectedImportIncompleteCandidateCount,
+          CAST((SELECT COUNT(DISTINCT snapshot_id) FROM missing_required_candidate) AS INTEGER) AS missingRequiredCandidateCount,
+          CAST((SELECT COUNT(DISTINCT snapshot_id) FROM invalid_required_state_candidate) AS INTEGER) AS invalidRequiredStateCandidateCount,
+          CAST((SELECT COUNT(DISTINCT snapshot_id) FROM invalid_optional_state_candidate) AS INTEGER) AS invalidOptionalStateCandidateCount,
           CAST(COUNT(*) FILTER (
             WHERE snapshot_status = 'candidate'
               AND snapshot.snapshot_id IN (SELECT snapshot_id FROM invalid_candidate)
@@ -626,6 +642,10 @@ const getDiagnosticsSummaryRowsEffect = (
         snapshot_status_counts.failedCount AS snapshotFailedCount,
         snapshot_status_counts.retiredCount AS snapshotRetiredCount,
         snapshot_status_counts.invalidCandidateCount AS snapshotInvalidCandidateCount,
+        snapshot_status_counts.selectedImportIncompleteCandidateCount AS snapshotSelectedImportIncompleteCandidateCount,
+        snapshot_status_counts.missingRequiredCandidateCount AS snapshotMissingRequiredCandidateCount,
+        snapshot_status_counts.invalidRequiredStateCandidateCount AS snapshotInvalidRequiredStateCandidateCount,
+        snapshot_status_counts.invalidOptionalStateCandidateCount AS snapshotInvalidOptionalStateCandidateCount,
         dirty_work.pendingCount AS dirtyWorkPendingCount,
         dirty_work.runningCount AS dirtyWorkRunningCount,
         dirty_work.failedCount AS dirtyWorkFailedCount,
@@ -716,6 +736,12 @@ const getDiagnosticsSnapshot = (row: DiagnosticsSummaryRow | undefined): ReviewS
     activeSnapshotId: activeSnapshot?.snapshotId ?? null,
     activeUpdatedAt: activeSnapshot?.updatedAt ?? null,
     candidateCount: Number(row?.snapshotCandidateCount ?? 0),
+    invalidCandidateReasons: {
+      invalidOptionalStateCount: Number(row?.snapshotInvalidOptionalStateCandidateCount ?? 0),
+      invalidRequiredStateCount: Number(row?.snapshotInvalidRequiredStateCandidateCount ?? 0),
+      missingRequiredCount: Number(row?.snapshotMissingRequiredCandidateCount ?? 0),
+      selectedImportIncompleteCount: Number(row?.snapshotSelectedImportIncompleteCandidateCount ?? 0),
+    },
     invalidCandidateCount: Number(row?.snapshotInvalidCandidateCount ?? 0),
     failedCount: Number(row?.snapshotFailedCount ?? 0),
     lastKnownGoodSnapshotId: activeSnapshot?.lastKnownGoodSnapshotId ?? null,
