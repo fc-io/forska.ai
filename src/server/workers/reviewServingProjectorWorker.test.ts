@@ -2106,7 +2106,7 @@ test('worker writes compatible status and posting rebuild chunks through compone
   }
 })
 
-test('bounded worker isolates native-heavy request chunks without changing lightweight batches', async () => {
+test('bounded worker coalesces lightweight foreground chunks under the completed chunk cap', async () => {
   const cases = [
     {
       component: 'llmStatus',
@@ -2139,7 +2139,7 @@ test('bounded worker isolates native-heavy request chunks without changing light
       component: 'posting',
       endKeys: ['article-033', 'article-066', 'article-099'],
       identity: 'posting:project-1',
-      preclaimTailLimit: 1,
+      preclaimTailLimit: 7,
       startKeys: ['article-001', 'article-034', 'article-067'],
       validationTable: 'FROM mart.review_article_filter_posting_serving_v4 serving',
       writerName: 'postingBatchWriter',
@@ -2153,6 +2153,8 @@ test('bounded worker isolates native-heavy request chunks without changing light
       ...chunkInput,
       chunkEndKey: batchCase.endKeys[0],
       chunkStartKey: batchCase.startKeys[0],
+      estimatedInputRows: 512,
+      estimatedOutputRows: 512,
       projectionComponent: batchCase.component,
       projectionIdentity: batchCase.identity,
       requestId: 'rebuild:foreground-status',
@@ -2307,8 +2309,7 @@ test('bounded worker isolates native-heavy request chunks without changing light
     )
     const joined = statements.join('\n')
 
-    const expectedBatchSize =
-      batchCase.component === 'posting' ? 1 : Math.min(batchCase.preclaimTailLimit + 1, chunks.length)
+    const expectedBatchSize = Math.min(batchCase.preclaimTailLimit + 1, chunks.length)
     const expectedPreclaimTailLimit = Math.min(batchCase.preclaimTailLimit, 15)
     const expectedLastChunk = chunks[expectedBatchSize - 1] ?? chunks.at(-1)
 
@@ -2316,12 +2317,10 @@ test('bounded worker isolates native-heavy request chunks without changing light
     expect(result.chunkBatchCount).toBe(expectedBatchSize)
     expect(harness.claimInputs).toHaveLength(expectedBatchSize)
     expect(harness.getNextChunkInputs).toHaveLength(1)
-    expect(compatibleStatusBatchInputs).toEqual(
-      batchCase.component === 'posting'
-        ? []
-        : [{excludeChunkIds: [firstChunk.chunkId], firstChunk, limit: expectedPreclaimTailLimit}],
-    )
-    expect(harness.runChunkInputs).toEqual(batchCase.component === 'posting' ? [firstChunk] : [])
+    expect(compatibleStatusBatchInputs).toEqual([
+      {excludeChunkIds: [firstChunk.chunkId], firstChunk, limit: expectedPreclaimTailLimit},
+    ])
+    expect(harness.runChunkInputs).toEqual([])
     expect(harness.wakeInputs).toEqual([])
     const completionChecks = statements.filter((statement) => {
       return statement.includes('pendingChunkCount')
@@ -2331,13 +2330,11 @@ test('bounded worker isolates native-heavy request chunks without changing light
     } else {
       expect(completionChecks.length).toBeGreaterThanOrEqual(1)
     }
-    if (batchCase.component !== 'posting') {
-      expect(joined).toContain("article_id >= 'article-001'")
-      expect(joined).toContain("article_id <= 'article-033'")
-      expect(joined).toContain(`article_id >= '${batchCase.startKeys[expectedBatchSize - 1]}'`)
-      expect(joined).toContain(`article_id <= '${batchCase.endKeys[expectedBatchSize - 1]}'`)
-      expect(joined).toContain(batchCase.writerName)
-    }
+    expect(joined).toContain("article_id >= 'article-001'")
+    expect(joined).toContain("article_id <= 'article-033'")
+    expect(joined).toContain(`article_id >= '${batchCase.startKeys[expectedBatchSize - 1]}'`)
+    expect(joined).toContain(`article_id <= '${batchCase.endKeys[expectedBatchSize - 1]}'`)
+    expect(joined).toContain(batchCase.writerName)
   }
 })
 

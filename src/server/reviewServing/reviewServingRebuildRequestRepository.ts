@@ -304,6 +304,13 @@ const defaultRebuildNonPresplittableComponents = new Set<ReviewServingProjection
   'selectedImport',
 ])
 const defaultRebuildNativeHeavyComponents = new Set<ReviewServingProjectionComponent>(['posting', 'summary'])
+const defaultRebuildCoalescingCandidateComponents = new Set<ReviewServingProjectionComponent>([
+  'humanStatus',
+  'llmStatus',
+  'posting',
+  'queue',
+  'search',
+])
 const defaultRebuildPresplitInputRowLimits = {
   display: 25_000,
   humanStatus: 64,
@@ -333,6 +340,28 @@ const getDefaultRebuildPresplitBucketCount = (input: {
     && estimatedInputRows > inputRowLimit
     ? Math.min(defaultRebuildMaxAdmissionSplitCount, Math.max(2, Math.ceil(estimatedInputRows / inputRowLimit)))
     : 1
+}
+
+const getDefaultRebuildChunkPlanningDiagnostics = (input: {
+  chunkCount: number
+  component: ReviewServingProjectionComponent
+  estimate: ReviewServingRebuildRequestEstimate | undefined
+  requestedComponents: readonly ReviewServingProjectionComponent[]
+}) => {
+  return input.chunkCount === 1
+    ? undefined
+    : {
+        admissionPlan: {
+          chunkCount: input.chunkCount,
+          coalescingCandidate: defaultRebuildCoalescingCandidateComponents.has(input.component),
+          component: input.component,
+          estimatedInputRows: input.estimate?.estimatedInputRows ?? null,
+          inputRowLimit: defaultRebuildPresplitInputRowLimits[input.component],
+          maxAdmissionSplitCount: defaultRebuildMaxAdmissionSplitCount,
+          requestedComponentCount: input.requestedComponents.length,
+        },
+        admissionPresplit: true,
+      }
 }
 
 const getDefaultRebuildArticleRanges = async (
@@ -453,6 +482,14 @@ const getChunkedAdmissionEstimate = (input: {
   estimate: ReviewServingRebuildRequestEstimate | undefined
 }) => {
   if (input.chunks.length <= 1) {
+    return input.estimate
+  }
+
+  const canUsePerChunkAdmissionBudget = input.chunks.every((chunk) => {
+    return chunk.projectionComponent === 'search'
+  })
+
+  if (!canUsePerChunkAdmissionBudget) {
     return input.estimate
   }
 
@@ -703,7 +740,12 @@ const getDefaultReviewServingRebuildChunks = async (
         ...chunkEstimate,
         chunkEndKey: articleRange.chunkEndKey,
         chunkStartKey: articleRange.chunkStartKey,
-        diagnosticsJson: chunkCount === 1 ? undefined : {admissionPresplit: true},
+        diagnosticsJson: getDefaultRebuildChunkPlanningDiagnostics({
+          chunkCount,
+          component: state.projectionComponent,
+          estimate: input.estimate,
+          requestedComponents: input.requestedComponents,
+        }),
         inputDigest: manifest.inputDigest,
         inputWatermark: Number(manifest.inputWatermark ?? state.inputWatermark),
         outputBaseGeneration: state.baseGeneration,

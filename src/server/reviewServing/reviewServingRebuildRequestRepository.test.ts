@@ -527,7 +527,8 @@ test('search-only default rebuild presplit chunks preserve sparse article-id gap
   expect(joined).toContain(')\n    SELECT')
   expect(joined).toContain("'article-001'")
   expect(joined).toContain("'article-100'")
-  expect(joined).toContain('{"admissionPresplit":true}')
+  expect(joined).toContain('"admissionPresplit":true')
+  expect(joined).toContain('"admissionPlan"')
 })
 
 test('search-only default rebuild admission compares per-chunk budget after presplit', async () => {
@@ -559,7 +560,8 @@ test('search-only default rebuild admission compares per-chunk budget after pres
     requestId: 'rebuild:search-budget-presplit',
     status: 'admitted',
   })
-  expect(joined).toContain('{"admissionPresplit":true}')
+  expect(joined).toContain('"admissionPresplit":true')
+  expect(joined).toContain('"inputRowLimit":50000')
   expect(joined).toContain("'admitted'")
   expect(joined).toContain('136171')
   expect(joined).toContain('250000')
@@ -622,7 +624,9 @@ test('posting default rebuilds presplit into non-overlapping bounded chunks', as
   expect(joined).toContain('NTILE(4)')
   expect(joined).toContain("ELSE previous_scoped_end_key || ' '")
   expect(postingChunkInserts).toHaveLength(8)
-  expect(joined).toContain('{"admissionPresplit":true}')
+  expect(joined).toContain('"admissionPresplit":true')
+  expect(joined).toContain('"coalescingCandidate":true')
+  expect(joined).toContain('"inputRowLimit":512')
 })
 
 test('human status default rebuilds presplit into bounded article chunks', async () => {
@@ -687,7 +691,7 @@ test('human status default rebuilds presplit into bounded article chunks', async
   expect(joined).toContain('NTILE(4)')
   expect(joined).toContain("ELSE previous_scoped_end_key || ' '")
   expect(humanStatusChunkInserts).toHaveLength(8)
-  expect(joined).toContain('{"admissionPresplit":true}')
+  expect(joined).toContain('"admissionPresplit":true')
 })
 
 test('judgment input content default rebuilds avoid admission presplit boundary overlap', async () => {
@@ -759,7 +763,7 @@ test('judgment input content default rebuilds avoid admission presplit boundary 
 
   expect(joined).not.toContain('NTILE(')
   expect(chunkInserts).toHaveLength(2)
-  expect(joined).not.toContain('{"admissionPresplit":true}')
+  expect(joined).not.toContain('"admissionPresplit":true')
 })
 
 test('queue default rebuilds avoid admission presplit boundary overlap', async () => {
@@ -816,7 +820,7 @@ test('queue default rebuilds avoid admission presplit boundary overlap', async (
 
   expect(joined).not.toContain('NTILE(')
   expect(chunkInserts).toHaveLength(2)
-  expect(joined).not.toContain('{"admissionPresplit":true}')
+  expect(joined).not.toContain('"admissionPresplit":true')
 })
 
 test('display-only default rebuilds avoid admission presplit boundary overlap', async () => {
@@ -847,7 +851,7 @@ test('display-only default rebuilds avoid admission presplit boundary overlap', 
 
   expect(joined).not.toContain('NTILE(')
   expect(displayChunkInserts).toHaveLength(1)
-  expect(joined).not.toContain('{"admissionPresplit":true}')
+  expect(joined).not.toContain('"admissionPresplit":true')
 })
 
 test('project-scope-only default rebuilds avoid admission presplit boundary overlap', async () => {
@@ -898,7 +902,7 @@ test('project-scope-only default rebuilds avoid admission presplit boundary over
 
   expect(joined).not.toContain('NTILE(')
   expect(projectScopeChunkInserts).toHaveLength(1)
-  expect(joined).not.toContain('{"admissionPresplit":true}')
+  expect(joined).not.toContain('"admissionPresplit":true')
 })
 
 test('summary-only default rebuilds presplit into non-overlapping bounded chunks', async () => {
@@ -930,7 +934,8 @@ test('summary-only default rebuilds presplit into non-overlapping bounded chunks
   expect(joined).toContain('NTILE(4)')
   expect(joined).toContain("ELSE previous_scoped_end_key || ' '")
   expect(summaryChunkInserts).toHaveLength(8)
-  expect(joined).toContain('{"admissionPresplit":true}')
+  expect(joined).toContain('"admissionPresplit":true')
+  expect(joined).toContain('"component":"summary"')
 })
 
 test('selected-import-only default rebuilds avoid admission presplit boundary overlap', async () => {
@@ -999,7 +1004,7 @@ test('selected-import-only default rebuilds avoid admission presplit boundary ov
 
   expect(joined).not.toContain('NTILE(')
   expect(selectedImportChunkInserts).toHaveLength(2)
-  expect(joined).not.toContain('{"admissionPresplit":true}')
+  expect(joined).not.toContain('"admissionPresplit":true')
 })
 
 test('default rebuild request keeps same projection identity across base generations', async () => {

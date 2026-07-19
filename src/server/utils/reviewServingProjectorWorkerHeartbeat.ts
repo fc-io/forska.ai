@@ -18,7 +18,7 @@ const reviewServingProjectorWorkerWarningLogger = createRateLimitedLogger({sink:
 const reviewServingProjectorWorkerComponent = 'reviewServingProjectorWorker'
 const defaultReviewServingProjectorWorkerHeartbeatBatchSize = 2
 const lowMemoryMaintenanceDuckdbLimitMiB = 6400
-const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 1
+const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 16
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
 
 const getErrorMessage = (error: unknown) => {
