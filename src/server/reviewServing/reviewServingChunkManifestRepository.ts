@@ -219,6 +219,17 @@ const defaultReviewServingRebuildChunkRetryPolicy = {
   terminalState: 'quarantined',
 } as const satisfies ReviewServingRebuildChunkRetryPolicy
 
+const getReviewServingRebuildChunkRetryMaxAttemptsSql = (requestIdExpression: string) => {
+  return `COALESCE((
+    SELECT GREATEST(
+      1,
+      MAX(TRY_CAST(json_extract_string(policy.retry_policy_json, '$.maxAttempts') AS INTEGER))
+    )
+    FROM app.review_rebuild_request policy
+    WHERE policy.request_id = ${requestIdExpression}
+  ), ${getSqlLiteral(defaultReviewServingRebuildChunkRetryPolicy.maxAttempts)})`
+}
+
 type ReviewServingRebuildChunkValidationFailure = {
   _tag: 'ReviewServingRebuildChunkValidationFailure'
   validationError: string
@@ -376,19 +387,17 @@ const getRebuildChunkClaimPrioritySql = (tableAlias: string) => {
 
 const getRebuildChunkClaimRequestPrioritySql = (tableAlias: string) => {
   return `(
-    SELECT request.priority
+    SELECT MAX(request.priority)
     FROM app.review_rebuild_request request
     WHERE request.request_id = ${tableAlias}.request_id
-    LIMIT 1
   )`
 }
 
 const getRebuildChunkClaimRequestUpdatedAtSql = (tableAlias: string) => {
   return `(
-    SELECT request.updated_at
+    SELECT MAX(request.updated_at)
     FROM app.review_rebuild_request request
     WHERE request.request_id = ${tableAlias}.request_id
-    LIMIT 1
   )`
 }
 
@@ -772,6 +781,7 @@ export const getReviewServingRebuildChunkClaimPredicate = (
   tableAlias?: string,
 ) => {
   const source = tableAlias ? `${tableAlias}.` : ''
+  const retryMaxAttemptsSql = getReviewServingRebuildChunkRetryMaxAttemptsSql(`${source}request_id`)
 
   return `
     ${source}admission_state = 'admitted'
@@ -782,15 +792,7 @@ export const getReviewServingRebuildChunkClaimPredicate = (
         ${source}status = 'failed'
         AND COALESCE(${source}retry_count, 0) < CASE
           WHEN ${source}request_id IS NULL THEN ${getSqlLiteral(defaultReviewServingRebuildChunkRetryPolicy.maxAttempts)}
-          ELSE COALESCE((
-            SELECT GREATEST(
-              1,
-              TRY_CAST(json_extract_string(policy.retry_policy_json, '$.maxAttempts') AS INTEGER)
-            )
-            FROM app.review_rebuild_request policy
-            WHERE policy.request_id = ${source}request_id
-            LIMIT 1
-          ), ${getSqlLiteral(defaultReviewServingRebuildChunkRetryPolicy.maxAttempts)})
+          ELSE ${retryMaxAttemptsSql}
         END
         AND (
           ${source}retry_after IS NULL
@@ -853,6 +855,7 @@ const getReviewServingRebuildChunkLeaseClaimPredicate = (
   tableAlias: string,
 ) => {
   const source = `${tableAlias}.`
+  const retryMaxAttemptsSql = getReviewServingRebuildChunkRetryMaxAttemptsSql(`${source}request_id`)
 
   return `
     ${source}admission_state = 'admitted'
@@ -863,15 +866,7 @@ const getReviewServingRebuildChunkLeaseClaimPredicate = (
         ${source}status = 'failed'
         AND COALESCE(${source}retry_count, 0) < CASE
           WHEN ${source}request_id IS NULL THEN ${getSqlLiteral(defaultReviewServingRebuildChunkRetryPolicy.maxAttempts)}
-          ELSE COALESCE((
-            SELECT GREATEST(
-              1,
-              TRY_CAST(json_extract_string(policy.retry_policy_json, '$.maxAttempts') AS INTEGER)
-            )
-            FROM app.review_rebuild_request policy
-            WHERE policy.request_id = ${source}request_id
-            LIMIT 1
-          ), ${getSqlLiteral(defaultReviewServingRebuildChunkRetryPolicy.maxAttempts)})
+          ELSE ${retryMaxAttemptsSql}
         END
         AND (
           ${source}retry_after IS NULL
@@ -1316,6 +1311,11 @@ const getReviewServingRebuildChunkRetryPolicy = async (
     SELECT retry_policy_json AS retryPolicyJson
     FROM app.review_rebuild_request
     WHERE request_id = ${getSqlLiteral(input.requestId)}
+    ORDER BY
+      CASE WHEN admission_state = 'admitted' AND status IN ('admitted', 'running') THEN 0 ELSE 1 END ASC,
+      priority DESC NULLS LAST,
+      updated_at DESC NULLS LAST,
+      created_at DESC NULLS LAST
     LIMIT 1
   `)
 

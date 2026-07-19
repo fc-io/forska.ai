@@ -236,8 +236,9 @@ type DuckdbStartupIndexedTableRepairSpec = {
   postRepairSchemaRequirements?: DuckdbStartupSchemaRequirement[]
   recreateRepairPrimaryKeyIndex?: boolean
   recreateSecondaryIndexes?: boolean
+  repairDedupeOrderSql?: string
   repairPrimaryKeyColumns?: string[]
-  repairStrategy?: 'copy' | 'empty-derived'
+  repairStrategy?: 'copy' | 'dedupe-latest' | 'empty-derived'
   schemaRequirements?: DuckdbStartupSchemaRequirement[]
   schemaName: string
   skipGenericDeleteInsertProbe?: boolean
@@ -743,6 +744,14 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       DROP TABLE IF EXISTS startup_probe_review_rebuild_request;
     `,
     repairPrimaryKeyColumns: ['request_id'],
+    repairDedupeOrderSql: `
+      CASE WHEN admission_state = 'admitted' AND status IN ('admitted', 'running') THEN 0 ELSE 1 END ASC,
+      priority DESC NULLS LAST,
+      updated_at DESC NULLS LAST,
+      created_at DESC NULLS LAST,
+      request_id DESC
+    `,
+    repairStrategy: 'dedupe-latest',
     schemaName: 'app',
     tableName: 'review_rebuild_request',
   },
@@ -3710,6 +3719,60 @@ const getDuckdbIndexedTableRepairScript = () => {
       )
     }
 
+    const getOrderedTableColumnNames = async (schemaName, tableName) => {
+      const rows = await getRows(
+        "SELECT column_name AS columnName FROM information_schema.columns " +
+          "WHERE table_schema = " + getSqlLiteral(schemaName) +
+          " AND table_name = " + getSqlLiteral(tableName) +
+          " ORDER BY ordinal_position",
+      )
+
+      return rows
+        .map((row) => {
+          return typeof row.columnName === 'string' ? row.columnName : null
+        })
+        .filter((columnName) => {
+          return columnName !== null
+        })
+    }
+
+    const getRepairCopySql = async (spec, sourceName, repairName) => {
+      if (spec.repairStrategy !== 'dedupe-latest') {
+        return 'INSERT INTO ' + repairName + ' BY NAME SELECT * FROM ' + sourceName
+      }
+
+      const primaryKeyColumns = Array.isArray(spec.repairPrimaryKeyColumns)
+        ? spec.repairPrimaryKeyColumns.filter((columnName) => {
+            return typeof columnName === 'string' && columnName.trim().length > 0
+          })
+        : []
+
+      if (primaryKeyColumns.length === 0) {
+        throw new Error('dedupe-latest repair requires primary key columns for ' + getQualifiedName(spec.schemaName, spec.tableName))
+      }
+
+      const columnNames = await getOrderedTableColumnNames(spec.schemaName, spec.tableName)
+
+      if (columnNames.length === 0) {
+        throw new Error('dedupe-latest repair found no columns for ' + getQualifiedName(spec.schemaName, spec.tableName))
+      }
+
+      const columnList = columnNames.join(', ')
+      const dedupeOrderSql =
+        typeof spec.repairDedupeOrderSql === 'string' && spec.repairDedupeOrderSql.trim().length > 0
+          ? spec.repairDedupeOrderSql
+          : primaryKeyColumns.join(', ')
+
+      return (
+        'INSERT INTO ' + repairName + ' (' + columnList + ') ' +
+        'SELECT ' + columnList + ' FROM (' +
+        'SELECT ' + columnList + ', ROW_NUMBER() OVER (PARTITION BY ' + primaryKeyColumns.join(', ') +
+        ' ORDER BY ' + dedupeOrderSql + ') AS startup_repair_row_number ' +
+        'FROM ' + sourceName +
+        ') WHERE startup_repair_row_number = 1'
+      )
+    }
+
     const schemaRequirementsSatisfied = async (requirements) => {
       if (!Array.isArray(requirements) || requirements.length === 0) {
         return true
@@ -3750,7 +3813,7 @@ const getDuckdbIndexedTableRepairScript = () => {
         const duplicateRows = await getRows(spec.duplicateKeySelectSql)
         const duplicateCount = Number(duplicateRows[0]?.duplicateCount ?? 0)
 
-        if (duplicateCount > 0 && spec.repairStrategy !== 'empty-derived') {
+        if (duplicateCount > 0 && !['dedupe-latest', 'empty-derived'].includes(spec.repairStrategy)) {
           throw new Error(
             'cannot rebuild ' + getQualifiedName(spec.schemaName, spec.tableName)
               + ' because table data contains ' + duplicateCount + ' duplicate primary keys',
@@ -3792,7 +3855,7 @@ const getDuckdbIndexedTableRepairScript = () => {
         await connection.run('DROP TABLE IF EXISTS ' + repairName)
         await connection.run(createRepairSql)
         if (spec.repairStrategy !== 'empty-derived') {
-          await connection.run('INSERT INTO ' + repairName + ' BY NAME SELECT * FROM ' + sourceName)
+          await connection.run(await getRepairCopySql(spec, sourceName, repairName))
         }
         await connection.run('DROP TABLE ' + sourceName)
         await connection.run('ALTER TABLE ' + repairName + ' RENAME TO ' + spec.tableName)
