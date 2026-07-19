@@ -27,7 +27,7 @@ import {startRequestAttemptCloseoutBackfillScheduler} from './startRequestAttemp
 
 let maintenanceBackgroundWorkStops: Array<() => void> | null = null
 const lowMemoryMaintenanceDuckdbLimitMiB = 6400
-const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 1
+const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 16
 const lowMemoryReviewServingProjectorWorkerMaxRunMs = 60_000
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
 const reviewServingProjectorPauseRecoveryPollIntervalMs = 30_000
