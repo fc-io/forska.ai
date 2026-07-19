@@ -5085,8 +5085,66 @@ const failSupersededRequestlessBootstrapRebuildRequests = async (input: {
   projectId?: string | null
 }) => {
   const projectCondition = input.projectId ? `AND request.project_id = ${getSqlLiteral(input.projectId)}` : ''
+  const requestScope = `
+    SELECT
+      request.request_id,
+      request.project_id,
+      json_extract_string(request.identity_json, '$.snapshotId') AS snapshot_id,
+      TRY_CAST(json_extract_string(request.identity_json, '$.outputBaseGeneration') AS BIGINT) AS output_base_generation,
+      json_extract_string(request.identity_json, '$.inputDigest') AS input_digest
+    FROM app.review_rebuild_request request
+    WHERE request.request_id LIKE ${getSqlLiteral(`${requestlessBootstrapRebuildRequestPrefix}:%`)}
+      AND request.status IN ('admitted', 'running')
+      AND request.admission_state = 'admitted'
+      ${projectCondition}
+      AND (
+        EXISTS (
+          SELECT 1
+          FROM app.review_rebuild_request foreground_request
+          WHERE foreground_request.project_id = request.project_id
+            AND foreground_request.request_id <> request.request_id
+            AND foreground_request.reason <> 'requestless_bootstrap_rebuild'
+            AND foreground_request.status IN ('admitted', 'running')
+            AND foreground_request.admission_state = 'admitted'
+        )
+        OR NOT EXISTS (
+          SELECT 1
+          FROM app.review_serving_snapshot_manifest snapshot
+          WHERE snapshot.project_id = request.project_id
+            AND snapshot.snapshot_id = json_extract_string(request.identity_json, '$.snapshotId')
+            AND snapshot.snapshot_status IN ('candidate', 'active')
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM app.review_serving_snapshot_manifest newer_snapshot
+          INNER JOIN app.review_serving_snapshot_manifest request_snapshot
+            ON request_snapshot.project_id = request.project_id
+            AND request_snapshot.snapshot_id = json_extract_string(request.identity_json, '$.snapshotId')
+          WHERE newer_snapshot.project_id = request.project_id
+            AND newer_snapshot.snapshot_status IN ('candidate', 'active')
+            AND request_snapshot.snapshot_status IN ('candidate', 'active')
+            AND newer_snapshot.updated_at > request_snapshot.updated_at
+        )
+      )
+  `
 
   await input.database.run(`
+    WITH request_scope AS (${requestScope})
+    UPDATE app.review_rebuild_chunk_manifest AS chunk
+    SET
+      request_id = request_scope.request_id,
+      updated_at = current_timestamp
+    FROM request_scope
+    WHERE chunk.request_id IS NULL
+      AND chunk.project_id IS NOT DISTINCT FROM request_scope.project_id
+      AND chunk.snapshot_id IS NOT DISTINCT FROM request_scope.snapshot_id
+      AND chunk.output_base_generation = request_scope.output_base_generation
+      AND chunk.input_digest IS NOT DISTINCT FROM request_scope.input_digest
+      AND chunk.status NOT IN ('blocked_over_budget', 'quarantined')
+  `)
+
+  await input.database.run(`
+    WITH request_scope AS (${requestScope})
     UPDATE app.review_rebuild_request AS request
     SET
       status = 'failed',
@@ -5096,13 +5154,10 @@ const failSupersededRequestlessBootstrapRebuildRequests = async (input: {
     WHERE request.request_id LIKE ${getSqlLiteral(`${requestlessBootstrapRebuildRequestPrefix}:%`)}
       AND request.status IN ('admitted', 'running')
       AND request.admission_state = 'admitted'
-      ${projectCondition}
-      AND NOT EXISTS (
+      AND EXISTS (
         SELECT 1
-        FROM app.review_serving_snapshot_manifest snapshot
-        WHERE snapshot.project_id = request.project_id
-          AND snapshot.snapshot_id = json_extract_string(request.identity_json, '$.snapshotId')
-          AND snapshot.snapshot_status IN ('candidate', 'active')
+        FROM request_scope
+        WHERE request_scope.request_id = request.request_id
       )
   `)
 }
