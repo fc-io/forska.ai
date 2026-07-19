@@ -71,6 +71,10 @@ const shouldRecycleDuckdbBeforeReviewServingProjectorRestart = (
   return maxRssBytes > 0 && process.memoryUsage().rss >= maxRssBytes
 }
 
+const shouldRestartMaintenanceWorkerAfterHighRssDuckdbRecycle = () => {
+  return process.env.FORSKA_RUNTIME_SERVICE === 'maintenance-worker-server'
+}
+
 const recycleDuckdbBeforeReviewServingProjectorRestart = async (
   options: ReviewServingProjectorWorkerHeartbeatOptions,
 ) => {
@@ -89,6 +93,19 @@ const recycleDuckdbBeforeReviewServingProjectorRestart = async (
   const {closeDuckdbService} = await import('./duckdbService.ts')
   await closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
   globalThis.Bun.gc(true)
+
+  const rssBytesAfterRecycle = process.memoryUsage().rss
+
+  if (rssBytesAfterRecycle < maxRssBytes || !shouldRestartMaintenanceWorkerAfterHighRssDuckdbRecycle()) {
+    return
+  }
+
+  reviewServingProjectorWorkerWarningLogger.warn(
+    'review-serving-projector.heartbeat-high-rss-process-restart',
+    '[reviewServingProjectorWorker] restarting maintenance worker after DuckDB recycle left RSS above cap',
+    {maxRssBytes, rssBytesAfterRecycle},
+  )
+  return process.exit(0)
 }
 
 export const startReviewServingProjectorWorkerHeartbeat = (

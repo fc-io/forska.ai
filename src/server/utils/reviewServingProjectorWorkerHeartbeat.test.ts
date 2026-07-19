@@ -524,6 +524,101 @@ test('review serving projector worker heartbeat restarts native-heavy completion
   expect(result.events).toEqual([['run'], ['run']])
 })
 
+test('review serving projector worker heartbeat exits supervised maintenance worker when DuckDB recycle leaves RSS above cap', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const duckdbServiceModulePath = getModulePath('./src/server/utils/duckdbService.ts')
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const events = []
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async () => {
+              events.push(['run'])
+              return {reason: 'nativeHeavyChunkCompleted'}
+            },
+          }
+        })
+        void mock.module(duckdbServiceModulePath, () => {
+          return {
+            closeDuckdbService: async (input) => {
+              events.push(['closeDuckdb', input.checkpointBeforeClose, input.releaseOwnerLease])
+            },
+          }
+        })
+
+        process.memoryUsage = () => {
+          events.push(['memoryUsage'])
+          return {rss: 2_000}
+        }
+        globalThis.Bun.gc = (force) => {
+          events.push(['gc', force])
+        }
+        process.exit = (code) => {
+          events.push(['exit', code])
+        }
+
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?exit-high-rss=' + Date.now())
+        const stop = startReviewServingProjectorWorkerHeartbeat({
+          maxCompletedRebuildChunksPerRun: 1,
+          rebuildChunkBatchMaxRssBytes: 1_000,
+          restartDelayMs: 30,
+        })
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 10)
+        })
+        stop()
+
+        console.log(JSON.stringify({events}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {...process.env, DUCKDB_MEMORY_LIMIT: '', FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server'},
+    },
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Review serving projector worker heartbeat high-RSS process restart test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    events: Array<Array<boolean | number | string>>
+  }
+
+  expect(result.events).toEqual([
+    ['run'],
+    ['memoryUsage'],
+    ['memoryUsage'],
+    ['closeDuckdb', false, false],
+    ['gc', true],
+    ['memoryUsage'],
+    ['exit', 0],
+  ])
+})
+
 test('review serving projector worker heartbeat cancels pending native-heavy restart when stopped', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
