@@ -373,6 +373,110 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     duplicateKeySelectSql: `
       SELECT COUNT(*) AS duplicateCount
       FROM (
+        SELECT project_id, snapshot_id
+        FROM app.review_serving_snapshot_manifest
+        GROUP BY project_id, snapshot_id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_review_serving_snapshot_manifest;
+      CREATE TEMP TABLE startup_probe_review_serving_snapshot_manifest AS
+      SELECT
+        project_id,
+        snapshot_id,
+        snapshot_status,
+        updated_at,
+        failed_at,
+        last_error
+      FROM app.review_serving_snapshot_manifest
+      WHERE snapshot_status IN ('candidate', 'failed')
+      ORDER BY
+        CASE WHEN snapshot_status = 'candidate' THEN 0 ELSE 1 END,
+        updated_at DESC,
+        project_id ASC,
+        snapshot_id ASC
+      LIMIT 16;
+      BEGIN;
+      UPDATE app.review_serving_snapshot_manifest
+      SET
+        snapshot_status = CASE WHEN snapshot_status = 'candidate' THEN 'failed' ELSE snapshot_status END,
+        failed_at = CASE WHEN snapshot_status = 'candidate' THEN current_timestamp ELSE failed_at END,
+        last_error = CASE
+          WHEN snapshot_status = 'candidate' THEN 'startup_probe_review_serving_snapshot_manifest'
+          ELSE last_error
+        END,
+        updated_at = current_timestamp
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_review_serving_snapshot_manifest probe
+        WHERE probe.project_id = app.review_serving_snapshot_manifest.project_id
+          AND probe.snapshot_id = app.review_serving_snapshot_manifest.snapshot_id
+      );
+      COMMIT;
+      BEGIN;
+      UPDATE app.review_serving_snapshot_manifest
+      SET
+        snapshot_status = (
+          SELECT snapshot_status
+          FROM startup_probe_review_serving_snapshot_manifest probe
+          WHERE probe.project_id = app.review_serving_snapshot_manifest.project_id
+            AND probe.snapshot_id = app.review_serving_snapshot_manifest.snapshot_id
+          LIMIT 1
+        ),
+        failed_at = (
+          SELECT failed_at
+          FROM startup_probe_review_serving_snapshot_manifest probe
+          WHERE probe.project_id = app.review_serving_snapshot_manifest.project_id
+            AND probe.snapshot_id = app.review_serving_snapshot_manifest.snapshot_id
+          LIMIT 1
+        ),
+        last_error = (
+          SELECT last_error
+          FROM startup_probe_review_serving_snapshot_manifest probe
+          WHERE probe.project_id = app.review_serving_snapshot_manifest.project_id
+            AND probe.snapshot_id = app.review_serving_snapshot_manifest.snapshot_id
+          LIMIT 1
+        ),
+        updated_at = (
+          SELECT updated_at
+          FROM startup_probe_review_serving_snapshot_manifest probe
+          WHERE probe.project_id = app.review_serving_snapshot_manifest.project_id
+            AND probe.snapshot_id = app.review_serving_snapshot_manifest.snapshot_id
+          LIMIT 1
+        )
+      WHERE EXISTS (
+        SELECT 1
+        FROM startup_probe_review_serving_snapshot_manifest probe
+        WHERE probe.project_id = app.review_serving_snapshot_manifest.project_id
+          AND probe.snapshot_id = app.review_serving_snapshot_manifest.snapshot_id
+      );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_review_serving_snapshot_manifest;
+    `,
+    lowMemoryStartupPreflight: true,
+    repairDedupeOrderSql: `
+      CASE
+        WHEN snapshot_status = 'active' THEN 0
+        WHEN snapshot_status = 'candidate' THEN 1
+        WHEN snapshot_status = 'failed' THEN 2
+        ELSE 3
+      END ASC,
+      activated_at DESC NULLS LAST,
+      updated_at DESC NULLS LAST,
+      created_at DESC NULLS LAST,
+      project_id DESC,
+      snapshot_id DESC
+    `,
+    repairPrimaryKeyColumns: ['project_id', 'snapshot_id'],
+    repairStrategy: 'dedupe-latest',
+    schemaName: 'app',
+    tableName: 'review_serving_snapshot_manifest',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
         SELECT comparison_project_id
         FROM app.comparison_project_serving_generation
         GROUP BY comparison_project_id
@@ -2949,6 +3053,14 @@ const getDuckdbStartupRepairSpecForTableName = (tableName: string | null) => {
   })
 }
 
+const getDuckdbStartupRepairSpecForSnapshotManifestIndexError = (message: string) => {
+  if (!message.includes('Chunk - [17 Columns]') || !message.includes('snapshot:') || !message.includes('candidate')) {
+    return undefined
+  }
+
+  return getDuckdbStartupRepairSpecForTableName('app.review_serving_snapshot_manifest')
+}
+
 const getDuckdbStartupRepairSpecsForFatalIndexedTableError = (
   error: Error,
   failedMutatingTargetTable: string | null,
@@ -2971,6 +3083,12 @@ const getDuckdbStartupRepairSpecsForFatalIndexedTableError = (
 
   if (unqualifiedMessageSpec !== undefined) {
     return [unqualifiedMessageSpec]
+  }
+
+  const snapshotManifestSpec = getDuckdbStartupRepairSpecForSnapshotManifestIndexError(message)
+
+  if (snapshotManifestSpec !== undefined) {
+    return [snapshotManifestSpec]
   }
 
   const fallbackSpec = duckdbStartupIndexedTableRepairSpecs.find((spec) => {
