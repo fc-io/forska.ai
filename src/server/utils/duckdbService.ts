@@ -247,9 +247,17 @@ type DuckdbStartupIndexedTableRepairSpec = {
 type DuckdbStartupIndexedTableRepairResult = {checkpointSkipped: boolean}
 type DuckdbStartupSchemaRequirement = {columnNames?: string[]; schemaName: string; tableName: string}
 type DuckdbStartupPreflightError = Error & {
+  repairMarker?: DuckdbStartupPreflightRepairMarker | null
   repairMarkerOnly?: boolean
   repairMarkerPath?: string
   repairSpecs?: DuckdbStartupIndexedTableRepairSpec[]
+}
+type DuckdbStartupPreflightRepairMarker = {
+  phase?: unknown
+  reason?: unknown
+  repairSpecs?: unknown
+  schemaName?: unknown
+  tableName?: unknown
 }
 const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[] = [
   {
@@ -3453,13 +3461,24 @@ const clearDuckdbStartupPreflightActiveRepairSpec = (markerPath: string) => {
   }
 }
 
-const getDuckdbStartupPreflightRepairSpecs = (markerPath: string) => {
+const getDuckdbStartupPreflightRepairMarker = (markerPath: string) => {
   try {
-    const marker = JSON.parse(readFileSync(markerPath, 'utf8')) as {
-      repairSpecs?: unknown
-      schemaName?: unknown
-      tableName?: unknown
-    }
+    const marker = JSON.parse(readFileSync(markerPath, 'utf8')) as DuckdbStartupPreflightRepairMarker
+
+    return marker !== null && typeof marker === 'object' ? marker : null
+  } catch {
+    return null
+  }
+}
+
+const getDuckdbStartupPreflightRepairSpecs = (markerPath: string) => {
+  const marker = getDuckdbStartupPreflightRepairMarker(markerPath)
+
+  if (marker === null) {
+    return []
+  }
+
+  try {
     const markedRepairSpecs = Array.isArray(marker.repairSpecs) ? marker.repairSpecs : []
     const repairSpecs = markedRepairSpecs
       .map((repairSpec) => {
@@ -3534,6 +3553,16 @@ const getDuckdbStartupIndexedTableRepairSpecs = (error: unknown): DuckdbStartupI
   const repairSpecs = Array.isArray(candidateRepairSpecs) ? candidateRepairSpecs : []
 
   return repairSpecs.length === 0 ? duckdbStartupIndexedTableRepairSpecs : repairSpecs
+}
+
+const getDuckdbStartupPreflightRepairMarkerFromError = (error: unknown) => {
+  if (!(error instanceof Error)) {
+    return null
+  }
+
+  const marker = (error as DuckdbStartupPreflightError).repairMarker
+
+  return marker !== null && typeof marker === 'object' ? marker : null
 }
 
 const getDuckdbIndexedTableRepairScript = () => {
@@ -3932,12 +3961,14 @@ const getDuckdbStartupPreflightError = (
 
   const activeRepairSpecPath = getDuckdbStartupPreflightActiveRepairSpecPath(runtimeConfig)
   mkdirSync(`${runtimeConfig.databasePath}.startup-recovery`, {recursive: true})
+  const activeRepairMarker = getDuckdbStartupPreflightRepairMarker(activeRepairSpecPath)
   const activeRepairSpecs = getDuckdbStartupPreflightRepairSpecs(activeRepairSpecPath)
 
   if (activeRepairSpecs.length > 0) {
     const error = new Error(
       `DuckDB startup indexed-table repair marker requested repair for ${runtimeConfig.databasePath}`,
     ) as DuckdbStartupPreflightError
+    error.repairMarker = activeRepairMarker
     error.repairMarkerOnly = true
     error.repairMarkerPath = activeRepairSpecPath
     error.repairSpecs = activeRepairSpecs
@@ -4002,6 +4033,7 @@ const getDuckdbStartupPreflightError = (
   const error = new Error(
     `DuckDB startup preflight failed for ${runtimeConfig.databasePath}: ${failureText}`,
   ) as DuckdbStartupPreflightError
+  error.repairMarker = getDuckdbStartupPreflightRepairMarker(activeRepairSpecPath)
   const repairSpecs = getDuckdbStartupPreflightRepairSpecs(activeRepairSpecPath)
 
   if (repairSpecs.length > 0) {
@@ -4160,6 +4192,7 @@ const repairDuckdbStartupIndexedTables = async (
   const databaseBackupPath = join(recoveryDirectory, `${recoveryPathPart}.pre-repair.duckdb`)
   const manifestPath = join(recoveryDirectory, `${recoveryPathPart}.recovery.json`)
   const repairSpecs = getDuckdbStartupIndexedTableRepairSpecs(error)
+  const repairMarker = getDuckdbStartupPreflightRepairMarkerFromError(error)
 
   await mkdir(recoveryDirectory, {recursive: true})
   await waitForDuckdbStartupRepairFileLock(runtimeConfig)
@@ -4242,6 +4275,7 @@ const repairDuckdbStartupIndexedTables = async (
         recovery: 'indexed-table-rebuild',
         postRepairCheckpointSkipped: checkpointSkipped,
         postRepairCheckpointWarning: checkpointSkipped ? outputText : null,
+        repairMarker,
         repairStrategies: Object.fromEntries(
           repairSpecs.map((spec) => {
             return [`${spec.schemaName}.${spec.tableName}`, spec.repairStrategy ?? 'copy']
@@ -4261,6 +4295,7 @@ const repairDuckdbStartupIndexedTables = async (
       error,
       manifestPath,
       preservedDatabasePath,
+      repairMarker,
       repairedTables: repairSpecs.map((spec) => {
         return `${spec.schemaName}.${spec.tableName}`
       }),
