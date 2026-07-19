@@ -16,9 +16,11 @@ import {
   lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs,
   nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
   type ReviewServingProjectorWorkerDependencies,
+  type ReviewServingProjectorWorkerTimingBucket,
   runReviewServingProjectorWorker,
   runReviewServingProjectorWorkerClaimedRebuildChunk,
   runReviewServingProjectorWorkerOnce,
+  summarizeReviewServingProjectorWorkerTimingBucket,
 } from './reviewServingProjectorWorker.ts'
 
 type TestDatabase = {
@@ -264,6 +266,46 @@ test('worker calls projector orchestration with bounded wake budgets and reviewP
     allowsTempSpill: true,
     fallbackIntent: 'reject',
     workloadClass: 'reviewProjector',
+  })
+})
+
+test('rebuild timing summaries keep compact aggregate phase stats', () => {
+  const summary = summarizeReviewServingProjectorWorkerTimingBucket({
+    component: 'search',
+    count: 3,
+    estimatedInputRows: 1536,
+    estimatedOutputRows: 4800,
+    firstObservedAtMs: 1_000,
+    lastObservedAtMs: 61_000,
+    maxTotalMs: 130,
+    minTotalMs: 70,
+    phaseMaxMs: {executeMs: 100, finalizeRequestMs: 30},
+    phaseTotalMs: {executeMs: 240, finalizeRequestMs: 60},
+    projectId: 'project-1',
+    requestId: 'rebuild-1',
+    slowestChunkId: 'chunk-3',
+    splitDepthMax: 4,
+    status: 'completed',
+    totalMs: 300,
+  } satisfies ReviewServingProjectorWorkerTimingBucket)
+
+  expect(summary).toEqual({
+    avgTotalMs: 100,
+    component: 'search',
+    count: 3,
+    estimatedInputRows: 1536,
+    estimatedOutputRows: 4800,
+    maxTotalMs: 130,
+    minTotalMs: 70,
+    phaseAvgMs: {executeMs: 80, finalizeRequestMs: 20},
+    phaseMaxMs: {executeMs: 100, finalizeRequestMs: 30},
+    projectId: 'project-1',
+    requestId: 'rebuild-1',
+    slowestChunkId: 'chunk-3',
+    splitDepthMax: 4,
+    status: 'completed',
+    totalMs: 300,
+    windowMs: 60_000,
   })
 })
 
