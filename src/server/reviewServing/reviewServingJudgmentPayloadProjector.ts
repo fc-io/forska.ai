@@ -265,12 +265,23 @@ const getReplacementDeleteStatements = (
   })
   const shouldReplaceChunkRange = hasChunkArticleRange(input)
 
-  if (shouldReplaceChunkRange) {
-    return []
-  }
-
   return articleIds.length === 0 && !shouldReplaceBroadScope
-    ? []
+    ? payloadKinds.flatMap((payloadKind) => {
+        const listModeKeys =
+          payloadKind === 'llm' ? getLlmListModeKeys(input.listModeKeys) : getHumanListModeKeys(input.listModeKeys)
+
+        return listModeKeys.map((listModeKey) => {
+          return `
+            DELETE FROM mart.review_article_judgment_detail_serving_v4 detail
+            WHERE detail.project_id = ${getSqlLiteral(input.projectId)}
+              AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+              AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+              AND detail.list_mode_key = ${getSqlLiteral(listModeKey)}
+              AND detail.payload_kind = ${getSqlLiteral(payloadKind)}
+              ${shouldReplaceChunkRange ? getArticleRangePredicate({alias: 'detail', ...input}) : ''}
+          `
+        })
+      })
     : payloadKinds.flatMap((payloadKind) => {
         const listModeKeys =
           payloadKind === 'llm' ? getLlmListModeKeys(input.listModeKeys) : getHumanListModeKeys(input.listModeKeys)
@@ -421,15 +432,6 @@ const getLlmJudgmentDirectInsertStatement = (input: ProjectReviewServingJudgment
         COALESCE(payload.judgment_updated_at, current_timestamp) AS detail_updated_at
       FROM payload
       CROSS JOIN list_mode
-      ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO UPDATE SET
-        prompt_order = excluded.prompt_order,
-        judgment_id = excluded.judgment_id,
-        model_id = excluded.model_id,
-        answered_original = excluded.answered_original,
-        answered_original_as_array = excluded.answered_original_as_array,
-        judgment_payload_json = excluded.judgment_payload_json,
-        placeholder_kind = excluded.placeholder_kind,
-        detail_updated_at = excluded.detail_updated_at
     `
 }
 
@@ -541,16 +543,27 @@ const getHumanJudgmentDirectInsertStatement = (input: ProjectReviewServingJudgme
         COALESCE(payload.human_judgment_updated_at, current_timestamp) AS detail_updated_at
       FROM payload
       CROSS JOIN list_mode
-      ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO UPDATE SET
-        prompt_order = excluded.prompt_order,
-        judgment_id = excluded.judgment_id,
-        model_id = excluded.model_id,
-        answered_original = excluded.answered_original,
-        answered_original_as_array = excluded.answered_original_as_array,
-        judgment_payload_json = excluded.judgment_payload_json,
-        placeholder_kind = excluded.placeholder_kind,
-        detail_updated_at = excluded.detail_updated_at
     `
+}
+
+const getDirectSqlWriterDiagnostics = (input: {statementCount: number}) => {
+  return {
+    component: 'payload' as const,
+    diagnostics: {
+      phaseTimings: {},
+      records: {
+        batchCount: 0,
+        batchesByTable: {},
+        dedupedRecordCount: 0,
+        dedupedRecordsByTable: {},
+        inputRecordCount: 0,
+        inputRecordsByTable: {},
+        writeMsByTable: {},
+      },
+      statements: {count: input.statementCount},
+    },
+    promotedSnapshotId: null,
+  }
 }
 
 const getDirectJudgmentPayloadCount = async (
@@ -600,14 +613,25 @@ const projectReviewServingJudgmentPayloadRowsDirect = async (
   ].filter((statement): statement is string => {
     return statement !== null
   })
+  const statements = [...getReplacementDeleteStatements(input, requestedPayloadKinds), ...insertStatements]
+  const shouldUseSequentialRebuildWrites = claims.length === 0
   const writerResult = await measure('writerMs', async () => {
+    if (shouldUseSequentialRebuildWrites) {
+      await statements.reduce<Promise<void>>(async (previous, statement) => {
+        await previous
+        await database.run(statement)
+      }, Promise.resolve())
+
+      return getDirectSqlWriterDiagnostics({statementCount: statements.length})
+    }
+
     return writeReviewServingProjectorComponent(
       {
         acknowledgements: getPayloadAcknowledgements(input, claims),
         component: 'payload',
         projectionManifests: getPayloadProjectionManifests(input, claims),
         records: [],
-        statements: [...getReplacementDeleteStatements(input, requestedPayloadKinds), ...insertStatements],
+        statements,
         watermark: getPayloadWatermark(input, claims),
       },
       database,

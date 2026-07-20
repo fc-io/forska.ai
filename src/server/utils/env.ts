@@ -45,7 +45,7 @@ const envShape = arktype({
 const gibibyte = 1024 ** 3
 const defaultReviewServingRebuildChunkBatchSize = 2
 const minimumReviewServingRebuildChunkBatchMaxRssBytes = 4 * gibibyte
-const maximumReviewServingRebuildChunkBatchMaxRssBytes = 5 * gibibyte
+const maximumReviewServingRebuildChunkBatchMaxRssBytes = 12 * gibibyte
 
 export const getDefaultReviewServingRebuildChunkBatchMaxRssBytes = (totalMemoryBytes = totalmem()) => {
   const memoryBasedCapBytes = Math.floor(totalMemoryBytes * 0.7)

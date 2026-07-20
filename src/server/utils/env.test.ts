@@ -44,8 +44,8 @@ test('bounds default review serving rebuild chunk batch RSS cap from system memo
   const gibibyte = 1024 ** 3
 
   expect(getDefaultReviewServingRebuildChunkBatchMaxRssBytes(4 * gibibyte)).toBe(4 * gibibyte)
-  expect(getDefaultReviewServingRebuildChunkBatchMaxRssBytes(10 * gibibyte)).toBe(5 * gibibyte)
-  expect(getDefaultReviewServingRebuildChunkBatchMaxRssBytes(128 * gibibyte)).toBe(5 * gibibyte)
+  expect(getDefaultReviewServingRebuildChunkBatchMaxRssBytes(10 * gibibyte)).toBe(7 * gibibyte)
+  expect(getDefaultReviewServingRebuildChunkBatchMaxRssBytes(128 * gibibyte)).toBe(12 * gibibyte)
 })
 
 test('uses configured runtime log filtering and profile values', () => {

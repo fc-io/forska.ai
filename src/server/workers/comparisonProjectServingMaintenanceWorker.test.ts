@@ -48,12 +48,37 @@ test('comparison project serving maintenance worker drains one unavailable proje
     getForegroundQueueDepth: () => {
       return 0
     },
+    hasReviewServingRebuildWork: async () => {
+      return false
+    },
     rebuildNextUnavailableComparisonProjectServing: async () => {
       return {comparisonProjectId: 'comparison-1', rebuildResult: null, rebuilt: true}
     },
   })
 
   expect(result).toEqual({comparisonProjectId: 'comparison-1', rebuilt: true, status: 'processed'})
+})
+
+test('comparison project serving maintenance worker skips while review serving rebuild work is active', async () => {
+  let rebuildCalled = false
+  const result = await runComparisonProjectServingMaintenanceWorkerOnce({
+    getAppendQueueDepth: () => {
+      return 0
+    },
+    getForegroundQueueDepth: () => {
+      return 0
+    },
+    hasReviewServingRebuildWork: async () => {
+      return true
+    },
+    rebuildNextUnavailableComparisonProjectServing: async () => {
+      rebuildCalled = true
+      return {comparisonProjectId: 'comparison-1', rebuildResult: null, rebuilt: true}
+    },
+  })
+
+  expect(result).toEqual({comparisonProjectId: null, reason: 'review-serving-work-active', status: 'idle'})
+  expect(rebuildCalled).toBe(false)
 })
 
 test('comparison project serving maintenance worker stays idle when no comparison project needs rebuild', async () => {
@@ -63,6 +88,9 @@ test('comparison project serving maintenance worker stays idle when no compariso
     },
     getForegroundQueueDepth: () => {
       return 0
+    },
+    hasReviewServingRebuildWork: async () => {
+      return false
     },
     rebuildNextUnavailableComparisonProjectServing: async () => {
       return {comparisonProjectId: null, rebuildResult: null, rebuilt: false}

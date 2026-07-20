@@ -257,9 +257,16 @@ test('sql-native title search rebuild clears stale chunk tokens before inserting
   expect(insertStatement).not.toContain('mart.review_selected_import_patch_v4')
   expect(insertStatement).not.toContain('selected_patch')
   expect(insertStatement).toContain('CROSS JOIN unnest(regexp_split_to_array')
+  expect(insertStatement).toContain('source_rows AS')
+  expect(insertStatement).toContain('ANY_VALUE(normalized_title) AS normalized_title')
   expect(insertStatement).toContain('tokenized_source AS')
   expect(insertStatement).toContain('GROUP BY article_id, token')
+  expect(insertStatement).toContain('final_rows AS')
+  expect(insertStatement).toContain(
+    'GROUP BY project_id, search_identity, project_scope_identity, snapshot_id, tokenized.token, tokenized.article_id',
+  )
   expect(insertStatement).toContain('MAX(activity_sort_at) AS activity_sort_at')
+  expect(insertStatement).not.toContain('ON CONFLICT')
 })
 
 test('search availability distinguishes ready indexing unavailable and async states', () => {

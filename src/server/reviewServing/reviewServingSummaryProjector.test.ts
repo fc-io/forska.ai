@@ -722,7 +722,7 @@ test('summary rebuild request finalization ignores stale accumulator rows from p
       `)
 
       expect(countRows).toEqual([{countValue: '3'}])
-      expect(partialRows).toEqual([{total: '1'}])
+      expect(partialRows).toEqual([{total: '2'}])
     } finally {
       close()
     }

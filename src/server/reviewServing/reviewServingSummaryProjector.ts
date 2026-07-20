@@ -910,8 +910,7 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
   const scopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'partial'})
   const chunkIdPredicate = getSummaryRebuildPartialChunkIdPredicate(input.chunkIds)
 
-  await database.transaction(async (tx) => {
-    await tx.run(`
+  await database.run(`
       INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
         request_id,
         chunk_id,
@@ -972,13 +971,12 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
         END,
         partial_updated_at = now()
     `)
-    await tx.run(getRefreshSummaryRebuildAccumulatorCountsStatement(input))
-    await tx.run(`
+  await database.run(getRefreshSummaryRebuildAccumulatorCountsStatement(input))
+  await database.run(`
       DELETE FROM mart.review_article_summary_rebuild_partial_v4
       WHERE ${getSummaryRebuildPartialScopePredicate(input)}
         AND ${chunkIdPredicate}
     `)
-  })
 }
 
 const reduceSummaryRebuildPartialBatchesIntoAccumulator = async (
@@ -1111,11 +1109,6 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         AND chunk_id = ${getSqlLiteral(accumulatorChunkId)}
         AND summary_kind = 'facet'
       GROUP BY project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version
-    `)
-    await tx.run(`
-      DELETE FROM mart.review_article_summary_rebuild_partial_v4
-      WHERE ${scopePredicate}
-        AND chunk_id <> ${getSqlLiteral(accumulatorChunkId)}
     `)
   })
 }

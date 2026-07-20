@@ -683,12 +683,7 @@ const getInsertFullRebuildStatsRowsStatement = (
       END AS selectivity,
       current_timestamp AS stats_updated_at
     FROM stats_source stats
-    CROSS JOIN total_article total
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key) DO UPDATE SET
-      posting_identity = excluded.posting_identity,
-      cardinality = excluded.cardinality,
-      selectivity = excluded.selectivity,
-      stats_updated_at = excluded.stats_updated_at`
+    CROSS JOIN total_article total`
 }
 
 export const refreshReviewServingFilterPostingStats = async (

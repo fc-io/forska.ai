@@ -57,6 +57,7 @@
     "db:query:snapshot": "bun scripts/dbQuerySnapshot.ts",
     "db:duck:legacy-inspect-dirty-refresh-risk": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/inspectDirtyRefreshRisk.ts",
     "db:duck:inspect-review-serving-rebuild-timings": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/inspectReviewServingRebuildTimings.ts",
+    "db:duck:inspect-review-serving-project-state": "FORSKA_RUNTIME_PROFILE=primary DUCKDB_PATH=\"$HOME/Library/Application Support/Forska/runtime/primary/forska.duckdb\" bun scripts/inspectReviewServingProjectState.ts",
     "db:duck:request-review-serving-project-rebuild": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestReviewServingProjectRebuild.ts",
     "db:duck:request-review-serving-all-projects-rebuild": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestReviewServingAllProjectsRebuild.ts",
     "db:duck:legacy-quarantine-dirty-refresh-article": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/quarantineDirtyRefreshArticle.ts",
