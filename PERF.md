@@ -35,7 +35,7 @@ Additional review-serving benchmark context lives in
 ## Planned Review-Serving Synthetic Benchmarks
 
 The planned physical DuckDB benchmark work is tracked in
-[PERF_BENCH_PLAN.md](PERF_BENCH_PLAN.md).
+[PERF_BENCH_PLAN.md](plans/old/PERF_BENCH_PLAN.md).
 
 Target commands:
 

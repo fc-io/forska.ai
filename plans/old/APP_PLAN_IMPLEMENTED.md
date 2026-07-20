@@ -1,12 +1,12 @@
 # App Packaging Plan Implemented
 
 - This file tracks completed desktop packaging work plus landed decisions.
-- Remaining full-plan work lives in `../../APP_PLAN_TODO_FULL.md`.
-- The active ElectroBun spike lives in `../../APP_PLAN_TODO_SPIKE.md`.
+- Remaining full-plan work lives in `./APP_PLAN_TODO_FULL.md`.
+- The active ElectroBun spike lives in `./APP_PLAN_TODO_SPIKE.md`.
 
 ## Current Status Summary
 
-- Status as of 2026-04-26: this is still an active desktop feasibility spike. See `../../APP_PLAN_TODO_SPIKE.md` for current spike blockers and `../../APP_PLAN_TODO_FULL.md` for remaining release work.
+- Status as of 2026-04-26: this is still an active desktop feasibility spike. See `./APP_PLAN_TODO_SPIKE.md` for current spike blockers and `./APP_PLAN_TODO_FULL.md` for remaining release work.
 - The local ElectroBun dev path is working enough to prove the basic shape: desktop shell, Bun backend sidecar, packaged frontend loading, API bridge, startup UI, logs, and single-instance protection.
 - The landed desktop launcher still starts one `SERVER_ROLE=dev-single` backend sidecar; the planned packaged target has moved to a multi-worker backend stack tracked in the TODO plans.
 
