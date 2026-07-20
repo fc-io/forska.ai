@@ -112,6 +112,7 @@ const reviewServingProjectorDeleteScopedInsertOnlyTables = new Set<string>([
   'mart.review_article_summary_contribution_rebuild_partial_v4',
   'mart.review_article_summary_rebuild_partial_v4',
   'mart.review_filter_posting_stats_v4',
+  'mart.review_title_search_serving_v4',
 ])
 
 export type WriteReviewServingQueueRebuildRowsInput = {
@@ -556,7 +557,7 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
       activity_sort_at,
       search_updated_at
     )
-    WITH source AS (
+    WITH source_rows AS (
       SELECT
         scope.article_id,
         lower(strip_accents(COALESCE(${input.articleTitleSql}, ''))) AS normalized_title,
@@ -569,6 +570,13 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
         AND (scope.in_curated_scope OR scope.in_route_scope)
         AND article.id IS NOT NULL
         ${input.articleRangePredicateSql}
+    ), source AS (
+      SELECT
+        article_id,
+        ANY_VALUE(normalized_title) AS normalized_title,
+        MAX(activity_sort_at) AS activity_sort_at
+      FROM source_rows
+      GROUP BY article_id
     ), tokenized_source AS (
       SELECT DISTINCT
         source.article_id,
@@ -586,22 +594,30 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
         MAX(activity_sort_at) AS activity_sort_at
       FROM tokenized_source
       GROUP BY article_id, token
+    ), final_rows AS (
+      SELECT
+        ${getSqlLiteral(input.projectId)} AS project_id,
+        ${getSqlLiteral(input.searchIdentity)} AS search_identity,
+        ${getSqlLiteral(input.projectScopeIdentity)} AS project_scope_identity,
+        ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
+        tokenized.token,
+        tokenized.article_id,
+        ANY_VALUE(tokenized.title_prefix) AS title_prefix,
+        MAX(tokenized.activity_sort_at) AS activity_sort_at
+      FROM tokenized
+      GROUP BY project_id, search_identity, project_scope_identity, snapshot_id, tokenized.token, tokenized.article_id
     )
     SELECT
-      ${getSqlLiteral(input.projectId)} AS project_id,
-      ${getSqlLiteral(input.searchIdentity)} AS search_identity,
-      ${getSqlLiteral(input.projectScopeIdentity)} AS project_scope_identity,
-      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-      tokenized.token,
-      tokenized.article_id,
-      tokenized.title_prefix,
-      tokenized.activity_sort_at,
+      final_rows.project_id,
+      final_rows.search_identity,
+      final_rows.project_scope_identity,
+      final_rows.snapshot_id,
+      final_rows.token,
+      final_rows.article_id,
+      final_rows.title_prefix,
+      final_rows.activity_sort_at,
       current_timestamp AS search_updated_at
-    FROM tokenized
-    ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token, article_id) DO UPDATE SET
-      title_prefix = excluded.title_prefix,
-      activity_sort_at = excluded.activity_sort_at,
-      search_updated_at = excluded.search_updated_at
+    FROM final_rows
   `,
   ]
 }
@@ -620,17 +636,36 @@ export const writeReviewServingTitleSearchRebuildRanges = async (
   input: WriteReviewServingTitleSearchRebuildRangesInput,
   database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
 ) => {
-  return writeReviewServingProjectorComponent(
-    {
-      component: 'search',
-      projectionManifests: [],
-      records: [],
-      statements: input.ranges.flatMap((range) => {
-        return getReviewServingTitleSearchRebuildRowsStatements(range)
-      }),
-    },
-    database,
-  )
+  const phaseTimings: Record<string, number> = {}
+  const startedAtMs = Date.now()
+  const statements = input.ranges.flatMap((range) => {
+    return getReviewServingTitleSearchRebuildRowsStatements(range)
+  })
+
+  await statements.reduce<Promise<void>>(async (previous, statement) => {
+    await previous
+    await database.run(statement)
+  }, Promise.resolve())
+
+  phaseTimings.statementsMs = getNonNegativeElapsedMs(startedAtMs)
+
+  return {
+    component: 'search' as const,
+    diagnostics: {
+      phaseTimings,
+      records: {
+        batchCount: 0,
+        batchesByTable: {},
+        dedupedRecordCount: 0,
+        dedupedRecordsByTable: {},
+        inputRecordCount: 0,
+        inputRecordsByTable: {},
+        writeMsByTable: {},
+      },
+      statements: {count: statements.length},
+    } satisfies ReviewServingProjectorWriterDiagnostics,
+    promotedSnapshotId: null,
+  }
 }
 
 const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQueueRebuildRowsInput) => {

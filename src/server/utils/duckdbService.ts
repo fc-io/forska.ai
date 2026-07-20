@@ -1946,6 +1946,49 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_title_search_serving_v4;
     `,
+    postRepairSchemaRequirements: [
+      {
+        columnNames: ['projection_component', 'status', 'admission_state', 'retry_after', 'last_error', 'updated_at'],
+        schemaName: 'app',
+        tableName: 'review_rebuild_chunk_manifest',
+      },
+      {
+        columnNames: ['request_id', 'status', 'admission_state', 'retry_after', 'last_error', 'updated_at'],
+        schemaName: 'app',
+        tableName: 'review_rebuild_request',
+      },
+    ],
+    postRepairSql: `
+      UPDATE app.review_rebuild_chunk_manifest
+      SET
+        status = 'pending',
+        admission_state = 'admitted',
+        retry_after = NULL,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        last_error = NULL,
+        updated_at = current_timestamp
+      WHERE projection_component = 'search'
+        AND status IN ('running', 'failed', 'blocked_over_budget', 'quarantined');
+
+      UPDATE app.review_rebuild_request AS request
+      SET
+        status = 'admitted',
+        admission_state = 'admitted',
+        retry_after = NULL,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        last_error = NULL,
+        updated_at = current_timestamp
+      WHERE request.status IN ('running', 'failed', 'blocked_over_budget')
+        AND EXISTS (
+          SELECT 1
+          FROM app.review_rebuild_chunk_manifest chunk
+          WHERE chunk.request_id = request.request_id
+            AND chunk.projection_component = 'search'
+            AND chunk.status = 'pending'
+        )
+    `,
     repairPrimaryKeyColumns: [
       'project_id',
       'search_identity',
@@ -1954,6 +1997,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       'token',
       'article_id',
     ],
+    repairStrategy: 'empty-derived',
     schemaName: 'mart',
     tableName: 'review_title_search_serving_v4',
   },
@@ -3103,23 +3147,10 @@ const getDuckdbStartupRepairSpecsForFatalIndexedTableError = (
     getDuckdbStartupRepairSpecForTableName(failedMutatingTargetTable),
     ...transactionIndexedMutationTargets.map(getDuckdbStartupRepairSpecForTableName),
     getDuckdbStartupRepairSpecForTableName(transactionIndexedMutationTarget),
+    getDuckdbStartupRepairSpecForTableName(lastMutatingTargetTable),
   ].filter((repairSpec): repairSpec is DuckdbStartupIndexedTableRepairSpec => {
     return repairSpec !== undefined
   })
-
-  if (repairSpecs.length === 0 && failedMutatingTargetTable === null) {
-    return duckdbStartupIndexedTableRepairSpecs.filter((spec) => {
-      return spec.lowMemoryStartupPreflight === true
-    })
-  }
-
-  repairSpecs.push(
-    ...[getDuckdbStartupRepairSpecForTableName(lastMutatingTargetTable)].filter(
-      (repairSpec): repairSpec is DuckdbStartupIndexedTableRepairSpec => {
-        return repairSpec !== undefined
-      },
-    ),
-  )
   const uniqueRepairSpecs = repairSpecs.filter((repairSpec, index) => {
     return (
       repairSpecs.findIndex((candidate) => {

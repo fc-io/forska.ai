@@ -1,3 +1,5 @@
+import {totalmem} from 'node:os'
+
 import {runReviewServingProjectorWorker} from '../workers/reviewServingProjectorWorker.ts'
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {env, getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
@@ -17,6 +19,7 @@ const reviewServingProjectorWorkerLogger = createRateLimitedLogger({sink: 'file-
 const reviewServingProjectorWorkerWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 const reviewServingProjectorWorkerComponent = 'reviewServingProjectorWorker'
 const defaultReviewServingProjectorWorkerHeartbeatBatchSize = 2
+const gibibyte = 1024 ** 3
 const lowMemoryMaintenanceDuckdbLimitMiB = 6400
 const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 16
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
@@ -75,6 +78,16 @@ const shouldRestartMaintenanceWorkerAfterHighRssDuckdbRecycle = () => {
   return process.env.FORSKA_RUNTIME_SERVICE === 'maintenance-worker-server'
 }
 
+export const getReviewServingProjectorWorkerHardRestartRssBytes = (
+  maxRssBytes: number,
+  totalMemoryBytes = totalmem(),
+) => {
+  const unboundedHardRestartBytes = Math.max(maxRssBytes * 3, maxRssBytes + 8 * gibibyte)
+  const physicalMemoryGuardBytes = Math.floor(totalMemoryBytes * 0.9)
+
+  return Math.max(maxRssBytes, Math.min(unboundedHardRestartBytes, physicalMemoryGuardBytes))
+}
+
 const recycleDuckdbBeforeReviewServingProjectorRestart = async (
   options: ReviewServingProjectorWorkerHeartbeatOptions,
 ) => {
@@ -95,15 +108,16 @@ const recycleDuckdbBeforeReviewServingProjectorRestart = async (
   globalThis.Bun.gc(true)
 
   const rssBytesAfterRecycle = process.memoryUsage().rss
+  const hardRestartRssBytes = getReviewServingProjectorWorkerHardRestartRssBytes(maxRssBytes)
 
-  if (rssBytesAfterRecycle < maxRssBytes || !shouldRestartMaintenanceWorkerAfterHighRssDuckdbRecycle()) {
+  if (rssBytesAfterRecycle < hardRestartRssBytes || !shouldRestartMaintenanceWorkerAfterHighRssDuckdbRecycle()) {
     return
   }
 
   reviewServingProjectorWorkerWarningLogger.warn(
     'review-serving-projector.heartbeat-high-rss-process-restart',
-    '[reviewServingProjectorWorker] restarting maintenance worker after DuckDB recycle left RSS above cap',
-    {maxRssBytes, rssBytesAfterRecycle},
+    '[reviewServingProjectorWorker] restarting maintenance worker after DuckDB recycle left RSS above hard cap',
+    {hardRestartRssBytes, maxRssBytes, rssBytesAfterRecycle},
   )
   return process.exit(0)
 }

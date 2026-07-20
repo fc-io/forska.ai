@@ -2136,6 +2136,15 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
       writerName: 'queueBatchWriter',
     },
     {
+      component: 'search',
+      endKeys: ['article-033', 'article-066', 'article-099'],
+      identity: 'search:project-1',
+      preclaimTailLimit: 63,
+      startKeys: ['article-001', 'article-034', 'article-067'],
+      validationTable: 'FROM mart.review_title_search_serving_v4 search',
+      writerName: 'searchBatchWriter',
+    },
+    {
       component: 'posting',
       endKeys: ['article-033', 'article-066', 'article-099'],
       identity: 'posting:project-1',
@@ -2313,13 +2322,13 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
     } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
 
     const result = await runReviewServingProjectorWorkerOnce(
-      {maxCompletedRebuildChunksPerRun: 16, rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+      {maxCompletedRebuildChunksPerRun: 128, rebuildChunkBatchSize: 2, workerId: 'worker-1'},
       harness.dependencies,
     )
     const joined = statements.join('\n')
 
     const expectedBatchSize = Math.min(batchCase.preclaimTailLimit + 1, chunks.length)
-    const expectedPreclaimTailLimit = Math.min(batchCase.preclaimTailLimit, 15)
+    const expectedPreclaimTailLimit = Math.min(batchCase.preclaimTailLimit, 127)
     const expectedLastChunk = chunks[expectedBatchSize - 1] ?? chunks.at(-1)
 
     expect(result.chunk).toMatchObject({chunkId: expectedLastChunk?.chunkId, status: 'completed'})
@@ -3934,6 +3943,51 @@ test('worker readmits failed rebuild requests that still have retryable chunks',
   expect(readmissionStatement).toContain('last_error = NULL')
 })
 
+test('worker fails inconsistent and superseded foreground rebuild requests before readmission', async () => {
+  const harness = createWorkerHarness({chunkComplete: true})
+
+  await runReviewServingProjectorWorkerOnce({rebuildProjectId: 'project-1', workerId: 'worker-1'}, harness.dependencies)
+
+  const inconsistentStatement = harness.runStatements.find((statement) => {
+    return (
+      statement.includes('rebuild request had failed_at while still non-terminal')
+      && statement.includes('request.failed_at IS NOT NULL')
+    )
+  })
+  const supersededStatement = harness.runStatements.find((statement) => {
+    return (
+      statement.includes('superseded by newer foreground rebuild request')
+      && statement.includes('newer_request.created_at > request.created_at')
+    )
+  })
+  const readmissionStatementIndex = harness.runStatements.findIndex((statement) => {
+    return (
+      statement.includes('UPDATE app.review_rebuild_request AS request')
+      && statement.includes("request.status = 'failed'")
+    )
+  })
+  const inconsistentStatementIndex = harness.runStatements.findIndex((statement) => {
+    return statement === inconsistentStatement
+  })
+  const supersededStatementIndex = harness.runStatements.findIndex((statement) => {
+    return statement === supersededStatement
+  })
+
+  expect(inconsistentStatement).toContain("status = 'failed'")
+  expect(inconsistentStatement).toContain("AND request.project_id = 'project-1'")
+  expect(supersededStatement).toContain(
+    "request.reason NOT IN ('requestless_bootstrap_rebuild', 'requestless_summary_range_rebuild')",
+  )
+  expect(supersededStatement).toContain('newer_request.reason = request.reason')
+  expect(supersededStatement).toContain("newer_request.status IN ('admitted', 'running')")
+  expect(supersededStatement).toContain("newer_request.failed_at IS NULL")
+  expect(supersededStatement).toContain("newer_chunk.status IN ('pending', 'running', 'failed')")
+  expect(supersededStatement).toContain("newer_blocked_chunk.status IN ('blocked_over_budget', 'quarantined')")
+  expect(inconsistentStatementIndex).toBeGreaterThanOrEqual(0)
+  expect(supersededStatementIndex).toBeGreaterThan(inconsistentStatementIndex)
+  expect(readmissionStatementIndex).toBeGreaterThan(supersededStatementIndex)
+})
+
 test('worker refreshes request candidate snapshot state before promotion', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const requestChunk = {
@@ -4265,6 +4319,25 @@ test('batched rebuild chunk writers keep claimed leases alive during batch execu
   expect(batchSource).toContain('const stopHeartbeat = startClaimedRebuildChunkBatchHeartbeats(input)')
   expect(batchSource).toContain('finally')
   expect(batchSource).toContain('stopHeartbeat()')
+})
+
+test('shared rebuild chunk batch writer splits splittable chunks after DuckDB OOM instead of failing the batch', () => {
+  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const sharedBatchStart = source.indexOf('const runReviewServingProjectorWorkerRebuildChunkBatchWith = async')
+  const sharedBatchEnd = source.indexOf('\nconst runLlmStatusReviewServingProjectorWorkerRebuildChunkBatch', sharedBatchStart)
+  const sharedBatchSource = source.slice(sharedBatchStart, sharedBatchEnd)
+  const recoveryStart = source.indexOf('const recoverDuckDbOutOfMemoryReviewServingRebuildChunkBatch = async')
+  const recoveryEnd = source.indexOf('\nconst prepareClaimedReviewServingProjectorWorkerRebuildChunkBatch', recoveryStart)
+  const recoverySource = source.slice(recoveryStart, recoveryEnd)
+
+  expect(sharedBatchSource).toContain('recoverDuckDbOutOfMemoryReviewServingRebuildChunkBatch')
+  expect(sharedBatchSource).toContain('batchResults = recoveredResults')
+  expect(sharedBatchSource).toContain('failClaimedReviewServingProjectorWorkerRebuildChunkBatch')
+  expect(recoverySource).toContain('isDuckDbOutOfMemoryError(input.error)')
+  expect(recoverySource).toContain('splittableArticleRangeRebuildComponents.has')
+  expect(recoverySource).toContain('canSplitRebuildChunk(claimed.chunk)')
+  expect(recoverySource).toContain("splitReason: 'duckdb_oom'")
+  expect(recoverySource).toContain("status: 'completed'")
 })
 
 test('selected import runner releases dirty work while base projection is still batching', async () => {
@@ -4791,7 +4864,7 @@ test('strict posting rebuild validation rescans output instead of reusing projec
     expect(postingChunk.requestId).toBeNull()
     expect(joined).toContain('string_agg(')
     expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
-    expect(joined).toContain(
+    expect(joined).not.toContain(
       'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
     )
     expect(joined).toContain('"validationMode":"debug-strict-checksum"')
@@ -5194,7 +5267,7 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   )
   expect(filterOptionDeletes).toHaveLength(0)
   expect(joined).toContain('"summaryProjectorSnapshots"')
-  expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
+  expect(joined).toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('"judgmentPayloadProjectorSnapshots"')
   expect(joined).toContain("article_id >= 'article-001'")
@@ -5203,7 +5276,7 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
     statements.filter((statement) => {
       return statement === 'BEGIN judgmentInputContent'
     }).length,
-  ).toBe(3)
+  ).toBe(2)
 })
 
 test('worker refreshes summary filter options when an active-snapshot summary request is finalized', async () => {
@@ -5450,8 +5523,9 @@ test('worker refreshes posting stats once when a posting rebuild request is fina
   const joined = statements.join('\n')
 
   expect(result.chunk).toMatchObject({chunkId: postingChunk.chunkId, status: 'completed'})
+  expect(joined).toContain('DELETE FROM mart.review_filter_posting_stats_v4')
   expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
-  expect(joined).toContain(
+  expect(joined).not.toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
   )
   expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 serving')
@@ -5799,7 +5873,9 @@ test('worker adopts requestless bootstrap chunks into one rebuild request before
   expect(joined).toContain('INSERT INTO app.review_rebuild_request')
   expect(joined).toContain('requestless_bootstrap_rebuild')
   expect(joined).toContain('adoptedRequestlessBootstrapChunks')
-  expect(joined).toContain('requested_components_json = CASE')
+  expect(joined).toContain('UPDATE app.review_rebuild_request')
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).not.toContain('ON CONFLICT(request_id)')
   expect(joined).toContain("status NOT IN ('blocked_over_budget', 'quarantined')")
   expect(joined).toContain('"display"')
   expect(joined).toContain('"projectScope"')
@@ -5904,6 +5980,36 @@ test('requestless summary adoption persists request linkage in DuckDB', () => {
     }
 
     await database.run(\`
+      INSERT INTO app.review_rebuild_request (
+        request_id,
+        project_id,
+        reason,
+        requested_components_json,
+        source_watermarks_json,
+        identity_json,
+        priority,
+        status,
+        admission_state,
+        retry_policy_json,
+        diagnostics_json,
+        admitted_at
+      )
+      VALUES (
+        '\${requestId}',
+        '\${chunk.projectId}',
+        'requestless_summary_range_rebuild',
+        '[]'::JSON,
+        '{}'::JSON,
+        '{}'::JSON,
+        100,
+        'running',
+        'admitted',
+        '{}'::JSON,
+        '{}'::JSON,
+        current_timestamp
+      )
+    \`)
+    await database.run(\`
       INSERT INTO app.review_rebuild_chunk_manifest (
         chunk_id,
         project_id,
@@ -5977,7 +6083,7 @@ test('requestless summary adoption persists request linkage in DuckDB', () => {
     )
 
     const requestRows = await database.queryJson(\`
-      SELECT request_id AS requestId, reason, status
+      SELECT request_id AS requestId, reason, status, CAST(requested_components_json AS VARCHAR) AS requestedComponentsJson
       FROM app.review_rebuild_request
       WHERE request_id = '\${requestId}'
     \`)
@@ -5992,6 +6098,9 @@ test('requestless summary adoption persists request linkage in DuckDB', () => {
     }
     if (requestRows.length !== 1 || requestRows[0].reason !== 'requestless_summary_range_rebuild') {
       throw new Error('requestless summary adoption did not persist a rebuild request')
+    }
+    if (requestRows[0].status !== 'admitted' || !String(requestRows[0].requestedComponentsJson).includes('summary')) {
+      throw new Error('requestless summary adoption did not update the existing rebuild request')
     }
     if (chunkRows.length !== 1 || chunkRows[0].requestId !== requestId) {
       throw new Error('requestless summary adoption did not persist the chunk request id')
@@ -6500,7 +6609,7 @@ test('judgment input content rebuild chunk splits only after DuckDB OOM', async 
   expect(result).toEqual({status: 'completed'})
   expect(joined).toContain('NTILE(48)')
   expect(joined).not.toContain('scope.project_scope_identity')
-  expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
+  expect(joined).toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('lease_expires_at > current_timestamp')
   expect(joined).toContain('RETURNING chunk_id AS chunkId')

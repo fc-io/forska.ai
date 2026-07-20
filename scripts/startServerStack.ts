@@ -1,5 +1,5 @@
 import {realpathSync} from 'node:fs'
-import {mkdir, readFile, unlink, writeFile} from 'node:fs/promises'
+import {mkdir, readFile, rename, unlink, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {dirname, join} from 'node:path'
 
@@ -77,6 +77,10 @@ const isExistingFileError = (error: unknown) => {
   return error instanceof Error && 'code' in error && error.code === 'EEXIST'
 }
 
+const isJsonSyntaxError = (error: unknown) => {
+  return error instanceof SyntaxError || (error instanceof Error && error.name === 'SyntaxError')
+}
+
 const isProcessAlive = (pid: number) => {
   try {
     process.kill(pid, 0)
@@ -88,8 +92,16 @@ const isProcessAlive = (pid: number) => {
 
 const readServerStackLock = async () => {
   try {
-    return JSON.parse(await readFile(serverStackLockPath, 'utf8')) as ServerStackLockMetadata
+    const raw = await readFile(serverStackLockPath, 'utf8')
+    const trimmed = raw.trim()
+
+    return trimmed === '' ? null : (JSON.parse(trimmed) as ServerStackLockMetadata)
   } catch (error) {
+    if (isJsonSyntaxError(error)) {
+      console.error(`[server:stack] ignoring malformed supervisor lock at ${serverStackLockPath}`, error)
+      return null
+    }
+
     return isMissingFileError(error) ? null : Promise.reject(error)
   }
 }
@@ -174,7 +186,16 @@ const getServerStackLockMetadata = (): ServerStackLockMetadata => {
 
 const writeServerStackLock = async (metadata: ServerStackLockMetadata, flag: 'w' | 'wx') => {
   await mkdir(dirname(serverStackLockPath), {recursive: true})
-  await writeFile(serverStackLockPath, JSON.stringify(metadata, null, 2), {flag})
+  const payload = JSON.stringify(metadata, null, 2)
+
+  if (flag === 'wx') {
+    await writeFile(serverStackLockPath, payload, {flag})
+    return
+  }
+
+  const temporaryPath = `${serverStackLockPath}.${process.pid}.${Date.now()}.tmp`
+  await writeFile(temporaryPath, payload, {flag: 'wx'})
+  await rename(temporaryPath, serverStackLockPath)
 }
 
 const refreshServerStackLock = async () => {
@@ -391,7 +412,6 @@ const stopConflictingDuckdbOwner = async (envValues: Record<string, string | und
     currentLease === null
     || !isLockOwnedByCurrentMachine(currentLease)
     || !isDuckdbOwnerLeaseProcessAlive(currentLease)
-    || currentLease.apiServerPort !== config.maintenancePort
   ) {
     return
   }

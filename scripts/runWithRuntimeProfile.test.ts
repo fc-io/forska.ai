@@ -135,7 +135,10 @@ test('stacked server allows DuckDB startup recovery to finish before maintenance
 
   expect(source).toContain('const maintenanceStartupTimeoutMs = 180_000')
   expect(source).toContain('deadlineMs = Date.now() + maintenanceStartupTimeoutMs')
+  expect(source).toContain('isJsonSyntaxError(error)')
+  expect(source).toContain('rename(temporaryPath, serverStackLockPath)')
   expect(source).not.toContain('deadlineMs = Date.now() + startupTimeoutMs')
+  expect(source).not.toContain('currentLease.apiServerPort !== config.maintenancePort')
 })
 
 const removePathIfExists = (path: string) => {
@@ -612,8 +615,32 @@ const fetchJson = async <T>(url: string, init?: RequestInit): Promise<T> => {
   return (await response.json()) as T
 }
 
+const fetchJsonWithTransientOwnerRetries = async <T>(
+  url: string,
+  init?: RequestInit,
+  deadlineMs = Date.now() + 20_000,
+): Promise<T> => {
+  try {
+    return await fetchJson<T>(url, init)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const retryable =
+      message.includes('returned 502')
+      || message.includes('returned 503')
+      || message.includes('returned 504')
+      || message.includes('Unable to connect')
+
+    if (!retryable || Date.now() >= deadlineMs) {
+      throw error
+    }
+
+    await waitFor(1_000)
+    return fetchJsonWithTransientOwnerRetries(url, init, deadlineMs)
+  }
+}
+
 const postReviewWarnings = async (apiPort: number, projectId: string) => {
-  return fetchJson<ReviewsWarningsBody>(`http://127.0.0.1:${apiPort}/api/projectsreviewswarnings`, {
+  return fetchJsonWithTransientOwnerRetries<ReviewsWarningsBody>(`http://127.0.0.1:${apiPort}/api/projectsreviewswarnings`, {
     body: JSON.stringify({projectId}),
     headers: {'content-type': 'application/json'},
     method: 'POST',

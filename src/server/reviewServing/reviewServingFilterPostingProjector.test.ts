@@ -238,7 +238,7 @@ test('full posting rebuilds refresh stats from serving state without JS contribu
   expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
   expect(joined).toContain('COUNT(*) AS cardinality')
   expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 serving')
-  expect(joined).toContain(
+  expect(joined).not.toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
   )
   expectNoLegacyPostingSourcePatchTables(joined)

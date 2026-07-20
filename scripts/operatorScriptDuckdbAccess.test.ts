@@ -56,6 +56,12 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     ],
     path: 'scripts/inspectReviewServingRebuildTimings.ts',
   },
+  'db:duck:inspect-review-serving-project-state': {
+    commandIncludes: ['DUCKDB_PATH=', 'runtime/primary/forska.duckdb'],
+    description: 'V4 project state readonly snapshot diagnostics',
+    mustContain: ['createDuckdbSnapshotForCli', 'getReadOnlyDuckdbRuntimeOptions', 'DuckDBInstance.create'],
+    path: 'scripts/inspectReviewServingProjectState.ts',
+  },
   'db:duck:mig': {commandIncludes: ['bun run db:mig'], description: 'migration alias'},
   'db:duck:legacy-quarantine-dirty-refresh-article': {
     commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],

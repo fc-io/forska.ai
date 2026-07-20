@@ -5080,6 +5080,67 @@ const readmitRetryableFailedRebuildRequests = async (input: {
   `)
 }
 
+const failInconsistentAndSupersededForegroundRebuildRequests = async (input: {
+  database: ReviewServingChunkManifestRepositoryDatabase
+  projectId?: string | null
+}) => {
+  const projectCondition = input.projectId ? `AND request.project_id = ${getSqlLiteral(input.projectId)}` : ''
+
+  await input.database.run(`
+    UPDATE app.review_rebuild_request AS request
+    SET
+      status = 'failed',
+      lease_owner = NULL,
+      lease_expires_at = NULL,
+      last_error = COALESCE(request.last_error, 'rebuild request had failed_at while still non-terminal'),
+      updated_at = current_timestamp
+    WHERE request.status IN ('admitted', 'running')
+      AND request.admission_state = 'admitted'
+      AND request.failed_at IS NOT NULL
+      ${projectCondition}
+  `)
+
+  await input.database.run(`
+    UPDATE app.review_rebuild_request AS request
+    SET
+      status = 'failed',
+      failed_at = COALESCE(request.failed_at, current_timestamp),
+      lease_owner = NULL,
+      lease_expires_at = NULL,
+      last_error = COALESCE(request.last_error, 'superseded by newer foreground rebuild request'),
+      updated_at = current_timestamp
+    WHERE request.status IN ('admitted', 'running')
+      AND request.admission_state = 'admitted'
+      AND request.reason NOT IN ('requestless_bootstrap_rebuild', 'requestless_summary_range_rebuild')
+      ${projectCondition}
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_request newer_request
+        WHERE newer_request.project_id = request.project_id
+          AND newer_request.request_id <> request.request_id
+          AND newer_request.reason = request.reason
+          AND newer_request.reason NOT IN ('requestless_bootstrap_rebuild', 'requestless_summary_range_rebuild')
+          AND newer_request.status IN ('admitted', 'running')
+          AND newer_request.admission_state = 'admitted'
+          AND newer_request.failed_at IS NULL
+          AND newer_request.created_at > request.created_at
+          AND newer_request.priority >= request.priority
+          AND EXISTS (
+            SELECT 1
+            FROM app.review_rebuild_chunk_manifest newer_chunk
+            WHERE newer_chunk.request_id = newer_request.request_id
+              AND newer_chunk.status IN ('pending', 'running', 'failed')
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM app.review_rebuild_chunk_manifest newer_blocked_chunk
+            WHERE newer_blocked_chunk.request_id = newer_request.request_id
+              AND newer_blocked_chunk.status IN ('blocked_over_budget', 'quarantined')
+          )
+      )
+  `)
+}
+
 const failSupersededRequestlessBootstrapRebuildRequests = async (input: {
   database: ReviewServingChunkManifestRepositoryDatabase
   projectId?: string | null
@@ -6425,6 +6486,10 @@ const getForegroundRebuildChunkBatchSize = (chunk: {
     return 32
   }
 
+  if (chunk.projectionComponent === 'search') {
+    return 64
+  }
+
   return 16
 }
 
@@ -6678,6 +6743,20 @@ const adoptRequestlessRebuildChunk = async (
         : ''
     await requireClaimedRebuildChunk(input, tx)
     await tx.run(`
+      UPDATE app.review_rebuild_request
+      SET
+        requested_components_json = ${getSqlLiteral(JSON.stringify(adoption.requestedComponents))}::JSON,
+        diagnostics_json = ${getSqlLiteral(JSON.stringify(adoption.diagnostics))}::JSON,
+        status = 'admitted',
+        admission_state = CASE
+          WHEN admission_state = 'blocked_over_budget' THEN admission_state
+          ELSE 'admitted'
+        END,
+        updated_at = now()
+      WHERE request_id = ${getSqlLiteral(adoption.requestId)}
+        AND status NOT IN ('completed', 'failed')
+    `)
+    await tx.run(`
       INSERT INTO app.review_rebuild_request (
         request_id,
         project_id,
@@ -6692,12 +6771,13 @@ const adoptRequestlessRebuildChunk = async (
         diagnostics_json,
         admitted_at,
         updated_at
-      ) VALUES (
-        ${getSqlLiteral(adoption.requestId)},
-        ${getSqlLiteral(projectId)},
-        ${getSqlLiteral(adoption.reason)},
-        ${getSqlLiteral(JSON.stringify(adoption.requestedComponents))}::JSON,
-        '{}'::JSON,
+      )
+      SELECT
+        ${getSqlLiteral(adoption.requestId)} AS request_id,
+        ${getSqlLiteral(projectId)} AS project_id,
+        ${getSqlLiteral(adoption.reason)} AS reason,
+        ${getSqlLiteral(JSON.stringify(adoption.requestedComponents))}::JSON AS requested_components_json,
+        '{}'::JSON AS source_watermarks_json,
         ${getSqlLiteral(
           JSON.stringify({
             inputDigest: input.chunk.inputDigest,
@@ -6706,35 +6786,19 @@ const adoptRequestlessRebuildChunk = async (
             projectionIdentity: input.chunk.projectionIdentity,
             snapshotId: input.chunk.snapshotId,
           }),
-        )}::JSON,
-        100,
-        'admitted',
-        'admitted',
-        '{}'::JSON,
-        ${getSqlLiteral(JSON.stringify(adoption.diagnostics))}::JSON,
-        now(),
-        now()
+        )}::JSON AS identity_json,
+        100 AS priority,
+        'admitted' AS status,
+        'admitted' AS admission_state,
+        '{}'::JSON AS retry_policy_json,
+        ${getSqlLiteral(JSON.stringify(adoption.diagnostics))}::JSON AS diagnostics_json,
+        now() AS admitted_at,
+        now() AS updated_at
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_request existing_request
+        WHERE existing_request.request_id = ${getSqlLiteral(adoption.requestId)}
       )
-      ON CONFLICT(request_id) DO UPDATE SET
-        requested_components_json = CASE
-          WHEN app.review_rebuild_request.status IN ('completed', 'failed')
-            THEN app.review_rebuild_request.requested_components_json
-          ELSE excluded.requested_components_json
-        END,
-        diagnostics_json = CASE
-          WHEN app.review_rebuild_request.status IN ('completed', 'failed')
-            THEN app.review_rebuild_request.diagnostics_json
-          ELSE excluded.diagnostics_json
-        END,
-        status = CASE
-          WHEN app.review_rebuild_request.status IN ('completed', 'failed') THEN app.review_rebuild_request.status
-          ELSE 'admitted'
-        END,
-        admission_state = CASE
-          WHEN app.review_rebuild_request.admission_state = 'blocked_over_budget' THEN app.review_rebuild_request.admission_state
-          ELSE 'admitted'
-        END,
-        updated_at = now()
     `)
     await tx.run(`
       UPDATE app.review_rebuild_chunk_manifest
@@ -7223,6 +7287,53 @@ const failClaimedReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   }
 
   return {chunk: firstFailedResult, completedCount: input.completedCount}
+}
+
+const recoverDuckDbOutOfMemoryReviewServingRebuildChunkBatch = async (input: {
+  claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
+  database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase
+  error: unknown
+  workerId: string
+}) => {
+  if (!isDuckDbOutOfMemoryError(input.error)) {
+    return null
+  }
+
+  const recoverableChunks = input.claimedChunks.filter((claimed) => {
+    return splittableArticleRangeRebuildComponents.has(claimed.chunk.projectionComponent) && canSplitRebuildChunk(claimed.chunk)
+  })
+
+  if (recoverableChunks.length !== input.claimedChunks.length) {
+    return null
+  }
+
+  const results: Array<Extract<ReviewServingProjectorWorkerChunkResult, {status: 'completed'}>> = []
+
+  for (const claimed of recoverableChunks) {
+    const split = await splitClaimedArticleRangeRebuildChunk(
+      {
+        chunk: claimed.chunk,
+        leaseOwner: input.workerId,
+        projectId: requireRebuildChunkProjectId(claimed.chunk),
+        splitReason: 'duckdb_oom',
+        timings: claimed.timings,
+      },
+      input.database,
+    )
+
+    if (!split) {
+      return null
+    }
+
+    results.push({
+      chunkId: claimed.chunk.chunkId,
+      projectionComponent: claimed.chunk.projectionComponent,
+      requestId: claimed.chunk.requestId,
+      status: 'completed',
+    })
+  }
+
+  return results
 }
 
 const prepareClaimedReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
@@ -7826,14 +7937,25 @@ const runReviewServingProjectorWorkerRebuildChunkBatchWith = async (
       stopHeartbeat()
     }
   } catch (error) {
-    return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
+    const recoveredResults = await recoverDuckDbOutOfMemoryReviewServingRebuildChunkBatch({
       claimedChunks: input.claimedChunks,
-      completedCount,
       database: input.database,
-      dependencies: input.dependencies,
       error,
       workerId: input.workerId,
     })
+
+    if (recoveredResults !== null) {
+      batchResults = recoveredResults
+    } else {
+      return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
+        claimedChunks: input.claimedChunks,
+        completedCount,
+        database: input.database,
+        dependencies: input.dependencies,
+        error,
+        workerId: input.workerId,
+      })
+    }
   }
 
   if (batchResults === null) {
@@ -8320,6 +8442,7 @@ export const runReviewServingProjectorWorkerCycle = async (
   const wakeId = `${workerId}:${getWorkerNowMs(dependencies, options)}`
   const workloadContext = getReviewServingProjectorWorkerWorkloadContext(workerId)
   const database = getReviewServingProjectorWorkerDatabase(dependencies, workloadContext)
+  await failInconsistentAndSupersededForegroundRebuildRequests({database, projectId: options.rebuildProjectId})
   await failSupersededRequestlessBootstrapRebuildRequests({database, projectId: options.rebuildProjectId})
   await repairRequestlessBootstrapRebuildAdoptions({database, projectId: options.rebuildProjectId})
   const terminalFailedChunk = await finalizeTerminalFailedRebuildRequests({

@@ -1613,6 +1613,8 @@ test('duckdb fatal index-delete repair target prefers table named by error over 
   expect(targetMatcherSource.indexOf('const unqualifiedMessageSpec')).toBeLessThan(
     targetMatcherSource.indexOf('getDuckdbStartupRepairSpecForTableName(failedMutatingTargetTable)'),
   )
+  expect(targetMatcherSource).toContain('getDuckdbStartupRepairSpecForTableName(lastMutatingTargetTable)')
+  expect(targetMatcherSource).not.toContain('spec.lowMemoryStartupPreflight === true')
 })
 
 test('duckdb fatal index-delete repair target recognizes snapshot manifest row dumps', () => {
@@ -3399,6 +3401,10 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
       'article_id',
     ])
     expect(titleSearchProbe?.mutationProbeSql).toContain('UPDATE mart.review_title_search_serving_v4')
+    expect(titleSearchProbe?.repairStrategy).toBe('empty-derived')
+    expect(titleSearchProbe?.postRepairSql).toContain("projection_component = 'search'")
+    expect(titleSearchProbe?.postRepairSql).toContain("status = 'pending'")
+    expect(titleSearchProbe?.postRepairSql).toContain('app.review_rebuild_request')
     const queueServingProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_unassessed_queue_serving_v4'
     })
