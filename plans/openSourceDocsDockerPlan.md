@@ -1,6 +1,6 @@
 # Workstream 1 Implementation Plan
 
-This is the active change plan for `OS_IT_PLAN.md` Workstream 1: public docs and Docker/publication artifacts.
+This is the active change plan for `plans/old/OS_IT_PLAN.md` Workstream 1: public docs and Docker/publication artifacts.
 
 ## Scope
 
@@ -36,7 +36,7 @@ These decisions record intended public-release handling. This workstream does no
 | `docs/README_RUN_LOCAL.md` | Rewrite done | Forska | Local run doc avoids private helper repos, internal runtime drills, and admin/debug routes. | None |
 | `docs/README_SPLIT_RUNTIME_VERIFICATION.md` | Remove done | N/A | Internal runtime verification doc described owner RPC, admin diagnostics, and failover drills. | None |
 | `AGENTS.md` | Hold for now | Forska cleanup branch | User requested no action for now. Final contributor-doc handling can happen later. | Contributor-docs decision |
-| `OS_IT_PLAN.md` and `plans/openSource*.md` | Keep during cleanup | Forska cleanup branch | Active release planning docs. Keep for now; decide final handling in Workstream 11. | Final release-scope decision |
+| `plans/old/OS_IT_PLAN.md` and `plans/openSource*.md` | Keep during cleanup | Forska cleanup branch | Active release planning docs. Keep for now; decide final handling in Workstream 11. | Final release-scope decision |
 | Root `*_PLAN.md` files and `plans/old/*` | Keep during cleanup | Forska cleanup branch | Internal implementation history and planning material. Keep for now; decide final handling in Workstream 11. | Final release-scope decision |
 | `future/**/*.md` | Move done | `../docs/future/` | Example/reference material was moved out of the Forska repo for separate review. | Licensing/data-rights review before public use |
 | `scripts/createUnexpectedAnswersAdminPage.md` | Remove done | N/A | Stale admin-page note, not public project documentation as-is. | None |
