@@ -58,6 +58,7 @@ export type ProjectReviewServingSelectedImportArticleRangeInput = {
   chunkStartArticleId: string
   projectId: string
   projectScopeIdentity: string
+  refreshServingRows?: boolean
   replaceExistingRows?: boolean
   selectedImportSnapshotId: string
   servingBaseGeneration?: number
@@ -478,7 +479,11 @@ const selectedImportServingColumns = [
 const getRefreshSelectedImportServingArticleRangeStatements = (
   input: ProjectReviewServingSelectedImportArticleRangeInput,
 ) => {
-  if (input.servingBaseGeneration === undefined || input.servingProjectionIdentity === undefined) {
+  if (
+    input.refreshServingRows === false
+    || input.servingBaseGeneration === undefined
+    || input.servingProjectionIdentity === undefined
+  ) {
     return []
   }
 
