@@ -1,199 +1,673 @@
 {
-  "name": "DuckDB CQRS Phase 0",
-  "description": "Create the pure review-serving contracts, registries, cursor and admission helpers, SQL-shape guards, diagnostics, and benchmark smoke harness without changing product route behavior.",
-  "branchName": "ralph/duckdb-cqrs-phase-0",
+  "name": "Project Review Storage Shape Audit",
+  "branchName": "ralph/review-storage-shape-audit",
+  "description": "Perform an exhaustive, evidence-backed audit of project-review API, UI, DuckDB, worker, lifecycle, index, temporary, and local payload storage shapes. Repository schemas, code, runtime behavior, retention, and live/project data remain unchanged; only designated physical-evidence stories may mutate isolated disposable fixtures.",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Define review-serving core contracts",
-      "description": "As a developer, I want shared review-serving contract types so later Phase 0 modules can agree on freshness, counts, search, bulk, snapshots, workload classes, and route budgets.",
+      "title": "Establish the durable audit framework",
+      "description": "As an auditor, I want one resumable evidence structure for every later story.",
       "acceptanceCriteria": [
-        "Add or update `src/server/reviewServing/reviewServingContracts.ts` with explicit freshness states, count/search/bulk states, named fast count keys, workload classes, route budget shapes, snapshot identifiers, required/optional component states, and physical filter access strategy types.",
-        "Keep contract definitions pure and free of database calls or route behavior changes.",
-        "Use `effect` for any non-trivial JavaScript/TypeScript async or server flow added by this story, while keeping pure transforms as plain functions.",
-        "Add adjacent tests for contract invariants and exported state values.",
-        "`bun test src/server/reviewServing` passes.",
-        "`bunx eslint src/server/reviewServing` passes.",
-        "`bun run lint` passes."
+        "Preserve substantiated content already in `STORAGE_SHAPE_AUDIT_PLAN.md`, and mark inherited dispositions provisional when revised proof is missing.",
+        "Create sections for all eleven required outputs, the five coverage manifests, reconciliation summaries, commands, blockers, and owner questions.",
+        "Define stable row IDs and four distinct state fields: manifest `auditStatus` uses only `not-started`, `traced-to-api`, `traced-to-writer`, `traced-to-lifecycle`, `measured`, `classified`, `blocked`, or `out-of-scope`; `proofCheckState` uses `satisfied`, `pending`, `blocked`, or `not-applicable`; `recommendationActionability` uses `actionable`, `unresolved`, or `blocked`; `overallCertification` uses `PASS` or `INCOMPLETE`.",
+        "Define discovered = classified + out-of-scope + blocked reconciliation formulas and require missing evidence plus an owner question for every nonterminal manifest row.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`, apart from Ralph tracker metadata; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Cite exact files, symbols, routes, tables, columns, indexes, SQL shapes, tests, commands, or approved snapshots; distinguish production use from tests, fixtures, plans, comments, generated files, and historical migrations.",
+        "Never inspect live DuckDB directly, and do not strengthen a move, derive, archive, or delete recommendation before API, writer, lifecycle, recovery, export, transfer, and retention evidence is traced."
       ],
       "priority": 1,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [],
-      "completionNotes": "Completed by agent"
+      "dependsOn": []
     },
     {
       "id": "US-002",
-      "title": "Build projection identity helpers",
-      "description": "As a developer, I want stable projection identity helpers so review-serving rows can carry only the invalidation keys they depend on.",
+      "title": "Freeze route contracts and benchmark configuration",
+      "description": "As an auditor, I want product semantics and reliability-critical settings fixed before inventory and comparison work.",
       "acceptanceCriteria": [
-        "Add or update `src/server/reviewServing/reviewProjectionIdentity.ts` with stable identity builders for display, search, judgment-input content, project scope, prompt config, review config, and composed route identities.",
-        "Identity builders produce stable output for equivalent input ordering and do not include unrelated projection inputs.",
-        "Keep helpers pure and free of database calls or route behavior changes.",
-        "Use `effect` for any non-trivial JavaScript/TypeScript async or server flow added by this story, while keeping pure transforms as plain functions.",
-        "Add adjacent tests proving stable identity hashing and narrow component dependencies.",
-        "`bun test src/server/reviewServing` passes.",
-        "`bunx eslint src/server/reviewServing` passes.",
-        "`bun run lint` passes."
+        "Record mounted review routes and read contracts with exact ordering, filters, counts, pagination, cursors, freshness, stale or unavailable behavior, snapshots, exactness, and response budgets.",
+        "Record fixture scale, seed, model, provider, thinking level, prompts, content flags, DuckDB memory limit, runtime profile, metric definitions, and approved evidence tooling without overriding configured values.",
+        "Separate source import or seeding time, projection or rebuild time, and foreground route-read time, and record route registry or parity discrepancies.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep proof-check, actionability, and overall-certification fields separate.",
+        "Cite exact evidence, update relevant manifest counts, and record commands, skipped checks, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not strengthen a move, derive, archive, or delete recommendation in this story."
       ],
       "priority": 2,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-001"
-      ],
-      "completionNotes": "Completed by agent"
+      "dependsOn": ["US-001"]
     },
     {
       "id": "US-003",
-      "title": "Add invalidation registry",
-      "description": "As a developer, I want every planned review-serving delta kind mapped to the narrowest affected component so later write paths cannot fall back to broad project invalidation.",
+      "title": "Census article, import, and project-scope schema",
+      "description": "As an auditor, I want authoritative article and scope objects enumerated from the effective schema.",
       "acceptanceCriteria": [
-        "Add or update `src/server/reviewServing/reviewServingInvalidationRegistry.ts` with every Phase 0 change kind planned for Phase 2 and Phase 3.",
-        "Each change kind declares first affected component, downstream dependents, required affected keys, and update mode.",
-        "LLM judgment changes do not invalidate display, selected-import, or search components unless those inputs actually changed.",
-        "Unknown change kinds are not treated as broad project invalidation.",
-        "Use `effect` for any non-trivial JavaScript/TypeScript async or server flow added by this story, while keeping pure transforms as plain functions.",
-        "Static tests prove every `reviewServingChangeKind` has an invalidation registry entry and no unknown change kind becomes broad project invalidation.",
-        "`bun test src/server/reviewServing` passes.",
-        "`bunx eslint src/server/reviewServing` passes.",
-        "`bun run lint` passes."
+        "Inventory article, data-source, import-route, source-record, project, project-article, project-import-route, and subproject tables with every column, JSON key, identity, constraint, and current index.",
+        "Trace the complete forward migration chain and separately record production and non-production references plus unavailable runtime evidence.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update schema-object and material-field counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave every storage disposition unresolved."
       ],
       "priority": 3,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-001",
-        "US-002"
-      ],
-      "completionNotes": "Completed by agent"
+      "dependsOn": ["US-002"]
     },
     {
       "id": "US-004",
-      "title": "Create read contract registry",
-      "description": "As a developer, I want every planned hot review read registered with serving-table, cursor, budget, count, filter, freshness, and workload metadata before route migration starts.",
+      "title": "Census prompt, model, and review-configuration schema",
+      "description": "As an auditor, I want benchmark-critical review configuration fully enumerated.",
       "acceptanceCriteria": [
-        "Add or update `src/server/reviewServing/reviewServingReadContracts.ts` with contract entries for LLM, human, both, unassessed, filter, facet, badge, count, row, queue, detail, health, warning, prompt preview, bulk, PDF, export, and search surfaces planned for Phase 4.",
-        "Every contract declares workload class, cursor spec, result budgets, allowed filters, physical filter access strategy, named fast counts, freshness behavior, required/optional components, and physical serving table.",
-        "Read contracts point only to planned serving/index tables and do not include raw fallback tables.",
-        "The migration inventory maps contracts to product routes without changing route behavior.",
-        "Use `effect` for any non-trivial JavaScript/TypeScript async or server flow added by this story, while keeping pure transforms as plain functions.",
-        "Static tests prove every `reviewServingReadContracts.ts` key has workload class, cursor spec, budgets, allowed filters, physical filter access strategy, named fast counts, freshness behavior, and required/optional components.",
-        "`bun test src/server/reviewServing` passes.",
-        "`bunx eslint src/server/reviewServing` passes.",
-        "`bun run lint` passes."
+        "Inventory prompt, project-prompt, model, provider, scope, content-setting, date-range, selected-route, and project review-configuration objects with every persisted field, JSON key, constraint, identity, and index.",
+        "Record final declaring migrations and identify every dimension used by applicability, judgment identity, projection identity, snapshot identity, and invalidation.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update schema-object and material-field counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave every storage disposition unresolved."
       ],
       "priority": 4,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-001",
-        "US-002",
-        "US-003"
-      ],
-      "completionNotes": "Completed by agent"
+      "dependsOn": ["US-003"]
     },
     {
       "id": "US-005",
-      "title": "Add cursor and filter signature helpers",
-      "description": "As a developer, I want review-serving cursors and filter signatures to be snapshot, projection identity, filter, and sort scoped so migrated routes can reject stale or mismatched cursors.",
+      "title": "Census judgment, human-review, and review-state schema",
+      "description": "As an auditor, I want durable review truth and audit state exhaustively represented.",
       "acceptanceCriteria": [
-        "Add or update `src/server/reviewServing/reviewServingCursor.ts` with cursor encode/decode helpers and validation against snapshot ID, projection identities, component state, filter signature, sort key, and route contract.",
-        "Add stable filter signature helpers that produce identical signatures for equivalent filter inputs.",
-        "Malformed cursors and identity, component, filter, or sort mismatches return explicit invalid-cursor results instead of raw fallback behavior.",
-        "Keep helpers pure and free of database calls or route behavior changes.",
-        "Use `effect` for any non-trivial JavaScript/TypeScript async or server flow added by this story, while keeping pure transforms as plain functions.",
-        "Add adjacent tests for cursor round trips, malformed cursors, filter signature stability, and mismatch rejection.",
-        "`bun test src/server/reviewServing` passes.",
-        "`bunx eslint src/server/reviewServing` passes.",
-        "`bun run lint` passes."
+        "Inventory LLM judgments, human judgments, review state, assessments, tokens, execution snapshots, and outbox objects with every field, JSON key, sequence-like identity, constraint, and index.",
+        "Record model and every content-setting identity dimension, final migrations, and any current-schema drift without resolving ambiguity by assumption.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update schema-object and material-field counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave every storage disposition unresolved."
       ],
       "priority": 5,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-001",
-        "US-004"
-      ],
-      "completionNotes": "Completed by agent"
+      "dependsOn": ["US-004"]
     },
     {
       "id": "US-006",
-      "title": "Add admission interfaces and diagnostics shape",
-      "description": "As a developer, I want registry-based admission and diagnostics contracts so Phase 4 foreground work can be admitted or rejected before DuckDB execution.",
+      "title": "Census judgment-job and execution-control schema",
+      "description": "As an auditor, I want judgment execution and job control objects independently checkable.",
       "acceptanceCriteria": [
-        "Add or update `src/server/reviewServing/reviewServingAdmission.ts` with registry-based admission for registered contracts, page/result budgets, stale allowance, unsupported count shapes, and synchronous substring search rejection.",
-        "Admission returns explicit accepted or rejected results without executing DuckDB SQL.",
-        "Add diagnostics shapes for freshness, count/search/job state, route budget decisions, workload class, and rejection reasons.",
-        "Do not add product-specific SQL or route behavior changes.",
-        "Use `effect` for any non-trivial JavaScript/TypeScript async or server flow added by this story, while keeping pure transforms as plain functions.",
-        "Add adjacent tests for accepted registered work, unregistered foreground work, over-budget work, stale snapshot behavior, unsupported counts, and synchronous substring search rejection.",
-        "`bun test src/server/reviewServing` passes.",
-        "`bunx eslint src/server/reviewServing` passes.",
-        "`bun run lint` passes."
+        "Inventory judgment jobs, attempts, leases, execution snapshots, import state, retry state, and directly related control objects with every persisted field, key, identity, constraint, and index.",
+        "Record final migrations, lifecycle timestamps, payload fields, and production versus non-production references.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update schema-object and material-field counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave every storage disposition unresolved."
       ],
       "priority": 6,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-001",
-        "US-004",
-        "US-005"
-      ],
-      "completionNotes": "Completed by agent"
+      "dependsOn": ["US-005"]
     },
     {
       "id": "US-007",
-      "title": "Add serving SQL-shape guards",
-      "description": "As a developer, I want SQL-shape guard helpers so new review-serving SQL cannot accidentally reintroduce raw fallback, unbounded scans, or large-offset pagination patterns.",
+      "title": "Census deltas, outboxes, and reusable hot facts",
+      "description": "As an auditor, I want intake, replay, and typed reusable facts fully enumerated.",
       "acceptanceCriteria": [
-        "Add `src/server/reviewServing/reviewServingSql.ts` or sibling `reviewServingSql/` files with SQL-shape guard helpers for new serving SQL builders.",
-        "SQL-shape guards reject `selected_scoped_article_import`, `ROW_NUMBER(`, `OFFSET`, raw `app.article` scans, raw `app.judgment` scans, `json_extract`, and unbounded foreground `GROUP BY` in new serving SQL.",
-        "SQL-shape guards accept bounded serving-table keyset SQL over registered serving/index tables.",
-        "Static guards protect the new `reviewServing` package and do not fail just because legacy routes still delegate to OLAP before Phase 4.",
-        "Use `effect` for any non-trivial JavaScript/TypeScript async or server flow added by this story, while keeping pure transforms as plain functions.",
-        "SQL-shape tests prove new serving SQL cannot include raw fallback shapes.",
-        "`bun test src/server/reviewServing` passes.",
-        "`bunx eslint src/server/reviewServing` passes.",
-        "`bun run lint` passes."
+        "Inventory review and import deltas, source outboxes, reconciliation cursors, and import hot facts with every column, JSON key, key, owner, lifecycle timestamp, and index.",
+        "Record dynamic SQL registries, writer allowlists, generated table names, and repeated raw JSON extraction that literal searches could miss.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update schema-object and material-field counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave every storage disposition unresolved."
       ],
       "priority": 7,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-001",
-        "US-004"
-      ],
-      "completionNotes": "Completed by agent"
+      "dependsOn": ["US-006"]
     },
     {
       "id": "US-008",
-      "title": "Add benchmark smoke harness scaffold",
-      "description": "As a developer, I want a smoke-capable benchmark scaffold so later phases can run the full 10M-article/7-prompt overlap workload with consistent metrics.",
+      "title": "Census dirty work, acknowledgements, and watermarks",
+      "description": "As an auditor, I want projector progress and replay state exhaustively represented.",
       "acceptanceCriteria": [
-        "Add a benchmark harness scaffold for the 10M-article/7-prompt synthetic fixture and overlap workload definition without requiring completed schema or projectors.",
-        "The harness metrics shape includes p50/p95/p99 latency, memory, temp usage, queue depth, rows scanned, rows returned, and admitted/rejected work.",
-        "The smoke path can run against minimal or mocked inputs before final schema/projectors exist.",
-        "The full 10M benchmark remains documented as a Phase 5 release gate and is not required for Phase 0 completion.",
-        "Use `effect` for non-trivial JavaScript/TypeScript async benchmark orchestration, resource lifetime, retries, polling, or backoff, while keeping pure transforms as plain functions.",
-        "Benchmark smoke harness can run without requiring completed schema/projectors.",
-        "`bun test src/server/reviewServing` passes.",
-        "`bunx eslint src/server/reviewServing` passes.",
-        "`bun run lint` passes."
+        "Inventory dirty work, acknowledgements, project import cursors, projector watermarks, and projection input watermarks with every field, key, lease, owner, lifecycle timestamp, and index.",
+        "Record dynamic registries, writer and reader ownership, final migrations, and initial production or non-production references.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update schema-object and material-field counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave every storage disposition unresolved."
       ],
       "priority": 8,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-001",
-        "US-004",
-        "US-006",
-        "US-007"
+      "dependsOn": ["US-007"]
+    },
+    {
+      "id": "US-009",
+      "title": "Census projection identities, snapshots, and pins",
+      "description": "As an auditor, I want publication identity and snapshot ownership fully enumerated.",
+      "acceptanceCriteria": [
+        "Inventory selected-import snapshots and bases, projection identities, snapshot manifests, component identities, and snapshot pins with every field, JSON key, identity, constraint, and index.",
+        "Apply all forward migrations and record publication, active, last-known-good, pin, and retirement timestamps and owners.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update schema-object and material-field counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave every storage disposition unresolved."
       ],
-      "completionNotes": "Completed by agent"
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-008"]
+    },
+    {
+      "id": "US-010",
+      "title": "Census rebuilds, overlays, jobs, and retention control",
+      "description": "As an auditor, I want rebuild and lifecycle control state independently checkable.",
+      "acceptanceCriteria": [
+        "Inventory rebuild requests and chunks, write overlays, bulk and search jobs, result manifests, retention marks, retry and lease state with every field, JSON key, owner, identity, and index.",
+        "Apply forward migrations and record lifecycle, recovery, cleanup, pin, and orphan-related fields and initial references.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update schema-object and material-field counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave every storage disposition unresolved."
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-009"]
+    },
+    {
+      "id": "US-011",
+      "title": "Census candidate, display, and status marts",
+      "description": "As an auditor, I want list selection and status shapes enumerated without inferring use from names.",
+      "acceptanceCriteria": [
+        "Inventory candidate serving, display patch, selected-import patch, LLM status, and human status objects with every column, material JSON key, identity, constraint, and index expression.",
+        "Record owners and declarations while leaving pre-limit and post-limit use unknown until lineage proves it.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update schema-object and material-field counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave every storage disposition unresolved."
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-010"]
+    },
+    {
+      "id": "US-012",
+      "title": "Census payload, search, and queue marts",
+      "description": "As an auditor, I want keyed hydration, search, and queue storage independently enumerated.",
+      "acceptanceCriteria": [
+        "Inventory article payload, judgment detail payload, title search, queue patches, and unassessed queue objects with every column, JSON key, key, identity, constraint, and index.",
+        "Record owners and declarations while leaving candidate, hydration, priority, and search necessity unknown until lineage proves it.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update schema-object and material-field counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave every storage disposition unresolved."
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-011"]
+    },
+    {
+      "id": "US-013",
+      "title": "Census postings, summaries, filters, and partial marts",
+      "description": "As an auditor, I want high-fan-out and exact-summary storage exhaustively represented.",
+      "acceptanceCriteria": [
+        "Inventory posting patches, serving and stats, counts, facets, filter options, contributions, and rebuild partials with every field, key, constraint, current or dropped index, owner, and final migration.",
+        "Separate serving, staging, contribution, request-scoped partial, and potentially retired roles without making deletion decisions.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update schema-object and material-field counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave every storage disposition unresolved."
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-012"]
+    },
+    {
+      "id": "US-014",
+      "title": "Census legacy, temporary, payload, and local-file shapes",
+      "description": "As an auditor, I want adjacent and non-table persistence represented before API inventory.",
+      "acceptanceCriteria": [
+        "Inventory legacy review marts, refresh or dirty state, comparison/export/transfer objects, every temporary-table pattern, PDFs, full text, runtime assets, export artifacts, transfer packages, backups, snapshots, generated files, and relevant directories.",
+        "Record every active index or material key plus owner, path scheme, producer, consumer, lifecycle, retention, recovery role, declaration, and browser or desktop implication.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update schema-object, temporary, and payload/file counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Exclude adjacent shapes only with an evidence-backed project-review scope reason, and leave dispositions unresolved."
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-013"]
+    },
+    {
+      "id": "US-015",
+      "title": "Capture the approved physical baseline",
+      "description": "As an auditor, I want a reproducible physical baseline before UI inventory and candidate comparisons.",
+      "acceptanceCriteria": [
+        "On one approved disposable fixture, record fixture identity, memory and runtime settings, database size, table row counts, null and distinct samples, index inventory, rebuild wall time, rows written, RSS, foreground p95, and source/projection/read timing boundaries.",
+        "Record logical payload bytes, index bytes or cost, WAL bytes, and physical database bytes as separate categories, preserving unavailable categories as exact blockers.",
+        "Keep fixture scale, seed, model, provider, thinking level, prompts, content flags, memory limit, and runtime profile fixed; preserve failures without retry or downgrade.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Distinguish physical evidence from mock or smoke output, cite exact commands and tooling, update measurement rows and counts, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not make a storage recommendation from baseline data alone."
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-014"]
+    },
+    {
+      "id": "US-016",
+      "title": "Inventory LLM review API and UI surfaces",
+      "description": "As an auditor, I want every LLM list, count, filter, search, and UI consumer represented.",
+      "acceptanceCriteria": [
+        "Add mounted API and read-contract rows for LLM rows, counts, filters, search, methods, inputs, outputs, owning services, SQL readers, tests, exactness, freshness, and query counts.",
+        "Add UI/runtime rows for LLM query keys, components, filters, counts, pagination, consumed and ignored fields, duplicated requests, and browser/desktop applicability, plus preliminary route-to-query and route-to-table rows.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update API and UI manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-015"]
+    },
+    {
+      "id": "US-017",
+      "title": "Inventory Human review API and UI surfaces",
+      "description": "As an auditor, I want every Human list, count, filter, and UI consumer represented.",
+      "acceptanceCriteria": [
+        "Add mounted API and read-contract rows for Human rows, counts, filters, prompt and status semantics, methods, inputs, outputs, owners, readers, tests, exactness, freshness, and query counts.",
+        "Add UI/runtime rows for Human query keys, components, judgment hydration, cursors, consumed and ignored fields, repeated requests, browser/desktop applicability, and preliminary route maps.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update API and UI manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-016"]
+    },
+    {
+      "id": "US-018",
+      "title": "Inventory Both-mode review API and UI surfaces",
+      "description": "As an auditor, I want combined-review contracts and consumers explicitly represented.",
+      "acceptanceCriteria": [
+        "Add mounted API and read-contract rows for Both rows, counts, filters, conflict and composition semantics, methods, inputs, outputs, owners, readers, tests, exactness, freshness, and query counts.",
+        "Add UI/runtime rows for Both query keys, components, LLM and human hydration, cursors, consumed and ignored fields, repeated requests, browser/desktop applicability, and preliminary route maps.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update API and UI manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-017"]
+    },
+    {
+      "id": "US-019",
+      "title": "Inventory Unassessed and queue API and UI surfaces",
+      "description": "As an auditor, I want queue rows, counts, eligibility, and consumers explicitly represented.",
+      "acceptanceCriteria": [
+        "Add mounted API and read-contract rows for Unassessed rows, counts, queue kinds, priority, ordering, pagination, human-assessment initialization, owners, readers, tests, exactness, freshness, and query counts.",
+        "Add UI/runtime rows for Unassessed query keys, components, prompt applicability, consumed and ignored fields, polling, browser/desktop applicability, and preliminary route maps.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update API and UI manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-018"]
+    },
+    {
+      "id": "US-020",
+      "title": "Inventory detail, prompt, full-text, and admin surfaces",
+      "description": "As an auditor, I want detail-only and hydration contracts explicitly represented.",
+      "acceptanceCriteria": [
+        "Add API and read-contract rows for review detail, article payload, judgment payload, prompt preview, full text, and article admin-support responses with inputs, output fields, owners, readers, tests, caps, freshness, and snapshot behavior.",
+        "Add UI/runtime rows for callers, consumed and ignored fields, candidate versus post-limit hydration, browser/desktop applicability, and route maps; classify adjacent article and assessment routes in or out of scope with evidence.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update API and UI manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-019"]
+    },
+    {
+      "id": "US-021",
+      "title": "Inventory warning, health, readiness, and progress surfaces",
+      "description": "As an auditor, I want diagnostic and polling contracts explicitly represented.",
+      "acceptanceCriteria": [
+        "Add API and read-contract rows for warnings, health, readiness, rebuild progress, PDF or bulk progress, and unavailable states with frequency, outputs, owners, readers, tests, and snapshot or lifecycle dependencies.",
+        "Add UI/runtime rows for warning and progress pollers, consumed and ignored fields, repeated metadata reads, waterfalls, and browser/desktop applicability.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update API and UI manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-020"]
+    },
+    {
+      "id": "US-022",
+      "title": "Inventory search, selection, and add-to-project surfaces",
+      "description": "As an auditor, I want search and bulk-selection consumers explicitly represented.",
+      "acceptanceCriteria": [
+        "Add API and read-contract rows for token-prefix and substring search, select-all, add-by-filter, and add-by-ID paths with filter signatures, ordering, snapshots, keyset batching, ID and payload caps, progress, owners, and tests.",
+        "Reconcile Eden/RPC, direct fetch, browser proxy, shared client, and desktop bridge callers, consumed fields, ignored fields, and route maps.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update API and UI manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 22,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-021"]
+    },
+    {
+      "id": "US-023",
+      "title": "Inventory PDF, export, and transfer surfaces",
+      "description": "As an auditor, I want generated-output and portability consumers explicitly represented.",
+      "acceptanceCriteria": [
+        "Add API and read-contract rows for PDF-by-filter, PDF-by-project, PDF-by-ID, job status, project export, transfer export, transfer read, progress, and download paths with snapshots, pins, caps, ordering, output fields, owners, cleanup, and tests.",
+        "Reconcile browser, desktop, direct fetch, shared client, worker, generated-file, export, and transfer callers plus route-to-query and route-to-table maps.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update API and UI manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 23,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-022"]
+    },
+    {
+      "id": "US-024",
+      "title": "Verify current browser LLM and Human flows",
+      "description": "As an auditor, I want bounded runtime evidence for the current LLM and Human browser behavior.",
+      "acceptanceCriteria": [
+        "Verify current browser LLM and Human list, count, filter, search, pagination, cursor, judgment hydration, freshness, stale, and unavailable behavior against the frozen contracts using approved non-live evidence.",
+        "Record requests, response fields, ignored fields, ordering, counts, waterfalls, repeated metadata reads, runtime profile, and exact blockers; stop every process started for verification.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or any database data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact runtime evidence, update API and UI rows and counts, and record commands, skipped checks, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 24,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-023"]
+    },
+    {
+      "id": "US-025",
+      "title": "Verify current browser Both and Unassessed flows",
+      "description": "As an auditor, I want bounded runtime evidence for current Both and Unassessed browser behavior.",
+      "acceptanceCriteria": [
+        "Verify current browser Both and Unassessed list, count, filter, conflict, queue priority, eligibility, pagination, cursor, freshness, stale, and unavailable behavior against frozen contracts using approved non-live evidence.",
+        "Record requests, fields, ordering, counts, queue behavior, waterfalls, runtime profile, and exact blockers; stop every process started for verification.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or any database data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact runtime evidence, update API and UI rows and counts, and record commands, skipped checks, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 25,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-024"]
+    },
+    {
+      "id": "US-026",
+      "title": "Verify current browser detail and diagnostic flows",
+      "description": "As an auditor, I want bounded runtime evidence for browser detail, prompt, payload, and diagnostic behavior.",
+      "acceptanceCriteria": [
+        "Verify current browser detail, prompt preview, full-text, admin, warning, health, readiness, and progress flows with representative LLM, Human, Both, and Unassessed entry paths using approved non-live evidence.",
+        "Record bounded hydration, fields, caps, snapshot identity, polling, stale and unavailable states, requests, runtime profile, and blockers; stop every process started for verification.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or any database data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact runtime evidence, update API and UI rows and counts, and record commands, skipped checks, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 26,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-025"]
+    },
+    {
+      "id": "US-027",
+      "title": "Verify current browser search, bulk, PDF, and export flows",
+      "description": "As an auditor, I want bounded runtime evidence for browser bulk and generated-output behavior.",
+      "acceptanceCriteria": [
+        "Verify current browser prefix and substring search, select-all, add-to-project, PDF, export, progress, and download flows with approved non-live evidence.",
+        "Record exact IDs and ordering, signatures, caps, batching, snapshot pins, generated outputs, cleanup, requests, runtime profile, and blockers; stop every process started for verification.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or any database data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact runtime evidence, update API and UI rows and counts, and record commands, skipped checks, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 27,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-026"]
+    },
+    {
+      "id": "US-028",
+      "title": "Verify current desktop LLM and Human flows",
+      "description": "As an auditor, I want bounded runtime evidence for current LLM and Human desktop behavior.",
+      "acceptanceCriteria": [
+        "Verify current desktop LLM and Human list, count, filter, search, pagination, cursor, judgment hydration, freshness, stale, and unavailable behavior against frozen contracts using approved non-live evidence.",
+        "Record bridge or shared-client paths, requests, fields, ordering, counts, repeated reads, runtime paths, restart behavior, and blockers; stop every process started for verification.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or any database data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact runtime evidence, update API and UI rows and counts, and record commands, skipped checks, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 28,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-027"]
+    },
+    {
+      "id": "US-029",
+      "title": "Verify current desktop Both and Unassessed flows",
+      "description": "As an auditor, I want bounded runtime evidence for current Both and Unassessed desktop behavior.",
+      "acceptanceCriteria": [
+        "Verify current desktop Both and Unassessed list, count, filter, conflict, queue priority, eligibility, pagination, cursor, freshness, stale, and unavailable behavior using approved non-live evidence.",
+        "Record bridge or shared-client paths, requests, fields, ordering, counts, queue behavior, runtime paths, restart behavior, and blockers; stop every process started for verification.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or any database data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact runtime evidence, update API and UI rows and counts, and record commands, skipped checks, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 29,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-028"]
+    },
+    {
+      "id": "US-030",
+      "title": "Verify current desktop detail and diagnostic flows",
+      "description": "As an auditor, I want bounded runtime evidence for desktop detail, payload, prompt, and diagnostics.",
+      "acceptanceCriteria": [
+        "Verify current desktop detail, prompt preview, full-text, admin, warning, health, readiness, and progress flows through representative review entry paths using approved non-live evidence.",
+        "Record runtime paths, bounded hydration, fields, caps, snapshot identity, polling, stale and unavailable states, restart or resume behavior, and blockers; stop every process started for verification.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or any database data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact runtime evidence, update API and UI rows and counts, and record commands, skipped checks, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 30,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-029"]
+    },
+    {
+      "id": "US-031",
+      "title": "Verify current desktop search, bulk, PDF, and export flows",
+      "description": "As an auditor, I want bounded runtime evidence for desktop bulk and generated-output behavior.",
+      "acceptanceCriteria": [
+        "Verify current desktop search, select-all, add-to-project, PDF, export, transfer-facing, progress, and download flows using approved non-live evidence.",
+        "Record bridge and runtime paths, IDs, ordering, signatures, caps, batching, pins, generated outputs, cleanup, restart or resume behavior, and blockers; stop every process started for verification.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or any database data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact runtime evidence, update API and UI rows and counts, and record commands, skipped checks, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 31,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-030"]
+    },
+    {
+      "id": "US-032",
+      "title": "Inventory article, import, and project-scope mutations",
+      "description": "As an auditor, I want source mutations and their initial review-serving effects explicitly listed.",
+      "acceptanceCriteria": [
+        "Enumerate import sources, route membership, canonical article and metadata or payload writes, project article add or remove, subproject, deletion, archive, and transfer-import mutations.",
+        "For each mutation record production writer, tables or files read and written, emitted delta or dirty work, lifecycle and recovery role, tests, and manifest row IDs.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update background/operator counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 32,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-031"]
+    },
+    {
+      "id": "US-033",
+      "title": "Inventory judgment and human-review mutations",
+      "description": "As an auditor, I want LLM and human review writes explicitly listed.",
+      "acceptanceCriteria": [
+        "Enumerate LLM judgment create, update, delete, outbox import, human judgment submit, move, delete, review-state writes, and prompt merge or cleanup mutations.",
+        "For each mutation record writer, identity dimensions, tables or files read and written, emitted delta or dirty work, overlays, lifecycle, recovery role, tests, and manifest row IDs.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update background/operator counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 33,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-032"]
+    },
+    {
+      "id": "US-034",
+      "title": "Inventory project review-configuration mutations",
+      "description": "As an auditor, I want benchmark-critical invalidation paths explicitly listed.",
+      "acceptanceCriteria": [
+        "Enumerate project scope, prompts, models, content settings, date range, selected routes, clone, transfer-import, and review-state configuration changes.",
+        "For each mutation record writer, all identity dimensions, downstream change kind, invalidation scope, tables or files touched, lifecycle, recovery role, tests, and manifest row IDs.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update background/operator counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 34,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-033"]
+    },
+    {
+      "id": "US-035",
+      "title": "Inventory intake, scope, selected-import, and display projectors",
+      "description": "As an auditor, I want the source-to-scope projection pipeline explicitly checkable.",
+      "acceptanceCriteria": [
+        "Enumerate delta reconciliation, dirty intake, project scope, selected import, and display projectors and schedulers.",
+        "Record entry points, input and output objects, component identities, publication role, full rebuild, incremental, patch/base, compaction, chunk, and test paths.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update background/operator counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 35,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-034"]
+    },
+    {
+      "id": "US-036",
+      "title": "Inventory status, payload, search, and queue projectors",
+      "description": "As an auditor, I want review-state and hydration publication components explicitly checkable.",
+      "acceptanceCriteria": [
+        "Enumerate LLM status, human status, payload, title search, and queue projectors, workers, and schedulers.",
+        "Record entry points, input and output objects, identities, publication role, full rebuild, incremental, patch/base, compaction, chunk, and test paths.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update background/operator counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 36,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-035"]
+    },
+    {
+      "id": "US-037",
+      "title": "Inventory posting, summary, filter, and partial projectors",
+      "description": "As an auditor, I want high-fan-out serving publication components explicitly checkable.",
+      "acceptanceCriteria": [
+        "Enumerate posting, stats, count, facet, filter-option, contribution, partial, and compaction projectors, workers, and schedulers.",
+        "Record entry points, input and output objects, identities, snapshot promotion, full rebuild, incremental, contribution, partial, compaction, chunk, and test paths.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update background/operator counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 37,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-036"]
+    },
+    {
+      "id": "US-038",
+      "title": "Inventory startup, readiness, retention, and repair surfaces",
+      "description": "As an auditor, I want lifecycle and recovery consumers represented before lineage work.",
+      "acceptanceCriteria": [
+        "Enumerate startup probes, readiness, snapshot pins, compaction, retention, cleanup, repair, replay, recovery, and backup surfaces.",
+        "Record objects or files touched, lifecycle and recovery role, frequency, ownership, tests, and whether each path is foreground, background, startup-only, migration-only, or operator-only.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update background/operator counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 38,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-037"]
+    },
+    {
+      "id": "US-039",
+      "title": "Inventory transfer, export, import, and operator surfaces",
+      "description": "As an auditor, I want portability and hidden operator dependencies explicitly represented.",
+      "acceptanceCriteria": [
+        "Enumerate transfer, export, import, PDF or bulk workers, migration helpers, legacy scripts, maintenance commands, and operator tools.",
+        "Record objects and files touched, lifecycle and recovery role, current, retired, or unresolved production use, tests, and migration-only or operator-only status.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update background/operator counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not make storage dispositions."
+      ],
+      "priority": 39,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-038"]
     }
-  ],
-  "metadata": {
-    "updatedAt": "2026-06-13T14:18:41.370Z"
-  }
+  ]
 }
