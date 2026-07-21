@@ -1,7 +1,7 @@
 {
   "name": "Project Review Storage Shape Audit",
-  "branchName": "ralph/review-storage-shape-audit",
   "description": "Perform an exhaustive, evidence-backed audit of project-review API, UI, DuckDB, worker, lifecycle, index, temporary, and local payload storage shapes. Repository schemas, code, runtime behavior, retention, and live/project data remain unchanged; only designated physical-evidence stories may mutate isolated disposable fixtures.",
+  "branchName": "ralph/review-storage-shape-audit",
   "userStories": [
     {
       "id": "US-001",
@@ -17,9 +17,10 @@
         "Never inspect live DuckDB directly, and do not strengthen a move, derive, archive, or delete recommendation before API, writer, lifecycle, recovery, export, transfer, and retention evidence is traced."
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -37,7 +38,9 @@
       "priority": 2,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001"]
+      "dependsOn": [
+        "US-001"
+      ]
     },
     {
       "id": "US-003",
@@ -54,7 +57,9 @@
       "priority": 3,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-002"]
+      "dependsOn": [
+        "US-002"
+      ]
     },
     {
       "id": "US-004",
@@ -71,7 +76,9 @@
       "priority": 4,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-003"]
+      "dependsOn": [
+        "US-003"
+      ]
     },
     {
       "id": "US-005",
@@ -88,7 +95,9 @@
       "priority": 5,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-004"]
+      "dependsOn": [
+        "US-004"
+      ]
     },
     {
       "id": "US-006",
@@ -105,7 +114,9 @@
       "priority": 6,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-005"]
+      "dependsOn": [
+        "US-005"
+      ]
     },
     {
       "id": "US-007",
@@ -122,7 +133,9 @@
       "priority": 7,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-006"]
+      "dependsOn": [
+        "US-006"
+      ]
     },
     {
       "id": "US-008",
@@ -139,7 +152,9 @@
       "priority": 8,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-007"]
+      "dependsOn": [
+        "US-007"
+      ]
     },
     {
       "id": "US-009",
@@ -156,7 +171,9 @@
       "priority": 9,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-008"]
+      "dependsOn": [
+        "US-008"
+      ]
     },
     {
       "id": "US-010",
@@ -173,7 +190,9 @@
       "priority": 10,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-009"]
+      "dependsOn": [
+        "US-009"
+      ]
     },
     {
       "id": "US-011",
@@ -190,7 +209,9 @@
       "priority": 11,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-010"]
+      "dependsOn": [
+        "US-010"
+      ]
     },
     {
       "id": "US-012",
@@ -207,7 +228,9 @@
       "priority": 12,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-011"]
+      "dependsOn": [
+        "US-011"
+      ]
     },
     {
       "id": "US-013",
@@ -224,7 +247,9 @@
       "priority": 13,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-012"]
+      "dependsOn": [
+        "US-012"
+      ]
     },
     {
       "id": "US-014",
@@ -241,7 +266,9 @@
       "priority": 14,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-013"]
+      "dependsOn": [
+        "US-013"
+      ]
     },
     {
       "id": "US-015",
@@ -259,7 +286,9 @@
       "priority": 15,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-014"]
+      "dependsOn": [
+        "US-014"
+      ]
     },
     {
       "id": "US-016",
@@ -276,7 +305,9 @@
       "priority": 16,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-015"]
+      "dependsOn": [
+        "US-015"
+      ]
     },
     {
       "id": "US-017",
@@ -293,7 +324,9 @@
       "priority": 17,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-016"]
+      "dependsOn": [
+        "US-016"
+      ]
     },
     {
       "id": "US-018",
@@ -310,7 +343,9 @@
       "priority": 18,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-017"]
+      "dependsOn": [
+        "US-017"
+      ]
     },
     {
       "id": "US-019",
@@ -327,7 +362,9 @@
       "priority": 19,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-018"]
+      "dependsOn": [
+        "US-018"
+      ]
     },
     {
       "id": "US-020",
@@ -344,7 +381,9 @@
       "priority": 20,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-019"]
+      "dependsOn": [
+        "US-019"
+      ]
     },
     {
       "id": "US-021",
@@ -361,7 +400,9 @@
       "priority": 21,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-020"]
+      "dependsOn": [
+        "US-020"
+      ]
     },
     {
       "id": "US-022",
@@ -378,7 +419,9 @@
       "priority": 22,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-021"]
+      "dependsOn": [
+        "US-021"
+      ]
     },
     {
       "id": "US-023",
@@ -395,7 +438,9 @@
       "priority": 23,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-022"]
+      "dependsOn": [
+        "US-022"
+      ]
     },
     {
       "id": "US-024",
@@ -412,7 +457,9 @@
       "priority": 24,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-023"]
+      "dependsOn": [
+        "US-023"
+      ]
     },
     {
       "id": "US-025",
@@ -429,7 +476,9 @@
       "priority": 25,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-024"]
+      "dependsOn": [
+        "US-024"
+      ]
     },
     {
       "id": "US-026",
@@ -446,7 +495,9 @@
       "priority": 26,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-025"]
+      "dependsOn": [
+        "US-025"
+      ]
     },
     {
       "id": "US-027",
@@ -463,7 +514,9 @@
       "priority": 27,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-026"]
+      "dependsOn": [
+        "US-026"
+      ]
     },
     {
       "id": "US-028",
@@ -480,7 +533,9 @@
       "priority": 28,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-027"]
+      "dependsOn": [
+        "US-027"
+      ]
     },
     {
       "id": "US-029",
@@ -497,7 +552,9 @@
       "priority": 29,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-028"]
+      "dependsOn": [
+        "US-028"
+      ]
     },
     {
       "id": "US-030",
@@ -514,7 +571,9 @@
       "priority": 30,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-029"]
+      "dependsOn": [
+        "US-029"
+      ]
     },
     {
       "id": "US-031",
@@ -531,7 +590,9 @@
       "priority": 31,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-030"]
+      "dependsOn": [
+        "US-030"
+      ]
     },
     {
       "id": "US-032",
@@ -548,7 +609,9 @@
       "priority": 32,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-031"]
+      "dependsOn": [
+        "US-031"
+      ]
     },
     {
       "id": "US-033",
@@ -565,7 +628,9 @@
       "priority": 33,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-032"]
+      "dependsOn": [
+        "US-032"
+      ]
     },
     {
       "id": "US-034",
@@ -582,7 +647,9 @@
       "priority": 34,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-033"]
+      "dependsOn": [
+        "US-033"
+      ]
     },
     {
       "id": "US-035",
@@ -599,7 +666,9 @@
       "priority": 35,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-034"]
+      "dependsOn": [
+        "US-034"
+      ]
     },
     {
       "id": "US-036",
@@ -616,7 +685,9 @@
       "priority": 36,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-035"]
+      "dependsOn": [
+        "US-035"
+      ]
     },
     {
       "id": "US-037",
@@ -633,7 +704,9 @@
       "priority": 37,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-036"]
+      "dependsOn": [
+        "US-036"
+      ]
     },
     {
       "id": "US-038",
@@ -650,7 +723,9 @@
       "priority": 38,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-037"]
+      "dependsOn": [
+        "US-037"
+      ]
     },
     {
       "id": "US-039",
@@ -667,7 +742,2465 @@
       "priority": 39,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-038"]
+      "dependsOn": [
+        "US-038"
+      ]
+    },
+    {
+      "id": "US-040",
+      "title": "Trace LLM review lineage end to end",
+      "description": "As an auditor, I want every LLM field, predicate, order key, and count connected to source and lifecycle.",
+      "acceptanceCriteria": [
+        "Trace LLM rows, judgments, badges, filters, counts, ordering, cursors, freshness, and search from mounted route through service, SQL builder, mart field, projector, and authoritative source.",
+        "Record pre-limit versus post-limit use, duplicated transforms, invalidating mutations, publication, retention, and every model and content-setting applicability dimension in the column lineage matrix and route maps.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update lineage and manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave unsupported dispositions unresolved."
+      ],
+      "priority": 40,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-039"
+      ]
+    },
+    {
+      "id": "US-041",
+      "title": "Trace Human review lineage end to end",
+      "description": "As an auditor, I want Human fields and semantics connected to writers, serving shapes, and lifecycle.",
+      "acceptanceCriteria": [
+        "Trace Human fields, statuses, prompt answers, filters, counts, ordering, cursors, and judgment hydration through routes, readers, marts, projectors, and authoritative sources.",
+        "Trace human writes through deltas, status patches, summaries, overlays, publication, read-your-write behavior, recovery, and retention, separating summary-mode semantics where needed.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update lineage and manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave unsupported dispositions unresolved."
+      ],
+      "priority": 41,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-040"
+      ]
+    },
+    {
+      "id": "US-042",
+      "title": "Trace Both-mode review lineage end to end",
+      "description": "As an auditor, I want combined-review composition and conflict semantics fully traced.",
+      "acceptanceCriteria": [
+        "Trace Both fields, LLM and human composition, conflicts, statuses, filters, counts, ordering, cursors, and hydration through routes, readers, marts, projectors, and sources.",
+        "Record applicability, ownership, invalidation, overlays, publication, snapshot behavior, recovery, and retention separately where combined semantics differ from LLM or Human mode.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update lineage and manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave unsupported dispositions unresolved."
+      ],
+      "priority": 42,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-041"
+      ]
+    },
+    {
+      "id": "US-043",
+      "title": "Trace Unassessed and queue lineage end to end",
+      "description": "As an auditor, I want queue eligibility, priority, ordering, and counts fully explained.",
+      "acceptanceCriteria": [
+        "Trace Unassessed rows, counts, queue kinds, eligibility, priority, order, prompt applicability, and assessment initialization through routes, SQL, queue storage, projectors, and source facts.",
+        "Trace judgment and human writes that add, remove, or reprioritize entries, including exactness, cursor, snapshot, read-your-write, recovery, restart, and retention behavior.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update lineage and manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave unsupported dispositions unresolved."
+      ],
+      "priority": 43,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-042"
+      ]
+    },
+    {
+      "id": "US-044",
+      "title": "Trace filters, counts, facets, options, and search lineage",
+      "description": "As an auditor, I want every materialized filter, summary, and search shape tied to a consumer.",
+      "acceptanceCriteria": [
+        "Map every posting kind, named count, facet kind, filter-option field, token-prefix mode, and substring mode to routes, current browser and desktop consumers, ignored fields, SQL, projectors, and source facts.",
+        "Record pre-limit necessity, selectivity, cardinality, synchronous, asynchronous, and unavailable behavior plus computed or stored groups with no demonstrated consumer.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update lineage and manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not prematurely recommend deletion."
+      ],
+      "priority": 44,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-043"
+      ]
+    },
+    {
+      "id": "US-045",
+      "title": "Trace detail, prompt, full-text, and payload lineage",
+      "description": "As an auditor, I want detail-only data separated from candidate-selection needs.",
+      "acceptanceCriteria": [
+        "Trace review detail, article payload, judgment payload, prompt preview, full text, and admin fields to sources, transforms, readers, keyed storage, files, writers, and lifecycle paths.",
+        "Record which values are pre-limit, post-limit, bounded by article IDs, fixed to a snapshot, exported, transferred, invalidated, retained, or runtime-path specific in browser and desktop.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update lineage and manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave unsupported homes unresolved."
+      ],
+      "priority": 45,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-044"
+      ]
+    },
+    {
+      "id": "US-046",
+      "title": "Trace warning, health, readiness, and progress lineage",
+      "description": "As an auditor, I want diagnostics and polling fields tied to control and lifecycle ownership.",
+      "acceptanceCriteria": [
+        "Trace warning, health, readiness, rebuild progress, bulk or PDF progress, stale, and unavailable fields through routes, readers, manifests, jobs, projectors, startup probes, and lifecycle state.",
+        "Record repeated diagnostic work, snapshot requirements, browser and desktop polling, failure behavior, retention, recovery, and fields ignored by callers.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update lineage and manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave unsupported dispositions unresolved."
+      ],
+      "priority": 46,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-045"
+      ]
+    },
+    {
+      "id": "US-047",
+      "title": "Trace search, selection, and add-to-project lineage",
+      "description": "As an auditor, I want search and selection operations tied to snapshot and batching ownership.",
+      "acceptanceCriteria": [
+        "Trace prefix and substring search, select-all, add-by-filter, and add-by-ID through criteria, filter signatures, jobs, cursors, snapshot pins, result manifests, hydration, writes, and cleanup.",
+        "Record keyset batching, ID and payload caps, duplicate behavior, latest versus pinned semantics, progress, retries, recovery, browser, and desktop callers.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update lineage and manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave unsupported dispositions unresolved."
+      ],
+      "priority": 47,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-046"
+      ]
+    },
+    {
+      "id": "US-048",
+      "title": "Trace PDF, export, and transfer lineage",
+      "description": "As an auditor, I want generated outputs and portability mappings tied to lifecycle ownership.",
+      "acceptanceCriteria": [
+        "Trace PDF, project export, transfer export, and transfer read through criteria, jobs, pins, result manifests, hydration, files, mappings, cleanup, and recovery.",
+        "Record fields needed for audit, portability, or recovery even when normal UI ignores them, plus ordering, caps, progress, retry, browser, desktop, and snapshot behavior.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update lineage and manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave unsupported dispositions unresolved."
+      ],
+      "priority": 48,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-047"
+      ]
+    },
+    {
+      "id": "US-049",
+      "title": "Trace article, import, and project-scope mutations forward",
+      "description": "As an auditor, I want source mutations connected to invalidation, publication, recovery, and retained state.",
+      "acceptanceCriteria": [
+        "Trace import, routing, article metadata or payload, membership, deletion, and archive mutations through deltas, dirty work, projectors, manifests, serving rows, files, and cleanup.",
+        "Record replay, repair, export, transfer, retention, recovery, repeated JSON extraction, and candidate typed facts for each touched field family.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update lineage and manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave unsupported home decisions unresolved."
+      ],
+      "priority": 49,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-048"
+      ]
+    },
+    {
+      "id": "US-050",
+      "title": "Trace judgment and human-review mutations forward",
+      "description": "As an auditor, I want review decisions connected to exact component invalidation and lifecycle.",
+      "acceptanceCriteria": [
+        "Trace LLM and human create, update, move, and delete operations through deltas, dirty work, status, queue, summary, overlay, publication, and cleanup components.",
+        "Record model and content dimensions, read-your-write behavior, replay, repair, snapshot publication, recovery, retention, and missing or broad change kinds without workarounds.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update lineage and manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave unsupported home decisions unresolved."
+      ],
+      "priority": 50,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-049"
+      ]
+    },
+    {
+      "id": "US-051",
+      "title": "Trace project review-configuration mutations forward",
+      "description": "As an auditor, I want benchmark-critical settings connected to exact downstream invalidation.",
+      "acceptanceCriteria": [
+        "Trace prompt, model, content, scope, date, selected-route, clone, transfer, and review-state changes through every affected identity, dirty item, projector, snapshot, route, and cleanup path.",
+        "Record narrow versus broad invalidation, overlays, replay, repair, retention, publication, and duplicated deterministic state without silently weakening settings.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update lineage and manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave unsupported home decisions unresolved."
+      ],
+      "priority": 51,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-050"
+      ]
+    },
+    {
+      "id": "US-052",
+      "title": "Trace publication and rebuild lifecycle",
+      "description": "As an auditor, I want every publication and rebuild row assigned a complete lifecycle trace.",
+      "acceptanceCriteria": [
+        "Trace create, claim, lease, update, acknowledge, build, validate, publish, pin, retire, fail, retry, compact, and delete behavior across identities, snapshots, rebuild requests, chunks, and projectors.",
+        "Map active, candidate, last-known-good, failed, pinned, partial, superseded, and orphan protection plus restart and publication failure behavior.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update lifecycle and manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not assume deletion safety for state without cleanup."
+      ],
+      "priority": 52,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-051"
+      ]
+    },
+    {
+      "id": "US-053",
+      "title": "Trace retention, recovery, and file lifecycle",
+      "description": "As an auditor, I want cleanup, recovery, and local-file ownership complete before reconciliation.",
+      "acceptanceCriteria": [
+        "Trace retain, pin, expire, clean, archive, back up, restore, replay, repair, export, transfer, generate, atomically publish, and delete behavior for control, temporary, and file shapes.",
+        "Identify missing consumer watermarks, cleanup paths, bounded retention, recovery owners, partial files, orphan protection, and operator consequences without assuming obsolescence.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Use only the manifest `auditStatus` values from US-001 and keep other state fields separate.",
+        "Cite exact evidence, update lifecycle and manifest counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not assume deletion safety for state without cleanup."
+      ],
+      "priority": 53,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-052"
+      ]
+    },
+    {
+      "id": "US-054",
+      "title": "Reconcile article, import, and project-scope objects",
+      "description": "As an auditor, I want authoritative article and scope objects checked against all discovered evidence.",
+      "acceptanceCriteria": [
+        "Reconcile every article, source, import, and project-scope object, field, key, identity, constraint, and index with routes, runtime consumers, writers, projectors, startup, repair, retention, export, transfer, scripts, and lineage.",
+        "Search aliases, generated SQL, allowlists, registries, and non-production references; assign each manifest row `classified`, `out-of-scope`, or `blocked` without making final dispositions.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001.",
+        "Cite exact evidence, balance family counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave missing runtime measurements explicitly pending for Phase 4."
+      ],
+      "priority": 54,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-053"
+      ]
+    },
+    {
+      "id": "US-055",
+      "title": "Reconcile prompt, model, and configuration objects",
+      "description": "As an auditor, I want review configuration checked against all consumers and invalidation roles.",
+      "acceptanceCriteria": [
+        "Reconcile every prompt, model, provider, scope, content, date, selected-route, and review-configuration object, field, key, constraint, and index with routes, runtime, writers, projectors, snapshots, benchmarks, export, transfer, and lineage.",
+        "Search aliases, generated SQL, registries, scripts, tests, fixtures, and migrations; assign each row `classified`, `out-of-scope`, or `blocked` without final dispositions.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001.",
+        "Cite exact evidence, balance family counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave missing runtime measurements explicitly pending for Phase 4."
+      ],
+      "priority": 55,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-054"
+      ]
+    },
+    {
+      "id": "US-056",
+      "title": "Reconcile judgment, human-review, and review-state objects",
+      "description": "As an auditor, I want durable review truth checked against every consumer and lifecycle role.",
+      "acceptanceCriteria": [
+        "Reconcile every judgment, human review, review-state, assessment, token, execution snapshot, and outbox object, field, JSON key, identity, constraint, and index.",
+        "Trace route, runtime, writer, projector, replay, repair, retention, export, transfer, benchmark, startup, script, and non-production evidence; assign terminal or blocked auditStatus values without final dispositions.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001.",
+        "Cite exact evidence, balance family counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave missing runtime measurements explicitly pending for Phase 4."
+      ],
+      "priority": 56,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-055"
+      ]
+    },
+    {
+      "id": "US-057",
+      "title": "Reconcile judgment-job and execution-control objects",
+      "description": "As an auditor, I want execution jobs and attempts checked against production and recovery behavior.",
+      "acceptanceCriteria": [
+        "Reconcile judgment job, attempt, lease, execution, retry, import, and result objects, fields, payload keys, identities, constraints, and indexes.",
+        "Trace writers, workers, startup, replay, repair, retention, transfer, scripts, benchmark use, and non-production references; assign terminal or blocked auditStatus values without final dispositions.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001.",
+        "Cite exact evidence, balance family counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave missing runtime measurements explicitly pending for Phase 4."
+      ],
+      "priority": 57,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-056"
+      ]
+    },
+    {
+      "id": "US-058",
+      "title": "Reconcile deltas, outboxes, and reusable hot facts",
+      "description": "As an auditor, I want intake and reusable facts checked against writers, readers, and retention.",
+      "acceptanceCriteria": [
+        "Reconcile every delta, outbox, reconciliation cursor, and hot-fact object, field, JSON key, identity, and index.",
+        "Trace writers, readers, dynamic registries, projectors, replay, repair, startup, retention, transfer, export, scripts, and non-production references; assign terminal or blocked auditStatus values.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001.",
+        "Cite exact evidence, balance family counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave missing runtime measurements explicitly pending for Phase 4."
+      ],
+      "priority": 58,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-057"
+      ]
+    },
+    {
+      "id": "US-059",
+      "title": "Reconcile dirty work, acknowledgements, and watermarks",
+      "description": "As an auditor, I want progress and replay state checked against production lifecycle.",
+      "acceptanceCriteria": [
+        "Reconcile every dirty-work, acknowledgement, project cursor, projector watermark, and projection input watermark object, field, lease, key, identity, and index.",
+        "Trace writers, readers, registries, projectors, replay, repair, startup, retention, scripts, measurements pending, and non-production references; assign terminal or blocked auditStatus values.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001.",
+        "Cite exact evidence, balance family counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave missing runtime measurements explicitly pending for Phase 4."
+      ],
+      "priority": 59,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-058"
+      ]
+    },
+    {
+      "id": "US-060",
+      "title": "Reconcile projection identities, snapshots, and pins",
+      "description": "As an auditor, I want publication identities checked against readers, recovery, and retention.",
+      "acceptanceCriteria": [
+        "Reconcile selected-import state, projection identities, snapshots, components, and pins with every field, JSON key, identity, constraint, and index.",
+        "Trace route readers, projectors, workers, startup, readiness, repair, backup, export, transfer, retention, scripts, and non-production references; assign terminal or blocked auditStatus values.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001.",
+        "Cite exact evidence, balance family counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave missing runtime measurements explicitly pending for Phase 4."
+      ],
+      "priority": 60,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-059"
+      ]
+    },
+    {
+      "id": "US-061",
+      "title": "Reconcile rebuilds, overlays, jobs, and retention control",
+      "description": "As an auditor, I want rebuild and lifecycle control checked against hidden consumers and recovery.",
+      "acceptanceCriteria": [
+        "Reconcile rebuild requests and chunks, overlays, bulk and search jobs, result manifests, and retention marks with every field, JSON key, identity, and index.",
+        "Trace routes, projectors, workers, startup, readiness, repair, recovery, export, transfer, retention, scripts, and non-production references; assign terminal or blocked auditStatus values.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001.",
+        "Cite exact evidence, balance family counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave missing runtime measurements explicitly pending for Phase 4."
+      ],
+      "priority": 61,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-060"
+      ]
+    },
+    {
+      "id": "US-062",
+      "title": "Reconcile candidate, display, and status marts",
+      "description": "As an auditor, I want selection and status fields checked against actual bounded-read use.",
+      "acceptanceCriteria": [
+        "Reconcile every candidate, display, selected-import, LLM status, and human status object, field, JSON key, identity, and index.",
+        "Map readers, projectors, writers, pre-limit and post-limit use, snapshot semantics, runtime consumers, recovery, export, transfer, retention, aliases, generated SQL, and non-production references.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001.",
+        "Assign terminal or blocked auditStatus values, balance family counts, and record exact evidence, commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave missing runtime measurements explicitly pending for Phase 4."
+      ],
+      "priority": 62,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-061"
+      ]
+    },
+    {
+      "id": "US-063",
+      "title": "Reconcile payload, search, and queue marts",
+      "description": "As an auditor, I want hydration, search, and queue fields checked against actual consumers.",
+      "acceptanceCriteria": [
+        "Reconcile article payload, judgment payload, title search, queue patch, and unassessed queue objects, fields, JSON keys, identities, and indexes.",
+        "Map readers, projectors, writers, bounded hydration, search and priority use, snapshots, runtime consumers, recovery, export, transfer, retention, aliases, and non-production references.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001.",
+        "Assign terminal or blocked auditStatus values, balance family counts, and record exact evidence, commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave missing runtime measurements explicitly pending for Phase 4."
+      ],
+      "priority": 63,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-062"
+      ]
+    },
+    {
+      "id": "US-064",
+      "title": "Reconcile postings, summaries, filters, partials, and indexes",
+      "description": "As an auditor, I want high-fan-out derived shapes checked against real access paths.",
+      "acceptanceCriteria": [
+        "Reconcile every posting, stats, count, facet, filter-option, contribution, and rebuild-partial object, field, key, identity, and index.",
+        "Map each index to its equality prefix, ordering suffix, or diagnostic query and trace readers, writers, projectors, recovery, export, transfer, retention, aliases, and non-production references.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001.",
+        "Assign terminal or blocked auditStatus values, balance family counts, and record exact evidence, commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave missing runtime measurements explicitly pending for Phase 4."
+      ],
+      "priority": 64,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-063"
+      ]
+    },
+    {
+      "id": "US-065",
+      "title": "Reconcile legacy and temporary database shapes",
+      "description": "As an auditor, I want legacy objects and temporary materializations checked against current use.",
+      "acceptanceCriteria": [
+        "Reconcile legacy review and project marts, refresh or dirty state, adjacent comparison objects touched by review flows, and every materialized temporary-table pattern, field, key, and index.",
+        "Trace current readers, writers, projectors, repair, recovery, retention, export, transfer, operator scripts, migrations, aliases, dynamic SQL, and non-production references.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001.",
+        "Assign terminal or blocked auditStatus values, balance family counts, and record exact evidence, commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave missing runtime measurements explicitly pending for Phase 4."
+      ],
+      "priority": 65,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-064"
+      ]
+    },
+    {
+      "id": "US-066",
+      "title": "Reconcile payload directories and local-file shapes",
+      "description": "As an auditor, I want every relevant local shape checked against runtime and lifecycle behavior.",
+      "acceptanceCriteria": [
+        "Reconcile PDFs, full text, runtime assets, keyed payload files, export artifacts, transfer packages, backups, snapshots, generated files, and project-review directories.",
+        "Trace paths and keys, producers, consumers, atomicity, browser and desktop access, cleanup, retention, recovery, export, transfer, declarations, and non-production references.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001.",
+        "Assign terminal or blocked auditStatus values, balance payload/file counts, and record exact evidence, commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Leave missing runtime measurements explicitly pending for Phase 4."
+      ],
+      "priority": 66,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-065"
+      ]
+    },
+    {
+      "id": "US-067",
+      "title": "Measure authoritative sources and configuration",
+      "description": "As an auditor, I want source and configuration size, cardinality, width, and lifecycle quantified after reconciliation.",
+      "acceptanceCriteria": [
+        "On the approved fixture, record row formulas, row counts, null ratios, approximate distinct counts, width drivers, duplicate values, lifecycle ranges, rows written, RSS, and active or orphan evidence for article, import, project, prompt, model, and configuration families.",
+        "Record logical payload bytes, index bytes or cost, WAL bytes, and physical database bytes separately; mark unavailable categories with exact blockers.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep benchmark-critical settings unchanged and preserve failures without retries or downgrades.",
+        "Use state fields from US-001, cite exact tooling and commands, update measurement and manifest counts, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not strengthen a disposition from blocked measurements."
+      ],
+      "priority": 67,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-066"
+      ]
+    },
+    {
+      "id": "US-068",
+      "title": "Measure judgments, deltas, and reusable hot facts",
+      "description": "As an auditor, I want durable review truth and intake duplication quantified after reconciliation.",
+      "acceptanceCriteria": [
+        "On the approved fixture, record formulas, counts, null and distinct evidence, repeated text or JSON, typed extraction savings, payload widths, lifecycle ranges, rows written, RSS, and generation evidence for judgment, human, delta, outbox, and hot-fact families.",
+        "Record logical payload bytes, index bytes or cost, WAL bytes, and physical database bytes separately; mark unavailable categories with exact blockers.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep benchmark-critical settings unchanged and preserve failures without retries or downgrades.",
+        "Use state fields from US-001, cite exact tooling and commands, update measurement and manifest counts, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not strengthen a disposition from blocked measurements."
+      ],
+      "priority": 68,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-067"
+      ]
+    },
+    {
+      "id": "US-069",
+      "title": "Measure manifests, control state, and jobs",
+      "description": "As an auditor, I want control retention, payload width, and generation growth quantified.",
+      "acceptanceCriteria": [
+        "On the approved fixture, record formulas, counts, status and age distributions, payload widths, retry and lease state, rows written, RSS, retention horizons, and active, candidate, retired, pinned, failed, and orphaned counts for identities, snapshots, control, rebuild, overlay, and job families.",
+        "Record logical payload bytes, index bytes or cost, WAL bytes, and physical database bytes separately; mark unavailable categories and apparently unbounded histories precisely.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep benchmark-critical settings unchanged and preserve failures without retries or downgrades.",
+        "Use state fields from US-001, cite exact tooling and commands, update measurement and manifest counts, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Distinguish missing retention evidence from a proven lifecycle defect."
+      ],
+      "priority": 69,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-068"
+      ]
+    },
+    {
+      "id": "US-070",
+      "title": "Measure candidate, status, payload, search, and queue marts",
+      "description": "As an auditor, I want serving duplication and candidate-versus-hydration width quantified.",
+      "acceptanceCriteria": [
+        "On the approved fixture, record formulas, counts, null and distinct evidence, duplicate bytes, pre-limit and post-limit width, rows written, rewrites, temporary work, RSS, and generation distributions for candidate, status, payload, search, and queue families.",
+        "Record logical payload bytes, index bytes or cost, WAL bytes, and physical database bytes separately; mark unavailable categories with exact blockers.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep benchmark-critical settings unchanged and preserve failures without retries or downgrades.",
+        "Use state fields from US-001, cite exact tooling and commands, update measurement and manifest counts, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not strengthen a disposition from blocked measurements."
+      ],
+      "priority": 70,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-069"
+      ]
+    },
+    {
+      "id": "US-071",
+      "title": "Measure postings, summaries, indexes, and temporary work",
+      "description": "As an auditor, I want high-fan-out storage and write amplification quantified.",
+      "acceptanceCriteria": [
+        "On the approved fixture, record formulas, counts, cardinalities, duplicate bytes, full-row rewrites, read-modify-write statements, temporary materializations, rows written, RSS, and active or orphan generations for posting, summary, filter, partial, index, and temporary families.",
+        "Record logical payload bytes, index bytes or cost, WAL bytes, and physical database bytes separately; mark unavailable categories with exact blockers.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep benchmark-critical settings unchanged and preserve failures without retries or downgrades.",
+        "Use state fields from US-001, cite exact tooling and commands, update measurement and manifest counts, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not strengthen a disposition from blocked measurements."
+      ],
+      "priority": 71,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-070"
+      ]
+    },
+    {
+      "id": "US-072",
+      "title": "Measure legacy and local-file shapes",
+      "description": "As an auditor, I want legacy database and file-backed storage quantified after reconciliation.",
+      "acceptanceCriteria": [
+        "On the approved fixture, record formulas, counts, logical sizes, index cost, WAL where applicable, physical bytes, file counts and sizes, duplicate content, age ranges, temporary bytes, RSS, generation state, and cleanup evidence for legacy and local-file families.",
+        "Keep logical payload, index, WAL, and physical database or file bytes separate, explicitly recording `not-applicable` proof checks or blockers rather than conflating categories.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep benchmark-critical settings unchanged and preserve failures without retries or downgrades.",
+        "Use state fields from US-001, cite exact tooling and commands, update measurement and manifest counts, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not strengthen a disposition from blocked measurements."
+      ],
+      "priority": 72,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-071"
+      ]
+    },
+    {
+      "id": "US-073",
+      "title": "Provisionally classify authoritative sources and configuration",
+      "description": "As an auditor, I want source and configuration fields assigned evidence-backed provisional homes.",
+      "acceptanceCriteria": [
+        "Assign one provisional table-level and column-family disposition to article, import, project-scope, prompt, model, and review-configuration families, with source, audit, benchmark, export, transfer, recovery, ownership, invalidation, and retention evidence.",
+        "For every keep decision state authoritative need; for every non-keep decision state a bounded replacement requirement and mark recommendationActionability `unresolved` until final proof.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update disposition rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not mark a move, derive, archive, or delete recommendation actionable."
+      ],
+      "priority": 73,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-072"
+      ]
+    },
+    {
+      "id": "US-074",
+      "title": "Provisionally classify judgments and reusable hot facts",
+      "description": "As an auditor, I want durable review truth and reusable facts assigned provisional homes.",
+      "acceptanceCriteria": [
+        "Assign provisional table-level and column-family dispositions to judgment, human-review, review-state, assessment, token, delta-derived hot-fact, and typed import-fact families.",
+        "State authoritative, audit, benchmark, export, transfer, recovery, identity, ownership, invalidation, retention, and bounded replacement evidence; keep non-keep recommendationActionability unresolved.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update disposition rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not mark a move, derive, archive, or delete recommendation actionable."
+      ],
+      "priority": 74,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-073"
+      ]
+    },
+    {
+      "id": "US-075",
+      "title": "Provisionally classify deltas, progress state, and control jobs",
+      "description": "As an auditor, I want intake and control state assigned explicit provisional ownership and retention.",
+      "acceptanceCriteria": [
+        "Assign provisional dispositions to deltas, outboxes, dirty work, acknowledgements, cursors, watermarks, judgment jobs, bulk jobs, search jobs, and retention marks.",
+        "State owner, create, update, claim, retry, replay, recovery, consumer watermark, orphan handling, retention trigger, and cleanup safety; leave incomplete items blocked and non-keep actionability unresolved.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update disposition rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not mark a move, derive, archive, or delete recommendation actionable."
+      ],
+      "priority": 75,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-074"
+      ]
+    },
+    {
+      "id": "US-076",
+      "title": "Provisionally classify manifests, snapshots, rebuilds, and overlays",
+      "description": "As an auditor, I want publication control assigned provisional ownership and bounded lifecycle.",
+      "acceptanceCriteria": [
+        "Assign provisional dispositions to identities, selected-import state, snapshots, pins, rebuild requests, chunks, overlays, and result manifests.",
+        "State publication, retry, pin, active, last-known-good, recovery, retention, orphan, cleanup, and replacement evidence; leave incomplete items blocked and non-keep actionability unresolved.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update disposition rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not mark a move, derive, archive, or delete recommendation actionable."
+      ],
+      "priority": 76,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-075"
+      ]
+    },
+    {
+      "id": "US-077",
+      "title": "Provisionally classify candidate, display, status, and payload shapes",
+      "description": "As an auditor, I want selection and hydration fields separated by proven bounded-read needs.",
+      "acceptanceCriteria": [
+        "Classify candidate, display, selected-import, LLM status, human status, article payload, and judgment payload column families with provisional table and field dispositions.",
+        "For every keep field name its pre-limit, cursor, selective-filter, exact-summary, or snapshot requirement and budget; for every move or derive field specify bounded IDs, key, order preservation, invalidation, retention, and browser/desktop path while actionability remains unresolved.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update disposition rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not mark a move, derive, archive, or delete recommendation actionable."
+      ],
+      "priority": 77,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-076"
+      ]
+    },
+    {
+      "id": "US-078",
+      "title": "Provisionally classify search and queue shapes",
+      "description": "As an auditor, I want search and queue storage tied to exact bounded product contracts.",
+      "acceptanceCriteria": [
+        "Classify token search, substring search control, queue patch, and unassessed queue fields with provisional table and field dispositions.",
+        "Tie retained shapes to selectivity, ordering, eligibility, priority, keyset, asynchronous, unavailable, or snapshot requirements; specify bounded alternatives and lifecycle while non-keep actionability remains unresolved.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update disposition rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not mark a move, derive, archive, or delete recommendation actionable."
+      ],
+      "priority": 78,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-077"
+      ]
+    },
+    {
+      "id": "US-079",
+      "title": "Provisionally classify postings, summaries, filters, partials, and indexes",
+      "description": "As an auditor, I want high-fan-out and index storage assigned justified provisional dispositions.",
+      "acceptanceCriteria": [
+        "Classify each posting kind, stats, count, facet, filter option, contribution, partial, and associated index with provisional table and field dispositions.",
+        "Tie retained summaries and filters to named exact contracts, retained indexes to measured access paths, and retained intermediate state to ownership, lifecycle, cleanup, replay, and recovery; keep non-keep actionability unresolved.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update disposition rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not mark a move, derive, archive, or delete recommendation actionable."
+      ],
+      "priority": 79,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-078"
+      ]
+    },
+    {
+      "id": "US-080",
+      "title": "Provisionally classify legacy, temporary, and local-file shapes",
+      "description": "As an auditor, I want legacy, temporary, payload, and cold storage assigned explicit provisional homes.",
+      "acceptanceCriteria": [
+        "Assign provisional shape, table, index, column-family, and material-key dispositions to legacy objects, temporary patterns, payload directories, PDFs, full text, runtime assets, exports, transfers, backups, and generated files.",
+        "State current product, migration, repair, recovery, benchmark, path and key, atomicity, bounded lookup, browser/desktop, retention, cleanup, and replacement evidence; leave incomplete items blocked and non-keep actionability unresolved.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update disposition rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not mark a move, derive, archive, or delete recommendation actionable."
+      ],
+      "priority": 80,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-079"
+      ]
+    },
+    {
+      "id": "US-081",
+      "title": "Define source and configuration proof requirements",
+      "description": "As an auditor, I want source and configuration candidates paired with finite proof checks.",
+      "acceptanceCriteria": [
+        "Create proof rows for article, import, project-scope, prompt, model, and configuration candidates covering negative consumer searches and positive product, audit, benchmark, export, transfer, recovery, identity, migration, and retention preservation.",
+        "For moved data define owner, read and write paths, invalidation, retention, recovery, backfill or rebuild, cutover, cleanup, and later validation; set each proofCheckState independently and keep recommendationActionability unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update proof rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not claim planned parity or benchmark work has passed."
+      ],
+      "priority": 81,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-080"
+      ]
+    },
+    {
+      "id": "US-082",
+      "title": "Define judgment and hot-fact proof requirements",
+      "description": "As an auditor, I want durable review truth and reusable facts paired with finite proof checks.",
+      "acceptanceCriteria": [
+        "Create proof rows for LLM judgments, human judgments, review state, assessments, tokens, typed import facts, and reusable hot facts covering consumer, authority, audit, benchmark, export, transfer, recovery, identity, migration, and retention preservation.",
+        "For every non-keep candidate define replacement ownership, reads, writes, model and content identity, invalidation, replay, recovery, cutover, cleanup, and later validation; keep actionability unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update proof rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not claim planned parity or benchmark work has passed."
+      ],
+      "priority": 82,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-081"
+      ]
+    },
+    {
+      "id": "US-083",
+      "title": "Define delta and progress-state proof requirements",
+      "description": "As an auditor, I want intake and projector progress candidates paired with lifecycle proof checks.",
+      "acceptanceCriteria": [
+        "Create proof rows for deltas, outboxes, dirty work, acknowledgements, cursors, and watermarks covering every writer, reader, replay, repair, startup, transfer, export, retention, consumer watermark, and cleanup dependency.",
+        "For every non-keep candidate define replacement ownership, idempotence, ordering, lease behavior, recovery, bounded retention, migration, cutover, cleanup, and later workload validation; keep actionability unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update proof rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not claim planned lifecycle validation has passed."
+      ],
+      "priority": 83,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-082"
+      ]
+    },
+    {
+      "id": "US-084",
+      "title": "Define identity, snapshot, and pin proof requirements",
+      "description": "As an auditor, I want publication identity candidates paired with exact consistency proof checks.",
+      "acceptanceCriteria": [
+        "Create proof rows for selected-import identities, projection identities, snapshots, component mappings, and pins covering route, worker, startup, active, last-known-good, export, transfer, recovery, benchmark, retention, and cleanup behavior.",
+        "For every non-keep candidate define replacement ownership, publication atomicity, snapshot consistency, pin protection, migration, cutover, cleanup, and later parity or restart validation; keep actionability unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update proof rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not claim planned lifecycle validation has passed."
+      ],
+      "priority": 84,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-083"
+      ]
+    },
+    {
+      "id": "US-085",
+      "title": "Define rebuild, overlay, job, and retention proof requirements",
+      "description": "As an auditor, I want asynchronous control candidates paired with bounded lifecycle proof checks.",
+      "acceptanceCriteria": [
+        "Create proof rows for rebuild requests and chunks, overlays, judgment jobs, bulk jobs, search jobs, result manifests, and retention marks covering route, worker, retry, lease, progress, recovery, export, transfer, pin, and cleanup behavior.",
+        "For every non-keep candidate define replacement ownership, read and write paths, restart, failure, retention, migration, cutover, cleanup, and later workload validation; keep actionability unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update proof rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not claim planned lifecycle validation has passed."
+      ],
+      "priority": 85,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-084"
+      ]
+    },
+    {
+      "id": "US-086",
+      "title": "Define candidate, display, and status proof requirements",
+      "description": "As an auditor, I want list-serving candidates paired with exact bounded-read proof checks.",
+      "acceptanceCriteria": [
+        "Create proof rows for candidate, display, selected-import, LLM status, and human status fields covering routes, current browser and desktop behavior, pre-limit use, ordering, cursors, snapshots, writers, recovery, benchmark, export, transfer, and retention.",
+        "For moved or derived fields define bounded IDs, key, hydration, order preservation, ownership, writes, invalidation, migration, cleanup, and later parity validation; keep actionability unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update proof rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not claim planned route validation has passed."
+      ],
+      "priority": 86,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-085"
+      ]
+    },
+    {
+      "id": "US-087",
+      "title": "Define payload and detail proof requirements",
+      "description": "As an auditor, I want hydration candidates paired with bounded payload and runtime proof checks.",
+      "acceptanceCriteria": [
+        "Create proof rows for article payload, judgment payload, detail, prompt, full-text, and admin fields covering routes, browser, desktop, bounded hydration, caps, snapshot behavior, writers, invalidation, export, transfer, recovery, benchmark, and retention.",
+        "For moved or file-backed data define owner, key or path, atomic write, bounded lookup, ordering, migration, cutover, cleanup, and later parity validation; keep actionability unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update proof rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not claim planned route validation has passed."
+      ],
+      "priority": 87,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-086"
+      ]
+    },
+    {
+      "id": "US-088",
+      "title": "Define search and queue proof requirements",
+      "description": "As an auditor, I want search and queue candidates paired with exact selection and priority proof checks.",
+      "acceptanceCriteria": [
+        "Create proof rows for token search, substring search control, queue patches, and Unassessed queue fields covering routes, runtime, selection, order, cursor, eligibility, priority, snapshots, writers, recovery, benchmark, and retention.",
+        "For replacements define bounded project intersection or queue access, ownership, writes, invalidation, async or unavailable behavior, migration, cleanup, and later parity validation; keep actionability unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update proof rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not claim planned route validation has passed."
+      ],
+      "priority": 88,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-087"
+      ]
+    },
+    {
+      "id": "US-089",
+      "title": "Define posting, summary, filter, partial, and index proof requirements",
+      "description": "As an auditor, I want high-fan-out candidates paired with exact contract and access-path proof checks.",
+      "acceptanceCriteria": [
+        "Create proof rows for posting kinds, stats, counts, facets, filter options, contributions, partials, and indexes covering routes, runtime, exactness, selectivity, predicates, ordering, writers, replay, recovery, benchmark, retention, and cleanup.",
+        "For every non-keep candidate define bounded replacement, ownership, writes, unavailable or async behavior, migration, cutover, index timing, cleanup, and later parity validation; keep actionability unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update proof rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not claim planned route validation has passed."
+      ],
+      "priority": 89,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-088"
+      ]
+    },
+    {
+      "id": "US-090",
+      "title": "Define legacy and temporary proof requirements",
+      "description": "As an auditor, I want legacy and temporary candidates paired with production and lifecycle proof checks.",
+      "acceptanceCriteria": [
+        "Create proof rows for legacy marts, refresh or dirty state, adjacent review objects, temporary-table patterns, and their fields and indexes covering current production, migration, repair, recovery, export, transfer, benchmark, retention, and cleanup.",
+        "For every non-keep candidate define cutover or bounded replacement, ownership, migration, replay, operator implications, cleanup, and later validation; keep actionability unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update proof rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not claim planned lifecycle validation has passed."
+      ],
+      "priority": 90,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-089"
+      ]
+    },
+    {
+      "id": "US-091",
+      "title": "Define local-file and cold-storage proof requirements",
+      "description": "As an auditor, I want file-backed candidates paired with bounded access and preservation proof checks.",
+      "acceptanceCriteria": [
+        "Create proof rows for payload directories, PDFs, full text, runtime assets, exports, transfers, backups, snapshots, and generated files covering path and key, producer, consumer, atomicity, browser, desktop, export, recovery, portability, retention, and cleanup.",
+        "For every move or delete candidate define target owner, bounded lookup, writes, invalidation, permissions or encryption assumptions where present, migration, cutover, recovery, and later validation; keep actionability unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001.",
+        "Cite exact evidence, update proof rows and counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not claim planned route or lifecycle validation has passed."
+      ],
+      "priority": 91,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-090"
+      ]
+    },
+    {
+      "id": "US-092",
+      "title": "Design authoritative-source and reusable-fact target shapes",
+      "description": "As an auditor, I want concrete ownership-aligned alternatives for source and hot-fact candidates.",
+      "acceptanceCriteria": [
+        "Design surviving source, configuration, judgment, and reusable-fact alternatives grouped by ownership and invalidation boundary, with exact keys, representative read and write SQL, identities, migration or rebuild, cutover, and cleanup.",
+        "Document read fan-out, write fan-out, retention, replay, recovery, export, transfer, benchmark, failure behavior, and why no target weakens authoritative, audit, or critical configuration semantics.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001, and keep recommendationActionability unresolved pending validation and final proof.",
+        "Cite exact evidence, update target-shape and proof rows, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Reject targets that require broad dual writes or unbounded foreground work."
+      ],
+      "priority": 92,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-091"
+      ]
+    },
+    {
+      "id": "US-093",
+      "title": "Design candidate, display, and status target shapes",
+      "description": "As an auditor, I want concrete bounded alternatives to wide list-serving rows.",
+      "acceptanceCriteria": [
+        "Compare current wide rows with narrow candidate, display, selected-import, and status component shapes, page-sized hydration, and component-identity reuse across snapshots.",
+        "Document representative SQL, exact order and cursor behavior, snapshot consistency, keys, writes, invalidation, retention, recovery, failure, migration, cutover, cleanup, and browser/desktop consequences.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001, and keep recommendationActionability unresolved pending validation and final proof.",
+        "Cite exact evidence, update target-shape and proof rows, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Reject targets that move project-scale work into foreground reads."
+      ],
+      "priority": 93,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-092"
+      ]
+    },
+    {
+      "id": "US-094",
+      "title": "Design keyed-payload and detail target shapes",
+      "description": "As an auditor, I want bounded hydration alternatives for large list and detail payloads.",
+      "acceptanceCriteria": [
+        "Design keyed article and judgment payload, prompt, full-text, and detail alternatives with page-sized article-ID hydration, keys, field ownership, snapshot behavior, caps, ordering preservation, and optional file-backed boundaries.",
+        "Document representative SQL or bounded lookup, writes, invalidation, retention, recovery, export, transfer, failure, migration, cleanup, and browser/desktop runtime consequences.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001, and keep recommendationActionability unresolved pending validation and final proof.",
+        "Cite exact evidence, update target-shape and proof rows, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Reject all-payload or unbounded hydration targets."
+      ],
+      "priority": 94,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-093"
+      ]
+    },
+    {
+      "id": "US-095",
+      "title": "Design posting, summary, and filter target shapes",
+      "description": "As an auditor, I want exact bounded alternatives for high-cardinality filters and summaries.",
+      "acceptanceCriteria": [
+        "Compare selective postings, named exact counts, facets and options, contribution or request-scoped partial alternatives, and unsupported asynchronous or unavailable combinations.",
+        "Document representative SQL, cardinality bounds, exactness, write amplification, ownership, invalidation, retention, replay, recovery, failure, migration, index consequences, and cleanup.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001, and keep recommendationActionability unresolved pending validation and final proof.",
+        "Cite exact evidence, update target-shape and proof rows, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Reject approximate exact contracts and conceptual savings with unbounded foreground work."
+      ],
+      "priority": 95,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-094"
+      ]
+    },
+    {
+      "id": "US-096",
+      "title": "Design search and queue target shapes",
+      "description": "As an auditor, I want bounded search and queue alternatives with exact ordering and priority.",
+      "acceptanceCriteria": [
+        "Compare project-specific search with reusable global tokens plus bounded project intersection, asynchronous substring jobs, and queue shapes with exact eligibility, priority, order, and cursor behavior.",
+        "Document representative SQL, cardinality and payload bounds, writes, invalidation, snapshots, retention, recovery, failure, migration, cleanup, and browser/desktop consequences.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001, and keep recommendationActionability unresolved pending validation and final proof.",
+        "Cite exact evidence, update target-shape and proof rows, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Reject foreground project scans, all-ID materialization, and weakened queue semantics."
+      ],
+      "priority": 96,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-095"
+      ]
+    },
+    {
+      "id": "US-097",
+      "title": "Design manifest and control target shapes",
+      "description": "As an auditor, I want bounded publication and lifecycle alternatives for control state.",
+      "acceptanceCriteria": [
+        "Design identity, snapshot, pin, rebuild, overlay, job, watermark, dirty-work, and retention alternatives grouped by component ownership, publication boundary, and recovery need.",
+        "Document representative reads and writes, leases, retries, idempotence, active and last-known-good behavior, retention, consumer watermarks, orphan cleanup, recovery, failure, migration, and cutover.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001, and keep recommendationActionability unresolved pending validation and final proof.",
+        "Cite exact evidence, update target-shape and proof rows, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Reject indefinite control histories or targets that weaken atomic publication and recovery."
+      ],
+      "priority": 97,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-096"
+      ]
+    },
+    {
+      "id": "US-098",
+      "title": "Design local-file and cold-storage target shapes",
+      "description": "As an auditor, I want concrete bounded alternatives for surviving file-backed candidates.",
+      "acceptanceCriteria": [
+        "Define target path and key schemes, metadata indexes, bounded lookup, atomic writes, ownership, browser and desktop access, invalidation, retention, cleanup, recovery, portability, and migration for each surviving local or cold candidate.",
+        "Document permission or encryption assumptions where present, generated-output publication, export and transfer behavior, failure handling, backup implications, and proof checks for every target.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct as defined in US-001, and keep recommendationActionability unresolved pending validation and final proof.",
+        "Cite exact evidence, update target-shape and proof rows, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Reject unbounded directory scans, non-atomic publication, or targets without bounded retention and recovery ownership."
+      ],
+      "priority": 98,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-097"
+      ]
+    },
+    {
+      "id": "US-099",
+      "title": "Validate LLM rows, ordering, and cursors",
+      "description": "As an auditor, I want LLM candidate reads tested against frozen row and cursor semantics.",
+      "acceptanceCriteria": [
+        "Execute current and candidate LLM row selection and pagination or cursor shapes on the same approved disposable fixture, comparing exact IDs, order, applicability, snapshot, freshness, stale, unavailable, and response fields.",
+        "Record rows scanned and written, logical output bytes, temp spill, RSS, p50/p95/p99, and proofCheckState for each scenario; reject mismatches, raw scans, spill, retries, or setting downgrades.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep fixture scale, seed, model, provider, thinking, prompts, content flags, memory, and runtime profile unchanged; preserve failures.",
+        "Keep state fields distinct, cite exact commands and approved tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 99,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-098"
+      ]
+    },
+    {
+      "id": "US-100",
+      "title": "Validate LLM counts, filters, and search",
+      "description": "As an auditor, I want LLM summary and search candidates tested against exact contracts.",
+      "acceptanceCriteria": [
+        "Execute current and candidate LLM count, filter or facet, and search shapes on the same fixture, comparing exact counts, options, IDs, order, unavailable behavior, snapshot semantics, and existing browser and desktop contracts.",
+        "Record rows scanned and written, output bytes, temp spill, RSS, p50/p95/p99, and proofCheckState for the three scenarios; reject approximation, raw scans, spill, retries, or setting downgrades.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all benchmark-critical settings unchanged and preserve failures.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 100,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-099"
+      ]
+    },
+    {
+      "id": "US-101",
+      "title": "Validate Human rows, ordering, and cursors",
+      "description": "As an auditor, I want Human candidate reads tested against frozen row and cursor semantics.",
+      "acceptanceCriteria": [
+        "Execute current and candidate Human row selection and pagination or cursor shapes on the same fixture, comparing exact IDs, order, statuses, prompt answers, applicability, snapshots, freshness, unavailable behavior, and fields.",
+        "Record rows scanned and written, output bytes, temp spill, RSS, p50/p95/p99, and proofCheckState for each scenario; reject raw scans, spill, mismatch, retry, or setting downgrade.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all benchmark-critical settings unchanged and preserve failures.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 101,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-100"
+      ]
+    },
+    {
+      "id": "US-102",
+      "title": "Validate Human counts and filters",
+      "description": "As an auditor, I want Human count and filter candidates tested against exact contracts.",
+      "acceptanceCriteria": [
+        "Execute current and candidate Human count and filter or option shapes on the same fixture, comparing exact values, prompt and status semantics, snapshots, unavailable behavior, and existing browser and desktop contracts.",
+        "Record rows scanned and written, output bytes, temp spill, RSS, p50/p95/p99, and proofCheckState for both scenarios; reject approximation, raw scans, spill, mismatch, or weakened settings.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all benchmark-critical settings unchanged and preserve failures.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 102,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-101"
+      ]
+    },
+    {
+      "id": "US-103",
+      "title": "Validate Both rows, ordering, and cursors",
+      "description": "As an auditor, I want Both-mode candidate reads tested against exact composition semantics.",
+      "acceptanceCriteria": [
+        "Execute current and candidate Both row selection and pagination or cursor shapes on the same fixture, comparing exact IDs, order, LLM and human composition, prompt applicability, snapshots, freshness, unavailable behavior, and fields.",
+        "Record rows scanned and written, output bytes, temp spill, RSS, p50/p95/p99, and proofCheckState; reject raw scans, spill, mismatches, retries, or setting downgrades.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all benchmark-critical settings unchanged and preserve failures.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 103,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-102"
+      ]
+    },
+    {
+      "id": "US-104",
+      "title": "Validate Both counts, conflicts, and filters",
+      "description": "As an auditor, I want combined summary and conflict candidates tested against exact contracts.",
+      "acceptanceCriteria": [
+        "Execute current and candidate Both count, conflict or composition, and filter shapes on the same fixture, comparing exact values, IDs, flags, snapshots, unavailable behavior, and existing browser and desktop contracts.",
+        "Record rows scanned and written, output bytes, temp spill, RSS, p50/p95/p99, and proofCheckState for the three scenarios; reject approximation, raw scans, spill, mismatch, or weakened settings.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all benchmark-critical settings unchanged and preserve failures.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 104,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-103"
+      ]
+    },
+    {
+      "id": "US-105",
+      "title": "Validate Unassessed rows and counts",
+      "description": "As an auditor, I want Unassessed row and count candidates tested against exact eligibility.",
+      "acceptanceCriteria": [
+        "Execute current and candidate Unassessed row and count shapes on the same fixture, comparing exact IDs, count, applicability, eligibility, order, pagination, cursors, snapshots, freshness, unavailable behavior, and fields.",
+        "Record rows scanned and written, output bytes, temp spill, RSS, p50/p95/p99, and proofCheckState for both scenarios; reject foreground scans, mismatch, spill, or weakened settings.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all benchmark-critical settings unchanged and preserve failures.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 105,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-104"
+      ]
+    },
+    {
+      "id": "US-106",
+      "title": "Validate queue eligibility, priority, and restart behavior",
+      "description": "As an auditor, I want queue alternatives tested across exact priority and restart semantics.",
+      "acceptanceCriteria": [
+        "Execute current and candidate queue eligibility, priority or ordering, and interrupted-restart shapes on the same fixture, comparing exact entries, kinds, order, cursors, prompt applicability, snapshots, and recovery.",
+        "Record rows scanned and written, output bytes, temp spill, RSS, p50/p95/p99, recovery state, and proofCheckState for the three scenarios; reject mismatch, scan, spill, lost work, or weakened settings.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all benchmark-critical settings unchanged and preserve failures.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 106,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-105"
+      ]
+    },
+    {
+      "id": "US-107",
+      "title": "Validate review detail and prompt-preview hydration",
+      "description": "As an auditor, I want detail and prompt candidates tested for exact bounded hydration.",
+      "acceptanceCriteria": [
+        "Execute current and candidate review-detail and prompt-preview shapes on the same fixture, comparing exact fields, IDs, ordering, snapshot identity, judgment payloads, caps, stale and unavailable behavior, and browser/desktop contracts.",
+        "Record statements, rows scanned, output bytes, temp spill, RSS, latency, and proofCheckState for both scenarios; reject unbounded joins, all-payload reads, runtime-path regressions, or weakened settings.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all benchmark-critical settings unchanged and preserve failures.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 107,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-106"
+      ]
+    },
+    {
+      "id": "US-108",
+      "title": "Validate full-text and keyed-payload hydration",
+      "description": "As an auditor, I want large payload alternatives tested for bounded access and runtime parity.",
+      "acceptanceCriteria": [
+        "Execute current and candidate full-text and keyed article or judgment payload shapes on the same fixture, comparing exact bytes or fields, bounded IDs, ordering, caps, snapshots, file paths where applicable, and browser/desktop behavior.",
+        "Record statements, rows scanned, files read, output bytes, temp spill, RSS, latency, and proofCheckState for both scenarios; reject unbounded scans, directory scans, all-payload reads, or weakened settings.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all benchmark-critical settings unchanged and preserve failures.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 108,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-107"
+      ]
+    },
+    {
+      "id": "US-109",
+      "title": "Validate warning, health, and progress reads",
+      "description": "As an auditor, I want diagnostic alternatives tested against exact polling and failure behavior.",
+      "acceptanceCriteria": [
+        "Execute current and candidate warning, health or readiness, and rebuild or job progress shapes on the same fixture, comparing exact fields, snapshot status, stale and unavailable behavior, polling, browser/desktop contracts, and failure states.",
+        "Record statements, rows scanned, output bytes, RSS, latency, repeated work, and proofCheckState for the three scenarios; reject contract mismatch, hidden scans, silent fallback, or weakened settings.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all benchmark-critical settings unchanged and preserve failures.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 109,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-108"
+      ]
+    },
+    {
+      "id": "US-110",
+      "title": "Validate prefix and substring search",
+      "description": "As an auditor, I want both search modes tested for exact bounded behavior.",
+      "acceptanceCriteria": [
+        "Execute current and candidate token-prefix and substring-search shapes on the same fixture, comparing exact IDs, order, scopes, signatures, snapshots, asynchronous or unavailable states, progress, and browser/desktop callers.",
+        "Record rows scanned and written, output bytes, temp spill, RSS, latency, and proofCheckState for both scenarios; reject raw project scans, all-ID materialization, mismatch, or weakened settings.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all benchmark-critical settings unchanged and preserve failures.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 110,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-109"
+      ]
+    },
+    {
+      "id": "US-111",
+      "title": "Validate select-all and add-to-project operations",
+      "description": "As an auditor, I want selection and project-add alternatives tested for bounded exact batching.",
+      "acceptanceCriteria": [
+        "Execute current and candidate select-all, add-by-filter, and add-by-ID shapes on the same fixture, comparing exact IDs and order, signatures, keyset batches, caps, duplicates, snapshots, progress, recovery, and callers.",
+        "Record rows scanned and written, output bytes, temp spill, RSS, latency, and proofCheckState for the three scenarios; reject all-ID foreground materialization, raw scans, mismatches, or weakened settings.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all benchmark-critical settings unchanged and preserve failures.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 111,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-110"
+      ]
+    },
+    {
+      "id": "US-112",
+      "title": "Validate PDF filter, project, and ID operations",
+      "description": "As an auditor, I want all three PDF selection paths tested for exact output and pinning.",
+      "acceptanceCriteria": [
+        "Execute current and candidate PDF-by-filter, PDF-by-project, and PDF-by-ID shapes on the same fixture, comparing included IDs, order, caps, signatures, pins, progress, generated files, cleanup, recovery, and browser/desktop paths.",
+        "Record rows scanned and written, output and temporary bytes, file counts, RSS, latency, and proofCheckState for the three scenarios; reject unbounded hydration, mismatched output, lost pins, or weakened settings.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all benchmark-critical settings unchanged and preserve failures.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 112,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-111"
+      ]
+    },
+    {
+      "id": "US-113",
+      "title": "Validate project export and transfer operations",
+      "description": "As an auditor, I want export and transfer alternatives tested for exact portability and recovery.",
+      "acceptanceCriteria": [
+        "Execute current and candidate project-export and transfer export or read shapes on the same fixture, comparing IDs, fields, order, caps, pins, generated files, portability, cleanup, recovery, and browser/desktop paths.",
+        "Record rows scanned and written, output and temporary bytes, file counts, RSS, latency, and proofCheckState for both scenarios; reject lost audit fields, mismatch, unbounded hydration, or weakened settings.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all benchmark-critical settings unchanged and preserve failures.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 113,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-112"
+      ]
+    },
+    {
+      "id": "US-114",
+      "title": "Validate initial build and shared-import workloads",
+      "description": "As an auditor, I want initial projection and shared-import write fan-out measured.",
+      "acceptanceCriteria": [
+        "Execute current and candidate initial projection build and shared import-route update workloads on one fixture, verifying resulting list, count, filter, queue, snapshot, and recovery parity.",
+        "Record rows written, rewrites, wall time, logical payload, index, WAL, physical and temporary bytes, RSS, retained generations, p50/p95/p99 where applicable, and proofCheckState for both scenarios.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all benchmark-critical settings unchanged; reject mock-only wins, OOM, fatal restart, foreground spill, broad unrelated rewrites, retries, or missing bounded recovery.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 114,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-113"
+      ]
+    },
+    {
+      "id": "US-115",
+      "title": "Validate membership and project-article workloads",
+      "description": "As an auditor, I want membership changes tested for bounded invalidation and exact parity.",
+      "acceptanceCriteria": [
+        "Execute current and candidate import-route membership change and project-article add or remove workloads, verifying scope, selected import, list, count, queue, snapshot, export, and recovery parity.",
+        "Record rows written, rewrites, wall time, logical payload, index, WAL, physical and temp bytes, RSS, retained generations, and proofCheckState for both scenarios.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all critical settings unchanged; reject OOM, fatal restart, spill, broad rewrites, retries, mismatch, or unbounded recovery.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 115,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-114"
+      ]
+    },
+    {
+      "id": "US-116",
+      "title": "Validate article metadata and payload-update workloads",
+      "description": "As an auditor, I want routine article and payload updates tested for narrow writes and exact reads.",
+      "acceptanceCriteria": [
+        "Execute current and candidate article metadata update and full-text or payload update workloads, verifying list display, filters, detail, export, invalidation, snapshots, and recovery parity.",
+        "Record rows and files written, rewrites, wall time, logical payload, index, WAL, physical and temp bytes, RSS, retained generations, and proofCheckState for both scenarios.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all critical settings unchanged; reject OOM, fatal restart, spill, broad rewrites, retries, mismatch, or unbounded recovery.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 116,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-115"
+      ]
+    },
+    {
+      "id": "US-117",
+      "title": "Validate LLM judgment create, update, and delete workloads",
+      "description": "As an auditor, I want LLM judgment writes tested across three exact change kinds.",
+      "acceptanceCriteria": [
+        "Execute current and candidate LLM judgment create, update, and delete workloads, verifying identity dimensions, overlays, list, count, filter, detail, queue, snapshot, export, and recovery parity.",
+        "Record rows written, component invalidation, rewrites, wall time, logical payload, index, WAL, physical and temp bytes, RSS, retained generations, and proofCheckState for all three scenarios.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep model, provider, thinking, prompts, content settings, memory, and runtime fixed; reject missing identity dimensions, OOM, fatal restart, spill, retries, broad invalidation, or mismatch.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 117,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-116"
+      ]
+    },
+    {
+      "id": "US-118",
+      "title": "Validate human judgment submit, move, and delete workloads",
+      "description": "As an auditor, I want human-review writes tested across three exact change kinds.",
+      "acceptanceCriteria": [
+        "Execute current and candidate human judgment submit, move, and delete workloads, verifying overlays, Human, Both, Unassessed, counts, conflicts, queues, snapshots, export, and recovery parity.",
+        "Record rows written, component invalidation, rewrites, wall time, logical payload, index, WAL, physical and temp bytes, RSS, retained generations, and proofCheckState for all three scenarios.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all critical settings fixed; reject OOM, fatal restart, spill, retries, broad invalidation, mismatch, or unbounded replay.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 118,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-117"
+      ]
+    },
+    {
+      "id": "US-119",
+      "title": "Validate prompt, model, and content-setting workloads",
+      "description": "As an auditor, I want three benchmark-critical configuration changes tested for exact invalidation.",
+      "acceptanceCriteria": [
+        "Execute current and candidate prompt change, model change, and content-setting change workloads, verifying judgment identity, applicability, component invalidation, lists, counts, filters, queues, snapshots, and recovery parity.",
+        "Record rows written, invalidated components, rewrites, wall time, logical payload, index, WAL, physical and temp bytes, RSS, retained generations, and proofCheckState for all three scenarios.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all unrelated critical settings fixed; reject silent changes, missing dimensions, OOM, fatal restart, spill, broad unrelated invalidation, or mismatch.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 119,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-118"
+      ]
+    },
+    {
+      "id": "US-120",
+      "title": "Validate date-range, scope, and selected-route workloads",
+      "description": "As an auditor, I want three project-scope configuration changes tested for bounded invalidation.",
+      "acceptanceCriteria": [
+        "Execute current and candidate date-range change, project-scope change, and selected import-route change workloads, verifying candidate membership, filters, counts, queues, snapshots, export, and recovery parity.",
+        "Record rows written, invalidated components, rewrites, wall time, logical payload, index, WAL, physical and temp bytes, RSS, retained generations, and proofCheckState for all three scenarios.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all unrelated critical settings fixed; reject silent changes, OOM, fatal restart, spill, broad unrelated invalidation, mismatch, or unbounded replay.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 120,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-119"
+      ]
+    },
+    {
+      "id": "US-121",
+      "title": "Validate article deletion, project deletion, and archive workloads",
+      "description": "As an auditor, I want three product lifecycle operations tested for bounded cleanup and preservation.",
+      "acceptanceCriteria": [
+        "Execute current and candidate article deletion, project deletion, and archive workloads, verifying exact route state, authoritative and audit preservation, snapshots, pins, export, transfer, generated files, and recovery.",
+        "Record rows and files removed or retained, wall time, logical payload, index, WAL, physical and temp bytes, RSS, active and pinned generations, and proofCheckState for all three scenarios.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all critical settings fixed; reject removal of authoritative, audit, pinned, replay, transfer, or last-known-good data, unbounded cleanup, OOM, fatal restart, or spill.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 121,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-120"
+      ]
+    },
+    {
+      "id": "US-122",
+      "title": "Validate snapshot retirement, pin protection, and last-known-good retention",
+      "description": "As an auditor, I want three snapshot lifecycle boundaries tested for exact protection.",
+      "acceptanceCriteria": [
+        "Execute current and candidate snapshot retirement, active pin protection, and last-known-good retention scenarios, verifying reads, exports, bulk jobs, recovery, and bounded cleanup.",
+        "Record rows retained or removed, wall time, WAL, temp spill, RSS, active, candidate, pinned and retired generations, route parity, and proofCheckState for all three scenarios.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all critical settings fixed; reject lost pins, active or last-known-good loss, unbounded cleanup, OOM, fatal restart, spill, or silent fallback.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 122,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-121"
+      ]
+    },
+    {
+      "id": "US-123",
+      "title": "Validate delta, dirty-work, and partial cleanup",
+      "description": "As an auditor, I want three intermediate-state cleanup paths tested against consumer watermarks.",
+      "acceptanceCriteria": [
+        "Execute current and candidate delta cleanup, dirty-work or acknowledgement cleanup, and contribution or rebuild-partial cleanup, verifying consumer watermarks, replay, repair, exact reads, and restart safety.",
+        "Record rows removed or retained, wall time, WAL, temp spill, RSS, watermark positions, retained generations, and proofCheckState for all three scenarios.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all critical settings fixed; reject cleanup without an explicit consumer watermark, lost replay or repair data, unbounded scans, OOM, fatal restart, or spill.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 123,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-122"
+      ]
+    },
+    {
+      "id": "US-124",
+      "title": "Validate orphan, generated-file, and retention-boundary cleanup",
+      "description": "As an auditor, I want orphan and file cleanup tested at explicit lifecycle boundaries.",
+      "acceptanceCriteria": [
+        "Execute current and candidate orphan-generation cleanup, generated or partial-file cleanup, and exact retention-boundary scenarios, verifying ownership, pins, exports, transfers, recovery, and bounded directory access.",
+        "Record rows and files removed or retained, file counts and bytes, wall time, WAL where applicable, temp spill, RSS, generations, and proofCheckState for all three scenarios.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all critical settings fixed; reject unbounded directory or history scans, lost pinned or recovery files, OOM, fatal restart, spill, or missing owner.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 124,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-123"
+      ]
+    },
+    {
+      "id": "US-125",
+      "title": "Validate interrupted rebuild and incremental projection",
+      "description": "As an auditor, I want two projection interruption boundaries tested for safe resumption.",
+      "acceptanceCriteria": [
+        "Execute interrupted full rebuild and interrupted incremental projection scenarios for current and candidate shapes, verifying active and last-known-good reads, idempotence, duplicate suppression, chunks, watermarks, pins, and cleanup.",
+        "Record wall time, rows written, WAL, temp spill, RSS, retained generations, recovered state, route parity, and proofCheckState for both scenarios.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all critical settings fixed; reject partial publication exposure, lost work, duplicate effects, unbounded replay, OOM, fatal restart, or silent fallback.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 125,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-124"
+      ]
+    },
+    {
+      "id": "US-126",
+      "title": "Validate expired lease, failed publication, and application restart",
+      "description": "As an auditor, I want three control failures tested for bounded recovery.",
+      "acceptanceCriteria": [
+        "Execute expired lease, failed publication, and application restart scenarios for current and candidate shapes, verifying claims, retries, active and last-known-good reads, idempotence, jobs, cleanup, and operator state.",
+        "Record wall time, rows written, WAL, temp spill, RSS, retained generations, recovered state, route parity, and proofCheckState for all three scenarios.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all critical settings fixed; reject partial publication, lost work, duplicate effects, unbounded retries, OOM, fatal restart, or silent fallback.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 126,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-125"
+      ]
+    },
+    {
+      "id": "US-127",
+      "title": "Validate desktop restart and resume behavior",
+      "description": "As an auditor, I want desktop restart and resume tested against shared storage and runtime candidates.",
+      "acceptanceCriteria": [
+        "Execute desktop restart and desktop resume scenarios against current and candidate shapes, verifying all four review tabs, detail, progress, queued jobs, runtime paths, active snapshots, pins, and unavailable behavior.",
+        "Record requests, recovered state, wall time, RSS, WAL where applicable, retained generations, exact route and UI parity, and proofCheckState for both scenarios.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all critical settings fixed; reject fatal restart, lost state, stale silent fallback, partial publication exposure, OOM, or unbounded recovery.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 127,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-126"
+      ]
+    },
+    {
+      "id": "US-128",
+      "title": "Validate replay, repair, and operator recovery",
+      "description": "As an auditor, I want three recovery paths tested for exact bounded restoration.",
+      "acceptanceCriteria": [
+        "Execute replay, targeted repair, and documented operator recovery scenarios against current and candidate shapes, verifying idempotence, duplicate suppression, watermarks, snapshots, files, jobs, exact route state, and cleanup.",
+        "Record rows and files read or written, wall time, WAL, temp spill, RSS, retained generations, recovery outcome, and proofCheckState for all three scenarios.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or live/project data. Isolated disposable-fixture DDL, DML, and generated outputs are allowed only for this evidence, must be cleaned up, and every started process must be stopped.",
+        "Keep all critical settings fixed; reject lost data, duplicate effects, unbounded replay, missing operator path, OOM, fatal restart, spill, or silent fallback.",
+        "Keep state fields distinct, cite exact commands and tooling, update validation and proof rows, and record blockers and owner questions; never inspect live DuckDB directly.",
+        "Do not mark recommendations actionable."
+      ],
+      "priority": 128,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-127"
+      ]
+    },
+    {
+      "id": "US-129",
+      "title": "Exhaustively reconcile mounted API and read-contract rows",
+      "description": "As an auditor, I want every mounted review surface terminally accounted for after validation.",
+      "acceptanceCriteria": [
+        "Recheck every mounted route, method or query key, input, response contract, owner, reader or job path, parity registration, test, and route-to-query or route-to-table mapping against completed evidence.",
+        "Resolve duplicates and contradictions, add late surfaces, and assign every API row classified, out-of-scope, or blocked auditStatus with exact evidence and owner fields.",
+        "Publish exact discovered, classified, out-of-scope, and blocked API counts that balance; late findings without applicable validation remain blocked and cannot support actionability.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence, record commands and skipped checks, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 129,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-128",
+        "US-099",
+        "US-113"
+      ]
+    },
+    {
+      "id": "US-130",
+      "title": "Exhaustively reconcile browser list and detail consumers",
+      "description": "As an auditor, I want browser list and detail consumption terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck browser LLM, Human, Both, Unassessed, detail, prompt, full-text, warning, health, readiness, and progress query keys, components, requests, consumed fields, ignored fields, and runtime evidence.",
+        "Resolve duplicates and contradictions, add late callers, and assign every row classified, out-of-scope, or blocked auditStatus with exact evidence and owner fields.",
+        "Publish exact discovered, classified, out-of-scope, and blocked browser list/detail counts that balance; unvalidated late behavior remains blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence, record commands and skipped checks, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 130,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-129"
+      ]
+    },
+    {
+      "id": "US-131",
+      "title": "Exhaustively reconcile desktop list and detail consumers",
+      "description": "As an auditor, I want desktop list and detail consumption terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck desktop LLM, Human, Both, Unassessed, detail, prompt, full-text, warning, health, readiness, progress, shared-client, bridge, runtime-path, restart, and resume rows.",
+        "Resolve duplicates and contradictions, add late callers, and assign every row classified, out-of-scope, or blocked auditStatus with exact runtime evidence and owner fields.",
+        "Publish exact discovered, classified, out-of-scope, and blocked desktop list/detail counts that balance; unvalidated late behavior remains blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence, record commands and skipped checks, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 131,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-130"
+      ]
+    },
+    {
+      "id": "US-132",
+      "title": "Exhaustively reconcile bulk and generated-output consumers",
+      "description": "As an auditor, I want search, bulk, PDF, export, and transfer consumers terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck search, select-all, add-to-project, PDF, export, transfer, progress, download, direct-fetch, shared-client, browser, desktop, worker, generated-file, and cleanup rows.",
+        "Resolve duplicates and contradictions, add late callers, and assign every row classified, out-of-scope, or blocked auditStatus with exact evidence and owner fields.",
+        "Publish exact discovered, classified, out-of-scope, and blocked bulk/output counts that balance; unvalidated late behavior remains blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence, record commands and skipped checks, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 132,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-131"
+      ]
+    },
+    {
+      "id": "US-133",
+      "title": "Exhaustively reconcile projector, worker, and scheduler rows",
+      "description": "As an auditor, I want every background publication surface terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck every intake, scope, selected-import, display, status, payload, search, queue, posting, summary, filter, partial, compaction, projector, worker, and scheduler row against inputs, outputs, identities, tests, and validation.",
+        "Resolve duplicates and contradictions, add late surfaces, and assign every row classified, out-of-scope, or blocked auditStatus with evidence and owner fields.",
+        "Publish exact discovered, classified, out-of-scope, and blocked projector/worker counts that balance; unvalidated late paths remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence, record commands and skipped checks, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 133,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-132"
+      ]
+    },
+    {
+      "id": "US-134",
+      "title": "Exhaustively reconcile lifecycle, recovery, and operator rows",
+      "description": "As an auditor, I want every non-route lifecycle and operator surface terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck startup, readiness, pin, retention, cleanup, replay, repair, recovery, backup, transfer, export, import, migration, legacy script, maintenance command, and operator-tool rows against objects, files, roles, tests, and validation.",
+        "Resolve duplicates and contradictions, add late surfaces, and assign every row classified, out-of-scope, or blocked auditStatus with evidence and owner fields.",
+        "Publish exact discovered, classified, out-of-scope, and blocked lifecycle/operator counts that balance; unvalidated late paths remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence, record commands and skipped checks, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 134,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-133"
+      ]
+    },
+    {
+      "id": "US-135",
+      "title": "Exhaustively reconcile source and configuration DuckDB objects",
+      "description": "As an auditor, I want source and configuration objects and indexes terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck every article, import, project-scope, prompt, model, provider, content, date, and review-configuration object, identity, constraint, key, and index against effective migrations, producers, consumers, measurements, lifecycle, disposition, and proof rows.",
+        "Resolve duplicate or contradictory rows, add late objects, and map every index to a measured predicate or order path; assign terminal or blocked auditStatus values.",
+        "Publish balanced DuckDB-object and index counts for this family; late objects without lineage, measurement, or validation remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence and commands, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 135,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-134"
+      ]
+    },
+    {
+      "id": "US-136",
+      "title": "Exhaustively reconcile judgment, delta, and hot-fact DuckDB objects",
+      "description": "As an auditor, I want durable review truth and intake objects terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck every judgment, human-review, review-state, assessment, token, delta, outbox, reconciliation cursor, and hot-fact object, identity, constraint, key, and index against migrations, owners, measurements, lifecycle, dispositions, and proof.",
+        "Resolve duplicate or contradictory rows, add late objects, and map indexes to measured access paths; assign terminal or blocked auditStatus values.",
+        "Publish balanced DuckDB-object and index counts for this family; late objects without lineage, measurement, or validation remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence and commands, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 136,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-135"
+      ]
+    },
+    {
+      "id": "US-137",
+      "title": "Exhaustively reconcile manifest, control, and job DuckDB objects",
+      "description": "As an auditor, I want publication and execution control objects terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck dirty work, acknowledgements, watermarks, identities, snapshots, pins, rebuilds, overlays, judgment jobs, bulk jobs, search jobs, result manifests, and retention objects, identities, constraints, keys, and indexes.",
+        "Resolve duplicate or contradictory rows, add late objects, and map indexes to measured access paths; assign terminal or blocked auditStatus values.",
+        "Publish balanced DuckDB-object and index counts for this family; late objects without lifecycle, measurement, or validation remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence and commands, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 137,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-136"
+      ]
+    },
+    {
+      "id": "US-138",
+      "title": "Exhaustively reconcile candidate, status, payload, search, and queue DuckDB objects",
+      "description": "As an auditor, I want selection and hydration objects terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck candidate, display, selected-import, status, payload, title-search, queue-patch, and Unassessed queue objects, identities, constraints, keys, and indexes against migrations, owners, readers, writers, measurements, lifecycle, dispositions, and proof.",
+        "Resolve duplicate or contradictory rows, add late objects, and map indexes to measured access paths; assign terminal or blocked auditStatus values.",
+        "Publish balanced DuckDB-object and index counts for this family; late objects without route, runtime, measurement, or validation evidence remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence and commands, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 138,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-137"
+      ]
+    },
+    {
+      "id": "US-139",
+      "title": "Exhaustively reconcile posting, summary, and filter DuckDB objects",
+      "description": "As an auditor, I want high-fan-out derived objects terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck posting, stats, count, facet, filter-option, contribution, and partial objects, identities, constraints, keys, and indexes against migrations, owners, access paths, measurements, lifecycle, dispositions, and proof.",
+        "Resolve duplicate or contradictory rows, add late objects, and map every index to a measured equality, ordering, or diagnostic path; assign terminal or blocked auditStatus values.",
+        "Publish balanced DuckDB-object and index counts for this family; late objects without contract, measurement, or validation evidence remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence and commands, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 139,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-138"
+      ]
+    },
+    {
+      "id": "US-140",
+      "title": "Exhaustively reconcile legacy and temporary DuckDB objects",
+      "description": "As an auditor, I want legacy and temporary database shapes terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck every current legacy, adjacent review, refresh or dirty-state, migration-boundary, and materialized temporary object, key, identity, constraint, and index against migrations, production references, measurements, lifecycle, dispositions, and proof.",
+        "Resolve duplicate or contradictory rows, add late objects or patterns, and distinguish current from historical replacement objects; assign terminal or blocked auditStatus values.",
+        "Publish balanced DuckDB-object, temporary-shape, and index counts for this family; late objects without evidence remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence and commands, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 140,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-139"
+      ]
+    },
+    {
+      "id": "US-141",
+      "title": "Exhaustively reconcile payload directories and generated-file objects",
+      "description": "As an auditor, I want every non-table local shape terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck every payload directory, PDF, full-text file, runtime asset, export artifact, transfer package, backup, snapshot, and generated-file shape against paths, keys, owners, producers, consumers, runtime access, measurements, lifecycle, dispositions, and proof.",
+        "Resolve duplicate or contradictory rows, add late shapes, and assign every payload or file row classified, out-of-scope, or blocked auditStatus with evidence and owner fields.",
+        "Publish balanced payload/file counts; late shapes without runtime, lifecycle, measurement, or validation evidence remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence and commands, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 141,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-140"
+      ]
+    },
+    {
+      "id": "US-142",
+      "title": "Exhaustively reconcile source and configuration material fields",
+      "description": "As an auditor, I want every source and configuration field terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck every article, import, project-scope, prompt, model, and configuration column, JSON key, alias, and derived field against source, transform, producer, consumer, pre-limit use, post-limit use, invalidation, lifecycle, measurement, disposition, proof, and owning object.",
+        "Resolve duplicate or contradictory lineage rows, add late fields, and assign every row classified, out-of-scope, or blocked auditStatus with complete evidence fields.",
+        "Publish balanced material-field counts for this family; late fields without complete evidence remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence and commands, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 142,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-141"
+      ]
+    },
+    {
+      "id": "US-143",
+      "title": "Exhaustively reconcile judgment, delta, and hot-fact material fields",
+      "description": "As an auditor, I want durable review truth and intake fields terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck every judgment, human-review, state, assessment, token, delta, outbox, cursor, and hot-fact column, JSON key, alias, and derived field against source, transform, producer, consumer, use, invalidation, lifecycle, measurement, disposition, proof, and object.",
+        "Resolve duplicate or contradictory lineage rows, add late fields, and assign every row classified, out-of-scope, or blocked auditStatus with complete evidence fields.",
+        "Publish balanced material-field counts for this family; late fields without complete evidence remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence and commands, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 143,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-142"
+      ]
+    },
+    {
+      "id": "US-144",
+      "title": "Exhaustively reconcile manifest, control, and job material fields",
+      "description": "As an auditor, I want publication and execution control fields terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck every dirty-work, watermark, identity, snapshot, pin, rebuild, overlay, job, result, and retention column, JSON key, alias, and derived field against producer, consumer, lifecycle, recovery, measurement, disposition, proof, and object.",
+        "Resolve duplicate or contradictory lineage rows, add late fields, and assign every row classified, out-of-scope, or blocked auditStatus with complete evidence fields.",
+        "Publish balanced material-field counts for this family; late fields without complete evidence remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence and commands, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 144,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-143"
+      ]
+    },
+    {
+      "id": "US-145",
+      "title": "Exhaustively reconcile candidate, status, and payload material fields",
+      "description": "As an auditor, I want selection and hydration fields terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck every candidate, display, selected-import, status, article-payload, and judgment-payload column, JSON key, alias, and derived field against source, transform, producer, consumer, pre-limit and post-limit use, invalidation, lifecycle, measurement, disposition, proof, and object.",
+        "Resolve duplicate or contradictory lineage rows, add late fields, and assign every row classified, out-of-scope, or blocked auditStatus with complete evidence fields.",
+        "Publish balanced material-field counts for this family; late fields without complete route, runtime, or validation evidence remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence and commands, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 145,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-144"
+      ]
+    },
+    {
+      "id": "US-146",
+      "title": "Exhaustively reconcile search, queue, and posting material fields",
+      "description": "As an auditor, I want selection index and queue fields terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck every search, queue, posting, and posting-stats column, JSON key, alias, and derived field against source, transform, producer, consumer, selection, order, eligibility, priority, invalidation, lifecycle, measurement, disposition, proof, and object.",
+        "Resolve duplicate or contradictory lineage rows, add late fields, and assign every row classified, out-of-scope, or blocked auditStatus with complete evidence fields.",
+        "Publish balanced material-field counts for this family; late fields without complete route, runtime, or validation evidence remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence and commands, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 146,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-145"
+      ]
+    },
+    {
+      "id": "US-147",
+      "title": "Exhaustively reconcile summary, filter, legacy, and temporary material fields",
+      "description": "As an auditor, I want remaining database material fields terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck every count, facet, filter-option, contribution, partial, legacy, adjacent, and temporary column, JSON key, alias, generated field, key, and index expression against source, producer, consumer, use, lifecycle, measurement, disposition, proof, and object.",
+        "Resolve duplicate or contradictory lineage rows, add late fields, and assign every row classified, out-of-scope, or blocked auditStatus with complete evidence fields.",
+        "Publish balanced material-field counts for this family; late fields without complete evidence remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence and commands, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 147,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-146"
+      ]
+    },
+    {
+      "id": "US-148",
+      "title": "Exhaustively reconcile local keys and generated-file material fields",
+      "description": "As an auditor, I want every persisted local key and generated-file field terminally accounted for.",
+      "acceptanceCriteria": [
+        "Recheck every path component, metadata key, manifest field, generated-file field, payload key, export or transfer mapping, and backup or snapshot key against source, producer, consumer, bounded lookup, atomicity, lifecycle, measurement, disposition, proof, and owning shape.",
+        "Resolve duplicate or contradictory rows, add late keys, and assign every row classified, out-of-scope, or blocked auditStatus with complete evidence fields.",
+        "Publish balanced local material-key counts; late keys without complete runtime, lifecycle, or validation evidence remain blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence and commands, and never inspect live DuckDB directly.",
+        "Do not finalize recommendations."
+      ],
+      "priority": 148,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-147"
+      ]
+    },
+    {
+      "id": "US-149",
+      "title": "Finalize source and configuration proof",
+      "description": "As an auditor, I want source and configuration recommendations finalized only after exhaustive reconciliation and applicable validation.",
+      "acceptanceCriteria": [
+        "Update every article, import, project-scope, prompt, model, and configuration proof row from exhaustive API, runtime, object, field, measurement, target, and workload evidence.",
+        "For every non-keep candidate require all applicable negative-consumer and positive product, audit, benchmark, export, transfer, recovery, identity, migration, bounded-read, and retention proofCheckState values `satisfied` before recommendationActionability becomes `actionable`; otherwise set unresolved or blocked with evidence and owner.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep all state fields distinct as defined in US-001.",
+        "Cite exact evidence, update proof and disposition counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not infer proof from priority or from a planned future gate."
+      ],
+      "priority": 149,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-148",
+        "US-114",
+        "US-120",
+        "US-135",
+        "US-142"
+      ]
+    },
+    {
+      "id": "US-150",
+      "title": "Finalize judgment and hot-fact proof",
+      "description": "As an auditor, I want review-truth and reusable-fact recommendations finalized from complete evidence.",
+      "acceptanceCriteria": [
+        "Update every judgment, human-review, state, assessment, token, and hot-fact proof row from exhaustive route, runtime, object, field, measurement, target, and judgment or configuration workload evidence.",
+        "Require all applicable authority, identity, audit, benchmark, export, transfer, replay, recovery, migration, bounded-read, and retention proof checks satisfied before actionability; otherwise mark unresolved or blocked precisely.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep all state fields distinct as defined in US-001.",
+        "Cite exact evidence, update proof and disposition counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not infer proof from planned future gates."
+      ],
+      "priority": 150,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-149",
+        "US-117",
+        "US-120",
+        "US-136",
+        "US-143"
+      ]
+    },
+    {
+      "id": "US-151",
+      "title": "Finalize delta and progress-state proof",
+      "description": "As an auditor, I want intake and projector-progress recommendations finalized from lifecycle validation.",
+      "acceptanceCriteria": [
+        "Update every delta, outbox, dirty-work, acknowledgement, cursor, and watermark proof row from exhaustive object, field, measurement, cleanup, interruption, replay, repair, and operator evidence.",
+        "Require every applicable writer, reader, watermark, idempotence, replay, repair, migration, recovery, bounded retention, and cleanup proof check satisfied before actionability; otherwise mark unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep all state fields distinct as defined in US-001.",
+        "Cite exact evidence, update proof and disposition counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not infer proof from planned future gates."
+      ],
+      "priority": 151,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-150",
+        "US-123",
+        "US-128",
+        "US-137",
+        "US-144"
+      ]
+    },
+    {
+      "id": "US-152",
+      "title": "Finalize identity, snapshot, and pin proof",
+      "description": "As an auditor, I want publication identity recommendations finalized from exact consistency evidence.",
+      "acceptanceCriteria": [
+        "Update every selected-import identity, projection identity, snapshot, component, and pin proof row from exhaustive route, runtime, object, field, measurement, target, retirement, interruption, restart, replay, and recovery evidence.",
+        "Require every applicable publication, active, last-known-good, pin, export, transfer, recovery, benchmark, migration, retention, and cleanup proof check satisfied before actionability; otherwise mark unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep all state fields distinct as defined in US-001.",
+        "Cite exact evidence, update proof and disposition counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not infer proof from planned future gates."
+      ],
+      "priority": 152,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-151",
+        "US-122",
+        "US-128",
+        "US-137",
+        "US-144"
+      ]
+    },
+    {
+      "id": "US-153",
+      "title": "Finalize rebuild, overlay, job, and retention proof",
+      "description": "As an auditor, I want asynchronous control recommendations finalized from complete lifecycle evidence.",
+      "acceptanceCriteria": [
+        "Update every rebuild, chunk, overlay, judgment-job, bulk-job, search-job, result, and retention proof row from exhaustive route, runtime, object, field, measurement, target, progress, cleanup, interruption, restart, replay, and recovery evidence.",
+        "Require every applicable retry, lease, publication, pin, progress, recovery, export, transfer, migration, retention, orphan, and cleanup proof check satisfied before actionability; otherwise mark unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep all state fields distinct as defined in US-001.",
+        "Cite exact evidence, update proof and disposition counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not infer proof from planned future gates."
+      ],
+      "priority": 153,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-152",
+        "US-109",
+        "US-121",
+        "US-128",
+        "US-137",
+        "US-144"
+      ]
+    },
+    {
+      "id": "US-154",
+      "title": "Finalize candidate, status, and payload proof",
+      "description": "As an auditor, I want list-serving and hydration recommendations finalized from exact route and runtime evidence.",
+      "acceptanceCriteria": [
+        "Update every candidate, display, selected-import, status, article-payload, and judgment-payload proof row from exhaustive API, browser, desktop, object, field, measurement, target, list, detail, payload, and lifecycle validation.",
+        "Require every applicable exact IDs, order, cursor, snapshot, bounded hydration, caps, runtime, writer, recovery, export, transfer, benchmark, migration, retention, and cleanup proof check satisfied before actionability; otherwise mark unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep all state fields distinct as defined in US-001.",
+        "Cite exact evidence, update proof and disposition counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not infer proof from planned future gates."
+      ],
+      "priority": 154,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-153",
+        "US-099",
+        "US-109",
+        "US-138",
+        "US-145"
+      ]
+    },
+    {
+      "id": "US-155",
+      "title": "Finalize search and queue proof",
+      "description": "As an auditor, I want search and queue recommendations finalized from exact bounded selection evidence.",
+      "acceptanceCriteria": [
+        "Update every prefix-search, substring-search, queue-patch, and Unassessed queue proof row from exhaustive API, runtime, object, field, measurement, target, search, selection, queue, restart, and lifecycle validation.",
+        "Require every applicable exact IDs, order, cursor, eligibility, priority, bounded intersection, async or unavailable, snapshot, recovery, benchmark, migration, retention, and cleanup proof check satisfied before actionability; otherwise mark unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep all state fields distinct as defined in US-001.",
+        "Cite exact evidence, update proof and disposition counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not infer proof from planned future gates."
+      ],
+      "priority": 155,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-154",
+        "US-105",
+        "US-111",
+        "US-138",
+        "US-146"
+      ]
+    },
+    {
+      "id": "US-156",
+      "title": "Finalize posting, summary, filter, partial, and index proof",
+      "description": "As an auditor, I want high-fan-out recommendations finalized from exact contract and access-path evidence.",
+      "acceptanceCriteria": [
+        "Update every posting, stats, count, facet, filter-option, contribution, partial, and index proof row from exhaustive API, runtime, object, field, measurement, target, list, count, filter, cleanup, and lifecycle validation.",
+        "Require every applicable exact-contract, selectivity, predicate, ordering, writer, replay, recovery, benchmark, migration, retention, index timing, and cleanup proof check satisfied before actionability; otherwise mark unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep all state fields distinct as defined in US-001.",
+        "Cite exact evidence, update proof and disposition counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not infer proof from planned future gates."
+      ],
+      "priority": 156,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-155",
+        "US-100",
+        "US-104",
+        "US-139",
+        "US-146",
+        "US-147"
+      ]
+    },
+    {
+      "id": "US-157",
+      "title": "Finalize legacy and temporary proof",
+      "description": "As an auditor, I want legacy and temporary recommendations finalized from complete production and lifecycle evidence.",
+      "acceptanceCriteria": [
+        "Update every legacy, adjacent, refresh or dirty-state, temporary-pattern, field, and index proof row from exhaustive object, field, measurement, target, cleanup, migration, operator, replay, repair, and recovery evidence.",
+        "Require every applicable no-consumer, current-schema, migration, cutover, operator, benchmark, replay, recovery, retention, and cleanup proof check satisfied before actionability; otherwise mark unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep all state fields distinct as defined in US-001.",
+        "Cite exact evidence, update proof and disposition counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not infer proof from planned future gates."
+      ],
+      "priority": 157,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-156",
+        "US-123",
+        "US-128",
+        "US-140",
+        "US-147"
+      ]
+    },
+    {
+      "id": "US-158",
+      "title": "Finalize local-file and cold-storage proof",
+      "description": "As an auditor, I want local and cold recommendations finalized from complete runtime and lifecycle evidence.",
+      "acceptanceCriteria": [
+        "Update every payload-directory, PDF, full-text, runtime-asset, export, transfer, backup, snapshot, and generated-file proof row from exhaustive runtime, object, key, measurement, target, output, cleanup, restart, and recovery evidence.",
+        "Require every applicable bounded lookup, atomic write, browser, desktop, export, transfer, recovery, portability, migration, permission, retention, and cleanup proof check satisfied before actionability; otherwise mark unresolved or blocked.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep all state fields distinct as defined in US-001.",
+        "Cite exact evidence, update proof and disposition counts, and record commands, blockers, and owner questions; never inspect live DuckDB directly.",
+        "Do not infer proof from planned future gates."
+      ],
+      "priority": 158,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-157",
+        "US-108",
+        "US-113",
+        "US-124",
+        "US-141",
+        "US-148"
+      ]
+    },
+    {
+      "id": "US-159",
+      "title": "Prioritize source and configuration implementation slices",
+      "description": "As an auditor, I want actionable source and configuration recommendations sequenced into bounded later changes.",
+      "acceptanceCriteria": [
+        "Create slices only from proof rows with recommendationActionability `actionable`; list blocked or unresolved candidates separately and do not present them as implementation work.",
+        "Apply Phase 8 order: proven unused rows or columns and duplicate work first, safely late-hydrated payloads next where relevant, component-ownership splits after that, indexes only after target shapes, structural replacements behind physical parity gates, clear rebuild cutover without permanent dual writes, then pin-protected cleanup.",
+        "For each source or configuration slice record dependencies, exact objects and fields, reads, writes, migration, backfill or rebuild, cutover, cleanup, pins, rollback or recovery, and proof references.",
+        "Document conditional future gates per affected slice: `bun run db:mig` for schema work; targeted adjacent `bun test` suites for changed routes, readers, projectors, retention, and migrations; `bun run lint`; `bun run build` for shared API/client changes; browser verification for LLM, Human, Both, Unassessed, and detail flows; `bun run desktop:build` plus restart/resume verification for shared storage/runtime changes; same-fixture physical before/after benchmarks with unchanged critical settings; zero new DuckDB OOM, fatal restart, or foreground temp spill; and `OOM_ERRORS.md` only for an actual OOM fix. Do not run these later implementation commands as audit gates.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact evidence and commands used by the audit, and never inspect live DuckDB directly."
+      ],
+      "priority": 159,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-158",
+        "US-149"
+      ]
+    },
+    {
+      "id": "US-160",
+      "title": "Prioritize judgment, fact, and control implementation slices",
+      "description": "As an auditor, I want actionable review-truth and control recommendations sequenced into bounded later changes.",
+      "acceptanceCriteria": [
+        "Create slices only from actionable judgment, hot-fact, delta, progress, manifest, snapshot, rebuild, overlay, job, and retention proof rows; keep unresolved candidates separate.",
+        "Apply Phase 8 order: proven unused or duplicate state first, narrow ownership and retention fixes next, component splits after that, indexes only after target shapes, structural replacements behind parity gates, clear cutover without permanent dual writes, then pin-protected bounded cleanup.",
+        "For each slice record dependencies, objects and fields, reads, writes, migration or rebuild, cutover, cleanup, pins, rollback or recovery, and proof references.",
+        "Document conditional future gates per affected slice: `bun run db:mig`; targeted adjacent `bun test` suites for routes, readers, projectors, retention, and migrations; `bun run lint`; `bun run build` for shared API/client changes; all-four-tab and detail browser verification; `bun run desktop:build` plus restart/resume for shared storage/runtime; unchanged-setting same-fixture physical benchmarks; zero new DuckDB OOM, fatal restart, or foreground temp spill; and `OOM_ERRORS.md` only for an actual OOM fix. Do not run these commands as audit gates.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact audit evidence and commands, and never inspect live DuckDB directly."
+      ],
+      "priority": 160,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-159",
+        "US-150",
+        "US-153"
+      ]
+    },
+    {
+      "id": "US-161",
+      "title": "Prioritize candidate, status, and payload implementation slices",
+      "description": "As an auditor, I want actionable list-serving and hydration recommendations sequenced into bounded later changes.",
+      "acceptanceCriteria": [
+        "Create slices only from actionable candidate, display, status, and payload proof rows; keep blocked or unresolved candidates separate.",
+        "Apply Phase 8 order: unused fields and duplicate API work first, safely late-hydrated payloads next, component ownership splits after that, indexes only after target shapes, structural replacements behind parity gates, clear rebuild cutover without permanent dual writes, then pin-protected cleanup.",
+        "For each slice record dependencies, objects and fields, route and runtime effects, reads, writes, migration or rebuild, cutover, cleanup, pins, rollback or recovery, and proof references.",
+        "Document conditional future gates per affected slice: `bun run db:mig` for schema work; targeted adjacent `bun test` suites for changed routes, readers, projectors, retention, and migrations; `bun run lint`; `bun run build` for shared API/client changes; browser verification for LLM, Human, Both, Unassessed, and detail; `bun run desktop:build` plus restart/resume for shared storage/runtime; same-fixture physical before/after benchmarks with unchanged critical settings; zero new DuckDB OOM, fatal restart, or foreground temp spill; and `OOM_ERRORS.md` only for an actual OOM fix. Do not run these commands as audit gates.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact audit evidence and commands, and never inspect live DuckDB directly."
+      ],
+      "priority": 161,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-160",
+        "US-154"
+      ]
+    },
+    {
+      "id": "US-162",
+      "title": "Prioritize search and queue implementation slices",
+      "description": "As an auditor, I want actionable search and queue recommendations sequenced into bounded later changes.",
+      "acceptanceCriteria": [
+        "Create slices only from actionable search and queue proof rows; keep blocked or unresolved candidates separate.",
+        "Apply Phase 8 order: unused rows and duplicate requests first, bounded reusable search or queue facts next, component splits after that, indexes only after target shapes, structural replacements behind parity gates, clear cutover without permanent dual writes, then bounded cleanup.",
+        "For each slice record dependencies, objects and fields, route and runtime effects, reads, writes, migration or rebuild, cutover, cleanup, pins, rollback or recovery, and proof references.",
+        "Document conditional future gates per affected slice: `bun run db:mig` for schema work; targeted adjacent `bun test` suites for changed routes, readers, projectors, retention, and migrations; `bun run lint`; `bun run build` for shared API/client changes; all-four-tab and detail browser verification where affected; `bun run desktop:build` plus restart/resume for shared storage/runtime; same-fixture physical before/after benchmarks with unchanged critical settings; zero new DuckDB OOM, fatal restart, or foreground temp spill; and `OOM_ERRORS.md` only for an actual OOM fix. Do not run these commands as audit gates.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact audit evidence and commands, and never inspect live DuckDB directly."
+      ],
+      "priority": 162,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-161",
+        "US-155"
+      ]
+    },
+    {
+      "id": "US-163",
+      "title": "Prioritize posting, summary, filter, and index implementation slices",
+      "description": "As an auditor, I want actionable high-fan-out recommendations sequenced into bounded later changes.",
+      "acceptanceCriteria": [
+        "Create slices only from actionable posting, summary, filter, partial, and index proof rows; keep blocked or unresolved candidates separate.",
+        "Apply Phase 8 order: proven unused rows, columns, summaries, or duplicate API work first; safely removable partials next; component splits after that; index changes only after final target table and access paths; structural replacements behind parity gates; clear cutover without permanent dual writes; then pin-protected cleanup.",
+        "For each slice record dependencies, objects and fields, exact contracts, reads, writes, migration or rebuild, cutover, cleanup, pins, rollback or recovery, and proof references.",
+        "Document conditional future gates per affected slice: `bun run db:mig` for schema work; targeted adjacent `bun test` suites for changed routes, readers, projectors, retention, and migrations; `bun run lint`; `bun run build` for shared API/client changes; all-four-tab and detail browser verification; `bun run desktop:build` plus restart/resume for shared storage/runtime; same-fixture physical before/after benchmarks with unchanged critical settings; zero new DuckDB OOM, fatal restart, or foreground temp spill; and `OOM_ERRORS.md` only for an actual OOM fix. Do not run these commands as audit gates.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact audit evidence and commands, and never inspect live DuckDB directly."
+      ],
+      "priority": 163,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-162",
+        "US-156"
+      ]
+    },
+    {
+      "id": "US-164",
+      "title": "Prioritize legacy, temporary, and local-storage implementation slices",
+      "description": "As an auditor, I want actionable legacy and file recommendations sequenced into bounded later changes.",
+      "acceptanceCriteria": [
+        "Create slices only from actionable legacy, temporary, payload, generated-file, and cold-storage proof rows; keep blocked or unresolved candidates separate.",
+        "Apply Phase 8 order: proven unused legacy or temporary state first, safely late-hydrated files next, ownership and path splits after that, indexes only after target shapes, structural replacements behind parity gates, clear cutover without permanent dual writes, then bounded pin-protected database and file cleanup.",
+        "For each slice record dependencies, objects, fields or keys, runtime effects, reads, writes, migration or backfill, cutover, cleanup, pins, rollback or recovery, and proof references.",
+        "Document conditional future gates per affected slice: `bun run db:mig` for schema work; targeted adjacent `bun test` suites for changed routes, readers, projectors, retention, and migrations; `bun run lint`; `bun run build` for shared API/client changes; all-four-tab and detail browser verification where affected; `bun run desktop:build` plus restart/resume for shared storage/runtime; same-fixture physical before/after benchmarks with unchanged critical settings; zero new DuckDB OOM, fatal restart, or foreground temp spill; and `OOM_ERRORS.md` only for an actual OOM fix. Do not run these commands as audit gates.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep state fields distinct, cite exact audit evidence and commands, and never inspect live DuckDB directly."
+      ],
+      "priority": 164,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-163",
+        "US-157",
+        "US-158"
+      ]
+    },
+    {
+      "id": "US-165",
+      "title": "Certify the final audit status",
+      "description": "As an auditor, I want a concise certification that never presents incomplete evidence as actionable.",
+      "acceptanceCriteria": [
+        "Verify all eleven required outputs exist and cross-reference one another: API inventory; route maps; full schema, temporary, and file census; column lineage; table, index, and lifecycle inventory; fan-out and duplicate-byte report; dispositions; proof candidates; target shapes; implementation slices with benchmark gates; and exhaustive coverage manifests.",
+        "Verify every reconciliation category balances discovered = classified + out-of-scope + blocked with no silent not-started, traced-only, or measured-only row, and verify every audit completion quality gate including large-table physical measurements, exact candidate parity plans and results where required, browser and desktop implications, commands, approved tooling, and explained skipped checks.",
+        "Set overallCertification `PASS` only when every in-scope manifest row is classified, every blocked count is zero, every completion gate passes, and every actionable move, derive, archive, or delete row has satisfied negative and positive proof for routes, runtime, writers, lifecycle, recovery, export, transfer, snapshots, benchmark, migration, bounded reads, retention, and cleanup.",
+        "Otherwise set overallCertification `INCOMPLETE`, enumerate blockers and owner questions, and state that no implementation slice is certified actionable; completing this reporting story does not change any proofCheckState or convert missing evidence into a pass.",
+        "Confirm the artifact reports audit results only, lists commands and approved evidence tooling, makes no repository schema or runtime change, and does not represent documented later implementation gates as executed.",
+        "Write durable results only to `STORAGE_SHAPE_AUDIT_PLAN.md`; do not change repository schemas, code, routes, projectors, retention, runtime behavior, or data.",
+        "Keep manifest auditStatus, proofCheckState, recommendationActionability, and overallCertification distinct as defined in US-001, cite exact evidence, and never inspect live DuckDB directly."
+      ],
+      "priority": 165,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-159",
+        "US-160",
+        "US-161",
+        "US-162",
+        "US-163",
+        "US-164"
+      ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-07-21T06:44:34.956Z"
+  }
 }
