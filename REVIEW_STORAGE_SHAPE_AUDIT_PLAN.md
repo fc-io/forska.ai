@@ -165,10 +165,82 @@ these artifacts:
 8. Move/delete candidate list with proof requirements.
 9. Candidate target shapes with read and write consequences.
 10. Prioritized implementation slices with benchmark gates.
+11. Exhaustive coverage manifest showing every discovered API, UI query, table,
+    column, index, worker, script, migration, and local payload shape and whether
+    it has been reconciled.
 
 Do not leave the results only in notes, chat, logs, or temporary scripts. If a
 check cannot be completed, `STORAGE_SHAPE_AUDIT_PLAN.md` should record the
 missing evidence, why it is missing, and what would unblock it.
+
+## Exhaustiveness And Checkoff Strategy
+
+The audit should not rely on memory or broad phrases like "all review routes".
+It must start by generating explicit coverage manifests, then keep a checkoff
+row for every discovered item. The audit is incomplete while any manifest row is
+unclassified.
+
+Create these manifests in `STORAGE_SHAPE_AUDIT_PLAN.md` before writing
+dispositions:
+
+1. Mounted API and read-contract manifest.
+   - Source: server route registration, review read-contract files, route parity
+     coverage, route services, and generated/shared client API types.
+   - Each row must include route or entry point, method/query key where
+     applicable, response contract, owning service, tests, and audit status.
+2. UI and runtime consumption manifest.
+   - Source: browser query keys/components, desktop/runtime callers, shared
+     API clients, export/PDF/bulk flows, and warning/progress pollers.
+   - Each row must include caller, API surface, consumed fields, ignored fields,
+     browser/desktop applicability, and audit status.
+3. Background and operator surface manifest.
+   - Source: projectors, workers, schedulers, startup probes, repair/recovery,
+     retention, transfer/export/import, migrations, scripts, and operator tools.
+   - Each row must include read/write tables, lifecycle role, recovery role,
+     tests, and audit status.
+4. DuckDB schema object manifest.
+   - Source: current migrations/schema builders plus approved schema snapshot
+     tooling.
+   - Each row must include every relevant table, index, temporary table pattern,
+     payload directory, generated file, key, owner, declared-by location, and
+     audit status.
+5. Column and material field manifest.
+   - Source: schema object manifest, SQL builders, projection writers, JSON
+     extraction paths, generated aliases, and export/transfer mappings.
+   - Each row must include table/object, column or JSON key, producer,
+     consumer, pre-limit use, post-limit use, lifecycle, disposition, proof
+     needed, and audit status.
+
+Use these audit statuses consistently:
+
+- `not-started`
+- `traced-to-api`
+- `traced-to-writer`
+- `traced-to-lifecycle`
+- `measured`
+- `classified`
+- `blocked`
+- `out-of-scope`
+
+Every status except `classified` and `out-of-scope` must include the missing
+evidence and owner question. `out-of-scope` must state why the object is outside
+the project-review domain. A table or column cannot be marked `delete`, `move`,
+or `derive` unless its manifest row has been traced through API consumption,
+writers, lifecycle/recovery, export/transfer, and retention.
+
+The audit should also include a reconciliation summary:
+
+```text
+Mounted API surfaces: discovered N, classified N, blocked N
+UI/runtime consumers: discovered N, classified N, blocked N
+Background/operator surfaces: discovered N, classified N, blocked N
+DuckDB objects: discovered N, classified N, blocked N
+Columns/material fields: discovered N, classified N, blocked N
+Indexes: discovered N, classified N, blocked N
+Payload/file shapes: discovered N, classified N, blocked N
+```
+
+If the counts do not balance, the audit is not complete.
 
 ## Inventory Templates
 
