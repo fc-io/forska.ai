@@ -897,11 +897,12 @@
         "Leave unsupported homes unresolved."
       ],
       "priority": 45,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-044"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-046",
@@ -3244,6 +3245,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-07-21T23:20:18.223Z"
+    "updatedAt": "2026-07-21T23:47:10.891Z"
   }
 }
