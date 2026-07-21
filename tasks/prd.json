@@ -276,11 +276,12 @@
         "Exclude adjacent shapes only with an evidence-backed project-review scope reason, and leave dispositions unresolved."
       ],
       "priority": 14,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-013"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-015",
@@ -3213,6 +3214,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-07-21T11:08:43.848Z"
+    "updatedAt": "2026-07-21T11:45:03.871Z"
   }
 }
