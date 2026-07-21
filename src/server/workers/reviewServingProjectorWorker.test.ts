@@ -6971,6 +6971,7 @@ test('selected import bootstrap rebuild chunk writes article range and completed
   expect(joined).toContain("article_id >= 'article-050'")
   expect(joined).toContain("article_id <= 'article-099'")
   expect(joined).toContain("scope.article_id >= 'article-050'")
-  expect(joined).toContain("serving.article_id >= 'article-050'")
+  expect(joined).not.toContain('CREATE OR REPLACE TEMP TABLE review_selected_import_serving_rebuild_v4 AS')
+  expect(joined).not.toContain("serving.article_id >= 'article-050'")
   expect(joined).toContain("checksum = 'checksum-selected-import-range'")
 })

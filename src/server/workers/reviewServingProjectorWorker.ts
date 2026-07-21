@@ -396,6 +396,7 @@ const foregroundBatchableRangeRebuildComponents = new Set<ReviewServingProjectio
   'posting',
   'queue',
   'search',
+  'selectedImport',
   'summary',
 ])
 // Keep status chunks out of this set: they are small SQL-native updates, and per-chunk forced GC is unnecessary.
@@ -2755,6 +2756,7 @@ const projectSelectedImportArticleRangeForClaimedRebuild = async (
         chunkStartArticleId: input.chunk.chunkStartKey,
         projectId: input.projectId,
         projectScopeIdentity: input.projectScopeIdentity,
+        refreshServingRows: !isFreshReviewServingSnapshotRebuildChunk(input.chunk),
         replaceExistingRows: !isFreshReviewServingSnapshotRebuildChunk(input.chunk),
         selectedImportSnapshotId: input.selectedImportSnapshotId,
         servingBaseGeneration: input.chunk.outputBaseGeneration,
@@ -2903,7 +2905,6 @@ const canRunSelectedImportRebuildChunkBatch = (chunks: readonly ReviewServingReb
     && chunks.every((chunk) => {
       return (
         chunk.projectionComponent === 'selectedImport'
-        && chunk.requestId === null
         && !shouldRunFullSelectedImportRebuildChunk(chunk)
       )
     })
@@ -2922,6 +2923,7 @@ const getSelectedImportRebuildChunkBatchRange = (input: {
     chunkStartArticleId: input.chunk.chunkStartKey,
     projectId: input.projectId,
     projectScopeIdentity: input.projectScopeIdentity,
+    refreshServingRows: !isFreshReviewServingSnapshotRebuildChunk(input.chunk),
     replaceExistingRows: !isFreshReviewServingSnapshotRebuildChunk(input.chunk),
     selectedImportSnapshotId: input.selectedImportSnapshotId,
     servingBaseGeneration: input.chunk.outputBaseGeneration,
