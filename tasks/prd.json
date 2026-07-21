@@ -236,11 +236,12 @@
         "Leave every storage disposition unresolved."
       ],
       "priority": 12,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-011"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-013",
@@ -3211,6 +3212,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-07-21T10:26:43.121Z"
+    "updatedAt": "2026-07-21T10:47:14.373Z"
   }
 }
