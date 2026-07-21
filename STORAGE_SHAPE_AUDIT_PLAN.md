@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | The API manifest has 22 nonterminal rows and one blocked row; the US-003 through US-014 source censuses add nonterminal permanent, temporary, payload and file rows, blocked open domains, unresolved legacy/refresh/comparison/transfer/runtime-asset/lifecycle identities, and unresolved migration-path/local-shape drift; UI/background manifests, exact lineage, approved physical proof and benchmark-critical evidence remain pending; and no inherited recommendation is actionable. |
+| `overallCertification` | `INCOMPLETE` | The API manifest has 22 nonterminal rows and one blocked row; the US-003 through US-014 source censuses add nonterminal permanent, temporary, payload and file rows, blocked open domains, unresolved legacy/refresh/comparison/transfer/runtime-asset/lifecycle identities, and unresolved migration-path/local-shape drift; and US-015 records nine blocked physical-measurement rows because no approved fixture identity, complete benchmark-critical configuration, or runnable physical collector was supplied. UI/background manifests and exact lineage remain pending, and no inherited recommendation is actionable. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-014 / 2026-07-21` | The remaining source-defined permanent DuckDB tables/indexes, all migration and runtime temporary-table patterns, runtime roots, PDFs/full text references, transfer/export artifacts, backups, snapshots, generated files and coordination sidecars are enumerated without opening live DuckDB. Deployed/local shape, open payload domains, field/index necessity, cleanup, retention, recovery and browser/desktop parity remain unresolved. |
+| Latest normalized story | `US-015 / 2026-07-21` | The designated physical-baseline gate was evaluated before execution. The repository fixes only the 10M/7-prompt/70M-overlap shape and workload; fixture approval, seed, model/provider/thinking identity, prompt identities, content flags, explicit memory/runtime settings, physical identities and complete measurement tooling remain absent. No fixture, process, DDL/DML, output artifact, server, or live/project-data access was started; every unavailable category is preserved as a blocker. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
@@ -2167,6 +2167,109 @@ exists.
   parity capture exists. `BLK-0057`-`BLK-0064` preserve those limits, and all
   recommendations/dispositions stay `unresolved`.
 
+## US-015 Approved Physical Baseline
+
+US-015 is the first story that permits isolated disposable-fixture mutation,
+but only after the fixture and every benchmark-critical setting are approved.
+That approval gate did not pass. Repository source fixes the release-scale
+shape and workload, but neither the task input nor an immutable repository
+record supplies an approved fixture instance, generator/seed, model, provider,
+thinking identity, prompt identities, content flags, explicit memory/runtime
+settings, or physical snapshot identities. The repository also has no runnable
+physical collector that emits the complete required table, byte, rebuild,
+memory, and timing evidence.
+
+No physical run was attempted. This is a blocked baseline record, not a
+zero-valued baseline: absent row, byte, time, RSS, or WAL observations are
+`unavailable`, never `0`. No resolver default, smoke value, test fixture, live
+project, or existing database was substituted. `overallCertification` remains
+`INCOMPLETE`, and no storage disposition or recommendation changes.
+
+### US-015 Exact Evidence Ledger
+
+| rowId | Source class | Exact locator | Claim supported | Exposed by |
+| --- | --- | --- | --- | --- |
+| `EVD-0149` | `production` | `src/server/reviewServing/reviewServingBenchmark.ts#reviewServingSynthetic10m7PromptOverlapFixture`, `#ReviewServingBenchmarkReleaseContext`, `#getReviewServingBenchmarkMetrics`, `#getReviewServingBenchmarkReleaseReportViolations`, `#runReviewServingBenchmarkEffect` | The release contract fixes scale and validates explicit release context, latency, RSS, rows scanned/returned and temp use. It does not define fixture generation, seed/model/provider/thinking/prompt/content settings, database/table bytes, row writes, rebuild boundaries, WAL, or a real executor. | `CMD-0126` |
+| `EVD-0150` | `production` | `package.json` scripts `bench:review-serving-smoke` and `bench:review-serving-release-gate`; `scripts/benchmarkReviewServingSmoke.ts` | The only review-serving release-gate command runs the benchmark test plus mocked smoke and prints synthetic fixture/report data; it does not create or measure a physical fixture. | `CMD-0126` |
+| `EVD-0151` | `production` | `scripts/benchmarkArticlesReviews.ts#getArgs`, `#postArticlesReviews`, `#getSummary`, `#main` | The adjacent HTTP benchmark defaults to a project ID on a running server and reports response average/min/max/status/bytes. It neither owns a disposable fixture nor emits p95, source/projection time, row writes, RSS, table profiles, index/WAL cost, or physical database bytes. | `CMD-0126` |
+| `EVD-0152` | `test` | `src/server/reviewServing/reviewServingBenchmark.test.ts` tests `review-serving benchmark requires explicit release context for release-scale runs`, `review-serving benchmark requires release-scale context kind for release-scale runs`, and `review-serving benchmark release report records immutable fixture and snapshot identity` | Synthetic tests corroborate that release-scale runs reject missing/wrong context and invalid memory strings. Their fabricated identities and observations are not physical evidence. | `CMD-0128` |
+| `EVD-0153` | `plan` | `tasks/prd.json#US-015`; `REVIEW_STORAGE_SHAPE_AUDIT_PLAN.md#Phase 0 - Freeze Contracts, Baseline, And Schema Census`, `#Phase 4 - Measure Row Fan-Out And Width` | Requires one approved non-live baseline, separate timing boundaries and byte categories, exact blockers for missing evidence, cleanup, and no recommendation from baseline data alone. | `CMD-0125`, `CMD-0126` |
+
+### Fixture Approval And Configuration Gate
+
+The repository declaration is a candidate contract, not an approved physical
+fixture identity. `satisfied` below means only that a source contract is fixed;
+it does not mean the physical run occurred.
+
+| Dimension | Required or source-frozen contract | US-015 physical value | proofCheckState | Missing evidence / owner question |
+| --- | --- | --- | --- | --- |
+| Fixture approval and immutable instance identity | One explicitly approved isolated disposable fixture with an immutable report identity and disposable root. | `unavailable`; no approval record, fixture ID, path, checksum, or generated database exists. | `blocked` | `BLK-0002`; `OQ-0002`, `OQ-0005` |
+| Fixture kind and scale | `synthetic10m7PromptOverlap`: 10,000,000 articles, 7 prompts, 70,000,000 article-prompt overlap rows; completed schema projectors required. | Source contract fixed; no physical instance. | `satisfied` | None for declared scale; approval remains blocked above. |
+| Workload | `reviewServing.10m7PromptOverlap.v1`, 31 operations, 15 scopes, Phase-6 release gate. | Source contract fixed; no real work-item set or executor invocation. | `satisfied` | Physical execution is `BLK-0065`; `OQ-0070`. |
+| Generator and seed | Immutable generator/version and deterministic seed. | `unavailable`; neither exists in the fixture/report contract. | `blocked` | `BLK-0002`; `OQ-0005` |
+| Model | Exact immutable model ID, remote/version identity, and execution identity. | `unavailable`. | `blocked` | `BLK-0002`; `OQ-0005` |
+| Provider | Provider kind and immutable connection/execution identity, excluding secrets. | `unavailable`. | `blocked` | `BLK-0002`; `OQ-0005` |
+| Thinking level/options | Exact normalized thinking effort and provider options identity. | `unavailable`. | `blocked` | `BLK-0002`; `OQ-0005` |
+| Prompt set | Seven ordered prompt IDs plus text/config hashes, type, criteria/thresholds, answer options, and enabled/archive state. | Only `promptCount: 7` exists; identities and hashes are `unavailable`. | `blocked` | `BLK-0002`; `OQ-0005` |
+| Content flags | Exact `useTitle`, `useAbstract`, `useFulltext`, and `useFulltextNoImages` booleans. | `unavailable`. | `blocked` | `BLK-0002`; `OQ-0005` |
+| DuckDB memory limit | One approved explicit unit-bearing release value. | `unavailable`; host resolver and smoke defaults are not adopted. | `blocked` | `BLK-0002`; `OQ-0005` |
+| Runtime profile, role, topology, and versions | Approved profile/role/process topology plus Bun, DuckDB, OS/architecture and application revision used by the fixture. | `unavailable` for a fixture run; source-audit tooling is recorded separately below. | `blocked` | `BLK-0002`; `OQ-0005` |
+| Project/review/snapshot identities | Immutable project, review-config, snapshot, manifest, count, and search identities. | `unavailable`; synthetic labels are rejected as physical identities. | `blocked` | `BLK-0002`; `OQ-0002`, `OQ-0005` |
+| Retry, fallback, and downgrade policy | Preserve the configured run and any failure; no retry with weaker settings, fallback, or downgrade. | Fixed and honored: execution stopped at the unmet approval gate. | `satisfied` | No physical attempt was made. |
+
+### Non-Physical Audit Context And Cleanup Record
+
+These values identify the source/tooling audit only. They must not be copied
+into a future fixture report as runtime settings without owner approval.
+
+| Item | Recorded value | Evidence boundary |
+| --- | --- | --- |
+| Repository revision | `f962810ec4c76f290f0632482906b1a0bab24086`; worktree already had only the Ralph-owned `tasks/prd.json` timestamp change before US-015 edits. | Source audit identity from `CMD-0125` and `CMD-0127`; not a fixture checksum. |
+| Audit host/tooling | macOS `26.5.2`, Darwin `25.5.0` arm64, Bun `1.3.13`, `rtk 0.42.4`; package constraint `@duckdb/node-api ^1.5.1-r.1`. | Tool versions from `CMD-0127`; no DuckDB connection was opened. |
+| Physical fixture/database paths created | `0`; no candidate path was selected. | Session command log; absence is not a database-size observation. |
+| Processes/servers/workers/projectors started | `0`. | No process-start command ran. |
+| Fixture DDL statements / DML statements / rows written | `0 commands / 0 commands / unavailable rows`; no fixture existed. | Command counts describe audit actions only; they do not assert a zero-row physical fixture. |
+| Generated physical reports or temporary outputs | `0`. | No benchmark or snapshot artifact was generated. |
+| Cleanup | `not-applicable`; the tracked started-process and created-artifact sets were empty. | No material deletion was required. |
+| Live or project DuckDB/data access | `0`; prohibited commands remained skipped. | Safety proof only, never physical evidence. |
+
+### Physical Measurement Register
+
+`FAN-####` rows use `proofCheckState`; they are not manifest rows and do not
+receive `auditStatus`. All nine rows are blocked before execution. The
+source-defined count of 127 current named indexes remains schema evidence, not
+physical inventory proof.
+
+| rowId | Measurement category | Required physical value and boundary | Recorded physical value | proofCheckState | Missing evidence / blockers | Owner question IDs |
+| --- | --- | --- | --- | --- | --- | --- |
+| `FAN-0001` | Fixture identity, scale, and settings | Approved fixture/report ID; immutable generator/seed, model, provider, thinking, seven prompts, four content flags, memory limit, runtime profile/role/topology/version, and snapshot identities. | `unavailable`; only the source-declared 10M/7/70M shape and workload are fixed. | `blocked` | Approval/configuration absent; `BLK-0002`. | `OQ-0002`, `OQ-0005` |
+| `FAN-0002` | Table row counts plus null/distinct samples | Per physical fixture table: exact row count; approved null counts and bounded distinct/cardinality samples with query and sample boundary. | `unavailable`; no table was queried. | `blocked` | No fixture or approved collector; `BLK-0002`, `BLK-0007`, `BLK-0065`. | `OQ-0002`, `OQ-0010`, `OQ-0070` |
+| `FAN-0003` | Physical index inventory and index bytes/cost | Applied index name/expression, table, existence, approved use/plan or write-cost proxy, and separately attributable bytes when supported. | `unavailable`; 127 source-defined current names are not applied existence, optimizer use, bytes, or cost. | `blocked` | No fixture/plan collector or approved attribution method; `BLK-0057`, `BLK-0066`. | `OQ-0062`, `OQ-0071` |
+| `FAN-0004` | Rebuild work | Raw start/end timestamps, queue wait, work/publication wall time, rows inserted/updated/deleted/rewritten, retained generations, and failure state. | `unavailable`; no rebuild was requested. | `blocked` | The harness has no physical rebuild producer or row-write report; `BLK-0065`. | `OQ-0009`, `OQ-0070` |
+| `FAN-0005` | RSS and temporary usage | Process topology plus start/end/peak RSS, RSS growth, sample cadence, temp usage/spill and temp-directory growth across source, rebuild, and reads. | `unavailable`; no process was sampled. | `blocked` | Only synthetic observation fields exist; physical sampling owner/command absent; `BLK-0065`. | `OQ-0070` |
+| `FAN-0006` | Foreground latency and timing boundaries | Physical nearest-rank foreground p95/p99 plus raw source-seed/import, projection queue/work/publication, reader, and separate end-to-end HTTP boundaries; disclose configured retries and failures. | `unavailable`; no requests or timing spans ran. | `blocked` | Smoke observations are canned and the HTTP script omits required boundaries and p95; `BLK-0005`, `BLK-0065`. | `OQ-0009`, `OQ-0070` |
+| `FAN-0007` | Logical payload bytes | Approved per-table/per-family logical encoding method and exact logical payload bytes at named checkpoints, excluding index, WAL, temp and container overhead. | `unavailable`; no encoding/attribution method or fixture value. | `blocked` | Category collector/method absent; `BLK-0066`. | `OQ-0071` |
+| `FAN-0008` | WAL bytes | WAL path identity and bytes at declared pre-seed, post-seed, post-rebuild, post-read and post-checkpoint boundaries, without folding bytes into the database file. | `unavailable`, not zero; no fixture WAL or approved checkpoint boundary exists. | `blocked` | WAL/checkpoint attribution and cleanup protocol absent; `BLK-0062`, `BLK-0066`. | `OQ-0067`, `OQ-0071` |
+| `FAN-0009` | Physical database bytes | Fixture database path/device/filesystem identity and exact file bytes at declared empty, post-seed, post-rebuild, post-read and post-checkpoint boundaries, separate from logical/index/WAL/temp values. | `unavailable`; no fixture database file exists. | `blocked` | No approved fixture path or physical collector; `BLK-0002`, `BLK-0066`. | `OQ-0002`, `OQ-0071` |
+
+Measurement-row count: 9 discovered, 0 `satisfied`, 0 `pending`, 9
+`blocked`, 0 `not-applicable`, and 0 value-bearing physical observations.
+Manifest counts do not change, and no `DBO-####` or `CMF-####` row advances to
+`measured` without approved physical evidence.
+
+### US-015 Proof Checks
+
+| rowId | Check | proofCheckState | Evidence IDs | Missing evidence / blocker | Owner question IDs |
+| --- | --- | --- | --- | --- | --- |
+| `PRF-0009` | One disposable fixture and every benchmark-critical setting are explicitly approved and immutable. | `blocked` | `EVD-0149`, `EVD-0153` | Only scale/workload are fixed; `BLK-0002`. | `OQ-0002`, `OQ-0005` |
+| `PRF-0010` | Approved physical table counts, null/distinct samples, database size, and applied index inventory exist. | `blocked` | `EVD-0149`, `EVD-0150`, `EVD-0151` | No physical fixture or collector; `BLK-0007`, `BLK-0065`. | `OQ-0010`, `OQ-0070` |
+| `PRF-0011` | Rebuild wall time/rows written, RSS/temp, foreground p95, and non-overlapping source/projection/read/HTTP boundaries exist. | `blocked` | `EVD-0149`, `EVD-0151` | Existing tools omit or synthesize the required values; `BLK-0005`, `BLK-0065`. | `OQ-0009`, `OQ-0070` |
+| `PRF-0012` | Logical payload, index bytes/cost, WAL bytes, and physical database bytes are represented as separate categories. | `satisfied` | `EVD-0153` | Categories are separate in `FAN-0003`, `FAN-0007`-`FAN-0009`; values remain blocked. | — |
+| `PRF-0013` | Approved physical values exist for all four byte/cost categories. | `blocked` | `EVD-0149`, `EVD-0150` | No approved method, fixture, or output; `BLK-0066`. | `OQ-0071` |
+| `PRF-0014` | Mock/smoke/test output cannot be mislabeled as physical evidence. | `satisfied` | `EVD-0149`, `EVD-0150`, `EVD-0152` | None; no smoke command was used as measurement. | — |
+| `PRF-0015` | No live/project data is accessed, and every created fixture artifact and started process is cleaned up/stopped. | `satisfied` | `EVD-0153` | No fixture artifact or process was created; the cleanup set is empty. | — |
+| `PRF-0016` | Baseline data alone does not create or strengthen a storage recommendation. | `satisfied` | `EVD-0153` | None; all dispositions remain unresolved. | — |
+
 ## Recommendation Proof Gate
 
 Create separate `PRF-####` rows for positive and negative proof. For a move,
@@ -2251,8 +2354,11 @@ factor. Keep logical payload bytes, index cost/bytes, WAL bytes, temporary
 spill, and physical database bytes separate. Measurements require
 `approved-snapshot` evidence and fixed benchmark configuration.
 
-Current state: scaffolded; inherited qualitative width observations are not
-physical measurements.
+Current state: US-015 adds nine `FAN-####` rows with the required fixture,
+table-profile, index, rebuild, RSS, timing, logical-payload, WAL, and physical-
+database categories kept separate. All nine are `blocked` because no approved
+fixture/configuration or complete physical collector was supplied; inherited
+qualitative width observations and source index counts remain non-physical.
 
 ### Output 07 - Storage Disposition Matrix
 
@@ -4706,6 +4812,13 @@ subsets of the `DBO-####` manifest and require separate summary rows.
 | Temporary tables (DBO subset) | 31 | 0 | 0 | 0 | 31 | `31 != 0 + 0 + 0` | Eighteen migration families contain 105 literal declarations; thirteen runtime families contain 51 source declaration sites. Connection/session lifecycle, crash residue and temp/spill cost remain unavailable |
 | Payload/file shapes (DBO subset) | 36 | 0 | 0 | 0 | 36 | `36 != 0 + 0 + 0` | Existing job/worker file containers plus 32 runtime-root, asset, transfer, backup, snapshot, export, lock and generated-file families are baselined; deployed contents, bytes, recovery, retention and browser/desktop parity remain unavailable |
 
+The US-015 physical register is an output row family, not an `auditStatus`
+manifest: 9 `FAN-####` rows reconcile by `proofCheckState` as 0 `satisfied`,
+0 `pending`, 9 `blocked`, and 0 `not-applicable`, with 0 value-bearing physical
+observations. Because no approved physical evidence exists, the 322 DBO and
+1,982 CMF manifest statuses and all subset counts remain unchanged; no row is
+advanced to `measured`.
+
 The remaining bootstrap zeros count only normalized rows. They are not evidence
 that the repository has no surfaces or objects; `BLK-0001` prevents that
 interpretation. The API family remains 22 nonterminal plus one blocked row. The
@@ -4718,8 +4831,10 @@ blocked open domains. The 31 temporary families reconcile 105 migration
 declarations and 51 runtime declaration sites without treating either as
 durable deployed objects. US-013 retains 17 objects and 123 fields; its
 posting-stats lookup index remains dropped history. Existing full-text and
-job/worker local-file rows are cross-referenced rather than recounted. Later
-stories must append rather than renumber these rows and update affected counts.
+job/worker local-file rows are cross-referenced rather than recounted. US-015
+adds measurement rows only and preserves its unmet authorization, tooling, and
+byte-attribution requirements as blockers. Later stories must append rather
+than renumber these rows and update affected counts.
 
 ## Commands And Skipped Checks
 
@@ -4852,13 +4967,20 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-0122` | 2026-07-21 / US-014 | `rtk bun run lint` | Run the repo-native lint gate without changing unrelated source. | Failed on the same six pre-existing import-order/formatting errors in `comparisonProjectServingMaintenanceWorker.ts`, `reviewServingProjectorWorker.test.ts`, and `reviewServingProjectorWorker.ts`; US-014 changes no `src` file and did not fix them. |
 | `CMD-0123` | 2026-07-21 / US-014 | Source-only manifest/state/DDL-field/index/temporary/path invariant checks; `rtk git diff --check -- STORAGE_SHAPE_AUDIT_PLAN.md .ralph-tui/progress.md`; trailing-whitespace, typecheck-script, changed-file and status checks | Verify sequential IDs, totals, allowed `auditStatus`, required evidence/questions, unresolved dispositions, exact lexical DDL/index equality, US-014 subtotals, blocked domains, Markdown widths, whitespace and scope. | Passed: 322 sequential DBO rows (250 writer-traced, 72 API-traced), 1,982 sequential CMF rows (1,753 writer-traced, 157 API-traced, 72 blocked), 148 evidence rows, 124 commands, 64 blockers and 69 owner questions. Static application across all 127 lexical migrations matches all 41 table column sequences and 553 normalized field definitions; all 40 index expressions match their latest declarations. Source counts are 105 migration temp declarations in 18 files and 51 runtime sites in 13 families. US-014 subtotals, required cells, unresolved dispositions, Markdown widths and whitespace pass. Only the audit plan is tracked for US-014; progress is updated but ignored, and the pre-existing `tasks/prd.json` change remains untouched. |
 | `CMD-0124` | 2026-07-21 / US-014 | `bun run typecheck`, full/combined `bun test`, `bun run build`, browser/desktop flows, `bun run db:mig`, direct/live DuckDB inspection, approved-snapshot collection, benchmark, projector, repair, retention-worker and production runtime/data commands (skipped) | Preserve docs-only/no-live-storage scope and avoid irrelevant, cross-contaminating, mutating or prohibited checks. | `package.json` has no `typecheck` script. Isolated focused tests preserve the backup failure; builds/runtime/full-suite checks do not validate Markdown, and database/server/worker/projector/migration/repair/benchmark/data commands would violate scope or the live-DuckDB prohibition. |
+| `CMD-0125` | 2026-07-21 / US-015 | Complete reads of the US-015 task and US-014 prerequisite in `tasks/prd.json`, all of `.ralph-tui/progress.md`, the normalized framework/US-002/US-014/manifests/outputs, and `.opencode/skills/forskai-duckdb/SKILL.md`, `forskai-reporting/SKILL.md`, and `forskai-api-server/SKILL.md`; `rtk git status --short` and `rtk git diff -- tasks/prd.json` | Confirm prerequisite completion, benchmark-integrity and no-live-data rules, immutable row/state vocabulary, output scope, runtime boundary, and unrelated worktree state. | US-014 was complete and US-015 had no measurement rows. The only pre-existing worktree change was Ralph's `tasks/prd.json` `updatedAt` timestamp; it remains untouched. |
+| `CMD-0126` | 2026-07-21 / US-015 | Source-only `rtk rg -n` and `sed -n` inspection of `package.json`, `scripts/benchmarkReviewServingSmoke.ts`, `scripts/benchmarkArticlesReviews.ts`, `src/server/reviewServing/reviewServingBenchmark.ts`, its Markdown/tests, and the Phase-0/Phase-4 strategy; exact repository search for release-scale invocation, fixture generation, physical byte, row-write and timing fields | Determine whether an approved runnable disposable physical baseline exists and inventory exactly what each benchmark surface emits without starting it. | Only scale/workload and a validation/report API exist. The release gate is tests plus mocked smoke; the HTTP client requires a running project and omits most required metrics; no non-test release-scale invocation, physical fixture generator, real executor, complete table/byte collector, or approved settings record was found in the searched source. Literal absence is recorded as a tooling blocker, not proof about deployed/operator tooling. |
+| `CMD-0127` | 2026-07-21 / US-015 | `rtk git rev-parse HEAD`; `bun --version`; `rtk --version`; `uname -srm`; `sw_vers -productVersion`; `jq` read of the DuckDB package constraint | Record reproducible source-audit tooling while keeping it separate from unapproved fixture runtime settings. | Revision `f962810ec4c76f290f0632482906b1a0bab24086`; Bun `1.3.13`; rtk `0.42.4`; Darwin `25.5.0` arm64 / macOS `26.5.2`; `@duckdb/node-api ^1.5.1-r.1`. No database connection was opened. |
+| `CMD-0128` | 2026-07-21 / US-015 | `rtk bun test src/server/reviewServing/reviewServingBenchmark.test.ts` | Verify fixture/workload validation, explicit release-context failure, memory validation, mocked-smoke boundary, and metric contract without creating a database. | Passed: 26 tests, 0 failures, 81 expectations. All observations/identities are synthetic test evidence, not physical measurements. |
+| `CMD-0129` | 2026-07-21 / US-015 | `rtk bun run lint` | Run the repo-native lint gate without changing unrelated source. | Failed on the same six pre-existing import-order/formatting errors in `comparisonProjectServingMaintenanceWorker.ts`, `reviewServingProjectorWorker.test.ts`, and `reviewServingProjectorWorker.ts`; US-015 changes no `src` file and did not fix them. |
+| `CMD-0130` | 2026-07-21 / US-015 | `bun run typecheck`, full/combined `bun test`, `bun run build`, browser/desktop/server flows, `bun run bench:review-serving-smoke`, `bun run bench:review-serving-release-gate`, `bun run bench:articlesreviews`, `bun run db:mig`, snapshot/direct/live DuckDB queries, fixture DDL/DML, projector/rebuild/repair/retention commands, and production runtime/data commands (skipped) | Preserve benchmark integrity and the approved-disposable/no-live-data boundary; distinguish mocked smoke from physical proof and avoid irrelevant checks. | `package.json` has no `typecheck` script. The focused test validates the source contract. No approved fixture/configuration/collector exists, so no benchmark, database, server, projector, DDL/DML, or data process started; created-artifact and started-process sets stayed empty, making cleanup `not-applicable`. |
+| `CMD-0131` | 2026-07-21 / US-015 | Source-only stable-ID/state/reference/count/Markdown invariant checks; `rtk git diff --check -- STORAGE_SHAPE_AUDIT_PLAN.md .ralph-tui/progress.md`; changed-file, trailing-whitespace and status checks | Verify nine sequential FAN rows, allowed and separate state fields, blocker/question closure, unchanged manifest counts, unresolved dispositions, exact evidence/command/blocker/question totals, whitespace, and scope. | Passed: 23 API, 322 DBO, 1,982 CMF, 9 blocked FAN, 16 PRF, 153 EVD, 131 CMD, 66 BLK and 71 OQ IDs are sequential; all five US-015 table widths, measurement summary, unchanged manifest totals, whitespace and diff checks pass. Only the audit plan is tracked for US-015; progress is ignored, and the pre-existing `tasks/prd.json` timestamp change remains untouched. |
 
 ## Blockers
 
 | rowId | Scope | Missing evidence | Why blocked | Owner question IDs | Resolution condition |
 | --- | --- | --- | --- | --- | --- |
 | `BLK-0001` | Five manifests and eleven outputs | The inherited narrative has not been re-censused into stable rows with exact production/non-production evidence. | Later inventory and lineage stories own that work; treating narrative bullets as reconciled would overstate proof. | `OQ-0001` | Populate all manifests, update counts, and reconcile every inherited discovery. |
-| `BLK-0002` | Physical fan-out, width, lifecycle age, and benchmark proof | The repository fixes scale/workload but not seed, model, provider, thinking, prompt identities, content flags, physical DuckDB memory, runtime profile/role, or approved snapshot identity; no approved physical evidence is attached. | Live DuckDB inspection is prohibited and US-002 does not authorize fixture mutation or value substitution. | `OQ-0002`, `OQ-0005` | Record approval, every fixed value, immutable identity, collection command, and evidence ID in the designated measurement story. |
+| `BLK-0002` | Physical fan-out, width, lifecycle age, and benchmark proof | The repository fixes scale/workload but not seed, model, provider, thinking, prompt identities, content flags, physical DuckDB memory, runtime profile/role, or approved snapshot identity; no approved physical evidence is attached. | Live DuckDB inspection is prohibited. US-015 authorizes only an approved isolated fixture, but no owner approval or complete immutable configuration was supplied; choosing resolver defaults or synthetic identities would violate benchmark integrity. | `OQ-0002`, `OQ-0005` | Record approval, every fixed value, immutable fixture/report identity, disposable root, collection command, and evidence ID before execution. |
 | `BLK-0003` | Inherited move/delete/retention candidates | Revised API, writer, lifecycle, recovery, export, transfer, and retention proof is absent. | Inherited evidence predates the normalized proof gate and cannot certify actionability. | `OQ-0003`, `OQ-0004` | All applicable proof checks are `satisfied` or evidence-backed `not-applicable`. |
 | `BLK-0004` | Health route mount and parity | `POST /api/projectsreviewshealth` is declared mounted and parity-covered but is absent from product route composition and the public route registry. | Source evidence conflicts; test coverage trusts the stale declaration and cannot prove reachability. | `OQ-0006` | Product/API owner resolves the intended mount state and all registries/tests agree. |
 | `BLK-0005` | Seeding, projection, and route-read physical timing | The smoke harness contains canned observations and no separate seed/import or projection/rebuild duration fields. | Phase-6 scope labels are not physical timestamps, and no approved fixture run exists. | `OQ-0009` | Approved physical report emits separate raw timestamps/durations for all three boundaries. |
@@ -4921,6 +5043,8 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0062` | DuckDB WAL, backup, snapshot, owner/history, worker-state and lock recovery | Source defines database/WAL, copied backup and source-WAL, snapshot, owner lock/history, worker state, desktop lock and related generated files, but authority, atomicity, replay order, stale-lock recovery, restore selection and retention are split across scripts and runtime owners. | File naming and tests cannot certify a crash-consistent backup, WAL compatibility, cross-process/host fencing, latest-valid selection, restoration success, cleanup or deployed sidecar absence. The isolated backup test could not open its synthetic owner-server health port. | `OQ-0067` | Reliability/operations owners publish and test the authoritative backup/snapshot/WAL/owner/lock protocol, restore order, fencing, corruption handling, retention and cleanup under an approved isolated environment. |
 | `BLK-0063` | Browser/desktop export and download parity | CSV/JSON exports, ZIP transfer artifacts, runtime-asset reads and generated downloads have source-observed filenames, content types and local paths, but exact columns/order, streaming limits, cancellation, desktop save behavior, browser download behavior and retained local-copy policy are not closed for every flow. | Server route presence and serializer tests do not prove mounted product reachability, semantic parity, large-file behavior, user-visible recovery or whether desktop and browser leave equivalent artifacts. | `OQ-0068` | Product/UI/desktop owners publish exact export schemas, filenames/content types, limits, cancellation/retry, save/download semantics and local-copy retention, then parity tests cover both flows. |
 | `BLK-0064` | Legacy/current table necessity, material-key authority and open payload domains | The 41-table remainder includes legacy review/refresh/dirty, comparison, transfer, telemetry and configuration state; 43 material file/path keys are finite, while ten serializer-retained or source-defined domains remain open. Exact per-field route/query/pre-limit/post-limit/export/recovery lineage and current index-plan fit are incomplete. | A current producer/consumer or finite serializer proves reachability, not necessity, authoritative identity, field coherence, retention, safe exclusion or disposition. Open values cannot be closed by profiling live data, and an index declaration does not prove optimizer use. | `OQ-0069` | Product/data/query owners publish authoritative identities and versioned payload domains, exact field lineage and lifecycle/recovery needs, plus approved plans and browser/desktop/export evidence for every disposition candidate. |
+| `BLK-0065` | US-015 physical fixture runner and measurement coverage | The release-scale benchmark API has no fixture generator or production executor wiring, and the repository commands expose only mocked smoke or an HTTP client for an existing running project. No approved command emits per-table profiles, rebuild rows/wall time, RSS sampling across phases, physical foreground p95, or raw source/projection/read boundaries. | Starting a server or pointing the HTTP script at project data would violate the disposable-fixture and no-live-data boundary. Fabricating work items or inserting an ad hoc executor would change benchmark behavior and durable code outside this story. | `OQ-0009`, `OQ-0070` | Owners approve one isolated root and exact existing or separately implemented collector command/report schema that creates the fixed fixture, preserves failures, captures every required boundary, and proves cleanup without live/project access. |
+| `BLK-0066` | US-015 logical, index, WAL, and physical byte attribution | No approved collector or calculation contract defines logical encoding, index bytes versus an accepted cost proxy, WAL checkpoints, or physical database-file checkpoints for the disposable fixture. | Source field/index counts and synthetic response bytes cannot be converted into physical categories. Recording absent files as zero or subtracting database sizes without approved boundaries would conflate storage layers and produce irreproducible evidence. | `OQ-0071` | Storage/reliability owners approve exact formulas/tooling and pre/post checkpoints for logical payload, index bytes/cost, WAL, temp and physical database bytes, including checkpoint and cleanup behavior. |
 
 ## Owner Questions
 
@@ -4995,6 +5119,8 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0067` | Reliability/operations owner | What crash-consistent protocol governs DuckDB WAL, backups and copied source-WAL files, snapshots, database-owner lock/history, worker state, desktop locks and restoration, including fencing, stale/corrupt handling, selection, retention and cleanup? | Recovery rows in `DBO-0291`-`DBO-0300`, `CMF-1940`-`CMF-1954` and `BLK-0062` |
 | `OQ-0068` | Product/UI/desktop owner | What exact CSV/JSON/ZIP schemas, filenames, content types, size/stream limits, cancellation/retry, browser download and desktop save behavior are required, and which retained local copies or cleanup outcomes must parity tests assert? | Export/artifact rows in `DBO-0307`-`DBO-0322`, related material paths and `BLK-0063` |
 | `OQ-0069` | Product/data/query owner | Which legacy review/refresh/dirty, comparison, transfer, telemetry and configuration shapes remain authoritative; what versioned schemas close the open payload domains; and what per-field pre/post-limit, route/query/export/recovery lineage plus approved plans proves each field and index necessary? | `DBO-0179`-`DBO-0259`, `CMF-1387`-`CMF-1982` and `BLK-0064` |
+| `OQ-0070` | Benchmark/database/tooling owner | Which exact approved command, isolated disposable root, fixture/report identity and immutable output schema will generate the fixed fixture and emit per-table counts/null/distinct samples, applied indexes, rebuild timestamps/rows, RSS/temp samples, physical p95 and non-overlapping source/projection/read/HTTP boundaries without changing settings or touching project data? | `FAN-0002`-`FAN-0006`, `PRF-0010`-`PRF-0011`, and `BLK-0065` |
+| `OQ-0071` | Storage/reliability owner | Which exact formulas and tools measure logical payload bytes, index bytes or approved cost proxy, WAL bytes, temp bytes and physical database bytes separately, and at which pre-seed/post-seed/post-rebuild/post-read/checkpoint boundaries must each value and cleanup outcome be captured? | `FAN-0003`, `FAN-0007`-`FAN-0009`, `PRF-0013`, and `BLK-0066` |
 
 ## US-001 Quality Gates
 
@@ -5547,6 +5673,45 @@ commands. A command proves only the claim linked through its evidence record.
       owner-question and whitespace checks must pass. No live DuckDB, migration,
       production data, benchmark, projector, repair or retention-worker command
       may run; irrelevant/prohibited checks are recorded as skipped.
+
+---
+
+## US-015 Quality Gates
+
+- [x] The designated physical gate is evaluated before execution. The
+      repository-declared 10M/7-prompt/70M-overlap scale and 31-operation
+      workload are recorded, while the missing fixture approval, generator,
+      seed, model, provider, thinking identity, prompts, content flags, memory,
+      runtime and physical identities remain blockers rather than defaults.
+- [x] Nine sequential `FAN-####` rows separately record fixture/configuration,
+      per-table row/null/distinct evidence, physical index inventory/cost,
+      rebuild work, RSS/temp, foreground/timing boundaries, logical payload,
+      WAL, and physical database bytes. Counts are 0 satisfied and 9 blocked,
+      with zero value-bearing physical observations.
+- [x] Logical payload bytes, index bytes or cost, WAL bytes, temporary bytes and
+      physical database bytes are distinct categories. Unavailable values are
+      written as `unavailable`, never inferred as zero or derived from source
+      field/index counts.
+- [x] Mocked smoke, fabricated test identities, source-defined scale, and the
+      existing-project HTTP benchmark are explicitly non-physical. The release
+      gate and smoke commands were not used as baseline evidence.
+- [x] No DBO/CMF manifest row advances to `measured`; all manifest counts remain
+      unchanged, `FAN` rows use `proofCheckState`, and only the US-001
+      `auditStatus` vocabulary appears in manifest state.
+- [x] No fixture path, database, DDL/DML, generated report, server, worker,
+      projector, rebuild, repair, retention process, live/project query or
+      snapshot query was created or started. The tracked cleanup set is empty,
+      and every process started by this story is stopped vacuously.
+- [x] No benchmark-critical failure was retried, downgraded, or worked around;
+      execution stopped at the missing-approval/tooling gate and preserves the
+      exact owner questions needed to unblock it.
+- [x] No storage disposition, target shape, move/delete candidate, or inherited
+      recommendation is added or strengthened from unavailable baseline data.
+- [x] The focused benchmark contract passes 26 tests and 81 expectations. Repo
+      lint retains the same six unrelated source errors; no `typecheck` script
+      exists, and irrelevant/prohibited checks are recorded as skipped.
+- [x] Final sequential-ID, state, reference, measurement-count, Markdown-width,
+      whitespace, changed-file and scope invariants pass (`CMD-0131`).
 
 ---
 
