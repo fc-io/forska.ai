@@ -3,19 +3,476 @@
 Generated from the review-storage audit strategy in
 `REVIEW_STORAGE_SHAPE_AUDIT_PLAN.md`.
 
-## Status
+## Durable Audit Control Framework
 
-This is the first durable audit artifact. It records repo-derived evidence from
+This is the audit control plane. Later stories must resume here and append
+normalized evidence rather than creating parallel result files. Narrative
+findings retained later in this file are discovery input, not substitutes for
+the manifests and proof records below.
+
+### Certification Snapshot
+
+| Field | Value | Reason |
+| --- | --- | --- |
+| `overallCertification` | `INCOMPLETE` | The manifests are not populated or reconciled, revised proof is pending, and no inherited recommendation is actionable. |
+| Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
+| Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
+
+`overallCertification: PASS` is forbidden until every in-scope manifest row is
+`classified`, every reconciliation has zero nonterminal and blocked rows, all
+completion gates pass, and every actionable recommendation has all applicable
+positive and negative proof checks satisfied. Otherwise it remains
+`INCOMPLETE`.
+
+### Scope And Mutation Boundary
+
+- Audit work may read repository files and approved immutable snapshots. It
+  must not change repository schemas, code, routes, projectors, retention,
+  runtime behavior, or data.
+- Durable audit results go only in this file. Changes under `.ralph-tui/` are
+  tracker metadata, not audit evidence.
+- Never open or query the live DuckDB file directly. Physical evidence is
+  acceptable only from approved snapshot tooling or an explicitly approved,
+  isolated disposable fixture in a story that authorizes it.
+- Do not start a server, worker, projector, migration, maintenance command, or
+  database writer merely to fill this framework.
+- Model, provider, thinking level, prompt set, content flags, memory limit, and
+  runtime profile are benchmark-critical. Preserve failures under those
+  settings; do not retry, downgrade, or silently work around them.
+
+### Inherited Evidence And Disposition Rule
+
+The pre-US-001 content below is preserved because it contains useful
+repo-derived observations. Its factual claims remain discovery leads subject to
+exact citation and manifest reconciliation. Every inherited `Disposition:`,
+deletion/move candidate, target shape, implementation slice, and current
+recommendation is **provisional** with
+`recommendationActionability: unresolved` unless a later normalized row
+cross-references revised proof.
+
+- A broad path or glob is a discovery source, not a proof citation.
+- A test, fixture, plan, comment, generated file, or historical migration does
+  not prove production use.
+- Absence from literal search does not prove absence from generated SQL,
+  aliases, registries, allowlists, scripts, or runtime paths.
+- No move, derive, archive, or delete recommendation may become stronger before
+  API, writer, lifecycle, recovery, export, transfer, and retention evidence is
+  traced. Final actionability also requires all applicable proof domains below.
+
+## Stable Row IDs And Cross-References
+
+Every normalized row receives an opaque stable ID. IDs identify evidence
+records, not mutable object names.
+
+| Prefix | Row family |
+| --- | --- |
+| `API-####` | Mounted API and read-contract manifest |
+| `UIR-####` | UI and runtime consumption manifest |
+| `BGO-####` | Background and operator surface manifest |
+| `DBO-####` | DuckDB object, temporary shape, payload, or generated-file manifest |
+| `CMF-####` | Column and material field manifest |
+| `MAP-####` | Route-to-query and route-to-table map |
+| `LIN-####` | Column-level lineage |
+| `TLI-####` | Table, index, and lifecycle inventory |
+| `FAN-####` | Fan-out or duplicate-byte measurement |
+| `DSP-####` | Storage disposition |
+| `PRF-####` | Positive or negative proof check |
+| `TGT-####` | Candidate target shape |
+| `SLC-####` | Implementation slice and benchmark gate |
+| `EVD-####` | Exact evidence citation |
+| `CMD-####` | Command or explicitly skipped check |
+| `BLK-####` | Audit blocker |
+| `OQ-####` | Owner question |
+
+ID rules:
+
+1. Allocate the next decimal ID within its family and zero-pad to four digits.
+2. Never renumber, reuse, or derive an ID from a route, symbol, table, or
+   column name.
+3. A rename keeps the ID and records both locators. A split creates new IDs and
+   cross-references the originating ID.
+4. Keep retired or superseded rows for history; record an evidence-backed
+   terminal state instead of deleting them.
+5. Use IDs for all cross-output links. Citations supplement IDs but never
+   replace them.
+
+## State Model
+
+The four state fields answer different questions and must never substitute for
+one another.
+
+### Manifest `auditStatus`
+
+Only these values are valid:
+
+| Value | Meaning |
+| --- | --- |
+| `not-started` | Discovered and allocated, but no required lineage has been traced. |
+| `traced-to-api` | Product/API or explicit non-route scope is known; writer and lifecycle proof is incomplete. |
+| `traced-to-writer` | Producers and mutations are traced; lifecycle/recovery or other required evidence is incomplete. |
+| `traced-to-lifecycle` | Invalidation, replay/recovery, retention, and cleanup are traced; measurement or classification is incomplete. |
+| `measured` | Required approved physical evidence is recorded; classification is incomplete. |
+| `classified` | The in-scope row has complete required evidence and a use classification; this does not make a recommendation actionable. |
+| `blocked` | Reconciliation-terminal for counting, but required evidence cannot currently be obtained; any blocked row prevents `PASS`. |
+| `out-of-scope` | Evidence proves the row is outside the project-review domain and records the exact reason. |
+
+The nonterminal values are `not-started`, `traced-to-api`,
+`traced-to-writer`, `traced-to-lifecycle`, and `measured`. Every row with
+one of those values must contain concrete `missingEvidence` and at least one
+`ownerQuestionIds` reference. A `blocked` row must contain both as well.
+`classified` and `out-of-scope` are the evidence-complete terminal states;
+`out-of-scope` additionally requires a cited scope reason.
+
+### `proofCheckState`
+
+| Value | Meaning |
+| --- | --- |
+| `satisfied` | The named positive or negative proof is present and exactly cited. |
+| `pending` | The proof is required but has not been established. |
+| `blocked` | The proof is required and an identified blocker prevents collection. |
+| `not-applicable` | Cited scope evidence shows why this proof domain cannot apply. |
+
+### `recommendationActionability`
+
+| Value | Meaning |
+| --- | --- |
+| `actionable` | Every applicable proof check and benchmark gate is satisfied. |
+| `unresolved` | One or more proof checks or design consequences remain pending. |
+| `blocked` | A required proof check is blocked. |
+
+### `overallCertification`
+
+| Value | Meaning |
+| --- | --- |
+| `PASS` | All manifests reconcile with no blocked rows, every completion gate passes, and every actionable recommendation has complete proof. |
+| `INCOMPLETE` | Any other condition, including an empty/unbaselined manifest, nonterminal row, blocker, pending gate, or unresolved required proof. |
+
+## Exact Evidence And Source Classification
+
+Each `EVD-####` record states the claim it supports, source class, exact
+locator, and `CMD-####` or approved snapshot that exposed it. Accepted exact
+locators include:
+
+- repository file plus symbol, exported constant, test name, or exact SQL
+  statement shape;
+- mounted method and route, UI query key, worker/scheduler entry point, or
+  operator command;
+- fully qualified table, column, JSON key, constraint, index name/expression,
+  or temporary-table naming shape;
+- exact current/final migration and every forward migration that changes it;
+- immutable approved snapshot identity plus collection command and fixed
+  benchmark configuration; and
+- exact local path scheme or export/transfer mapping plus producer and consumer.
+
+Every evidence record uses one source class:
+
+| Source class | Evidentiary use |
+| --- | --- |
+| `production` | Runtime route, client, service, writer, worker, projector, lifecycle, recovery, export, transfer, or operator code. |
+| `test` | Test behavior only; corroborates but does not prove production use. |
+| `fixture` | Seed/mock/disposable-fixture behavior only; never live physical evidence. |
+| `plan` | Intended or historical design only. |
+| `comment` | Discovery hint only. |
+| `generated` | Generated types/files; record the source and do not infer runtime mounting. |
+| `historical-migration` | Schema history only; reconcile current declarations and forward migrations. |
+| `approved-snapshot` | Immutable approved non-live physical evidence with fixed configuration. |
+
+Globs, directory-level citations, unrecorded searches, and bare claims such as
+“the tests cover this” cannot satisfy proof. Conflicting evidence is preserved
+and linked to a blocker or owner question, never resolved by assumption.
+
+## Recommendation Proof Gate
+
+Create separate `PRF-####` rows for positive and negative proof. For a move,
+derive, archive, or delete recommendation, the minimum domains are:
+
+| Domain | Required proof |
+| --- | --- |
+| API and UI/runtime | Every mounted and shared browser/desktop behavior is preserved, replaced, or proven unrelated. |
+| Writer | Every direct, generated, registry-driven, or script writer and invalidation input is traced. |
+| Lifecycle | Create, update, publish, pin, retire, orphan, and cleanup behavior is traced. |
+| Recovery | Replay, restart, repair, startup probe, audit-history, and disaster-recovery roles are preserved or proven absent. |
+| Export | Project export, PDF/bulk hydration, and other exports are preserved or proven unrelated. |
+| Transfer | Transfer-package write/read mappings and compatibility needs are preserved or proven unrelated. |
+| Retention | Active, failed, last-known-good, pinned, historical, and terminal retention is explicit. |
+| Snapshot consistency | Identity, cursor, ordering, count, freshness, and pin semantics remain exact. |
+| Benchmark and parity | Same-fixture semantics and budgets pass without retry, fallback, spill, or settings changes. |
+| Migration/backfill | Replacement ownership, bounded cutover/backfill, rollback/recovery, and cleanup are explicit. |
+| Bounded reads | No foreground path regresses to a project-scale scan or unbounded hydration. |
+
+Any applicable `pending` proof keeps
+`recommendationActionability: unresolved`; any applicable `blocked` proof
+sets it to `blocked`. Search absence, a test-only guard, historical migration,
+or baseline size alone cannot strengthen a recommendation.
+
+## Required Audit Outputs
+
+### Output 01 - API Surface Inventory
+
+Authoritative row family: `API-####`. Record one row per mounted route or
+explicit read-contract entry point, including method/query key, inputs, output
+fields, ordering, filters, counts, cursors, exactness/freshness, candidate
+selection, bounded hydration, query count, owner, and exact tests. Cross-link
+each row to `MAP-####`, `UIR-####`, `LIN-####`, and evidence IDs.
+
+Current state: scaffolded. The inherited API list below is discovery input and
+must be re-adopted row by row with exact mounting and contract citations.
+
+### Output 02 - Route-To-Query And Route-To-Table Map
+
+Authoritative row family: `MAP-####`. Map each `API-####` or `BGO-####`
+entry point to exact reader/query-builder symbols, SQL shapes, tables,
+columns/indexes, statement counts, pre-limit work, bounded hydration, and
+snapshot/freshness reads. Cross-link UI consumers and lineage rows.
+
+Current state: scaffolded; no inherited route-to-query claim is certified.
+
+### Output 03 - Full Schema, Temporary, And File Census
+
+Authoritative row families: `DBO-####` and `CMF-####`. Include every relevant
+current table, material column/JSON key, index expression, constraint,
+sequence-like identity, temporary-table pattern, payload directory, generated
+file, export artifact, transfer package, backup, and snapshot. Record the final
+declaration plus forward migrations, separating production from non-production
+references.
+
+Current state: scaffolded. The inherited schema census is a discovery backlog,
+not proof that the census is exhaustive or current.
+
+### Output 04 - Column-Level Data Lineage Matrix
+
+Authoritative row family: `LIN-####`. Trace source-of-truth, transform,
+persisted copies, API/UI consumers, producer and invalidation, pre-limit and
+post-limit use, snapshot identity, export/transfer use, lifecycle, and exact
+evidence for every `CMF-####` row.
+
+Current state: scaffolded; inherited column-family observations are provisional.
+
+### Output 05 - Table, Index, And Lifecycle Inventory
+
+Authoritative row family: `TLI-####`. For each `DBO-####`, record key and
+owner, production producers/consumers, the real predicate/order path for each
+index, create/update/invalidate/publish/pin/retire/delete events, replay/repair
+role, retention horizon, orphan handling, and non-production references.
+
+Current state: scaffolded.
+
+### Output 06 - Row Fan-Out And Duplicate-Byte Report
+
+Authoritative row family: `FAN-####`. Record the row formula and every
+article-, project-, prompt-, list-mode-, filter-value-, and snapshot-scaling
+factor. Keep logical payload bytes, index cost/bytes, WAL bytes, temporary
+spill, and physical database bytes separate. Measurements require
+`approved-snapshot` evidence and fixed benchmark configuration.
+
+Current state: scaffolded; inherited qualitative width observations are not
+physical measurements.
+
+### Output 07 - Storage Disposition Matrix
+
+Authoritative row family: `DSP-####`. Give every table and material column
+family exactly one provisional or revised disposition, product/query-budget
+reason, bounded replacement when applicable, evidence IDs, proof IDs, and
+`recommendationActionability`. A `classified` manifest row is necessary but
+not sufficient for an actionable disposition.
+
+Current state: scaffolded. Every disposition in the inherited material is
+provisional and `unresolved` pending adoption into this matrix.
+
+### Output 08 - Move/Delete Candidates And Proof Requirements
+
+Authoritative row family: `PRF-####`, cross-referenced from `DSP-####`.
+Record separate positive and negative checks for every applicable proof domain,
+each with `proofCheckState`, evidence IDs, missing evidence, blockers, and
+owner-question IDs.
+
+Current state: scaffolded. The inherited candidate list is preserved but is not
+certified and must not drive implementation.
+
+### Output 09 - Candidate Target Shapes
+
+Authoritative row family: `TGT-####`. Record ownership and identity, exact
+columns/keys/indexes, read SQL shape, write fan-out, invalidation, publication,
+retention, recovery, browser/desktop consequences, migration/backfill, cleanup,
+and linked parity/benchmark proof.
+
+Current state: scaffolded; inherited target-shape prose is provisional.
+
+### Output 10 - Prioritized Implementation Slices With Benchmark Gates
+
+Authoritative row family: `SLC-####`. Each slice names touched layers,
+dependencies, exact changes, migration/cutover and cleanup, rollback/recovery,
+fixed benchmark configuration, semantic parity gates, resource budgets, and
+repo-native commands. A slice can be implementation-ready only when every
+linked recommendation is `actionable`.
+
+Current state: scaffolded. No implementation slice is certified actionable
+while `overallCertification` is `INCOMPLETE`.
+
+### Output 11 - Exhaustive Coverage Manifests
+
+The five append-only manifests below are authoritative for discovery and
+reconciliation. Narrative inventories and derived output tables must
+cross-reference their stable IDs.
+
+## Coverage Manifest 01 - Mounted API And Read Contracts
+
+| rowId | Surface | Mounted method/route or contract entry | Response contract | Owning service | Exact tests | Evidence IDs | auditStatus | missingEvidence | ownerQuestionIds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+
+_No normalized rows yet. US-002 and later API inventory stories must append
+rows; zero rows does not mean zero surfaces._
+
+## Coverage Manifest 02 - UI And Runtime Consumption
+
+| rowId | Caller/query key | API surface IDs | Consumed fields | Ignored fields | Browser/desktop applicability | Evidence IDs | auditStatus | missingEvidence | ownerQuestionIds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+
+_No normalized rows yet. Browser, desktop, export, PDF, bulk, warning, and
+progress consumers remain to be baselined._
+
+## Coverage Manifest 03 - Background And Operator Surfaces
+
+| rowId | Entry point/owner | Read objects | Written objects | Lifecycle role | Recovery role | Exact tests | Evidence IDs | auditStatus | missingEvidence | ownerQuestionIds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+
+_No normalized rows yet. Projectors, workers, schedulers, startup probes,
+repair/recovery, retention, import/export/transfer, migrations, scripts, and
+operator tools remain to be baselined._
+
+## Coverage Manifest 04 - DuckDB Schema And Persisted Objects
+
+| rowId | Object/kind | Key/index/path shape | Owner | Final declaration and forward migrations | Production refs | Non-production refs | Evidence IDs | auditStatus | missingEvidence | ownerQuestionIds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+
+_No normalized rows yet. Tables, indexes, temporary patterns, payload
+directories, generated files, exports, transfers, backups, and snapshots remain
+to be baselined without inspecting live DuckDB._
+
+## Coverage Manifest 05 - Columns And Material Fields
+
+| rowId | Object ID | Column/JSON key/material field | Producer | Consumers | Pre-limit use | Post-limit use | Lifecycle | Provisional disposition | Proof IDs | Evidence IDs | auditStatus | missingEvidence | ownerQuestionIds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+
+_No normalized rows yet. Later census stories must append one row per material
+field rather than grouping fields with different producers, consumers, or
+lifecycles._
+
+## Reconciliation Summaries
+
+For every manifest family `F`, calculate:
+
+```text
+discovered_F = count(all manifest rows in F)
+classified_F = count(rows where auditStatus = classified)
+out_of_scope_F = count(rows where auditStatus = out-of-scope)
+blocked_F = count(rows where auditStatus = blocked)
+nonterminal_F = discovered_F - classified_F - out_of_scope_F - blocked_F
+required balance: discovered_F = classified_F + out_of_scope_F + blocked_F
+```
+
+The required balance is true only when `nonterminal_F = 0`. A balanced family
+with `blocked_F > 0` is reconciled for accounting but still prevents
+`overallCertification: PASS`. Indexes and payload/file shapes are typed
+subsets of the `DBO-####` manifest and require separate summary rows.
+
+| Family | Discovered | Classified | Out of scope | Blocked | Nonterminal | Required balance | Baseline state |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| Mounted API/read contracts | 0 | 0 | 0 | 0 | 0 | `0 = 0 + 0 + 0` | Not baselined |
+| UI/runtime consumers | 0 | 0 | 0 | 0 | 0 | `0 = 0 + 0 + 0` | Not baselined |
+| Background/operator surfaces | 0 | 0 | 0 | 0 | 0 | `0 = 0 + 0 + 0` | Not baselined |
+| DuckDB/persisted objects | 0 | 0 | 0 | 0 | 0 | `0 = 0 + 0 + 0` | Not baselined |
+| Columns/material fields | 0 | 0 | 0 | 0 | 0 | `0 = 0 + 0 + 0` | Not baselined |
+| Indexes (DBO subset) | 0 | 0 | 0 | 0 | 0 | `0 = 0 + 0 + 0` | Not baselined |
+| Payload/file shapes (DBO subset) | 0 | 0 | 0 | 0 | 0 | `0 = 0 + 0 + 0` | Not baselined |
+
+These bootstrap zeros count only normalized rows. They are not evidence that
+the repository has no surfaces or objects; `BLK-0001` prevents that
+interpretation. Each later story must update affected counts with its rows.
+
+## Commands And Skipped Checks
+
+Record discovery, verification, approved-snapshot, and explicitly skipped
+commands. A command proves only the claim linked through its evidence record.
+
+| rowId | Date/story | Exact command or skipped check | Purpose | Result/evidence |
+| --- | --- | --- | --- | --- |
+| `CMD-0001` | 2026-07-21 / US-001 | `sed -n '1,260p' REVIEW_STORAGE_SHAPE_AUDIT_PLAN.md` and `sed -n '260,620p' REVIEW_STORAGE_SHAPE_AUDIT_PLAN.md` | Read the complete source strategy, including outputs, manifests, and gates. | Framework requirements extracted; repository files only. |
+| `CMD-0002` | 2026-07-21 / US-001 | `sed -n '1,320p' .ralph-tui/progress.md` | Read tracker status and prior learnings. | No prior story implementation recorded. |
+| `CMD-0003` | 2026-07-21 / US-001 | `sed -n '1,360p' STORAGE_SHAPE_AUDIT_PLAN.md` and `sed -n '300,620p' STORAGE_SHAPE_AUDIT_PLAN.md` | Inspect and preserve the inherited audit artifact. | Existing evidence and provisional recommendations identified. |
+| `CMD-0004` | 2026-07-21 / US-001 | `bun run lint` | Run the repo-native lint gate. | Failed on six pre-existing formatting/import-order errors in `src/server/workers/comparisonProjectServingMaintenanceWorker.ts`, `src/server/workers/reviewServingProjectorWorker.test.ts`, and `src/server/workers/reviewServingProjectorWorker.ts`; US-001 does not touch `src/`, and unrelated lint was not fixed. |
+| `CMD-0005` | 2026-07-21 / US-001 | `test "$(rg -c '^### Output [0-9]{2} -' STORAGE_SHAPE_AUDIT_PLAN.md)" -eq 11 && test "$(rg -c '^## Coverage Manifest [0-9]{2} -' STORAGE_SHAPE_AUDIT_PLAN.md)" -eq 5` | Verify required section cardinality. | Passed: eleven outputs and five manifests. |
+| `CMD-0006` | 2026-07-21 / US-001 | `git diff --check -- STORAGE_SHAPE_AUDIT_PLAN.md` | Check patch whitespace. | Passed. |
+| `CMD-0007` | 2026-07-21 / US-001 | `bun run typecheck` (skipped) | Typecheck gate. | `package.json` has no `typecheck` script, and US-001 changes no typed source. |
+| `CMD-0008` | 2026-07-21 / US-001 | `bun test` and `bun run build` (skipped) | Runtime test/build gates. | Docs-only framework; no code, route, UI, browser, or desktop behavior changed. |
+| `CMD-0009` | 2026-07-21 / US-001 | `bun run db:mig` and all DuckDB inspection commands (skipped) | Schema/data gates. | Schema and data mutation are out of scope; live DuckDB inspection is prohibited. |
+
+## Blockers
+
+| rowId | Scope | Missing evidence | Why blocked | Owner question IDs | Resolution condition |
+| --- | --- | --- | --- | --- | --- |
+| `BLK-0001` | Five manifests and eleven outputs | The inherited narrative has not been re-censused into stable rows with exact production/non-production evidence. | Later inventory and lineage stories own that work; treating narrative bullets as reconciled would overstate proof. | `OQ-0001` | Populate all manifests, update counts, and reconcile every inherited discovery. |
+| `BLK-0002` | Physical fan-out, width, lifecycle age, and benchmark proof | No approved disposable-fixture or immutable-snapshot evidence is attached. | Live DuckDB inspection is prohibited and US-001 does not authorize fixture mutation. | `OQ-0002` | Record approval, fixed settings, collection commands, and evidence IDs in the designated measurement story. |
+| `BLK-0003` | Inherited move/delete/retention candidates | Revised API, writer, lifecycle, recovery, export, transfer, and retention proof is absent. | Inherited evidence predates the normalized proof gate and cannot certify actionability. | `OQ-0003`, `OQ-0004` | All applicable proof checks are `satisfied` or evidence-backed `not-applicable`. |
+
+## Owner Questions
+
+| rowId | Owner needed | Question | Unblocks |
+| --- | --- | --- | --- |
+| `OQ-0001` | Audit owner | Who signs off that discovery sources are exhausted and all five manifests reconcile, including aliases, generated SQL, registries, allowlists, scripts, and non-production references? | `BLK-0001` and final coverage certification |
+| `OQ-0002` | Benchmark/data owner | Which isolated disposable fixture or immutable snapshot is approved, and what fixed scale, seed, model, provider, thinking level, prompts, content flags, memory limit, and runtime profile apply? | `BLK-0002` and physical proof |
+| `OQ-0003` | Product/API owner | Which mounted browser/desktop behaviors, export/PDF/bulk flows, transfer mappings, and exact response semantics must approve any move, derive, archive, or delete candidate? | Product and transfer proof in `BLK-0003` |
+| `OQ-0004` | Storage/recovery owner | What replay, repair, pin, last-known-good, failed-job, audit/export, cleanup, and retention horizons are mandatory for each candidate object? | Lifecycle, recovery, and retention proof in `BLK-0003` |
+
+## US-001 Quality Gates
+
+- [x] All eleven output sections and five coverage manifests exist.
+- [x] Stable IDs and four non-overlapping state fields are defined with only the
+      permitted values.
+- [x] Reconciliation uses
+      `discovered = classified + out-of-scope + blocked` and exposes
+      nonterminal rows.
+- [x] Every nonterminal or blocked manifest row is required to record missing
+      evidence and an owner question.
+- [x] Inherited facts are retained while inherited dispositions are explicitly
+      provisional and unresolved.
+- [x] Exact evidence classes distinguish production from tests, fixtures,
+      plans, comments, generated files, and historical migrations.
+- [x] The live-DuckDB prohibition and recommendation proof gate are explicit.
+- [x] Repository verification and explicitly skipped commands are recorded;
+      the lint result is preserved without fixing unrelated source errors.
+
+---
+
+## Inherited Audit Material (Provisional)
+
+Everything from this point to the end of the file predates the normalized
+framework. Substantiated observations are retained for later adoption. All
+dispositions, candidates, target shapes, implementation slices, and
+recommendations in this inherited portion are provisional with
+`recommendationActionability: unresolved` until linked to revised manifest and
+proof rows.
+
+## Inherited Status (Provisional)
+
+This was the first durable audit artifact. It records repo-derived evidence from
 the mounted API/read-contract inventory, DuckDB migrations, projector/reader
 code, tests, and operator scripts. It does not inspect the live DuckDB file
 directly.
 
-The audit is actionable for the schema-shape questions that can be answered from
-code and schema. Runtime row counts, physical bytes, null ratios, and oldest/newest
-update timestamps are still marked as missing evidence until collected through
-approved snapshot tooling.
+The inherited version described its schema-shape recommendations as actionable
+from code and schema. US-001 supersedes that disposition: its observations are
+preserved, but every recommendation is provisional and
+`recommendationActionability: unresolved` until revised proof is normalized.
+Runtime row counts, physical bytes, null ratios, and oldest/newest update
+timestamps also remain missing until collected through approved snapshot
+tooling.
 
-## Evidence Used
+## Inherited Discovery Sources
+
+Exact files below remain useful discovery sources. Wildcards are not proof
+citations and must be expanded to exact files and symbols during manifest
+adoption.
 
 - `src/server/reviewServing/reviewServingReadContracts.ts`
 - `src/server/reviewServing/reviewServingRouteParityCoverage.ts`
@@ -45,7 +502,7 @@ approved snapshot tooling.
 - `src/db/duckdbMigrations/0115_rebuildReviewServingProjectorWatermarkWithoutPrimaryKey.sql`
 - `src/db/duckdbMigrations/0116_dropReviewServingProjectorWatermarkLookupIndex.sql`
 
-## API Surface Inventory
+## Inherited API Surface Inventory
 
 Mounted review read surfaces:
 
@@ -88,7 +545,7 @@ Parity gates already named by the repo:
 - Job routes: durable job persistence, keyset batching, article-ID caps, filter
   signature, snapshot semantics, and foreground payload cap.
 
-## Current Read Shape
+## Inherited Current Read Shape
 
 The serving design already has a useful split:
 
@@ -111,7 +568,7 @@ that several hot rows still carry values that are only needed after candidate
 selection, and some control/partial tables need explicit disposition and
 retention proof.
 
-## Schema Census
+## Inherited Schema Census
 
 ### Source, Delta, And Intake Tables
 
@@ -373,7 +830,7 @@ retention proof.
   - Disposition: keep with strict retention.
   - Reason: replaces the broad persistent contribution ledger during rebuild.
 
-## Column Family Findings
+## Inherited Column Family Findings
 
 - Display metadata is the highest-confidence slimming target.
   - Repeated in `app.review_import_article_hot_field`,
@@ -406,7 +863,7 @@ retention proof.
   - Snapshot, pin, dirty-work, chunk, watermark, request, cursor, and retention
     tables are writer/recovery surfaces.
 
-## Deletion And Move Candidates
+## Inherited Deletion And Move Candidates (Provisional)
 
 1. Delete `mart.review_article_summary_contribution_v4`.
    - Confidence: high.
@@ -437,7 +894,7 @@ retention proof.
    - Required proof: terminal rebuild requests can be cleaned while preserving
      active, failed evidence, pinned snapshots, and operator diagnostics.
 
-## Proposed Target Shape
+## Inherited Proposed Target Shape (Provisional)
 
 ### Slim Candidate Mart
 
@@ -478,7 +935,7 @@ Do not reintroduce project-scale foreground aggregation. Any dynamic combination
 that cannot be answered from a bounded posting intersection should be async or
 explicitly unavailable.
 
-## Implementation Slices
+## Inherited Implementation Slices (Not Actionable)
 
 1. Remove the retired main summary contribution ledger.
    - Add a migration dropping `mart.review_article_summary_contribution_v4`.
@@ -514,7 +971,7 @@ explicitly unavailable.
    - Measure rows scanned, rows written, output bytes, temp spill, RSS, and
      p50/p95/p99 latency.
 
-## Required Verification
+## Inherited Required Verification
 
 For the next implementation PRs:
 
@@ -528,7 +985,7 @@ For the next implementation PRs:
   filters.
 - Desktop restart/resume verification for storage/runtime changes.
 
-## Missing Evidence To Collect
+## Inherited Missing Evidence To Collect
 
 - Row counts and physical bytes for every current review-serving table.
 - Null ratio and approximate distinct count for each candidate display/status
@@ -539,7 +996,7 @@ For the next implementation PRs:
 - UI field-consumption proof for filter option payload JSON and facet groups.
 - Active snapshot/pin counts and retained historical generation counts.
 
-## Current Recommendation
+## Inherited Current Recommendation (Provisional)
 
 Proceed in this order:
 
