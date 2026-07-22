@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 now contribute 195 table/logical/file-object rows, 202 disjoint column/material-family rows and 44 separate associated-index rows covering 119 physical tables/catalogs, 31 temporary shape families, 45 logical/file/no-table contracts, all 1,985 CMF rows and 44 named indexes. The 441 provisional rows comprise 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` decisions; all 441 have `recommendationActionability: unresolved` and zero are actionable. Eighty-three other supporting named indexes retain owning-table evidence without being recounted. US-080 assigns the remaining legacy/control/comparison/telemetry/transfer tables, migration and runtime temporary families, database/WAL/spill, PDFs, full-text backing assets, imports, runtime assets, exports, transfers, backups, recovery and generated files explicit provisional homes; it raises full-table delete candidates to 19 and adds two separate ephemeral file-cleanup candidates without granting deletion authority. US-072 leaves the physical register at 92 rows: 91 blocked, one source-proven `not-applicable` and zero value-bearing physical observations. The US-015 approval gate remains unmet, final source/audit/benchmark/path/key/atomicity/browser/desktop/recovery/ownership/retention/cleanup/replacement authority is incomplete, and no retained index has a measured access-path receipt. No manifest or proof-check state advanced, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` therefore remains independent and `INCOMPLETE`. |
+| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 adds 67 finite source/configuration proof checks without changing a disposition: the 83-row proof register is eight `satisfied`, 33 `pending`, 42 `blocked` and zero `not-applicable`; 433 disposition rows remain `recommendationActionability: unresolved`, the eight US-073 non-keep accounting rows are `blocked` through explicit required proof links, and zero are actionable. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed consumer inventory, owner authority, benchmark fixture/configuration, product/audit/export/transfer parity, identity/invalidation, migration/cutover, recovery, retention, cleanup and restore evidence remain incomplete. No prior proof state or manifest state advanced, no planned parity or benchmark work is labeled passed, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` remains independently `INCOMPLETE`. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-080 / 2026-07-22` | Provisionally classified 36 permanent legacy/current tables, 36 associated indexes, 18 migration-temporary families, 13 runtime-temporary families, 32 rooted/file objects and 78 disjoint column/material families after US-079. Exactly 213 `DSP-####` rows cover 135 DBO decisions and the remaining 529 CMF rows once: 156 keep, three move, 36 delete and 18 archive decisions, with zero derive rows; all are unresolved and none actionable. Active product, migration, repair, recovery, benchmark, path/key, atomicity, bounded lookup, browser/desktop, retention, cleanup and replacement evidence is explicit. Full-text database scalars retain their earlier owner while backing PDFs/assets receive separate file homes. Missing deployed/physical/owner evidence remains blocked; normal drop, `finally`, checksum, route reachability or file existence is not cleanup, atomicity, parity or restore proof. DBO/CMF `auditStatus`, existing `proofCheckState`, lineage/runtime state and `overallCertification` do not change; no database, runtime, schema, route, projector, retention or data mutation occurred. |
+| Latest normalized story | `US-081 / 2026-07-22` | Paired all 41 US-073 source/configuration dispositions across article, import, project/scope, prompt, model/provider and review configuration with ten independent proof domains each, then added seven target-specific contracts for the bridge delete and six logical derives. `PRF-0017`-`PRF-0083` state exact pass predicates and blockers for negative consumers plus positive product, audit, benchmark, export, transfer, recovery, identity, migration and retention preservation. Every target contract names owner/read/write/invalidation/retention/recovery/backfill-or-rebuild/cutover/cleanup/later-validation requirements. The eight linked non-keep rows become actionability-blocked; keeps stay unresolved; no disposition, manifest, prior proof, physical or certification state advances. Source is unchanged since US-073, and no planned parity, benchmark or lifecycle execution is claimed to have passed. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
@@ -11523,7 +11523,7 @@ and owner question remain additional gates.
 | `DSP-0003` | Article | `DBO-0181 app.article_identifier` | `keep` as authoritative normalized identifier source | Canonical lookup, matching, comparison, export and transfer remapping need the unique normalized identifier-to-article relation and provenance. | `EVD-0830`; `PRF`; `BLK-0380`/`OQ-0385` | `unresolved` |
 | `DSP-0004` | Import | `DBO-0002 app.data_source` | `keep` as authoritative data-source configuration/progress source | Import admission, configuration, archive state, cursor/resume and source-file references need one data-source record. | `EVD-0831`; `PRF`; `BLK-0381`/`OQ-0386` | `unresolved` |
 | `DSP-0005` | Import | `DBO-0003 app.import_route` | `keep` as authoritative route catalog | Scope, current/source links, import dispatch, export and transfer need a stable unique route identity and active catalog entry. | `EVD-0831`; `PRF`; `BLK-0381`/`OQ-0386` | `unresolved` |
-| `DSP-0006` | Import | `DBO-0004 app.data_source_import_route` | `delete` candidate | Bounded replacement: owners must select a canonical data-source/route binding, migrate and reconcile every bridge row, constrain/version the replacement, preserve import/API/export/transfer/replay behavior and prove negative dynamic/deployed references before drop. | `EVD-0831`; `PRF`; `BLK-0381`/`BLK-0386`; `OQ-0386`/`OQ-0391` | `unresolved` |
+| `DSP-0006` | Import | `DBO-0004 app.data_source_import_route` | `delete` candidate | Bounded replacement: owners must select a canonical data-source/route binding, migrate and reconcile every bridge row, constrain/version the replacement, preserve import/API/export/transfer/replay behavior and prove negative dynamic/deployed references before drop. | `EVD-0831`; `PRF-0027`-`PRF-0036`/`PRF-0077`; `BLK-0381`/`BLK-0386`/`BLK-0453`; `OQ-0386`/`OQ-0391`/`OQ-0457` | `blocked` |
 | `DSP-0007` | Import | `DBO-0005 app.article_import_route` | `keep` as authoritative current article-route link | Current membership, route-derived scope, selected-import ranking, detail/export and stale-link synchronization need one current relation distinct from history. | `EVD-0831`; `PRF`; `BLK-0381`/`OQ-0386` | `unresolved` |
 | `DSP-0008` | Import | `DBO-0006 app.article_import_route_source_record` | `keep` as authoritative import-scoped source/audit history | Idempotent source identity, raw provenance, quarantine, replay, canonical matching and transfer need retained source-record history distinct from current membership. | `EVD-0831`; `PRF`; `BLK-0381`/`OQ-0386` | `unresolved` |
 | `DSP-0009` | Project/scope | `DBO-0007 app.project` | `keep` as authoritative project and current configuration source | Project identity, display/archive/delete state and current model/content/date/Human settings anchor all scope, review and cleanup contracts. | `EVD-0832`/`EVD-0835`; `PRF`; `BLK-0382`/`BLK-0385`; `OQ-0387`/`OQ-0390` | `unresolved` |
@@ -11531,16 +11531,16 @@ and owner question remain additional gates.
 | `DSP-0011` | Project/scope | `DBO-0009 app.project_import_route` | `keep` as authoritative selected-route membership | Effective scope, selected import, job snapshots, export/transfer and route invalidation need the project/route set. | `EVD-0832`/`EVD-0835`; `PRF`; `BLK-0382`/`BLK-0385`; `OQ-0387`/`OQ-0390` | `unresolved` |
 | `DSP-0012` | Project/scope | `DBO-0179 app.archived_project_delete_tombstone` | `keep` as authoritative cleanup-control evidence | Access guards, resumable phased cleanup and final-delete admission need durable request/progress state until completion receipts and retention are proven. | `EVD-0832`; `PRF`; `BLK-0382`/`OQ-0387` | `unresolved` |
 | `DSP-0013` | Project/scope | `DBO-0211 mart.project_scope_article` | `keep` as reusable current scope index, never source authority | Bounded pre-limit scope, queue/projector/rebuild partitioning and current route reads need a materialized per-project/article union unless a same-fixture bounded replacement passes; authority remains project/direct/route/article sources. | `EVD-0832`; `PRF`; `BLK-0382`/`OQ-0387` | `unresolved` |
-| `DSP-0014` | Project/scope | `DBO-0010` logical subproject shape | `derive`; keep no standalone table | Bounded replacement: creation must deterministically compose one target project plus bounded prompt/article links from explicit source IDs in one recoverable transaction; if parent/source provenance is a product/audit need, persist a versioned provenance relation before claiming derivability. | `EVD-0832`; `PRF`; `BLK-0382`/`BLK-0386`; `OQ-0387`/`OQ-0391` | `unresolved` |
+| `DSP-0014` | Project/scope | `DBO-0010` logical subproject shape | `derive`; keep no standalone table | Bounded replacement: creation must deterministically compose one target project plus bounded prompt/article links from explicit source IDs in one recoverable transaction; if parent/source provenance is a product/audit need, persist a versioned provenance relation before claiming derivability. | `EVD-0832`; `PRF-0037`-`PRF-0046`/`PRF-0078`; `BLK-0382`/`BLK-0386`/`BLK-0454`; `OQ-0387`/`OQ-0391`/`OQ-0458` | `blocked` |
 | `DSP-0015` | Prompt | `DBO-0021 app.prompt` | `keep` as authoritative immutable prompt-content source | Prompt text/type/heading/hash identity, judgment execution, export, transfer and rebuilds need one immutable prompt record with explicit archive state. | `EVD-0833`; `PRF`; `BLK-0383`/`OQ-0388` | `unresolved` |
 | `DSP-0016` | Prompt | `DBO-0022 app.project_prompt` | `keep` as authoritative project-prompt applicability/config source | Membership, order, enable/archive, origin and criteria drive queues, review hashes, Human/LLM behavior, export and transfer. | `EVD-0833`/`EVD-0835`; `PRF`; `BLK-0383`/`BLK-0385`; `OQ-0388`/`OQ-0390` | `unresolved` |
 | `DSP-0017` | Model/provider | `DBO-0023 app.model` | `keep` as authoritative stored model catalog/config source | Project binding, natural model identity, execution options, context/runtime metadata, snapshots, export and transfer need stable stored rows distinct from virtual selectable variants. | `EVD-0834`; `PRF`; `BLK-0384`/`OQ-0389` | `unresolved` |
 | `DSP-0018` | Model/provider | `DBO-0024 app.provider_connection` | `keep` as authoritative provider configuration/reference source | Provider kind/endpoint/auth reference/runtime routing/concurrency/health and dependent model execution need one stored connection record; secret bytes remain external. | `EVD-0834`; `PRF`; `BLK-0384`/`OQ-0389` | `unresolved` |
-| `DSP-0019` | Project/scope | `DBO-0027` logical project scope/applicability | `derive` from authoritative source plus the current scope index | Bounded replacement: one versioned per-project function must union direct and selected-route membership, apply archive/inclusive dates, use an immutable input identity, replay late membership and publish/restore the bounded physical index before consumers advance. | `EVD-0832`/`EVD-0835`; `PRF`; `BLK-0382`/`BLK-0386`; `OQ-0387`/`OQ-0391` | `unresolved` |
-| `DSP-0020` | Review configuration | `DBO-0028` logical content setting | `derive` from `app.project` | Bounded replacement: one validated/versioned four-flag value must enforce full-text exclusivity across ordinary, transfer and direct writers and bind judgment reuse, snapshots and invalidation without a duplicate authority. | `EVD-0835`; `PRF`; `BLK-0385`/`BLK-0386`; `OQ-0390`/`OQ-0391` | `unresolved` |
-| `DSP-0021` | Review configuration | `DBO-0029` logical date range | `derive` from `app.project` plus article creation time | Bounded replacement: one inclusive, ordered, versioned range must be validated by every writer and participate consistently in scope, execution snapshots, invalidation, export and transfer before any copied range is retired. | `EVD-0835`; `PRF`; `BLK-0385`/`BLK-0386`; `OQ-0390`/`OQ-0391` | `unresolved` |
-| `DSP-0022` | Review configuration | `DBO-0030` logical selected-route set | `derive` from `app.project_import_route` and current article-route links | Bounded replacement: derive a sorted bounded project route set with a versioned source watermark/snapshot identity, late-membership replay and export/transfer parity before treating any selected-import copy as authority. | `EVD-0832`/`EVD-0835`; `PRF`; `BLK-0385`/`BLK-0386`; `OQ-0390`/`OQ-0391` | `unresolved` |
-| `DSP-0023` | Review configuration | `DBO-0031` logical project review configuration/hash | `derive` from project/prompt/model/provider sources | Bounded replacement: one versioned canonical composition must enumerate all owner-approved applicability and execution dimensions, freeze a consumer identity, drive V4/comparison/transfer invalidation and preserve execution/export/recovery history before any hash is treated as authoritative. | `EVD-0835`; `PRF`; `BLK-0385`/`BLK-0386`; `OQ-0390`/`OQ-0391` | `unresolved` |
+| `DSP-0019` | Project/scope | `DBO-0027` logical project scope/applicability | `derive` from authoritative source plus the current scope index | Bounded replacement: one versioned per-project function must union direct and selected-route membership, apply archive/inclusive dates, use an immutable input identity, replay late membership and publish/restore the bounded physical index before consumers advance. | `EVD-0832`/`EVD-0835`; `PRF-0037`-`PRF-0046`/`PRF-0079`; `BLK-0382`/`BLK-0386`/`BLK-0454`; `OQ-0387`/`OQ-0391`/`OQ-0458` | `blocked` |
+| `DSP-0020` | Review configuration | `DBO-0028` logical content setting | `derive` from `app.project` | Bounded replacement: one validated/versioned four-flag value must enforce full-text exclusivity across ordinary, transfer and direct writers and bind judgment reuse, snapshots and invalidation without a duplicate authority. | `EVD-0835`; `PRF-0067`-`PRF-0076`/`PRF-0080`; `BLK-0385`/`BLK-0386`/`BLK-0455`; `OQ-0390`/`OQ-0391`/`OQ-0459` | `blocked` |
+| `DSP-0021` | Review configuration | `DBO-0029` logical date range | `derive` from `app.project` plus article creation time | Bounded replacement: one inclusive, ordered, versioned range must be validated by every writer and participate consistently in scope, execution snapshots, invalidation, export and transfer before any copied range is retired. | `EVD-0835`; `PRF-0067`-`PRF-0076`/`PRF-0081`; `BLK-0385`/`BLK-0386`/`BLK-0455`; `OQ-0390`/`OQ-0391`/`OQ-0459` | `blocked` |
+| `DSP-0022` | Review configuration | `DBO-0030` logical selected-route set | `derive` from `app.project_import_route` and current article-route links | Bounded replacement: derive a sorted bounded project route set with a versioned source watermark/snapshot identity, late-membership replay and export/transfer parity before treating any selected-import copy as authority. | `EVD-0832`/`EVD-0835`; `PRF-0067`-`PRF-0076`/`PRF-0082`; `BLK-0385`/`BLK-0386`/`BLK-0455`; `OQ-0390`/`OQ-0391`/`OQ-0459` | `blocked` |
+| `DSP-0023` | Review configuration | `DBO-0031` logical project review configuration/hash | `derive` from project/prompt/model/provider sources | Bounded replacement: one versioned canonical composition must enumerate all owner-approved applicability and execution dimensions, freeze a consumer identity, drive V4/comparison/transfer invalidation and preserve execution/export/recovery history before any hash is treated as authoritative. | `EVD-0835`; `PRF-0067`-`PRF-0076`/`PRF-0083`; `BLK-0385`/`BLK-0386`/`BLK-0456`; `OQ-0390`/`OQ-0391`/`OQ-0460` | `blocked` |
 
 ### Column-Family Disposition Matrix
 
@@ -11551,7 +11551,7 @@ and owner question remain additional gates.
 | `DSP-0026` | Article | `CMF-1410`-`CMF-1418` and `CMF-1941` (10) | `keep` in `app.article_identifier` | Normalized identity, article link, source/primary/provenance and audit times are the canonical match/export/transfer relation. | `EVD-0830`; `PRF`; `BLK-0380`/`OQ-0385` | `unresolved` |
 | `DSP-0027` | Import | `CMF-0001`-`CMF-0012` and `CMF-1983`-`CMF-1985` (15) | `keep` in `app.data_source` | Data-source identity/display/archive/date/import progress and the tagged/open cursor domain are authoritative for import admission/resume and referenced input files. | `EVD-0831`; `PRF`; `BLK-0381`/`OQ-0386` | `unresolved` |
 | `DSP-0028` | Import | `CMF-0013`-`CMF-0019` (7) | `keep` in `app.import_route` | Stable route identity/name/activation and audit times are required by import dispatch, scope, export and transfer. | `EVD-0831`; `PRF`; `BLK-0381`/`OQ-0386` | `unresolved` |
-| `DSP-0029` | Import | `CMF-0020`-`CMF-0024` (5) | `delete` with `DBO-0004` candidate | Bounded replacement: migrate/reconcile IDs and timestamps into the owner-approved canonical binding, preserve all API/import/export/transfer/recovery behavior and prove no dynamic/deployed consumer before removing these fields. | `EVD-0831`; `PRF`; `BLK-0381`/`BLK-0386`; `OQ-0386`/`OQ-0391` | `unresolved` |
+| `DSP-0029` | Import | `CMF-0020`-`CMF-0024` (5) | `delete` with `DBO-0004` candidate | Bounded replacement: migrate/reconcile IDs and timestamps into the owner-approved canonical binding, preserve all API/import/export/transfer/recovery behavior and prove no dynamic/deployed consumer before removing these fields. | `EVD-0831`; `PRF-0027`-`PRF-0036`/`PRF-0077`; `BLK-0381`/`BLK-0386`/`BLK-0453`; `OQ-0386`/`OQ-0391`/`OQ-0457` | `blocked` |
 | `DSP-0030` | Import | `CMF-0059`-`CMF-0071` and `CMF-0132`-`CMF-0141` (23) | `keep` in current article-route link | Current identity/membership, external/run/source keys/hashes, raw/import/match payload and timestamps are needed for scope, selected import, detail/export and current-link repair. | `EVD-0831`; `PRF`; `BLK-0381`/`OQ-0386` | `unresolved` |
 | `DSP-0031` | Import | `CMF-0072`-`CMF-0087` and `CMF-0142`-`CMF-0155` (30) | `keep` in source-record history | Import-scoped identity, raw/provenance, quarantine and audit fields are needed for idempotency, replay, canonical resolution, transfer and history independent of current membership. | `EVD-0831`; `PRF`; `BLK-0381`/`OQ-0386` | `unresolved` |
 | `DSP-0032` | Project/scope | `CMF-0088`-`CMF-0090`, `CMF-0098`-`CMF-0100` and `CMF-0102` (7) | `keep` in `app.project` | Project identity/display/archive/delete and audit fields are authoritative for access, lifecycle, export/transfer and cleanup; configuration fields are separated below. | `EVD-0832`; `PRF`; `BLK-0382`/`OQ-0387` | `unresolved` |
@@ -11567,12 +11567,12 @@ and owner question remain additional gates.
 
 ### Disposition Counts, Replacement Gate And State Accounting
 
-| Register slice | Rows | `keep` | `derive` | `delete` | `recommendationActionability: unresolved` | Actionable |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Physical-table decisions | 17 | 16 | 0 | 1 | 17 | 0 |
-| Logical/no-table decisions | 6 | 0 | 6 | 0 | 6 | 0 |
-| Column-family decisions | 18 | 17 | 0 | 1 | 18 | 0 |
-| **US-073 total** | **41** | **33** | **6** | **2** | **41** | **0** |
+| Register slice | Rows | `keep` | `derive` | `delete` | `recommendationActionability: unresolved` | `recommendationActionability: blocked` | Actionable |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Physical-table decisions | 17 | 16 | 0 | 1 | 16 | 1 | 0 |
+| Logical/no-table decisions | 6 | 0 | 6 | 0 | 0 | 6 | 0 |
+| Column-family decisions | 18 | 17 | 0 | 1 | 17 | 1 | 0 |
+| **US-073 total** | **41** | **33** | **6** | **2** | **33** | **8** | **0** |
 
 The two delete rows describe the same bridge at table and column-family
 granularity; they are not two deletion targets. The six derive rows describe
@@ -11592,12 +11592,13 @@ Manifest accounting remains DBO 322 discovered/322 blocked and CMF 1,985
 discovered/1,985 blocked. API, UI, background, map and lineage counts/states
 are unchanged. The relevant 12 `FAN-####` proof-check rows remain blocked,
 the 92-row physical register remains 91 blocked plus one
-`not-applicable`, and no `PRF-####` state advances. A `keep` disposition is a
-provisional home, not a `classified` manifest row or an actionable
-recommendation. A blocked manifest/measurement state is not silently copied
-into `recommendationActionability`; the task-required provisional value
-remains `unresolved` pending final proof. `overallCertification` remains
-independently `INCOMPLETE`.
+`not-applicable`. US-081 later adds family/target `PRF-####` rows without
+advancing any prior proof state: the 33 keeps remain unresolved, while the
+eight non-keep accounting rows become blocked only through explicit required
+blocked proof links. Neither state is copied from manifest or measurement
+state. A `keep` remains a provisional home, not a `classified` manifest row
+or an actionable recommendation. `overallCertification` remains independently
+`INCOMPLETE`.
 
 ## US-074 Provisional Judgment And Reusable-Hot-Fact Dispositions
 
@@ -13083,12 +13084,13 @@ supporting indexes retain owning-table evidence without a second disposition.
 
 US-080 raises full-table delete candidates from ten to 19 and records two
 separate ephemeral file-cleanup candidates; neither number is deletion
-authority. All 213 new rows and all 441 cumulative rows remain
-`recommendationActionability: unresolved`, including provisional keeps. No
-move, derive, archive or delete recommendation is actionable. The 322 DBO and
-1,985 CMF manifest rows remain `auditStatus: blocked`; the physical register,
-all existing `proofCheckState` values and `overallCertification: INCOMPLETE`
-remain unchanged and independent.
+authority. At US-080 completion, all 213 new rows and all 441 cumulative rows
+were `recommendationActionability: unresolved`, including provisional keeps.
+US-081 later blocks the eight US-073 non-keep accounting rows through explicit
+proof links; zero recommendations are actionable. The 322 DBO and 1,985 CMF
+manifest rows remain `auditStatus: blocked`; the physical register, all prior
+`proofCheckState` values and `overallCertification: INCOMPLETE` remain
+unchanged and independent.
 
 Every non-keep row requires owner-approved deployed/reference/history
 inventory, exact replacement writer/read ownership, migration/backfill,
@@ -13096,6 +13098,194 @@ bounded cutover, rollback, benchmark and browser/desktop parity, durable
 cleanup, retention and executable restore evidence. Missing evidence remains a
 blocker and an owner question; source absence, a normal `DROP`, `finally`,
 checksum, response completion or file existence cannot advance actionability.
+
+## US-081 Source And Configuration Proof Requirements
+
+### US-081 Scope, Prerequisite And State Boundary
+
+US-080 is complete. US-081 pairs the exact US-073 source/configuration
+dispositions with finite positive and negative proof checks; it does not reopen
+their object, column-family or supporting-index accounting. The six family
+scopes remain article, import, project/scope, prompt, model/provider and review
+configuration. The bridge delete target and six logical derive targets are
+also recorded separately because one family-level proof state cannot stand in
+for target ownership, cutover or cleanup.
+
+| Proof slice | Candidate scope | New proof rows | Boundary |
+| --- | --- | ---: | --- |
+| Article | `DSP-0001`-`DSP-0003` and `DSP-0024`-`DSP-0026` | `PRF-0017`-`PRF-0026` (10) | Canonical content, identifier, quarantine, full-text/reference and raw audit contracts remain separate. |
+| Import | `DSP-0004`-`DSP-0008` and `DSP-0027`-`DSP-0031` | `PRF-0027`-`PRF-0036` (10) | Data-source configuration, route catalog, current link, source history and bridge retirement remain separate. |
+| Project/scope | `DSP-0009`-`DSP-0014`, `DSP-0019`, `DSP-0032` and `DSP-0034`-`DSP-0037` | `PRF-0037`-`PRF-0046` (10) | Project/direct/route source, logical applicability, tombstone and physical scope publication remain separate. |
+| Prompt | `DSP-0015`-`DSP-0016` and `DSP-0038`-`DSP-0039` | `PRF-0047`-`PRF-0056` (10) | Immutable prompt content and project applicability/configuration remain separate. |
+| Model/provider | `DSP-0017`-`DSP-0018` and `DSP-0040`-`DSP-0041` | `PRF-0057`-`PRF-0066` (10) | Stored catalog, selectable virtual identity, provider reference, runtime execution and external-secret recovery remain separate. |
+| Review configuration | `DSP-0009`, `DSP-0011`, `DSP-0016`, `DSP-0020`-`DSP-0023`, `DSP-0033`, `DSP-0035` and `DSP-0039`-`DSP-0041` | `PRF-0067`-`PRF-0076` (10) | Backing fields retain their single disposition owner; this family only proves their logical composition and consumer identities. |
+| Non-keep target contracts | `DSP-0006`, `DSP-0014`, `DSP-0019`-`DSP-0023` and `DSP-0029` | `PRF-0077`-`PRF-0083` (7) | Seven physical/logical targets; the bridge's table and field rows are two accounting grains for one target. |
+| **US-081 total** | **All 41 US-073 rows paired; seven non-keep targets expanded once** | **67** | **Sixty family/domain checks plus seven target-specific replacement checks.** |
+
+Each family has exactly ten checks: one exhaustive negative-consumer check and
+nine positive product, audit, benchmark, export, transfer, recovery, identity,
+migration and retention-preservation checks. A pass requires the complete
+predicate in its row; a source match, source absence, existing unit test,
+registered route, migration text or planned test is only evidence toward that
+predicate. No actual browser/desktop parity, export, transfer, recovery,
+migration, retention or physical benchmark work ran, and none is recorded as
+passed.
+
+The 60 family rows are independently 30 `pending` and 30 `blocked`. The seven
+target-specific replacement rows are independently `blocked`. Existing
+`PRF-0001`-`PRF-0016` retain their prior states, so the complete 83-row proof
+register is eight `satisfied`, 33 `pending`, 42 `blocked` and zero
+`not-applicable`. DBO and CMF `auditStatus` remain blocked, FAN state remains
+91 blocked plus one source-proven not-applicable row, and
+`overallCertification` remains independently `INCOMPLETE`.
+
+The eight non-keep accounting rows now use
+`recommendationActionability: blocked` because each is linked to at least one
+required blocked proof check. The 33 keep rows remain
+`recommendationActionability: unresolved`. No disposition value changes and
+zero recommendations are actionable. Across all 441 `DSP-####` rows, 433 are
+unresolved, eight are blocked and zero are actionable.
+
+No live/current/project DuckDB or SQLite, configured snapshot/query/studio,
+fixture DDL/DML, server, app, browser, desktop shell, writer, projector,
+migration, repair, recovery, export, transfer, cleanup, benchmark,
+EXPLAIN/profile or physical collector ran. Only this audit file and the
+required Ralph tracker metadata may change.
+
+### US-081 Evidence Ledger
+
+| Evidence ID | Class | Exact locator | Finding | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-0930` | `control` | User US-081 PRD and codebase patterns; `tasks/prd.json#US-080/#US-081/#US-082`; `.ralph-tui/progress.md` US-054/US-055/US-067/US-073/US-080; US-001 state model; reporting, DuckDB, API and frontend skills; HEAD/worktree/ID/count inspection | Fixes the US-080 prerequisite, exact 41-row/six-family scope, 67-row proof design, independent-state rule, audit-only/no-live boundary and unrelated pre-existing `tasks/prd.json` timestamp change. | `CMD-0610` |
+| `EVD-0931` | `production/control` | Source baseline parent `a3faeac97373c5cd21a6298671be52084eee8200` through HEAD `0b25952e2967086a0fde65c76058edeb941158a9`, scoped to `src`, `scripts` and `package.json`; US-054/US-055 closure and US-073 `EVD-0830`-`EVD-0835` | No scoped product source changed since the source/configuration reconciliation and disposition evidence. The exact 17-table/six-logical/251-CMF authority candidates and their known consumers remain current source evidence, not deployed proof. | `CMD-0611` |
+| `EVD-0932` | `production/historical-migration` | Exact non-test searches for `app.data_source_import_route`/`data_source_import_route`/`dataSourceImportRoute`; `src/db/duckdbMigrations/0000_nativeDuckdbSchema.sql` declaration; `src/app/routes/+admin/+datasources/dataSourceImportRouteOptions.ts` option helper imports; exact searches for standalone subproject, content-setting, date-range, selected-route-set and universal-review-config persistence | No checked-in production database reader/writer was found for the bridge, and the six logical targets remain compositions rather than independently persisted authorities. UI option naming is not a bridge-table consumer. Alias/generated SQL, deployed code/data and operator history are unavailable, so negative proof remains blocked. | `CMD-0611` |
+| `EVD-0933` | `production` | `src/server/services/articleCanonicalMatcher.ts`; `articleImportStoreService.ts`; `immutablePromptService.ts`; `insertArticlesIntoProject.ts`; `src/server/routes/ArticlesRoutes.ts`, `DataSourcesRoutes.ts`, `ImportRoutes.ts`, `ProjectsRoutes.ts`, `ProjectsAddArticlesRoutes.ts`, `ProjectArticlesRoutes.ts`, `SubprojectsRoutes.ts`, `PromptsRoutes.ts`, `ModelsRoutes.ts`, `ProviderModelsRoutes.ts` and `ProviderConnectionsRoutes.ts`; `src/server/providers/providerModelRepository.ts` and `providerConnectionRepository.ts` | Positive product writers/readers and current authority candidates exist for all six families, but mounted route source and service tests do not prove actual browser/desktop behavior, field preservation, owner intent or post-cutover parity. | `CMD-0612` |
+| `EVD-0934` | `production` | `src/server/routes/ProjectExportRoutes.ts`; `src/server/services/projectExportReviewServingExportArticleRepository.ts`; `src/server/services/projectTransfer/projectTransferExport.ts`, `projectTransferExportPackage.ts`, `projectTransferSchemas.ts`, `projectTransferSnapshotFingerprint.ts`, `projectTransferCommitWriter.ts` and `projectTransferCommitRecovery.test.ts` | Export and transfer read, serialize, fingerprint, remap or rehydrate article/import/project/prompt/model/configuration state under different selection and hydration identities. Existing source/tests identify required paths but no before/after execution or client-saved-file parity ran. | `CMD-0612` |
+| `EVD-0935` | `production/historical-migration` | Lexical DuckDB chain including `0000_nativeDuckdbSchema.sql`, `0013_rebuildArticleWithoutOpenalexId.sql`, `0014_providerConnections.sql`, `0021_rebuildModelWithProviderConnections.sql`, `0029_dropModelProviderConnectionForeignKey.sql`, `0039_humanJudgmentSummaryMode.sql`, `0040_projectPromptCriteriaDispositionCombined.sql` and `0078_articleImportRouteSourceRecords.sql`; `src/server/services/archivedProjectCleanupService.ts`; `scripts/repairOwnedProjectPrompts.ts`; `scripts/slimProviderMetadata.ts`; project-scope/config delta services and transfer recovery | Historical rebuilds and current cleanup/repair/recovery paths show preservation obligations. No checked-in migration or owner-approved design closes the bridge retirement or six logical replacements, deployed backfill, bounded cutover, cleanup receipt and executable restore together. | `CMD-0612` |
+| `EVD-0936` | `production/fixture` | `package.json` `bench:review-serving-release-gate`/`bench:review-serving-smoke`/`db:query:snapshot`; `src/server/reviewServing/reviewServingBenchmark.ts#reviewServingSynthetic10m7PromptOverlapFixture` and `#ReviewServingBenchmarkReleaseContext`; US-067 `EVD-0787`-`EVD-0793` and `FAN-0010`-`FAN-0021` | Repository scale/workload declarations exist, but no approved immutable fixture, generator/seed, model/provider/thinking, prompt/content/scope/date/route settings, runtime identity or complete source/configuration collector exists. Benchmark preservation is blocked, not failed or zero. | `CMD-0612` |
+| `EVD-0937` | `control` | US-073 `DSP-0006`/`DSP-0029` bridge target and `DSP-0014`/`DSP-0019`-`DSP-0023` logical targets; exact positive/negative source evidence `EVD-0830`-`EVD-0835` and `EVD-0932`-`EVD-0936` | Seven non-keep targets require separate owner, read/write, invalidation, retention, recovery, backfill/rebuild, cutover, cleanup and later-validation contracts. None has a complete approved target contract, so each target proof is blocked independently. | `CMD-0613` |
+| `EVD-0938` | `control` | Prohibited-command and created-artifact/started-process audit | Zero database/runtime/fixture/product commands, generated artifacts or started product processes occurred; cleanup and stop sets are empty. These action counts are not product, parity, lifecycle or physical proof. | `CMD-0614` |
+| `EVD-0939` | `control` | Sequential-ID/reference/family-domain/target/state/actionability/count/source/worktree/tracker/whitespace validators; package-script typecheck discovery; repo lint | Confirms 67 sequential new proof rows, ten domains per family, seven target contracts, independent proof states, eight blocked non-keep actionability rows, exact cumulative counts and docs-only isolation. | `CMD-0615` |
+
+### Finite Proof Domain Contract
+
+Every family row below is atomic: its state answers only the named pass
+predicate. `pending` means the required comparison has not yet been executed;
+`blocked` names the missing approval, inventory, fixture or target contract
+that prevents collection. Positive source reachability is not positive parity,
+and a negative checked-in search is not deployed absence.
+
+| rowId | Family | Domain and finite pass predicate | proofCheckState | Exact evidence | Missing evidence / blocker | Owner question IDs |
+| --- | --- | --- | --- | --- | --- | --- |
+| `PRF-0017` | Article | Negative consumers: an immutable literal/alias/generated-SQL/registry/script/deployed inventory maps every `DSP-0001`-`DSP-0003`/`DSP-0024`-`DSP-0026` object and field; every proposed omission has zero unpreserved reader, writer, audit, file-reference or operator consumers. | `blocked` | `EVD-0830`, `EVD-0931`, `EVD-0932` | Checked-in positives are known; deployed/dynamic exhaustion is unavailable, `BLK-0447`. | `OQ-0385`, `OQ-0451` |
+| `PRF-0018` | Article | Product: before/after API plus actual browser and desktop captures preserve article/admin/detail/PDF/full-text reads, canonical writes, response fields/order/errors and file reachability on one immutable fixture. | `pending` | `EVD-0830`, `EVD-0933` | Source routes exist; no target implementation or parity capture ran, `BLK-0448`. | `OQ-0385`, `OQ-0452` |
+| `PRF-0019` | Article | Audit: field-level canonical/source/raw/conversion/identifier provenance and quarantine request/winner/reason/resolution history reconcile before/after with an owner-approved history horizon and immutable receipt. | `pending` | `EVD-0830`, `EVD-0933` | Required retained fields, resolution lifecycle and denominator are not approved, `BLK-0448`. | `OQ-0385`, `OQ-0452` |
+| `PRF-0020` | Article | Benchmark: fixed fixture/configuration reports source write/match lookup, full-text mutation, list/detail/PDF/export hydration, rows/bytes/RSS/temp and p50/p95/p99 before/after without retry, fallback or setting change. | `blocked` | `EVD-0936`, `FAN-0010`, `FAN-0016`-`FAN-0021` | Fixture, critical settings and collector are unavailable, `BLK-0449`. | `OQ-0354`-`OQ-0357`, `OQ-0453` |
+| `PRF-0021` | Article | Export: frozen selection, later current hydration, article/import/full-text fields, row order, CSV/PDF bytes, errors and checksums reconcile on the same snapshot with the intended hydration-time contract explicit. | `pending` | `EVD-0830`, `EVD-0934` | No owner-approved frozen/current boundary or before/after export receipt, `BLK-0448`. | `OQ-0385`, `OQ-0452` |
+| `PRF-0022` | Article | Transfer: package schema, article/identifier/provenance/full-text asset members, fingerprints, ID remaps, commit visibility and round-trip equality reconcile for create/reuse/conflict cases. | `pending` | `EVD-0830`, `EVD-0934` | Source mappings exist; no immutable before/after round trip or client parity ran, `BLK-0448`. | `OQ-0385`, `OQ-0452` |
+| `PRF-0023` | Article | Recovery: interruption/corruption drills restore canonical rows, identifiers, quarantine evidence and referenced assets from approved backup artifacts, then validate open/read/match/rebuild behavior and orphan safety. | `blocked` | `EVD-0830`, `EVD-0935` | No authorized destructive fixture, complete backup/reference set or executable restore receipt, `BLK-0450`. | `OQ-0385`, `OQ-0454` |
+| `PRF-0024` | Article | Identity: owner-approved canonical ID, normalized identifier, source identity, content/reference version and mutation/invalidation dimensions produce stable before/after equality and reject collisions/stale reuse. | `pending` | `EVD-0830`, `EVD-0933` | Multiple unversioned/open envelopes and direct writers lack one approved identity matrix, `BLK-0451`. | `OQ-0385`, `OQ-0455` |
+| `PRF-0025` | Article | Migration: complete lexical schema plus deployed catalog/data inventory defines bounded backfill/rebuild, verification totals/hashes, cutover, rollback and old-row/file cleanup; re-run proves idempotency. | `blocked` | `EVD-0935` | Applied shape/data and approved target/cutover fixture are unavailable, `BLK-0452`. | `OQ-0385`, `OQ-0456` |
+| `PRF-0026` | Article | Retention: per-family active/history/quarantine/identifier/full-text horizons, reader leases, DB-to-file reference/orphan scans, scheduled cleanup receipts and restore validation preserve required rows/assets and remove only approved orphans. | `blocked` | `EVD-0830`, `EVD-0935` | Global article/file horizons, schedule, lease and durable receipts are absent, `BLK-0450`. | `OQ-0385`, `OQ-0454` |
+| `PRF-0027` | Import | Negative consumers: an immutable literal/alias/generated-SQL/registry/script/deployed inventory covers data source, route, bridge, current link and source history; bridge retirement has zero unpreserved dynamic, operator or deployed consumer. | `blocked` | `EVD-0831`, `EVD-0931`, `EVD-0932` | Checked-in bridge search is negative outside schema/UI naming, but deployed/dynamic exhaustion is unavailable, `BLK-0447`. | `OQ-0386`, `OQ-0451` |
+| `PRF-0028` | Import | Product: before/after API plus actual browser/desktop captures preserve data-source CRUD/archive/import progress, all import modes, route options, current-link detail/scope and exact error/retry behavior. | `pending` | `EVD-0831`, `EVD-0933` | Source paths exist; no target implementation or parity capture ran, `BLK-0448`. | `OQ-0386`, `OQ-0452` |
+| `PRF-0029` | Import | Audit: raw/source/cursor/run/external/hash/match/quarantine/current-link history reconciles by source identity with explicit opaque cursor variants, replay/reset semantics and owner-approved history horizons. | `pending` | `EVD-0831`, `EVD-0933` | Open cursor/scalar and history domains plus retained denominator are unapproved, `BLK-0448`. | `OQ-0386`, `OQ-0452` |
+| `PRF-0030` | Import | Benchmark: fixed fixture/configuration measures per-mode ingestion, canonical matching, current/source writes, stale-link sync, dirty fan-out, selected-import/scope reads, rows/bytes/RSS/temp and latency before/after. | `blocked` | `EVD-0936`, `FAN-0011`, `FAN-0016`-`FAN-0021` | Fixture, source files/cursors, critical settings and collector are unavailable, `BLK-0449`. | `OQ-0354`-`OQ-0357`, `OQ-0453` |
+| `PRF-0031` | Import | Export: selected route/source/current metadata, raw fields intentionally included, order, snapshot/current hydration identity and errors reconcile before/after for project/PDF/CSV exports. | `pending` | `EVD-0831`, `EVD-0934` | No approved export field/hydration contract or execution receipt, `BLK-0448`. | `OQ-0386`, `OQ-0452` |
+| `PRF-0032` | Import | Transfer: data-source/route/current/source-history schemas, cursor/file references, fingerprints, ID remaps, duplicate handling and target visibility round-trip without losing replay or provenance. | `pending` | `EVD-0831`, `EVD-0934` | Source mappings exist; no immutable round-trip or compatibility matrix ran, `BLK-0448`. | `OQ-0386`, `OQ-0452` |
+| `PRF-0033` | Import | Recovery: replay from retained source/cursor plus interruption drills restore canonical/current/source links, stale-link state and dirty publication without duplicate loss, late-membership loss or stranded files. | `blocked` | `EVD-0831`, `EVD-0935` | Only Covidence fully syncs stale links; no approved replay/restore fixture or receipt, `BLK-0450`. | `OQ-0386`, `OQ-0454` |
+| `PRF-0034` | Import | Identity: versioned data-source, route, source-record, current-link, cursor/run/external and selected-import identities are owner-approved; duplicate/range-reset/late-membership cases produce stable expected invalidation. | `pending` | `EVD-0831`, `EVD-0933` | Current/history/snapshot identities and archive cascades are not unified or approved, `BLK-0451`. | `OQ-0386`, `OQ-0455` |
+| `PRF-0035` | Import | Migration: deployed bridge/current/history/cursor/file inventory is reconciled; bounded backfill/rebuild, verification totals/hashes, cutover, rollback, compatibility and old-row/file cleanup pass twice. | `blocked` | `EVD-0932`, `EVD-0935` | Deployed bridge rows/references and approved replacement are unavailable, `BLK-0452`. | `OQ-0386`, `OQ-0456` |
+| `PRF-0036` | Import | Retention: configuration, progress/cursor, current link, source/raw/quarantine history and input files have explicit active/archive/success/failure horizons, leases, reference scans, scheduled cleanup receipts and restore validation. | `blocked` | `EVD-0831`, `EVD-0935` | Archive cascade, successful-input and history/file horizons are incomplete, `BLK-0450`. | `OQ-0386`, `OQ-0454` |
+| `PRF-0037` | Project/scope | Negative consumers: an immutable literal/alias/generated-SQL/registry/script/deployed inventory covers project/direct/route/tombstone/physical-scope and logical-subproject/applicability uses; no omitted consumer relies on a retired copy or provenance field. | `blocked` | `EVD-0832`, `EVD-0931`, `EVD-0932` | Known physical-scope consumers are positive; dynamic/deployed and logical-provenance exhaustion is unavailable, `BLK-0447`. | `OQ-0387`, `OQ-0451` |
+| `PRF-0038` | Project/scope | Product: before/after API plus actual browser/desktop captures preserve project/subproject creation, direct/route membership, inclusive dates, list/count/queue selection, archive/delete progress, errors and navigation. | `pending` | `EVD-0832`, `EVD-0933` | No target implementation or actual platform parity capture ran, `BLK-0448`. | `OQ-0387`, `OQ-0452` |
+| `PRF-0039` | Project/scope | Audit: direct imported-from provenance, selected-route membership, subproject source provenance decision and delete-tombstone phase/count history reconcile with explicit authority and terminal history horizon. | `pending` | `EVD-0832`, `EVD-0933` | Logical subproject provenance and cleanup evidence authority are not approved, `BLK-0448`. | `OQ-0387`, `OQ-0452` |
+| `PRF-0040` | Project/scope | Benchmark: fixed fixture/configuration measures direct/route/combined cardinality, dirty fan-out, rebuild and incremental writes, pre-limit membership scans, rows/bytes/RSS/temp and latency before/after. | `blocked` | `EVD-0936`, `FAN-0012`, `FAN-0016`-`FAN-0021` | Fixture, scope/date/route profile and collector are unavailable, `BLK-0449`. | `OQ-0354`-`OQ-0357`, `OQ-0453` |
+| `PRF-0041` | Project/scope | Export: project/PDF/CSV selection cardinality/order, direct-versus-route provenance, pinned identities and later hydration reconcile before/after, including archive/date boundaries. | `pending` | `EVD-0832`, `EVD-0934` | No owner-approved selection/hydration freeze or export comparison, `BLK-0448`. | `OQ-0387`, `OQ-0452` |
+| `PRF-0042` | Project/scope | Transfer: project settings, direct memberships, selected routes and any approved subproject provenance remap with exact target scope, duplicate handling, revision identity and visible result. | `pending` | `EVD-0832`, `EVD-0934` | Logical provenance is not serialized and no immutable before/after round trip ran, `BLK-0448`. | `OQ-0387`, `OQ-0452` |
+| `PRF-0043` | Project/scope | Recovery: interruption/restart drills replay late membership, rebuild physical scope, bind ACK to materialized output, resume tombstone cleanup and restore source plus scope without stale or missing members. | `blocked` | `EVD-0832`, `EVD-0935` | Incremental ACK can advance without physical writes; no unified replay/restore receipt, `BLK-0450`. | `OQ-0387`, `OQ-0454` |
+| `PRF-0044` | Project/scope | Identity: versioned project, direct/route membership, inclusive date, scope input, selected-import/source watermark and physical publication identities are approved and collision/late-membership tests pass. | `pending` | `EVD-0832`, `EVD-0933` | These dimensions and lifetimes differ and no universal owner-approved identity exists, `BLK-0451`. | `OQ-0387`, `OQ-0455` |
+| `PRF-0045` | Project/scope | Migration: deployed project/membership/tombstone/scope inventory plus bounded derivation rebuild defines checksums/cardinality, reader cutover, rollback, cleanup and repeat-run equality without foreground full-scope scans. | `blocked` | `EVD-0935` | Deployed values, immutable rebuild input and approved cutover are unavailable, `BLK-0452`. | `OQ-0387`, `OQ-0456` |
+| `PRF-0046` | Project/scope | Retention: source membership, tombstone and physical-scope generations have explicit active/archive/delete horizons, reader leases, late-membership/reference scans, scheduled cleanup receipts and executable restore validation. | `blocked` | `EVD-0832`, `EVD-0935` | Batched cleanup exists without complete source/physical receipt, lease or horizon, `BLK-0450`. | `OQ-0387`, `OQ-0454` |
+| `PRF-0047` | Prompt | Negative consumers: immutable literal/alias/generated-SQL/registry/script/deployed inventory covers prompt/project-prompt fields, hashes, criteria and repair paths; every proposed derived/omitted value has zero unpreserved consumer. | `blocked` | `EVD-0833`, `EVD-0931`, `EVD-0932` | Checked-in consumers and direct repair are known; deployed/dynamic exhaustion is unavailable, `BLK-0447`. | `OQ-0388`, `OQ-0451` |
+| `PRF-0048` | Prompt | Product: before/after API plus actual browser/desktop captures preserve create/edit/archive/merge/delete, project order/enablement/criteria, preview/review behavior, errors and cache invalidation. | `pending` | `EVD-0833`, `EVD-0933` | No target implementation or actual platform parity capture ran, `BLK-0448`. | `OQ-0388`, `OQ-0452` |
+| `PRF-0049` | Prompt | Audit: immutable content, nullable legacy/current hash, origin, criteria, project-link state and repair/merge/delete history reconcile with an approved version/history horizon. | `pending` | `EVD-0833`, `EVD-0933` | No durable config-version history or approved legacy-hash/criteria authority, `BLK-0448`. | `OQ-0388`, `OQ-0452` |
+| `PRF-0050` | Prompt | Benchmark: fixed fixture/configuration measures prompt/link writes, hash computation, config invalidation, queue/review reads, export/transfer hydration, rows/bytes/RSS/temp and latency before/after. | `blocked` | `EVD-0936`, `FAN-0013`, `FAN-0016`-`FAN-0021` | Immutable prompt set/settings and complete collector are unavailable, `BLK-0449`. | `OQ-0354`-`OQ-0357`, `OQ-0453` |
+| `PRF-0051` | Prompt | Export: prompt CSV and project/PDF/bulk prompt selection preserve exact content/hash/order/state/criteria and explicitly freeze or re-resolve current rows under one recorded identity. | `pending` | `EVD-0833`, `EVD-0934` | Current re-read behavior exists; no approved freeze boundary or before/after receipt, `BLK-0448`. | `OQ-0388`, `OQ-0452` |
+| `PRF-0052` | Prompt | Transfer: prompt/link schema, content hash, origin/criteria/state/order, duplicate/merge handling and ID remaps round-trip with exact target applicability and invalidation. | `pending` | `EVD-0833`, `EVD-0934` | Source mappings exist; no immutable round-trip or compatibility matrix ran, `BLK-0448`. | `OQ-0388`, `OQ-0452` |
+| `PRF-0053` | Prompt | Recovery: interruption drills restore prompt/link rows, legacy hashes and criteria, replay direct repair/merge/delete safely and rebuild dependent judgments/configuration without orphan links or silent identity reuse. | `blocked` | `EVD-0833`, `EVD-0935` | Repair and normal writers lack one replay/rollback journal or executable restore receipt, `BLK-0450`. | `OQ-0388`, `OQ-0454` |
+| `PRF-0054` | Prompt | Identity: owner-approved immutable-content hash/version and project applicability/order/state/criteria identity drive judgment reuse, review hashes, deltas, comparison and transfer; collision/legacy-null tests pass. | `pending` | `EVD-0833`, `EVD-0933` | Criteria and direct repairs are not covered consistently by every identity/invalidation path, `BLK-0451`. | `OQ-0388`, `OQ-0455` |
+| `PRF-0055` | Prompt | Migration: deployed prompt/link/legacy-hash inventory is reconciled; bounded hash/criteria backfill or derivation, verification totals, cutover, rollback, cleanup and repeat-run equality pass. | `blocked` | `EVD-0935` | Deployed legacy rows and approved canonical version/cutover are unavailable, `BLK-0452`. | `OQ-0388`, `OQ-0456` |
+| `PRF-0056` | Prompt | Retention: active/archive/merged/deleted prompt/link and audit-history horizons, reference scans to judgments/jobs/exports, cleanup schedule/receipts and restore validation are approved and enforced. | `blocked` | `EVD-0833`, `EVD-0935` | Archive/merge/delete exists without closed history/reference horizon or receipts, `BLK-0450`. | `OQ-0388`, `OQ-0454` |
+| `PRF-0057` | Model/provider | Negative consumers: immutable literal/alias/generated-SQL/registry/script/deployed inventory covers stored and virtual model/provider identities, open option/config keys, secret references and direct metadata writers; no omitted value has an unpreserved consumer. | `blocked` | `EVD-0834`, `EVD-0931`, `EVD-0932` | Positive source consumers are known; open/dynamic keys and deployed references prevent exhaustion, `BLK-0447`. | `OQ-0389`, `OQ-0451` |
+| `PRF-0058` | Model/provider | Product: before/after API plus actual browser/desktop captures preserve model/provider list/create/update/archive/delete/selection, synthesized variants, routing, health/errors and exact option behavior. | `pending` | `EVD-0834`, `EVD-0933` | No target implementation or actual platform parity capture ran, `BLK-0448`. | `OQ-0389`, `OQ-0452` |
+| `PRF-0059` | Model/provider | Audit: stored metadata/options/config, discovery/source/version/variant, health/error, transfer markers and external-secret reference history reconcile with redaction and owner-approved history horizons. | `pending` | `EVD-0834`, `EVD-0933` | Open JSON domains, secret boundary and retained history are not approved, `BLK-0448`. | `OQ-0389`, `OQ-0452` |
+| `PRF-0060` | Model/provider | Benchmark: fixed fixture/configuration freezes stored/remote model, provider, variant/version, thinking/options/concurrency and measures resolution/execution/review/export/transfer paths, resources and latency before/after. | `blocked` | `EVD-0936`, `FAN-0014`, `FAN-0016`-`FAN-0021` | Benchmark-critical values, fixture and collector are unavailable, `BLK-0449`. | `OQ-0354`-`OQ-0357`, `OQ-0453` |
+| `PRF-0061` | Model/provider | Export: every included stored/copied model/provider field, redaction, variant/version/options and current-versus-snapshot identity reconcile before/after without exposing secret bytes. | `pending` | `EVD-0834`, `EVD-0934` | No approved export identity/redaction matrix or before/after receipt, `BLK-0448`. | `OQ-0389`, `OQ-0452` |
+| `PRF-0062` | Model/provider | Transfer: provider/model schemas, redaction, fingerprints, materialization/reuse, drift/duplicate handling, ID remaps and target execution identity round-trip for every supported provider kind/variant. | `pending` | `EVD-0834`, `EVD-0934` | Source tests exist; no immutable full provider matrix or target execution parity ran, `BLK-0448`. | `OQ-0389`, `OQ-0452` |
+| `PRF-0063` | Model/provider | Recovery: DB plus external-secret interruption/corruption drills restore references and secret material, reject mismatches, rebuild dependent config and execute an approved nonfallback health/request check. | `blocked` | `EVD-0834`, `EVD-0935` | Database backup does not recover external credentials; no executable cross-store restore receipt, `BLK-0450`. | `OQ-0389`, `OQ-0454` |
+| `PRF-0064` | Model/provider | Identity: stored/virtual/selectable/runtime/execution/transfer fingerprint dimensions are versioned and owner-approved; collisions, variant drift and direct metadata writes invalidate all intended consumers exactly once. | `pending` | `EVD-0834`, `EVD-0933` | Current identities omit different fields and comparison/transfer/direct-writer parity is incomplete, `BLK-0451`. | `OQ-0389`, `OQ-0455` |
+| `PRF-0065` | Model/provider | Migration: deployed rows/open JSON/secret references are inventoried; bounded schema/materialization backfill, fingerprint verification, cutover, rollback, cleanup and repeat-run equality pass without changing benchmark settings. | `blocked` | `EVD-0935` | Deployed domains, external-secret inventory and approved target/cutover are unavailable, `BLK-0452`. | `OQ-0389`, `OQ-0456` |
+| `PRF-0066` | Model/provider | Retention: active/disabled/archived/deleted catalog, health/error, transfer-marker, secret-reference and audit histories have horizons, dependent-reference scans, scheduled cleanup receipts and DB/secret restore validation. | `blocked` | `EVD-0834`, `EVD-0935` | Model deletion, provider/secret/history horizons and cleanup receipts are unresolved, `BLK-0450`. | `OQ-0389`, `OQ-0454` |
+| `PRF-0067` | Review configuration | Negative consumers: immutable literal/alias/generated-SQL/registry/script/deployed inventory enumerates every project/prompt/model/provider/route/article dimension and every review/selected-import/serving/execution/comparison/transfer identity consumer; no universal-hash assumption remains untraced. | `blocked` | `EVD-0835`, `EVD-0931`, `EVD-0932` | Known consumer identities differ; dynamic/deployed exhaustion is unavailable, `BLK-0447`. | `OQ-0390`, `OQ-0451` |
+| `PRF-0068` | Review configuration | Product: before/after API plus actual browser/desktop captures preserve project settings, prompt/route/model changes and LLM/Human/Both/Unassessed/list/detail/count/filter/warning behavior under exact invalidation/freshness semantics. | `pending` | `EVD-0835`, `EVD-0933` | No target composition or actual platform parity capture ran, `BLK-0448`. | `OQ-0390`, `OQ-0452` |
+| `PRF-0069` | Review configuration | Audit: old/new dimension values, writer identity, config delta, derived hashes/snapshot IDs and affected consumer components reconcile in a versioned ledger or immutable equivalent with approved history horizon. | `pending` | `EVD-0835`, `EVD-0933` | Current rows/timestamps and execution snapshots do not form one config-change audit ledger, `BLK-0448`. | `OQ-0390`, `OQ-0452` |
+| `PRF-0070` | Review configuration | Benchmark: one immutable fixture freezes every applicability, model/provider/thinking, prompt/content/date/route/scope/runtime dimension and measures invalidation, rebuild, foreground reads and resources before/after without defaults or fallback. | `blocked` | `EVD-0936`, `FAN-0015`, `FAN-0016`-`FAN-0021` | Critical dimension values, fixture and collector are unavailable, `BLK-0449`. | `OQ-0354`-`OQ-0357`, `OQ-0453` |
+| `PRF-0071` | Review configuration | Export: selection identity and every prompt/article/model/content/date/route/scope value used at selection versus download hydration are explicit and before/after exports reconcile under the approved freeze/current policy. | `pending` | `EVD-0835`, `EVD-0934` | Jobs can pin one identity while later hydration re-resolves others; no approved parity receipt, `BLK-0448`. | `OQ-0390`, `OQ-0452` |
+| `PRF-0072` | Review configuration | Transfer: plan/revision, provider/model fingerprints, prompts, content/date/route/scope settings, target defaults and dirty tokens round-trip to the intended target config and trigger all required invalidations. | `pending` | `EVD-0835`, `EVD-0934` | Transfer and current review hashes use different dimensions; no immutable round-trip matrix ran, `BLK-0448`. | `OQ-0390`, `OQ-0452` |
+| `PRF-0073` | Review configuration | Recovery: interruption/replay drills reconstruct the intended version from source plus retained snapshots/deltas, resume dirty/rebuild/promotion, reject mixed identities and restore comparison/transfer visibility. | `blocked` | `EVD-0835`, `EVD-0935` | No single replay journal or executable restore receipt spans all consumer identities, `BLK-0450`. | `OQ-0390`, `OQ-0454` |
+| `PRF-0074` | Review configuration | Identity: an owner-approved versioned dimension matrix defines applicability, judgment natural identity, review hash, selected-import, serving snapshot, execution snapshot, comparison and transfer identities; mutation tests prove exact invalidation coverage. | `pending` | `EVD-0835`, `EVD-0933` | Existing hashes/snapshots intentionally omit different dimensions and no authority decision exists, `BLK-0451`. | `OQ-0390`, `OQ-0455` |
+| `PRF-0075` | Review configuration | Migration: deployed source/hash/snapshot/job/transfer inventories reconcile; bounded recomputation/backfill, version cutover, mixed-version rejection, rollback, cleanup and repeat-run equality pass. | `blocked` | `EVD-0935` | Deployed values, canonical composition/version and approved cutover are unavailable, `BLK-0452`. | `OQ-0390`, `OQ-0456` |
+| `PRF-0076` | Review configuration | Retention: current settings, config deltas, execution/serving snapshots, jobs, comparison and transfer histories have explicit horizons, pins/references/reader leases, cleanup receipts and version-specific restore validation. | `blocked` | `EVD-0835`, `EVD-0935` | Separate families have no approved common or per-family horizon/cleanup/restore matrix, `BLK-0450`. | `OQ-0390`, `OQ-0454` |
+
+### Non-Keep Target Replacement Contracts
+
+These rows do not authorize implementation. Each pass requires every named
+contract in the row, including a later immutable validation receipt. A target
+can be source-derived without requiring data movement, but it still needs an
+explicit rebuild/backfill-or-not-applicable decision, reader cutover and
+cleanup boundary.
+
+| rowId | Target / linked dispositions | Owner, read and write paths | Invalidation, retention and recovery | Backfill/rebuild, cutover and cleanup | Later validation | proofCheckState | Evidence / blocker / owner question |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `PRF-0077` | `app.data_source_import_route` delete; `DSP-0006`/`DSP-0029` | Import/architecture owner selects the canonical data-source-to-route binding; inventory all API/import/option/export/transfer/operator reads and every direct/generated writer before naming the replacement. | Version route/binding changes; preserve required bridge audit history, cursor/replay and source/current links; define restore/rollback owner and horizon. | Reconcile every deployed bridge row/reference into the approved target, verify totals/hashes/conflicts, cut all readers/writers, reject mixed versions, then drop/clean only after a durable receipt. | Static negative search plus deployed inventory, import/API/browser/desktop/export/transfer parity, replay/restore and same-fixture benchmark all pass on one release candidate. | `blocked` | `EVD-0831`, `EVD-0932`, `EVD-0935`, `EVD-0937`; `BLK-0453`; `OQ-0457` |
+| `PRF-0078` | Logical subproject derive; `DSP-0014` | Project/subproject owner freezes the source project, target project, bounded prompt/article link reads and transactional target writes; decide whether parent/source provenance must be persisted. | Emit exact project/prompt/article/config deltas; retain provenance or an evidence-backed not-applicable decision; define transaction rollback and source/target restore. | If provenance is required, backfill/version it before cutover; otherwise prove deterministic reconstruction. Cut over create/read/export/transfer consumers atomically and clean no source until references settle. | Creation totals/order/config, API/browser/desktop, export/transfer, interruption rollback, restore and same-fixture boundedness pass. | `blocked` | `EVD-0832`, `EVD-0933`-`EVD-0935`, `EVD-0937`; `BLK-0454`; `OQ-0458` |
+| `PRF-0079` | Logical project scope/applicability derive; `DSP-0019` | Project/scope and projector owners define authoritative project/direct/selected-route/article/date reads, physical `mart.project_scope_article` writes and every foreground/queue/projector consumer. | Version immutable scope input, replay late membership, bind dirty ACK to publication; retain active/history/tombstone generations with reader-safe recovery. | Rebuild all affected projects with cardinality/checksum receipts, dual-read only if explicitly bounded, cut readers on one version, rollback to prior generation and clean retired rows under leases. | Direct/route/combined/date cases, queue/list/count/export/transfer, crash restart, restore and same-fixture pre-limit budgets pass. | `blocked` | `EVD-0832`, `EVD-0933`-`EVD-0935`, `EVD-0937`; `BLK-0454`; `OQ-0458` |
+| `PRF-0080` | Logical content setting derive; `DSP-0020` | Project/config owner defines the four project-field reads and every ordinary, transfer and direct writer plus judgment/config/snapshot/export consumer; no duplicate authority is introduced. | Version exclusivity and content identity; invalidate V4/comparison/transfer/execution consumers; retain old execution evidence and define rollback/restore. | Validate/backfill illegal or legacy combinations, cut every writer to one validator/version, reject mixed values and clean only superseded derived copies after reference scans. | Exact four-flag boundary cases, judgment reuse, all review modes, export/transfer, recovery and fixed-setting benchmark pass. | `blocked` | `EVD-0835`, `EVD-0933`-`EVD-0937`; `BLK-0455`; `OQ-0459` |
+| `PRF-0081` | Logical date range derive; `DSP-0021` | Project/config owner defines inclusive ordered project bounds, article-created-at reads, all writers and scope/execution/export/transfer consumers. | Version null/start/end semantics; invalidate every scope/review/comparison/transfer consumer; retain historical execution bounds and restore prior version. | Inventory/backfill invalid/reversed/legacy bounds, rebuild affected scope/snapshots, cut writers/readers to one validator/version, rollback and clean superseded copies after pins settle. | Null, equal, inclusive start/end and out-of-range cases pass API/browser/desktop, export/transfer, recovery and same-fixture scope budgets. | `blocked` | `EVD-0832`, `EVD-0835`, `EVD-0933`-`EVD-0937`; `BLK-0455`; `OQ-0459` |
+| `PRF-0082` | Logical selected-route set derive; `DSP-0022` | Import/project/config owners define sorted project-route plus current article-route reads, selected-import/scope writes and all list/job/export/transfer consumers. | Version route set plus source watermark/snapshot, replay late membership/archive/stale-link changes, retain pinned selections and define restore. | Rebuild selected-import/scope for deployed projects with set/cardinality/checksum receipts, cut on one version, rollback to prior set/snapshot and clean retired copies under pin/reader leases. | Add/remove/archive/stale/late route cases, list/count/export/transfer, crash restore and same-fixture bounded-selection budgets pass. | `blocked` | `EVD-0831`, `EVD-0832`, `EVD-0835`, `EVD-0933`-`EVD-0937`; `BLK-0455`; `OQ-0459` |
+| `PRF-0083` | Logical project review configuration/hash derive; `DSP-0023` | Configuration/invalidation owner approves the source-dimension matrix, canonical serializer/version, all ordinary/direct/transfer writers and each review/selected-import/serving/execution/comparison/transfer reader identity. | Emit old/new versioned deltas with exact fan-out; retain execution/audit history, pins and old-version readers; define mixed-version rejection, replay and restore. | Recompute deployed identities/snapshots/jobs with equality/collision receipts, rebuild every affected component, cut consumers by version, roll back atomically or compensatingly and clean only after reference/pin scans. | Mutation matrix proves each dimension invalidates exactly intended consumers; all review modes, benchmark, export/transfer, crash recovery, retention and cleanup validation pass. | `blocked` | `EVD-0835`, `EVD-0933`-`EVD-0937`; `BLK-0456`; `OQ-0460` |
+
+### US-081 Proof And Actionability Accounting
+
+| Register slice | New rows | `satisfied` | `pending` | `blocked` | `not-applicable` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Article domains | 10 | 0 | 5 | 5 | 0 |
+| Import domains | 10 | 0 | 5 | 5 | 0 |
+| Project/scope domains | 10 | 0 | 5 | 5 | 0 |
+| Prompt domains | 10 | 0 | 5 | 5 | 0 |
+| Model/provider domains | 10 | 0 | 5 | 5 | 0 |
+| Review-configuration domains | 10 | 0 | 5 | 5 | 0 |
+| Non-keep target contracts | 7 | 0 | 0 | 7 | 0 |
+| **US-081 new** | **67** | **0** | **30** | **37** | **0** |
+| Prior `PRF-0001`-`PRF-0016` | 16 | 8 | 3 | 5 | 0 |
+| **Cumulative proof register** | **83** | **8** | **33** | **42** | **0** |
+
+| Disposition slice | Rows | `recommendationActionability: unresolved` | `recommendationActionability: blocked` | Actionable |
+| --- | ---: | ---: | ---: | ---: |
+| US-073 keep rows | 33 | 33 | 0 | 0 |
+| US-073 derive/delete accounting rows | 8 | 0 | 8 | 0 |
+| Other US-074-US-080 rows | 400 | 400 | 0 | 0 |
+| **Cumulative disposition register** | **441** | **433** | **8** | **0** |
+
+This proof expansion changes no `auditStatus` and does not claim parity,
+benchmark, export, transfer, recovery, migration or retention success.
+`proofCheckState` is recorded row by row; the actionability transition applies
+only because the eight non-keep rows explicitly reference required blocked
+checks. Manifest reconciliation remains DBO 322/322 blocked and CMF
+1,985/1,985 blocked. No proof check is inferred from a manifest state, no
+recommendation state is inferred from a physical measurement, and
+`overallCertification` remains `INCOMPLETE`.
 
 ## Recommendation Proof Gate
 
@@ -13336,8 +13526,10 @@ ninety-five table/logical/file-object rows, 202 disjoint column/material-family
 rows and 44 associated-index rows cover 119 physical tables/catalogs, 31
 temporary families, 45 logical/file/no-table contracts, all 1,985 CMF rows and
 44 named indexes exactly once. Counts are 326 `keep`, six `move`, 24 `derive`,
-61 `delete` and 24 `archive`; all 441 are provisional with
-`recommendationActionability: unresolved` and zero are actionable.
+61 `delete` and 24 `archive`; all 441 remain provisional. US-081 leaves 433
+with `recommendationActionability: unresolved` and changes the eight exact
+US-073 derive/delete accounting rows to `blocked` through linked required
+proof checks. Zero are actionable.
 
 US-080 adds nine table-level delete targets and their field grains, raising
 full-table delete candidates from ten to 19; two separate file/object plus
@@ -13359,8 +13551,16 @@ Record separate positive and negative checks for every applicable proof domain,
 each with `proofCheckState`, evidence IDs, missing evidence, blockers, and
 owner-question IDs.
 
-Current state: scaffolded. The inherited candidate list is preserved but is not
-certified and must not drive implementation.
+Current state: US-081 adds `PRF-0017`-`PRF-0083`. Sixty rows give each of the
+six source/configuration families one independently stateful negative-consumer
+check and nine positive product, audit, benchmark, export, transfer, recovery,
+identity, migration and retention checks. Seven more rows define the complete
+owner/read/write/invalidation/retention/recovery/backfill-or-rebuild/cutover/
+cleanup/later-validation contract for the bridge delete and six logical
+derives. New states are 30 pending and 37 blocked; the cumulative 83-row
+register is eight satisfied, 33 pending, 42 blocked and zero not-applicable.
+No planned parity or benchmark check is satisfied, and the inherited candidate
+list remains provisional.
 
 ### Output 09 - Candidate Target Shapes
 
@@ -16026,14 +16226,23 @@ zero value-bearing physical observations. No DBO or CMF row advances to
 4 deployed schema, value, plan, size, runtime, cleanup or recovery evidence.
 
 The disposition register is also an output family, not a manifest status.
-US-073 and US-074 contribute 65 `DSP-####` rows: 31 table/logical and 34
-column-family decisions, comprising 51 `keep`, six `derive`, two `delete`
-and six `archive` rows. All 65 are
-`recommendationActionability: unresolved` and none is actionable. The two
-delete rows are two granularities for one bridge target, and the six archive
-rows are multiple granularities for two physical targets; logical-object
-backing fields and supporting indexes are cross-references, not additional
-disposition targets.
+US-073 through US-080 contribute 441 `DSP-####` rows: 195 object/logical/file,
+202 disjoint column/material and 44 associated-index decisions, comprising 326
+`keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081
+changes no disposition: 433 rows retain
+`recommendationActionability: unresolved`, while the eight exact US-073
+derive/delete accounting rows become `blocked` through explicit required
+`PRF-####` links. None is actionable. Multiple accounting grains for one
+physical target, logical-object backing-field cross-references and supporting
+indexes are not additional targets.
+
+The proof register is independently 83 `PRF-####` rows. The 16 prior rows
+retain eight `satisfied`, three `pending` and five `blocked` states. US-081
+adds 60 family/domain rows plus seven target contracts: 30 pending and 37
+blocked. Cumulative state is eight satisfied, 33 pending, 42 blocked and zero
+not-applicable. No manifest, measurement, disposition value or certification
+state is inferred from those proof states, and no planned parity or benchmark
+work is recorded as passed.
 
 The remaining zeros count normalized terminal states, not absent repository
 objects. API remains 64 lifecycle, eight API, two writer and one blocked; UI
@@ -16044,9 +16253,10 @@ nonterminal output rows: 193 lifecycle, 13 writer and four API.
 US-054 through US-066 complete family-level source reconciliation. DBO rows now
 distribute as 322 blocked and CMF rows as 1,985 blocked, with zero nonterminal,
 classified or out-of-scope rows in either family. This is balanced terminal
-accounting, not certification: every row is blocked and every storage
-disposition remains unresolved. US-067 through US-072 add measurement state
-only and leave those manifest distributions unchanged.
+accounting, not certification: every manifest row is blocked and every storage
+disposition remains non-actionable; 433 actionability states are unresolved
+and eight are blocked. US-067 through US-072 add measurement state only and
+leave those manifest distributions unchanged.
 
 US-049-US-053 lineage remains evidence for mutation, publication and lifecycle;
 terminal object accounting and blocked measurements do not convert its status
@@ -16679,6 +16889,12 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-0607` | 2026-07-22 / US-080 | Expanded the remaining DBO/CMF ranges, separated object, temporary, index, field and material-key grains, reconciled prior ownership and full-text references, assigned every in-scope grain once and derived exact disposition/cumulative counts plus non-keep gates. | Prevent double counting and close the Phase 5 provisional register without converting source evidence into actionability. | Produced `EVD-0927`: 99 object/temp/file, 36 index and 78 field/material decisions cover 135 DBO and 529 unique CMF rows; US-080 counts are 156 keep/three move/36 delete/18 archive and cumulative counts are 326 keep/six move/24 derive/61 delete/24 archive. All 441 rows remain unresolved and zero is actionable. |
 | `CMD-0608` | 2026-07-22 / US-080 | Deliberately skipped configured snapshot/query/studio, direct/live DuckDB or SQLite, host-root/deployed-file inventory, fixture DDL/DML, migrations, server/app/browser/desktop, workers/projectors, repair/recovery/backup/export/transfer/cleanup, benchmarks, EXPLAIN/profile and physical collectors. Audited created artifacts and started product processes. | Preserve repository data/runtime behavior and benchmark-critical settings while making non-execution, cleanup and process-stop accounting explicit. | Produced `EVD-0928`: zero database/runtime/fixture commands, zero generated artifacts and zero started product processes occurred; cleanup and stop sets are empty. These action counts are not physical observations. |
 | `CMD-0609` | 2026-07-22 / US-080 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check` and strict source-only sequential-ID/reference/table-width/scope/disjointness/no-recount/disposition/actionability/state/count/source/worktree/tracker/whitespace validators. Three initial inline-validator launches were preserved: the first overmatched DBO cross-reference rows, the second overmatched pre-ledger BLK rows, and the third incorrectly required numeric CMF presentation order even though `CMF-1946` is intentionally grouped with its comparison payload owner. The corrected section-scoped/set validator is authoritative. Skipped build, tests, browser/desktop, database and runtime gates because this story changes audit Markdown/tracker metadata only and runtime/data inspection is prohibited. | Verify the complete Phase 5 register, independent states, non-actionability, audit-only isolation and repo-native formatting without manufacturing runtime evidence. | Produced `EVD-0929`. Lint preserves the same six unrelated source errors and no typecheck script exists. Corrected validators pass: 322 DBO, 1,985 CMF, 929 EVD, 609 CMD, 446 BLK, 450 OQ and 441 DSP canonical IDs are contiguous; US-080 scope is 36/36/18/13/32/78, all 529 CMF IDs occur exactly once, all 213 rows are unresolved and zero is actionable; cumulative dispositions are 326 keep/six move/24 derive/61 delete/24 archive; manifests/proof/certification remain unchanged and no product/runtime source changed. |
+| `CMD-0610` | 2026-07-22 / US-081 | Read the required reporting, DuckDB, API and frontend skills, user PRD/patterns, `tasks/prd.json#US-080/#US-081/#US-082`, `.ralph-tui/progress.md` including US-054/055/067/073/080, US-001 state/proof rules, US-073 dispositions, US-080 prerequisite, current proof/disposition/count registries, HEAD and worktree status; searched the targeted memory registry. | Establish prerequisite, exact six-family/41-row/seven-target scope, independent states, audit-only/no-live boundary and unrelated worktree state before defining checks. | Produced `EVD-0930`. US-080 is complete; `tasks/prd.json` is the sole pre-existing unrelated modification, and the memory registry has no applicable audit result. |
+| `CMD-0611` | 2026-07-22 / US-081 | Ran scoped `git diff --name-only a3faeac97373c5cd21a6298671be52084eee8200..HEAD -- src scripts package.json` and exact non-test `rg` searches for the bridge's SQL/symbol variants plus standalone persisted subproject/content/date/selected-route/universal-config authorities. | Revalidate source stability and record negative checked-in consumer evidence without treating it as deployed absence. | Produced `EVD-0931`-`EVD-0932`. Scoped source is unchanged; the bridge remains schema-declared with no production DB owner found, and the six logical targets remain compositions. Dynamic/deployed exhaustion stays blocked. |
+| `CMD-0612` | 2026-07-22 / US-081 | Used exact `rg` and focused reads over article canonical/import/full-text paths; data-source/import/current/source-history paths; project/subproject/scope/tombstone paths; prompt/hash/repair paths; model/provider/selectable/secret paths; review-config/hash/snapshot/delta/invalidation paths; project/PDF/CSV export; transfer schema/fingerprint/commit/recovery; lexical migrations, cleanup/retention and benchmark declarations. | Define finite positive product, audit, benchmark, export, transfer, recovery, identity, migration and retention pass predicates from current source while preserving their evidence domains. | Produced `EVD-0933`-`EVD-0936`. Positive paths and source gaps are exact; no planned execution is recorded as passed. |
+| `CMD-0613` | 2026-07-22 / US-081 | Expanded six families into ten independent domains each; paired every US-073 disposition with its family range; expanded the bridge delete and six logical derives into seven target contracts covering owner, reads, writes, invalidation, retention, recovery, backfill/rebuild, cutover, cleanup and later validation. | Make every recommendation gate finite and prevent one family-level or runtime state from substituting for target-specific proof. | Produced `EVD-0937` and `PRF-0017`-`PRF-0083`: 60 family rows plus seven target rows. New states are 30 pending/37 blocked; cumulative states are eight satisfied/33 pending/42 blocked. Eight non-keep DSP rows become blocked, 433 remain unresolved and zero are actionable. |
+| `CMD-0614` | 2026-07-22 / US-081 | Deliberately skipped configured snapshot/query/studio, direct/live DuckDB or SQLite, deployed-file/data inventory, fixture DDL/DML, migrations, server/app/browser/desktop, writers/projectors, repair/recovery, export/transfer, cleanup/retention, benchmarks, EXPLAIN/profile and physical collectors. Audited created artifacts and started product processes. | Preserve data/runtime behavior and benchmark-critical settings while making non-execution, cleanup and process-stop accounting explicit. | Produced `EVD-0938`: zero database/runtime/fixture/product commands, generated artifacts or started product processes occurred; cleanup and stop sets are empty. |
+| `CMD-0615` | 2026-07-22 / US-081 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check` and strict source-only sequential-ID/reference/table-width/family-domain/target/pairing/state/actionability/count/source/worktree/tracker/whitespace validators. Four initial checks are preserved as non-authoritative: two shell counters exposed Markdown backticks to zsh, one counted repeated DBO cross-reference rows rather than unique IDs, and one required an unwrapped summary phrase. The corrected quoted/unique-ID/field-scanning/whitespace-tolerant validator is authoritative. Skipped build, tests, browser/desktop, database and runtime gates because this story changes audit Markdown/tracker metadata only and those executions would manufacture or mutate prohibited evidence. | Verify the finite proof register, exact pairing, independent states, non-actionability and docs-only isolation. | Produced `EVD-0939`. Lint preserves the same six unrelated source errors; no typecheck script exists. Corrected validators pass: 322 DBO, 1,985 CMF, 939 EVD, 615 CMD, 456 BLK, 460 OQ, 83 PRF and 441 DSP canonical IDs are contiguous; US-081 is 60 family plus seven target rows, states reconcile to 8/33/42/0, exactly eight linked DSP rows are blocked, 433 are unresolved and no product/runtime source changed. |
 
 ## Blockers
 
@@ -17139,6 +17355,16 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0444` | Transfer, export, download and promoted-asset lifecycle | Durable session/history rows, selection, package members, promotion manifests, current-table hydration, ready downloads and target visibility settle in separate phases. Recovery and TTL cleanup lack complete reader fencing and client-saved artifacts have no server retention contract. | A package checksum, completed job or Blob response does not freeze later hydration, prove native desktop save, result visibility, concurrent-download safety or terminal cleanup. | `OQ-0448` | Transfer/export/client owners approve versioned schemas and identities and prove frozen hydration, publication/ACK, browser/desktop delivery, leases, cleanup, retention, rollback and restore. |
 | `BLK-0445` | Local controls, imports, generated files, logs and open serializers | Lease/history/registry/settings/log/import/provider/recovery/lock families use exclusive create, direct rewrite, append or temp/rename independently. Open dynamic/unknown values, redaction, permissions, schema evolution, successful-input retention, crash residue and scheduled cleanup are unresolved. | A local path, bounded source cap or known JSON envelope does not prove security, atomicity, compatibility, retention, cleanup or recovery. | `OQ-0449` | Runtime/security/import/operator owners close serializer domains and approve permissions, atomicity, versioning, retention, scheduled cleanup, redaction and platform recovery. |
 | `BLK-0446` | US-080 non-keep replacement, cutover and restore | Three moves, 36 deletes and 18 archives have bounded provisional homes or retirement conditions, but target schemas/keys/indexes, writers/readers, deployed history/reference inventory, migration/backfill, cutover, rollback, cleanup, retention and restore receipts are unavailable. | Naming a target or finding no current reader cannot make a move, delete or archive actionable or prove unchanged product/benchmark behavior. | `OQ-0450` | Architecture/migration/recovery owners approve each non-keep design and immutable evidence proves parity, bounded migration, rollback, cleanup, retention and executable restore before actionability changes. |
+| `BLK-0447` | US-081 negative consumer exhaustion | Exact checked-in searches identify current positive consumers and the bridge's source-level absence, but alias/generated SQL, registries, scripts outside the checked scope, deployed code/data and operator history are not immutably inventoried for all six families. | A literal negative search cannot satisfy `PRF-0017`/`PRF-0027`/`PRF-0037`/`PRF-0047`/`PRF-0057`/`PRF-0067` or authorize removal, derivation or field omission. | `OQ-0451` | Audit/deployment owners approve the search universe and immutable source plus deployed inventory, with every candidate object/field mapped to a preserved consumer or a zero-consumer receipt. |
+| `BLK-0448` | Product, audit, export and transfer preservation | Source routes/services/tests show positive use, but no owner-approved before/after API/browser/desktop, audit-history, project/PDF/CSV export or transfer round-trip matrix has run against one immutable candidate build and fixture. | Planned coverage and source reachability cannot satisfy the 30 pending positive proof rows or establish unchanged user-visible, audit or portable results. | `OQ-0452` | Product/client/audit/export/transfer owners freeze exact cases, identities, fields, order, errors and file outcomes; immutable before/after receipts pass for all six families. |
+| `BLK-0449` | Source/configuration benchmark preservation | No approved fixture instance, generator/seed, model/provider/thinking, prompt/content/scope/date/route settings, memory/runtime/snapshot identity or complete collector exists. | `PRF-0020`/`PRF-0030`/`PRF-0040`/`PRF-0050`/`PRF-0060`/`PRF-0070` remain blocked; missing values are unavailable, never zero or source-default substitutes. | `OQ-0453` | Benchmark/data owners approve the immutable configuration and collector; same-fixture before/after resource, write and latency results pass without retry, fallback or setting changes. |
+| `BLK-0450` | Recovery, retention and cleanup preservation | Source families, histories, snapshots, external secrets, referenced files and physical scope have separate recovery and lifetime contracts; no authorized interruption/corruption fixture, complete backup/reference set, reader leases, scheduled cleanup receipts or executable restore matrix exists. | Recovery and retention source paths cannot satisfy `PRF-0023`/`PRF-0026`, `PRF-0033`/`PRF-0036`, `PRF-0043`/`PRF-0046`, `PRF-0053`/`PRF-0056`, `PRF-0063`/`PRF-0066` or `PRF-0073`/`PRF-0076`; missing cleanup never proves deletion safety. | `OQ-0454` | Recovery/retention owners approve per-family horizons and destructive-fixture authority; interruption, reference/orphan scan, cleanup, restore and later read validation receipts pass. |
+| `BLK-0451` | Identity and invalidation authority | Canonical/source/current, prompt/content, model/provider, scope, review hash, selected-import, serving, execution, comparison and transfer identities include different dimensions and direct writers have incomplete fan-out parity. | Current source cannot make one identity universally authoritative or satisfy `PRF-0024`/`PRF-0034`/`PRF-0044`/`PRF-0054`/`PRF-0064`/`PRF-0074`. | `OQ-0455` | Data/configuration/invalidation owners approve a versioned dimension-and-consumer matrix; collision, stale-reuse and mutation fan-out tests pass for every writer and consumer. |
+| `BLK-0452` | Deployed migration, backfill and cutover proof | The lexical source schema is known, but applied catalogs/data, open serializer values, bridge rows/references and an approved target release candidate are unavailable. No bounded verification, cutover, rollback or cleanup ran. | Historical migration text cannot satisfy `PRF-0025`/`PRF-0035`/`PRF-0045`/`PRF-0055`/`PRF-0065`/`PRF-0075` or prove idempotent deployed transition. | `OQ-0456` | Migration/database owners approve a non-live immutable inventory and target; totals/hashes/conflicts, backfill/rebuild, mixed-version handling, cutover, rollback, cleanup and repeat-run receipts pass. |
+| `BLK-0453` | Data-source/import-route bridge retirement contract | The checked-in bridge has no production database owner, but deployed rows/references and the canonical replacement binding are unknown; cursor/replay, audit history, API/import/export/transfer and restore consequences remain open. | `PRF-0077` is blocked and both bridge accounting rows must remain non-actionable. | `OQ-0457` | Import/architecture owners select and version the target, reconcile deployed rows/references, then prove negative consumers, parity, migration, rollback, retention, cleanup and restore on one release candidate. |
+| `BLK-0454` | Subproject and project-scope replacement contracts | Logical subproject provenance is undecided, while physical scope rebuild and incremental acknowledgement use different writers/receipts and late membership is not automatically replayed. | `PRF-0078` and `PRF-0079` are blocked; derivability does not prove transaction recovery, publication equality or bounded current membership. | `OQ-0458` | Project/scope owners approve provenance, authoritative reads/writes and immutable input; bounded create/rebuild, ACK/output, cutover, rollback, cleanup, parity, benchmark and restore receipts pass. |
+| `BLK-0455` | Content, date and selected-route replacement contracts | The three logical values have different backing rows, writers, validators, watermarks and consumer identities; illegal/legacy values, late membership, pins and superseded copies lack one cutover and cleanup design. | `PRF-0080`-`PRF-0082` remain blocked and their derive dispositions cannot advance. | `OQ-0459` | Project/import/configuration owners approve versioned validators/identities and all writer/read paths; boundary backfill/rebuild, invalidation, parity, rollback, retention, cleanup and restore pass. |
+| `BLK-0456` | Project review-configuration replacement contract | No canonical versioned composition covers every owner-approved applicability/execution dimension or all review, selected-import, serving, execution, comparison, export and transfer consumers. | `PRF-0083` remains blocked; an existing hash, successful component rebuild or transfer fingerprint cannot certify universal configuration parity. | `OQ-0460` | Configuration/invalidation owners approve the serializer/version and consumer matrix; deployed recomputation, mixed-version rejection, exact fan-out, cutover/rollback, parity, benchmark, cleanup and restore receipts pass. |
 
 ## Owner Questions
 
@@ -17603,6 +17829,16 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0448` | Transfer/export/client/recovery owner | Which selection, session, revision, package, promotion, visibility and download identities are frozen; what version/compatibility horizon, native browser/desktop delivery, concurrent-reader fence, terminal cleanup, retained-copy policy, rollback and restore proof applies? | `DSP-0244`-`DSP-0248`, `DSP-0350`-`DSP-0354`, `DSP-0357`-`DSP-0360`, `DSP-0379`-`DSP-0383`, `DSP-0404`-`DSP-0406`, `DSP-0425`-`DSP-0429`, `DSP-0432`-`DSP-0435`, `DSP-0440`-`DSP-0441` and `BLK-0444` |
 | `OQ-0449` | Runtime/security/import/operator owner | Which closed/versioned/redacted schemas, permissions, atomic publication rules, benchmark settings, retention horizons, cleanup schedules and recovery procedures govern owner files, registries, settings, logs, imports, provider cache, recovery SQL and local locks? | `DSP-0235`-`DSP-0236`, `DSP-0251`, `DSP-0338`-`DSP-0349`, `DSP-0355`-`DSP-0356`, `DSP-0361`-`DSP-0363`, `DSP-0370`-`DSP-0371`, `DSP-0386`-`DSP-0387`, `DSP-0403`, `DSP-0413`-`DSP-0424`, `DSP-0430`-`DSP-0431`, `DSP-0436`-`DSP-0439` and `BLK-0445` |
 | `OQ-0450` | Architecture/migration/API/client/recovery owner | For the exact 57 US-080 non-keep rows (three move, 36 delete, 18 archive), what target schema/key/index and owners, deployed reference/history inventory, migration/backfill, bounded cutover, rollback, product/browser/desktop/export/transfer parity, cleanup, retention and executable restore evidence is mandatory? | Non-keep rows within `DSP-0229`-`DSP-0441` and `BLK-0446` |
+| `OQ-0451` | Audit/deployment/operator owner | What exact literal, alias, generated-SQL, registry, allowlist, package/script, operator and deployed-code/data universe is mandatory for an immutable negative-consumer receipt for each US-081 family and target? | `PRF-0017`/`PRF-0027`/`PRF-0037`/`PRF-0047`/`PRF-0057`/`PRF-0067` and `BLK-0447` |
+| `OQ-0452` | Product/client/audit/export/transfer owner | Which exact API, browser, desktop, audit-history, project/PDF/CSV export and transfer round-trip cases, fields, ordering, errors, identities and saved-file outcomes must match before/after for the six source/configuration families? | Thirty pending product/audit/export/transfer rows and `BLK-0448` |
+| `OQ-0453` | Benchmark/data/tooling owner | Which immutable fixture/report ID, generator/seed, model/provider/thinking, prompts, content/scope/date/route settings, memory/runtime/snapshot identities, workload cases, metrics and collector approve the six source/configuration comparisons? | `PRF-0020`/`PRF-0030`/`PRF-0040`/`PRF-0050`/`PRF-0060`/`PRF-0070` and `BLK-0449` |
+| `OQ-0454` | Recovery/retention/storage/security owner | What per-family active/history/failure/pin/file/secret horizons, reader leases, reference/orphan scans, cleanup scheduler/receipts, destructive interruption/corruption fixture and executable restore/read validation are required? | Twelve recovery/retention proof rows and `BLK-0450` |
+| `OQ-0455` | Data/configuration/invalidation owner | Which versioned dimensions define canonical/source/current, prompt/content, model/provider, project scope, review, selected-import, serving, execution, comparison and transfer identities, and which writer-to-consumer mutation matrix must pass? | Six identity proof rows and `BLK-0451` |
+| `OQ-0456` | Migration/database/release owner | Which immutable deployed catalog/data/open-domain/reference inventory and release candidate may be used, and what totals/hashes/conflict, backfill/rebuild, mixed-version, cutover, rollback, cleanup and repeat-run receipts are mandatory? | Six migration proof rows and `BLK-0452` |
+| `OQ-0457` | Import/architecture/recovery owner | What replaces `app.data_source_import_route`, who owns its reads/writes/invalidation, how are every deployed row and history reference reconciled, and which parity, migration, rollback, retention, cleanup and restore receipts permit drop? | `DSP-0006`/`DSP-0029`, `PRF-0077` and `BLK-0453` |
+| `OQ-0458` | Project/subproject/scope/projector owner | Is subproject source provenance durable or evidence-backed non-applicable, which immutable inputs and writers define current scope, and what late-membership replay, ACK/output, rebuild, cutover, cleanup, benchmark and restore receipts are required? | `DSP-0014`/`DSP-0019`, `PRF-0078`-`PRF-0079` and `BLK-0454` |
+| `OQ-0459` | Project/import/configuration owner | Which versioned validators, read/write paths and invalidation identities govern content settings, inclusive dates and selected routes, and what legacy backfill, rebuild, cutover, rollback, pin-safe cleanup, parity and restore matrix must pass? | `DSP-0020`-`DSP-0022`, `PRF-0080`-`PRF-0082` and `BLK-0455` |
+| `OQ-0460` | Configuration/invalidation/release owner | Which canonical serializer/version and complete dimension-to-consumer map defines project review configuration, and what deployed recomputation, collision/mixed-version, exact fan-out, cutover/rollback, benchmark/parity, retention, cleanup and restore proof is mandatory? | `DSP-0023`, `PRF-0083` and `BLK-0456` |
 
 ## US-001 Quality Gates
 
@@ -20629,8 +20865,10 @@ commands. A command proves only the claim linked through its evidence record.
       Every non-keep row states a bounded replacement requirement including
       authority, version/identity, migration or derivation, parity, benchmark,
       recovery and retention gates as applicable.
-- [x] All 41 rows retain `recommendationActionability: unresolved`; zero are
-      actionable. No move, derive, archive or delete implementation is
+- [x] At US-073 completion, all 41 rows retained
+      `recommendationActionability: unresolved` and zero were actionable.
+      US-081 later blocks the eight non-keep accounting rows through explicit
+      proof links. No move, derive, archive or delete implementation is
       authorized, and no `move`, `slim`, `split` or `archive` disposition is
       introduced.
 - [x] `auditStatus`, `proofCheckState`,
@@ -20980,8 +21218,9 @@ commands. A command proves only the claim linked through its evidence record.
 - [x] Two hundred thirteen sequential `DSP-####` rows reconcile as 36 table,
       36 index, 18 migration-temp, 13 runtime-temp, 32 file/object and 78
       field/material decisions: 156 `keep`, three `move`, 36 `delete` and 18
-      `archive`, with zero `derive`. All 213 new and all 441 cumulative rows
-      retain `recommendationActionability: unresolved`; zero are actionable.
+      `archive`, with zero `derive`. At US-080 completion, all 213 new and all
+      441 cumulative rows retained `recommendationActionability: unresolved`;
+      US-081 later blocks eight prior US-073 rows and zero are actionable.
 - [x] Cumulative accounting reconciles to 195 object, 202 column/material and
       44 index decisions covering 119 permanent tables/catalogs, 31 temporary
       families, 45 logical/file/no-table contracts, all 1,985 CMF rows and 44
@@ -21010,6 +21249,55 @@ commands. A command proves only the claim linked through its evidence record.
 - [x] Final sequential-ID/reference/table-width/scope/disjointness/no-recount/
       disposition/actionability/state/count/source/worktree/tracker/whitespace
       invariants pass (`CMD-0609`).
+
+## US-081 Quality Gates
+
+- [x] US-080 is complete and scoped product source is unchanged since the
+      US-073 source/configuration baseline. All 41 US-073 disposition rows
+      remain paired without recounting their 23 object/logical, 18
+      column-family or 16 supporting-index grains.
+- [x] Sixty sequential family/domain proof rows give article, import,
+      project/scope, prompt, model/provider and review configuration exactly
+      one negative-consumer and nine positive product, audit, benchmark,
+      export, transfer, recovery, identity, migration and retention checks.
+      Every row has one independently assigned `proofCheckState`, exact
+      evidence, missing evidence/blocker and owner question.
+- [x] Seven sequential target rows cover the bridge delete and six logical
+      derives exactly once. Each defines owner, read and write paths,
+      invalidation, retention, recovery, backfill or rebuild, cutover, cleanup
+      and later validation without authorizing implementation.
+- [x] `PRF-0017`-`PRF-0083` reconcile to 67 new rows: 30 `pending` and 37
+      `blocked`. The cumulative 83-row register is eight `satisfied`, 33
+      `pending`, 42 `blocked` and zero `not-applicable`; no prior proof state
+      advances and no planned parity or benchmark work is marked passed.
+- [x] The 33 US-073 keeps retain
+      `recommendationActionability: unresolved`. The six derive and two bridge
+      accounting rows become `blocked` only through explicit required proof
+      links. Cumulative actionability is 433 unresolved, eight blocked and
+      zero actionable; no disposition value changes.
+- [x] `auditStatus`, `proofCheckState`,
+      `recommendationActionability` and `overallCertification` remain
+      independent. DBO stays 322 discovered/322 blocked, CMF stays 1,985
+      discovered/1,985 blocked, FAN stays 91 blocked plus one source-proven
+      not-applicable row and certification stays `INCOMPLETE`.
+- [x] `EVD-0930`-`EVD-0939`, `CMD-0610`-`CMD-0615`,
+      `BLK-0447`-`BLK-0456` and `OQ-0451`-`OQ-0460` record exact source,
+      proof, command, blocker, owner and bounded resolution evidence. Negative
+      checked-in search is not deployed absence, and positive source
+      reachability is not executed parity.
+- [x] Zero live/current/project DuckDB or SQLite, configured snapshot/query/
+      studio, deployed-data inventory, fixture DDL/DML, server/app/browser/
+      desktop, writer/projector, migration, repair/recovery, export/transfer,
+      cleanup/retention, benchmark, EXPLAIN/profile or physical collector
+      commands ran. No generated artifact or product process requires cleanup
+      or stopping.
+- [x] `rtk bun run lint` preserves the same six unrelated source errors and no
+      typecheck script exists. Build, tests, browser/desktop and database/
+      runtime gates are irrelevant or prohibited for this Markdown-only proof
+      definition and were not run.
+- [x] Final sequential-ID/reference/table-width/family-domain/target/pairing/
+      state/actionability/count/source/worktree/tracker/whitespace invariants
+      pass (`CMD-0615`).
 
 ---
 
