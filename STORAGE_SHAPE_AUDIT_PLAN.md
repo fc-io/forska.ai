@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-096 add 940 finite proof rows without changing a disposition: the 956-row proof register is eight `satisfied`, 478 `pending`, 470 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked` through explicit required target links, and zero are actionable. US-092 through US-096 define 45 concrete but unvalidated `TGT-0001`-`TGT-0045` shapes; US-096 adds project-specific and globally reusable token alternatives, bounded exact asynchronous substring results, immutable queue eligibility/order/article-access components and intake selection receipts. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, benchmark fixture/configuration, exact route/browser/desktop proof, posting/summary/filter/search exactness and selectivity, applied access paths, bounded ID/row/byte/call/attempt hydration and order, queue eligibility/priority/cursor/intake/claim parity, legacy/current identity and history mapping, snapshot/publication/file-reference atomicity, canonical path/key and permissions/encryption evidence, export/transfer/portability parity, migration/cutover, temporary lifetime and residue, replay/repair/startup/recovery, retention, cleanup and restore evidence remain incomplete. No prior proof state or manifest state advanced, no planned route, runtime, parity, benchmark or lifecycle work is labeled passed, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` remains independently `INCOMPLETE`. |
+| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-097 add 953 finite proof rows without changing a disposition: the 969-row proof register is eight `satisfied`, 478 `pending`, 483 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked` through explicit required target links, and zero are actionable. US-092 through US-097 define 58 concrete but unvalidated `TGT-0001`-`TGT-0058` shapes; US-097 adds immutable component and selected/snapshot publication, owner-fenced pins, source/dirty/watermark controls, rebuild/finalization, overlay, judgment/maintenance/bulk jobs and complete retention-cycle alternatives. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, benchmark fixture/configuration, exact route/browser/desktop proof, posting/summary/filter/search exactness and selectivity, applied access paths, bounded ID/row/byte/call/attempt hydration and order, queue eligibility/priority/cursor/intake/claim parity, legacy/current identity and history mapping, snapshot/publication/file-reference atomicity, canonical path/key and permissions/encryption evidence, export/transfer/portability parity, migration/cutover, temporary lifetime and residue, replay/repair/startup/recovery, retention, cleanup and restore evidence remain incomplete. No prior proof state or manifest state advanced, no planned route, runtime, parity, benchmark or lifecycle work is labeled passed, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` remains independently `INCOMPLETE`. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-096 / 2026-07-22` | Designs seven layered `TGT-0039`-`TGT-0045` alternatives for project-specific token membership, reusable global title facts plus bounded project binding, exact asynchronous substring work, immutable queue eligibility, exact prompt-pair order/cursors, article-grain queue access and bounded intake selection receipts. Proposed contracts separately cap normalized input, per-title tokens, source/binding/posting rows, prefix probes, candidate intersections, result rows, encoded bytes, calls/physical attempts, pages/chunks/windows and termination. Representative SQL, write/index amplification, ownership, invalidation, snapshot publication, failure, migration, retention, replay, recovery, cleanup and browser/desktop consequences are explicit. Foreground project scans, all-ID materialization, cursor omissions and reinterpreting intake/SQLite/claim order as serving priority are rejected. `PRF-0950`-`PRF-0956` remain blocked pending semantic ownership, non-live applied inventory, exact plan/platform/lifecycle proof and a fixed physical benchmark; seven linked keeps remain unresolved, seven linked non-keeps remain blocked and no actionability changes. No schema, code, runtime, data or certification state advances. |
+| Latest normalized story | `US-097 / 2026-07-22` | Designs 13 ownership-aligned `TGT-0046`-`TGT-0058` alternatives for immutable component revisions, selected-import and serving-snapshot publication, owner-scoped pins, durable source frontiers, fenced dirty work, consumer visibility watermarks, rebuild/finalization, write overlays, judgment execution, maintenance, bulk jobs and retention cycles. Representative reads/writes, mandatory finite caps, owner generations, leases, retries, idempotence, active/LKG behavior, terminal receipts, consumer watermarks, references, orphan cleanup, recovery, failure and component-by-component migration/cutover are explicit. Mutable status/timestamps, stale-running claims without tokens, threshold-keyed pseudo-cursors, expiration without cleanup, all-ID histories, unbounded terminal rows and any cutover that weakens atomic publication or recovery are rejected. `PRF-0957`-`PRF-0969` remain blocked pending authority, non-live applied inventory, exact publication/lease/recovery/retention proof and a fixed physical benchmark; 73 linked keeps remain unresolved, two linked non-keeps remain blocked and no actionability changes. No schema, code, runtime, data or certification state advances. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
@@ -17921,6 +17921,412 @@ DBO remains 322/322 blocked, CMF remains 1,985/1,985 blocked, FAN remains 91
 blocked plus one source-proven not-applicable, and overall certification remains
 `INCOMPLETE`.
 
+## US-097 Manifest And Control Target Shapes
+
+US-096 is complete and remains the prerequisite. This story designs bounded
+publication and lifecycle alternatives for the identity, selected-import,
+serving-snapshot, pin, delta/frontier, dirty-work, watermark, rebuild, overlay,
+judgment-job, maintenance, bulk-job and retention families classified in
+US-075/US-076 and proved by US-083 through US-085. `TGT-0041` remains the sole
+asynchronous-substring target and `TGT-0045` remains the queue-intake receipt;
+US-097 cross-references those contracts without claiming a second target.
+
+The designs below are grouped by component owner, publication boundary and
+recovery need. They are not schema approval, an applied migration, measured
+savings, owner authority or permission to alter routes, writers, projectors,
+retention, files or data. Scoped `src`, `scripts` and `package.json` source is
+unchanged from the US-083 control baseline `048ec5f5` through HEAD
+`cd197355`. Effective checked-in shape was derived from the complete lexical
+migration chain, including the final projector-watermark rebuild and index
+drop. No live/current DuckDB or SQLite file, configured snapshot, fixture,
+server, app, worker, projector, migration, repair, browser or packaged desktop
+process was opened or run.
+
+`auditStatus`, `proofCheckState`, `recommendationActionability` and
+`overallCertification` remain independent. Every new target proof is
+`proofCheckState: blocked`. The 73 linked keep grains remain
+`recommendationActionability: unresolved`; the two linked dormant project-
+cursor delete grains remain `recommendationActionability: blocked`; no
+disposition, existing proof or certification state changes. DBO, CMF, FAN and
+the 441-row disposition register are not recounted.
+
+### US-097 Evidence Ledger
+
+| evidenceId | Evidence class | Exact source | Finding used by this story | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-1146` | `control/prerequisite` | `tasks/prd.json:1908-1962`; `.ralph-tui/progress.md` US-096 entry; US-001 state rules; US-075/US-076 dispositions; US-083/US-084/US-085 proofs; US-096 target boundary; HEAD/worktree and canonical-ID counts | US-096 is complete and US-097 was absent. Next IDs are `TGT-0046`, `PRF-0957`, `EVD-1146`, `CMD-0753`, `BLK-0611` and `OQ-0615`. The engine-owned `tasks/prd.json` modification is unrelated and preserved. | `CMD-0753` |
+| `EVD-1147` | `production/schema-source` | `src/db/migrateDuckdb.ts#getDuckdbMigrationFiles`; `0097_reviewServingV4Foundation.sql:71-488`; `0103_reviewProjectionInputWatermarks.sql`; `0107_reviewServingRebuildRequest.sql`; `0115_rebuildReviewServingProjectorWatermarkWithoutPrimaryKey.sql`; `0116_dropReviewServingProjectorWatermarkLookupIndex.sql`; judgment-job migrations `0046`, `0047`, `0061`, `0071`, `0082`; scoped diff `048ec5f5..cd197355` | Source declares the current control families, but final projector-watermark shape is unkeyed and the effective constraints/indexes differ from bootstrap declarations. DDL is not applied/deployed inventory, value preservation or migration receipt. | `CMD-0754` |
+| `EVD-1148` | `production/identity-selected-snapshot` | `reviewServingContracts.ts:1-15`; `reviewProjectionIdentity.ts`; `reviewServingProjectorDomain.ts#getReviewServingProjectionComponentIdentityKey/#getReviewServingSourcePartitionWatermarks`; `reviewServingManifestRepository.ts#getProjectionManifestId/#upsertReviewServingProjectionIdentityManifest/#createCandidateReviewServingSnapshotManifest/#getActiveOrLastKnownGoodReviewServingSnapshotManifest`; `reviewServingSelectedImportProjector.ts#getReviewServingSelectedImportSnapshotId`; `reviewServingProjectorWriter.ts#writeReviewServingSelectedImportSnapshotCursor/#promoteReviewServingProjectorSnapshot`; `reviewServingSnapshotPromotionService.ts#composeReviewServingCandidateSnapshotManifest/#validateReviewServingCandidateSnapshotManifest` | Eleven component types are registered. Current component rows mutate under one semantic manifest ID; selected headers can update/reuse identity; candidate composition copies mutable manifest state; promotion retires active then activates candidate in one transaction but SQL lacks immutable revision/FK/single-active fences. | `CMD-0755` |
+| `EVD-1149` | `production/pin-reader` | `reviewServingSnapshotPinRepository.ts#getReviewServingSnapshotPinId/#acquireReviewServingSnapshotPin/#incrementReviewServingSnapshotPin/#releaseReviewServingSnapshotPin/#expireReviewServingSnapshotPins/#listProtectedReviewServingSnapshotStates`; `reviewBulkOperationService.ts#getPinnedSnapshotState/#insertBulkOperationJob`; active/LKG route and generic reader resolution | Pin identity includes owner and composed identity and protects retention while active. Bulk pin acquisition precedes job insertion, terminal release/expiry lack an operating owner, ordinary readers have no lease and ref-count/status alone does not prove settlement or safe deletion. | `CMD-0755` |
+| `EVD-1150` | `production/delta-dirty-watermark` | `reviewServingDeltaLedger.ts`; `reviewServingDeltaReconciliation.ts#reconcileReviewServingDeltaOutboxRow/#getReviewServingOutboxWatermarkBarrier/#advanceReviewServingProjectorWatermark`; `reviewServingDirtyWorkService.ts#upsertReviewServingDirtyWork/#claimReviewServingDirtyWork/#completeReviewServingDirtyWorkClaimsAndAdvanceWatermark/#compactReviewServingDirtyWorkAcknowledgements`; `reviewServingProjectorDomain.ts#getReviewServingProjectorWatermarkId/#getReviewServingSourcePartitionWatermarks`; dirty-intake and projector callers | Delta allocation, outbox reconciliation, dirty admission, ownerless stale claim, point ACK, threshold-keyed compaction, projector row and manifest input map are separate. Current process-local watermark locking, status/timestamp claim and threshold-specific receipt IDs are not cross-process ownership or one advancing consumer frontier. | `CMD-0756` |
+| `EVD-1151` | `production/rebuild-finalization` | `reviewServingRebuildRequestRepository.ts#createReviewServingRebuildRequestEffect`; `reviewServingChunkManifestRepository.ts#getReviewServingRebuildChunkClaimPredicate/#claimReviewServingRebuildChunk/#heartbeatReviewServingRebuildChunkLease/#markReviewServingRebuildChunkFailed/#writeReviewServingRebuildChunkOutput`; `reviewServingProjectorWorker.ts` split-depth gate, derived finalization, promotion and terminal repair paths | Requests deterministically admit bounded chunks; chunks have owner/expiry claims, default three attempts/60-second retry and depth below 12. Output completion, derived reduction, candidate refresh, promotion and request terminal state are separate; a failure after all chunks complete needs a distinct finalization claimant and receipt. | `CMD-0757` |
+| `EVD-1152` | `production/overlay` | `reviewWriteOverlayService.ts#getReviewWriteOverlayId/#appendReviewWriteOverlay/#getActiveReviewWriteOverlays/#reconcileReviewWriteOverlays/#expireReviewWriteOverlays`; Human delta writer and row/detail overlay readers; exact non-test reconcile/expire/delete caller search | Current overlay payload is capped at 4,096 bytes and defaults to five-minute expiry. Reads are article/surface scoped but uncapped; helper-driven reconcile/expire has no operating sweep, expiry is not deletion, and source high water is not active/LKG visibility. | `CMD-0757` |
+| `EVD-1153` | `production/judgment-maintenance-job` | `judgmentJobSqliteService.ts`; `judgmentExecutionSnapshotService.ts`; `judgeWorkerCompletionJournal.ts`; `judgmentsJobsMarkDirtyWork.ts`; `judgmentJobRepair.ts`; `judgmentJobSqliteLease.ts`; `maintenanceWorkLeaseService.ts`; `providerAdmissionLease.ts`; `requestAttemptCloseoutService.ts`; judgment-job routes/status/cleanup; US-006/US-069/US-085 exact control inventories | Canonical job, local ready/claim/execution/result/completion/import/visibility, token closeout, maintenance freshness, provider admission, health and delete state have distinct identities and owners. A local terminal, central job status, health count or owner ACK cannot substitute for canonical visibility and cleanup. | `CMD-0758` |
+| `EVD-1154` | `production/bulk-search-job` | `reviewBulkOperationService.ts#getBulkOperationJobId/#insertBulkOperationJob`; `reviewBulkOperationWorker.ts#getClaimableJob/#markProgress/#runWithHeartbeat/#markFailed`; add/PDF/export status and download readers; `reviewSearchService.ts`; `TGT-0041`, `TGT-0045` | Bulk criteria are deterministically keyed, capped at 5,000 explicit IDs/1 MB, executed in 500-row batches with three default retries, but claim ownership is only status plus `updated_at`; progress/result writes are not claimant-CAS fenced and pins survive terminal state. Search work remains separately owned by `TGT-0041`. | `CMD-0758` |
+| `EVD-1155` | `production/retention-recovery` | `reviewServingRetentionService.ts#cleanupTableSpecs/#deleteCleanupBatch/#writeRetentionMark/#cleanupReviewServingRetentionState`; projector-worker 60-second schedule; startup indexed-table probes; `scripts/dbBackup.ts`; transfer/export selection, hydration, package and recovery paths | Current cleanup rotates one 512-row step over 11 data tables and protects active/LKG/pins, but records only the next table index, carries unused cutoffs and omits every control family. No cleaner/reader lease, registry version, reference/orphan scan, full-cycle receipt or executable control-family restore exists. | `CMD-0759` |
+| `EVD-1156` | `production/publication-consumer` | mounted LLM/Human/Both/Unassessed/filter readers; diagnostics/warning/health; review project export and bulk download; project-transfer schema/package/commit/recovery; active/LKG/pin resolution; US-084/US-085 route/export/transfer proof | Product readers observe explicit, active or LKG snapshots; exports can pin selection then re-resolve or hydrate later, while transfer omits control rows and regenerates target state. Source reachability does not prove one immutable read, artifact or target recovery boundary. | `CMD-0759` |
+| `EVD-1157` | `measurement/control` | US-069 `FAN-0033`-`FAN-0047`; US-083/US-084/US-085 physical blockers; approved non-live snapshot and fixture absence; source/worktree checks | Deployed control rows/statuses/ages, component/source fan-out, terminal history, null/orphan/reference counts, table/index/WAL/temp bytes, claim races, plans, latency, RSS/spill, cleanup lag and restore outcomes remain unavailable, never zero. | `CMD-0759` |
+| `EVD-1158` | `design/comparison-lifecycle` | `TGT-0046`-`TGT-0058`; US-097 ownership, cap, SQL, lease/retry/idempotence, active/LKG, watermark, retention/recovery, migration and rejection matrices below | Thirteen design-only targets retain separate receipts for admission, claim, output, publication, visibility and cleanup; every target has a finite policy/cap, explicit overflow/failure and no indefinite hot history. | `CMD-0760`-`CMD-0761` |
+| `EVD-1159` | `design/proof-control` | `PRF-0957`-`PRF-0969`; `BLK-0611`-`BLK-0621`; `OQ-0615`-`OQ-0625`; US-097 accounting, quality gates and command ledger | All 13 validations remain blocked pending owner authority, immutable applied inventory, atomic publication/lease/recovery proof, finite lifecycle policy and fixed benchmark. Proof becomes 8/478/483/0 across 969 rows; actionability remains 326 unresolved/115 blocked/zero actionable. | `CMD-0762`-`CMD-0764` |
+
+### Ownership, Publication Boundary And Recovery Grouping
+
+| Component owner | Target families | Atomic publication boundary | Recovery and lifecycle need |
+| --- | --- | --- | --- |
+| Review-serving component/projector owner | `TGT-0046` component revision; `TGT-0047` selected import; `TGT-0048` serving snapshot; `TGT-0053` rebuild | Sealed component revision -> sealed selected base -> immutable snapshot composition -> one CAS active/LKG head | Rebuild missing/failed revisions from source events; never mutate a revision referenced by active/LKG/pin; keep terminal attempts only under a finite policy. |
+| Retention and bulk-owner boundary | `TGT-0049` snapshot lease; `TGT-0057` bulk job | Job admission and pin lease are one transaction or have a durable compensation receipt; artifact readiness is separate from job terminal status | Settle owner generations and download leases, scan references, repair orphan jobs/pins/artifacts and retain finite delivery history. |
+| Delta and projector-intake owner | `TGT-0050` source frontier; `TGT-0051` dirty work; `TGT-0052` consumer visibility frontier | Immutable source event -> fenced dirty attempt/output receipt -> sealed component revision -> snapshot visibility receipt | Detect gaps/duplicates, reclaim only by generation, replay zero-fan-out/late-membership cases, and prune only below every approved consumer frontier. |
+| Human review writer | `TGT-0054` overlay | Canonical Human write plus overlay event is one transaction; overlay reconciliation waits for the exact source event's active/LKG visibility receipt | Expire read eligibility without claiming deletion; repair missing visibility links and clean bounded terminal rows after references/leases. |
+| Judgment execution owner | `TGT-0055` canonical/local judgment job; `TGT-0056` maintenance/control runs | Intake, durable insertion, claim/execution snapshot, result, canonical import, visibility and closeout remain separate receipts tied by immutable IDs | Resume local/central handoff without duplicate result/token effects, fence stale owners, restore files plus central markers and clean only after visibility and closeout. |
+| Storage/recovery owner | `TGT-0058` retention cycle | One versioned policy and target registry; each bounded delete step has a receipt; only a complete cycle advances the cycle head | Resume after any eligibility/delete/receipt crash, repair unknown cursors/orphans, validate restore and reject unbounded or reference-blind histories. |
+
+### Current Contract Versus Bounded Alternatives
+
+| Grain | Current checked-in behavior | Exact bounded alternative | Consequence and explicit failure |
+| --- | --- | --- | --- |
+| Component identity/input | One semantic manifest ID is updated with generation, patch, scalar/map input and status. Snapshot composition copies the row's current state. | `TGT-0046` writes a content-addressed immutable revision plus closed per-partition input rows and a seal receipt. | Later updates create another revision. Unknown partitions, over-cap inputs, digest/count mismatch or an unsealed revision block composition; no mutable-row reuse. |
+| Selected-import publication | Header/cursor/base and projection manifest can be updated/reused under a selected snapshot ID. | `TGT-0047` separates resumable build attempt from immutable sealed header/base revision and exact count/checksum. | Interrupted builds resume by attempt cursor; reset creates a new revision. Missing/extra winners or unsealed base is unavailable, never partially active. |
+| Serving active/LKG | Candidate JSON copies are validated, current active rows are retired and the candidate is activated transactionally, without a relational component/FK/single-active fence. | `TGT-0048` stores relational component references and changes one `(active_snapshot_id,lkg_snapshot_id,head_epoch)` row by compare-and-swap. | Readers resolve one head epoch. CAS loss, missing seal/reference, cross-config mismatch or validation failure retains prior active/LKG and records failed candidate. |
+| Pin/reader lease | Owner-hashed ref-count rows protect cleanup; bulk acquisition precedes job insertion and ordinary readers do not lease. | `TGT-0049` uses one owner-generation lease per admitted use, atomic job binding/compensation and finite terminal settlement receipts. | Active-lease cap overflow blocks admission rather than evicting references. Stale generation cannot renew/release; cleanup requires zero live leases and a reference scan. |
+| Source intake/frontier | Allocation, delta, optional outbox, `reconciled_at`, dirty fan-out and schema-only project cursor are separate and can stop before later membership/publication. | `TGT-0050` stores immutable partition events and separate contiguous allocation, persisted, reconciled, dirty-admitted and visible frontiers with gap receipts. | Zero fan-out remains explicit and can be replayed on membership revision. Gaps, unknown payload/version or over-cap lag quarantine the lane; a mutable cursor cannot authorize prune. |
+| Dirty work/ACK | Coalesced rows claim by status/time without owner token; ACK precedes status completion; compaction identity includes threshold. | `TGT-0051` adds owner token/generation/lease, immutable attempt/output receipt and one lane checkpoint whose identity excludes the advancing value. | Only owner-CAS completion can ACK/advance. Stale owner, output mismatch, failed publication or missing visibility leaves work retryable/quarantined and cannot suppress replay. |
+| Consumer watermark | Projector row, manifest scalar/map and snapshot copy use different identities; process-local locking guards an unkeyed table. | `TGT-0052` records separate event, dirty, sealed-output and snapshot-visible values per registered consumer lane and signs the monotonic transition chain. | Freshness/pruning uses only an owner-approved visible minimum. Alias drift, duplicate lane, regression or missing receipt blocks advance; values are never merged by `any_value`. |
+| Rebuild request/chunk/finalize | Request/chunks have budgets and chunk leases; all-complete derived reduction/promotion is a later sequence with no independent finalization claim. | `TGT-0053` keeps immutable plan, chunk attempt/output, request finalization claim and promotion receipt as separate versioned rows. | Completed chunks remain reusable while finalization retries under its own lease. Attempt/depth/budget exhaustion is terminal/quarantined; active/LKG remains unchanged. |
+| Write overlay | Deterministic pending rows expire after five minutes; reads are uncapped and reconcile/expire helpers lack an operating sweep. | `TGT-0054` stores immutable overlay event, bounded article/surface index and exact source-visible receipt; reconciliation and physical cleanup are separate. | More than the approved row/byte cap is unavailable, not truncated. Expiry removes read eligibility only; cleanup waits for visibility/reference/lease proof. |
+| Judgment execution job | Central job, per-file scan/queue/claim/snapshot/outboxes/ACKs, import marker, visibility and token closeout use separate current contracts. | `TGT-0055` retains each grain under one immutable job/selection/execution identity and a finite receipt chain; it references `TGT-0045` intake. | Local terminal or owner ACK cannot mark canonical visibility. Config drift, missing receipt or retry exhaustion preserves failure and active evidence; no all-ID job JSON. |
+| Maintenance/control runs | Maintenance/provider leases, health, closeout/backfill, delete intent and telemetry have different owners and horizons. | `TGT-0056` uses a versioned work-kind registry, fenced run/step receipts, current-only health projection and separately typed provider/closeout/delete evidence. | No generic status or timestamp implies completion. Unknown work kind, stale owner, incomplete closeout or history-cap overflow blocks the lane; three-day telemetry remains a separate source contract. |
+| Bulk job/result | Criteria/job ID is deterministic; stale `updated_at` reclaims running jobs, progress/result is mutable JSON and terminal state does not settle pin/artifact. | `TGT-0057` freezes criteria/selection revision, owner-CAS claims, per-batch side-effect/result receipts, typed final manifest and delivery/pin settlement. | Existing 5,000-ID/1 MB/500-row/three-attempt limits are hard ceilings pending owner validation. A claim loss, checksum/count/artifact mismatch or delivery lease blocks terminal publication. |
+| Retention cycle | One mark rotates a table index across 11 data tables, deletes 512 rows and updates `last_cleaned_at`; controls and complete-cycle evidence are omitted. | `TGT-0058` stores versioned policy/registry, owner lease, cycle, per-target eligibility/delete receipt, orphan decision and complete-cycle checksum. | Maximum 512 deletes/step and 16 targets/cycle with explicit continuation. Unknown references, policy drift, lease loss, receipt failure or incomplete restore leaves the cycle failed/resumable, never "clean". |
+
+### US-097 Target Shape Register
+
+Every `v5` object below is proposed only. `MAX_*` denotes a mandatory finite,
+versioned owner-approved value; there is no implicit default. If a policy value
+is missing or a cap is reached, admission/publication/cleanup returns typed
+`unavailable`, `blocked` or `quarantined` state and preserves current active/LKG
+or referenced data.
+
+| targetId | Target and linked disposition grains | Exact proposed shape | Owner, source, invalidation and failure | Evidence / proof |
+| --- | --- | --- | --- | --- |
+| `TGT-0046` | Immutable component revision and closed input vector; `DSP-0098`, `DSP-0127`, `DSP-0131`, `DSP-0140` | `app.review_component_revision_v5` PK `component_revision_id=sha256(canonical immutable fields)` stores project/component/projection identity, definition/config/prompt hashes, generation/patch range, source-vector digest, output count/bytes/checksum, `building/sealed/failed`, seal/failure receipt and times. `app.review_component_revision_source_v5` PK `(component_revision_id,source_partition_key)` stores closed registry version and high water; at most 11 components/snapshot and `MAX_SOURCE_PARTITIONS_PER_REVISION`. Sealed rows are append-only. | Each component writer owns its revision; source/config/delta change creates a new ID. Writer retries the same ID idempotently and cannot overwrite a seal. Unknown lane, cap/digest/output mismatch or failure records a failed attempt and blocks snapshot composition. | `EVD-1147`-`EVD-1148`, `EVD-1150`, `EVD-1157`-`EVD-1159`; `PRF-0957` |
+| `TGT-0047` | Immutable selected-import build/header/base; `DSP-0132`-`DSP-0133`, `DSP-0141`-`DSP-0142` | `app.review_selected_import_build_v5` PK `build_id` stores immutable scope/source/order policy, owner generation, lease, cursor, attempt/count/byte caps and status. `app.review_selected_import_revision_v5` PK `selected_revision_id` stores sealed build ID, expected/actual winner count, checksum and source vector. Base PK `(selected_revision_id,article_id)` stores winner/rank/display/conflict/tombstone; 512+1 keyset rows/build step, no ID array. | Selected-import projector owns build and seal; source/scope/rank change starts another build. Page retry is idempotent on `(build_id,page_ordinal,cursor_in)`. Missing page, overlap/gap, duplicate winner, checksum/count/cap or lease failure never publishes a partial revision. | `EVD-1147`-`EVD-1148`, `EVD-1155`-`EVD-1159`; `PRF-0958` |
+| `TGT-0048` | Relational immutable serving snapshot plus active/LKG head; `DSP-0134`-`DSP-0135`, `DSP-0143` | `app.review_serving_snapshot_v5` PK `(project_id,snapshot_id)` stores config/composed/selected revision, source digest, validation and immutable candidate outcome. Component PK `(project_id,snapshot_id,component,requirement)` references one sealed `TGT-0046` revision, maximum 11. `app.review_serving_snapshot_head_v5` PK `(project_id,review_config_hash_key)` stores exactly `active_snapshot_id`, nullable `lkg_snapshot_id`, `head_epoch`. | Promotion owner validates all references/counts/checksums then CAS-updates one head; failed candidate is append-only. A reader fetches one head epoch and exact snapshot. Missing/unsealed refs, config mismatch or CAS loss retains active/LKG and returns retryable/unavailable without mixed composition. | `EVD-1147`-`EVD-1149`, `EVD-1155`-`EVD-1159`; `PRF-0959` |
+| `TGT-0049` | Owner-generation snapshot and reader lease; `DSP-0136`, `DSP-0144` | `app.review_snapshot_lease_v5` PK `lease_id=sha256(project,snapshot,composed,owner_kind,owner_id,owner_generation)` stores heartbeat/expiry/release and bound job/read transaction. Terminal `app.review_snapshot_lease_receipt_v5` records release/expiry/compensation reason and reference scan. `MAX_ACTIVE_LEASES_PER_PROJECT` is enforced before admission. | Bulk/job/export or approved long reader owns acquisition/renew/release. Job plus lease inserts in one transaction, or a compensation receipt reverses acquisition. Only matching generation CAS renews/releases. Overflow, missing owner, expired use or orphan mismatch blocks work; cleanup never evicts a live reference. | `EVD-1149`, `EVD-1154`-`EVD-1159`; `PRF-0960` |
+| `TGT-0050` | Immutable source event and typed consumer-frontier intake; `DSP-0090`-`DSP-0093`, `DSP-0096`, `DSP-0120`-`DSP-0122`, `DSP-0125` | `app.review_source_event_v5` PK `(source_partition,event_sequence)` plus unique idempotency key stores typed operation/key/payload version/digest and source time. `app.review_source_frontier_v5` PK `(source_partition,frontier_version)` stores allocated, persisted, reconciled, dirty-admitted and visible-through values separately; event-attempt/quarantine and zero-fan-out/late-membership receipts are append-only and finite. Dormant project-cursor rows map or retire here only after proof. | Source writers own atomic allocation+event; intake owns reconciliation/dirty receipts; publication owns visible frontier. Same source mutation reuses identity. Gap, duplicate conflict, open payload, no approved membership replay, lag/cap or exhausted attempt quarantines without advancing later grains. | `EVD-1147`, `EVD-1150`, `EVD-1155`-`EVD-1159`; `PRF-0961` |
+| `TGT-0051` | Owner-fenced dirty work, output attempt and advancing ACK lane; `DSP-0094`-`DSP-0095`, `DSP-0123`-`DSP-0124` | `app.review_dirty_work_v5` PK `work_id` stores immutable component revision/scope/source interval and mutable claim owner token/generation/lease/attempt. `app.review_dirty_output_receipt_v5` PK `(work_id,attempt_no)` stores affected rows/bytes/checksum, component revision and terminal error. `app.review_dirty_ack_lane_v5` PK `(component_revision_id,source_partition)` advances one `completed_through` value plus receipt ID; threshold is not identity. | Dirty intake coalesces only identical immutable scope. Projector claims at most 64 rows/one lane and 512 rows per wake; three attempts, 120-second lease and five-second wake are proposed current-aligned ceilings. Only owner-CAS sealed output can ACK/complete. | `EVD-1150`-`EVD-1151`, `EVD-1155`, `EVD-1157`-`EVD-1159`; `PRF-0962` |
+| `TGT-0052` | Versioned consumer visibility frontier; `DSP-0097`, `DSP-0126` and cross-reference `TGT-0046`/`TGT-0048`/`TGT-0051` | `app.review_consumer_frontier_v5` PK `(consumer_version,project_key,component_revision_id,source_partition)` stores event-persisted, dirty-admitted, output-sealed and snapshot-visible values plus exact event/work/output/snapshot receipt IDs. A closed alias registry maps source names; monotonic CAS and unique lane constraints are mandatory. | Publication owner advances only after all referenced receipts exist in one transaction. Consumers read the named grain they need; only `snapshot_visible_through` may certify active publication or prune. Regression, alias drift, duplicate lane, missing active/LKG link or cross-process CAS loss blocks advance. | `EVD-1148`, `EVD-1150`, `EVD-1155`-`EVD-1159`; `PRF-0963` |
+| `TGT-0053` | Immutable rebuild plan, fenced chunks and separately claimable finalization; `DSP-0137`-`DSP-0138`, `DSP-0145`-`DSP-0146` | Request PK `request_id` hashes immutable source/config/component/budget/retry plan. Chunk PK `(request_id,component,range_start,range_end,split_depth)` stores owner generation/lease and three-attempt/60-second backoff policy; output attempts hold count/byte/checksum and component revision. Finalization PK `(request_id,finalization_version)` has its own lease, derived-output receipts, promotion receipt and terminal state. Split depth is at most 12 and execution remains one chunk/batch unless validated otherwise. | Rebuild scheduler owns admission/chunks; publication owner owns finalization. Same plan/chunk/attempt is idempotent; priority is mutable scheduling only. Completed chunks remain sealed through finalization retry. Budget, depth, attempt, checksum or promotion failure leaves prior active/LKG and a finite quarantined record. | `EVD-1147`-`EVD-1148`, `EVD-1151`, `EVD-1155`-`EVD-1159`; `PRF-0964` |
+| `TGT-0054` | Bounded immutable read-your-write overlay; `DSP-0139`, `DSP-0147` | `app.review_overlay_event_v5` PK `overlay_id` keeps exact project/config/article/prompt/judgment/human key, surface/kind, source event/frontier, payload digest/value (maximum 4,096 bytes), created/eligible-until. State references the exact `TGT-0052` visibility receipt. Article/surface read index returns at most `MAX_ACTIVE_OVERLAYS_PER_ARTICLE` and `MAX_OVERLAY_BYTES_PER_READ`; cleanup pages 512 rows. | Canonical Human mutation and event insert are atomic. Row/detail reader overlays only pending eligible rows; source visibility reconciles, clock only expires eligibility. Same source event is idempotent. Overflow, missing source/visibility, divergent payload or sweep failure is unavailable/blocked, never truncated or silently current. | `EVD-1152`, `EVD-1155`-`EVD-1159`; `PRF-0965` |
+| `TGT-0055` | Judgment job and local execution receipt chain; `DSP-0066`-`DSP-0071`, `DSP-0074`, `DSP-0082`-`DSP-0087`, `DSP-0103`-`DSP-0109`, `DSP-0116`-`DSP-0118`; file containers/locks remain separate US-091/US-098 references | One immutable central job/selection identity references versioned `TGT-0045` intake pages. Per-file queue, accepted claim, execution snapshot, result outbox, completion, import marker, visibility ACK and token closeout each retain typed PKs and owner-generation attempt receipts; no row or JSON claims the other grain. Active rows are capped per job/epoch; terminal histories require finite status horizons and page-based cleanup. | Judgment scheduler owns job/intake, worker owns claim/execution/result, central importer owns import/visibility, token owner closes attempts. Replays reuse each receipt key under identical model/provider/thinking/content settings. Drift, missing ACK, duplicate-conflict, lost owner or exhausted attempt stops without config fallback or false terminal visibility. | `EVD-1153`-`EVD-1157`, `EVD-1159`; `PRF-0966` |
+| `TGT-0056` | Versioned maintenance, health, provider, closeout and deletion controls; `DSP-0075`-`DSP-0081`, `DSP-0110`-`DSP-0115`; lease/lock files remain separate file targets | `app.maintenance_run_v5` PK `(work_kind_version,scope_id,run_id)` stores owner generation/lease, source/consumer frontier, attempt and terminal receipt. Typed step receipts cover health refresh, provider admission, request closeout/backfill and file deletion; current health is one replaceable projection, telemetry remains bounded by its separate three-day horizon. Work-kind registry and per-status `MAX_*` histories are versioned. | Each registered service owns one typed run/step schema; coordinator fences claims and stale takeover. Same work/source frontier is idempotent, while a new attempt never overwrites terminal evidence. Unknown kind/open recovery payload, claim loss, closeout mismatch, deletion without reference receipt or cap overflow blocks/quarantines. | `EVD-1153`, `EVD-1155`-`EVD-1159`; `PRF-0967` |
+| `TGT-0057` | Owner-fenced bulk criteria, page result and delivery settlement; `DSP-0099`, `DSP-0102`, `DSP-0128`; substring remains `TGT-0041` | Immutable job criteria/selection revision stores at most 5,000 explicit IDs/1 MB and typed job kind/snapshot semantics. Claim row stores owner token/generation/lease. Batch receipt PK `(job_id,batch_ordinal,cursor_in)` stores at most 500 selected IDs by normalized rows, side-effect/result counts/checksum and artifact reference; typed final manifest and delivery/pin receipt replace dynamic JSON maps. Three identical-setting attempts maximum. | Add/PDF/export owner admits atomically with `TGT-0049`; worker owner-CAS writes batch and terminal receipts; download holds artifact/snapshot lease. Replay of a sealed batch is no-op. Cursor/count/checksum/side-effect mismatch, lease loss, artifact failure, retry exhaustion or unsettled pin stays failed/unavailable. | `EVD-1149`, `EVD-1154`-`EVD-1159`; `PRF-0968` |
+| `TGT-0058` | Complete retention policy/cycle/orphan journal; `DSP-0101`, `DSP-0130` | `app.retention_policy_v5` versions the finite target registry, per-family/status horizon and row cap, reference types and restore requirement. Cycle header stores owner generation/lease/policy/cutoff/status; step PK `(cycle_id,target_ordinal,page_ordinal)` stores cursor in/out, at most 512 scanned/deleted/protected rows, hashes and error. Orphan decisions and final cycle receipt are separate; at most 16 target entries/cycle before explicit continuation. | Retention owner scans active/LKG/lease/job/export/transfer/audit references and ordinary-reader leases before delete. Same step is idempotent; receipt commits with delete. Policy drift, unknown reference, lease loss, partial delete/receipt, restore failure or unresolved orphan fails/resumes the cycle and never advances complete-cycle head. | `EVD-1149`, `EVD-1155`-`EVD-1159`; `PRF-0969` |
+
+### Mandatory Bounds And Continuation
+
+These are design ceilings, not measured-safe or owner-approved values. The
+current-aligned numbers below may only become authoritative after the exact
+later proof passes. Every `MAX_*` is a finite positive policy value stored with
+the revision that used it; null, missing, changed or exceeded values fail
+closed. A 512-row page never implies a bounded request unless pages, calls,
+encoded bytes, underlying attempts and termination are also capped.
+
+| Target slice | Per operation ceiling | Request, revision or lifecycle ceiling | Continuation and overflow behavior |
+| --- | --- | --- | --- |
+| `TGT-0046` component revision | At most 11 registered component references and `MAX_SOURCE_PARTITIONS_PER_REVISION`; 512 source/control rows and 2 MiB encoded control data/call | `MAX_BUILD_PAGES`, `MAX_COMPONENT_REVISIONS_PER_SCOPE`, three identical-input physical attempts and five seconds/statement | Explicit build cursor or new revision. Unknown/open lane, over-cap vector, byte/call/attempt/time excess or missing seal is unavailable; no partial component copy. |
+| `TGT-0047` selected import | 512 winner candidates plus one sentinel/build page; 2 MiB control/receipt bytes | `MAX_SELECTED_ROWS`, `MAX_BUILD_PAGES`, `MAX_BUILD_BYTES`, three attempts/page | Persist page receipt/cursor then continue explicitly. Sentinel proves more work only; cap stops build before seal and retains prior active/LKG. |
+| `TGT-0048` snapshot publication | At most 11 component rows and one selected revision; one head CAS/transaction | `MAX_CANDIDATES_PER_SCOPE` and finite failed/retired histories; one active and at most one LKG per project/config head | CAS loser or invalid candidate records failure/retry; it never mutates the active head, auto-promotes a subset or scans historical manifests. |
+| `TGT-0049` leases | Point acquire/renew/release; 512 reference rows/page | `MAX_ACTIVE_LEASES_PER_PROJECT`, `MAX_LEASE_RENEWALS`, finite maximum duration and terminal receipt horizon | Admission stops before the cap. Reference scan uses an explicit cursor; no expiry extension without owner generation and no eviction to make room. |
+| `TGT-0050` source events | 512 events plus sentinel/partition page; 2 MiB payload+receipt bytes | `MAX_EVENT_LAG`, `MAX_PARTITION_PAGES_PER_RUN`, three attempts/event; finite quarantined/event history | Continue by `(partition,event_sequence)`. Gap/conflict/open payload or lag cap quarantines/stops; no skip to a later high water and no recursive read-all. |
+| `TGT-0051` dirty work | At most 64 claims/one lane and 512 rows/wake; 2 MiB output receipts, 120-second proposed lease | Three attempts/work item, five seconds/wake, `MAX_PENDING_WORK_PER_LANE` | Explicit next lane/cursor. Claim/lease/attempt/pending cap or output mismatch fails/quarantines without ACK/checkpoint advance. |
+| `TGT-0052` consumer frontier | Point lane read/CAS and at most 512 receipt validations/page | At most the closed source-lane registry per component revision; three CAS attempts | Resume exact receipt page. Missing prior grain, alias/version drift or CAS conflict blocks visibility; no maximum/`any_value` merge across duplicate lanes. |
+| `TGT-0053` rebuild | One chunk/batch, 512 control rows/page, default-aligned three attempts/60-second backoff/120-second lease and split depth below 12 | `MAX_CHUNKS_PER_REQUEST`, `MAX_FINALIZATION_ATTEMPTS`, stored input/output/payload/temp/byte budgets | Keyset/split continuation is explicit; finalization remains claimable after all chunks complete. Budget/depth/attempt excess is terminal, never an uncapped split/retry or partial promotion. |
+| `TGT-0054` overlay | Maximum 4,096 payload bytes and `MAX_ACTIVE_OVERLAYS_PER_ARTICLE`/`MAX_OVERLAY_BYTES_PER_READ`; 512 cleanup rows | Five-minute current-compatible eligibility only after approval; finite pending/reconciled/expired row caps/horizons | Over-cap read is unavailable, not truncated. Reconciliation uses visibility receipt; expiry changes eligibility and cleanup continues by keyset. |
+| `TGT-0055` judgment execution | `TGT-0045` 128-row intake page; typed point/batch receipts and 512 terminal cleanup rows | `MAX_ACTIVE_ROWS_PER_JOB`, `MAX_SELECTION_PAGES`, finite attempts/status horizons and explicit file-byte cap from later file target | Next intake/result/import/visibility page is explicit. Config/receipt/file/cap mismatch stops same settings; no all-ID materialization or recursive queue drain. |
+| `TGT-0056` maintenance | At most 64 claimed runs, 512 step rows and 2 MiB diagnostics/receipt bytes | Three attempts/step unless a stricter typed policy applies; `MAX_ACTIVE_RUNS_PER_KIND`, finite terminal/error history; telemetry retains the separate three-day source ceiling | Continue by work-kind/scope/run/step cursor. Unknown kind, open payload, lease loss or cap excess blocks/quarantines; health counters cannot advance cleanup. |
+| `TGT-0057` bulk | Existing proposed hard ceilings: 5,000 explicit IDs, 1 MiB criteria, 500 rows/batch plus sentinel, three attempts | `MAX_BATCHES_PER_JOB`, `MAX_RESULT_BYTES`, finite delivery/pin/job/artifact horizon | Persist batch and side-effect receipt before cursor advance. New explicit job/continuation is required at a request cap; no dynamic all-ID result map. |
+| `TGT-0058` retention | At most 512 scanned/deleted rows/step and 16 registered targets/cycle | `MAX_STEPS_PER_CYCLE`, three owner-CAS attempts/step, finite cycle/failure/orphan receipt horizon | Persist exact step cursor/receipt; continue with another bounded cycle segment. Policy/reference/lease/restore mismatch stops before unsafe delete and cannot label the cycle complete. |
+
+All target scopes must additionally enforce a request-wide encoded-byte budget,
+database-call budget, physical-attempt budget and explicit maximum page/step
+count. Reaching a terminal history cap blocks new non-recovery admission until
+approved cleanup or cold archival completes; it never causes silent eviction
+or indefinite hot growth.
+
+### Representative Target Reads And Writes
+
+The SQL below is illustrative design text. It was not executed and is not
+applied-plan proof. Table names, constraints, isolation and caps remain subject
+to target-specific validation.
+
+```sql
+-- TGT-0046/TGT-0048: compose only sealed immutable revisions, then CAS one head.
+BEGIN;
+SELECT head_epoch, active_snapshot_id
+FROM app.review_serving_snapshot_head_v5
+WHERE project_id = ? AND review_config_hash_key = ?;
+
+SELECT component, component_revision_id, output_count, output_checksum
+FROM app.review_serving_snapshot_component_v5
+JOIN app.review_component_revision_v5 USING (component_revision_id)
+WHERE project_id = ? AND snapshot_id = ? AND revision_status = 'sealed'
+ORDER BY component
+LIMIT 12; -- eleven registered components plus an overflow sentinel
+
+UPDATE app.review_serving_snapshot_head_v5
+SET lkg_snapshot_id = active_snapshot_id,
+    active_snapshot_id = ?,
+    head_epoch = head_epoch + 1
+WHERE project_id = ? AND review_config_hash_key = ? AND head_epoch = ?;
+-- Require exactly one updated head and insert the publication receipt in this transaction.
+COMMIT;
+```
+
+```sql
+-- TGT-0051/TGT-0052: claim by owner generation; completion binds output and visible frontier.
+UPDATE app.review_dirty_work_v5
+SET status = 'running', owner_token = ?, owner_generation = ?, lease_expires_at = ?, attempt_no = attempt_no + 1
+WHERE work_id IN (
+  SELECT work_id
+  FROM app.review_dirty_work_v5
+  WHERE lane_id = ? AND (status = 'pending' OR lease_expires_at <= ?)
+  ORDER BY source_high_water, work_id
+  LIMIT 64
+)
+AND (status = 'pending' OR lease_expires_at <= ?)
+RETURNING work_id, source_high_water, attempt_no;
+
+UPDATE app.review_dirty_ack_lane_v5
+SET completed_through = ?, output_receipt_id = ?, lane_epoch = lane_epoch + 1
+WHERE lane_id = ? AND lane_epoch = ? AND completed_through <= ?;
+-- The transaction also verifies the sealed component/output receipt; visibility advances later.
+```
+
+```sql
+-- TGT-0053: finalization is independently claimable after every chunk is sealed.
+UPDATE app.review_rebuild_finalization_v5
+SET status = 'running', owner_token = ?, owner_generation = ?, lease_expires_at = ?, attempt_no = attempt_no + 1
+WHERE request_id = ?
+  AND status IN ('pending', 'retryable_failed')
+  AND NOT EXISTS (
+    SELECT 1 FROM app.review_rebuild_chunk_v5
+    WHERE request_id = ? AND status <> 'sealed'
+  )
+RETURNING request_id, finalization_version, attempt_no;
+
+-- Derived-output receipts and the TGT-0048 promotion receipt are inserted before owner-CAS terminal completion.
+```
+
+```sql
+-- TGT-0054: bounded overlay lookup; sentinel means unavailable/overflow, never truncation.
+SELECT overlay_id, overlay_kind, overlay_value_json, source_event_id, eligible_until
+FROM app.review_overlay_event_v5
+WHERE project_id = ? AND article_id = ? AND read_surface = ?
+  AND reconcile_status = 'pending' AND eligible_until > ?
+ORDER BY created_at DESC, overlay_id
+LIMIT MAX_ACTIVE_OVERLAYS_PER_ARTICLE + 1;
+```
+
+```sql
+-- TGT-0057: stale workers cannot update another generation's batch/result state.
+UPDATE app.review_bulk_job_claim_v5
+SET owner_token = ?, owner_generation = owner_generation + 1, lease_expires_at = ?, status = 'running'
+WHERE job_id = ? AND (status = 'pending' OR lease_expires_at <= ?)
+RETURNING owner_generation;
+
+INSERT INTO app.review_bulk_batch_receipt_v5 (...)
+VALUES (...)
+ON CONFLICT(job_id, batch_ordinal, cursor_in) DO NOTHING;
+
+UPDATE app.review_bulk_job_claim_v5
+SET cursor_json = ?, processed_count = processed_count + ?, status = ?
+WHERE job_id = ? AND owner_token = ? AND owner_generation = ?;
+```
+
+```sql
+-- TGT-0058: eligibility, bounded delete and receipt commit together.
+BEGIN;
+SELECT reference_type, reference_id
+FROM app.retention_reference_v5
+WHERE target_key = ? AND object_id > ?
+ORDER BY object_id
+LIMIT 513;
+
+DELETE FROM target_table
+WHERE rowid IN (
+  SELECT rowid FROM target_table candidate
+  WHERE candidate.project_id = ? AND candidate.object_id > ?
+    AND NOT EXISTS (SELECT 1 FROM app.retention_reference_v5 ref WHERE ref.object_id = candidate.object_id)
+  ORDER BY candidate.object_id
+  LIMIT 512
+);
+INSERT INTO app.retention_step_receipt_v5 (...) VALUES (...);
+COMMIT;
+```
+
+### Reads, Writes, Leases, Retries And Idempotence
+
+| Target | Representative reads | Representative writes and idempotence | Lease, retry and failure contract |
+| --- | --- | --- | --- |
+| `TGT-0046` | Point revision; closed source-vector page; snapshot composition by exact revision ID | Insert/build source rows, seal once; content ID makes identical replay a no-op and conflicting bytes a failure | Build owner generation; three same-input attempts; failed/unsealed revisions never compose and terminal attempts have a finite horizon. |
+| `TGT-0047` | Build cursor; 512+1 winner page; sealed header/base count/checksum | Idempotent page receipt then base upsert under build ID; one immutable seal | Build lease/owner generation; gap/overlap/count/checksum failure keeps prior selected revision; reset creates a new build. |
+| `TGT-0048` | One head, one snapshot and at most 11 component refs | Insert immutable candidate/validation then one head CAS/publication receipt | Promotion has no stale-worker write after CAS loss; failure stays candidate/failed and exact active/LKG remains readable. |
+| `TGT-0049` | Point owner lease; bounded active/reference scan | Atomic job+lease insert or compensation; matching owner generation renew/release is idempotent | Finite lease/renewal policy; stale/expired generation is fenced; unresolved orphan blocks cleanup/admission. |
+| `TGT-0050` | Partition keyset events and separate frontier values | Atomic sequence allocation/event insert; reconcile/dirty/visible receipts advance only their named values | Typed attempt/quarantine policy; duplicate same digest is no-op, conflicting duplicate/gap is blocked and never skipped. |
+| `TGT-0051` | Oldest lane's 64 claims; exact attempt/output/ACK checkpoint | Owner-CAS claim, immutable attempt/output receipt, one advancing lane row | 120-second proposed lease/three attempts; lease loss or output/publication mismatch cannot ACK/complete. |
+| `TGT-0052` | Point consumer lane and bounded receipt chain | Monotonic CAS from event -> dirty -> output -> visible; same receipt is no-op | No time-based takeover without owner generation; regression/duplicate/alias drift is quarantined, not merged. |
+| `TGT-0053` | Request plan; claimable chunk page; all-chunk terminal check; finalization state | Immutable request/chunk identity, owner-fenced attempts/output, independently claimable finalization/promotion receipt | Three chunk attempts/depth below 12; bounded finalization attempts. Failure preserves sealed chunks and active/LKG. |
+| `TGT-0054` | Bounded article/config/surface overlay plus sentinel | Canonical write+event transaction; exact visibility receipt reconciles; expiry and delete are separate | Writer transaction is the ownership fence; overflow/divergence/missing visibility is unavailable, and cleanup retry uses the same row key. |
+| `TGT-0055` | Central job; bounded intake/queue/claim/outbox/import/visibility/closeout pages | Each handoff inserts a typed immutable receipt; same receipt key/no changed benchmark settings is idempotent | Owner generations per scheduler/worker/importer; bounded attempts; any missing step preserves retry/quarantine evidence and prevents false completion. |
+| `TGT-0056` | Work-kind/scope run and typed step; current health point read; bounded telemetry/history | Run/step receipts are append-only; health is replaceable; provider/closeout/delete receipts retain their natural identities | Per-service owner generation/lease and typed retry policy; unknown kind/open payload/late conflict is quarantined with finite history. |
+| `TGT-0057` | Point job; 500+1 selection/batch page; typed result/artifact/delivery manifest | Atomic criteria+pin admission; immutable batch receipt then owner-CAS progress; final manifest sealed once | Owner token/generation replaces `updated_at` ownership; three attempts; failed side effect/artifact/delivery/pin settlement blocks terminal ready. |
+| `TGT-0058` | Versioned policy/target, bounded references/orphans and 512+1 eligible rows | Delete and step receipt share a transaction; complete-cycle receipt only after every registered target | Cleaner owner generation/lease; exact step replay is idempotent; policy drift/reference uncertainty/restore failure leaves failed/resumable cycle. |
+
+### Active, Last-Known-Good, Visibility And Recovery
+
+| Target family | Active and LKG behavior | Consumer watermark or visibility | Orphan cleanup and recovery |
+| --- | --- | --- | --- |
+| `TGT-0046`-`TGT-0048` | One head selects immutable active and optional LKG snapshots; both reference immutable component/selected revisions. Failed candidates never replace either pointer. | Snapshot publication receipt binds all 11-or-fewer component seals, selected seal, source vector and head epoch. | `TGT-0058` retains every revision referenced by active/LKG/lease/export/audit. Missing/corrupt revisions rebuild under new IDs; clean-host restore must reproduce head/component/result equality before reads reopen. |
+| `TGT-0049` | A pin never creates active/LKG state; it protects the exact snapshot/composed identity selected at admission. | Lease receipt binds job/read owner to snapshot epoch; status or ref count alone is not visibility. | Orphan scan joins owner/job/artifact/download state; matching generation settles or operator-quarantines. Restore validates owner/reference/pin protection before cleanup resumes. |
+| `TGT-0050`-`TGT-0052` | Source/dirty/projector rows never become active/LKG independently. Only the `TGT-0048` head makes their sealed output visible. | Allocation, persisted event, reconciliation, dirty admission, output seal and snapshot visibility are separate monotonic values; prune uses the approved minimum visible consumer. | Gap/duplicate/zero-fan-out/late-membership repair replays immutable events. Orphan work/output/frontier rows require reference checks, bounded repair and post-restore active/LKG equality. |
+| `TGT-0053` | Rebuild candidate/finalization never mutates current head until promotion CAS; failure preserves old active/LKG and sealed chunk evidence. | Finalization receipt reconciles all chunks, derived outputs and promotion; chunk `completed` is not visibility. | Startup claims expired generations, reuses valid sealed chunks, repairs missing derived/promotion receipt and caps retries. Orphan request/chunk/candidate rows are retained or cleaned by explicit relation graph. |
+| `TGT-0054` | Overlay is temporary read-your-write state over the route's chosen active/LKG snapshot, not another snapshot or LKG. | Exact source event must reach the relevant snapshot-visible frontier before reconciliation; expiry is neither visibility nor deletion. | Missing canonical/source/visibility link is repairable/quarantined. Cleanup scans active readers and audit references and validates restored row/detail behavior. |
+| `TGT-0055`-`TGT-0057` | Jobs bind pinned snapshot or explicitly versioned latest semantics; latest is re-resolved only where product approves it. Terminal status cannot silently switch snapshot/config. | Selection, inserted, claimed, executed, imported, canonical-visible, artifact-ready, delivered and cleaned values remain separate receipts. | Startup resumes only owner-fenced incomplete steps, reconciles local files/central markers/pins/artifacts, and never replays a sealed side effect. Orphan cleanup waits for visibility, token closeout, delivery and reader leases. |
+| `TGT-0058` | Active/LKG/lease/reference sets are protected inputs, never inferred from age. Cleanup cannot promote, retire or repair publication implicitly. | A cycle receipt reports scanned/protected/deleted/orphaned totals and hashes but is not a product visibility watermark. | Startup resumes exact incomplete step. Destructive interruption requires backup/restore plus later route/worker/export equality before the next cycle; unknown reference blocks deletion. |
+
+### Finite Retention, History And Orphan Policy
+
+Every family must store both `MAX_TERMINAL_AGE` and `MAX_TERMINAL_ROWS` (or a
+stricter typed equivalent), plus active-work caps, schedule, owner, reference
+types and restore requirement. Cleanup applies the earlier safe boundary and
+must never treat reaching a cap as deletion authority. Audit-required history
+older than the hot bound moves only to an approved versioned cold target under
+US-098; without that target, new non-recovery admission blocks before hot
+history becomes indefinite.
+
+| State class | Required protection and finite disposition |
+| --- | --- |
+| Building/pending/running | Protected by live owner generation/lease and request/job/source relation; capped by per-scope active rows and maximum age. Expired owners become repair candidates, not automatic success or deletion. |
+| Candidate/unsealed | Retained until sealed, failed or owner-approved abandoned; bounded candidate count/age. Abandonment records reason, input/output digest and reference scan. |
+| Active/LKG | Never age-deleted. Protected by the single snapshot head and exact immutable references until a later atomic head change plus reference/restore proof. |
+| Pinned/reader-held/export-held | Protected until matching owner generation releases and delivery/read completes. Expiry only permits orphan review; it does not prove safe cleanup. |
+| Retryable failed/quarantined | Retain finite attempts, last input/error and repair/operator decision. Retry exhaustion never resets identity or discards benchmark-critical failure. |
+| Completed/visible/delivered | Retain until all applicable consumer frontiers, audit/export/transfer references, token/closeout and restore horizons pass; then archive or delete in a receipted 512-row step. |
+| Reconciled/expired/released | Logical ineligibility is separate from physical deletion. Reference/orphan scan, reader/cleaner leases and restore validation remain mandatory. |
+| Orphan/unknown version | Never delete by age alone. Quarantine under a finite operator queue; resolve to repair, approved archive or receipted delete before the queue cap. |
+
+### Migration, Cutover, Rollback And Cleanup
+
+Each target migrates under its component owner; there is no all-control big-bang
+or permanent dual authority.
+
+1. Freeze canonical component/source/work/job/status/owner vocabularies,
+   immutable identity fields, benchmark-critical configuration and every
+   finite `MAX_*`/horizon. Missing values are blockers, not defaults.
+2. Attach an immutable non-live applied DuckDB/SQLite/file inventory with
+   effective constraints/indexes, row/status/null/reference/orphan counts,
+   JSON/open-domain values and hashes. Never inspect the live DuckDB directly.
+3. Create an isolated release-candidate v5 target and migration ledger. Record
+   target DDL/hash/version and prove constraints, access plans and backup/restore
+   before any production writer changes.
+4. Backfill in bounded keyset pages, active and LKG references first, then live
+   leases/jobs/work, then finite terminal history. Each page records cursor
+   in/out, source/target counts, checksums, bytes, conflicts and attempts.
+5. Map legacy mutable identities to immutable revisions/attempts. Preserve
+   exact failures, retry counts, source frontiers, selected/snapshot references,
+   pins and local-to-central receipts; do not synthesize zero/complete values.
+6. Quiesce one component/owner lane at an explicit source high water, drain or
+   fence in-flight owners, reconcile source -> dirty -> output -> visible state
+   and run shadow reads. Broad dual writers are rejected.
+7. Switch that lane's writer to v5, validate repeat idempotence and recovery,
+   then build a complete candidate snapshot from sealed v5 revisions. Old
+   active/LKG remains authoritative until one `TGT-0048` promotion CAS passes.
+8. Switch readers/jobs by versioned contract after exact current/candidate row,
+   order, cursor, status/error, export/transfer and browser/desktop comparisons.
+   Mixed-version readers fail unavailable; they do not merge old/new rows.
+9. Hold a finite rollback horizon. Rollback changes the head/contract fence to
+   the last validated old authority, stops v5 writers and preserves v5 failure
+   receipts; it never reconstructs old state from a mutable target guess.
+10. After all target proofs, zero old writers/readers/leases/references and an
+    executable restore pass, archive required history and delete old controls
+    in bounded `TGT-0058` steps. Record reclaimed logical/physical bytes
+    separately and run later route/worker/export/transfer validation.
+
+### Rejected Control Targets
+
+- Reject a semantic manifest ID whose generation, config, input map, output or
+  status can mutate after a snapshot references it.
+- Reject open component/watermark JSON as the sole publication relation, or a
+  checksum/count that omits fields later used for order, freshness or recovery.
+- Reject multiple active rows selected by timestamp, activation without a head
+  CAS, and LKG reconstructed from current mutable manifests.
+- Reject pin acquisition before job insert without atomicity/compensation,
+  ref-count/expiry as cleanup proof, or ordinary long readers without an
+  owner-approved lease decision.
+- Reject `status` plus `updated_at` as a claim fence, in-process locks as cross-
+  process ownership, and progress/terminal writes without owner generation CAS.
+- Reject threshold value inside ACK-lane identity, scalar/map maxima as a
+  consumer visibility proof, or any watermark that skips a pending/quarantined
+  source event or late-membership replay contract.
+- Reject chunk completion as request finalization, finalization that cannot be
+  claimed after all chunks complete, and retry/split loops without attempt,
+  depth, rows, bytes, calls and termination caps.
+- Reject expiry/reconcile/release invocation as physical cleanup, mutable
+  timestamps as leases, and retention marks that record only a next table index
+  or `last_cleaned_at` instead of step and full-cycle receipts.
+- Reject one generic job/control table that collapses selection, claim,
+  execution snapshot, result, import, visibility, token closeout, artifact
+  delivery or cleanup into a single status or open JSON payload.
+- Reject all-ID job/result/history arrays, recursive read-all drains, reference-
+  blind cleanup, infinite terminal/quarantine history, age-only orphan deletion
+  and admission that silently evicts history at a cap.
+- Reject a migration that switches readers before complete sealed publication,
+  retains permanent dual writers, fabricates missing deployed values, silently
+  falls back to old/default benchmark settings or weakens active/LKG recovery.
+
+### US-097 Target-Specific Proof Rows
+
+| rowId | Finite pass predicate | proofCheckState | Exact evidence | Missing evidence / blocker | Owner questions |
+| --- | --- | --- | --- | --- | --- |
+| `PRF-0957` | `TGT-0046` passes only when all 11 component owners freeze immutable identity/source-lane/output fields; applied constraints and plans enforce content IDs and closed vectors; every writer/replay seals equal rows or preserves failure; active/LKG/export/transfer, finite history, cleanup and clean-host restore use the exact revision without mutable reinterpretation. | `blocked` | `EVD-1146`-`EVD-1151`, `EVD-1155`-`EVD-1159` | Authority, applied rows/vectors/plans, all-writer equality, atomic publication, history/restore and fixed benchmark are unavailable; `BLK-0611`-`BLK-0613`, `BLK-0620`-`BLK-0621`. | `OQ-0615`-`OQ-0617`, `OQ-0624`-`OQ-0625` |
+| `PRF-0958` | `TGT-0047` passes only when selected identity/order/winner authority, 512+1 page and request caps, page idempotence, no-gap/no-overlap count/checksum seal, active/LKG references, retry/restart, migration/rollback, finite retention and restore match every list/search/queue/export consumer. | `blocked` | `EVD-1146`-`EVD-1148`, `EVD-1155`-`EVD-1159` | Applied selected rows/equal-key domains, owner authority, build/seal transaction, route/export parity, recovery/cleanup and benchmark are unavailable; `BLK-0611`-`BLK-0613`, `BLK-0620`-`BLK-0621`. | `OQ-0615`-`OQ-0617`, `OQ-0624`-`OQ-0625` |
+| `PRF-0959` | `TGT-0048` passes only when relational component requirements and one active/LKG head are authoritative; promotion validates every sealed revision and wins one CAS; concurrent readers see one epoch; failed/interrupted promotion preserves old active/LKG; migration, cleanup and restore prove exact route/order/count/error equality. | `blocked` | `EVD-1146`-`EVD-1149`, `EVD-1155`-`EVD-1159` | Single-head authority, applied FK/unique/isolation behavior, concurrent route reads, interruption, finite manifest cleanup/restore and benchmark are unavailable; `BLK-0611`-`BLK-0613`, `BLK-0620`-`BLK-0621`. | `OQ-0615`-`OQ-0617`, `OQ-0624`-`OQ-0625` |
+| `PRF-0960` | `TGT-0049` passes only when owner kinds/generations, atomic job/read admission or compensation, active cap, heartbeat/expiry/release and delivery span are approved; stale owners are fenced; every active/LKG/job/export/reference race, orphan repair, finite terminal history, cleanup and restore passes. | `blocked` | `EVD-1149`, `EVD-1154`-`EVD-1159` | Owner vocabulary/caps, deployed pin/job/orphan inventory, atomicity/races, ordinary-reader decision, settlement/cleanup/restore and benchmark are unavailable; `BLK-0612`, `BLK-0614`, `BLK-0619`-`BLK-0621`. | `OQ-0616`, `OQ-0618`, `OQ-0623`-`OQ-0625` |
+| `PRF-0961` | `TGT-0050` passes only when every source writer emits one immutable typed event and all allocation/persisted/reconciled/dirty/visible frontiers reconcile; gap, zero-fan-out and late-membership replay pass under caps; dormant project cursor rows are mapped/receipted; pruning, migration, recovery and restore never advance on mutable status alone. | `blocked` | `EVD-1147`, `EVD-1150`, `EVD-1155`-`EVD-1159` | Complete writer/payload authority, deployed gaps/cursor values, operating outbox owner, late-membership replay, consumer visibility, cleanup/restore and benchmark are unavailable; `BLK-0611`-`BLK-0612`, `BLK-0615`, `BLK-0620`-`BLK-0621`. | `OQ-0615`-`OQ-0616`, `OQ-0619`, `OQ-0624`-`OQ-0625` |
+| `PRF-0962` | `TGT-0051` passes only when 64-row/512-wake/lease/attempt caps and lane order are approved; owner-generation claims exclude stale completion; exact component output/ACK/checkpoint transactions and zero-row exceptional branches reconcile; restart, finite retention, orphan cleanup, migration and restore pass with no threshold-keyed history growth. | `blocked` | `EVD-1150`-`EVD-1151`, `EVD-1155`, `EVD-1157`-`EVD-1159` | Claim/branch authority, applied races/rows/plans, output-to-publication receipt, compaction history, cleanup/restore and benchmark are unavailable; `BLK-0612`, `BLK-0615`, `BLK-0619`-`BLK-0621`. | `OQ-0616`, `OQ-0619`, `OQ-0623`-`OQ-0625` |
+| `PRF-0963` | `TGT-0052` passes only when closed lane/alias versions and each event/dirty/output/visible grain are approved; cross-process monotonic CAS, no duplicate/regression, active/LKG visibility equality and the exact prune minimum pass across every component, transfer/rebuild, failure, cleanup and restore case. | `blocked` | `EVD-1148`, `EVD-1150`, `EVD-1155`-`EVD-1159` | Lane/consumer authority, applied uniqueness/concurrency, scalar/map migration, active/LKG comparison, retention/restore and benchmark are unavailable; `BLK-0611`-`BLK-0613`, `BLK-0615`, `BLK-0620`-`BLK-0621`. | `OQ-0615`-`OQ-0617`, `OQ-0619`, `OQ-0624`-`OQ-0625` |
+| `PRF-0964` | `TGT-0053` passes only when immutable request/chunk/finalization identities, budgets, owner generations, three-attempt/lease/depth/termination policy and output receipts are authoritative; completed-chunk finalization can retry independently; promotion failure preserves active/LKG; migration, orphan cleanup, recovery and restore pass. | `blocked` | `EVD-1147`-`EVD-1151`, `EVD-1155`-`EVD-1159` | Request/config authority, applied chunk/request relations/races/plans, finalization claimant, interruption/cleanup/restore and benchmark are unavailable; `BLK-0612`-`BLK-0613`, `BLK-0616`, `BLK-0619`-`BLK-0621`. | `OQ-0616`-`OQ-0617`, `OQ-0620`, `OQ-0623`-`OQ-0625` |
+| `PRF-0965` | `TGT-0054` passes only when overlay kinds/surfaces/payloads and caps are approved; canonical write/event atomicity, bounded sentinel reads, exact snapshot-visible reconciliation, expiry-versus-delete, reader leases, restart/repair, finite history, cleanup/restore and row/detail behavior all pass without truncation. | `blocked` | `EVD-1152`, `EVD-1155`-`EVD-1159` | Consumer/owner/cap authority, applied active fan-out, operating reconcile/cleanup, visibility link, platform parity, restore and benchmark are unavailable; `BLK-0612`, `BLK-0617`, `BLK-0619`-`BLK-0621`. | `OQ-0616`, `OQ-0621`, `OQ-0623`-`OQ-0625` |
+| `PRF-0966` | `TGT-0055` passes only when central/local job, selection, insertion, claim, execution snapshot, result, completion, import, visibility, token and cleanup identities remain separate and fully reconciled; owner generations/retries/config failure, restart/file restore, finite histories, orphan cleanup and later routes pass with no duplicate side effect or settings fallback. | `blocked` | `EVD-1153`, `EVD-1155`-`EVD-1159`; `TGT-0045` | Complete job/receipt authority, non-live DuckDB/SQLite/file inventory, end-to-end visibility, claim/closeout races, bounded history, clean-host restore and benchmark are unavailable; `BLK-0611`-`BLK-0612`, `BLK-0618`-`BLK-0621`. | `OQ-0615`-`OQ-0616`, `OQ-0622`-`OQ-0625` |
+| `PRF-0967` | `TGT-0056` passes only when every work kind has a typed owner/scope/frontier/step/result contract, owner-generation lease and finite retry/history policy; health, provider admission, closeout/backfill, deletion and telemetry remain separate; startup, late-conflict repair, cleanup, migration and restore pass. | `blocked` | `EVD-1153`, `EVD-1155`-`EVD-1159` | Work registry/owner authority, deployed run/lease/open-payload values, cross-process races, closeout/delete/telemetry retention, recovery/restore and benchmark are unavailable; `BLK-0611`-`BLK-0612`, `BLK-0618`-`BLK-0621`. | `OQ-0615`-`OQ-0616`, `OQ-0622`-`OQ-0625` |
+| `PRF-0968` | `TGT-0057` passes only when immutable criteria/selection/snapshot semantics, 5,000-ID/1 MB/500-row/three-attempt caps, owner-CAS batch side effects/results, atomic pin admission, typed artifact/delivery manifests, retry/restart, finite job/result/artifact history, cleanup/restore and browser/desktop delivery pass. | `blocked` | `EVD-1149`, `EVD-1154`-`EVD-1159` | Product/criteria/cap authority, applied batch/equal-key/race data, side-effect idempotence, artifact fixedness/delivery, pin settlement, cleanup/restore and benchmark are unavailable; `BLK-0612`, `BLK-0614`, `BLK-0618`-`BLK-0621`. | `OQ-0616`, `OQ-0618`, `OQ-0622`-`OQ-0625` |
+| `PRF-0969` | `TGT-0058` passes only when a versioned complete target/reference registry, finite per-status horizons/caps, cleaner/reader leases, 512-row/16-target step and cycle receipts, orphan decisions, interruption resume, archive/delete authority, migration, clean-host restore and later route/worker/export validation all pass; no indefinite history remains. | `blocked` | `EVD-1149`, `EVD-1155`-`EVD-1159` | Policy/horizon/reference authority, applied ages/orphans/bytes, installed complete cleaner, lease/race receipts, cold archive, destructive recovery/restore and benchmark are unavailable; `BLK-0612`, `BLK-0619`-`BLK-0621`. | `OQ-0616`, `OQ-0623`-`OQ-0625` |
+
+### US-097 Accounting Reconciliation
+
+| Proof population | satisfied | pending | blocked | not-applicable | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Prior `PRF-0001`-`PRF-0956` | 8 | 478 | 470 | 0 | 956 |
+| US-097 publication/lease targets `PRF-0957`-`PRF-0960` | 0 | 0 | 4 | 0 | 4 |
+| US-097 source/projector/rebuild/overlay targets `PRF-0961`-`PRF-0965` | 0 | 0 | 5 | 0 | 5 |
+| US-097 job/retention targets `PRF-0966`-`PRF-0969` | 0 | 0 | 4 | 0 | 4 |
+| Cumulative `PRF-0001`-`PRF-0969` | 8 | 478 | 483 | 0 | 969 |
+
+| Disposition population | Target references | Count | unresolved | blocked | actionable |
+| --- | --- | ---: | ---: | ---: | ---: |
+| US-097 linked keeps | `TGT-0046`-`TGT-0058` excluding prior substring/file-only grains | 73 | 73 | 0 | 0 |
+| US-097 linked dormant project-cursor non-keeps | `TGT-0050`; `DSP-0096`, `DSP-0125` | 2 | 0 | 2 | 0 |
+| All other existing dispositions | Existing targets/proofs, unchanged | 366 | 253 | 113 | 0 |
+| Cumulative `DSP-0001`-`DSP-0441` | 58 target designs; cross-references and logical alternatives do not duplicate assignments | 441 | 326 | 115 | 0 |
+
+The 13 US-097 proofs validate target-specific preservation or replacement
+contracts; they do not change a family disposition. All are blocked, all 73
+linked keeps remain unresolved and both linked non-keeps remain blocked.
+`TGT-0041`, `TGT-0045` and US-091 file targets keep their prior ownership.
+DBO remains 322/322 blocked, CMF remains 1,985/1,985 blocked, FAN remains 91
+blocked plus one source-proven not-applicable, and overall certification remains
+`INCOMPLETE`.
+
 ## Recommendation Proof Gate
 
 Create separate `PRF-####` rows for positive and negative proof. For a move,
@@ -21782,6 +22188,18 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-0750` | 2026-07-22 / US-096 | Added `PRF-0950`-`PRF-0956`, `BLK-0601`-`BLK-0610`, `OQ-0605`-`OQ-0614` and target/proof/actionability reconciliation; cross-checked all seven keep and seven non-keep US-078 grains without recounting alternative/logical target references. | Keep family proof, target validation, disposition actionability, manifest audit status and certification independent. | Produced `EVD-1145`. Seven new proofs remain blocked; cumulative proof is 8/478/470/0 across 956 rows, actionability remains 326 unresolved/115 blocked/zero actionable and target designs total 45. |
 | `CMD-0751` | 2026-07-22 / US-096 | Deliberately skipped configured snapshot/query/studio, direct/live DuckDB or SQLite, deployed inventory, fixture DDL/DML, migrations, server/app/browser/desktop, writers/projectors/workers/operators, repair/backup/restore, export/transfer, cleanup/retention, benchmark, EXPLAIN/profile and physical collectors; audited scoped artifacts/processes before completion. | Preserve schemas, code, routes, projectors, retention, runtime, data and benchmark-critical settings and keep unavailable physical/parity/lifecycle values explicit rather than zero. | Produced `EVD-1145`. No database/runtime/fixture/product command or mutation ran; no generated artifact or started product process requires cleanup. |
 | `CMD-0752` | 2026-07-22 / US-096 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check`, scoped US-088 source-baseline/current-worktree/tracker checks and registry-scoped Bun validators for canonical IDs/reference closure, legacy-aware proof states, disposition actionability, target/disposition links, Markdown table widths, cap/SQL/order/rejection/write/index/snapshot/lifecycle/migration/platform text and accounting. The first read-only proof validator accepted only standalone state cells and therefore found 894 of 956 legacy/current proof layouts; a later draft reused a one-shot state iterator and undercounted all but its first category. The corrected embedded-state and materialized-array validator changed no audit state. Skipped build, tests, browser/desktop, database and runtime gates because this story changes audit Markdown plus Ralph tracker metadata only and those executions would manufacture prohibited product/physical evidence. | Verify exact target/proof/state accounting, bounded-design completeness, source isolation and repo-native formatting without treating lint debt, proposed SQL or source inspection as physical proof. | Produced `EVD-1145`. Lint preserves the same six unrelated errors in `comparisonProjectServingMaintenanceWorker.ts`, `reviewServingProjectorWorker.test.ts` and `reviewServingProjectorWorker.ts`; no typecheck script exists. Final validators pass for 322 DBO, 1,985 CMF, 92 FAN, 1,145 EVD, 752 CMD, 610 BLK, 614 OQ, 956 PRF, 441 DSP and 45 TGT canonical ID sets; proof is 8/478/470/0, actionability is 326 unresolved/115 blocked, all 14 US-096 disposition grains are linked, six SQL blocks/tables/reference closure/whitespace pass, progress is appended and scoped product source is unchanged. Only the audit file plus preserved pre-existing `tasks/prd.json` appear in Git status; ignored progress was appended. |
+| `CMD-0753` | 2026-07-22 / US-097 | Read the reporting, DuckDB and API-server skills; user US-097 PRD/patterns; `tasks/prd.json#US-096/#US-097/#US-098`; `.ralph-tui/progress.md`; US-001 state rules; US-075/US-076 dispositions; US-083/US-084/US-085 proof; US-096 targets; current IDs/counts; HEAD/worktree and targeted memory registry. | Establish prerequisite, exact control-family/adjacent-target/state boundaries, next IDs, audit-only/no-live constraint and unrelated worktree state. | Produced `EVD-1146`. US-096 is complete, US-097 was absent, no applicable stored result replaced source inspection and the engine-owned `tasks/prd.json` modification was preserved. |
+| `CMD-0754` | 2026-07-22 / US-097 | Compared scoped `src`/`scripts`/`package.json` from US-083 baseline `048ec5f5` through HEAD `cd197355`; read lexical migration discovery and effective control/judgment-job DDL through the final projector-watermark rebuild/index drop. No database was opened. | Revalidate checked-in shape and final constraints/indexes without treating bootstrap DDL as applied/deployed state, row preservation or migration proof. | Produced `EVD-1147`. Scoped product/schema source is unchanged; all applied values, histories, references, bytes and plans remain unavailable. |
+| `CMD-0755` | 2026-07-22 / US-097 | Read component registries/identities, mutable projection manifests/input maps, selected header/base build and cursor, candidate composition/validation/promotion, active/LKG readers, pin acquire/increment/release/expire/protection and bulk pin admission. | Trace immutable-versus-mutable identity, selected/header/base and active/LKG publication, pin ownership and reader protection as separate contracts. | Produced `EVD-1148`-`EVD-1149`. Current transactions and hashes are exact source evidence but do not enforce immutable revisions, one head, atomic job+pin or settled reader-safe retention. |
+| `CMD-0756` | 2026-07-22 / US-097 | Read delta allocation/append, outbox reconcile/barrier, dirty upsert/claim/release/fail/complete, point/high-water ACK/compaction, projector-watermark lock/update/insert, source alias vectors and manifest/snapshot consumption. | Trace source, dirty, ACK, projector and publication grains and identify the exact ownership/idempotence/consumer-frontier boundaries. | Produced `EVD-1150`. Process-local locking, status/timestamp claims and threshold-keyed ACK identities cannot certify cross-process ownership or active/LKG visibility. |
+| `CMD-0757` | 2026-07-22 / US-097 | Read rebuild request planning/admission/identity, chunk claim/heartbeat/retry/split/output, all-complete derived finalization/promotion/repair, overlay identity/4,096-byte cap/read/reconcile/expire and non-test lifecycle ownership. | Separate chunk output from finalization/publication and overlay eligibility from source visibility and physical cleanup. | Produced `EVD-1151`-`EVD-1152`. Current chunk fencing does not supply an independent completed-chunk finalizer; overlay TTL/helpers do not supply bounded reads, installed cleanup or visibility receipts. |
+| `CMD-0758` | 2026-07-22 / US-097 | Re-read US-006/US-069/US-085 exact judgment/local SQLite/maintenance inventory and focused current job/execution/import/visibility/closeout/lease paths; read bulk identity/admission, 5,000-ID/1 MB caps, 500-row batches, stale claim, progress, retries, status/download and search-target ownership. | Group job targets by actual component owner while preserving intake, insertion, claim, execution, result, import, visibility, token, maintenance, side-effect, artifact and cleanup grains. | Produced `EVD-1153`-`EVD-1154`. Current durable pieces are not one end-to-end visibility receipt; mutable timestamps/results and terminal status do not fence owners or settle pins/artifacts. |
+| `CMD-0759` | 2026-07-22 / US-097 | Read the 11-table/512-row retention registry, table cursor/mark, active/LKG/pin predicates and worker schedule; rechecked startup/backup, route/diagnostic/export/transfer/recovery sources and US-069 physical blockers without running them. | Define active/LKG/reference protection, complete-cycle, orphan, recovery, export/transfer and measurement obligations without promoting source invocation to proof. | Produced `EVD-1155`-`EVD-1157`. Control cleanup, leases, full-cycle receipts, clean-host restore, runtime/platform equality and physical values remain unavailable. |
+| `CMD-0760` | 2026-07-22 / US-097 | Compared current behavior with `TGT-0046`-`TGT-0058`; grouped targets by component ownership/publication/recovery; specified exact proposed keys/fields, closed registries, immutable revisions/attempts/receipts, active/LKG heads and separate visibility grains; added common and target-specific row/byte/page/call/attempt/lease/history caps and six SQL examples. | Provide bounded control alternatives with explicit failure/continuation and no mutable-history or atomic-publication weakening. | Produced `EVD-1158`. Thirteen targets cover 73 keep and two dormant-cursor non-keep grains without duplicating substring, queue-intake or file-target ownership. |
+| `CMD-0761` | 2026-07-22 / US-097 | Documented representative reads/writes, owner generations, leases, retries, idempotence, active/LKG behavior, consumer visibility, terminal states, finite retention/hot-history caps, orphan cleanup, failure/recovery, ten-step component cutover/rollback and rejected shapes. | Keep operation, publication, visibility, cleanup and restore receipts separate and reject indefinite histories, status/timestamp ownership, recursive drains and broad dual authority. | Produced `EVD-1158`. Every proposed policy/cap and lifecycle transition remains subject to owner, applied-shape, concurrency, recovery and benchmark validation. |
+| `CMD-0762` | 2026-07-22 / US-097 | Added `PRF-0957`-`PRF-0969`, `BLK-0611`-`BLK-0621`, `OQ-0615`-`OQ-0625` and target/proof/actionability reconciliation; cross-checked 73 keep and two non-keep grains and prior `TGT-0041`/`TGT-0045`/file ownership. | Keep family proof, target validation, disposition actionability, manifest audit status and certification independent. | Produced `EVD-1159`. Thirteen new proofs remain blocked; cumulative proof is 8/478/483/0 across 969 rows, actionability remains 326 unresolved/115 blocked/zero actionable and target designs total 58. |
+| `CMD-0763` | 2026-07-22 / US-097 | Deliberately skipped configured snapshot/query/studio, direct/live DuckDB or SQLite, deployed inventory, fixture DDL/DML, migrations, server/app/browser/desktop, writers/projectors/workers/operators, repair/backup/restore, export/transfer, cleanup/retention, benchmark, EXPLAIN/profile and physical collectors; audited scoped artifacts/processes. | Preserve schemas, code, routes, projectors, retention, runtime behavior, data and benchmark settings and keep unavailable evidence explicit rather than zero. | Produced `EVD-1159`. No database/runtime/fixture/product command or mutation ran; no generated artifact or started product process requires cleanup. |
+| `CMD-0764` | 2026-07-22 / US-097 | Ran `rtk bun run lint`, exact package-script typecheck discovery, `git diff --check`, Git status/stat, scoped US-083 source-baseline and current-worktree isolation checks, and an inline read-only Bun validator for canonical ID continuity/reference closure, proof states, actionability, new target links, SQL fences, Markdown table widths and required lifecycle terms. The first orchestration wrapper failed to parse before dispatch and a probe for a repository validator reported that no such script exists; both were replaced by the inline validator and changed no state. Product build/tests, browser/desktop, database/runtime and physical gates were skipped because this story changes audit Markdown plus required Ralph tracker metadata only. | Verify exact accounting, target completeness, finite-history/atomic-publication requirements, source isolation and repo-native formatting without treating lint debt, proposed SQL or source inspection as physical proof. | Produced `EVD-1159`. Lint preserves the same six unrelated errors in `comparisonProjectServingMaintenanceWorker.ts`, `reviewServingProjectorWorker.test.ts` and `reviewServingProjectorWorker.ts`; no typecheck script exists. Final validation passes for 322 DBO, 1,985 CMF, 92 FAN, 1,159 EVD, 764 CMD, 621 BLK, 625 OQ, 969 PRF, 441 DSP and 58 TGT canonical ID sets; proof is 8/478/483/0, actionability is 326 unresolved/115 blocked, all 75 US-097 disposition grains are linked, six SQL blocks/table widths/reference closure/whitespace pass, progress is appended and scoped product source is unchanged. Only the audit file plus preserved pre-existing `tasks/prd.json` appear in Git status; ignored progress was appended. |
 
 ## Blockers
 
@@ -22412,6 +22830,17 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0608` | US-096 intake, local queue, claim, configuration and visibility | Serving cursor advancement, central/local rejection, Human-first partition, durable SQLite insertion/ACK, claim, execution snapshot, canonical import, visibility ACK and cleanup do not have one approved reconciliation receipt or restart matrix. | Fetched, accepted, inserted, claimed, executed and visible rows can diverge; an intake policy cannot weaken serving order or silently change benchmark-critical execution settings. | `OQ-0612` | Judgment-job/queue/execution/import owners approve separate identities and prove page receipts, ACK chain, rejection/duplicate accounting, config drift failure, restart/replay, visibility and cleanup. |
 | `BLK-0609` | US-096 migration, retention, replay, recovery and cleanup | Applied backfill/cutover jobs, one-writer/read fences, rollback horizon, global-fact references, ordinary-reader leases, finalization repair, cleanup schedule/cursors/receipts, history mapping and clean-host restoration are unavailable. | Immutable candidate design, current 512-row cleanup, expiry, startup probe or backup file cannot prove safe transition, bounded deletion, crash recovery, reclaimed bytes or restored routes. | `OQ-0613` | Migration/retention/recovery/release owners approve the eight-step transition and prove bounded replay/finalization, references/leases, crash-resumable cleanup, rollback and source-to-route clean-host restore. |
 | `BLK-0610` | US-096 fixed benchmark, browser/desktop parity and final proof | No approved corpus, seed, model/provider/thinking, prompts/content, project/import/Human/search/queue/candidate/config/execution identities, workload, applied targets/runtime or complete physical/browser/desktop collector exists. | Proposed caps and conceptual token/grouping savings cannot establish benefit or non-regression; source-only UI applicability and synthetic tests cannot prove requests, caching, history/hash routing, polling or displayed semantics. | `OQ-0614` | Benchmark/data/runtime/platform/release owners freeze every critical value, capture exact before/after build/update/query/result/intake/cleanup/restore and real browser/packaged-desktop behavior, then sign `PRF-0950`-`PRF-0956` without fallback. |
+| `BLK-0611` | US-097 identity, status and ownership authority | Component/source/work/job/owner/status vocabularies, immutable versus mutable fields, source-lane aliases, selected winner/order, snapshot requirement, overlay kind/surface, maintenance work kinds and benchmark-critical job identity are not owner-approved as one versioned contract. | A content hash, current enum or deterministic ID can be internally stable while omitting a dimension later required for replay, publication, failure history or cleanup. | `OQ-0615` | Product/data/projector/judgment/maintenance owners freeze closed typed identities, immutable fields, owner generations, status transitions, error behavior and version migration for all 13 targets. |
+| `BLK-0612` | US-097 applied control shape and physical baseline | No approved immutable non-live DuckDB/SQLite/file inventory supplies effective constraints/indexes, rows/statuses/nulls/open JSON, component/source/job fan-out, terminal ages, references/orphans, table/index/WAL/temp bytes, residue or applied plans. | Checked-in DDL and proposed target constraints/caps cannot prove deployed compatibility, bounded histories, access paths, storage benefit, migration fit or resource safety. | `OQ-0616` | Database/runtime/operator owners attach one non-live applied inventory with exact schema/value/reference/byte/plan evidence and no live DuckDB inspection. |
+| `BLK-0613` | US-097 immutable component, selected and atomic active/LKG publication | No owner-approved content revision/seal, selected header/base completeness, relational component/FK/single-head constraint, head-CAS isolation or concurrent explicit/active/LKG reader comparison exists. | Mutable manifests or selected headers can change after composition, multiple active rows can rely on timestamp choice and a validation transaction alone cannot prove immutable active/LKG interpretation or crash recovery. | `OQ-0617` | Publication/reliability owners approve revision/seal/head identities and prove count/checksum/FK/CAS/concurrency/failure/interruption behavior with exact active/LKG route equality. |
+| `BLK-0614` | US-097 pin, ordinary-reader and delivery lease settlement | Owner-kind/generation vocabulary, active caps/durations, atomic job admission or compensation, ordinary-reader lease applicability, heartbeat/expiry/release, artifact/download span and orphan policy are unresolved. | Ref count, expiry or terminal job status can leave protected data or allow cleanup while a reader/download still needs it; stale owners are not fenced by identity alone. | `OQ-0618` | Bulk/export/runtime/storage owners freeze the lease contract and prove admission, renewal, stale takeover, release/expiry, delivery and cleanup races plus orphan repair/restore. |
+| `BLK-0615` | US-097 source frontier, dirty work and consumer visibility | Complete source writer/payload/lane inventory, zero-fan-out and late-membership replay, owner-generation dirty claims, output-to-ACK equality, one advancing lane checkpoint and exact snapshot-visible prune minimum are unresolved. | Allocation, `reconciled_at`, dirty completion, ACK, projector row, manifest input or snapshot copy can each advance without proving the other grains; threshold-keyed ACKs can grow indefinitely. | `OQ-0619` | Source/projector/publication owners approve the full receipt chain, caps and prune authority and prove gaps, duplicates, retries, races, zero fan-out, late membership and active/LKG visibility. |
+| `BLK-0616` | US-097 rebuild plan, output and completed-chunk finalization | Immutable request/chunk/finalization identity, budget/retry authority, request/parent/snapshot constraints, owner generations, exact output receipts and an independent finalization claimant after all chunks complete are not validated. | Chunk completion can precede derived reduction/promotion failure; without finalization admission, sealed output, candidate and request states can strand or be falsely retried/cleaned. | `OQ-0620` | Rebuild/projector/reliability owners freeze all identities/caps and prove claim, split, retry, output, all-complete finalization, promotion failure, restart and orphan cleanup. |
+| `BLK-0617` | US-097 overlay bounded visibility and cleanup | Overlay kind/payload/surface authority, active row/encoded-byte caps, canonical-write atomicity, exact source-to-snapshot-visible reconciliation, operating expire/reconcile/cleanup and row/detail platform parity are unavailable. | A five-minute TTL can hide but retain rows; uncapped reads can grow, and source high water or expiry cannot prove canonical data is visible or deletion is safe. | `OQ-0621` | Human/product/projector owners approve overlay semantics/caps and prove bounded reads, visibility reconciliation, expiry, restart, reader-safe cleanup, restore and web/desktop row/detail behavior. |
+| `BLK-0618` | US-097 judgment, maintenance and bulk job receipt chains | Complete central/local job, work-kind, selection, claim, execution, result, import, visibility, token/closeout, side-effect, artifact and delivery identities plus owner-generation retry policies are not approved or validated. | One terminal status, health projection, owner ACK or mutable result JSON can mask missing canonical visibility, duplicate side effects, stale claims, pin leaks, late evidence or cleanup blockers. | `OQ-0622` | Judgment/maintenance/bulk/export owners freeze each receipt/claim/cap and prove bounded replay, failure, config drift, startup, visibility, artifact delivery and settlement without settings fallback. |
+| `BLK-0619` | US-097 finite retention, references, orphan cleanup and archive | No complete versioned target/reference registry, finite per-status row/age caps, cleaner/reader leases, orphan decision queue, installed schedule, step/cycle receipts, approved cold archive or post-cleanup validation exists. | TTLs, `last_cleaned_at`, status or a 512-row delete call cannot reject indefinite history, prove full coverage, settle references or recover from delete/receipt interruption. | `OQ-0623` | Retention/storage/audit owners approve every finite horizon/cap/reference/archive rule and prove bounded steps/cycles, leases, orphan resolution, interruption resume, restore and later workloads. |
+| `BLK-0620` | US-097 migration, cutover, rollback and clean-host recovery | Applied backfill inputs, immutable identity mappings, component high-water/quiesce fences, v5 release candidate, writer/read switch order, rollback horizon, zero-old-reference cleanup and executable DuckDB/SQLite/file restore are unavailable. | Broad dual writes, fabricated missing values or reader-first cutover can weaken atomic publication/recovery, strand jobs/leases or make old and new histories irreconcilable. | `OQ-0624` | Migration/release/recovery owners approve the ten-step component cutover and prove bounded backfill, one-writer fences, shadow equality, head promotion, rollback, cleanup and clean-host restoration. |
+| `BLK-0621` | US-097 fixed benchmark, route/platform and final proof | No approved corpus, seed, model/provider/thinking, prompts/content, source/component/snapshot/job/work/retention identities, lifecycle clock, applied targets/runtime/topology or complete physical/route/browser/desktop collector exists. | Proposed caps, normalized receipts and finite histories cannot establish semantic equality, resource safety, recovery or benefit; unavailable rows/bytes/races/latency/RSS/spill/restore values cannot be zero. | `OQ-0625` | Benchmark/data/runtime/platform/release owners freeze all critical values, capture before/after build/publish/read/job/failure/cleanup/restore behavior and sign `PRF-0957`-`PRF-0969` without fallback. |
 
 ## Owner Questions
 
@@ -23046,6 +23475,17 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0612` | Judgment-job/queue/execution/import owners | Which receipt chain separately reconciles fetched, central/local rejected, Human-first accepted, durably inserted, claimed, executed, imported, visible and cleaned rows; what queue/config/execution identities, retry/restart and drift failures preserve serving order and benchmark settings? | `PRF-0954`, `PRF-0956` and `BLK-0608` |
 | `OQ-0613` | Migration/index/retention/recovery/release owners | Which deployed readers/writers/rows/indexes and retained cursors/results/jobs require migration; what bounded backfill, one-writer/read fence, rollback horizon, reference/lease scan, finalization repair, cleanup receipts and clean-host restore govern each target and later old-shape retirement? | `PRF-0950`-`PRF-0953`, `PRF-0955`-`PRF-0956` and `BLK-0609` |
 | `OQ-0614` | Benchmark/data/runtime/browser/desktop owners and release validator | Which immutable corpus, seed, provider/model/thinking, prompt/content, project/import/Human/search/queue/candidate/config/execution workload, target runtime and complete rows/bytes/index/WAL/temp/probes/calls/attempts/latency/RSS/spill/restore/browser/desktop collector are approved, and who signs all seven proofs without fallback? | All US-096 proofs and `BLK-0610` |
+| `OQ-0615` | Product/data/projector/judgment/maintenance owners | For `TGT-0046`-`TGT-0058`, which exact component/source/selected/snapshot/work/job/overlay/owner/status vocabularies and fields are immutable; which model/provider/thinking/content/config dimensions apply; how do unknown, legacy, null and conflicting values fail and migrate? | All US-097 proofs and `BLK-0611` |
+| `OQ-0616` | Database/runtime/operator owners | Which immutable non-live DuckDB/SQLite/file inventory supplies effective constraints/indexes, exact rows/status/null/open-value domains, component/source/job fan-out, terminal ages, references/orphans, table/index/WAL/temp bytes, residue and plans without opening live DuckDB? | All US-097 proofs and `BLK-0612` |
+| `OQ-0617` | Publication/projector/query/reliability owners | What content revision/seal, selected completeness, relational component/reference constraint, single active/LKG head and CAS isolation are authoritative; which concurrent explicit/active/LKG reads and failure/interruption receipts prove one immutable publication? | `PRF-0957`-`PRF-0959`, `PRF-0963`-`PRF-0964` and `BLK-0613` |
+| `OQ-0618` | Bulk/export/runtime/storage owners | Which owner kinds/generations, active lease caps/durations, atomic job admission or compensation, ordinary-reader lease rules, heartbeat/expiry/release/delivery span and orphan settlement are approved; which races and restore receipts must pass? | `PRF-0960`, `PRF-0968` and `BLK-0614` |
+| `OQ-0619` | Source/delta/projector/publication owners | Which source event/lane/payload identities and finite lag/page caps, zero-fan-out/late-membership replay, dirty owner/attempt/output/ACK semantics and exact snapshot-visible consumer minimum authorize freshness and pruning; what gap/duplicate/race matrix must pass? | `PRF-0961`-`PRF-0963` and `BLK-0615` |
+| `OQ-0620` | Rebuild/projector/reliability owners | Which immutable request/chunk/finalization fields, budgets, three-attempt/lease/depth/termination limits, request/parent/snapshot relations, output receipts and all-complete finalization claimant are authoritative; how are promotion failure and orphan state recovered? | `PRF-0964` and `BLK-0616` |
+| `OQ-0621` | Human/product/API/browser/desktop/projector owners | Which overlay kinds/surfaces/payload keys, 4,096-byte and per-article/read caps, canonical-write transaction, source-visible reconciliation, eligibility/expiry/error UI and bounded cleanup/restore behavior must pass for row and detail in web and packaged desktop? | `PRF-0965` and `BLK-0617` |
+| `OQ-0622` | Judgment/maintenance/bulk/export owners | Which separate job/work/selection/insertion/claim/execution/result/import/visibility/token/closeout/side-effect/artifact/delivery identities, owner generations, retry/cap policies and terminal meanings are authoritative; which startup, drift, late-conflict and duplicate matrix must pass? | `PRF-0966`-`PRF-0968` and `BLK-0618` |
+| `OQ-0623` | Retention/storage/audit/recovery owners | What finite per-family/status active/terminal row and age caps, reference types, cleaner/reader lease, orphan queue, schedule, 512-row/16-target step/cycle receipt, cold archive and later route/worker/export/restore validations reject indefinite history? | `PRF-0960`-`PRF-0969` and `BLK-0619` |
+| `OQ-0624` | Migration/release/recovery owners | Which applied rows/references/files and legacy identities require migration; what bounded page receipts, component high-water/quiesce fence, one-writer switch, shadow comparison, head promotion, rollback horizon, zero-old-reference cleanup and clean-host restore govern each target? | All US-097 proofs and `BLK-0620` |
+| `OQ-0625` | Benchmark/data/runtime/browser/desktop owners and release validator | Which immutable corpus, seed, provider/model/thinking, prompts/content, source/component/selected/snapshot/job/work/retention identities, frozen lifecycle clock, runtime/topology and complete rows/bytes/index/WAL/temp/calls/attempts/races/latency/RSS/spill/restore/platform collector are approved, and who signs all 13 proofs without fallback? | All US-097 proofs and `BLK-0621` |
 
 ## US-001 Quality Gates
 
@@ -27344,6 +27784,77 @@ commands. A command proves only the claim linked through its evidence record.
       are recorded in `CMD-0752`. Build, tests, browser/desktop,
       database/runtime and physical gates are skipped for this Markdown-only
       design story so they cannot manufacture prohibited proof.
+
+---
+
+## US-097 Quality Gates
+
+- [x] US-096 is complete and scoped `src`/`scripts`/`package.json` source is
+      unchanged from the US-083 control baseline. Effective control shape was
+      derived from the complete lexical migration chain, including the final
+      projector-watermark rebuild/index drop, without opening DuckDB/SQLite or
+      inferring applied/deployed state.
+- [x] `TGT-0046`-`TGT-0058` cover immutable component identity, selected-import
+      publication, relational serving snapshots, owner-scoped pins, source
+      events/frontiers, dirty work/ACKs, consumer visibility, rebuild/finalize,
+      overlays, judgment/maintenance/bulk jobs and retention cycles grouped by
+      component owner, publication boundary and recovery need.
+- [x] Current substring remains `TGT-0041`, queue selection remains
+      `TGT-0045`, and local-file/path targets retain US-091/US-098 ownership.
+      Seventy-three keep and two project-cursor non-keep disposition grains are
+      linked without recounting a table, material family, logical object,
+      supporting index, file or prior target.
+- [x] Every target names exact proposed keys/fields, representative reads and
+      writes, closed/open-domain behavior, owner generation, lease, retry,
+      idempotence, failure, immutable attempt/output/publication/visibility/
+      cleanup receipts and typed overflow/unavailable behavior.
+- [x] Active and LKG use one CAS head over immutable component/selected/snapshot
+      revisions. Pins and jobs cannot create or reinterpret active/LKG state;
+      source, dirty, ACK, projector and manifest values remain separate until
+      an exact snapshot-visible consumer receipt exists.
+- [x] Per-operation and request/lifecycle caps independently cover component/
+      source lanes, selected rows, control/job pages, claims, encoded bytes,
+      calls, physical attempts, leases, split depth, cycles, active work,
+      terminal histories and recursive termination. Missing `MAX_*` policy or
+      cap overflow blocks rather than truncates, silently deletes or grows hot
+      history indefinitely.
+- [x] Six representative SQL blocks show immutable snapshot head promotion,
+      owner-fenced dirty claims/ACKs, independently claimable completed-chunk
+      finalization, bounded overlay reads, owner-CAS bulk progress and atomic
+      retention delete receipts. SQL is design text and was not executed or
+      treated as applied-plan proof.
+- [x] Every target documents finite retention, references, ordinary-reader and
+      cleaner leases, orphan decisions, scheduled bounded cleanup, complete-
+      cycle receipts, startup/replay, destructive interruption, clean-host
+      restore and later route/worker/export validation. Expiry, reconciliation,
+      release, status or `last_cleaned_at` never proves deletion safety.
+- [x] The ten-step component cutover freezes identities/config/caps, inventories
+      non-live applied state, backfills with page receipts, quiesces one lane,
+      switches one writer, promotes one complete candidate, then switches
+      readers with finite rollback and zero-reference cleanup. Broad dual
+      authority, reader-first cutover and fabricated/default values are rejected.
+- [x] Mutable referenced manifests, timestamp-only claims, process-local locks,
+      threshold-keyed pseudo-cursors, chunk-complete finalization, ref-count/
+      TTL cleanup, generic one-status jobs, all-ID histories, recursive drains,
+      unbounded terminal/quarantine state and recovery-weakening cutover are
+      explicitly rejected.
+- [x] `PRF-0957`-`PRF-0969` add 13 independently `blocked` validations. The
+      969-row proof register is 8 `satisfied`, 478 `pending`, 483 `blocked` and
+      zero `not-applicable`; 73 linked keeps remain unresolved, two linked
+      non-keeps remain blocked, cumulative actionability remains 326 unresolved/
+      115 blocked/zero actionable and certification remains `INCOMPLETE`.
+- [x] `EVD-1146`-`EVD-1159`, `CMD-0753`-`CMD-0764`,
+      `BLK-0611`-`BLK-0621` and `OQ-0615`-`OQ-0625` record exact source,
+      commands, blockers, owner decisions and finite target-specific resolution
+      conditions. No database/runtime/fixture/product process or generated
+      artifact ran or requires cleanup.
+- [x] Repo-native lint, typecheck-script discovery, whitespace, source
+      isolation, canonical-ID/reference/table-width, target/link/cap/SQL/
+      ownership/publication/lease/retry/idempotence/history/recovery/migration/
+      rejection/state/actionability/accounting and tracker checks are recorded
+      in `CMD-0764`. Build, tests, browser/desktop, database/runtime and physical
+      gates are skipped for this Markdown-only design story so they cannot
+      manufacture prohibited proof.
 
 ---
 
