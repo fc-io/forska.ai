@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-093 add 919 finite proof rows without changing a disposition: the 935-row proof register is eight `satisfied`, 478 `pending`, 449 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked` through explicit required target links, and zero are actionable. US-092/US-093 define 24 concrete but unvalidated `TGT-0001`-`TGT-0024` shapes; US-093 adds immutable component revisions, narrow candidate/display/selected/status components and a page-bounded composition contract. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, benchmark fixture/configuration, exact route/browser/desktop proof, posting/summary/filter exactness and selectivity, applied access paths, bounded hydration/caps/order, search/queue selection, eligibility, priority and cursor parity, legacy/current identity and history mapping, snapshot/publication/file-reference atomicity, canonical path/key and permissions/encryption evidence, export/transfer/portability parity, migration/cutover, temporary lifetime and residue, replay/repair/startup/recovery, retention, cleanup and restore evidence remain incomplete. No prior proof state or manifest state advanced, no planned route, runtime, parity, benchmark or lifecycle work is labeled passed, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` remains independently `INCOMPLETE`. |
+| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-094 add 925 finite proof rows without changing a disposition: the 941-row proof register is eight `satisfied`, 478 `pending`, 455 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked` through explicit required target links, and zero are actionable. US-092 through US-094 define 30 concrete but unvalidated `TGT-0001`-`TGT-0030` shapes; US-094 adds keyed article/judgment/prompt/full-text components, an optional content-addressed blob boundary and a nonrecursive page-bounded detail contract. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, benchmark fixture/configuration, exact route/browser/desktop proof, posting/summary/filter exactness and selectivity, applied access paths, bounded ID/row/byte/call hydration and order, search/queue selection, eligibility, priority and cursor parity, legacy/current identity and history mapping, snapshot/publication/file-reference atomicity, canonical path/key and permissions/encryption evidence, export/transfer/portability parity, migration/cutover, temporary lifetime and residue, replay/repair/startup/recovery, retention, cleanup and restore evidence remain incomplete. No prior proof state or manifest state advanced, no planned route, runtime, parity, benchmark or lifecycle work is labeled passed, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` remains independently `INCOMPLETE`. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-093 / 2026-07-22` | Compares the current 44-column snapshot/list-mode row with seven layered `TGT-0018`-`TGT-0024` designs: immutable component revision/binding/lease, six-field candidate core, page-hydrated 13-field display, selected-import winner, separate LLM and Human status, and a one-statement at-most-501-ID composition barrier. Exact keys, SQL, reviewed/Unassessed cursor directions, writes, invalidation, reuse, snapshot consistency, failure, migration, cutover, rollback, retention, recovery, cleanup and browser/desktop/export/transfer consequences are explicit. `PRF-0929`-`PRF-0935` remain blocked pending owner approval, deployed inventory, applied-plan/parity/recovery proof and a fixed physical benchmark; 19 linked keeps remain unresolved and 11 linked non-keeps retain blocked actionability. No schema, code, runtime, data or certification state advances. |
+| Latest normalized story | `US-094 / 2026-07-22` | Designs six layered `TGT-0025`-`TGT-0030` alternatives for keyed article payload, judgment payload, prompt applicability/content, snapshot full-text content, optional content-addressed inline/file bytes and logical detail composition. List hydration preserves the US-093 candidate ordinal and uses at most 500 returned IDs; judgment work is at most 100 IDs/10,000 rows/4 MB per call with an 8 MB request aggregate; detail judgments are explicit nonrecursive 512-row/2 MB cursor pages; prompt, full-text segment, export and transfer boundaries are separately capped. Exact fields/keys, ownership, snapshot/latest behavior, SQL/lookup, writes, invalidation, failure, migration, retention, recovery, cleanup and browser/desktop/export/transfer consequences are explicit. `PRF-0936`-`PRF-0941` remain blocked pending owner approval, deployed inventory, applied plans, serializer/file/parity/recovery proof and a fixed physical benchmark; 13 cross-referenced keep grains remain unresolved and no actionability changes. No schema, code, runtime, data or certification state advances. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
@@ -16404,6 +16404,422 @@ remains 322/322 blocked, CMF remains 1,985/1,985 blocked, FAN remains 91
 blocked plus one not-applicable, and overall certification remains
 `INCOMPLETE`.
 
+## US-094 Keyed Payload And Detail Target Shapes
+
+### US-094 Scope, Prerequisite And State Boundary
+
+US-093 is complete. Scoped product, schema and route source under `src`,
+`scripts` and `package.json` is unchanged from the US-087 payload baseline
+`31b1c024` and the US-093 baseline `bdc249d3` through HEAD `63442c74`.
+US-094 therefore designs against the already reconciled current shape; it does
+not infer an applied catalog, deployed values, plans, sizes or performance and
+does not reopen any DBO, CMF, FAN or DSP row.
+
+Six layered target rows close the payload bridge deliberately left by
+`TGT-0024`:
+
+| Target slice | Linked existing dispositions; no new disposition | Design grain and boundary |
+| --- | --- | --- |
+| Keyed article payload | `DSP-0153`, `DSP-0166`-`DSP-0167`; canonical source remains `DSP-0001`/`DSP-0024` | One immutable row per article/payload revision owns only snapshot-selected metadata, client badge facts and bounded previews. Full source JSON is inline-or-referenced and is never a list-selection input. |
+| Keyed judgment payload | `DSP-0154`, `DSP-0168`-`DSP-0170` | One immutable row per article/prompt/payload-kind revision owns active typed judgment/detail values without list-mode copies, prompt-text copies or stored unanswered placeholders. |
+| Prompt applicability and content | Cross-references `DSP-0015`-`DSP-0016`, `DSP-0038`-`DSP-0039`; no second pairing | One immutable prompt revision owns project applicability, order and the exact prompt display/input fields referenced by judgment rows. Canonical `app.prompt` and `app.project_prompt` stay authoritative. |
+| Full-text content revision | Cross-references `DSP-0001`/`DSP-0024`; file paths remain US-091 scope | A snapshot-bound descriptor owns content/provenance digests and inline-or-referenced text/HTML/assets. Current conversion/admin state remains a separately labeled latest read. |
+| Optional content-addressed blob boundary | Cross-references US-087 file-boundary proof and US-091 file dispositions; no disposition or file-actionability claim | A sealed manifest/reference pair separates semantic ownership from inline bytes or an ordinary file. It does not absorb existing PDF/transfer/client-file families. |
+| Bounded detail composition | Logical composition only; cross-references all five targets and `TGT-0018`/`TGT-0024` | One article shell plus explicit judgment, prompt, full-text, current-history/admin and related-record pages. It owns no storage and rejects recursive all-payload assembly. |
+
+The 13 unique keep grains cross-referenced above retain
+`recommendationActionability: unresolved`; no non-keep row changes and the
+optional file boundary does not pre-empt US-091. Six target-specific proof rows
+are independently `blocked`. No prior `proofCheckState`, `auditStatus`,
+disposition, physical value or `overallCertification` changes. Proposed caps
+below are target contract values to validate, not claims that current code
+enforces them.
+
+No live/current/project DuckDB or SQLite, configured snapshot/query/studio,
+fixture DDL/DML, migration, server, app, browser, packaged desktop, writer,
+projector, repair, export, transfer, cleanup, benchmark, EXPLAIN/profile or
+physical collector ran. SQL and schemas below are design text only and were not
+executed.
+
+### US-094 Evidence Ledger
+
+| Evidence ID | Class | Exact locator | Finding | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-1108` | `control` | User US-094 PRD and codebase patterns; `tasks/prd.json#US-093/#US-094`; `.ralph-tui/progress.md` US-087/US-091/US-093; US-001 state model; reporting, DuckDB, API-server and frontend skills; HEAD/worktree/ID/count inspection | Fixes the completed prerequisite, six-target audit-only scope, four-state separation, no-live boundary and unrelated pre-existing `tasks/prd.json` timestamp change. | `CMD-0723` |
+| `EVD-1109` | `production/historical-migration` | Source baseline `31b1c024`/`bdc249d3` through HEAD `63442c74`; `src/db/migrateDuckdb.ts#getDuckdbMigrationFiles`; `0097_reviewServingV4Foundation.sql:697-730`, `0098_reviewServingPayloadOrderColumns.sql:1-5`, `0099_reviewServingCountScopeAndDetailOptionTables.sql:22-44`, `0109_reviewServingJudgmentDetailPayloadKindForwardMigration.sql:1-66`; `0077_articleIdentifierCanonicalSchema.sql:56-83`; final `app.project_prompt` rebuild in `0081_dropProjectChildParentForeignKeys.sql:299-310` | Effective checked-in source has an 11-field article-payload row and a 15-field judgment-detail row after the lexical 0099/0109 rebuilds; canonical article still owns broad full-text/JSON fields and prompt source/applicability remain separate. Migration text is not applied/deployed shape proof. | `CMD-0724` |
+| `EVD-1110` | `production/read/caps` | `reviewServingReadContracts.ts:487-680`; `reviewServingReader.ts:127-128,226-240,768-975`; `reviewServingSql.ts:215-362,648-769`; LLM route `reviewServingLlmReviewRouteService.ts:90-92,424-487`; Human/Both route `reviewServingHumanBothUnassessedRouteService.ts:119-123,580-665` | Current contracts declare one-row/1 MB article payload, 100-ID article-set admission, 10,000-row/4 MB judgment calls, 512-row detail pages and exact order fields. The reader enforces request declarations, but route recursion and multiple chunks leave request-wide rows/bytes/call termination separate. | `CMD-0725` |
+| `EVD-1111` | `production/article-payload-writer` | `reviewServingDisplayPayloadProjector.ts:545-710,746-978`; `reviewServingProjectorWorker.ts:4472-4510`; `articleReviewServingDeltaService.ts:39-61,89-119,143-174` | Current payload writer merges canonical and selected-source metadata, truncates abstract/full-text previews to 2,000 characters and records untruncated source character length as `payload_bytes`; it copies the row per snapshot and updates in place under its current key. `payload_bytes` is not encoded row or response size. | `CMD-0726` |
+| `EVD-1112` | `production/judgment-prompt-writer` | `reviewServingJudgmentPayloadProjector.ts:199-255,257-305,307-547,569-719`; `reviewServingSummaryProjector.ts:243-259`; `reviewServingFilterPostingProjector.ts:289-305`; `llmJudgmentReviewServingDeltaService.ts:41-75`; `humanJudgmentReviewServingDeltaService.ts:34-78` | Current judgment payload repeats prompt/model display JSON and placeholders across applicable list modes. LLM model/content identity and Human prompt/summary mode differ; delete/insert, manifest/ACK, row count and later snapshot visibility are separate. Prompt fields can be keyed once only if serializer, applicability and placeholder reconstruction are validated. | `CMD-0726` |
+| `EVD-1113` | `production/detail/current-state` | `projectsRoutesPostArticleReviewDetails.ts:261-414,416-667,695-835,860-1137`; `ArticlesRoutes.ts:545-620`; `ArticleAdminRoutes.ts:28-42,48-83,170-235,238-318` | Project detail recursively drains 512-row serving pages, then joins current full text, current canonical judgment history, project names, admin state and up to 501 Covidence records. Global article detail returns all current judgment history without a row cap. One article ID therefore does not bound total rows, bytes, calls or snapshot consistency. | `CMD-0727` |
+| `EVD-1114` | `production/prompt-full-text` | `projectsRoutesGetPromptPreview.ts:77-114,165-323`; `ensureFullText.ts:35-162`; `fullTextJobs.ts:288-307`; `0077_articleIdentifierCanonicalSchema.sql:56-83` | Prompt preview selects one serving article/payload but separately reads current project/prompt/model and the entire current `app.article.full_text` before token processing. A one-row SQL limit does not bound the text bytes or freeze prompt/model/content identity with the serving snapshot. | `CMD-0727` |
+| `EVD-1115` | `production/export` | `ProjectExportRoutes.ts:65-68,250-318,365-438,550-612,744-823`; `projectExportReviewServingExportArticleRepository.ts:25-115` | Export uses 500-ID and 10 MB job declarations, but later hydration joins snapshot rows to payload plus current article/selected-source fields, parses prompt/model JSON and streams artifacts. Selection, prompt lookup, batch hydration, generated bytes and client save remain separate; current joins are not frozen by the snapshot ID. | `CMD-0728` |
+| `EVD-1116` | `production/transfer/file` | `projectTransferExport.ts:1016-1180,1860-2003,2880-3275`; `projectTransferExportAssets.ts:503-831`; `projectTransferExportPackage.ts:483-745,911-1228`; `projectTransferCommit.ts:1245-1748`; `projectTransferCommitRollback.ts:345-686,1198-1333`; `RuntimeAssetsRoutes.ts:9-32`; `ArticleAdminRoutes.ts:28-42,170-235`; `getRuntimeAssetUrl.ts:1-10` | Transfer reads project-scale canonical article/full-text/raw JSON state and separately packages/rebases assets with checksums. Uploaded PDFs write ordinary bytes before the database reference; runtime assets are served through a rooted API path. Snapshot payload rows, database references, package assets and client files are different contracts. | `CMD-0728` |
+| `EVD-1117` | `production/lifecycle` | `reviewServingRetentionService.ts:29-54,70-124,193-225`; `reviewServingSnapshotPinRepository.ts:141-345`; `duckdbService.ts:1660-1799,2461-2613`; `scripts/dbBackup.ts:34-51`; US-091 file lifecycle proof | Current retention protects active/LKG/pinned snapshot IDs and deletes registered tables in batches, but has no ordinary-reader component/blob lease or content-reference graph. Probe restoration, backup existence and a cleanup invocation are not crash-safe database/file recovery or a durable cleanup receipt. | `CMD-0728` |
+| `EVD-1118` | `production/client/desktop` | Detail routes `+reviews-llm/+$articleId/+index.tsx:33-52,78-257` and `+fulltext.tsx:20-39,64-161`; `projectPromptPreview.tsx:18-60`; `ArticleTabs.tsx:14-74`; `router.tsx:25-38`; `getRouterHistoryMode.ts:1-7`; `getDesktopApiOrigin.ts:11-31`; `getApiRequestUrl.ts:34-44` | Summary/full-text tabs share one five-minute `article-review-details` cache containing all payloads; prompt preview has a separate one-minute key. Browser paths and packaged desktop hash/loopback/runtime-asset behavior share UI source but require separate request, navigation, cache, stream/download and restart captures. | `CMD-0728` |
+| `EVD-1119` | `production/fixture/control` | `reviewServingBenchmark.ts:279-302,712-719,1100-1216,2766-2798`; `TGT-0025`-`TGT-0030` key/cap/SQL/write/lifecycle matrices; `PRF-0936`-`PRF-0941`; prohibited-command and artifact/process audit | Repository declarations support a finite design, but approved deployed widths/fan-out, serializer domains, file sizes, plans, runtime values and before/after parity/resource measurements remain unavailable. Six targets and six blocked validations change no actionability. | `CMD-0729`-`CMD-0732` |
+
+### Current Payload And Detail Work Versus Bounded Alternative
+
+| Grain | Current checked-in behavior | Proposed bounded alternative | Unresolved proof |
+| --- | --- | --- | --- |
+| Article list payload | Merged open `source_metadata` is stored per snapshot and joined before the candidate limit; previews share the same row even when list only needs metadata/badges. | Hydrate at most the 500 returned candidate IDs after selection, restore candidate ordinal and select only a compact badge projection for list. Full metadata and previews remain keyed but are fetched only by detail/export contracts with byte admission. | Consumer-approved metadata projection, encoded distributions, applied post-limit plan and missing/over-cap behavior are unavailable. |
+| Judgment list payload | Prompt/model/assessment JSON and placeholders are copied across list modes. Up to five 100-ID/10,000-row/4 MB calls can serve one 500-article page without one aggregate cap. | Store actual LLM/Human rows once per immutable revision and key; join prompt content separately. Pack complete article chunks by sealed prompt/byte receipts, cap the whole route at 8 MB and reject rather than return an incomplete article or silently shrink the page. | Serializer equality, per-article byte receipts, aggregate admission, mode/config parity and physical benefit are unproved. |
+| Detail | One route recursively drains every 512-row judgment page and adds current full text, current history, prompt/project names, admin fields and related records to one response/cache. | Return a one-row shell and explicit cursor pages. Judgment, prompt, current-history/admin, related-record and full-text segments each have independent keys, caps and freshness labels; no server or client `readAll` loop is admitted. | Product envelope/cursor decision, request/render parity, termination, cancellation and back/forward behavior are unvalidated. |
+| Prompt preview | One serving payload is combined with latest project/prompt/model and entire latest full text, then processed under a derived/default context limit. | Bind prompt revision, review/content settings, model/provider/thinking and a prepublished content revision before reading. Read one prompt and a bounded prepared-text object; missing benchmark-critical values or content rejects preview. | Approved identity, no-default behavior, prepared-content writer and exact preview parity are absent. |
+| Full text and files | Full text/HTML/metadata live in the canonical row; PDFs/assets are references to ordinary files or external values. Detail returns full text inline and asset routes read whole files. | Summary returns only a descriptor/preview. Full-text tab reads at most 1 MB segments from an immutable content revision; large JSON/text/HTML may use a content-addressed file manifest, while existing PDFs remain their own asset family. | Object maxima, Range/segment protocol, rooted path, permissions, corruption, leases and browser/desktop behavior are unapproved. |
+| Export and transfer | Export pins selection but later joins current fields; transfer serializes current canonical rows project-wide and separately copies assets. | Export pins every component/content revision and hydrates at most 500 IDs/10 MB per background batch. Transfer either remains explicitly latest-canonical or packages exact revision/blob identities in bounded batches; the two modes cannot masquerade as each other. | Frozen/latest owner policy, package schema, round-trip equality, artifact/client-copy integrity and cleanup-safe reads are absent. |
+
+### Rejected US-094 Shapes
+
+| Rejected alternative | Reason |
+| --- | --- |
+| One universal `payload_json` or `detail_json` per article/snapshot | Recombines article, prompts, LLM, Human, full text, current history and admin state under different writers/invalidation/retention. One keyed row can still be unbounded in bytes and cannot prove field ownership or partial failure. |
+| Treat at most 100 or 500 article IDs as a complete hydration bound | Prompt fan-out, open JSON, full text, current history and recursive pages can remain unbounded. ID, row, encoded-byte, call-count and termination caps are separate required checks. |
+| Keep recursive `readAllReviewServingRows` because each call is capped | A finite per-call page does not bound request-wide calls, rows, bytes, memory or time. Detail must expose continuation and never recursively drain an unknown number of pages in one route or query function. |
+| Store prompt text, model metadata and unanswered placeholders in every judgment/list-mode row | Repeats immutable or derivable values, couples prompt/config changes to judgment copies and preserves list-mode fan-out. Prompt revision plus actual judgment rows is the bounded alternative. |
+| Hydrate full metadata, judgment extension JSON or full text for every list row and discard it in the client | Moves all-payload work above the route while retaining unnecessary bytes and parsing. List selects only its approved bounded projection; detail/export request larger fields explicitly. |
+| Read current full text, prompt, model or admin state beside a snapshot without a freshness label | Produces a mixed-time response that a snapshot key/checksum cannot certify. The value is either revision-bound or returned from a separately named latest contract. |
+| Put all large values in files or serve persisted paths directly to the client | File backing adds path, permission, atomicity, lease, cleanup, recovery and portability contracts and is not automatically cheaper. Clients use a server endpoint and opaque key, never a database path or `file://` value. |
+| Silently truncate open JSON/full text, lower page size, drop prompts or fall back to current source on cap/missing/hash failure | Changes response semantics, order, benchmark input or snapshot identity. The target returns a typed over-cap/unavailable result or an explicit cursor; it never retries with weaker settings or another authority. |
+| Use one global content hash as article, prompt, judgment, model/config and file identity | These domains invalidate independently and carry different history/applicability. Content-addressed bytes may dedupe a byte object, but semantic owner keys and component revision bindings remain relational and separate. |
+| Broadly dual-write current payload tables and every target/file form | Creates parallel mutable authorities and an unbounded reconciliation tail. Migration uses bounded backfill, shadow comparison, one version-fenced writer switch, one reader switch and read-only rollback. |
+
+### Keyed Payload And Detail Target-Shape Register
+
+| rowId | Boundary / linked dispositions | Exact proposed key and field set | Ownership, snapshot and failure boundary | Evidence / linked proof |
+| --- | --- | --- | --- | --- |
+| `TGT-0025` | Keyed article payload; `DSP-0153`, `DSP-0166`-`DSP-0167`; canonical source `DSP-0001`/`DSP-0024` remains authority | `mart.review_article_payload_component_v5`: PK `(project_id,component_revision_id,article_id)`; keys plus nullable `article_created_at`, non-null versioned `source_badge_json`, nullable `source_metadata_inline_json`/`source_metadata_blob_id`, non-null `source_metadata_digest`, nullable `abstract_preview`, `full_text_preview`, nonnegative `source_character_count`, nonnegative `encoded_inline_bytes`. Exactly one metadata representation is present; an empty object is encoded explicitly, and previews are each at most 2,000 characters. | Display/payload projector owns the snapshot-selected merge and badge projection; canonical article/source rows remain authority. `TGT-0018` receipt binds display, selected-import, article and full-text inputs. List reads only badge fields for returned candidate IDs; detail/export can request full metadata. Missing row, digest mismatch, both/neither invalid representation, row/aggregate over-cap or unknown badge serializer rejects sealing/read with no source fallback. | `EVD-1109`-`EVD-1111`, `EVD-1115`, `EVD-1119`; `PRF-0936` |
+| `TGT-0026` | Keyed judgment payload; `DSP-0154`, `DSP-0168`-`DSP-0170` | `mart.review_judgment_payload_component_v5`: PK `(project_id,component_revision_id,payload_kind,article_id,judgment_slot_id)` where kind is `llm`, `human_prompt` or `human_summary`; non-null `judgment_slot_id` equals `prompt_id` for prompt kinds and the versioned literal `summary:v1` for a Human summary whose `prompt_id` is null. Keys plus `prompt_revision_id`, nullable `prompt_id`, `prompt_order`, non-null `judgment_id`, nullable `model_id`, `created_at`, `updated_at`, `answered_original`, `answered_original_as_array`, `is_answered`, `chunking_strategy`, `confidence_original`, `explanation_inline`/`explanation_blob_id`, `quotes_inline_json`/`quotes_blob_id`, `human_comment_inline`/`human_comment_blob_id`, LLM snapshot-project/model-display fields, latest-assessment scalar fields, non-null `payload_reference_kind`, `serializer_version`, optional `extension_inline_json`/`extension_blob_id`, nonnegative `encoded_inline_bytes`. Large pairs are mutually exclusive. No `list_mode_key`, prompt text or unanswered placeholder row is stored. | Separate LLM and Human component revisions bind exact model/content/prompt/config/mode/delete identities. Writers select the current active row per exact natural key; prompt component supplies text/order and composer derives missing placeholders. List, detail and export select only needed columns. Missing natural identity, invalid/duplicate slot, relational/extension mismatch, unknown serializer, over-cap or failed chunk blocks the new revision while prior active/LKG remains. Current all-history stays a separate paginated source contract. | `EVD-1109`-`EVD-1113`, `EVD-1115`, `EVD-1119`; `PRF-0937` |
+| `TGT-0027` | Prompt applicability/content; `DSP-0015`-`DSP-0016`, `DSP-0038`-`DSP-0039` cross-reference only | `app.review_prompt_component_v5`: PK `(project_id,component_revision_id,prompt_id)`; keys plus non-null `content_hash`, nullable `prompt_order`, non-null `enabled`, `archived`, nullable `origin`, `criteria_disposition`, `prompt_heading`, `prompt_type`, nullable `original_text_inline`/`original_text_blob_id`, `transformed_text_inline`/`transformed_text_blob_id`, `serializer_version`, nonnegative `encoded_inline_bytes`. Revision receipt binds Human mode, review config and ordered prompt-set checksum. | Immutable `app.prompt` plus mutable `app.project_prompt` remain source authority; prompt owner publishes a complete immutable applicability revision. Judgment rows reference this revision instead of copying prompt text. One preview reads one prompt; list/detail reads only prompt IDs present in a bounded judgment page, then restores prompt order. Missing legacy hash, duplicate order/key, changed content/applicability, unknown criteria or text over-cap blocks the revision and never defaults. | `EVD-1109`, `EVD-1112`-`EVD-1114`, `EVD-1119`; `PRF-0938` |
+| `TGT-0028` | Snapshot full-text content; canonical `DSP-0001`/`DSP-0024` cross-reference; local-file decisions remain US-091 | `mart.review_full_text_component_v5`: PK `(project_id,component_revision_id,article_id)`; keys plus non-null `content_revision_id`, nullable `content_hash`, `full_text_inline`/`full_text_blob_id`, `full_text_html_inline`/`full_text_html_blob_id`, `full_text_assets_inline_json`/`full_text_assets_blob_id`, nullable `full_text_pdf_reference`, `full_text_source`, `full_text_original_format`, `full_text_fetched_at`, nonnegative nullable `full_text_char_count`, nonnegative `encoded_inline_bytes`. Operational conversion attempts/error/model/status remain latest canonical/admin fields and are not owned here. | Article/full-text owner allocates a new immutable content revision after canonical text/HTML/assets/reference publication and binds it to the payload/display revision. Summary/list never selects full bytes. Full-text tab reads descriptor then bounded segments; prompt preview uses a separately published prepared-content receipt bound to content settings and model token limit. Missing source history, digest/reference mismatch, incomplete file publication or object cap failure rejects snapshot admission. | `EVD-1109`, `EVD-1111`, `EVD-1113`-`EVD-1114`, `EVD-1116`, `EVD-1119`; `PRF-0939` |
+| `TGT-0029` | Optional inline/file payload bytes; proof boundary only | `app.review_payload_blob_v5`: PK `blob_id`, the `sha256t:v1:` digest of the canonical `(media_type,encoding,bytes)` tuple; fields `content_checksum_sha256`, `byte_length`, `media_type`, `encoding`, `storage_kind` (`inline`/`file`), nullable `inline_bytes`/`relative_path`, `status`, `created_at`, `sealed_at`, `last_error`; unique `(content_checksum_sha256,byte_length,media_type,encoding)` and exactly one storage value. `app.review_payload_blob_reference_v5`: PK `(component_revision_id,owner_kind,owner_key,field_kind)`; `blob_id`, `project_id`, `created_at`. Rooted file layout is `assets/review-payload/v1/sha256t/<first-two>/<blob-digest>`; callers never receive it. | Semantic component owns the reference; blob service owns immutable bytes/checksum/path only. Inline maximum is 64,000 encoded bytes; JSON/text/HTML file object maximum is 64,000,000 bytes and each API segment is at most 1,000,000 bytes. PDFs remain the existing asset family. Write temp, verify length/hash, rename/publish ready, then attach reference; database/file atomicity uses explicit candidate/ready/orphan states. Missing/hash/path/type/range/lease failure is visible and no direct path or alternate current byte source is used. | `EVD-1116`-`EVD-1117`, `EVD-1119`; `PRF-0940` |
+| `TGT-0030` | Page-bounded detail composition; logical no-table contract | Input is exactly one `article_id`, one resolved snapshot and exact candidate/display/selected/status/article-payload/judgment/prompt/full-text revision tuple plus a request lease. Output is a one-row shell with opaque continuation tokens for LLM/Human judgment, current history, related records and full-text segments. Cursor identities bind article, contract, revision tuple, field projection and exact order. No persisted all-detail bundle is created. | Resolve/bind once, hydrate shell by key, then issue independent bounded subresource queries only when requested. Judgment pages join prompts by page prompt IDs; placeholders derive from the exact prompt revision. Snapshot content and latest admin/history are separate named envelopes. Missing component, stale cursor, mixed revision, recursive drain request, over-cap projection or blob failure returns typed unavailable/continuation state and never assembles/falls back to all payloads. | `EVD-1110`, `EVD-1113`-`EVD-1118`, `EVD-1119`; `PRF-0941` |
+
+### Required Hydration, Cap And Ordering Contract
+
+All numeric values in this table are proposed hard target maxima pending owner
+approval and physical validation. A lower caller request is allowed; the
+server may not silently lower an admitted page after candidate selection.
+Encoded-byte caps cover the serialized values read and returned, not the
+current `payload_bytes` character diagnostic.
+
+| Consumer/read | ID, row, byte and call bound | Exact order and completeness | Over-cap/missing behavior |
+| --- | --- | --- | --- |
+| Review list article payload | Candidate query may fetch 501 rows only to detect continuation; payload/display hydration receives at most the 500 returned IDs. Article payload participates in one 8,000,000-byte route aggregate. | Input `(article_id,page_ordinal)` is authoritative; output is `page_ordinal ASC`. Every admitted ID has exactly one required payload row; the sentinel is not hydrated or returned. | Reject the page with typed `payloadOverBudget`/`componentIncomplete`; never drop metadata, reorder, shrink after cursor calculation or query current source. |
+| List judgment payload | At most 100 unique article IDs, 10,000 rows and 4,000,000 encoded bytes per call; all calls for one list response share an 8,000,000-byte and finite planned-call aggregate. Chunk size is `min(100,floor(10000/applicable_judgment_slot_count),byte_receipt_fit)`, where the sealed count is nonzero and includes the one summary slot in summary mode. | `(article_ordinal,payload_kind priority,prompt_order ASC NULLS LAST,judgment_slot_id ASC,judgment_id ASC)`; list contracts request one explicit payload kind per call, and every admitted article chunk is complete for that revision. No row from a later article is used to hide an incomplete earlier article. | Reject before query when slot/byte receipts cannot fit; reject count/checksum mismatch after query. No partial article, prompt drop or implicit smaller list page. |
+| Article detail shell | Exactly one article, one row per required scalar/article-payload component and at most 1,000,000 encoded bytes; one composition resolve/lease. | Singleton article identity; response identifies every snapshot revision and labels separately requested latest fields. | Typed unavailable if any required row/revision is absent or aggregate estimate/actual bytes exceed cap. |
+| Detail LLM/Human judgments | Exactly one article; at most 512 rows and 2,000,000 encoded bytes per LLM page, 512 rows and 1,000,000 bytes per Human page; one page per request. | Cursor tuple `(payload_kind_priority,prompt_order_null_rank,prompt_order,judgment_slot_id,judgment_id)` ascending. Placeholders are derived after the page from the exact prompt revision and never stored/fetched as payload. | Return `nextCursor`; never recursively drain. A single row above the page-byte cap is unavailable or fetched through its explicit blob field endpoint. |
+| Prompt hydration/preview | At most the 512 distinct non-null prompt IDs referenced by one returned judgment page and 1,000,000 bytes; preview is exactly one prompt and one prepared-content descriptor under the same byte cap. | `(prompt_order ASC NULLS LAST,prompt_id ASC)` and caller ordinal when joining back to judgments. Prompt preview binds prompt/config/model/content identities before reading. | Missing/changed revision or benchmark-critical setting returns unavailable. Large text uses `TGT-0029`; no current prompt/default model fallback. |
+| Full-text tab/prepared input | One article descriptor; inline value at most 64,000 bytes, file object at most 64,000,000 bytes, segment at most 1,000,000 bytes and one segment per request. Prepared judgment input is additionally capped by exact approved model token limit. | Segment cursor is `(blob_id,byte_offset)` with monotonically increasing non-overlapping offsets; text/HTML representation and content settings are part of the token. | Return continuation or typed object-too-large/corrupt/unavailable. No whole-object read behind a segment endpoint and no model/context default. |
+| Current judgment history and related records | Separate latest-only pages: at most 256 history rows/1,000,000 bytes and 100 related rows/1,000,000 bytes per request. | History `created_at DESC NULLS LAST,id ASC`; related records `is_current DESC,title ASC,external_id ASC NULLS LAST,id ASC`; cursors carry that tuple. | Return continuation. Never append all current history/Covidence rows to the snapshot detail shell. |
+| CSV export | Selection remains durable; database hydration uses at most 500 IDs and 10,000,000 encoded bytes per background batch, then streams rows in selection ordinal/prompt order. | Preserve durable selection ordinal for articles and requested prompt ordinal; every batch pins the same revision tuple. | Fail/resume the job at batch identity without selecting a later snapshot/current field. No all-selection in-memory hydration. |
+| Transfer | Target contract requires at most 500 IDs and 10,000,000 database payload bytes per background batch; file members use separately admitted object/expanded-byte limits and checksums. | Canonical-latest mode uses stable article-ID order; historical mode includes exact component/content/blob identities and manifest order. | Reject mixed latest/snapshot packages and missing assets; resume by durable batch/member identity without scanning or rehydrating the whole project in a foreground request. |
+
+Page-sized article-ID hydration is therefore a conjunction, not a synonym for
+an `IN` predicate: `bounded IDs AND bounded fan-out rows AND bounded encoded
+bytes AND bounded calls AND deterministic termination`. Every target proof
+must demonstrate all five terms with the exact applied plan and runtime trace.
+
+### Representative Bounded Lookups
+
+The following is design SQL, not migration text. The caller materializes the
+returned candidate IDs and ordinals from `TGT-0024`; it does not pass the 501st
+continuation sentinel. An applied DuckDB plan must still prove keyed access and
+must report scanned/returned rows and encoded bytes.
+
+```sql
+WITH requested(article_id, article_ordinal) AS MATERIALIZED (
+  VALUES
+    ($article_id_1, 1),
+    ($article_id_2, 2)
+    /* ... no more than 500 returned candidate IDs ... */
+),
+hydrated AS MATERIALIZED (
+  SELECT
+    requested.article_ordinal,
+    requested.article_id,
+    payload.article_id AS hydrated_article_id,
+    payload.source_badge_json,
+    payload.abstract_preview,
+    payload.full_text_preview,
+    payload.encoded_inline_bytes
+  FROM requested
+  LEFT JOIN mart.review_article_payload_component_v5 AS payload
+    ON payload.project_id = $project_id
+   AND payload.component_revision_id = $article_payload_revision_id
+   AND payload.article_id = requested.article_id
+)
+SELECT *
+FROM hydrated
+ORDER BY article_ordinal ASC;
+```
+
+The reader verifies `COUNT(*) = requested_count`, every
+`hydrated_article_id` matches, no duplicate key exists and the sum of encoded
+component plus serialized response bytes fits the route aggregate. Full
+`source_metadata_inline_json`/blob bytes are deliberately omitted from list
+projection.
+
+List judgment hydration uses a complete admitted article chunk. Detail uses
+the same key but substitutes one article and the cursor predicate; only detail
+may return a continuation.
+
+```sql
+WITH requested(article_id, article_ordinal) AS MATERIALIZED (
+  VALUES ($article_id_1, 1), ($article_id_2, 2)
+),
+judgment_ranked AS MATERIALIZED (
+  SELECT
+    requested.article_ordinal,
+    judgment.*,
+    CASE judgment.payload_kind
+      WHEN 'llm' THEN 0
+      WHEN 'human_prompt' THEN 1
+      WHEN 'human_summary' THEN 2
+      ELSE 3
+    END AS payload_kind_priority,
+    CASE WHEN judgment.prompt_order IS NULL THEN 1 ELSE 0 END AS prompt_order_null_rank
+  FROM requested
+  INNER JOIN mart.review_judgment_payload_component_v5 AS judgment
+    ON judgment.project_id = $project_id
+   AND judgment.component_revision_id = $judgment_revision_id
+   AND judgment.article_id = requested.article_id
+  WHERE $payload_kind IS NULL
+     OR judgment.payload_kind = $payload_kind
+),
+judgment_page AS MATERIALIZED (
+  SELECT *
+  FROM judgment_ranked
+  WHERE (
+    $cursor_payload_kind_priority IS NULL
+    OR (
+      payload_kind_priority,
+      prompt_order_null_rank,
+      COALESCE(prompt_order, 0),
+      judgment_slot_id,
+      judgment_id
+    ) > (
+      $cursor_payload_kind_priority,
+      $cursor_prompt_order_null_rank,
+      $cursor_prompt_order,
+      $cursor_judgment_slot_id,
+      $cursor_judgment_id
+    )
+  )
+  ORDER BY
+    article_ordinal ASC,
+    payload_kind_priority ASC,
+    prompt_order_null_rank ASC,
+    prompt_order ASC,
+    judgment_slot_id ASC,
+    judgment_id ASC
+  LIMIT $row_limit_plus_one
+),
+returned_judgment_page AS MATERIALIZED (
+  SELECT *
+  FROM judgment_page
+  ORDER BY
+    article_ordinal ASC,
+    payload_kind_priority ASC,
+    prompt_order_null_rank ASC,
+    prompt_order ASC,
+    judgment_slot_id ASC,
+    judgment_id ASC
+  LIMIT $row_limit
+),
+prompt_ids AS MATERIALIZED (
+  SELECT DISTINCT prompt_revision_id, prompt_id
+  FROM returned_judgment_page
+  WHERE prompt_id IS NOT NULL
+  LIMIT 512
+),
+prompt_page AS MATERIALIZED (
+  SELECT prompt.*
+  FROM prompt_ids
+  INNER JOIN app.review_prompt_component_v5 AS prompt
+    ON prompt.project_id = $project_id
+   AND prompt.component_revision_id = prompt_ids.prompt_revision_id
+   AND prompt.prompt_id = prompt_ids.prompt_id
+)
+SELECT
+  returned_judgment_page.*,
+  prompt.content_hash,
+  prompt.prompt_heading,
+  prompt.prompt_type,
+  prompt.original_text_inline,
+  prompt.original_text_blob_id,
+  (SELECT COUNT(*) > $row_limit FROM judgment_page) AS has_more
+FROM returned_judgment_page
+LEFT JOIN prompt_page AS prompt
+  ON prompt.component_revision_id = returned_judgment_page.prompt_revision_id
+ AND prompt.prompt_id = returned_judgment_page.prompt_id
+ORDER BY
+  returned_judgment_page.article_ordinal ASC,
+  returned_judgment_page.payload_kind_priority ASC,
+  returned_judgment_page.prompt_order_null_rank ASC,
+  returned_judgment_page.prompt_order ASC,
+  returned_judgment_page.judgment_slot_id ASC,
+  returned_judgment_page.judgment_id ASC;
+```
+
+For list hydration, both row-limit parameters equal the sealed complete-row
+count; no partial-article sentinel is admitted. The judgment-slot count and
+per-article byte receipt must admit a complete chunk before execution, and
+equality checks reject any incomplete result. For detail, request `limit + 1`,
+return at most 512 and sign the next cursor with the complete revision tuple.
+Every non-null prompt reference in the returned page must match exactly one
+prompt row; a missing/duplicate prompt rejects the page. Prompt blob fields are
+descriptors, so bytes require a separate admitted lookup.
+
+```sql
+SELECT
+  reference.blob_id,
+  blob.byte_length,
+  blob.content_checksum_sha256,
+  blob.media_type,
+  blob.encoding,
+  blob.storage_kind,
+  CASE WHEN blob.storage_kind = 'inline' THEN blob.inline_bytes ELSE NULL END AS inline_bytes
+FROM app.review_payload_blob_reference_v5 AS reference
+INNER JOIN app.review_payload_blob_v5 AS blob
+  ON blob.blob_id = reference.blob_id
+ AND blob.status = 'ready'
+WHERE reference.component_revision_id = $component_revision_id
+  AND reference.owner_kind = $owner_kind
+  AND reference.owner_key = $owner_key
+  AND reference.field_kind = $field_kind
+  AND blob.byte_length <= $object_byte_cap
+LIMIT 1;
+```
+
+File storage returns only the descriptor. The server resolves the canonical
+root, validates the same checksum/length/media tuple, acquires the revision and
+blob lease and reads exactly the requested at-most-1 MB segment. SQL success,
+path validation, file existence, checksum equality and segment delivery remain
+separate receipts.
+
+### Write, Invalidation, Publication And Failure Contract
+
+| Target | Authoritative inputs and owner | Bounded writes and invalidation | Publication and failure behavior |
+| --- | --- | --- | --- |
+| Article payload (`TGT-0025`) | Canonical article metadata/summary/full-text preview plus exact selected-import source and badge serializer; display/payload projector owns the derived row | Article/source/import selection, summary, full-text preview or serializer change creates a new component revision. Build one row/article in strict article-ID chunks and record encoded bytes/digests. | Seal only after key/count/checksum/representation/budget validation. Unknown/open metadata over the inline cap must use an approved blob or fail; prior active/LKG remains readable. |
+| Judgment payload (`TGT-0026`) | Canonical active LLM natural identity, Human prompt/summary row, prompt revision, model display, assessment and exact config/mode/delete semantics; separate LLM/Human owners | Relevant judgment, Human answer/comment, prompt, model display, assessment, review config, mode or tombstone change builds a new kind-specific revision in bounded chunks. No list-mode copies or stored placeholders. | Seal requires source-to-row identity, relational/extension equality, prompt reference, encoded-byte and status/summary/detail checks. Missing benchmark dimensions, failed chunk or finalization failure stays visible and never publishes a partial revision. |
+| Prompt revision (`TGT-0027`) | Immutable prompt content and project-prompt applicability/order owner | Prompt create/archive/link/enable/order/origin/criteria/content-hash or Human/review-config applicability change builds one complete revision by bounded prompt-ID chunks. | Seal ordered key/content checksum only after duplicate/null-hash/serializer checks. A judgment revision cannot bind a prompt revision still candidate/failed, and no current prompt fallback is allowed. |
+| Full-text revision (`TGT-0028`) | Canonical article/full-text conversion/import owner; semantic content and current operational status remain separate | Successful text/HTML/assets/PDF-reference publication creates a new content revision and payload/display invalidation. Build descriptors by bounded article IDs; write large bytes through `TGT-0029`. | Bind only ready bytes/references and digest/char-count equality. Database update without ready bytes, bytes without a durable reference, conversion failure or missing historical source blocks the new snapshot content; current admin status reports separately. |
+| Blob boundary (`TGT-0029`) | Blob service owns bytes; semantic component owns reference | Write one candidate temp object, enforce type/size, hash while writing, close/flush, rename to content path, mark ready, then attach bounded references. Same hash tuple reuses immutable bytes. | Any short write, hash mismatch, path collision, rename/permission failure or reference transaction failure leaves explicit candidate/orphan state. No ready reference points to candidate bytes; cleanup never infers safety from write failure. |
+| Detail composition (`TGT-0030`) | API contract and snapshot resolver; no storage writer | No independent write. Resolve one snapshot/revision tuple and lease; each subrequest carries that token and its own projection/cursor. | Mixed token, expired lease, unavailable component, over-cap row/blob or recursive-all request fails. A latest admin/history subrequest is explicitly latest and cannot mutate or silently replace the snapshot portion. |
+
+Component row counts, stored bytes and write fan-out above are structural
+design bounds, not measured savings. Deployed metadata/prompt/judgment/full-
+text distributions, unchanged-revision reuse, blob deduplication, WAL/temp
+bytes, filesystem amplification, latency, RSS and spill remain unavailable and
+block recommendation.
+
+### Snapshot, Export, Transfer And Runtime Contract
+
+| Plane | Required target behavior | Current consequence and unresolved proof |
+| --- | --- | --- |
+| Snapshot/list | Resolve `TGT-0018` bindings once, lease article/judgment/prompt/full-text revisions and compose `TGT-0024` candidate order with at most 500 returned IDs. Cursor binds all revisions plus field projection. | Current manifest has one payload identity and current list hydrates judgment chunks separately; applied transaction/lease/plan and exact envelope parity are unproved. |
+| Project detail | Shell and every snapshot subpage carry the same immutable detail token. Component promotion during navigation either leaves the token valid for its lease/horizon or returns explicit stale/unavailable; it never mixes revisions. | Current parallel reads can independently resolve serving state and then join latest current sources. Client cache key lacks a snapshot/detail token. |
+| Current admin/history | Admin conversion state, global/current judgment history and project-name hydration are separate `latest` envelopes with their own cursor and invalidation. They are not checksummed as snapshot detail. | Current one response merges these values and global article history is unbounded. Product owners must approve split loading and visible latest labels. |
+| Prompt preview | Bind exact prompt revision, model/provider/thinking/options, content flags, content revision and prepared-input identity before reading. No resolver default or current full-text fallback. | Current route can use a default context limit and latest source rows. Exact benchmark input/output and unavailable behavior require fixed capture. |
+| Export | Selection/result manifest pins snapshot and all component/content revisions. Each 500-ID/10 MB batch hydrates article, prompt and judgment fields by those keys, preserves selection/prompt ordinal and records batch/artifact hashes. | Current selection pin does not freeze later canonical/source joins. Artifact generation, download and retained client copy need independent receipts. |
+| Transfer | Latest-canonical transfer remains a distinct mode and regenerates target serving state. A historical-snapshot mode, if required, packages component/content/blob keys, field serializer versions and referenced assets with checksums in bounded batches. | Current package serializes canonical rows/assets, not serving payload revisions. Package checksum alone cannot prove target API/detail equality or file cleanup safety. |
+| Browser | Summary query loads shell; judgment/prompt/history/related/full-text are local query boundaries with cursor/error UI. Query identities include project/article plus immutable detail token; navigation preserves normal path/query state. | Current five-minute shared detail query fetches everything and both tabs reuse it. Actual request count/order, cancellation, progressive render, cache, back/forward, PDF/segment download and errors need browser capture. |
+| Packaged desktop | Same logical queries use hash history, outer-window state and loopback API origin; all blob/PDF bytes flow through server URLs built with the desktop origin. Sleep/restart must not reuse expired leases/cursors. | Shared Solid/Eden source and `getApiRequestUrl` declarations do not prove packaged request, hash, cache, streaming, permission, saved-file or restart parity. |
+
+### Retention, Recovery, Cleanup And Migration
+
+| Contract | Required target behavior | What remains unproved |
+| --- | --- | --- |
+| Retention/reference graph | Protect every component/content/blob revision referenced by active, LKG, candidate, pin, export, transfer, job, retained cursor/detail-token policy or unexpired reader/blob lease. Canonical source/audit and current admin/history keep their independently approved horizons. | Deployed references, legal/audit horizons, cursor/token duration, lease renewal and failed/orphan diagnostics horizon are unknown. |
+| Database cleanup | Mark a zero-reference component retired, re-scan, delete keyed rows by strict article/prompt chunks, verify zero, delete bindings/references/receipt last and write a durable completion/reclamation receipt. | No scheduler, reference-complete query, interruption matrix, per-target cursor or physical deletion receipt exists. |
+| Blob cleanup | After semantic references and leases reach zero, mark blob retired, re-scan, delete inline/file bytes, verify absence/checksum state, then delete manifest last. Candidate/orphan files use a separate bounded age/cursor policy. | Ordinary-file delete, directory scan, concurrent stream, crash resume, permissions and reclaimed-byte receipts are unproved. |
+| Recovery/restore | Restore canonical sources and files first, then immutable prompts/content/blobs, component revisions/counts/checksums, snapshot bindings/pins and cleanup state. Validate every referenced hash and replay bounded rebuilds before reopening routes; repeat browser/desktop/export/transfer workloads. | Startup mutation probes and backup files do not prove clean-host database-plus-file restore, route parity or corruption handling. |
+| Failure/replay | Every chunk and blob write is idempotent by immutable revision/key/hash. Completed-chunk finalization failure has an explicit retry/repair state; promotion changes only bindings/active pointer after all target components validate. | Current finalization readmission, ACK/visibility, filesystem candidate/orphan and operator repair receipts are incomplete. |
+
+Admissible migration and cutover order is:
+
+1. **Freeze the contract.** Owners approve every field owner, typed/open
+   serializer, identity, cap, order/cursor, missing/over-cap behavior, inline/
+   file threshold, root and response/API split. Derive checked-in schema from
+   the full lexical migration sequence and obtain an approved non-live applied
+   inventory; bootstrap source is insufficient.
+2. **Inventory and bounded backfill.** For retained active/LKG/pinned/export/
+   transfer obligations, build prompt and content/blob revisions, then article
+   and kind-specific judgment revisions in strict key chunks. Never parse or
+   hydrate a whole project inside a foreground request.
+3. **Validate immutable equality.** Compare exact keys, source values, typed
+   versus JSON serializer output, prompt applicability/order, placeholder
+   derivation, full-text/asset hashes, row/byte receipts and first/middle/last
+   cursor pages. Missing or over-cap deployed values remain blockers; they are
+   not silently omitted.
+4. **Shadow the bounded readers.** Under one fixed benchmark configuration,
+   capture applied plans, scanned/returned rows, encoded bytes, call count,
+   latency, RSS/spill/temp/WAL and browser/desktop render/navigation plus
+   export/transfer outputs. No fallback, retry under weaker settings or
+   recursive all-detail drain is allowed.
+5. **Switch writers once.** Quiesce or version-fence payload dirty work, drain
+   and receipt the old high-waters, then switch prompt/content, article payload
+   and LLM/Human judgment writers to immutable candidates. File publication
+   uses its own candidate/ready/orphan protocol; do not broadly dual-write both
+   payload authorities.
+6. **Bind and switch readers once.** Promote only snapshots with the complete
+   target revision tuple, switch list/article-set/detail/prompt/export readers
+   under one version gate and issue revision-bound cursors/tokens. Keep old
+   tables read-only for a bounded rollback horizon; target failures are
+   visible or select a prior LKG before request admission.
+7. **Rollback and cleanup.** Roll back the reader gate without reverse-writing
+   target state. Retire old payload rows/indexes and any target blobs only after
+   parity, fixed benchmark, reference-negative, recovery, retention and
+   cleanup receipts pass. Existing PDF/asset/client-copy cleanup remains its
+   own US-091 contract.
+
+US-094 executes none of these phases. Current payload/detail paths remain the
+checked-in authority until a later authorized implementation and validation.
+
+### US-094 Target-Specific Proof Rows
+
+These proofs remain separate from US-087 family preservation and every earlier
+non-keep replacement proof. Each finite predicate is independently `blocked`;
+design completeness does not advance disposition actionability.
+
+| rowId | Target-specific finite pass predicate | proofCheckState | Exact evidence | Missing evidence / blockers | Owner question IDs |
+| --- | --- | --- | --- | --- | --- |
+| `PRF-0936` | `TGT-0025` passes only when article/import/product owners approve every badge/metadata/preview field and serializer; an approved applied/deployed inventory plus fixed fixture proves at-most-500-ID post-limit lookup, candidate ordinal, one-row completeness, encoded row/call/route caps, immutable write/invalidation, snapshot/export/transfer equality, migration, retention, recovery and cleanup with no full-metadata list read or source fallback. | `blocked` | `EVD-1109`-`EVD-1111`, `EVD-1115`-`EVD-1119` | Field/serializer authority, deployed values/widths, plans, encoded receipts, consumer captures, lifecycle and benchmark are unavailable; `BLK-0581`-`BLK-0590`. | `OQ-0585`-`OQ-0594` |
+| `PRF-0937` | `TGT-0026` passes only when LLM/Human/reliability owners approve exact natural/config/mode/delete identities and relational/extension fields; active rows, prompt references and derived placeholders equal current semantics; complete 100-ID/10,000-row/4 MB calls and 8 MB route aggregate preserve order; writer/finalization, list/detail/export/transfer, migration, restore, retention and cleanup pass without list-mode copies, recursive drain or fallback. | `blocked` | `EVD-1109`-`EVD-1113`, `EVD-1115`, `EVD-1117`-`EVD-1119` | Identity/serializer/history authority, deployed fan-out/bytes, complete-call admission, status/detail equality, parity, lifecycle and benchmark are unavailable; `BLK-0581`-`BLK-0590`. | `OQ-0585`-`OQ-0594` |
+| `PRF-0938` | `TGT-0027` passes only when prompt/product owners approve content/applicability/order/hash/criteria semantics; every judgment/export/transfer/prompt-preview consumer reconstructs exact fields from at-most-512-ID/1 MB prompt pages; invalidation, immutable binding, legacy null-hash behavior, migration, rollback, retention and restore pass without copied prompt JSON or current fallback. | `blocked` | `EVD-1109`, `EVD-1112`-`EVD-1115`, `EVD-1118`-`EVD-1119` | Prompt authority/version/open text sizes, deployed order/content equality, complete consumers, platform parity, lifecycle and fixture are unavailable; `BLK-0581`-`BLK-0590`. | `OQ-0585`-`OQ-0594` |
+| `PRF-0939` | `TGT-0028` passes only when article/full-text/benchmark owners approve content-revision identity and snapshot-versus-latest fields; bounded descriptor/segment/prepared-input reads reproduce exact summary/full-text/prompt behavior under frozen model/content settings; database/reference/file publication, export/transfer, migration, recovery, retention and cleanup pass with no entire current-text read or admin-state masquerade. | `blocked` | `EVD-1109`, `EVD-1111`, `EVD-1113`-`EVD-1119` | Historical content authority, object/token caps, content/file hashes, prepared-input writer, actual browser/desktop streams, restore and benchmark are unavailable; `BLK-0581`-`BLK-0590`. | `OQ-0585`-`OQ-0594` |
+| `PRF-0940` | `TGT-0029` passes only when storage/security/platform owners approve inline/file thresholds, canonical root/key/type/permissions/encryption and state machine; temp/hash/rename/reference/lease/concurrent-read/crash/orphan/cleanup and clean-host restore receipts prove exact bytes and portability; range/segment browser and packaged-desktop reads pass without direct paths or unsafe deletion. | `blocked` | `EVD-1116`-`EVD-1119` | Deployed files/permissions, atomicity/journal assumptions, scheduler/leases, corruption matrix, platform traces, reclaimed bytes and restore are unavailable; `BLK-0581`-`BLK-0590`. | `OQ-0585`-`OQ-0594` |
+| `PRF-0941` | `TGT-0030` passes only when API/product/client owners approve shell/subresource envelopes, exact snapshot/latest labels, caps and cursors; applied plans and request traces prove finite calls/rows/bytes with no recursive all-payload path; list/detail/prompt/full-text/current-history/admin/related-record/export/transfer behavior, browser path state, desktop hash/loopback/restart, migration, rollback, retention and recovery match one immutable fixture. | `blocked` | `EVD-1110`, `EVD-1113`-`EVD-1119` | Product split/cursor policy, applied plans, request/termination/cancellation traces, actual platform rendering/navigation, migration/lifecycle and fixed benchmark are unavailable; `BLK-0581`-`BLK-0590`. | `OQ-0585`-`OQ-0594` |
+
+### US-094 Target, Proof And Actionability Accounting
+
+| Register slice | New rows | `satisfied` | `pending` | `blocked` | `not-applicable` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Article/judgment/prompt validation | 3 | 0 | 0 | 3 | 0 |
+| Full-text/blob/detail validation | 3 | 0 | 0 | 3 | 0 |
+| **US-094 new** | **6** | **0** | **0** | **6** | **0** |
+| Prior `PRF-0001`-`PRF-0935` | 935 | 8 | 478 | 449 | 0 |
+| **Cumulative proof register** | **941** | **8** | **478** | **455** | **0** |
+
+| Target/disposition slice | Target rows | Cross-referenced disposition rows | `recommendationActionability: unresolved` | `recommendationActionability: blocked` | Actionable |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| US-094 unique keep grains | 6 designs | 13 | 13 | 0 | 0 |
+| US-094 non-keep grains | — | 0 | 0 | 0 | 0 |
+| Other disposition rows | — | 428 | 313 | 115 | 0 |
+| **Cumulative disposition register** | **30 target designs** | **441** | **326** | **115** | **0** |
+
+Target rows overlap prior keep/source/file proof boundaries because they are
+layered alternatives, not another disposition assignment. The 441-row
+disposition register remains singly accounted and unchanged. `auditStatus`,
+`proofCheckState`, `recommendationActionability` and `overallCertification`
+remain independent: all six new target proofs are blocked, all 13
+cross-referenced keep grains remain unresolved, all 115 prior non-keeps remain
+blocked, DBO remains 322/322 blocked, CMF remains 1,985/1,985 blocked, FAN
+remains 91 blocked plus one source-proven not-applicable and certification
+remains `INCOMPLETE`.
+
 ## Recommendation Proof Gate
 
 Create separate `PRF-####` rows for positive and negative proof. For a move,
@@ -16714,6 +17130,13 @@ remain separate from family proof and the 11 linked non-keep replacement
 proofs. The cumulative 935-row register is eight satisfied, 478 pending, 449
 blocked and zero not-applicable.
 
+US-094 adds `PRF-0936`-`PRF-0941`: six separately blocked validation rows
+for keyed article payload, judgment payload, prompt applicability/content,
+snapshot full text, optional content-addressed bytes and nonrecursive bounded
+detail composition. They remain separate from US-087 family proof, US-091
+file proof and every earlier replacement proof. The cumulative 941-row
+register is eight satisfied, 478 pending, 455 blocked and zero not-applicable.
+
 ### Output 09 - Candidate Target Shapes
 
 Authoritative row family: `TGT-####`. Record ownership and identity, exact
@@ -16726,14 +17149,17 @@ rows exactly once into 17 ownership- and invalidation-aligned source,
 configuration, judgment and reusable-fact designs. `TGT-0018`-`TGT-0024`
 add seven layered list-serving designs: immutable component revision/binding/
 lease, narrow candidate, page-hydrated display, selected-import winner,
-separate LLM/Human status and one bounded composition contract. Exact proposed
-keys/fields, representative two-stage SQL, both cursor directions, read/write
-fan-out, invalidation, snapshot reuse, failure, retention, recovery,
-browser/desktop/export/transfer consequences, migration, cutover, rollback and
-cleanup are explicit. Mutable identity reuse, pre-limit payload/source work,
-foreground derivation/count scans, broad dual writes and silent fallback are
-rejected. All 24 target validations remain blocked; no target is
-implementation-ready or actionable.
+separate LLM/Human status and one bounded composition contract. `TGT-0025`-
+`TGT-0030` add keyed article, judgment, prompt and full-text components, an
+optional inline/file blob manifest and one logical detail shell with explicit
+cursor subresources. Exact proposed keys/fields, bounded SQL, ID/row/byte/call
+caps, order, read/write fan-out, invalidation, snapshot/latest behavior,
+failure, retention, recovery, browser/desktop/export/transfer consequences,
+migration, cutover, rollback and cleanup are explicit. Mutable identity reuse,
+pre-limit payload/source work, foreground derivation/count scans, recursive or
+all-payload hydration, broad dual writes and silent fallback are rejected. All
+30 target validations remain blocked; no target is implementation-ready or
+actionable.
 
 ### Output 10 - Prioritized Implementation Slices With Benchmark Gates
 
@@ -19393,7 +19819,7 @@ The disposition register is also an output family, not a manifest status.
 US-073 through US-080 contribute 441 `DSP-####` rows: 195 object/logical/file,
 202 disjoint column/material and 44 associated-index decisions, comprising 326
 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081
-through US-093 change no disposition: all 326 keep rows retain
+through US-094 change no disposition: all 326 keep rows retain
 `recommendationActionability: unresolved`, while the eight exact US-073
 derive/delete, six exact US-074 archive, two exact US-075 project-cursor
 delete, two exact US-075 search-job delete, 11 exact US-077
@@ -19416,7 +19842,12 @@ keep and 11 non-keep list-serving dispositions without assigning any row a
 second disposition. Those designs bring the target register to 24 and leave
 all 326 unresolved/115 blocked/zero actionable disposition states unchanged.
 
-The proof register is independently 935 `PRF-####` rows. The 16 pre-US-081
+US-094 separately adds six layered `TGT-####` rows that cross-reference 13
+unique keep grains without assigning a second disposition or claiming an
+existing file family. Those designs bring the target register to 30 and leave
+all 326 unresolved/115 blocked/zero actionable disposition states unchanged.
+
+The proof register is independently 941 `PRF-####` rows. The 16 pre-US-081
 rows retain eight `satisfied`, three `pending` and five `blocked` states.
 US-081 adds 60 source/configuration family/domain rows plus seven target
 contracts: 30 pending and 37 blocked. US-082 adds 70 judgment/hot-fact
@@ -19446,8 +19877,10 @@ not-applicable. US-092 adds 17 blocked target-specific validation rows for
 `TGT-0001`-`TGT-0017`, producing a cumulative eight satisfied, 478 pending,
 442 blocked and zero not-applicable. US-093 adds seven blocked target-specific
 validation rows for `TGT-0018`-`TGT-0024`, producing a cumulative eight
-satisfied, 478 pending, 449 blocked and zero not-applicable. No manifest,
-measurement,
+satisfied, 478 pending, 449 blocked and zero not-applicable. US-094 adds six
+blocked target-specific validation rows for `TGT-0025`-`TGT-0030`, producing
+a cumulative eight satisfied, 478 pending, 455 blocked and zero
+not-applicable. No manifest, measurement,
 disposition value or certification state is inferred from those proof states,
 and no planned parity, benchmark or lifecycle work is recorded as passed.
 
@@ -20217,6 +20650,17 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-0721` | 2026-07-22 / US-093 | Deliberately skipped configured snapshot/query/studio, direct/live DuckDB or SQLite, deployed inventory, fixture DDL/DML, migration, server/app/browser/desktop, writer/projector/operator, repair/backup/restore, export/transfer, cleanup/retention, benchmark, EXPLAIN/profile and physical collectors; audited artifacts/processes before completion. | Preserve schemas, code, routes, projectors, retention, runtime, data and benchmark-critical settings and make unavailable physical/parity/lifecycle evidence explicit rather than zero. | Produced `EVD-1107`. No database/runtime/fixture/product command or mutation ran; no generated artifact or started product process requires cleanup. |
 | `CMD-0722` | 2026-07-22 / US-093 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check`, scoped source-baseline/worktree/tracker checks and strict source-only canonical-ID, proof-state, disposition-actionability, target-definition, blocker/question, SQL/order/cursor/foreground-bound and accounting validators. Preliminary read-only drafts overescaped shell/dynamic regexes or assumed one proof-row state layout; the corrected validator accepts both normalized and legacy target-proof layouts and changed no state. Skipped build, tests, browser/desktop, database and runtime gates because this story changes audit Markdown plus ignored Ralph tracker metadata only and those executions would manufacture prohibited evidence. | Verify exact target/proof/state accounting, design completeness, foreground-work rejection, source isolation and relevant repo-native formatting without treating lint debt or proposed SQL as product evidence. | Produced `EVD-1107`. Lint preserves the same six unrelated errors in three worker files; no typecheck script exists. Final validators pass: 322 DBO, 1,985 CMF, 92 FAN, 1,107 EVD, 722 CMD, 580 BLK, 584 OQ, 935 PRF, 441 DSP and 24 TGT canonical ID sets; proof is 8/478/449/0, actionability is 326 unresolved/115 blocked, all seven US-093 targets/proofs and exact order/cursor/limit contracts are present, whitespace passes and scoped product/schema source is unchanged. The ignored `.ralph-tui/progress.md` append exists; only the audit file plus the preserved pre-existing engine `tasks/prd.json` timestamp appear in Git status. |
 
+| `CMD-0723` | 2026-07-22 / US-094 | Read all reporting, DuckDB, API-server and frontend project skills; the user US-094 PRD/patterns; `tasks/prd.json#US-093/#US-094`; `.ralph-tui/progress.md`; US-001 state rules; US-087/US-091/US-093 evidence, targets and proof; current IDs/counts; HEAD/worktree status; and the targeted memory registry. | Establish the completed prerequisite, payload/detail ownership boundary, exact four-state model, next IDs, audit-only/no-live boundary and unrelated worktree state. | Produced `EVD-1108`. US-093 is complete, US-094 was absent, the memory registry only reconfirmed project skill routing, and the pre-existing engine-owned `tasks/prd.json` timestamp change was preserved. |
+| `CMD-0724` | 2026-07-22 / US-094 | Compared scoped `src`/`scripts`/`package.json` source from payload baseline `31b1c024` and US-093 baseline `bdc249d3` through HEAD `63442c74`; read the lexical migration loader, complete relevant final rebuild migrations, canonical article/full-text fields and final prompt rebuild. No database was opened. | Derive effective checked-in article payload, judgment detail, prompt and full-text shape without presenting migration source as applied catalog or deployed-state proof. | Produced `EVD-1109`. Scoped source is unchanged from both relevant baselines; current source declares the wide payload/detail and canonical content fields summarized in US-094. |
+| `CMD-0725` | 2026-07-22 / US-094 | Read review-serving contracts, admission, reader and SQL builders plus mounted LLM/Human/Both/detail route chunking and recursion. Traced article-set, row, estimated-byte, order/cursor, per-call and request-wide behavior. | Separate cheap per-call admission from complete article chunks, aggregate route bytes/calls and deterministic termination before designing bounded lookup. | Produced `EVD-1110`. Current declarations cap 100 IDs, 10,000 list rows/4 MB, one payload row/1 MB and 512 detail rows, but multiple chunks and recursive detail draining are not request-wide bounds. |
+| `CMD-0726` | 2026-07-22 / US-094 | Read article-payload and judgment-payload projectors, checksums/counts, direct serving mutation/status paths, invalidation inputs and summary/filter consumers. | Trace exact field ownership, repeated prompt/model/list-mode values, writer fan-out, encoded-size gaps and publication/finalization boundaries. | Produced `EVD-1111`-`EVD-1112`. Current payload bytes are a source-character diagnostic, prompt/model/placeholders repeat, and projector result counters, serving mutations, ACK and snapshot visibility remain separate. |
+| `CMD-0727` | 2026-07-22 / US-094 | Read project article-detail composition, global article history, admin/full-text routes, prompt preview, canonical full-text processing and current project/prompt/model reads. | Separate snapshot shell/payload rows from current full text, prompt/model, unbounded history, admin state and related-record hydration. | Produced `EVD-1113`-`EVD-1114`. One article ID and one-row limits do not bound open text or recursively/all-history joined payloads, and current joins are not frozen by the serving snapshot. |
+| `CMD-0728` | 2026-07-22 / US-094 | Read project export selection/hydration/streaming, transfer canonical serialization/assets/packages/rollback, runtime asset and uploaded-PDF paths, review-serving retention/pins/startup probes, and Solid browser/desktop detail/prompt/full-text routing, cache and origin helpers. | Define frozen versus latest hydration, ordinary-file boundaries, lifecycle/reference requirements and separate browser/path versus packaged-desktop/hash/loopback consequences. | Produced `EVD-1115`-`EVD-1118`. Current export can hydrate later current fields, transfer is canonical/project-scale, file references need separate leases/recovery/cleanup and shared UI source is not platform proof. |
+| `CMD-0729` | 2026-07-22 / US-094 | Designed `TGT-0025`-`TGT-0030` with exact keys/fields/owners, snapshot/latest labels, page-sized ID plus row/byte/call caps, order/cursors, representative SQL, writes/invalidation/publication/failure, export/transfer, browser/desktop, optional inline/file bytes, migration, retention, recovery and cleanup. Rejected universal payloads, ID-only bounds, recursive draining, copied prompt/model/placeholders, list-wide metadata/full text, mixed unlabeled freshness, direct paths, fallback and broad dual writes. | Provide finite alternatives without changing product storage or allowing all-payload/unbounded hydration to masquerade as a keyed read. | Produced `EVD-1119`. Six layered target designs are explicit alternatives only and retain current checked-in paths as authority. |
+| `CMD-0730` | 2026-07-22 / US-094 | Added `PRF-0936`-`PRF-0941`, `BLK-0581`-`BLK-0590`, `OQ-0585`-`OQ-0594` and target/proof/actionability reconciliation; cross-checked 13 unique linked keep grains without recounting a disposition or claiming US-091 file actionability. | Keep family preservation, target validation, disposition actionability, manifest audit status and overall certification independent. | Produced `EVD-1119`. Six new proofs remain blocked; cumulative proof is 8/478/455/0 across 941 rows, actionability remains 326 unresolved/115 blocked/zero actionable and target designs total 30. |
+| `CMD-0731` | 2026-07-22 / US-094 | Deliberately skipped configured snapshot/query/studio, direct/live DuckDB or SQLite, deployed inventory, fixture DDL/DML, migrations, server/app/browser/desktop, writers/projectors/operators, repair/backup/restore, export/transfer, cleanup/retention, benchmarks, EXPLAIN/profile and physical collectors; audited artifacts/processes before completion. | Preserve schemas, code, routes, projectors, retention, runtime, data and benchmark-critical settings and keep unavailable physical/parity/lifecycle values explicit rather than zero. | Produced `EVD-1119`. No database/runtime/fixture/product command or mutation ran; no generated artifact or started product process requires cleanup. |
+| `CMD-0732` | 2026-07-22 / US-094 | Ran `rtk bun run lint` and raw `bun run lint`, package-script typecheck discovery, `git diff --check`, both scoped source-baseline diffs, worktree/tracker checks and registry-scoped Bun validators for canonical IDs, table widths, proof states, disposition actionability, target uniqueness, required caps/rejections/SQL/state text and story presence. The first `bun` stdin invocation only printed CLI help, and an initial global ID scan counted first-column cross-reference matrices; corrected `bun run -` and authoritative-section slices changed no audit state. Skipped build, tests, browser/desktop, database and runtime gates because this story changes Markdown/tracker metadata only and those executions would manufacture prohibited evidence. | Verify exact target/proof/state accounting, bounded-design completeness, source isolation and repo-native formatting without treating lint debt or design SQL as product evidence. | Produced `EVD-1119`. Lint preserves the same six unrelated errors in three worker files; no typecheck script exists. Corrected validators pass: 322 DBO, 1,985 CMF, 92 FAN, 1,119 EVD, 732 CMD, 590 BLK, 594 OQ, 941 PRF, 441 DSP and 30 TGT canonical ID sets; proof is 8/478/455/0 and actionability is 326 unresolved/115 blocked. All six US-094 targets/proofs, cap/order/SQL/rejection/lifecycle contracts, Markdown widths, whitespace, tracker and both source baselines pass. Only the audit file plus the preserved pre-existing engine `tasks/prd.json` timestamp appear in Git status; ignored progress was appended. |
+
 ## Blockers
 
 | rowId | Scope | Missing evidence | Why blocked | Owner question IDs | Resolution condition |
@@ -20814,6 +21258,17 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0578` | US-093 retention, lease, cleanup and executable recovery | Reference categories and cleanup order are explicit, but horizons, durable lease renewal/expiry, scheduler, orphan cursors, cleanup receipt, corruption matrix and clean-host restore are unavailable. | `finally`, a pin, protected snapshot ID, startup mutation restoration or backup-file existence cannot prove concurrent-reader safety, bounded crash cleanup or restored route behavior. | `OQ-0582` | Retention/recovery owners approve horizons and interruption points and prove lease fencing, reference re-scan, bounded deletion, durable receipts and source-plus-component restore before route reopen. |
 | `BLK-0579` | US-093 API, browser, desktop, export and transfer parity | Source contracts and client hooks are mapped, but no actual browser or packaged-desktop request/render/navigation/cache capture, artifact hydration receipt, transfer round trip or concurrent-cleanup proof exists. | Fake adapters, test DOM, shared source, response typing, hash/path declarations and completed jobs cannot prove platform routing, saved-file integrity or immutable hydration. | `OQ-0583` | Product/platform/export/transfer owners approve exact envelopes and capture LLM/Human/Both/Unassessed pages, detail/PDF, cache/back-forward/restart, artifacts and round trips against one immutable fixture. |
 | `BLK-0580` | US-093 fixed benchmark and target-specific final proof | Repository caps and synthetic scale are source-defined, but corpus, seed, model/provider/thinking, prompts/content, project/import/Human/snapshot identities, applied shapes, runtime and full collector are unapproved. | Structural fan-out differences cannot establish storage or latency benefit, and design completeness cannot make `PRF-0929`-`PRF-0935` or linked recommendations actionable. | `OQ-0584` | Benchmark/release owners freeze every critical value, collect before/after read/write/rebuild/rows/bytes/latency/RSS/spill/temp/WAL and sign each complete target validation without retry or fallback. |
+
+| `BLK-0581` | US-094 field ownership, serializer and semantic identity | Proposed article, judgment, prompt and full-text fields are finite, but owners have not approved source-versus-derived authority, typed/open serializer versions, LLM/Human natural keys, prompt/content/model/config dimensions or missing/null/tombstone semantics. | A keyed table can still copy the wrong authority, collapse independently invalidated dimensions or reconstruct a different visible payload. | `OQ-0585` | Product/data/judgment/prompt/content owners approve every field, semantic key, serializer, applicability rule and typed failure before target implementation. |
+| `BLK-0582` | US-094 applied shape, values and physical baseline | Checked-in lexical schema and consumers are traced, but no approved non-live applied catalog, deployed row/value/reference inventory, JSON/text widths, prompt/judgment fan-out, file sizes, plans or resource baseline exists. | Source declarations and proposed caps cannot prove that deployed values fit, keyed paths are used, migration is complete or storage/read cost improves. | `OQ-0586` | Database/runtime owners provide an immutable approved catalog and value/size/reference/plan inventory with exact unavailable and over-cap cases. |
+| `BLK-0583` | US-094 bounded hydration, order and termination | ID, row, encoded-byte, per-call, aggregate-route and cursor caps are proposed, but no applied plan or request trace proves complete article chunks, exact order, equal-key traversal, finite call count or absence of recursive/all-payload reads. | A 100-ID predicate, 512-row page or SQL `LIMIT` alone can still omit equal keys, split an article, parse an oversized value or drain an unbounded request. | `OQ-0587` | Query/API owners approve every cap/order/cursor and capture first/middle/last, over-cap, missing and termination behavior with scanned/returned rows, bytes and calls. |
+| `BLK-0584` | US-094 judgment and prompt normalization parity | Removing list-mode copies, prompt/model JSON and unanswered placeholders depends on exact LLM/Human mode, prompt applicability/order, model display, assessment, extension and placeholder derivation that has not been approved or compared. | Relational normalization can change status, prompt labels, empty-page mode, conflict/detail output or historical interpretation even when row counts match. | `OQ-0588` | Judgment/Human/prompt/reliability owners approve identities and serializers and prove list/detail/status/summary/export/transfer equality for every mode and missing state. |
+| `BLK-0585` | US-094 snapshot content versus latest admin/history authority | The target labels revision-bound article/prompt/full-text values separately from latest conversion/admin/history/related values, but product owners have not approved which fields freeze, which remain latest or how mixed navigation is shown. | Current routes merge these grains; a snapshot token or payload checksum cannot certify later current joins, while freezing operational status can also misrepresent current reality. | `OQ-0589` | Product/article/admin/audit owners approve the field-by-field freshness matrix, visible labels, invalidation, cursor and retention behavior. |
+| `BLK-0586` | US-094 optional file boundary, atomicity and reader safety | Inline/file thresholds, rooted layout and candidate/ready/orphan states are designs only; deployed roots, permissions/encryption, temp/hash/flush/rename semantics, database reference ordering, Range/segment behavior, leases and corruption evidence are unavailable. | File backing can add bytes and failure modes; a checksum or successful rename cannot prove cross-boundary publication, safe concurrent deletion, portability or restore. | `OQ-0590` | Storage/security/platform owners approve the root/key/state machine and prove every write, reference, read, crash, lease, cleanup and clean-host restore boundary. |
+| `BLK-0587` | US-094 writer, invalidation, finalization and visibility | Current writer/delta/ACK paths are mapped and target chunks are designed, but no complete one-writer matrix, accepted/affected/visible counts, immutable seal, completed-chunk finalization repair, promotion or no-dual-authority receipt exists. | A successful chunk or ACK can leave incomplete component, blob, snapshot or visibility state, and broad dual writes can diverge. | `OQ-0591` | Projector/reliability owners approve one version-fenced writer per target and prove every invalidation, chunk, seal, retry, promotion, visibility and terminal failure. |
+| `BLK-0588` | US-094 migration, retention, recovery and cleanup | Bounded backfill/cutover/rollback and reference-first cleanup are explicit, but applied inventory, batch jobs, compatibility horizon, reference graph, leases, schedules, durable receipts, crash matrix and executable restore are absent. | Design order is not a migration; retention timestamps or successful cleanup invocation do not prove reader safety, bounded residue, reclamation or restored behavior. | `OQ-0592` | Migration/storage/retention/recovery owners approve and execute inventory, backfill, shadow, one-writer/reader cutover, rollback, cleanup and clean-host restore plans. |
+| `BLK-0589` | US-094 API, browser, desktop, export and transfer parity | Exact source paths are mapped, but no approved envelope/cursor split or actual browser and packaged-desktop request/render/navigation/cache/stream/restart capture, frozen export artifact or transfer round trip exists. | Shared UI code, route types, job completion, package checksums and source caps cannot prove progressive loading, hash/path parity, saved-file integrity or target visibility. | `OQ-0593` | Product/platform/export/transfer owners approve contracts and capture all list/detail/prompt/full-text/error/download/round-trip behavior on one immutable fixture. |
+| `BLK-0590` | US-094 fixed benchmark and final target proof | No approved corpus, seed, model/provider/thinking, prompts/content flags, project/import/Human/snapshot/component/file identities, runtime or complete before/after collector exists. | Proposed normalization, page sizes and file backing cannot establish physical benefit or non-regression, and unavailable measurements cannot be recorded as zero. | `OQ-0594` | Benchmark/release owners freeze all critical values, collect rows/bytes/calls/latency/RSS/spill/temp/WAL/file/write/rebuild/export/transfer results and sign `PRF-0936`-`PRF-0941` without fallback. |
 
 ## Owner Questions
 
@@ -21416,6 +21871,17 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0582` | Retention/recovery/audit owners | Which active/LKG/candidate/pin/job/export/transfer/cursor/lease/failed references and horizons are mandatory; how are leases renewed/expired and cleanup resumed; and which corruption/restart/clean-host restore validates component rows, bindings, files and routes? | `PRF-0929`-`PRF-0935` and `BLK-0578` |
 | `OQ-0583` | Product/browser/desktop/export/transfer owners | Which exact envelopes, labels, counts, title/detail/PDF routes, TanStack cache/page behavior, browser path history, desktop hash/outer URL/loopback behavior and frozen artifact/package semantics must match, and which physical captures approve them? | `PRF-0931`-`PRF-0935` and `BLK-0579` |
 | `OQ-0584` | Benchmark/data/runtime owners and release validator | Which immutable corpus, seed, model/provider/thinking, prompts/content, project/import/Human/snapshot/component identities, applied shapes, runtime and complete before/after collector are approved, and who signs each `PRF-0929`-`PRF-0935` predicate before actionability changes? | All US-093 proofs and `BLK-0580` |
+
+| `OQ-0585` | Product/data/judgment/prompt/content owners | For `TGT-0025`-`TGT-0028`, who owns every article badge/metadata/preview, LLM/Human judgment, prompt/applicability, model/assessment and full-text field; which natural/config/content identities, serializer versions and null/tombstone/failure rules are authoritative? | `PRF-0936`-`PRF-0939` and `BLK-0581` |
+| `OQ-0586` | Database/runtime/operator owners | Which approved non-live applied catalog and immutable deployed inventory supplies exact current/target rows, widths, JSON/text variants, prompt/judgment fan-out, references/files, indexes/plans and resource denominators without opening the live database? | All US-094 proofs and `BLK-0582` |
+| `OQ-0587` | Query/API/product owners | Which exact ID/row/encoded-byte/call/request caps, article-completeness rules, payload-kind split, orders, cursors and errors are approved; which applied plans and traces prove finite first/middle/last/over-cap/missing behavior with no recursive or all-payload hydration? | `PRF-0936`-`PRF-0939`, `PRF-0941` and `BLK-0583` |
+| `OQ-0588` | Judgment/Human/prompt/model/reliability owners | Which LLM/Human prompt/summary identities, model display, assessment, extension, mode, applicability/order and placeholder rules permit removal of copied prompt/model/list-mode payloads, and what exact route/export/transfer equality must pass? | `PRF-0937`-`PRF-0938` and `BLK-0584` |
+| `OQ-0589` | Product/article/admin/audit owners | Which article, metadata, prompt, model, full-text, conversion/admin, judgment-history, project-name and related-record fields are snapshot-bound versus latest; how are freshness, invalidation, cursors, UI labels and retained history exposed? | `PRF-0936`, `PRF-0938`-`PRF-0939`, `PRF-0941` and `BLK-0585` |
+| `OQ-0590` | Storage/security/browser/desktop owners | What inline/file thresholds, canonical root/key/type/mode/encryption, candidate/ready/orphan publication, segment/Range protocol, lease, concurrent cleanup, corruption and clean-host restore contract is approved for `TGT-0029`? | `PRF-0936`-`PRF-0940` and `BLK-0586` |
+| `OQ-0591` | Projector/writer/reliability owners | For every article/source/import/prompt/model/config/mode/judgment/assessment/full-text delta, what one version-fenced target writer, bounded chunk, count/checksum, seal, ACK/visibility, finalization repair, promotion and terminal-failure receipt applies? | `PRF-0936`-`PRF-0939` and `BLK-0587` |
+| `OQ-0592` | Migration/storage/retention/recovery owners | Which applied rows/references/files and retained snapshots require backfill; what batches, shadow equality, writer/read cutover, rollback horizon, complete reference graph, leases, cleanup schedule/receipt and executable restore govern all six targets? | All US-094 proofs and `BLK-0588` |
+| `OQ-0593` | API/product/browser/desktop/export/transfer owners | Which shell/subresource envelopes, query keys, progressive/error UI, browser path history, desktop hash/outer URL/loopback/restart, frozen export batches and latest-versus-historical transfer modes must match, and which physical captures approve them? | All US-094 proofs and `BLK-0589` |
+| `OQ-0594` | Benchmark/data/runtime owners and release validator | Which immutable corpus, seed, model/provider/thinking, prompts/content flags, project/import/Human/snapshot/component/blob identities, applied shapes, runtime and complete before/after collector are approved, and who signs `PRF-0936`-`PRF-0941` before any actionability changes? | All US-094 proofs and `BLK-0590` |
 
 ## US-001 Quality Gates
 
@@ -25533,6 +25999,57 @@ commands. A command proves only the claim linked through its evidence record.
       Markdown-only design/proof story and were not run. Final ID/reference/
       target/SQL/order/cursor/lifecycle/state/actionability/count/source/
       worktree/tracker/whitespace validators pass (`CMD-0722`).
+
+---
+
+## US-094 Quality Gates
+
+- [x] US-093 is complete and scoped `src`/`scripts`/`package.json` source is
+      unchanged from both the US-087 payload baseline and US-093 baseline.
+      Effective shape was derived from the lexical migration sequence without
+      opening DuckDB or inferring applied/deployed state.
+- [x] `TGT-0025`-`TGT-0030` define exact proposed article, judgment, prompt,
+      full-text and optional blob keys/fields plus a logical detail token and
+      explicit field owner, source authority, snapshot/latest and failure
+      boundary. Existing file families retain their US-091 ownership.
+- [x] List, detail, prompt, full-text, current-history, related-record, export
+      and transfer contracts separately cap article IDs, fan-out rows, encoded
+      bytes, calls/segments and recursive termination. Candidate and payload
+      sentinels, complete article chunks, exact sort ties and continuation
+      behavior are explicit and no all-payload target is admitted.
+- [x] Representative SQL hydrates only the at-most-500 returned candidate IDs,
+      restores candidate ordinal, binds one list payload kind, ranks detail
+      cursor fields before filtering and fetches blob descriptors by exact
+      owner/reference key. SQL is design text and was not executed.
+- [x] Every target records authoritative inputs, bounded writes, invalidation,
+      immutable sealing/publication, terminal failure, retention/reference
+      graph, reader/blob leases, recovery/restore, bounded migration/backfill,
+      one-writer/reader cutover, rollback and reference-safe cleanup.
+- [x] Export selection versus later hydration, latest versus historical
+      transfer, browser path/TanStack cache and packaged-desktop hash/outer
+      URL/loopback/restart effects remain separate. Shared source is not
+      presented as actual platform parity.
+- [x] Universal payload/detail JSON, ID-only bounds, recursive read-all,
+      copied prompt/model/list-mode/placeholders, list-wide metadata/full text,
+      unlabeled current joins, direct file paths, silent truncation/fallback,
+      universal hashes and broad dual writes are explicitly rejected.
+- [x] `PRF-0936`-`PRF-0941` add six independently `blocked` validations. The
+      941-row register remains 8 `satisfied`, 478 `pending`, 455 `blocked` and
+      zero `not-applicable`; 13 cross-referenced keeps retain
+      `recommendationActionability: unresolved`, cumulative actionability is
+      326 unresolved/115 blocked/zero actionable and certification remains
+      independently `INCOMPLETE`.
+- [x] `EVD-1108`-`EVD-1119`, `CMD-0723`-`CMD-0732`,
+      `BLK-0581`-`BLK-0590` and `OQ-0585`-`OQ-0594` record exact source,
+      commands, unavailable evidence, owner decisions and finite resolution
+      conditions. No database/runtime/fixture/product process or generated
+      artifact ran or requires cleanup.
+- [x] Lint preserves the same six unrelated errors and no typecheck script
+      exists. Build, tests, browser/desktop, database/runtime and physical
+      gates were skipped for this Markdown-only design story. Final canonical
+      ID, reference, table-width, target, cap/order/SQL/rejection/lifecycle,
+      state/actionability/count, source/worktree/tracker and whitespace
+      validators pass (`CMD-0732`).
 
 ---
 
