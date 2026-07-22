@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-091 add 895 finite proof rows without changing a disposition: the 911-row proof register is eight `satisfied`, 478 `pending`, 425 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked` through explicit required target links, and zero are actionable. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, benchmark fixture/configuration, exact route/browser/desktop proof, posting/summary/filter exactness and selectivity, applied access paths, bounded hydration/caps/order, search/queue selection, eligibility, priority and cursor parity, legacy/current identity and history mapping, snapshot/publication/file-reference atomicity, canonical path/key and permissions/encryption evidence, export/transfer/portability parity, migration/cutover, temporary lifetime and residue, replay/repair/startup/recovery, retention, cleanup and restore evidence remain incomplete. No prior proof state or manifest state advanced, no planned route, runtime, parity, benchmark or lifecycle work is labeled passed, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` remains independently `INCOMPLETE`. |
+| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-092 add 912 finite proof rows without changing a disposition: the 928-row proof register is eight `satisfied`, 478 `pending`, 442 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked` through explicit required target links, and zero are actionable. US-092 adds 17 concrete but unvalidated `TGT-####` shapes for the exact 65 US-073/US-074 source, configuration, judgment and hot-fact dispositions. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, benchmark fixture/configuration, exact route/browser/desktop proof, posting/summary/filter exactness and selectivity, applied access paths, bounded hydration/caps/order, search/queue selection, eligibility, priority and cursor parity, legacy/current identity and history mapping, snapshot/publication/file-reference atomicity, canonical path/key and permissions/encryption evidence, export/transfer/portability parity, migration/cutover, temporary lifetime and residue, replay/repair/startup/recovery, retention, cleanup and restore evidence remain incomplete. No prior proof state or manifest state advanced, no planned route, runtime, parity, benchmark or lifecycle work is labeled passed, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` remains independently `INCOMPLETE`. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-091 / 2026-07-22` | Pairs all 67 rooted/file US-080 dispositions across nine families with 99 independently stateful path/key, producer, consumer/bounded-access, atomicity, browser, desktop, export, recovery, portability, retention/protection and cleanup checks. `PRF-0906`-`PRF-0911` add six separately blocked physical target contracts covering all 12 archive/delete rows without recounting files, material domains or prior full-text references. The 55 keeps remain unresolved, all 12 archive/delete rows become blocked only through explicit targets, and no disposition value, manifest, prior proof, physical or certification state advances. No planned route, platform or lifecycle validation is claimed to have passed. |
+| Latest normalized story | `US-092 / 2026-07-22` | Maps all 65 US-073/US-074 source, configuration, judgment and reusable-fact disposition rows exactly once into 17 ownership- and invalidation-aligned `TGT-0001`-`TGT-0017` designs. Each design has exact current or proposed keys, representative bounded read/write SQL, authority and identity boundaries, fan-out/failure behavior, migration or rebuild, cutover, cleanup, retention, replay/recovery, export, transfer and fixed-configuration benchmark obligations. `PRF-0912`-`PRF-0928` remain separately blocked pending owner approval, deployed inventory and immutable later validation. The 51 linked keeps remain unresolved, the 14 linked non-keeps retain their prior blocked state, all other disposition and proof states remain unchanged, and no schema, code, runtime, data or certification state advances. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
@@ -15402,6 +15402,651 @@ physical register remains 91 blocked plus one source-proven not-applicable
 row, and `overallCertification` remains `INCOMPLETE`.
 
 
+## US-092 Authoritative-Source And Reusable-Fact Target Shapes
+
+### US-092 Scope, Prerequisite And State Boundary
+
+US-091 is complete. US-092 designs alternatives for the exact 65
+US-073/US-074 disposition rows; it does not reopen their 25 physical tables,
+six logical contracts, 34 column/material families or 21 supporting indexes.
+Every disposition is assigned once to a target-shape boundary:
+
+| Target slice | Exact disposition coverage | Rows | Ownership and invalidation boundary |
+| --- | --- | ---: | --- |
+| Canonical article and normalized identifiers | `DSP-0001`, `DSP-0003`, `DSP-0024`, `DSP-0026` | 4 | Canonical content and normalized strong identity change together, but identifiers retain their own unique key. |
+| Canonical-match quarantine | `DSP-0002`, `DSP-0025` | 2 | Conflict/audit evidence resolves and expires independently of the winning article. |
+| Import control, route catalog and bridge decision | `DSP-0004`-`DSP-0006`, `DSP-0027`-`DSP-0029` | 6 | Data-source configuration/progress and route binding are configuration-owned; the string-versus-bridge fork cannot have two authorities. |
+| Current import link and source history | `DSP-0007`-`DSP-0008`, `DSP-0030`-`DSP-0031` | 4 | Current route membership and immutable/replayable source history use different keys and retention. |
+| Project and current project-owned settings | `DSP-0009`, `DSP-0020`-`DSP-0021`, `DSP-0032`-`DSP-0033` | 5 | Project lifecycle, model/Human/content settings and inclusive dates are one project-owned mutation boundary. |
+| Project membership and bounded scope fact | `DSP-0010`-`DSP-0011`, `DSP-0013`-`DSP-0014`, `DSP-0019`, `DSP-0022`, `DSP-0034`-`DSP-0035`, `DSP-0037` | 9 | Direct and route membership are source rows; scope is a separately published reusable fact and never authority. |
+| Archived-project deletion tombstone | `DSP-0012`, `DSP-0036` | 2 | Cleanup admission/progress survives partial deletion independently of project configuration. |
+| Immutable prompt and project-prompt applicability | `DSP-0015`-`DSP-0016`, `DSP-0038`-`DSP-0039` | 4 | Immutable content and mutable project applicability have separate keys but one prompt/config owner. |
+| Provider connection and stored model | `DSP-0017`-`DSP-0018`, `DSP-0040`-`DSP-0041` | 4 | Provider runtime/secret reference and model natural identity invalidate execution separately but compose at admission. |
+| Versioned review-configuration receipt | `DSP-0023` | 1 | A derived immutable receipt freezes named consumer identities without becoming source authority or one universal hash. |
+| Canonical LLM judgment | `DSP-0042`, `DSP-0050`-`DSP-0052` | 4 | Model/content natural identity, physical generation, tombstone and result payload remain separate dimensions in one canonical row. |
+| Human prompt and summary judgments | `DSP-0043`-`DSP-0044`, `DSP-0053`-`DSP-0054` | 4 | Prompt and summary modes share an owner but retain distinct tables, keys, answer semantics and invalidation. |
+| Legacy section-review archive | `DSP-0045`, `DSP-0055` | 2 | Transfer-visible legacy state can move only to an exact cold/compatibility owner after model/content applicability is decided. |
+| Judgment assessment | `DSP-0046`, `DSP-0056` | 2 | Manual correctness/comment truth is keyed to one canonical judgment and has its own audit lifecycle. |
+| Token and request-closeout evidence | `DSP-0047`, `DSP-0057`-`DSP-0060` | 5 | Usage totals, outcome partitions, runtime attribution and request evidence close one accepted request group. |
+| Typed import hot facts | `DSP-0048`, `DSP-0061`-`DSP-0062` | 3 | One source-record contribution produces reusable rank/display/filter facts; retained raw/source rows remain authority. |
+| Retired judgment-fact divergence archive | `DSP-0049`, `DSP-0063`-`DSP-0065` | 4 | Canonical/V4 reconstruction and any evidence-backed divergent legacy value are separate paths; only divergence may enter cold storage. |
+| **US-092 total** | **`DSP-0001`-`DSP-0065` exactly once** | **65** | **Seventeen target shapes: 41 US-073 plus 24 US-074 rows.** |
+
+The 51 linked `keep` rows retain
+`recommendationActionability: unresolved`. The 14 linked derive/delete/archive
+rows retain their prior `blocked` state from `PRF-0077`-`PRF-0083` and
+`PRF-0154`-`PRF-0155`; a concrete design does not weaken or satisfy those
+contracts. Seventeen new target-specific validation rows are independently
+`blocked`. No manifest `auditStatus`, prior `proofCheckState`, disposition,
+physical value or `overallCertification` changes.
+
+No live/current/project DuckDB or SQLite, configured snapshot/query/studio,
+fixture DDL/DML, migration, server, app, browser, desktop, writer, projector,
+repair, export, transfer, cleanup, benchmark, EXPLAIN/profile or physical
+collector ran. SQL below is design text only. It was not executed.
+
+### US-092 Evidence Ledger
+
+| Evidence ID | Class | Exact locator | Finding | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-1086` | `control` | User US-092 PRD and codebase patterns; `tasks/prd.json#US-091/#US-092/#US-093`; `.ralph-tui/progress.md` US-073/US-074/US-081/US-082/US-091; US-001 state model; reporting and DuckDB skills; HEAD/worktree/ID/count inspection | Fixes the US-091 prerequisite, exact 65-disposition/17-target scope, no-live/audit-only boundary, four-state separation and unrelated pre-existing `tasks/prd.json` change. | `CMD-0704` |
+| `EVD-1087` | `production/historical-migration` | Source baseline `8a4921a9` through HEAD `58e0aa33`; `src/db/migrateDuckdb.ts#getDuckdbMigrationFiles`; migrations `0000`, `0015`, `0028`, `0029`, `0037`, `0039`, `0040`, `0058`, `0059`, `0067`, `0069`, `0077`-`0079`, `0081`, `0083`, `0089`, `0092` and `0097`; DBO/CMF closure | No `src`, `scripts` or `package.json` source changed since US-074. The effective source-defined keys/columns remain the exact design baseline; they are not applied/deployed shape proof. | `CMD-0705` |
+| `EVD-1088` | `production` | `articleCanonicalMatcher.ts#matchCanonicalArticlesWithTx`; `articleImportStoreService.ts#ensureImportRoutes/#upsertArticleImportRouteCurrentLinks/#upsertArticleImportRouteSourceRecords/#syncImportedArticlesWithTx`; `DataSourcesRoutes.ts`; `dataSourceQueryService.ts`; import delta/hot-field services; US-073/US-081 article/import evidence | Article, identifier, quarantine, data-source, route, current-link, history, hot-fact and delta writes have distinct keys and effects. Current source does not establish a production owner for `app.data_source_import_route`. | `CMD-0706` |
+| `EVD-1089` | `production` | `ProjectsRoutes.ts#upsertProjectPromptTx`; project create/edit/clone paths; `insertArticlesIntoProject.ts`; `SubprojectsRoutes.ts`; `reviewServingProjectorWorker.ts#writeProjectScopeRebuildChunkRows`; `archivedProjectCleanupService.ts`; `immutablePromptService.ts`; `reviewServingReviewConfig.ts`; `reviewServingProjectConfigIdentity.ts` | Project settings, prompt content/applicability, direct/route membership, scope publication, tombstone progress and review-config composition use separate write, invalidation and recovery boundaries. Scope rebuild is chunked background work; current hashes omit different dimensions. | `CMD-0707` |
+| `EVD-1090` | `production` | `providerConnectionRepository.ts`; `providerModelRepository.ts`; provider metadata/config serializers; execution-snapshot and review-config services; project-transfer fingerprint/dirty-token services | Provider PK, model natural key and external secret reference are distinct. Repository writes emit review deltas and transfer dirty tokens, while DB/secret recovery remains compensating and selectable virtual variants are not stored authority. | `CMD-0707` |
+| `EVD-1091` | `production` | `judgeStoreJudgment.ts#storeJudgmentForPrompt`; `appDatabaseService.ts#getAppendJudgmentsSql`; judgment SQLite import/visibility paths; Human init/submit/pending and Covidence summary writers; `PromptsRoutes.ts`; `reviewServingJudgmentPayloadProjector.ts`; `judgeStoreTokenUse.ts`; `tokenUseQueryService.ts` | LLM, Human prompt, Human summary, assessment and token writes use distinct identities, fan-out and failure behavior. Blank Human submission, generation/tombstone, local visibility and request-closeout receipts remain separate contracts. | `CMD-0708` |
+| `EVD-1092` | `production/historical-migration` | `reviewImportHotFieldService.ts#reviewImportHotFieldProjectorColumns/#getReviewImportHotFieldRow/#upsertReviewImportArticleHotFieldEffect`; selected-import intake/projectors; `app.review` transfer/fidelity/cleanup references; `mart.judgment_fact` migrations `0000`/`0058`/`0069`, negative current-reader guards and cleanup | Typed facts actively avoid repeated parsing but copy source values; raw authority, hot fact and downstream copies remain separate. Legacy review and judgment-fact retirement still require deployed-value and history mapping. | `CMD-0708` |
+| `EVD-1093` | `production/test` | Project CSV/PDF/export repositories; project-transfer v1/v2 schema/export/package/commit/fidelity/recovery; judgment local replay/repair; review-serving retention/backup/startup paths; exact source tests cited by US-081/US-082 | Export selection, later hydration, package serialization, target remap, recovery artifacts and cleanup are independent. Source/tests expose required paths but provide no immutable before/after, clean-host restore or terminal cleanup receipt. | `CMD-0709` |
+| `EVD-1094` | `production/fixture` | `reviewServingBenchmark.ts#reviewServingSynthetic10m7PromptOverlapFixture/#ReviewServingBenchmarkReleaseContext`; package benchmark scripts; US-067/US-068 `FAN-0010`-`FAN-0032` and US-072 `FAN-0075` | Repository scale declarations exist, but approved corpus/seed/model/provider/thinking/prompt/content/scope/import/runtime settings and a complete target collector are absent. Every target benchmark remains unavailable, never zero. | `CMD-0709` |
+| `EVD-1095` | `control` | US-092 65-row single-coverage validator; `TGT-0001`-`TGT-0017` key/SQL/fan-out/lifecycle matrices; broad-dual-write and foreground-scan rejection matrix; `PRF-0912`-`PRF-0928` | Seventeen target shapes cover the source/configuration/judgment/hot-fact slice once, preserve separate authorities, and require target-specific validation; no design is promoted into an actionable recommendation. | `CMD-0710`, `CMD-0711` |
+| `EVD-1096` | `control` | Prohibited-command/artifact/process audit and final sequential-ID/reference/target/SQL/pairing/state/actionability/count/source/worktree/tracker/whitespace validators | Confirms no prohibited runtime evidence, exact target/proof accounting, unchanged disposition states and audit/tracker-only isolation. | `CMD-0712`, `CMD-0713` |
+
+### Target Design Rules And Rejected Shapes
+
+The selected shapes are alternatives to validate, not implementation
+authorization. A source table remains authoritative unless a target explicitly
+preserves every source/audit/configuration dimension and completes cutover.
+Derived facts are replaceable and rebuildable; they never become authority.
+
+| Rejected shape | Why it is rejected now |
+| --- | --- |
+| One wide JSON source for article, import, project or judgment state | Removes relational uniqueness and typed benchmark-critical predicates, obscures serializer/version migration and makes bounded equality or invalidation dependent on parsing. |
+| One universal review-configuration hash | Existing applicability, judgment, serving, selected-route/scope, execution, comparison and transfer identities intentionally cover different dimensions. A receipt may carry all of them but may not replace them with one authority. |
+| A project-scale foreground union of direct membership and route membership | Moves rebuild work into route latency and violates the bounded-read contract; `mart.project_scope_article` must be published asynchronously and read by key/range. |
+| Foreground raw-payload parsing instead of typed import facts | Reintroduces unbounded JSON parse work and does not remove retained raw or downstream copies; rebuildable typed facts remain the bounded alternative. |
+| Merging prompt-grain and summary-grain Human rows | Conflates pending/blank/comment semantics with summary answer/origin and allows project mode to reinterpret the same physical key. |
+| Broad dual writes during bridge, receipt or cold-archive cutover | Creates two mutable authorities and an unbounded reconciliation tail. The only accepted cutover is inventory/backfill, quiesce or version fence, one writer switch, read switch, verification, then cleanup. |
+| Rebuilding all legacy history from current canonical/V4 values | Can erase divergent audit evidence and model/content identity. Equal rows may be reconstructed only after field comparison; divergent rows require an immutable cold record. |
+| Synchronous per-project judgment fan-out or full hot-fact rebuild | Source writes remain one canonical row plus a durable delta/outbox; project fan-out and complete rebuild run in bounded background batches and preserve failure. |
+
+### Ownership-Aligned Target-Shape Register
+
+| rowId | Boundary / linked dispositions | Exact surviving or proposed key and field set | Authority, identity and invalidation | Selected alternative and explicit rejection | Evidence / linked proof |
+| --- | --- | --- | --- | --- | --- |
+| `TGT-0001` | Canonical article and normalized identifiers; `DSP-0001`, `DSP-0003`, `DSP-0024`, `DSP-0026` | Keep all `DBO-0001`/`CMF-0025`-`CMF-0058`, `CMF-0114`-`CMF-0131` fields under `app.article.id`; keep all `DBO-0181`/`CMF-1410`-`CMF-1418` fields under `article_identifier.id` and `UNIQUE(kind, normalized_value)`. | `article.id` is canonical content identity; `(kind, normalized_value)` is canonical strong identity. Source/content/full-text changes emit article invalidation; identifier conflicts never silently reassign an article. | Retain normalized relational identity beside the article row. Reject serving-mart authority, identifier-in-JSON lookup, silent conflict overwrite and any new duplicate identity table. | `EVD-1087`-`EVD-1088`; `PRF-0912` |
+| `TGT-0002` | Canonical-match quarantine; `DSP-0002`, `DSP-0025` | Keep all `DBO-0180`/`CMF-1396`-`CMF-1409` fields; PK `id`; lookup `(source_kind, import_run_id, source_record_key, resolved_at)` and `(kind, normalized_value, resolved_at)`. | The requested/winning/source/identifier conflict record is audit authority; `resolved_at` changes resolution state without changing the winning article. | Keep an independently retained relational audit row. Reject embedding conflict history in mutable article/source JSON or deleting on successful retry. | `EVD-1087`-`EVD-1088`; `PRF-0913` |
+| `TGT-0003` | Import control, route catalog and bridge decision; `DSP-0004`-`DSP-0006`, `DSP-0027`-`DSP-0029` | Keep `app.data_source.id` and exact 12 fields; keep `app.import_route.id`, `UNIQUE(route)` and exact seven fields. Choose exactly one binding: A, `data_source.import_route = import_route.route` for one route per source; or B, bridge PK `id` plus `UNIQUE(data_source_id, import_route_id)` for approved multi-route cardinality. | Data-source cursor/archive/progress and route catalog are authoritative. Binding mutations invalidate import admission/replay; A and B cannot both be writable or authoritative. | Source evidence favors A because it has production readers/writers and the bridge has none. B remains an owner-decision alternative only with a versioned stop-the-world cutover. Reject the A+B hybrid and broad dual writes. | `EVD-1087`-`EVD-1088`; `PRF-0914` |
+| `TGT-0004` | Current import link and source history; `DSP-0007`-`DSP-0008`, `DSP-0030`-`DSP-0031` | Keep exact `app.article_import_route` fields with `UNIQUE(article_id, import_route_id)`; keep exact `app.article_import_route_source_record` fields with `UNIQUE(import_route_id, source_record_key)`. | Current membership selects one source record per article/route. History/raw/quarantine is source/replay authority by route/source key. Current-link, history, hot-fact and delta identities stay separate. | Retain two grains and transactionally project current from history. Reject one table that overwrites history, raw-payload authority in the hot fact, and a current link selected by newest-row scan. | `EVD-1087`-`EVD-1088`; `PRF-0915` |
+| `TGT-0005` | Project and current project-owned settings; `DSP-0009`, `DSP-0020`-`DSP-0021`, `DSP-0032`-`DSP-0033` | Keep exact `app.project` 15-field row under PK `id`; four content flags and inclusive nullable `date_from`/`date_to` stay typed fields. | Project lifecycle and current model/Human/content/date settings are authority. Mutations emit old/new configuration and scope invalidation; no hash or snapshot overwrites source settings. | Retain the typed project row. Reject an unversioned JSON settings blob, copied settings in each mart, or silent defaulting of missing benchmark-critical values. | `EVD-1087`, `EVD-1089`; `PRF-0916` |
+| `TGT-0006` | Project membership and bounded scope fact; `DSP-0010`-`DSP-0011`, `DSP-0013`-`DSP-0014`, `DSP-0019`, `DSP-0022`, `DSP-0034`-`DSP-0035`, `DSP-0037` | Keep source keys `UNIQUE(project_id, article_id)` and `UNIQUE(project_id, import_route_id)`; keep reusable fact PK `(project_id, article_id)` with six exact `DBO-0211` fields. | Direct and selected-route rows are authority. Scope fact is versioned derived membership with curated/route flags and article times; late membership/date/archive changes enqueue rebuild and cannot be acknowledged as published until rows validate. | Retain asynchronous chunk publication and bounded fact reads. Reject foreground union/scans, scope fact as authority and advancement of source/ACK cursors without physical scope publication. | `EVD-1087`-`EVD-1089`; `PRF-0917` |
+| `TGT-0007` | Archived-project deletion tombstone; `DSP-0012`, `DSP-0036` | Keep PK `project_id` and exact nine fields: request/completion time, last cleanup time/phase/table/count and audit times. | Tombstone is cleanup-control authority, not project truth. Each bounded batch updates progress; final project removal and tombstone deletion are distinct terminal actions. | Retain durable progress until a completion/retention receipt exists. Reject in-memory progress, delete-on-start and treating `finally` or zero rows as terminal cleanup. | `EVD-1087`, `EVD-1089`; `PRF-0918` |
+| `TGT-0008` | Immutable prompt and project-prompt applicability; `DSP-0015`-`DSP-0016`, `DSP-0038`-`DSP-0039` | Keep `app.prompt.id` plus nullable `UNIQUE(content_hash)` over the exact nine fields; keep `app.project_prompt.id` plus `UNIQUE(project_id, prompt_id)` over the exact 12 fields. | Prompt content identity covers original/transformed/heading/type. Link identity covers order, enable/archive, origin and criteria. Link/content mutations emit prompt/config invalidation; legacy null hashes remain explicit. | Retain immutable content plus mutable applicability. Reject in-place prompt text mutation, content-hash-only criteria identity and a project JSON prompt list. | `EVD-1087`, `EVD-1089`; `PRF-0919` |
+| `TGT-0009` | Provider connection and stored model; `DSP-0017`-`DSP-0018`, `DSP-0040`-`DSP-0041` | Keep provider PK `id` and exact 13 fields; keep model PK `id`, exact 11 fields and unique natural index `(provider_connection_id, remote_model_id, COALESCE(variant, ''))`. Secret bytes remain behind `secret_ref`. | Provider routing/auth/config/health and model catalog/options are separate authorities composed into execution identity. Any execution-affecting mutation emits review-config and transfer invalidation; virtual selectable variants remain derived. | Retain normalized provider/model rows plus external secret ownership. Reject secret bytes in DB metadata, display name as model identity, silent virtual-to-stored substitution and fallback after configured model/provider failure. | `EVD-1087`, `EVD-1090`; `PRF-0920` |
+| `TGT-0010` | Versioned review-configuration receipt; `DSP-0023` | Proposed immutable key `receipt_id`; unique `(project_id, serializer_version, review_serving_hash, scope_input_hash, selected_route_set_hash)`. Exact columns and JSON keys are frozen below. | Source rows remain authority. Receipt stores separate applicability, judgment, serving, scope and route-set identities plus exact source payload/watermarks at job/rebuild/snapshot admission; no field is defaulted. | Add only on admission if later approved; reject mutation-time broad dual writes, one universal hash and using the receipt as current source configuration. | `EVD-1089`-`EVD-1090`; `PRF-0921` |
+| `TGT-0011` | Canonical LLM judgment; `DSP-0042`, `DSP-0050`-`DSP-0052` | Keep exact 22-field `app.judgment` row under PK `id` and unique `(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, delete_generation)`. | Seven logical model/content dimensions identify reusable result; `delete_generation` and `deleted_at` separately identify physical generation/current activity. Answer payload and audit times remain canonical. | Retain the canonical row; emit one source delta/outbox and move project fan-out to bounded background work. Reject model/content omission, `deleted_at`-only reuse and serving/V4 authority. | `EVD-1087`, `EVD-1091`; `PRF-0922` |
+| `TGT-0012` | Human prompt and summary judgments; `DSP-0043`-`DSP-0044`, `DSP-0053`-`DSP-0054` | Keep prompt key `(project_id, article_id, prompt_id)` with exact nine fields and summary key `(project_id, article_id)` with exact seven fields/checks. | Prompt pending/answered/blank/answer/comment and summary answer/origin are separate authorities selected by persisted project mode. Writes invalidate the matching mode and comparison state only after durable source commit. | Keep both tables and mode-specific readers/writers. Reject merged nullable prompt rows, mode inference from page contents and treating optional blank as equivalent to an emitted answer delta. | `EVD-1087`, `EVD-1091`; `PRF-0923` |
+| `TGT-0013` | Legacy section-review archive; `DSP-0045`, `DSP-0055` | Proposed `cold.review_section_state_v1` PK `source_review_id`, unique `(project_id, article_id)`, exact 24 source fields plus `source_schema_version`, `row_hash`, `archived_at`. | Cold row preserves the final transfer-visible section state and audit identity. Model/content applicability must be approved; missing columns do not imply non-applicability. | Either retain `app.review` until transfer compatibility retires, or quiesce and cut once to the cold table. Reject ongoing hot+cold dual writes, partial JSON loss and deletion based only on checked-in route absence. | `EVD-1091`-`EVD-1093`; `PRF-0924` |
+| `TGT-0014` | Judgment assessment; `DSP-0046`, `DSP-0056` | Keep exact six-field `app.judgment_assessment` row under PK `id` and `UNIQUE(judgment_id)`. | One correctness/comment decision is audit truth for one canonical judgment. Judgment remap/delete changes require explicit assessment mapping/invalidation, not silent cascade assumptions. | Retain a separate one-to-one row. Reject embedding mutable assessment in the immutable judgment answer or a serving-only copy. | `EVD-1087`, `EVD-1091`; `PRF-0925` |
+| `TGT-0015` | Token and request-closeout evidence; `DSP-0047`, `DSP-0057`-`DSP-0060` | Keep exact 30-field `app.token_use` row under PK `id`; request-attempt IDs remain versioned inside the exact `request_attempts_json` serializer domain until a separately approved split. | One accepted closeout ID owns totals, partitions, runtime attribution and request/failure evidence. Nullable job link is not identity; model/runtime fields do not replace frozen benchmark configuration. | Retain insert-once evidence with conflict equality. Reject overwrite-on-conflict, aggregate-only deletion of request evidence, unversioned JSON slimming and silent persistence retry/fallback. | `EVD-1087`, `EVD-1091`; `PRF-0926` |
+| `TGT-0016` | Typed import hot facts; `DSP-0048`, `DSP-0061`-`DSP-0062` | Keep exact 20 fields under PK `(import_route_id, article_id, source_record_key)`; rank key/numeric and typed display/filter fields are deterministic versioned derivatives. | Retained source history/raw payload is authority. Hot row is one current/tombstone contribution for bounded ranking/filter/posting/display; downstream facts remain separate copies. | Retain/rebuild asynchronously from source. Reject foreground JSON extraction, hot row as source/audit authority, package serialization as truth and complete rebuild inside a route. | `EVD-1087`-`EVD-1088`, `EVD-1092`; `PRF-0927` |
+| `TGT-0017` | Retired judgment-fact divergence archive; `DSP-0049`, `DSP-0063`-`DSP-0065` | Proposed `cold.judgment_fact_divergence_v1` PK `judgment_id`; typed model/content identity plus exact versioned 26-key source payload, divergence keys, hashes and archive times below. | Equal fields reconstruct from canonical/V4; only owner-approved divergent values become cold audit authority. V4 repair, canonical restore and cold divergence restore remain distinct. | Batch compare, archive only divergence, cut legacy readers/writers once, then clean. Reject a second hot fact, project-scale foreground cold join, untyped payload without model/content keys and assuming current values reproduce history. | `EVD-1091`-`EVD-1093`; `PRF-0928` |
+
+### Proposed-Only Exact Cold And Receipt Shapes
+
+These are logical target contracts, not executed DDL. Names remain candidates
+until database, security and retention owners approve them.
+
+| Target | Exact proposed columns and keys | Serializer constraint |
+| --- | --- | --- |
+| `TGT-0010` `app.review_config_receipt_v1` | `receipt_id VARCHAR PRIMARY KEY`; `project_id VARCHAR NOT NULL`; `serializer_version VARCHAR NOT NULL`; `applicability_hash VARCHAR NOT NULL`; `judgment_identity_hash VARCHAR NOT NULL`; `review_serving_hash VARCHAR NOT NULL`; `scope_input_hash VARCHAR NOT NULL`; `selected_route_set_hash VARCHAR NOT NULL`; `dimension_payload_json JSON NOT NULL`; `source_watermark_json JSON NOT NULL`; `created_at TIMESTAMPTZ NOT NULL`; unique `(project_id, serializer_version, review_serving_hash, scope_input_hash, selected_route_set_hash)`. | Version 1 payload has only `projectId`, `humanJudgmentMode`, `model`, `content`, `dates`, ordered `prompts`, sorted `importRouteIds`; `model` has `id`, provider connection/kind/base URL, remote ID, variant and execution options; `content` has all four flags; each prompt has ID/content hash/order/enable/archive/criteria fields. Watermarks are a fixed named map, never arbitrary fallback values. |
+| `TGT-0013` `cold.review_section_state_v1` | `source_review_id VARCHAR PRIMARY KEY`; `project_id VARCHAR NOT NULL`; `article_id VARCHAR NOT NULL`; `opened BOOLEAN NOT NULL`; the nine exact `reviewed_<section>` booleans and nine exact comment fields; `source_created_at TIMESTAMPTZ NOT NULL`; `source_updated_at TIMESTAMPTZ NOT NULL`; `source_schema_version VARCHAR NOT NULL`; `row_hash VARCHAR NOT NULL`; `archived_at TIMESTAMPTZ NOT NULL`; unique `(project_id, article_id)`. | No open JSON. Version 1 preserves all `CMF-0247`-`CMF-0270` values exactly; row hash covers the typed source fields and schema version. |
+| `TGT-0017` `cold.judgment_fact_divergence_v1` | `judgment_id VARCHAR PRIMARY KEY`; `canonical_judgment_id VARCHAR`; `article_id VARCHAR NOT NULL`; `prompt_id VARCHAR NOT NULL`; `model_id VARCHAR NOT NULL`; four content flags `BOOLEAN NOT NULL`; `source_row_hash VARCHAR NOT NULL`; `source_payload_json JSON NOT NULL`; `divergence_fields_json JSON NOT NULL`; `source_created_at TIMESTAMPTZ NOT NULL`; `source_updated_at TIMESTAMPTZ NOT NULL`; `source_schema_version VARCHAR NOT NULL`; `archived_at TIMESTAMPTZ NOT NULL`. | Version 1 source payload has exactly the 26 `CMF-1793`-`CMF-1818` field names; divergence list contains only those names. Unknown/missing keys or a typed-key/payload mismatch fail migration rather than being coerced. |
+
+### Representative Read And Write SQL
+
+Named parameters describe the exact bound; these statements are not executed.
+Every `:bounded_*` input must be capped by the owning route, worker chunk or
+maintenance batch. The write examples run inside the owner transaction and
+must fail rather than silently retry, downgrade or substitute configuration.
+
+#### Article And Import Boundaries
+
+```sql
+-- TGT-0001 read: one article or a capped article-ID set, then its identifiers.
+SELECT a.*, i.id AS identifier_id, i.kind, i.normalized_value,
+       i.source, i.provenance, i.is_primary
+FROM app.article a
+LEFT JOIN app.article_identifier i ON i.article_id = a.id
+WHERE a.id IN (:bounded_article_ids)
+ORDER BY a.id, i.is_primary DESC, i.kind, i.normalized_value;
+
+-- TGT-0001 write: canonical row and collision-safe normalized identity.
+INSERT INTO app.article (id, article_title, content_hash, updated_at)
+VALUES (:article_id, :article_title, :content_hash, current_timestamp)
+ON CONFLICT(id) DO UPDATE SET
+  article_title = excluded.article_title,
+  content_hash = excluded.content_hash,
+  updated_at = current_timestamp;
+INSERT INTO app.article_identifier
+  (id, article_id, kind, normalized_value, source, provenance, is_primary)
+VALUES
+  (:identifier_id, :article_id, :kind, :normalized_value,
+   :source, :provenance, :is_primary)
+ON CONFLICT(kind, normalized_value) DO NOTHING;
+SELECT article_id
+FROM app.article_identifier
+WHERE kind = :kind AND normalized_value = :normalized_value;
+
+-- TGT-0002 read/write: bounded unresolved audit lookup and append/resolve.
+SELECT *
+FROM app.article_canonical_match_quarantine
+WHERE kind = :kind AND normalized_value = :normalized_value
+  AND resolved_at IS NULL
+ORDER BY created_at, id
+LIMIT :audit_limit;
+INSERT INTO app.article_canonical_match_quarantine
+  (id, source_kind, import_run_id, source_record_key, source_record_hash,
+   requested_article_id, winning_article_id, kind, normalized_value,
+   reason, metadata)
+VALUES
+  (:id, :source_kind, :import_run_id, :source_record_key, :source_record_hash,
+   :requested_article_id, :winning_article_id, :kind, :normalized_value,
+   :reason, :metadata);
+UPDATE app.article_canonical_match_quarantine
+SET resolved_at = current_timestamp, updated_at = current_timestamp
+WHERE id = :id AND resolved_at IS NULL;
+```
+
+```sql
+-- TGT-0003 alternative A: one route name is the sole source binding.
+SELECT ds.*, ir.id AS import_route_id, ir.route, ir.active
+FROM app.data_source ds
+LEFT JOIN app.import_route ir ON ir.route = ds.import_route
+WHERE ds.id = :data_source_id
+LIMIT 1;
+UPDATE app.data_source
+SET import_route = :route, updated_at = current_timestamp
+WHERE id = :data_source_id;
+
+-- TGT-0003 alternative B: use only if multi-route cardinality is approved.
+SELECT ds.*, ir.*
+FROM app.data_source ds
+JOIN app.data_source_import_route bridge ON bridge.data_source_id = ds.id
+JOIN app.import_route ir ON ir.id = bridge.import_route_id
+WHERE ds.id = :data_source_id
+ORDER BY ir.route, ir.id;
+INSERT INTO app.data_source_import_route
+  (id, data_source_id, import_route_id)
+VALUES (:binding_id, :data_source_id, :import_route_id)
+ON CONFLICT(data_source_id, import_route_id) DO NOTHING;
+
+-- TGT-0004 read: exact current link plus its selected history row.
+SELECT current_link.*, history.quarantined_at, history.quarantine_reason,
+       history.quarantine_metadata
+FROM app.article_import_route current_link
+JOIN app.article_import_route_source_record history
+  ON history.import_route_id = current_link.import_route_id
+ AND history.source_record_key = current_link.source_record_key
+WHERE current_link.import_route_id IN (:bounded_route_ids)
+  AND current_link.article_id IN (:bounded_article_ids)
+ORDER BY current_link.import_route_id, current_link.article_id;
+
+-- TGT-0004 write: history first, then current projection in one transaction.
+INSERT INTO app.article_import_route_source_record
+  (id, article_id, import_route_id, source_record_key, source_record_hash,
+   source_kind, raw_payload)
+VALUES
+  (:history_id, :article_id, :import_route_id, :source_record_key,
+   :source_record_hash, :source_kind, :raw_payload)
+ON CONFLICT(import_route_id, source_record_key) DO UPDATE SET
+  article_id = excluded.article_id,
+  source_record_hash = excluded.source_record_hash,
+  source_kind = excluded.source_kind,
+  raw_payload = excluded.raw_payload,
+  quarantined_at = NULL,
+  quarantine_reason = NULL,
+  quarantine_metadata = NULL,
+  updated_at = current_timestamp;
+INSERT INTO app.article_import_route
+  (id, article_id, import_route_id, source_record_key, source_record_hash,
+   source_kind, raw_payload)
+VALUES
+  (:current_id, :article_id, :import_route_id, :source_record_key,
+   :source_record_hash, :source_kind, :raw_payload)
+ON CONFLICT(article_id, import_route_id) DO UPDATE SET
+  source_record_key = excluded.source_record_key,
+  source_record_hash = excluded.source_record_hash,
+  source_kind = excluded.source_kind,
+  raw_payload = excluded.raw_payload,
+  updated_at = current_timestamp;
+```
+
+#### Project, Prompt, Provider And Configuration Boundaries
+
+```sql
+-- TGT-0005 read/write: typed project settings by PK.
+SELECT id, name, description, model_id, human_judgment_mode,
+       use_title, use_abstract, use_fulltext, use_fulltext_no_images,
+       date_from, date_to, archived, delete_pending_at, created_at, updated_at
+FROM app.project
+WHERE id = :project_id
+LIMIT 1;
+UPDATE app.project
+SET model_id = :model_id,
+    human_judgment_mode = :human_judgment_mode,
+    use_title = :use_title,
+    use_abstract = :use_abstract,
+    use_fulltext = :use_fulltext,
+    use_fulltext_no_images = :use_fulltext_no_images,
+    date_from = :date_from,
+    date_to = :date_to,
+    updated_at = current_timestamp
+WHERE id = :project_id;
+
+-- TGT-0006 foreground read: only the published key/range.
+SELECT project_id, article_id, in_curated_scope, in_route_scope,
+       article_created_at, article_updated_at
+FROM mart.project_scope_article
+WHERE project_id = :project_id
+  AND article_id IN (:bounded_article_ids)
+ORDER BY article_created_at, article_id;
+
+-- TGT-0006 background chunk publication: source union, never a route query.
+DELETE FROM mart.project_scope_article
+WHERE project_id = :project_id
+  AND article_id >= :chunk_start AND article_id < :chunk_end;
+INSERT INTO mart.project_scope_article
+  (project_id, article_id, in_curated_scope, in_route_scope,
+   article_created_at, article_updated_at)
+WITH membership AS (
+  SELECT project_id, article_id, TRUE AS curated, FALSE AS routed
+  FROM app.project_article
+  WHERE project_id = :project_id
+    AND article_id >= :chunk_start AND article_id < :chunk_end
+  UNION ALL
+  SELECT pir.project_id, air.article_id, FALSE, TRUE
+  FROM app.project_import_route pir
+  JOIN app.article_import_route air
+    ON air.import_route_id = pir.import_route_id
+  WHERE pir.project_id = :project_id
+    AND air.article_id >= :chunk_start AND air.article_id < :chunk_end
+)
+SELECT m.project_id, m.article_id, bool_or(m.curated), bool_or(m.routed),
+       a.article_created_at, a.article_updated_at
+FROM membership m
+JOIN app.article a ON a.id = m.article_id
+JOIN app.project p ON p.id = m.project_id AND p.archived = FALSE
+WHERE (p.date_from IS NULL OR a.article_created_at >= p.date_from)
+  AND (p.date_to IS NULL OR a.article_created_at <= p.date_to)
+GROUP BY m.project_id, m.article_id, a.article_created_at, a.article_updated_at;
+```
+
+```sql
+-- TGT-0007 read/write: one durable cleanup cursor and one batch result.
+SELECT *
+FROM app.archived_project_delete_tombstone
+WHERE completed_at IS NULL
+ORDER BY requested_at, project_id
+LIMIT 1;
+INSERT INTO app.archived_project_delete_tombstone (project_id)
+SELECT id FROM app.project
+WHERE id = :project_id AND archived = TRUE
+ON CONFLICT(project_id) DO NOTHING;
+UPDATE app.archived_project_delete_tombstone
+SET last_cleanup_at = current_timestamp,
+    last_cleanup_phase = :phase,
+    last_cleanup_table = :table_name,
+    last_deleted_row_count = :deleted_count,
+    updated_at = current_timestamp
+WHERE project_id = :project_id;
+
+-- TGT-0008 read/write: immutable prompt plus mutable project link.
+SELECT p.*, pp.prompt_order, pp.enabled, pp.archived AS link_archived,
+       pp.origin_project_id, pp.criteria_disposition,
+       pp.criteria_section_key, pp.criteria_section_label
+FROM app.project_prompt pp
+JOIN app.prompt p ON p.id = pp.prompt_id
+WHERE pp.project_id = :project_id
+ORDER BY coalesce(pp.prompt_order, 0), p.id;
+INSERT INTO app.prompt
+  (id, original_text, transformed_text, prompt_heading, type,
+   content_hash, archived)
+VALUES
+  (:prompt_id, :original_text, :transformed_text, :prompt_heading,
+   :prompt_type, :content_hash, FALSE)
+ON CONFLICT(content_hash) DO NOTHING;
+INSERT INTO app.project_prompt
+  (id, project_id, prompt_id, prompt_order, enabled, archived,
+   origin_project_id, criteria_disposition, criteria_section_key,
+   criteria_section_label)
+VALUES
+  (:link_id, :project_id, :prompt_id, :prompt_order, :enabled, :archived,
+   :origin_project_id, :criteria_disposition, :criteria_section_key,
+   :criteria_section_label)
+ON CONFLICT(project_id, prompt_id) DO UPDATE SET
+  prompt_order = excluded.prompt_order,
+  enabled = excluded.enabled,
+  archived = excluded.archived,
+  criteria_disposition = excluded.criteria_disposition,
+  criteria_section_key = excluded.criteria_section_key,
+  criteria_section_label = excluded.criteria_section_label,
+  updated_at = current_timestamp;
+```
+
+```sql
+-- TGT-0009 read: stored execution identity, never display-name identity.
+SELECT m.*, pc.provider_kind, pc.enabled AS provider_enabled,
+       pc.auth_mode, pc.base_url, pc.config_json, pc.secret_ref,
+       pc.max_inflight_requests
+FROM app.model m
+JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+WHERE m.id = :model_id
+LIMIT 1;
+SELECT id
+FROM app.model
+WHERE provider_connection_id = :provider_connection_id
+  AND remote_model_id = :remote_model_id
+  AND coalesce(variant, '') = coalesce(:variant, '')
+LIMIT 1;
+
+-- TGT-0009 write: one stored natural key; conflict is selected and compared.
+INSERT INTO app.model
+  (id, provider_connection_id, name, remote_model_id, display_name,
+   variant, source, enabled, metadata_json)
+VALUES
+  (:id, :provider_connection_id, :name, :remote_model_id, :display_name,
+   :variant, :source, :enabled, :metadata_json)
+ON CONFLICT DO NOTHING;
+
+-- TGT-0010 read/write: immutable admission receipt, not current authority.
+SELECT *
+FROM app.review_config_receipt_v1
+WHERE receipt_id = :receipt_id
+LIMIT 1;
+INSERT INTO app.review_config_receipt_v1
+  (receipt_id, project_id, serializer_version, applicability_hash,
+   judgment_identity_hash, review_serving_hash, scope_input_hash,
+   selected_route_set_hash, dimension_payload_json, source_watermark_json,
+   created_at)
+VALUES
+  (:receipt_id, :project_id, :serializer_version, :applicability_hash,
+   :judgment_identity_hash, :review_serving_hash, :scope_input_hash,
+   :selected_route_set_hash, :dimension_payload_json, :source_watermark_json,
+   current_timestamp)
+ON CONFLICT(project_id, serializer_version, review_serving_hash,
+            scope_input_hash, selected_route_set_hash) DO NOTHING;
+```
+
+#### Judgment And Reusable-Fact Boundaries
+
+```sql
+-- TGT-0011 read: exact logical identity plus explicit active generation.
+SELECT *
+FROM app.judgment
+WHERE article_id = :article_id
+  AND prompt_id = :prompt_id
+  AND model_id = :model_id
+  AND use_title = :use_title
+  AND use_abstract = :use_abstract
+  AND use_fulltext = :use_fulltext
+  AND use_fulltext_no_images = :use_fulltext_no_images
+  AND deleted_at IS NULL
+ORDER BY delete_generation DESC
+LIMIT 1;
+INSERT INTO app.judgment
+  (id, article_id, prompt_id, model_id, project_id,
+   use_title, use_abstract, use_fulltext, use_fulltext_no_images,
+   delete_generation, is_answered, answered_original,
+   answered_original_as_array, confidence_original, explanation, quotes)
+VALUES
+  (:id, :article_id, :prompt_id, :model_id, :project_id,
+   :use_title, :use_abstract, :use_fulltext, :use_fulltext_no_images,
+   :delete_generation, :is_answered, :answer, :answer_array,
+   :confidence, :explanation, :quotes)
+ON CONFLICT(article_id, prompt_id, model_id, use_title, use_abstract,
+            use_fulltext, use_fulltext_no_images, delete_generation)
+DO NOTHING;
+
+-- TGT-0012 read: mode chooses one physical contract, never a merged row.
+SELECT * FROM app.judgment_human
+WHERE project_id = :project_id AND article_id = :article_id
+ORDER BY prompt_id;
+SELECT * FROM app.judgment_human_summary
+WHERE project_id = :project_id AND article_id = :article_id
+LIMIT 1;
+INSERT INTO app.judgment_human
+  (id, project_id, article_id, prompt_id, is_answered, answer, comment)
+VALUES
+  (:id, :project_id, :article_id, :prompt_id,
+   :is_answered, :answer, :comment)
+ON CONFLICT(project_id, article_id, prompt_id) DO UPDATE SET
+  is_answered = excluded.is_answered,
+  answer = excluded.answer,
+  comment = excluded.comment,
+  updated_at = current_timestamp;
+INSERT INTO app.judgment_human_summary
+  (id, project_id, article_id, answer, origin)
+VALUES (:id, :project_id, :article_id, :answer, :origin)
+ON CONFLICT(project_id, article_id) DO UPDATE SET
+  answer = excluded.answer,
+  origin = excluded.origin,
+  updated_at = current_timestamp;
+```
+
+```sql
+-- TGT-0013 cold read: exact compatibility/audit key only.
+SELECT *
+FROM cold.review_section_state_v1
+WHERE project_id = :project_id AND article_id = :article_id
+LIMIT 1;
+
+-- TGT-0013 one-time, fenced backfill; all 24 source values are typed.
+INSERT INTO cold.review_section_state_v1
+  (source_review_id, project_id, article_id, opened,
+   reviewed_title, reviewed_title_comment,
+   reviewed_abstract, reviewed_abstract_comment,
+   reviewed_intro, reviewed_intro_comment,
+   reviewed_method, reviewed_method_comment,
+   reviewed_results, reviewed_results_comment,
+   reviewed_discussion, reviewed_discussion_comment,
+   reviewed_conclusion, reviewed_conclusion_comment,
+   reviewed_appendix, reviewed_appendix_comment,
+   reviewed_other, reviewed_other_comment,
+   source_created_at, source_updated_at,
+   source_schema_version, row_hash, archived_at)
+SELECT
+  id, project_id, article_id, opened,
+  reviewed_title, reviewed_title_comment,
+  reviewed_abstract, reviewed_abstract_comment,
+  reviewed_intro, reviewed_intro_comment,
+  reviewed_method, reviewed_method_comment,
+  reviewed_results, reviewed_results_comment,
+  reviewed_discussion, reviewed_discussion_comment,
+  reviewed_conclusion, reviewed_conclusion_comment,
+  reviewed_appendix, reviewed_appendix_comment,
+  reviewed_other, reviewed_other_comment,
+  created_at, updated_at, 'review-section-v1', :row_hash, current_timestamp
+FROM app.review
+WHERE id = :source_review_id
+ON CONFLICT(source_review_id) DO NOTHING;
+
+-- TGT-0014 one assessment per canonical judgment.
+SELECT * FROM app.judgment_assessment
+WHERE judgment_id = :judgment_id
+LIMIT 1;
+INSERT INTO app.judgment_assessment
+  (id, judgment_id, assessment_is_correct, assessment_comment)
+VALUES (:id, :judgment_id, :is_correct, :comment)
+ON CONFLICT(judgment_id) DO UPDATE SET
+  assessment_is_correct = excluded.assessment_is_correct,
+  assessment_comment = excluded.assessment_comment,
+  updated_at = current_timestamp;
+```
+
+```sql
+-- TGT-0015 bounded audit read and insert-once closeout.
+SELECT *
+FROM app.token_use
+WHERE (:job_id IS NULL OR judgment_job_id = :job_id)
+  AND (:after IS NULL OR created_at >= :after)
+ORDER BY created_at DESC, id DESC
+LIMIT :audit_limit;
+INSERT INTO app.token_use
+  (id, judgment_job_id, requests, total_prompt_tokens,
+   total_completion_tokens, total_tokens, successful_requests,
+   failed_requests, has_failed_requests, failed_requests_details,
+   request_attempts_json, started_at, finished_at, duration)
+VALUES
+  (:id, :judgment_job_id, :requests, :prompt_tokens,
+   :completion_tokens, :total_tokens, :successful_requests,
+   :failed_requests, :has_failed_requests, :failure_json,
+   :attempt_json, :started_at, :finished_at, :duration)
+ON CONFLICT(id) DO NOTHING;
+
+-- TGT-0016 bounded fact read and source-keyed deterministic upsert.
+SELECT *
+FROM app.review_import_article_hot_field
+WHERE import_route_id IN (:bounded_route_ids)
+  AND article_id IN (:bounded_article_ids)
+  AND tombstone = FALSE
+ORDER BY selected_rank_numeric, selected_rank_key,
+         import_route_id, article_id, source_record_key;
+INSERT INTO app.review_import_article_hot_field
+  (import_route_id, article_id, source_record_key, source_record_hash,
+   source_kind, selected_rank_key, selected_rank_numeric,
+   publication_year, article_title, journal_title, external_id,
+   duplicate_key, duplicate_flag, conflict_flag,
+   filter_bucket_key, filter_bucket_value, source_updated_at, tombstone)
+VALUES
+  (:import_route_id, :article_id, :source_record_key, :source_record_hash,
+   :source_kind, :selected_rank_key, :selected_rank_numeric,
+   :publication_year, :article_title, :journal_title, :external_id,
+   :duplicate_key, :duplicate_flag, :conflict_flag,
+   :filter_bucket_key, :filter_bucket_value, :source_updated_at, :tombstone)
+ON CONFLICT(import_route_id, article_id, source_record_key) DO UPDATE SET
+  source_record_hash = excluded.source_record_hash,
+  selected_rank_key = excluded.selected_rank_key,
+  selected_rank_numeric = excluded.selected_rank_numeric,
+  publication_year = excluded.publication_year,
+  article_title = excluded.article_title,
+  journal_title = excluded.journal_title,
+  external_id = excluded.external_id,
+  duplicate_key = excluded.duplicate_key,
+  duplicate_flag = excluded.duplicate_flag,
+  conflict_flag = excluded.conflict_flag,
+  filter_bucket_key = excluded.filter_bucket_key,
+  filter_bucket_value = excluded.filter_bucket_value,
+  source_updated_at = excluded.source_updated_at,
+  tombstone = excluded.tombstone,
+  updated_at = current_timestamp;
+```
+
+```sql
+-- TGT-0017 maintenance read: strict cursor and fixed batch, never foreground.
+SELECT jf.*
+FROM mart.judgment_fact jf
+WHERE jf.judgment_id > :last_judgment_id
+ORDER BY jf.judgment_id
+LIMIT :migration_batch_size;
+
+-- TGT-0017 writes only owner-approved divergent rows from a compared batch.
+INSERT INTO cold.judgment_fact_divergence_v1
+  (judgment_id, canonical_judgment_id, article_id, prompt_id, model_id,
+   use_title, use_abstract, use_fulltext, use_fulltext_no_images,
+   source_row_hash, source_payload_json, divergence_fields_json,
+   source_created_at, source_updated_at, source_schema_version, archived_at)
+SELECT
+  judgment_id, canonical_judgment_id, article_id, prompt_id, model_id,
+  use_title, use_abstract, use_fulltext, use_fulltext_no_images,
+  source_row_hash, source_payload_json, divergence_fields_json,
+  source_created_at, source_updated_at, 'judgment-fact-v1', current_timestamp
+FROM us092_compared_judgment_fact_batch
+WHERE cardinality(divergence_fields) > 0
+ON CONFLICT(judgment_id) DO NOTHING;
+```
+
+### Fan-Out, Lifecycle And Cutover Contract
+
+| Target | Read fan-out and bound | Write fan-out, invalidation and failure | Retention, replay and recovery | Export, transfer and benchmark | Migration/rebuild, cutover and cleanup |
+| --- | --- | --- | --- | --- | --- |
+| `TGT-0001` | One article plus its bounded identifier set; list/export hydration accepts only route/job-capped article IDs. | One article, zero-to-small-K identifiers and at most one quarantine row in one canonical transaction; one durable source delta follows. Collision or partial file/reference publication fails visibly. | Active article, identifier provenance, raw/source and referenced full-text horizons stay separate; import/transfer replay and clean-host restore must reproduce identifiers and assets. | Frozen selection versus current hydration is explicit; transfer remaps article and identifiers; fixed fixture measures match/write/hydration rows, bytes, RSS, spill and latency. | Current tables survive. Reconcile legacy scalar identifiers against normalized rows in bounded ID batches; no new dual authority; remove any later-proven duplicate only after reader/writer, restore and cleanup receipts. |
+| `TGT-0002` | Unresolved conflicts read by source or normalized identifier with cursor/limit; no product-scale scan. | Zero or one append per rejected/conflicting identifier and one resolution update; retry never deletes evidence. | Owner-approved unresolved/resolved audit horizons, replay linkage and backup restore preserve request/winner/reason metadata. | Audit/export inclusion and transfer omission/inclusion are explicit; benchmark measures conflict-heavy match overhead separately. | No shape migration now. Deployed rows and resolution state inventory precede any compaction; cutover/cleanup is retention-fenced and receipted. |
+| `TGT-0003` | One source plus one route under A, or a bounded ordered route set under B. | One route ensure plus one source/binding mutation and import-config delta. Ambiguous A/B cardinality, missing route or cursor/version mismatch fails without fallback. | Cursor tagged variants, source-file references, archive state and replay/reset history have independent horizons and restore tests. | Export/transfer serialize the chosen binding version; browser/desktop data-source/import parity and fixed import fixture pass. | Inventory every bridge/string value. Choose A or B, reconcile totals/conflicts, fence writes, cut one writer then readers, verify, roll back if needed, and clean the rejected representation; no broad dual-write period. |
+| `TGT-0004` | Current rows use route/article or source key and bounded article/route sets; history is never selected by newest-row scan. | Per changed source record: one history upsert, at most one current-link upsert/tombstone, one hot-fact upsert and one source delta in the owner transaction. Any failed stage rolls back; downstream acknowledgement waits for visibility. | Current and raw/history/quarantine horizons differ. Complete route rebuild, remap, delete/undelete, stale-link sync and late-membership replay plus backup restore must converge. | Exports declare current versus source history; transfer remaps both; benchmark measures raw parses, changed/unchanged writes and selected-import latency. | Existing shape survives. Any field slimming needs deployed equality, bounded rebuild, source/current writer cutover, rollback and stale-row cleanup after reference scans. |
+| `TGT-0005` | One project row, then separately bounded prompt/route sets; no hash is used to infer missing source values. | One project mutation plus exact old/new config and scope deltas. Review, comparison and transfer invalidations are recorded separately; invalid flag/date/model values fail before write. | Current settings, execution receipts and historic export/transfer snapshots have distinct horizons; replay rebuilds affected consumers from source and restores the prior version. | Every export/transfer field maps explicitly; benchmark freezes model/provider/thinking/content/date/mode values and rejects defaults. | Keep source row. Validate legacy null/illegal combinations in project-ID batches, version the validator, cut all writers/readers together and clean only superseded derived copies after pins settle. |
+| `TGT-0006` | Foreground reads one published project/range or capped article set. Full union occurs only in bounded rebuild chunks. | Source mutation is one direct/route link plus durable dirty work; chunk writer replaces one range and publishes checksum/count before ACK. Failure preserves dirty/retry state and old active snapshot. | Source links outlive facts. Full rebuild, late membership, date/archive changes, crash restart and restore must reproduce scope without advancing on zero unpublished rows. | Export selection and transfer membership map source identities, not the fact as authority; benchmark compares chunk writes and bounded route reads under fixed scope. | Rebuild candidate generations from source, validate each range, promote once, switch readers, retain rollback/pins, then clean old facts. Reject foreground fallback to source union. |
+| `TGT-0007` | One oldest pending tombstone and one table/batch at a time; batch size and maximum cycles are explicit. | Request inserts one tombstone; each batch mutates at most its cap and records phase/table/count. Failure leaves the tombstone; final project and tombstone deletion occur only after reference scans. | Tombstone persists through restart until terminal receipt plus approved audit horizon; backup/restore resumes at the recorded phase without deleting unrelated rows. | Export/transfer reject pending-deletion projects or freeze an approved state; benchmark measures worst allowed batch, not unbounded full deletion. | Existing state survives. Any redesign backfills project pending state, cuts cleanup reader/writer atomically, proves interrupted resume, then retires old control rows after completion receipts. |
+| `TGT-0008` | Prompt lookup is by content hash or ID; project prompts are bounded by configured prompt count and deterministically ordered. | At most one immutable prompt insert/reuse plus one project-link upsert and prompt-config delta. Hash collision, legacy null ambiguity or invalid criteria fails explicitly. | Prompt content, link history, merge/repair and archived provenance have approved horizons; replay/restore preserves order, criteria and immutable identity. | Prompt exports and transfer remaps include exact content/link fields; benchmark freezes ordered prompts and content hashes. | Backfill legacy hashes/criteria in bounded prompt batches with collision quarantine; cut every writer to one serializer/validator, retain rollback and clean no history until audit/recovery proof passes. |
+| `TGT-0009` | One model joins one provider; catalog reads are capped and ordered. Secret resolution is a separately bounded external lookup. | One provider/model mutation plus review-config delta and transfer dirty token; DB and secret-store effects use explicit compensating failure, never silent fallback. | Active/archive/error/health/secret and historical execution identities have separate horizons; restore validates DB plus secret reference and configured failure behavior. | Export/transfer redact secrets and version fingerprints; benchmark freezes provider/model/variant/options/concurrency and preserves configured failures. | Reconcile natural keys/open JSON/secret refs in bounded rows, cut repository serializers by version, reject mixed versions and clean only unreferenced archived rows after project/judgment/reference scans. |
+| `TGT-0010` | One receipt by ID at job/rebuild/snapshot admission; current routes still read authoritative source. | At most one insert-once receipt per admitted identity, never mutation-time fan-out. Payload/hash mismatch or missing benchmark-critical value aborts admission; no resolver default. | Receipts follow job/snapshot/pin/audit horizons. Replay re-derives and byte-compares the same version; recovery rejects mixed serializer or watermark identities. | Export/transfer may include the receipt or deterministically recreate and compare it; benchmark measures admission/write bytes separately from source reads. | If approved, create empty target, backfill only retained jobs/snapshots in bounded batches, compare, switch admission readers/writers by version, retain rollback, then clean unreferenced receipts. Source tables never cut over. |
+| `TGT-0011` | Exact active model/content identity returns at most one result; list/detail hydration uses bounded article/prompt sets through serving copies. | One canonical insert/update and one durable source delta/outbox; project fan-out is bounded background work. Conflict, deleted-generation mismatch or visibility failure remains terminal/retryable by explicit state, not silent reuse. | Active/deleted generations and audit history have approved horizons. Direct/batch/SQLite/transfer replay is idempotent; clean-host restore validates canonical, V4 and visibility separately. | Export/transfer preserve model/content/result/tombstone mapping; benchmark freezes full execution identity and measures source-to-visible latency without fallback. | Existing source survives. Reconcile generation-zero/deleted rows and every writer in bounded ID batches; version cutover and rebuild downstream state before any cleanup. |
+| `TGT-0012` | Prompt mode reads at most configured prompts for one article; summary mode reads one row. Empty pages do not infer mode. | Prompt init/write is capped by prompt count; summary write is one row. Mode-specific deltas and comparison invalidation commit with source; optional blank without required delta remains a blocker/failure observation. | Pending, answered, blank, summary-origin and tombstone horizons are explicit; replay/restore covers prompt edits, mode changes, transfer and delete/move. | Exports/transfers include the correct mode and key; browser/desktop mode parity and fixed Human fixture pass. | Keep separate tables. Any normalization backfills per project/article, versions the mode, cuts readers/writers together and never dual-writes both modes for one decision. |
+| `TGT-0013` | Cold reads are exact ID or project/article compatibility/audit lookups only; no foreground review list/detail joins. | One bounded migration insert per source row under a quiesced/version-fenced legacy writer. Hash conflict or model/content applicability ambiguity stops cutover. | Cold audit/compatibility horizon, reader lease, backup and executable restore are explicit; transfer replay preserves exact section values. | Export/transfer either version the cold contract or reject it explicitly; benchmark covers compatibility lookup and package round trip, not product hot paths. | Inventory deployed rows/references, decide applicability, backfill typed values/hashes in batches, switch the sole transfer/audit writer and reader, validate, then remove hot rows/table after rollback window and cleanup receipt. |
+| `TGT-0014` | One assessment by judgment key; bounded detail/export hydration by judgment IDs. | One insert/update plus assessment-specific invalidation if required. Missing creation authority, remap conflict or deleted judgment fails explicitly. | Manual decision/audit horizon and judgment-reference policy are approved; transfer/prompt-remap replay and backup restore reproduce the one-to-one relation. | Detail/UI/export/transfer parity includes comment/correctness and missing state; benchmark measures bounded hydration/write cost. | Existing row survives. Reconcile orphan/remapped judgments, cut any future writer by version and clean only after judgment/history/reference scans and restore validation. |
+| `TGT-0015` | ID/job/time queries have explicit limit/offset or cursor caps; JSON detail is fetched only for selected closeout IDs. | One insert-once token row plus request-attempt closeout projection/outbox. Conflict must compare all fields; persistence failure remains visible and no benchmark-critical retry/fallback occurs. | Success/failure/orphan/jobless/request-attempt evidence has redaction and retention horizons; outbox replay and restore reconcile counters exactly. | Export/audit inclusion and transfer local-only/portable policy are explicit; benchmark freezes execution settings and measures logical bytes, rows and query/write cost. | Keep row until counter/JSON authority closes. Version serializer, backfill/validate in bounded IDs, cut all closeout paths, retain rollback and clean only expired redacted evidence with receipts. |
+| `TGT-0016` | Read by route plus capped article/source keys or projector chunk; no route parses raw JSON or scans all history. | One deterministic hot upsert/tombstone per changed source record plus durable import delta; downstream publication is separate. Hash/rank version mismatch or missing source fails and remains dirty. | Raw/history may outlive hot/downstream copies. Complete bounded rebuild, remap, undelete, late membership, crash restart and restore compare raw-to-hot equality. | Export uses declared downstream/current fields; transfer recreates from mapped source rather than treating hot rows as portable truth; benchmark reports parse operations and encoded-byte deltas separately. | Rebuild a candidate hot generation from retained source in batches, compare keys/ranks/fields, switch consumers, preserve rollback, then clean stale rows under references/leases. Never dual-authorize raw and hot. |
+| `TGT-0017` | Migration scans by strict judgment-ID cursor and fixed batch; later reads are exact audit IDs only and never foreground product hydration. | One insert-once cold row only for a proven divergence. Equality/missing model-content mapping, hash conflict or unknown payload key blocks the batch; no legacy+new hot dual writer. | Canonical/V4 rebuild covers equal rows; cold backup/restore covers divergence. Retention, reader leases and executable restored detail/export/audit comparisons are explicit. | Export/transfer include or reject divergent history by version; fixed legacy fixture measures comparison, cold bytes and exact compatibility behavior. | Inventory deployed rows/references, field-compare in bounded batches, archive divergence, cut all legacy readers/writers/repair paths, retain rollback, then drop hot table/index residue only after negative/deployed and restore proof. |
+
+### Target-Specific Validation Proof Rows
+
+These rows validate one target each; no family-wide state can satisfy them.
+`blocked` means the concrete design exists but owner authority, deployed
+inventory or required immutable validation is unavailable.
+
+| rowId | Target-specific finite pass predicate | proofCheckState | Exact evidence | Missing evidence / blockers | Owner question IDs |
+| --- | --- | --- | --- | --- | --- |
+| `PRF-0912` | `TGT-0001` passes only when article/data owners approve its content/identifier authority; every deployed writer/reader and scalar/reference is mapped; bounded match/read/write, invalidation, export/transfer, migration, retention, crash restore and fixed-config benchmark preserve exact article/identifier/file semantics without another authority. | `blocked` | `EVD-1087`-`EVD-1088`, `EVD-1093`-`EVD-1095` | Owner identity, deployed inventory, failure receipts, restore and benchmark are unavailable; `BLK-0562`-`BLK-0569`, `BLK-0571`. | `OQ-0566`-`OQ-0572`, `OQ-0575` |
+| `PRF-0913` | `TGT-0002` passes only when audit/data owners approve conflict evidence and horizons; bounded source/identifier reads, append/resolve writes, replay, export/transfer applicability, migration/cleanup and restore prove no unresolved or required resolved evidence is lost. | `blocked` | `EVD-1087`-`EVD-1088`, `EVD-1093`, `EVD-1095` | Deployed conflicts, owner retention/applicability and lifecycle receipts are unavailable; `BLK-0562`-`BLK-0568`, `BLK-0571`. | `OQ-0566`-`OQ-0571`, `OQ-0575` |
+| `PRF-0914` | `TGT-0003` passes only when import/config owners choose A or B, prove cardinality and complete consumers, reconcile every deployed string/bridge row, execute a bounded one-writer cutover/rollback, preserve cursor/replay/export/transfer/browser/desktop behavior and meet fixed import budgets with no dual-write interval. | `blocked` | `EVD-1087`-`EVD-1088`, `EVD-1093`-`EVD-1095` | Cardinality authority, deployed bridge values, cutover, parity, restore and benchmark are unavailable; `BLK-0562`-`BLK-0569`, `BLK-0571`. | `OQ-0566`-`OQ-0572`, `OQ-0575` |
+| `PRF-0915` | `TGT-0004` passes only when import/data owners approve current/history authority and precedence; bounded reads and transactional history/current/hot/delta writes reconcile add/update/unchanged/remap/delete/late-membership cases; retention, full rebuild, recovery, export/transfer and benchmark pass. | `blocked` | `EVD-1087`-`EVD-1088`, `EVD-1092`-`EVD-1095` | Deployed equality, precedence, late replay, complete rebuild/restore and physical benefit are unavailable; `BLK-0562`-`BLK-0569`, `BLK-0571`. | `OQ-0566`-`OQ-0572`, `OQ-0575` |
+| `PRF-0916` | `TGT-0005` passes only when project/config owners approve typed current settings and validator version; all writers and review/comparison/transfer invalidations map exactly; null/boundary cases, history, export/transfer, replay/restore, migration and unchanged-setting benchmark pass without defaults. | `blocked` | `EVD-1087`, `EVD-1089`-`EVD-1090`, `EVD-1093`-`EVD-1095` | Canonical dimension/validator decision, deployed invalid values, full invalidation, restore and fixture are unavailable; `BLK-0562`-`BLK-0569`, `BLK-0570`-`BLK-0571`. | `OQ-0566`-`OQ-0575` |
+| `PRF-0917` | `TGT-0006` passes only when project/scope owners approve source and fact identities; capped reads, source writes and chunk publication prove exact membership/order/count/date behavior; late membership, zero-dirty, failure/ACK, promotion, replay, retention, export/transfer, restore and benchmark pass without foreground union. | `blocked` | `EVD-1087`-`EVD-1089`, `EVD-1093`-`EVD-1095` | Published identity, late replay, physical/ACK equality, deployed plan, restore and benchmark are unavailable; `BLK-0562`-`BLK-0569`, `BLK-0571`. | `OQ-0566`-`OQ-0572`, `OQ-0575` |
+| `PRF-0918` | `TGT-0007` passes only when cleanup/reliability owners approve its durable state machine, batch/schedule/horizon and final receipt; interruption at every phase resumes safely, reference scans protect live rows, export/transfer admission is deterministic, cleanup reclaims only approved state and restored projects remain valid. | `blocked` | `EVD-1087`, `EVD-1089`, `EVD-1093`, `EVD-1095` | Durable completion, schedule, reader/reference fence and executable restore are unavailable; `BLK-0563`-`BLK-0568`, `BLK-0571`. | `OQ-0567`-`OQ-0571`, `OQ-0575` |
+| `PRF-0919` | `TGT-0008` passes only when prompt/config owners approve content/link identities and legacy hash/criteria mapping; bounded reads/writes and exact deltas preserve order/applicability; merge/repair/replay, export/transfer, retention, migration/rollback, restore and fixed-prompt benchmark pass. | `blocked` | `EVD-1087`, `EVD-1089`, `EVD-1093`-`EVD-1095` | Legacy collisions, criteria identity, deployed consumers, restore and fixture are unavailable; `BLK-0562`-`BLK-0569`, `BLK-0570`-`BLK-0571`. | `OQ-0566`-`OQ-0575` |
+| `PRF-0920` | `TGT-0009` passes only when provider/model/security owners approve stored/virtual/secret identities and JSON versions; bounded reads/writes, config and transfer invalidation, compensating failures, redaction, migration, retention, DB-plus-secret restore, transfer fingerprint parity and fixed provider/model benchmark pass without fallback. | `blocked` | `EVD-1087`, `EVD-1090`, `EVD-1093`-`EVD-1095` | Open config/metadata, secret custody, deployed natural-key values, cross-store restore and fixture are unavailable; `BLK-0562`-`BLK-0571`. | `OQ-0566`-`OQ-0575` |
+| `PRF-0921` | `TGT-0010` passes only when configuration/invalidation owners approve every named identity, fixed JSON/watermark schema and admission writer; byte-identical replay, mixed-version rejection, pin/retention/recovery, export/transfer recreation, bounded backfill/cutover/cleanup and benchmark pass while source rows remain sole authority. | `blocked` | `EVD-1089`-`EVD-1090`, `EVD-1093`-`EVD-1095` | Canonical dimension matrix, serializer, target owner, deployed snapshots/jobs, cutover, restore and benchmark are unavailable; `BLK-0562`-`BLK-0571`. | `OQ-0566`-`OQ-0575` |
+| `PRF-0922` | `TGT-0011` passes only when judgment/reliability owners approve natural/generation/tombstone identity; all direct/batch/SQLite/transfer writers reconcile one canonical/visible result; background fan-out, export/transfer, migration, retention, replay/restore and fixed model/content benchmark pass without stale reuse or silent retry. | `blocked` | `EVD-1087`, `EVD-1091`, `EVD-1093`-`EVD-1095` | Active-generation authority, deployed rows, visibility/fan-out receipts, restore and fixture are unavailable; `BLK-0562`-`BLK-0571`. | `OQ-0566`-`OQ-0575` |
+| `PRF-0923` | `TGT-0012` passes only when Human/product owners approve prompt/summary mode identities and blank/tombstone semantics; bounded writes and deltas, comparison invalidation, mode transitions, browser/desktop/detail/export/transfer parity, replay/restore, retention and fixed Human benchmark pass without merged or dual-written decisions. | `blocked` | `EVD-1087`, `EVD-1091`, `EVD-1093`-`EVD-1095` | Mode/blank authority, deployed values, full invalidation/parity, restore and fixture are unavailable; `BLK-0562`-`BLK-0571`. | `OQ-0566`-`OQ-0575` |
+| `PRF-0924` | `TGT-0013` passes only when legacy/audit/transfer owners approve model/content applicability and every retained field; deployed rows/references are inventoried, typed hashes reconcile, one writer/read cutover succeeds without dual writes, transfer/audit parity, retention, rollback, cleanup and executable cold restore pass. | `blocked` | `EVD-1091`-`EVD-1093`, `EVD-1095` | Applicability/history policy, deployed values/references, cold owner/security, cutover and restore are unavailable; `BLK-0562`-`BLK-0568`, `BLK-0570`-`BLK-0571`. | `OQ-0566`-`OQ-0571`, `OQ-0573`-`OQ-0575` |
+| `PRF-0925` | `TGT-0014` passes only when assessment/product owners approve creation/remap/delete semantics; one-to-one writes and bounded hydration preserve UI/detail/export/transfer behavior; orphan migration, replay/restore, retention and benchmark pass without embedding assessment in another authority. | `blocked` | `EVD-1087`, `EVD-1091`, `EVD-1093`-`EVD-1095` | Ordinary creation authority, deployed/orphan values, invalidation, restore and fixture are unavailable; `BLK-0562`-`BLK-0569`, `BLK-0571`. | `OQ-0566`-`OQ-0572`, `OQ-0575` |
+| `PRF-0926` | `TGT-0015` passes only when accounting/reliability owners approve closeout identity, counter algebra and JSON/redaction versions; every direct/API/outbox/backfill/rebuild writer compares insert-once values; bounded queries, retention, replay/restore, export/transfer policy and fixed execution benchmark pass without retry/fallback. | `blocked` | `EVD-1087`, `EVD-1091`, `EVD-1093`-`EVD-1095` | Counter/attempt authority, open JSON, deployed values, global retention/restore and fixture are unavailable; `BLK-0562`-`BLK-0571`. | `OQ-0566`-`OQ-0575` |
+| `PRF-0927` | `TGT-0016` passes only when import/projector owners approve raw-to-typed fields, extraction/rank version and precedence; every source mutation/rebuild produces exact hot/downstream results; bounded reads, missing-row failure, retention, replay/restore, export/transfer recreation and parse/byte benchmark pass without foreground parsing. | `blocked` | `EVD-1087`-`EVD-1088`, `EVD-1092`-`EVD-1095` | Field intent, deployed equality, rank version, complete rebuild/restore and physical parse/byte evidence are unavailable; `BLK-0562`-`BLK-0571`. | `OQ-0566`-`OQ-0575` |
+| `PRF-0928` | `TGT-0017` passes only when judgment/audit/migration owners approve field equality and divergent-history policy; bounded deployed comparison maps exact model/content identity, cold writes only divergence, all legacy consumers cut once, API/detail/export/transfer compatibility, rollback, retention, cleanup and canonical-plus-cold restore pass. | `blocked` | `EVD-1091`-`EVD-1095` | Deployed values/references, divergence policy, cold owner/security, migration/cutover, restore and legacy fixture are unavailable; `BLK-0562`-`BLK-0571`. | `OQ-0566`-`OQ-0575` |
+
+### US-092 Target, Proof And Actionability Accounting
+
+| Register slice | New rows | `satisfied` | `pending` | `blocked` | `not-applicable` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Source/configuration target validation | 10 | 0 | 0 | 10 | 0 |
+| Judgment/reusable-fact target validation | 7 | 0 | 0 | 7 | 0 |
+| **US-092 new** | **17** | **0** | **0** | **17** | **0** |
+| Prior `PRF-0001`-`PRF-0911` | 911 | 8 | 478 | 425 | 0 |
+| **Cumulative proof register** | **928** | **8** | **478** | **442** | **0** |
+
+| Target/disposition slice | Target rows | Disposition rows | `recommendationActionability: unresolved` | `recommendationActionability: blocked` | Actionable |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| US-092 targets backed only by keeps | 11 | 51 | 51 | 0 | 0 |
+| US-092 targets containing non-keep grains | 6 | 14 | 0 | 14 | 0 |
+| Other disposition rows | — | 376 | 275 | 101 | 0 |
+| **Cumulative disposition register** | **17 target designs** | **441** | **326** | **115** | **0** |
+
+The target register adds no disposition and does not copy `proofCheckState`
+into `recommendationActionability`. Existing non-keep rows remain blocked by
+their earlier explicit replacement proofs; keep rows remain unresolved pending
+all linked family and target validation. DBO remains 322/322 blocked, CMF
+remains 1,985/1,985 blocked, FAN remains 91 blocked plus one source-proven
+not-applicable row, and `overallCertification` remains `INCOMPLETE`.
+
 ## Recommendation Proof Gate
 
 Create separate `PRF-####` rows for positive and negative proof. For a move,
@@ -15699,6 +16344,12 @@ register is eight satisfied, 478 pending, 425 blocked and zero
 not-applicable. No planned route, platform, parity, benchmark or lifecycle
 validation is satisfied, and the candidate list remains provisional.
 
+US-092 adds `PRF-0912`-`PRF-0928`: 17 separately blocked,
+target-specific validation rows for the exact 17 source/configuration/
+judgment/reusable-fact shapes. They do not replace the earlier family-domain
+or non-keep target proofs. The cumulative 928-row register is eight satisfied,
+478 pending, 442 blocked and zero not-applicable.
+
 ### Output 09 - Candidate Target Shapes
 
 Authoritative row family: `TGT-####`. Record ownership and identity, exact
@@ -15706,7 +16357,17 @@ columns/keys/indexes, read SQL shape, write fan-out, invalidation, publication,
 retention, recovery, browser/desktop consequences, migration/backfill, cleanup,
 and linked parity/benchmark proof.
 
-Current state: scaffolded; inherited target-shape prose is provisional.
+Current state: `TGT-0001`-`TGT-0017` map all 65 US-073/US-074 disposition
+rows exactly once into 17 ownership- and invalidation-aligned source,
+configuration, judgment and reusable-fact designs. Each row links exact
+current or proposed keys/fields, representative bounded read/write SQL,
+identity/authority, read and write fan-out, failure, invalidation, retention,
+replay/recovery, export, transfer, benchmark, migration or rebuild, cutover
+and cleanup. The three proposed-only receipt/cold schemas enumerate exact
+columns and JSON keys. Broad dual-write, universal-hash, merged-Human,
+foreground-union/raw-parse and unbounded-rebuild alternatives are explicitly
+rejected. All target validation remains blocked; no target is implementation-
+ready or actionable.
 
 ### Output 10 - Prioritized Implementation Slices With Benchmark Gates
 
@@ -18366,7 +19027,7 @@ The disposition register is also an output family, not a manifest status.
 US-073 through US-080 contribute 441 `DSP-####` rows: 195 object/logical/file,
 202 disjoint column/material and 44 associated-index decisions, comprising 326
 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081
-through US-091 change no disposition: all 326 keep rows retain
+through US-092 change no disposition: all 326 keep rows retain
 `recommendationActionability: unresolved`, while the eight exact US-073
 derive/delete, six exact US-074 archive, two exact US-075 project-cursor
 delete, two exact US-075 search-job delete, 11 exact US-077
@@ -18379,7 +19040,12 @@ rows are blocked and none is actionable. Multiple
 accounting grains for one physical target, logical-object backing-field cross-
 references and supporting indexes are not additional targets.
 
-The proof register is independently 911 `PRF-####` rows. The 16 pre-US-081
+US-092 separately adds 17 `TGT-####` rows for the exact 65 US-073/US-074
+source, configuration, judgment and reusable-fact dispositions. Those target
+designs are neither dispositions nor manifest rows and do not change the
+actionability totals.
+
+The proof register is independently 928 `PRF-####` rows. The 16 pre-US-081
 rows retain eight `satisfied`, three `pending` and five `blocked` states.
 US-081 adds 60 source/configuration family/domain rows plus seven target
 contracts: 30 pending and 37 blocked. US-082 adds 70 judgment/hot-fact
@@ -18404,7 +19070,10 @@ contracts: 54 pending and 47 blocked. US-091 adds 99 path/key, producer,
 bounded-consumer, atomicity, browser, desktop, export, recovery, portability,
 retention/protection and cleanup family/domain rows plus six physical
 archive/delete target contracts: 54 pending and 51 blocked. Cumulative state
-is eight satisfied, 478 pending, 425 blocked and zero not-applicable. No
+before US-092 is eight satisfied, 478 pending, 425 blocked and zero
+not-applicable. US-092 adds 17 blocked target-specific validation rows for
+`TGT-0001`-`TGT-0017`, producing a cumulative eight satisfied, 478 pending,
+442 blocked and zero not-applicable. No
 manifest, measurement,
 disposition value or certification state is inferred from those proof states,
 and no planned parity, benchmark or lifecycle work is recorded as passed.
@@ -18419,8 +19088,8 @@ US-054 through US-066 complete family-level source reconciliation. DBO rows now
 distribute as 322 blocked and CMF rows as 1,985 blocked, with zero nonterminal,
 classified or out-of-scope rows in either family. This is balanced terminal
 accounting, not certification: every manifest row is blocked and every storage
-disposition remains non-actionable; 338 actionability states are unresolved
-and 103 are blocked. US-067 through US-072 add measurement state only and
+disposition remains non-actionable; 326 actionability states are unresolved
+and 115 are blocked. US-067 through US-072 add measurement state only and
 leave those manifest distributions unchanged.
 
 US-049-US-053 lineage remains evidence for mutation, publication and lifecycle;
@@ -19153,6 +19822,18 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-0702` | 2026-07-22 / US-091 | Deliberately skipped configured snapshot/query/studio, direct/live DuckDB or SQLite, deployed root/file inventory, fixture DDL/DML, migrations, server/app/browser/desktop, workers/projectors/operators, startup repair, backup/restore, export/transfer, cleanup/retention, benchmarks, EXPLAIN/profile and physical collectors. Audited created artifacts and started product processes. | Preserve schemas, data, routes, projectors, retention, runtime behavior and benchmark-critical settings while making non-execution, cleanup and process-stop accounting explicit. | Produced `EVD-1085`: zero database/runtime/fixture/product commands, generated artifacts or started product processes occurred; cleanup and stop sets are empty. |
 | `CMD-0703` | 2026-07-22 / US-091 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check` and strict source-only sequential-ID/reference/table-width/family-domain/target-keyword/pairing/state/actionability/count/source/worktree/tracker/whitespace validators. Preliminary read-only validator drafts either counted duplicated historical BLK cross-reference rows globally or over-escaped dynamic regexes and returned zero rows; the corrected registry-scoped and literal-regex validators are authoritative and changed no state. Skipped build, tests, browser/desktop, database and runtime gates because this story changes audit Markdown/tracker metadata only and those executions would manufacture prohibited route/platform/lifecycle evidence. | Verify the finite US-091 register, exact file pairing, complete target contracts, independent states, blocked non-keep actionability, audit/tracker-only isolation and relevant repo-native formatting. | Produced `EVD-1085`. Lint preserves the same six unrelated source errors; no typecheck script exists. Corrected validators pass: 322 DBO, 1,985 CMF, 1,085 EVD, 703 CMD, 561 BLK, 565 OQ, 911 PRF and 441 DSP canonical registry IDs are contiguous; US-091 is 99 family plus six target rows, states reconcile to 8/478/425/0, exactly 115 DSP rows are blocked, 326 are unresolved and no product/runtime source changed. |
 
+| `CMD-0704` | 2026-07-22 / US-092 | Read the reporting and DuckDB skills; user PRD/patterns; `tasks/prd.json#US-091/#US-092/#US-093`; `.ralph-tui/progress.md`; US-001 state rules; US-073/US-074 dispositions; US-081/US-082/US-091 proof and current IDs/counts; HEAD/worktree status; and the targeted memory registry. | Establish prerequisite, exact 65-disposition/17-target scope, audit-only/no-live boundary, next IDs, four-state separation and unrelated worktree state. | Produced `EVD-1086`. US-091 is complete; the 41 US-073 plus 24 US-074 rows are the sole design scope, `tasks/prd.json` is a pre-existing unrelated modification, and memory has no applicable US-092 result. |
+| `CMD-0705` | 2026-07-22 / US-092 | Resolved the US-074 source baseline `8a4921a9` and HEAD `58e0aa33`; ran the scoped `src`/`scripts`/`package.json` diff; re-read full-name lexical migration loading, the exact relevant migration set and DBO/CMF/table/index closure. No database was opened. | Revalidate effective checked-in source shape and exact current keys/fields without treating migration text as applied catalog, deployed rows or backfill proof. | Produced `EVD-1087`. Scoped product/schema source is unchanged since US-074; current/proposed target shapes remain design inputs rather than deployed-state evidence. |
+| `CMD-0706` | 2026-07-22 / US-092 | Read canonical article matching, identifiers and quarantine; data-source/route configuration; current import links and source history; stale-link synchronization, raw/hot extraction and import-delta paths; and their exact migrations and prior evidence. | Separate canonical authority, normalized identity, conflict audit, route binding, current membership, replay history and typed reusable facts while tracing exact writes and invalidation. | Produced `EVD-1088`. Source favors one string route binding, retains history beside current links and exposes no production bridge owner; none of those observations authorizes archive or cutover. |
+| `CMD-0707` | 2026-07-22 / US-092 | Read project create/edit/clone, prompt upsert, direct/route membership, scope rebuild chunks, archived-project cleanup, review-config identities, provider/model repositories, secret references, execution snapshots and transfer invalidation. | Define typed source settings, immutable prompt content, mutable applicability, derived bounded scope, durable cleanup progress and provider/model execution boundaries without adopting a universal hash or foreground membership union. | Produced `EVD-1089`-`EVD-1090`. Source writes/invalidation are mapped; authoritative dimension approval, deployed parity, physical publication and recovery remain unavailable. |
+| `CMD-0708` | 2026-07-22 / US-092 | Read canonical LLM append/import/visibility, Human prompt/summary init/submit/pending, assessment, token/request closeout, import hot-field extraction, legacy `app.review` and retired `mart.judgment_fact` source, transfer and cleanup paths. | Preserve natural identity, physical generation, delete/tombstone, Human modes, accounting evidence, raw-versus-typed copies and equal-versus-divergent legacy history as distinct contracts. | Produced `EVD-1091`-`EVD-1092`. Exact source boundaries are mapped; missing legacy model/content columns, current-source equality and negative readers do not prove non-applicability or deletion safety. |
+| `CMD-0709` | 2026-07-22 / US-092 | Read project export, later hydration, transfer v1/v2 schema/package/commit/fidelity/recovery, judgment replay/repair, review-serving retention/backup/startup paths, benchmark declarations and prior physical blockers/tests without executing them. | Define export, transfer, replay, recovery, retention and fixed-configuration benchmark obligations separately from source reachability and synthetic declarations. | Produced `EVD-1093`-`EVD-1094`. Immutable artifacts, target round trips, executable restore, terminal cleanup and approved physical benchmark evidence remain unavailable rather than zero. |
+| `CMD-0710` | 2026-07-22 / US-092 | Grouped all 65 rows exactly once into `TGT-0001`-`TGT-0017`; specified exact surviving or proposed keys/fields, authority and identity, bounded representative reads/writes, invalidation/failure, read/write fan-out, retention, replay, recovery, export, transfer, benchmark, migration/rebuild, one-writer cutover and cleanup. Rejected wide source JSON, universal hashes, foreground project unions/raw parsing, merged Human grains, current-only history reconstruction, broad dual writes and synchronous project fan-out/full rebuild. | Provide concrete ownership-aligned alternatives without weakening source, audit or benchmark-critical configuration semantics or creating unbounded foreground work. | Produced `EVD-1095`. The 17 target designs cover 41 source/configuration plus 24 judgment/reusable-fact rows exactly once and remain unvalidated alternatives. |
+| `CMD-0711` | 2026-07-22 / US-092 | Added `PRF-0912`-`PRF-0928`, `BLK-0562`-`BLK-0571`, `OQ-0566`-`OQ-0575` and target/proof/actionability reconciliation; cross-checked target links against prior non-keep proofs and retained all prior states. | Keep family-wide preservation proof separate from target-specific replacement validation and keep `auditStatus`, `proofCheckState`, `recommendationActionability` and `overallCertification` independent. | Produced `EVD-1095`: 17 new blocked target proofs make cumulative proof 8/478/442/0 across 928 rows; 51 linked keeps remain unresolved, 14 linked non-keeps retain prior blocking, cumulative actionability remains 326 unresolved/115 blocked/zero actionable. |
+| `CMD-0712` | 2026-07-22 / US-092 | Deliberately skipped configured snapshot/query/studio, direct/live DuckDB or SQLite, deployed-data inventory, fixture DDL/DML, migrations, server/app/browser/desktop, writers/projectors/operators, repair/backup/restore, export/transfer, cleanup/retention, benchmarks, EXPLAIN/profile and physical collectors. Audited generated artifacts and started product processes. | Preserve schemas, data, routes, projectors, retention, runtime behavior and benchmark-critical settings while making the non-execution boundary explicit. | Produced `EVD-1096`: zero database/runtime/fixture/product commands, generated artifacts or started product processes occurred; cleanup and stop sets are empty. |
+
+| `CMD-0713` | 2026-07-22 / US-092 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check` and strict source-only sequential-ID/reference/table-width/65-row scope/target-key/proof-link/SQL-read-write/fan-out/lifecycle/state/actionability/count/source/worktree/tracker/whitespace validators. Preliminary read-only validator drafts counted first-column BLK/TGT cross-references as duplicate definitions, required uppercase `Reject`, or treated a combined read/write comment as one missing operation; corrected registry-scoped, case-insensitive and statement-aware validators are authoritative and changed no state. Skipped build, tests, browser/desktop, database and runtime gates because this story changes audit Markdown/tracker metadata only and those executions would manufacture prohibited runtime/lifecycle evidence. | Verify concrete target completeness, exact coverage, independent blocked validation, unchanged actionability, audit/tracker-only isolation and relevant repo-native formatting without converting lint debt or planned SQL into product evidence. | Produced `EVD-1096`. Lint preserves the same six unrelated source errors; no typecheck script exists. Corrected validators pass: 322 DBO, 1,985 CMF, 1,096 EVD, 713 CMD, 571 BLK, 575 OQ, 928 PRF, 441 DSP and 17 TGT canonical IDs; 65 target dispositions occur exactly once, all 17 SQL/lifecycle/proof contracts pass static checks, proof reconciles to 8/478/442/0, actionability stays 326 unresolved/115 blocked/zero actionable and no product/runtime source changed. |
+
 ## Blockers
 
 | rowId | Scope | Missing evidence | Why blocked | Owner question IDs | Resolution condition |
@@ -19729,6 +20410,17 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0559` | US-091 retention, permissions, encryption and reader protection | Partial log, recovery-group and transfer TTL policies do not cover all database, source, content, package, generated, client and cold copies. Complete references, ordinary-reader/download/operator leases, mode/owner, redaction, encryption/key custody and legal/audit horizons are absent. | Timestamps, OS defaults, newest-row limits, TTLs or artifact existence cannot establish protection or retention. | `OQ-0563` | Storage/security/privacy/retention owners approve per-family active/audit/recovery/export/transfer/client horizons, access/encryption assumptions, complete references and leases with interruption/restore receipts. |
 | `BLK-0560` | US-091 durable cleanup, orphan safety and reclamation | Cleanup is fragmented across reset, error/cancel, `finally`, stale PID, read-triggered expiry, TTL, rollback and manual operations. No bounded scheduled cycle records scanned/protected/deleted paths and bytes, references/leases, failures/restart, completion, reclaimed space and executable restore. | Successful invocation or missing cleanup cannot prove deletion safety, bounded residue or physical reclamation. | `OQ-0564` | Storage/reliability owners approve cleanup identities, fences and schedules; normal/interrupted cycles persist complete reference, protection/deletion/byte/residue results and later restored route/platform validation. |
 | `BLK-0561` | US-091 non-keep target migration and later validation | Six physical target contracts cover 12 archive/delete rows but lack approved target owners, deployed inventories, bounded keys/lookups, writer/invalidation changes, permissions/encryption, migration/backfill, cutover/rollback, recovery, retention/cleanup and immutable later validation. | Eleven family matrices cannot settle target-specific preservation or retirement; current error cleanup, OS temp, backup existence or proposed cold storage does not authorize action. | `OQ-0565` | Every target owner approves and executes its full contract; deployed state reconciles, protected target and access are measured, migration/cutover/rollback and cleanup/restore succeed, and later fixed-config product/operator/platform/export/transfer validation passes before actionability advances. |
+
+| `BLK-0562` | US-092 target ownership and identity authority | Source keys and proposed receipt/cold keys are concrete, but owners have not approved the article, route-binding, project/config, judgment, Human, accounting, hot-fact or legacy authority boundaries and version rules. | A concrete key or SQL shape cannot decide business ownership, natural identity, model/content applicability or whether a reusable fact is authoritative. | `OQ-0566` | Data/product/configuration/judgment owners approve each `TGT-####` owner, natural and physical identity, source-versus-derived boundary, serializer/version and explicit failure behavior. |
+| `BLK-0563` | US-092 deployed/applied inventory and consumer closure | Effective checked-in schema and source consumers are reconciled, but immutable applied catalogs, deployed rows/JSON variants, generated/dynamic SQL, scripts and operator consumers are unavailable. | Source-defined shape and negative search cannot certify deployed equality, cardinality, zero consumers, migration denominator or deletion safety. | `OQ-0567` | Database/runtime/operator owners provide an approved non-live applied ledger plus target-by-target row/value/reference and positive/negative consumer inventory. |
+| `BLK-0564` | US-092 bounded read fan-out and plan parity | Representative keyed/capped reads are designed, but deployed plans, rows scanned/returned, equal-key behavior, caps, order, latency and browser/desktop request traces do not exist for any target. | Named keys and source limits cannot prove bounded access, no foreground project-scale work or route parity. | `OQ-0568` | Query/product/platform owners approve caps and run immutable plan/request captures proving every read bound, order, error and absence of unregistered scans. |
+| `BLK-0565` | US-092 writer fan-out, invalidation and failure receipts | Writers/deltas are source-mapped, but exact accepted/conflicted/affected/visible totals, per-consumer invalidation, atomic failure, outbox/ACK and no-dual-write receipts are incomplete. | Transaction source, upsert success or emitted delta cannot prove publication, exactly-once fan-out, preserved failure or absence of a second mutable authority. | `OQ-0569` | Writer/projector/reliability owners approve one-writer boundaries and collect durable source, delta/outbox, fan-out, publication, failure and visibility receipts for every target. |
+| `BLK-0566` | US-092 migration, rebuild, cutover and cleanup | Versioned receipt/cold shapes and bounded migration order are designed, but applied values, backfill/rebuild jobs, conflict policy, quiesce/version fences, rollback, reader/writer cutover, residue handling and cleanup receipts are unavailable. | Design SQL is not a migration, and a family proof cannot settle target-specific cutover or deletion. | `OQ-0570` | Migration/data/storage owners approve per-target batches, checksums/conflicts, one-writer cutover, rollback, reference/pin fences and terminal cleanup/reclamation receipts. |
+| `BLK-0567` | US-092 retention, replay and executable recovery | Source paths show replay/repair/backup fragments, but no approved horizons, journals, reader leases, crash matrix or clean-host restore spans source, receipt, fact, cold and referenced-file state. | Retained source, a backup file or successful local repair cannot prove bounded replay, cold divergence recovery or restored product behavior. | `OQ-0571` | Reliability/audit/retention owners approve per-target horizons and interruption points; replay/rollback and executable source-plus-derived/cold restore reproduce exact later consumers. |
+| `BLK-0568` | US-092 export, transfer and audit preservation | Export and transfer mappings are source-traced, but field-level include/transform/reject, frozen-versus-current hydration, redaction, model/content applicability, package version and target round-trip receipts are missing. | Endpoint/package presence or omission cannot prove authoritative, audit or configuration preservation. | `OQ-0572` | Export/transfer/audit owners approve field and identity matrices and run immutable artifact, package, target-visibility and restored-output comparisons for all 17 targets. |
+| `BLK-0569` | US-092 fixed-configuration benchmark and resource budgets | Repository fixture declarations exist, but the approved corpus, seed, model/provider/thinking, prompts/content, project/import/Human/snapshot identities, applied shape, runtime and complete collector are absent. | Target design cannot claim savings, boundedness or non-regression; unavailable rows/bytes/latency/RSS/spill/WAL are not zero. | `OQ-0573` | Benchmark/data/runtime owners freeze all critical values and collect source write, rebuild, route/export/transfer read, rows, bytes, latency, RSS, temp and WAL before/after without fallback. |
+| `BLK-0570` | US-092 configuration and legacy history applicability | Review-config identities omit different dimensions; `app.review` and `mart.judgment_fact` lack a deployed field comparison and owner-approved model/content/history policy. | Missing columns, current-source equality or retired checked-in readers cannot prove non-applicability or authorize reconstruction/archive. | `OQ-0574` | Configuration/judgment/audit owners approve the consumer identity matrix, legacy model/content applicability and exact equal-versus-divergent history retention/redaction contract. |
+| `BLK-0571` | US-092 target-specific later validation | All 17 targets have concrete keys, SQL, fan-out and lifecycle designs but none has one immutable release-candidate receipt covering owner approval, deployed inventory, migration/rebuild, cutover, parity, benchmark, failure, recovery, retention and cleanup. | Family proof, design completeness or passing static validators cannot make any target or linked recommendation actionable. | `OQ-0575` | Each target owner executes and signs the complete target-specific validation matrix; only then may its proof and linked recommendation be reconsidered. |
 
 ## Owner Questions
 
@@ -20310,6 +21002,17 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0563` | Storage/security/privacy/retention owner | What active/audit/recovery/export/transfer/client horizons, complete references, ordinary-reader/download/operator leases, owner/mode/redaction, encryption/key custody and legal assumptions govern every US-091 family? | Nine retention/protection rows and `BLK-0559` |
 | `OQ-0564` | Storage/retention/reliability owner | What cleanup identity, fence, bounded schedule, canonical/reference/orphan scan, reader protection, batch/byte accounting, crash resume, completion/reclamation receipt and executable restore/later route-platform validation is required per family? | Nine cleanup rows and `BLK-0560` |
 | `OQ-0565` | Storage/database/import/transfer/reliability/security owner | For each of the six physical archive/delete targets, who owns the bounded key/lookup, writes/invalidation, permissions/encryption, deployed migration/backfill, producer/consumer cutover, rollback, recovery, horizon/cleanup and later immutable product/operator/platform/export/transfer validation? | `PRF-0906`-`PRF-0911` and `BLK-0561` |
+
+| `OQ-0566` | Data/product/configuration/judgment owner | For each `TGT-0001`-`TGT-0017`, who owns the source, derived fact, receipt or cold row; which natural/physical/model/content identity and serializer version is authoritative; and which ambiguity must fail rather than default? | All target rows and `BLK-0562` |
+| `OQ-0567` | Database/runtime/operator owner | Which immutable applied catalog, deployed row/JSON/reference inventory and generated/dynamic/script/operator consumer census is approved for each current and proposed target, including exact denominators and zero-consumer receipts? | All target migration/consumer rows and `BLK-0563` |
+| `OQ-0568` | Query/product/browser/desktop owner | What exact route/job/maintenance caps, key predicates, order, cursor, equal-key behavior, rows scanned/returned and latency budgets govern each target; which immutable plans and platform traces prove no project-scale foreground work? | All target read rows and `BLK-0564` |
+| `OQ-0569` | Writer/projector/reliability owner | What one-writer/version fence, source write, delta/outbox, fan-out, invalidation, publication/ACK, accepted/conflicted/visible totals and explicit failure receipt must hold for each target without broad dual writes? | All target write rows and `BLK-0565` |
+| `OQ-0570` | Migration/data/storage owner | For each target, what bounded inventory/backfill or rebuild, checksum/conflict policy, quiesce/version fence, writer then reader cutover, rollback, reference/pin scan, old-shape cleanup and reclamation receipt is approved? | All target cutover rows and `BLK-0566` |
+| `OQ-0571` | Reliability/audit/retention owner | What active/history/audit/compatibility horizons, reader leases, journals, crash/corruption points, replay/rollback rules, backup identities and executable clean-host restore comparisons preserve each source, fact, receipt and cold row? | All target lifecycle rows and `BLK-0567` |
+| `OQ-0572` | Export/transfer/audit/security owner | Which fields and identities are included, transformed, redacted, reconstructed or rejected for every target; what frozen/current hydration, package version/remap, target visibility, artifact checksum and restored round-trip comparisons pass? | All target export/transfer rows and `BLK-0568` |
+| `OQ-0573` | Benchmark/data/runtime owner | Which immutable corpus, seed, model/provider/thinking, prompts/content, project/import/Human/snapshot identities, applied shape, runtime and complete write/rebuild/read/export/transfer/rows/bytes/latency/RSS/temp/WAL collector are approved with no retry or fallback? | All target benchmark rows and `BLK-0569` |
+| `OQ-0574` | Configuration/judgment/legacy/audit owner | Which dimensions belong to applicability, judgment, serving, scope, selected-route, execution, comparison and transfer identities; when are model/content dimensions evidence-backed inapplicable to legacy rows; and which unequal values require cold retention? | `TGT-0005`, `TGT-0008`-`TGT-0013`, `TGT-0017` and `BLK-0570` |
+| `OQ-0575` | Target owners and release validator | What single immutable release-candidate record proves each target's owner/key/SQL/fan-out/failure, deployed mapping, migration/rebuild/cutover, API/browser/desktop/export/transfer parity, fixed benchmark, recovery/restore, retention and cleanup before any proof or recommendation advances? | `PRF-0912`-`PRF-0928` and `BLK-0571` |
 
 ## US-001 Quality Gates
 
@@ -24317,6 +25020,61 @@ commands. A command proves only the claim linked through its evidence record.
 - [x] Final sequential-ID/reference/table-width/family-domain/target/pairing/
       state/actionability/count/source/worktree/tracker/whitespace invariants
       pass (`CMD-0703`).
+
+---
+
+## US-092 Quality Gates
+
+- [x] US-091 is complete and scoped product/schema source is unchanged since
+      the US-074 baseline. All 65 US-073/US-074 source, configuration,
+      judgment and reusable-fact dispositions are assigned exactly once to
+      17 ownership/invalidation boundaries without recounting their physical
+      tables, logical contracts, material families or indexes.
+- [x] `TGT-0001`-`TGT-0017` name exact surviving or proposed keys and field
+      sets, source-versus-derived authority, natural/physical/model/content
+      identities and explicit invalidation/failure behavior. Every target has
+      representative bounded read and write SQL; the SQL is design text and
+      was not executed.
+- [x] Every target records read and write fan-out, retention, replay,
+      recovery, export, transfer, fixed-configuration benchmark, bounded
+      migration or rebuild, one-writer cutover, rollback and cleanup. Wide
+      source JSON, one universal hash, broad dual writes, synchronous
+      project fan-out and project-scale foreground unions/parsing are
+      explicitly rejected.
+- [x] `PRF-0912`-`PRF-0928` add 17 independently `blocked` target-specific
+      validations. The cumulative 928-row proof register is eight
+      `satisfied`, 478 `pending`, 442 `blocked` and zero `not-applicable`; no
+      prior proof state advances and no design completeness claim is treated
+      as later validation.
+- [x] The 51 linked keep rows retain
+      `recommendationActionability: unresolved`; the 14 linked non-keep rows
+      retain their earlier blocked replacement proofs. Cumulative
+      actionability remains 326 unresolved, 115 blocked and zero actionable;
+      no disposition changes.
+- [x] `auditStatus`, `proofCheckState`,
+      `recommendationActionability` and `overallCertification` remain
+      independent. DBO stays 322 discovered/322 blocked, CMF stays 1,985
+      discovered/1,985 blocked, FAN stays 91 blocked plus one source-proven
+      not-applicable row and certification stays `INCOMPLETE`.
+- [x] `EVD-1086`-`EVD-1096`, `CMD-0704`-`CMD-0713`,
+      `BLK-0562`-`BLK-0571`, `OQ-0566`-`OQ-0575` and the 17 TGT rows record
+      exact source, commands, target-specific blockers, owner questions and
+      bounded resolution conditions. Missing columns, source absence,
+      checksums, transaction source and fixture declarations are not promoted
+      across authority, history, publication, recovery or physical grains.
+- [x] Zero live/current/project DuckDB or SQLite, configured snapshot/query/
+      studio, deployed-data inventory, fixture DDL/DML, migration,
+      server/app/browser/desktop, writer/projector/operator mutation, repair,
+      backup/restore, export/transfer, cleanup/retention, benchmark,
+      EXPLAIN/profile or physical collector commands ran. No generated
+      artifact or started product process requires cleanup or stopping.
+- [x] `rtk bun run lint` preserves the same six unrelated source errors and
+      no typecheck script exists. Build, tests, browser/desktop and database/
+      runtime gates are irrelevant or prohibited for this Markdown-only
+      design/proof story and were not run.
+- [x] Final sequential-ID/reference/table-width/scope/target/proof/SQL/fan-out/
+      lifecycle/state/actionability/count/source/worktree/tracker/whitespace
+      invariants pass (`CMD-0713`).
 
 ---
 
