@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-066 terminally reconciles all 32 rooted database, control, payload, asset, package, generated-file and client-download families as blocked without advancing a disposition. Path/key, producer, consumer, atomicity, browser/desktop, cleanup, retention, recovery, export, transfer, declaration and non-production closure is source-only. Deployed roots/files/permissions, physical counts/bytes/ages, reference equality, crash/orphan outcomes, concurrent-reader leases, saved-copy integrity, executable restore and Phase 4 measurements remain unresolved. No inherited recommendation is actionable. |
+| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-067 defines the authoritative article, import, project, prompt, model/provider and logical-configuration measurement formulas and adds 12 blocked measurement rows, bringing the physical register to 21 blocked rows with zero value-bearing observations. The US-015 approval gate remains unmet: no immutable fixture, generator/seed, model/provider/thinking identity, prompt/content settings, memory/runtime identity, snapshot identity or complete collector was supplied. Logical payload, index cost/bytes, WAL and physical database bytes remain separate and unavailable. No fixture, live/current DuckDB, process or generated artifact ran, no manifest state advanced and no inherited recommendation is actionable. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-066 / 2026-07-22` | Reconciled `DBO-0291`-`DBO-0322` and `CMF-1948`-`CMF-1979`; the three adjacent open payload domains remain blocked. Active/default runtime roots, database/WAL/spill, backup/snapshot/startup recovery, owner/settings/log/lock files, PDFs/full text/runtime assets, structured/Covidence/provider/FHIR files, both transfer schemas and their exact keyed payloads, import/export sessions, promoted assets, recovery sidecars, four generated downloads and both supervisor locks are source-traced. A stale census claim is corrected: the active/default DuckDB spill root is the configured value or sibling `duckdb-temp`; `${databasePath}.tmp` is only a legacy cleanup/test reference in current source. No dedicated project-review filesystem declaration was found, which is negative source evidence rather than deletion authority. Global DBO status is zero nonterminal and 322 blocked; CMF status is zero nonterminal and 1,985 blocked. No live/current DuckDB, configured snapshot, product runtime, writer, cleanup, real backup/export/transfer, browser/desktop, operator, benchmark or physical collector ran. Nine blockers/questions retain deployed inventory and Phase 4 measurements; roots/recovery; control files; content assets; imports; transfer; downloads; and declaration/retention authority. Proof, actionability, certification, lineage/runtime state and every disposition remain independent and unchanged. |
+| Latest normalized story | `US-067 / 2026-07-22` | Reconciled the Phase 4 measurement gate after US-066. The source/configuration scope is the 39 DBO and 251 CMF rows terminally blocked by US-054/US-055, without double-counting their physical or logical backing rows. Six family formulas cover table rows, relationship fan-out, null ratios, approximate distincts, duplicate values/bytes, width drivers, lifecycle ranges, write deltas, RSS and active/orphan checks. Six cross-family rows keep fixture identity, stage writes/RSS, logical payload, index cost/bytes, WAL and physical database bytes distinct. All 12 new `FAN-####` rows are blocked and all physical values are `unavailable`, never zero. Application/source benchmark files are unchanged since US-015 and no approval record or complete collector exists. Zero fixture DDL/DML commands, processes and artifacts were created, so cleanup had an empty set. Global DBO/CMF counts remain 322/322 and 1,985/1,985 blocked; proof, actionability, certification, lineage/runtime state and every disposition remain independent and unchanged. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
@@ -10456,6 +10456,141 @@ files; PDFs/full text/assets; import/provider/generated files; transfer
 packages/sessions/promotion; operator/supervisor authority; client downloads;
 and complete declaration/retention/restore authority.
 
+## US-067 Authoritative Source And Configuration Measurements
+
+### US-067 Scope, Prerequisite And Execution Boundary
+
+US-066 is complete. US-067 measures the source/configuration families already
+terminally reconciled by US-054 and US-055; it does not reopen, renumber or
+double-count their manifest rows. The exact measurement scope is 39 DBO rows
+and 251 CMF rows:
+
+| Measurement family | Physical/logical object scope | Material-field scope | Accounting boundary |
+| --- | --- | --- | --- |
+| Article | `DBO-0001`, `DBO-0180`, `DBO-0181` and named indexes `DBO-0011`, `DBO-0221`-`DBO-0223` | Article columns/material payloads, canonical quarantine and identifier/provenance fields already included in the US-054 198-row CMF set | Three physical tables plus four indexes; no import-link or project-scope rows are silently included. |
+| Import | `DBO-0002`-`DBO-0006` and `DBO-0012`-`DBO-0016` | Data-source cursor variants `CMF-1983`-`CMF-1985` plus route/current-link/source-record fields in the US-054 set | Five physical tables plus five indexes; current links, source-record history and data-source configuration remain separate. |
+| Project and scope | `DBO-0007`-`DBO-0010`, `DBO-0017`-`DBO-0020`, `DBO-0179`, `DBO-0211`, `DBO-0220` | Project, direct/route membership, tombstone and physical-scope fields in the US-054 set | Five physical tables, one logical subproject shape and five indexes; authoritative membership and derived physical scope are not conflated. |
+| Prompt | `DBO-0021`, `DBO-0022`, `DBO-0025` | `CMF-0156`-`CMF-0176` | Two physical tables plus one index; prompt identity and project applicability remain separate. |
+| Model and provider | `DBO-0023`, `DBO-0024`, `DBO-0026` | `CMF-0177`-`CMF-0208` | Two physical tables plus one index; stored models, provider connections and synthesized selectable variants remain separate. |
+| Logical configuration | `DBO-0027`-`DBO-0031` | Backing project/article/link/prompt/model/provider fields already counted above | Five logical composites and zero additional physical rows: scope, content flags, date range, selected routes and review-config hash are separate contracts. |
+| **Total** | **39 DBO rows: 17 physical tables, one logical subproject shape, five logical configuration shapes and 16 named indexes** | **251 CMF rows: the 198 US-054 rows plus 53 US-055 rows** | **No DBO or CMF row is added or recounted by this measurement story.** |
+
+US-015 permits an isolated disposable physical fixture only after explicit
+approval of its immutable identity and every benchmark-critical value. That
+gate still does not pass. Neither this task input nor repository source names
+an approved fixture instance, generator/seed, model, provider, thinking
+identity, ordered prompt identities, content flags, DuckDB memory limit,
+runtime profile/topology/version, snapshot identities or complete physical
+collector. A source diff from the US-015 audit revision to current HEAD changes
+none of `package.json`, `src/` or `scripts/`; the only scoped diff is Ralph's
+pre-existing `tasks/prd.json` timestamp. The review-serving release command
+therefore remains tests plus mocked smoke, not a physical runner.
+
+Execution stopped at that gate. No default, environment-resolved value,
+synthetic smoke identity, disposable unit-test database, existing project or
+live/current DuckDB was substituted. Missing physical observations are
+`unavailable`, never zero. Authorization to create a fixture would still not
+approve its benchmark-critical configuration or an incomplete collector.
+
+### US-067 Evidence Ledger
+
+| Evidence ID | Class | Exact locator | Finding | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-0787` | `control` | User US-067 PRD and codebase patterns; `tasks/prd.json#US-067`; `.ralph-tui/progress.md`; US-001 state model; US-015 physical gate; US-054/US-055 family closure; US-066 prerequisite; reporting and DuckDB skills; HEAD/worktree/ID/count inspection | Fixes the prerequisite, 39-DBO/251-CMF non-overlapping scope, allowed measurement state, audit-only/no-live boundary and the unrelated pre-existing `tasks/prd.json` change. | `CMD-0532` |
+| `EVD-0788` | `production/control` | `package.json` `bench:review-serving-release-gate`, `bench:review-serving-smoke`, `db:query:snapshot`; `src/server/reviewServing/reviewServingBenchmark.ts#reviewServingSynthetic10m7PromptOverlapFixture`, `#ReviewServingBenchmarkReleaseContext`, `#runReviewServingBenchmarkEffect`; `scripts/benchmarkReviewServingSmoke.ts`; US-015 `EVD-0149`-`EVD-0153`; source diff from `f962810ec4c76f290f0632482906b1a0bab24086` through `ab3db69eaaad204269f91e6ae24d9262b17bd00f` | Source still fixes only the 10M article/7 prompt/70M overlap shape and mocked workload. It has no approved generator or complete source/configuration profile/byte/lifecycle collector; no application, script or package benchmark source changed since the US-015 gate. | `CMD-0533` |
+| `EVD-0789` | `schema/source` | US-003 census; US-014 additions; US-054 exact scope/closure for `DBO-0001`-`DBO-0020`, `DBO-0179`-`DBO-0181`, `DBO-0211`, `DBO-0220`-`DBO-0223` and its 198 CMF rows | Supplies the exact article/import/project table, field, JSON, constraint, index and lifecycle boundaries from which the family formulas below are derived; source shape is not a physical value profile. | `CMD-0534` |
+| `EVD-0790` | `schema/source` | US-004 census and US-055 exact scope/closure for `DBO-0021`-`DBO-0031` and `CMF-0156`-`CMF-0208` | Supplies the exact prompt/model/provider physical rows and five distinct logical configuration contracts. Virtual selectable models and review/scope/date/route identities cannot be inferred from stored-row counts alone. | `CMD-0534` |
+| `EVD-0791` | `plan/control` | `REVIEW_STORAGE_SHAPE_AUDIT_PLAN.md#Phase 4 - Measure Row Fan-Out And Width`; US-002 metric/timing definitions; US-015 `FAN-0001`-`FAN-0009`; US-054/US-055 Phase 4 pending lists | Requires per-table formulas, null/distinct/duplicate/width/lifecycle evidence, rows written, RSS, active/orphan evidence and separate logical/index/WAL/physical byte categories under one fixed approved configuration. | `CMD-0534` |
+| `EVD-0792` | `control` | US-067 approval decision, command/process/artifact ledger and skipped-command record | Confirms zero fixture DDL/DML commands, zero started processes, zero generated fixture artifacts and zero live/project database accesses; those action counts are not zero-valued physical measurements. | `CMD-0535` |
+| `EVD-0793` | `control` | Sequential-ID/reference/count/state/disposition/source-isolation/worktree/tracker/whitespace validators; package-script typecheck discovery; repo lint | Confirms 12 new measurement rows are blocked, 21 total measurement rows reconcile, all manifest counts/states remain unchanged, categories stay separate and story-owned durable changes are this audit plan plus required Ralph metadata. | `CMD-0536` |
+
+### Fixture, Configuration And Collector Gate
+
+| Gate dimension | Required immutable value | US-067 recorded value | State and exact blocker |
+| --- | --- | --- | --- |
+| Approval/report identity | Approved fixture/report ID, disposable root, owner approval and retained raw-report/cleanup policy | `unavailable`; none supplied | `blocked`; `BLK-0349`, `OQ-0354` |
+| Scale/generator/seed | Source contract is 10,000,000 articles, 7 prompts and 70,000,000 article-prompt overlaps; a physical generator version and deterministic seed are additionally required | Scale only is source-fixed; generator and seed are `unavailable` | `blocked`; `BLK-0349`, `OQ-0354` |
+| Model/provider/thinking | Stored and execution model identity, provider kind/connection/version and normalized thinking/options | `unavailable`; selectable source variants and host values are not adopted | `blocked`; `BLK-0349`, `OQ-0354` |
+| Prompt/content/config | Seven ordered prompt IDs plus text/config hashes, criteria/type/options/archive state; four content flags; Human mode; scope/date/routes | Prompt count only is source-fixed; all physical values are `unavailable` | `blocked`; `BLK-0349`, `OQ-0354` |
+| Memory/runtime/snapshot | Explicit DuckDB memory limit; profile, role, process topology, Bun/DuckDB/app/OS versions; project/review/snapshot/manifest identities | `unavailable` for a fixture; resolver defaults and audit-host versions are not fixture values | `blocked`; `BLK-0349`, `OQ-0354` |
+| Applied shape and value collector | Approved immutable snapshot or disposable-fixture database plus exact read-only SQL/profile output for all 17 physical tables, 251 fields and 16 indexes | `unavailable`; no snapshot ID, database path or approved query bundle exists | `blocked`; `BLK-0350`, `OQ-0355` |
+| Write/lifecycle/resource collector | Stage boundaries, statement-level row mutations/rewrites, RSS cadence/topology, active/orphan semantics and failure-preserving raw output | `unavailable`; table-count deltas cannot substitute for writes or rewrites | `blocked`; `BLK-0351`, `OQ-0356` |
+| Storage-byte collector | Canonical logical encoding, index attribution or approved cost proxy, WAL/checkpoint boundaries and database-file measurement | `unavailable`; no category attribution/checkpoint protocol exists | `blocked`; `BLK-0352`, `OQ-0357` |
+| Retry/downgrade policy | Preserve the first configured result/failure; no weaker rerun, fallback, spill allowance or settings change | Satisfied for this audit decision: execution stopped before mutation | No physical attempt or failure was converted to another setting. |
+
+### Measurement Formula Contract
+
+The following formulas are fixed as the required output shape, not reported as
+executed SQL. A future approved collector must record the exact query text,
+DuckDB version, transaction/snapshot identity and raw result for every value:
+
+| Metric | Required formula/boundary | Current value |
+| --- | --- | --- |
+| Table rows | `N(T) = COUNT(*)` at the named post-seed, post-source-write and post-publication checkpoints; filtered active/history counts retain their exact predicate | `unavailable` for every table |
+| Row fan-out | `fanout(child,parent) = N(child) / NULLIF(N(parent),0)` plus both numerator and denominator; no ratio is emitted alone | `unavailable` |
+| Null ratio | `nullRatio(T,c) = COUNT(*) FILTER (WHERE c IS NULL) / NULLIF(N(T),0)` for every nullable physical column/material field; empty-table result remains explicitly undefined | `unavailable` |
+| Approximate distinct | `approxDistinct(T,c) = approx_count_distinct(c)` with exact non-null row count and DuckDB version; identity/key columns additionally receive exact distinct where bounded | `unavailable` |
+| Duplicate values/bytes | `duplicateRows(T,K) = SUM(groupCount - 1)` for groups on the declared key/value/hash; repeated logical bytes require an approved canonical encoding and record top bounded duplicate groups separately | `unavailable`; equality/encoding approval is part of `BLK-0350`/`BLK-0352` |
+| Width drivers | Per scalar/JSON/list field record non-null count and logical encoded total, mean, p50, p95, p99 and max bytes; row/family totals remain logical payload, not physical storage | `unavailable` |
+| Lifecycle range | Per applicable timestamp/status record `MIN`, `MAX`, null count, age buckets at one frozen clock, and active/archived/resolved/quarantined/delete-pending predicates separately | `unavailable`; clock and predicate authority are `BLK-0351` |
+| Orphan evidence | For each declared or intentionally absent relationship, record the exact anti-join numerator, parent denominator and nullable-key treatment; a successful FK declaration is not a deployed orphan count | `unavailable` |
+| Rows written | Per stage and statement record inserted, updated, deleted and full-row-rewritten rows separately; `after N(T) - before N(T)` is not accepted as write count | `unavailable` |
+| RSS | Record process topology, start/end/peak RSS, growth and sample cadence for source/config writes and required projection/scope publication; temp/spill bytes remain a separate series | `unavailable` |
+
+### Family Measurement Register
+
+`FAN-####` rows use `proofCheckState`, not manifest `auditStatus`. Source
+formulas do not make a row `satisfied` when its approved physical values are
+absent.
+
+| rowId | Family and exact row formula | Required width, duplicate and lifecycle evidence | Required active/orphan, write and RSS evidence | Recorded physical value | proofCheckState | Blockers / owner questions |
+| --- | --- | --- | --- | --- | --- | --- |
+| `FAN-0010` | Article: `A=N(app.article)`, `I=N(app.article_identifier)`, `Q=N(app.article_canonical_match_quarantine)`; identifier fan-out `I/NULLIF(A,0)`; unresolved quarantine `Q_active=N(app.article_canonical_match_quarantine WHERE resolved_at IS NULL)` | Null/distinct profiles for all article/identifier/quarantine fields; duplicates by nullable legacy `article_id`, `content_hash`, `(kind,normalized_value)` and approved large-value hashes. Width drivers include title/summary/authors, full text/HTML/assets, original/source/conversion JSON, quarantine metadata and identifier provenance. Lifecycle covers article/source/fetch/create/update/resolution timestamps. | Anti-join identifiers to articles; approved requested/winning-article quarantine semantics; primary-identifier conflicts; canonical/import/full-text inserted/updated/resolved row writes and stage RSS. | All counts, ratios, bytes, ranges, writes, RSS and active/orphan values `unavailable`. | `blocked` | `BLK-0349`-`BLK-0352`; `OQ-0354`-`OQ-0357` |
+| `FAN-0011` | Import: `A=N(app.article)`, `D=N(app.data_source)`, `R=N(app.import_route)`, `B=N(app.data_source_import_route)`, `C=N(app.article_import_route)`, `H=N(app.article_import_route_source_record)`; current-link fan-out `C/NULLIF(A,0)`; history amplification `H/NULLIF(C,0)` | Null/distinct profiles for route/source/article/external/run/key/hash dimensions; cursor variant frequencies; duplicate raw/import/match/quarantine JSON and payload hashes. Width drivers are cursor and current/history metadata/raw payloads. Lifecycle includes created/updated, last-import and quarantined ranges plus archived/active routes. | Anti-joins for every declared/removed FK, current-link/source-history divergence, stale route membership, active versus quarantined rows; import-stage inserts/updates/sync deletes and RSS. | All physical values `unavailable`. | `blocked` | `BLK-0349`-`BLK-0352`; `OQ-0354`-`OQ-0357` |
+| `FAN-0012` | Project/scope: `P=N(app.project)`, `PA=N(app.project_article)`, `PR=N(app.project_import_route)`, `T=N(app.archived_project_delete_tombstone)`, `S=N(mart.project_scope_article)`; membership fan-outs `PA/NULLIF(P,0)`, `PR/NULLIF(P,0)`, `S/NULLIF(P,0)`; physical scope is compared with the distinct curated/route/date union, never assumed equal | Null/distinct profiles for project settings and membership provenance; repeated names/descriptions/config tuples and cross-project article/route duplication. Lifecycle covers create/update/date/delete-pending, tombstone request/claim/cleanup/completion and scope article timestamps. | Orphan project/article/route/imported-project links where final FKs are absent, tombstones without projects, scope without current membership/source and expected-but-missing scope; project/membership/scope materialization writes and RSS. | All physical values `unavailable`; logical subproject adds no separate stored row count. | `blocked` | `BLK-0349`-`BLK-0352`; `OQ-0354`-`OQ-0357` |
+| `FAN-0013` | Prompt: `P0=N(app.prompt)`, `PP=N(app.project_prompt)`; applicability fan-out `PP/NULLIF(P0,0)`; active ordered links are counted separately with `enabled AND NOT archived` | Null/distinct profiles for nullable legacy content hash, transformed text, heading/type, order/origin/criteria fields; duplicates by approved current content hash and exact/hash text groups. Width drivers are original/transformed text, headings and criteria labels. Lifecycle covers prompt/link creation/update and archive/enablement states. | Project-prompt anti-joins to project and prompt, origin-project orphans, null-hash and duplicate semantic prompt evidence; prompt/link insert/reuse/archive/merge/repair/transfer writes and RSS. | All physical values `unavailable`. | `blocked` | `BLK-0349`-`BLK-0352`; `OQ-0354`-`OQ-0357` |
+| `FAN-0014` | Model/provider: `M=N(app.model)`, `V=N(app.provider_connection)`; stored-model fan-out `M/NULLIF(V,0)`; selectable virtual variants are a separately enumerated runtime set and never added to `M` without materialization evidence | Null/distinct profiles for provider/remote/variant/source/auth/URL/secret/health/concurrency dimensions; duplicate natural-key groups and normalized JSON key/value hashes. Width drivers are metadata/config/options, URLs, labels and errors. Lifecycle covers create/update/last-checked and enabled/health states. | Model-to-provider and project-to-model anti-joins where final FKs are absent, virtual/stored identity drift and enabled-model/provider mismatches; discovery/materialization/update/slimming/transfer writes and RSS. | All physical and deployed runtime values `unavailable`. | `blocked` | `BLK-0349`-`BLK-0352`; `OQ-0354`-`OQ-0357` |
+| `FAN-0015` | Logical configuration: zero new physical rows. Per-project instances use `N(app.project)`; selected routes use `N(app.project_import_route)`; active prompt links use filtered `N(app.project_prompt)`; distinct content/date/scope/route/review-hash/execution tuples are measured separately rather than collapsed into one hash | Frequency/duplicate profile for Human mode, model/provider/options, ordered prompt hashes/criteria, four content flags, inclusive dates and selected-route sets. Width is attributed to backing rows/JSON/text once, not copied into a logical byte total. Lifecycle uses backing mutation timestamps and separately observed delta/current-hash/candidate/publication checkpoints. | Invalid full-text/date combinations, missing model/prompt/route backing, stale current-hash/candidate/snapshot identities and configuration changes with zero downstream dirty/publication rows; per-writer delta/dirty/rebuild rows and RSS. | All physical/deployed combinations, active/stale/orphan states, writes and RSS `unavailable`. | `blocked` | `BLK-0349`-`BLK-0352`; `OQ-0354`-`OQ-0357` |
+
+### Cross-Family Resource And Byte Register
+
+| rowId | Measurement category | Required physical value and boundary | Recorded physical value | proofCheckState | Blockers / owner questions |
+| --- | --- | --- | --- | --- | --- |
+| `FAN-0016` | Approved fixture/configuration and applied shape | Immutable fixture/report ID and every gate value above; applied migration/repair ledger and exact 17-table/251-field/16-index equality at the first checkpoint | `unavailable`; only source declarations and the 10M/7/70M shape exist | `blocked` | `BLK-0349`, `BLK-0350`; `OQ-0354`, `OQ-0355` |
+| `FAN-0017` | Rows written, RSS and temporary usage | Per source/config/project-scope stage: insert/update/delete/full-row rewrite counts, raw timestamps/failure state, process topology, start/end/peak RSS, cadence, growth and separately reported temp/spill bytes | `unavailable`; no writer, rebuild or sampler ran | `blocked` | `BLK-0351`; `OQ-0356` |
+| `FAN-0018` | Logical payload bytes | Per physical table/field/family canonical logical encoding totals and width percentiles at named checkpoints, with duplicate logical bytes separate and no index/WAL/temp/container bytes folded in | `unavailable`; no approved canonical encoder/query bundle or fixture | `blocked` | `BLK-0350`, `BLK-0352`; `OQ-0355`, `OQ-0357` |
+| `FAN-0019` | Index bytes or approved cost | Applied identity for all 16 in-scope named indexes, existence, exact plan/use/selectivity, rows scanned and write/rebuild cost; separately attributable bytes only where the approved DuckDB collector supports them | `unavailable`; source names are not deployed existence, use, bytes or cost | `blocked` | `BLK-0350`, `BLK-0352`; `OQ-0355`, `OQ-0357` |
+| `FAN-0020` | WAL bytes | Fixture WAL path/identity and exact bytes before source writes, after source/config writes, after scope publication and after an approved checkpoint, with checkpoint time and cleanup outcome | `unavailable`, not zero; no fixture/WAL/checkpoint protocol exists | `blocked` | `BLK-0352`; `OQ-0357` |
+| `FAN-0021` | Physical database bytes | Fixture database path/device/filesystem identity and exact file bytes at empty, post-source, post-config, post-scope-publication and post-checkpoint boundaries, separate from logical/index/WAL/temp values | `unavailable`; no database file was created or approved | `blocked` | `BLK-0349`, `BLK-0352`; `OQ-0354`, `OQ-0357` |
+
+US-067 adds 12 measurement rows: 0 `satisfied`, 0 `pending`, 12
+`blocked`, 0 `not-applicable` and 0 value-bearing physical observations.
+Together with US-015, the measurement register has 21 discovered rows: 0
+`satisfied`, 0 `pending`, 21 `blocked`, 0 `not-applicable` and 0 value-bearing
+physical observations. Formula text and source-declared scale are not counted
+as physical observations.
+
+### Non-Run, Cleanup, State And Manifest Accounting
+
+| Item | Recorded result | Evidence boundary |
+| --- | --- | --- |
+| Fixture DDL/DML commands | `0 commands / 0 commands`; affected physical rows are `unavailable`, not zero | Execution stopped at the approval gate. |
+| Fixture paths/databases/reports created | `0` | Action count only; it is not a database-size observation. |
+| Processes/servers/workers/projectors started | `0` | The started-process set is empty, so no stop action is required. |
+| Generated temporary outputs | `0` | The created-artifact set is empty, so cleanup is `not-applicable`. |
+| Live/current/project data access | `0` | No `db:query:snapshot`, studio, direct DuckDB, server, benchmark, migration, writer or product command ran. |
+| Benchmark-critical settings | Unchanged and unchosen | No default, retry, downgrade, fallback or weaker rerun occurred. |
+
+No manifest row advances from `blocked` to `measured`: DBO remains 322
+discovered/322 blocked and CMF remains 1,985 discovered/1,985 blocked. The
+39-DBO/251-CMF US-067 scope is a subset of those totals, not a new manifest.
+API, UI, background, map and lineage counts/states are unchanged.
+`auditStatus`, `proofCheckState`, `recommendationActionability`,
+`overallCertification`, lineage/runtime state and storage disposition remain
+independent. Every affected disposition remains `unresolved`; a blocked or
+unavailable size/cost result does not strengthen keep, move, derive, archive
+or delete advice.
+
 ## Recommendation Proof Gate
 
 Create separate `PRF-####` rows for positive and negative proof. For a move,
@@ -10664,11 +10799,15 @@ factor. Keep logical payload bytes, index cost/bytes, WAL bytes, temporary
 spill, and physical database bytes separate. Measurements require
 `approved-snapshot` evidence and fixed benchmark configuration.
 
-Current state: US-015 adds nine `FAN-####` rows with the required fixture,
-table-profile, index, rebuild, RSS, timing, logical-payload, WAL, and physical-
-database categories kept separate. All nine are `blocked` because no approved
-fixture/configuration or complete physical collector was supplied; inherited
-qualitative width observations and source index counts remain non-physical.
+Current state: US-015 adds nine baseline `FAN-####` rows with the required
+fixture, table-profile, index, rebuild, RSS, timing, logical-payload, WAL and
+physical-database categories kept separate. US-067 adds 12 source/configuration
+rows: six exact family formulas plus fixture/applied-shape, stage-write/RSS,
+logical-payload, index, WAL and physical-database rows. All 21 are `blocked`
+because no approved fixture/configuration or complete physical collector was
+supplied. Row formulas, source scale, qualitative width drivers and declared
+index counts are recorded but remain non-physical; there are zero value-bearing
+physical observations and no manifest row advances to `measured`.
 
 ### Output 07 - Storage Disposition Matrix
 
@@ -13336,17 +13475,18 @@ subsets of the `DBO-####` manifest and require separate summary rows.
 | Mounted API/read contracts | 75 | 0 | 0 | 1 | 74 | `75 != 0 + 0 + 1` | US-016 through US-030 normalize and runtime-corroborate list/detail/diagnostic/progress/search/selection plus PDF, CSV export, transfer and generated-file reads; bounded synthetic and desktop-preload evidence does not close snapshot/pin/output/cap/status/lifecycle authority, the health mount conflict, physical budgets, or actual browser/ElectroBun evidence |
 | UI/runtime consumers | 55 | 0 | 0 | 0 | 55 | `55 != 0 + 0 + 0` | Prior 49 consumers plus PDF file, project/prompt CSV, transfer summary/start/progress/download, and mixed-transport consumers remain baselined; US-024 through US-030 add unit/test-DOM and synthetic preload/shared-client evidence while consumed/ignored-field intent, integrity/save/cleanup behavior, actual runtime requests, and browser/desktop parity remain |
 | Background/operator surfaces | 112 | 0 | 0 | 0 | 112 | `112 != 0 + 0 + 0` | Five prior queue/bulk/export surfaces, fourteen US-032 source/project/transfer mutations, ten US-033 judgment/Human/review-state mutations, ten US-034 project review-configuration mutations, twelve US-035 intake/scope/display surfaces, six US-036 status/payload/search/queue surfaces, nine US-037 posting/stat/contribution/summary/filter/partial/finalization surfaces, fourteen US-038 readiness/startup/pin/retention/compaction/repair/replay/recovery/backup/cleanup surfaces, and 32 US-039 portability/PDF/migration/current/legacy/operator/recovery/benchmark surfaces are baselined; identity, lifecycle authority, publication/repair accounting, retention completion, restore validation, deployed behavior, and physical proof remain |
-| DuckDB/persisted objects | 322 | 0 | 0 | 39 | 283 | `322 != 0 + 0 + 39` | US-054 and US-055 terminally block 39 article/source/import/project-scope and prompt/model/provider/config table/logical/index rows after source reconciliation. The other 283 rows await their family stories; no storage disposition is final. |
-| Columns/material fields | 1985 | 0 | 0 | 310 | 1675 | `1985 != 0 + 0 + 310` | US-054 adds three data-source cursor-domain rows and blocks 198 scope rows; US-055 additionally blocks 53 prompt/model/provider fields and key families. The other 1,675 fields await family reconciliation; missing deployed/physical evidence remains pending. |
-| Indexes (DBO subset) | 127 | 0 | 0 | 16 | 111 | `127 != 0 + 0 + 16` | Fourteen article/import/project-scope and two prompt/model indexes are blocked after source reconciliation; 111 await later families. Deployed existence, optimizer use, selectivity, size and write cost remain unavailable. |
-| Temporary tables (DBO subset) | 31 | 0 | 0 | 0 | 31 | `31 != 0 + 0 + 0` | Eighteen migration families contain 105 literal declarations; thirteen runtime families contain 51 source declaration sites. Connection/session lifecycle, crash residue and temp/spill cost remain unavailable |
-| Payload/file shapes (DBO subset) | 36 | 0 | 0 | 0 | 36 | `36 != 0 + 0 + 0` | Existing job/worker file containers plus 32 runtime-root, asset, transfer, backup, snapshot, export, lock and generated-file families are baselined; deployed contents, bytes, recovery, retention and browser/desktop parity remain unavailable |
+| DuckDB/persisted objects | 322 | 0 | 0 | 322 | 0 | `322 = 0 + 0 + 322` | US-054 through US-066 terminally reconcile every table, logical shape, index, temporary shape and local-file family as blocked. US-067 measures only the existing 39-row source/configuration subset and changes no manifest status or disposition. |
+| Columns/material fields | 1985 | 0 | 0 | 1985 | 0 | `1985 = 0 + 0 + 1,985` | US-054 through US-066 terminally reconcile every physical column, JSON/key family and local-file material row as blocked. US-067 covers the existing 251-row source/configuration subset without adding or recounting fields. |
+| Indexes (DBO subset) | 127 | 0 | 0 | 127 | 0 | `127 = 0 + 0 + 127` | All current named-index rows are blocked after source reconciliation. US-067 retains 16 article/import/project/prompt/model indexes in its scope, but approved deployed existence, plans, selectivity, bytes and write/rebuild cost remain unavailable. |
+| Temporary tables (DBO subset) | 31 | 0 | 0 | 31 | 0 | `31 = 0 + 0 + 31` | Eighteen migration families contain 105 literal declarations and thirteen runtime families contain 51 source declaration sites. All are blocked; connection/session lifetime, crash residue and temp/spill cost remain unavailable. |
+| Payload/file shapes (DBO subset) | 36 | 0 | 0 | 36 | 0 | `36 = 0 + 0 + 36` | Job/worker file containers plus 32 runtime-root, asset, transfer, backup, snapshot, export, lock and generated-file families are terminal blocked; deployed contents, bytes, recovery, retention and browser/desktop parity remain unavailable. |
 
-The US-015 physical register is an output row family, not an `auditStatus`
-manifest: nine `FAN-####` rows remain blocked with no value-bearing physical
-observations. No row advances to `measured`. US-055 source closure cannot
-substitute for Phase 4 deployed schema, value, plan, size, runtime, cleanup or
-recovery evidence.
+The physical register is an output row family, not an `auditStatus` manifest.
+US-015 contributes nine baseline rows and US-067 contributes 12 exact
+source/configuration rows. All 21 `FAN-####` rows are blocked with zero
+value-bearing physical observations. No DBO or CMF row advances to `measured`.
+Source closure and formula definitions cannot substitute for Phase 4 deployed
+schema, value, plan, size, runtime, cleanup or recovery evidence.
 
 The remaining zeros count normalized terminal states, not absent repository
 objects. API remains 64 lifecycle, eight API, two writer and one blocked; UI
@@ -13354,19 +13494,18 @@ remains 55 API; background remains 104 lifecycle, four writer and four API;
 maps remain 31 lifecycle, one writer and one API. Lineage remains 210
 nonterminal output rows: 193 lifecycle, 13 writer and four API.
 
-US-054 and US-055 are the first two family-level terminal reconciliations.
-DBO rows now distribute as 135 lifecycle, 85 writer, 63 API and 39 blocked.
-CMF rows distribute as 1,050 lifecycle, 488 writer, 137 API and 310 blocked.
-US-055 adds four prompt/model/provider tables, five logical configuration
-objects and two named indexes to the blocked set; its 53 CMF rows are 45
-physical columns and eight material JSON families. The other 283 DBO and 1,675
-CMF rows remain nonterminal for US-056-US-066.
+US-054 through US-066 complete family-level source reconciliation. DBO rows now
+distribute as 322 blocked and CMF rows as 1,985 blocked, with zero nonterminal,
+classified or out-of-scope rows in either family. This is balanced terminal
+accounting, not certification: every row is blocked and every storage
+disposition remains unresolved. US-067 adds measurement state only and leaves
+those manifest distributions unchanged.
 
-US-049-US-053 lineage remains evidence for mutation, publication and
-lifecycle; US-054/US-055 do not duplicate it or convert lineage state into object
-classification. Every affected storage disposition remains `unresolved`.
-Later stories must append rather than renumber rows, preserve the distinct
-state fields and update these counts.
+US-049-US-053 lineage remains evidence for mutation, publication and lifecycle;
+terminal object accounting and blocked measurements do not convert its status
+or classify storage. Later stories must append rather than renumber rows,
+preserve the distinct state fields and update both manifest and measurement
+counts.
 
 ## Commands And Skipped Checks
 
@@ -13911,6 +14050,11 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-0529` | 2026-07-22 / US-066 | Source-only reads/searches of judgment recovery sidecars, server-stack/dev-watcher locks, package exposure and all qualified/unqualified file/path/project-review directory references across production, scripts, migrations, tests and plans. | Trace generated/operator/supervisor files and close declaration/non-production scope without treating absence as disposal authority. | Produced `EVD-0783`/`EVD-0784`. No dedicated production project-review directory declaration was found; tests, historical plans, package commands and fixture paths remain non-production evidence. |
 | `CMD-0530` | 2026-07-22 / US-066 | Ran 30 focused Bun files in isolated `rtk bun test <file>` processes plus one `rtk bunx vitest run <file>` UI process. The initial `.vitest.tsx` Bun-filter/no-match and forced-Bun-runner attempts were preserved before using the correct Vitest command. | Corroborate paths, serializers, controls, assets/imports, packages/sessions/promotion/recovery and client downloads while isolating module mocks and preserving failures. | Produced `EVD-0785`: 29 Bun files pass 255 tests; one Vitest file passes one test; `scripts/dbBackup.test.ts` preserves its known five-second timeout with one failed test. Bun reports 1,296 expectations. No matching disposable backup root remains; no product runtime, current database, real backup/export/transfer, browser or desktop shell ran. |
 | `CMD-0531` | 2026-07-22 / US-066 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check` and strict source-only scope/status/ID/reference/count/transition/evidence/path/schema-key/state/disposition/source/worktree/tracker/whitespace validators. Two initial inline-validator launches failed before evaluating target state because shell backticks were interpreted and then because the tracker-placement assertion named a nonexistent date heading; the corrected validator is authoritative. Skipped build, server/app/browser/desktop startup, configured snapshot/query/studio, direct/live DuckDB, writers, migration/repair/cleanup, real backup/export/transfer, package operator commands, benchmark and physical collectors. | Run relevant repo-native gates, preserve audit-only/no-live scope, record irrelevant/prohibited gates and verify terminal accounting plus independent states. | Produced `EVD-0786`. Lint preserves the same six unrelated source errors and no typecheck script exists. Corrected validators pass: 322 DBO, 1,985 CMF and all 786 EVD/531 CMD/348 BLK/353 OQ IDs are contiguous; all 32/32 targets and global DBO/CMF manifests are blocked; references, schema/path corrections, state/disposition preservation, tracker placement, changed-file scope and whitespace reconcile. |
+| `CMD-0532` | 2026-07-22 / US-067 | Read the required reporting and DuckDB skills, user PRD/patterns, `tasks/prd.json#US-066/#US-067`, `.ralph-tui/progress.md` framework and latest entries, US-001 state rules, US-015 physical gate, US-054/US-055 Phase 4 scope, US-066 closure, current manifest/measurement/count/ID registries, HEAD/status and the targeted memory registry. | Establish prerequisite, exact non-overlapping family scope, allowed states, audit-only/no-live boundary and unrelated worktree state before any physical action. | Produced `EVD-0787`. US-066 is complete; US-054/US-055 contribute exactly 39 DBO and 251 CMF source/configuration rows; `tasks/prd.json` is the sole pre-existing unrelated modification. The memory registry had no applicable audit result. |
+| `CMD-0533` | 2026-07-22 / US-067 | Inspected current package benchmark/query scripts and benchmark/strategy symbols; ran `git diff --name-status f962810ec4c76f290f0632482906b1a0bab24086..HEAD -- package.json src scripts REVIEW_STORAGE_SHAPE_AUDIT_PLAN.md tasks/prd.json`; searched approval, generator/seed, release-context, collector and separate byte-category references across source/scripts/tasks/plans. | Determine whether the US-015 fixture/configuration/collector gate changed without opening a database or choosing host defaults. | Produced `EVD-0788`. Only `tasks/prd.json` differs in the scoped source comparison; application/package/script benchmark code is unchanged. Release gate remains tests plus mocked smoke, while no approved fixture record or complete physical collector exists. |
+| `CMD-0534` | 2026-07-22 / US-067 | Read the exact DBO/CMF rows and US-003/US-004/US-054/US-055 closure for article, data-source/import, project/scope, prompt, model/provider and logical configuration; reconciled all physical tables, logical shapes, indexes and backing fields; derived the `N(T)`, fan-out, null, approximate-distinct, duplicate, width, lifecycle, orphan, write and RSS output formulas plus four separate byte/cost categories. | Freeze measurement scope and formulas without treating schema/source evidence as physical values or double-counting logical configuration. | Produced `EVD-0789`-`EVD-0791`: 17 physical tables, one logical subproject, five logical configuration shapes, 16 indexes and 251 CMF rows reconcile to 39 DBO rows; six family and six cross-family `FAN` rows cover every US-067 acceptance category. |
+| `CMD-0535` | 2026-07-22 / US-067 | Deliberately skipped `db:query:snapshot`, studio, direct DuckDB/CLI, fixture DDL/DML, server/app/desktop startup, migrations, writers/imports, projectors/rebuilds, benchmarks, checkpoint/WAL/file measurement and physical collectors after the approval gate failed. Audited the created-artifact and started-process sets. | Preserve benchmark settings/failures, avoid live/project data, and make cleanup/stop accounting explicit. | Produced `EVD-0792`: zero fixture DDL/DML commands, zero fixture paths/reports, zero started processes and zero generated artifacts. Cleanup/stop sets are empty. These action counts are not physical row/byte/RSS observations. |
+| `CMD-0536` | 2026-07-22 / US-067 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check` and strict source-only ID/reference/count/state/formula/category/disposition/source/worktree/tracker/whitespace validators. An initial validator-only task-diff expression incorrectly treated diff header lines as content; the corrected timestamp-only assertion is authoritative. Skipped build, full tests, browser/desktop, database and runtime gates because this story changes audit Markdown only and prohibited/unapproved physical commands cannot validate it. | Run relevant repo-native gates and verify measurement/manifest accounting, state independence, no disposition strengthening and cleanup/source isolation. | Produced `EVD-0793`. Lint preserves the same six unrelated source errors; no typecheck script exists. Corrected validators pass: 322 DBO, 1,985 CMF and all 793 EVD/536 CMD/352 BLK/357 OQ IDs are contiguous; 21 FAN rows are blocked, DBO/CMF remain fully blocked, all references/counts/formula/category/state/disposition/worktree/tracker/whitespace checks reconcile, and no product/runtime source changed. |
 
 ## Blockers
 
@@ -14269,6 +14413,10 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0346` | Operator-generated files and supervisor invocation authority | Recovery sidecars and both supervisor locks have source producers/consumers and partial stale/release behavior; no approved deployed command history or complete lifecycle exists. | Package exposure, a PID check, generated SQL, exclusive create or temp heartbeat does not prove authorization, PID-reuse safety, stale application prevention, crash cleanup, bounded retention or validated recovery. | `OQ-0351` | Operator/runtime/security/reliability owners define deployed command authority, artifact versions, PID/crash rules, cleanup horizon/receipts and recovery validation. |
 | `BLK-0347` | Export/download freezing, client integrity and retained-copy lifecycle | Server selection/hydration and Blob/object-URL downloads are traced; transfer status carries checksum/length/fingerprint, but the client does not verify them against the received body. | A completed job, ready package, 2xx/ZIP content type or click does not prove frozen data/assets, complete bytes, atomic save, browser/desktop native behavior, cancel/overwrite semantics or retained-copy cleanup. | `OQ-0352` | Export/client/desktop/storage owners define frozen selection/hydration/assets, response-body integrity verification, save receipts and retained-copy lifecycle, then provide supported web/desktop capture. |
 | `BLK-0348` | Complete declaration, project-review directory, reference and cleanup authority | Checked-in declarations and exact negative searches find no dedicated project-review root, while assets and dynamic/environment/deployed paths can exist outside literal names. | Source absence is not deployed absence or deletion authority. Producer-specific cleanup and database-wide backup do not prove a unified file registry, reference scan, safe deletion or family restore. | `OQ-0353` | Architecture/runtime/storage owners approve the complete declaration/reference/cleanup registry, legacy-directory policy, deletion fences/receipts and executable family restore matrix. |
+| `BLK-0349` | US-067 fixture authorization and benchmark-critical identity | Source fixes a 10M-article/7-prompt/70M-overlap shape, but no approved fixture/report ID, disposable root, generator/seed, model/provider/thinking identity, prompt/content/scope/date/route settings, memory/runtime/topology/version or snapshot identities were supplied. | Authorization to mutate a disposable root and approval of its exact benchmark configuration are separate. Selecting resolver defaults, virtual models, test values, host state, an existing project or live/current data would violate the benchmark and no-live contracts. | `OQ-0354` | Benchmark/data/product owners approve one immutable fixture/report, every benchmark-critical value, raw-report retention and cleanup policy before any physical command. |
+| `BLK-0350` | Source/configuration physical profile and applied-shape collector | The 17-table/251-field/16-index source shape and formulas are closed, but no approved immutable database/snapshot, applied migration/repair ledger or exact read-only query bundle exists. | Checked-in DDL and formula text cannot establish deployed rows, null ratios, approximate distincts, duplicate values, widths, JSON variants, lifecycle ranges, active/orphan counts, constraint equality or index existence/use. | `OQ-0355` | Database/audit owners approve the immutable snapshot or disposable database, exact collector SQL/profile, DuckDB version and raw result schema for every scoped table/field/relationship. |
+| `BLK-0351` | Stage writes, lifecycle semantics, RSS and active/orphan authority | Source identifies writers and lifecycle predicates, but no owner-approved frozen clock, stage boundary, active/orphan definition, statement mutation counter, full-row rewrite detector, process topology or RSS/temp sampler exists. | Before/after table counts cannot prove inserts, updates, deletes or rewrites; status/timestamp presence cannot define activity, orphanhood or bounded lifecycle; process RSS without ownership/cadence cannot attribute resource use. | `OQ-0356` | Source/config/projector/reliability owners define stages, predicates, relationships, clock, mutation/rewrite instrumentation, process topology, RSS cadence and temp/spill capture, then retain first-run failures. |
+| `BLK-0352` | Logical payload, index cost/bytes, WAL and physical database attribution | The four categories are separate in the register, but no canonical logical encoder, per-index attribution or approved cost proxy, WAL/checkpoint protocol, database path/device boundary or cleanup receipt is approved. | JSON/text/list serialization, database blocks, indexes, WAL, temp and container overhead are different domains. File growth alone cannot assign logical/index/write cost, and absent files/commands are not zero-byte measurements. | `OQ-0357` | Storage/database owners approve canonical encoding, index plan/cost/byte method, pre/post stage and checkpoint boundaries, file identity/stat tooling and cleanup verification for each separate category. |
 
 ## Owner Questions
 
@@ -14632,6 +14780,10 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0351` | Operator/runtime/security/reliability owner | Who may generate or execute recovery sidecars and start supervisors; what artifact version/stale-use and PID-reuse rules apply; and which crash-temp cleanup, bounded retention, durable receipt and recovery validation prove safe operation? | `DBO-0315`, `DBO-0320`, `DBO-0321`, corresponding CMF rows and `BLK-0346` |
 | `OQ-0352` | Export/client/desktop/storage owner | What immutable identity freezes export selection, download-time hydration and packaged assets; how must clients verify response length/checksum/fingerprint and atomic save; and what web/desktop save/cancel/overwrite and retained-copy cleanup evidence is required? | `DBO-0316`-`DBO-0319`, transfer download, corresponding CMF rows and `BLK-0347` |
 | `OQ-0353` | Architecture/runtime/storage owner | Which dynamic, environment, external, deployed and legacy path declarations complete the census, including any project-review directory; what producer-consumer/reference scan and unified cleanup registry exists; and what deletion fences, receipts and family restore validation authorize lifecycle decisions? | All US-066 declarations, `DBO-0322`, and `BLK-0348` |
+| `OQ-0354` | Benchmark/data/product owner | Which immutable disposable fixture/report and root are approved for US-067; what exact generator/seed, model/provider/thinking, ordered prompts/criteria, content/Human/scope/date/route settings, memory/profile/topology/version and snapshot identities apply; and what raw-report retention and cleanup receipt are required? | `FAN-0010`-`FAN-0021` and `BLK-0349` |
+| `OQ-0355` | Database/audit owner | Which immutable snapshot or disposable database and applied migration/repair identity may be measured; what exact SQL/profile output records every table row, nullable-field ratio, approximate/exact distinct, duplicate group, width percentile, JSON variant, relationship anti-join and index plan; and which DuckDB version/result schema is authoritative? | `FAN-0010`-`FAN-0016`, `FAN-0018`, `FAN-0019`, and `BLK-0350` |
+| `OQ-0356` | Source/config/projector/reliability owner | Which frozen stages and clock define source/config/scope writes; what inserted/updated/deleted/rewritten counters, active/archive/quarantine/resolve/delete predicates, orphan relationships, process topology, RSS cadence and temp/spill sampler must be captured; and how are first-run failures preserved? | `FAN-0010`-`FAN-0017` and `BLK-0351` |
+| `OQ-0357` | Storage/database owner | Which canonical scalar/JSON/list encoding measures logical payload; which index-byte attribution or cost proxy is approved; which database/WAL paths, devices, pre/post-stage/checkpoint boundaries and stat commands apply; and what cleanup receipt keeps logical, index, WAL, temp and physical bytes separate? | `FAN-0018`-`FAN-0021` and `BLK-0352` |
 
 ## US-001 Quality Gates
 
@@ -17326,6 +17478,49 @@ commands. A command proves only the claim linked through its evidence record.
 - [x] Final sequential-ID, allowed-state/reference/count, transition,
       evidence/path/schema-key, state/disposition preservation, source/
       worktree/tracker and whitespace invariants pass (`CMD-0531`).
+
+## US-067 Quality Gates
+
+- [x] US-066 is complete. The exact non-overlapping measurement scope is the
+      39 DBO and 251 CMF rows already terminally reconciled by US-054/US-055:
+      17 physical tables, one logical subproject shape, five logical
+      configuration shapes and 16 named indexes.
+- [x] Six family rows record exact row/fan-out formulas and required count,
+      null-ratio, approximate-distinct, duplicate, width, lifecycle,
+      active/orphan, rows-written and RSS evidence for article, import,
+      project/scope, prompt, model/provider and configuration families.
+- [x] Fixture/applied-shape, stage-write/RSS, logical payload, index
+      bytes/cost, WAL and physical database rows remain separate. No logical,
+      index, WAL, temp or physical byte category is folded into another.
+- [x] The fixture/configuration/collector approval gate was evaluated before
+      execution. Missing identities and tools remain exactly `unavailable`
+      under `BLK-0349`-`BLK-0352`; source scale, mocked smoke, resolver
+      defaults, test databases and host/project values were not substituted.
+- [x] Twelve sequential `FAN-####` rows are added and all are `blocked`.
+      Together with US-015, measurement accounting is 21 discovered, zero
+      satisfied, zero pending, 21 blocked, zero not-applicable and zero
+      value-bearing physical observations.
+- [x] Manifest accounting remains 322 discovered/322 blocked DBO and 1,985
+      discovered/1,985 blocked CMF. No row advances to `measured`; API, UI,
+      background, map and lineage states/counts are unchanged.
+- [x] Zero fixture DDL/DML commands, fixture paths/reports, generated artifacts,
+      started processes and live/current/project database accesses occurred.
+      Cleanup and process-stop sets are empty; action counts are not reported
+      as physical row/byte/RSS values.
+- [x] Benchmark-critical settings were unchanged and no retry, downgrade,
+      fallback, weaker rerun or failure masking occurred. Direct/live DuckDB,
+      configured snapshot/query/studio, benchmark, writer, rebuild, migration,
+      checkpoint and physical collector commands remain skipped.
+- [x] `auditStatus`, `proofCheckState`, `recommendationActionability`,
+      `overallCertification`, lineage/runtime state and storage disposition
+      remain independent. Blocked/unavailable measurements do not strengthen
+      any keep, move, derive, archive or delete recommendation.
+- [x] `rtk bun run lint` preserves the same six unrelated source errors; no
+      typecheck script exists. Build/full tests/browser/desktop are irrelevant
+      to this audit-only Markdown change and prohibited physical gates are not
+      run.
+- [x] Final sequential-ID/reference/count/state/formula/category/disposition/
+      source/worktree/tracker/whitespace invariants pass (`CMD-0536`).
 
 ---
 
