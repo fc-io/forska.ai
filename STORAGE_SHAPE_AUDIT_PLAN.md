@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-092 add 912 finite proof rows without changing a disposition: the 928-row proof register is eight `satisfied`, 478 `pending`, 442 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked` through explicit required target links, and zero are actionable. US-092 adds 17 concrete but unvalidated `TGT-####` shapes for the exact 65 US-073/US-074 source, configuration, judgment and hot-fact dispositions. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, benchmark fixture/configuration, exact route/browser/desktop proof, posting/summary/filter exactness and selectivity, applied access paths, bounded hydration/caps/order, search/queue selection, eligibility, priority and cursor parity, legacy/current identity and history mapping, snapshot/publication/file-reference atomicity, canonical path/key and permissions/encryption evidence, export/transfer/portability parity, migration/cutover, temporary lifetime and residue, replay/repair/startup/recovery, retention, cleanup and restore evidence remain incomplete. No prior proof state or manifest state advanced, no planned route, runtime, parity, benchmark or lifecycle work is labeled passed, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` remains independently `INCOMPLETE`. |
+| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-093 add 919 finite proof rows without changing a disposition: the 935-row proof register is eight `satisfied`, 478 `pending`, 449 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked` through explicit required target links, and zero are actionable. US-092/US-093 define 24 concrete but unvalidated `TGT-0001`-`TGT-0024` shapes; US-093 adds immutable component revisions, narrow candidate/display/selected/status components and a page-bounded composition contract. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, benchmark fixture/configuration, exact route/browser/desktop proof, posting/summary/filter exactness and selectivity, applied access paths, bounded hydration/caps/order, search/queue selection, eligibility, priority and cursor parity, legacy/current identity and history mapping, snapshot/publication/file-reference atomicity, canonical path/key and permissions/encryption evidence, export/transfer/portability parity, migration/cutover, temporary lifetime and residue, replay/repair/startup/recovery, retention, cleanup and restore evidence remain incomplete. No prior proof state or manifest state advanced, no planned route, runtime, parity, benchmark or lifecycle work is labeled passed, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` remains independently `INCOMPLETE`. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-092 / 2026-07-22` | Maps all 65 US-073/US-074 source, configuration, judgment and reusable-fact disposition rows exactly once into 17 ownership- and invalidation-aligned `TGT-0001`-`TGT-0017` designs. Each design has exact current or proposed keys, representative bounded read/write SQL, authority and identity boundaries, fan-out/failure behavior, migration or rebuild, cutover, cleanup, retention, replay/recovery, export, transfer and fixed-configuration benchmark obligations. `PRF-0912`-`PRF-0928` remain separately blocked pending owner approval, deployed inventory and immutable later validation. The 51 linked keeps remain unresolved, the 14 linked non-keeps retain their prior blocked state, all other disposition and proof states remain unchanged, and no schema, code, runtime, data or certification state advances. |
+| Latest normalized story | `US-093 / 2026-07-22` | Compares the current 44-column snapshot/list-mode row with seven layered `TGT-0018`-`TGT-0024` designs: immutable component revision/binding/lease, six-field candidate core, page-hydrated 13-field display, selected-import winner, separate LLM and Human status, and a one-statement at-most-501-ID composition barrier. Exact keys, SQL, reviewed/Unassessed cursor directions, writes, invalidation, reuse, snapshot consistency, failure, migration, cutover, rollback, retention, recovery, cleanup and browser/desktop/export/transfer consequences are explicit. `PRF-0929`-`PRF-0935` remain blocked pending owner approval, deployed inventory, applied-plan/parity/recovery proof and a fixed physical benchmark; 19 linked keeps remain unresolved and 11 linked non-keeps retain blocked actionability. No schema, code, runtime, data or certification state advances. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
@@ -16047,6 +16047,363 @@ all linked family and target validation. DBO remains 322/322 blocked, CMF
 remains 1,985/1,985 blocked, FAN remains 91 blocked plus one source-proven
 not-applicable row, and `overallCertification` remains `INCOMPLETE`.
 
+## US-093 Candidate, Display, Selected-Import, And Status Target Shapes
+
+### US-093 Scope, Prerequisite And State Boundary
+
+US-092 is complete. Product, schema and route source under `src`, `scripts`
+and `package.json` is unchanged from the US-086 source baseline
+`31b1c024` through HEAD `bdc249d3`. US-093 therefore designs alternatives
+against the already reconciled current shape; it does not infer deployed
+shape, values, plans or performance and does not reopen any DBO, CMF, FAN or
+DSP accounting row.
+
+Seven layered target rows compare the current wide list row with immutable
+component revisions and one bounded composition contract:
+
+| Target slice | Linked existing dispositions; no new disposition | Design grain and boundary |
+| --- | --- | --- |
+| Immutable component revision, snapshot binding and read lease | `DSP-0131`, `DSP-0134`-`DSP-0136`, `DSP-0140`, `DSP-0143`-`DSP-0144`, `DSP-0156` | Separates mutable projector identity from an immutable physical revision, snapshot composition and reader protection. |
+| Narrow candidate core | `DSP-0148`, `DSP-0155`, `DSP-0157`, with `DSP-0161` derived outside storage | One row per article/revision holds membership, date and the two exact list orders; it has no snapshot, list-mode, display, selected-import or status payload copy. |
+| Page-hydrated display component | `DSP-0149`, `DSP-0158`, `DSP-0162`; current keyed payload remains `DSP-0153`/`DSP-0166`-`DSP-0167` and US-094 scope | Thirteen rendered scalar fields live once per immutable display revision and are joined only after the candidate limit. |
+| Selected-import component | `DSP-0132`-`DSP-0133`, `DSP-0141`-`DSP-0142`, `DSP-0150`, `DSP-0160`, `DSP-0163`, and selected fields in `DSP-0159` | Winner/rank/source/filter facts retain their own immutable revision; display overrides remain inputs to the separately published display component. |
+| LLM-status component | `DSP-0151`, `DSP-0164`, and LLM fields in `DSP-0159` | Article/list-mode aggregates are separate from prompt-grain judgment detail and from Human status. |
+| Human-status component | `DSP-0152`, `DSP-0165`, and Human fields in `DSP-0159` | Prompt/summary aggregate state remains separate from LLM status and retains explicit review-config/mode applicability. |
+| Bounded page composition | Cross-references the six targets above and current posting/search/queue/summary/payload contracts; it claims no second disposition. | Selects an ordered prefix first, hydrates only the at-most-501 candidate IDs in one statement, preserves ordinal and binds every read to one immutable snapshot/revision tuple. |
+
+The current 11 linked move/derive/delete disposition rows retain
+`recommendationActionability: blocked`; linked keep rows retain
+`recommendationActionability: unresolved`. Seven new target-specific proof
+rows are independently `blocked`. No prior `proofCheckState`,
+`auditStatus`, disposition or `overallCertification` changes. The designs
+are bounded alternatives for later validation, not implementation
+authorization.
+
+No live/current/project DuckDB or SQLite, configured snapshot/query/studio,
+fixture DDL/DML, migration, server, app, browser, desktop, writer, projector,
+repair, export, transfer, cleanup, benchmark, EXPLAIN/profile or physical
+collector ran. Proposed SQL and schemas below are design text only and were
+not executed.
+
+### US-093 Evidence Ledger
+
+| Evidence ID | Class | Exact locator | Finding | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-1097` | `control` | User US-093 PRD and codebase patterns; `tasks/prd.json#US-092/#US-093/#US-094`; `.ralph-tui/progress.md` US-077/US-084/US-086/US-092; US-001 state model; reporting, DuckDB, API-server and frontend skills; HEAD/worktree/ID/count inspection | Fixes the completed prerequisite, seven-target audit-only scope, US-094 payload boundary, four-state separation and unrelated pre-existing `tasks/prd.json` timestamp change. | `CMD-0714` |
+| `EVD-1098` | `production/historical-migration` | Source baseline `31b1c024` through HEAD `bdc249d3`; `src/db/migrateDuckdb.ts#getDuckdbMigrationFiles`; migrations `0097_reviewServingV4Foundation.sql`, `0098_reviewServingPayloadOrderColumns.sql`, both lexical `0104` files, `0105_reviewServingArticleMetadataStatus.sql`, `0106_reviewServingRemoveHotSourceMetadata.sql` and `0108_reviewSelectedImportPatchDisplayFields.sql` | Current source defines the 44-column, five-part-PK candidate row, four patch tables, 16-column selected base, snapshot/component JSON and current indexes. No scoped product/schema source changed; checked-in declarations remain non-deployed evidence. | `CMD-0715` |
+| `EVD-1099` | `production/read` | `reviewServingReadContracts.ts#rowContract/#rowByArticleSetContract/#reviewServingReadContractList`; `reviewServingSql.ts#reviewServingArticleSelectColumns/#getReviewServingRowsSqlSelect/#buildReviewServingRowsSql`; `reviewServingReader.ts#getCursorPredicate/#createCursorForRow/#readReviewServingRows`; `reviewServingCursor.ts#ReviewServingCursorPayload/#decodeAndValidateReviewServingCursor` | Generic list SQL selects all 44 candidate fields and joins payload `source_metadata` before `ORDER BY ... LIMIT`. Reviewed order/cursor is `sort_key DESC, article_id ASC`; Unassessed is `activity_sort_at DESC, article_id DESC`. Tokens bind contract, filter signature, config, snapshot and all component generation/watermark/identity copies. | `CMD-0716` |
+| `EVD-1100` | `production/route` | `reviewServingLlmReviewRouteService.ts#getRouteFilters/#getLlmReviewArticlesFromServing/#getFilteredCountValue/#readJudgments`; `reviewServingHumanBothUnassessedRouteService.ts#getRouteFilters/#readRowsPage/#getHumanReviewArticlesFromServing/#getBothReviewArticlesFromServing/#getUnassessedReviewArticlesFromServing/#getFilteredCountValue`; project export/bulk serving repositories cited by US-086 | List routes request `limit + 1`, return at most 500, then hydrate judgments in bounded article-ID chunks and obtain counts separately. Dynamic counts still scan the snapshot candidate set; a target may not replace that with a wider foreground component/source join or claim it is bounded. | `CMD-0716` |
+| `EVD-1101` | `production/projector` | `reviewServingDisplayPayloadProjector.ts#getDisplayBaseRowsSql/#getInsertDisplayBaseRowsStatement/#getApplyDisplayPatchServingStatement`; `reviewServingSelectedImportProjector.ts#getReviewServingSelectedImportSnapshotId/#getInsertSelectedImportArticleRangeRowsStatement/#getRefreshSelectedImportServingArticleRangeStatements`; `reviewServingSelectedImportDirtyProjector.ts#getDirtyArticleCte/#getSelectedImportServingTemplates/#getApplySelectedImportServingStatements`; LLM/Human status projector direct update statements | Display base fans each scoped article across four list modes and every serving snapshot; selected-import and status paths later rewrite or directly update candidate/active wide rows. Status writes return zero patch rows, and dirty selected-import can mutate rows under a completed selected snapshot. | `CMD-0717` |
+| `EVD-1102` | `production/publication` | `reviewProjectionIdentity.ts#buildReviewProjectionIdentity/#getReviewProjectionIdentityValue/#getComposedRouteIdentityValue`; `reviewServingManifestRepository.ts#upsertReviewServingProjectionIdentityManifest/#isProjectionIdentityManifestUnchanged`; `reviewServingSnapshotPromotionService.ts#getComponentStateConsistencyError/#getCandidateValidationError/#composeReviewServingCandidateSnapshot`; snapshot pin repository | Projection identity excludes base generation and patch watermark, while the row keyed by that identity is updated in place and snapshots copy a generation/watermark/identity tuple. Projection identity alone is therefore not an immutable reusable rowset; reuse requires a sealed revision and reference receipt. | `CMD-0717` |
+| `EVD-1103` | `production/lifecycle` | `reviewServingRetentionService.ts#cleanupTableSpecs/#getProtectedSnapshotIds/#getProtectedSelectedImportSnapshotIds`; snapshot pin repository; `duckdbService.ts` startup mutation probes; US-084/US-086 recovery and retention evidence | Current cleanup protects active/LKG/pinned snapshot IDs and selected-import IDs but has no ordinary-reader component lease. Startup mutation restoration, a protected ID and a backup file do not prove immutable component reuse, crash recovery, safe cleanup or restored route parity. | `CMD-0717` |
+| `EVD-1104` | `production/client/desktop` | Four `projectsArticles*Query.ts` query-option builders; four `reviewsArticles*TableContainer.tsx` page-cursor/loaded-page stores; `reviewsArticlesTable.tsx`, `reviewsArticlesHumanTable.tsx`, `reviewsArticlesPdfCell.tsx`; `src/app/router.tsx`, `getRouterHistoryMode.ts`, `getDesktopApiOrigin.ts` | Browser and desktop share Eden/TanStack queries but keep cursor tokens and accumulated pages in client state. Tables consume display, status, selected-source metadata and judgments; every title links to the LLM detail path. Browser history, packaged hash history, loopback API origin, PDF links, cache and back/forward behavior require separate captures. | `CMD-0718` |
+| `EVD-1105` | `production/fixture` | `reviewServingBenchmark.ts#reviewServingSynthetic10m7PromptOverlapFixture/#reviewServingBenchmarkOverlapWorkloadDefinition`; US-070 `FAN-0048`-`FAN-0050`, `FAN-0053`-`FAN-0059`; US-086 `PRF-0383`-`PRF-0454` | Source-declared route, row and byte caps exist, but deployed widths, fan-out, plans, scanned rows, write amplification, reuse rate, latency/RSS/spill and parity values remain unavailable. No physical saving or foreground bound is inferred. | `CMD-0719` |
+| `EVD-1106` | `control` | `TGT-0018`-`TGT-0024` exact key/field/SQL/write/lifecycle matrices; current-to-target field and fan-out comparison; foreground-scan, mutable-reuse, pre-limit-display, runtime-overlay and broad-dual-write rejection review; `PRF-0929`-`PRF-0935` | Seven concrete layered targets preserve component ownership and exact cursor order while keeping every later validation blocked and every disposition state unchanged. | `CMD-0719`, `CMD-0720` |
+| `EVD-1107` | `control` | Prohibited-command/artifact/process audit and final sequential-ID/reference/target/SQL/order/cursor/lifecycle/state/actionability/count/source/worktree/tracker/whitespace validators | Confirms exact target/proof accounting, no prohibited runtime evidence and audit/tracker-only isolation. | `CMD-0721`, `CMD-0722` |
+
+### Current Wide Row Versus Component Alternative
+
+| Grain | Current checked-in shape and work | Proposed bounded alternative | Unresolved proof |
+| --- | --- | --- | --- |
+| Snapshot composition | Every `mart.review_article_serving_v4` row repeats snapshot, config, generation, watermark and eight component identities; component manifest rows remain mutable under one projection identity. | One relational snapshot binding references sealed component revisions. A revision is reusable by many snapshots only when definition, projection identity, generation, watermark, exact row count and rowset checksum are immutable. | Deployed identity reuse, freeze, reference and restored-history receipts are absent. |
+| Candidate | 44 columns under `(project_id,review_config_hash,snapshot_id,list_mode_key,article_id)`; display base writes four list-mode copies per article per snapshot. | Six columns under one candidate revision: project, revision, article, created time and the two order timestamps. Mode/status/selected/display state is not copied into the candidate row. | Exact membership, equal-key order, selective plan and physical scanned-row bounds are unmeasured. |
+| Display | Thirteen scalar display fields are repeated in every list-mode/snapshot candidate row; payload metadata is joined before the list limit. | One scalar display row per article/display revision. Scalars and existing/future keyed metadata hydrate only selected page IDs after `LIMIT`; abstract/full-text/detail payload design remains US-094. | Encoded metadata cap, missing-row policy and browser/desktop/API/export parity are unvalidated. |
+| Selected import | Winner facts exist in `app.review_selected_article_import_v4`, are copied into every candidate row and may be rewritten under one completed selected snapshot. | One immutable selected revision keeps exact winner/source/rank/display/filter facts. Candidate selection uses indexed `EXISTS` only when a selected predicate applies; output hydration is page-sized. | Current-versus-dirty winner equality, immutable dirty publication, historical mapping and cleanup are unproved. |
+| LLM status | Direct writers mutate status and three count fields on every matching candidate/active snapshot/list-mode row; prompt detail remains separate. | One immutable LLM-status revision holds only list-mode/article aggregate state. Prompt answers remain in judgment detail; snapshots may reuse unchanged status revisions. | Natural/config identity, reset/delete semantics, cross-component summary/detail equality and failure recovery remain blocked. |
+| Human status | Direct writers mutate candidate rows from prompt plus synthetic-summary input; the dormant patch lacks review-config identity. | One immutable Human-status revision holds only list-mode/article aggregate state with explicit review-config/mode applicability. Prompt/summary answers remain in detail/summary storage. | Blank/null/Covidence/mode semantics, missing legacy identity and replay/restore remain blocked. |
+| Foreground read | One SQL statement joins payload before the limit; route code later issues bounded judgment hydration and a separate exact count. Dynamic counts can scan the candidate snapshot. | One SQL statement materializes the ordered candidate prefix, then joins display/selected/status/payload by only those IDs and restores candidate ordinal. Counts remain a separate validated background summary/filter-result obligation. | Applied plans, statement/row/byte caps, count behavior and actual request traces are unavailable. |
+
+### Rejected US-093 Shapes
+
+| Rejected alternative | Reason |
+| --- | --- |
+| Treat `projection_identity` alone as a reusable component key | Current identity construction omits generation/watermark and its manifest row is mutable. A reused mutable rowset can change an older snapshot after cursor issuance. |
+| Resolve base plus an unbounded delta chain in a route | Moves compaction/replay into foreground work, makes page membership depend on cleanup timing and cannot bound equal-key cursor scans. A full immutable component revision must be published in bounded background chunks before admission. |
+| Join display, payload, current article/source or raw JSON before candidate `LIMIT` | Repeats the current pre-limit width/parse problem and permits project-scale source work. Only candidate predicates and indexed eligibility `EXISTS` checks may run before the limit. |
+| Recompute selected winner, LLM status, Human status, prompt aggregates or project scope in foreground SQL | Moves project-scale derivation out of projectors, weakens failure/replay receipts and can mix current state with a frozen snapshot. |
+| Replace dynamic exact counts with a foreground join across all component rows | Adds join amplification to an already separate count contract. Exact background result/summary publication or explicit unavailable/async behavior must be validated first; otherwise the target is rejected. |
+| Merge LLM and Human status or infer Human mode from whichever page row is present | Conflates model/content identity with prompt/summary/blank semantics and preserves the current empty-page ambiguity rather than proving it. |
+| Broadly dual-write wide and component rows | Creates two mutable authorities and an unbounded reconciliation tail. The accepted cutover uses bounded backfill, shadow reads, a writer version fence, one writer switch, a reader switch and read-only rollback. |
+| Fall back from a missing target component to current source, another snapshot or resolver defaults | Violates snapshot consistency and benchmark settings. Missing/mismatched required revisions fail visibly; the prior active/LKG snapshot remains the only explicit fallback selected before the request. |
+
+### Layered Target-Shape Register
+
+| rowId | Boundary / linked dispositions | Exact proposed key and field set | Read, write, identity and failure boundary | Evidence / linked proof |
+| --- | --- | --- | --- | --- |
+| `TGT-0018` | Immutable component revision, snapshot binding and reader lease; publication rows listed in the scope table | `app.review_serving_component_revision_v5`: PK `component_revision_id`; fields `project_id`, `component_kind`, `projection_identity`, `base_generation`, `patch_watermark`, `definition_version`, nullable `project_scope_identity`/`review_config_hash`/`prompt_config_hash`/`human_review_mode`/`selected_import_snapshot_id`, `source_watermarks_json`, `input_receipt_hash`, `row_count`, `rowset_checksum`, `status`, `created_at`, `sealed_at`, `last_error`; unique `(project_id,component_kind,input_receipt_hash)`. The versioned watermark serializer has only named keys: candidate `scope/article`, display `article/selectedImport/fullText`, selected `import/scope`, LLM `judgment/prompt/reviewConfig` and Human `humanPrompt/humanSummary/prompt/reviewConfig`; missing/unknown keys fail. `input_receipt_hash` covers every preceding identity/config/watermark scalar in canonical order. `app.review_serving_snapshot_component_v5`: PK `(project_id,snapshot_id,component_kind)`; `component_revision_id`, `requirement`, `created_at`. `app.review_serving_component_lease_v5`: PK `(lease_id,component_revision_id)`; `project_id`, `snapshot_id`, `owner_kind`, `expires_at`, `released_at`, `created_at`. | Snapshot admission reads one binding set and acquires a short request lease before any component query. Writers may insert candidate rows while revision status is `candidate`; after row count/checksum validation they seal once as `ready`. Any changed field, identity, config, definition, named watermark or checksum creates a new revision. Missing/mutable/mismatched revision rejects promotion/read; it never falls back within the request. | `EVD-1098`, `EVD-1102`-`EVD-1103`, `EVD-1106`; `PRF-0929` |
+| `TGT-0019` | Narrow candidate core; `DSP-0148`, `DSP-0155`, `DSP-0157` | `mart.review_candidate_component_v5`: PK `(project_id,component_revision_id,article_id)`; exact fields `project_id`, `component_revision_id`, `article_id`, nullable `article_created_at`, non-null `sort_key`, non-null `activity_sort_at`. Required order paths are `(project_id,component_revision_id,sort_key,article_id)` and `(project_id,component_revision_id,activity_sort_at,article_id)`; applied operator use remains later proof. | Project-scope membership plus article created/updated time is materialized in bounded article-ID chunks. One article is written once per candidate revision, not four list-mode times or once per composed snapshot. Source membership/date changes create a new background revision; an active revision is never updated. Missing candidate rows fail validation before snapshot promotion. | `EVD-1098`-`EVD-1102`, `EVD-1105`-`EVD-1106`; `PRF-0930` |
+| `TGT-0020` | Page-hydrated scalar display; `DSP-0149`, `DSP-0158`, `DSP-0162` | `mart.review_display_component_v5`: PK `(project_id,component_revision_id,article_id)`; keys plus `article_updated_at`, non-null `article_title`, nullable `article_external_id`, `arxiv_id`, `biorxiv_id`, `medrxiv_id`, `doi`, `pmid`, `journal_title`, `url`, `full_text_pdf`, `full_text_fetched_at`, `full_text_conversion_status`. It does not own abstract/full-text/detail payloads. | Display base/dirty owners resolve canonical plus selected-source values in background and seal one row per article/display revision. List reads join only materialized page IDs; detail/export use their separately capped ID sets. Missing required display rows reject the component result after bounded hydration; no source-table fallback. | `EVD-1098`-`EVD-1101`, `EVD-1104`-`EVD-1106`; `PRF-0931` |
+| `TGT-0021` | Immutable selected-import winner; selected dispositions listed in the scope table | `app.review_selected_import_component_v5`: PK `(project_id,component_revision_id,article_id)`; keys plus nullable `import_route_id`, `source_record_key`, `selected_rank_key`, `selected_rank_numeric`, `publication_year`, `article_title`, `journal_title`, `external_id`, `duplicate_flag`, `conflict_flag`; non-null `tombstone`. Winner order remains numeric null-last surrogate, current-link-prefixed rank-key surrogate, import route, source record, title `NULLS LAST` and external ID `NULLS LAST` as traced in the current projector. | Full/dirty selected projectors own one immutable winner revision. Selected predicates use keyed/filtered `EXISTS` before the candidate limit; selected response fields hydrate only page IDs and never reorder them. A dirty high-water change creates another revision rather than mutating a completed one. Ambiguous/multiple/missing winners block sealing. | `EVD-1098`, `EVD-1100`-`EVD-1102`, `EVD-1106`; `PRF-0932` |
+| `TGT-0022` | LLM aggregate status; `DSP-0151`, `DSP-0164`, LLM fields in `DSP-0159` | `mart.review_llm_status_component_v5`: PK `(project_id,component_revision_id,list_mode_key,article_id)`; keys plus nullable `llm_status_key`, nonnegative `llm_judged_prompt_count`, nonnegative `enabled_prompt_count`. Prompt answers, arrays, model IDs and explanations stay in judgment-detail storage. | LLM judgment/prompt/config deltas build a new immutable status revision in bounded chunks. Eligibility is an indexed `EXISTS` before limit; counts/status hydrate only page IDs. Empty-prompt reset is an explicit new revision. Missing natural/config identity, tombstone mapping, detail/summary mismatch or failed chunk blocks sealing and preserves the prior active revision. | `EVD-1098`-`EVD-1102`, `EVD-1105`-`EVD-1106`; `PRF-0933` |
+| `TGT-0023` | Human aggregate status; `DSP-0152`, `DSP-0165`, Human fields in `DSP-0159` | `mart.review_human_status_component_v5`: PK `(project_id,component_revision_id,list_mode_key,article_id)`; keys plus nullable `human_status_key`, nonnegative `human_answered_prompt_count`, nonnegative `enabled_prompt_count`. The revision receipt must bind `review_config_hash`, Human mode and prompt/summary definition; prompt/summary answers/comments remain outside this row. | Human write/delete/prompt/mode/config deltas build a new immutable revision. Eligibility is an indexed `EXISTS`; aggregate fields hydrate only page IDs. Blank/null/Covidence summary semantics are versioned and validated before sealing. Missing review-config applicability or detail/summary equality blocks publication rather than defaulting. | `EVD-1098`-`EVD-1102`, `EVD-1105`-`EVD-1106`; `PRF-0934` |
+| `TGT-0024` | One-statement bounded candidate selection and page hydration; logical composition only | Inputs are one resolved snapshot, exact `TGT-0018` revision IDs, normalized filter signature, contract/list mode, reviewed or Unassessed cursor values and `limit + 1 <= 501`. Output is candidate order values plus display/selected/status and current-or-US-094 payload fields for only the materialized page IDs, including a generated `page_ordinal`. No new storage authority is claimed. | Candidate predicates and posting/search/queue `EXISTS` checks run before `LIMIT`; display/payload/output fields join after it. Outer order is only `page_ordinal`. The cursor binds the exact revision tuple and rejects mismatch. A missing required hydration row, over-budget estimate, stale revision or SQL-shape violation fails visibly. Dynamic counts remain separate and cannot become a foreground component/source scan. | `EVD-1099`-`EVD-1106`; `PRF-0935` |
+
+### Representative Bounded Selection And Hydration SQL
+
+This is design SQL, not executable migration text. Route construction must
+render only the applicable indexed `EXISTS` blocks, not boolean-guard every
+component. `MATERIALIZED` is a semantic cardinality barrier here; an applied
+DuckDB plan must still prove that no display, payload, source or JSON work
+moves below the at-most-501-row prefix.
+
+```sql
+WITH candidate_prefix AS MATERIALIZED (
+  SELECT
+    c.article_id,
+    c.article_created_at,
+    c.sort_key,
+    c.activity_sort_at
+  FROM mart.review_candidate_component_v5 AS c
+  WHERE c.project_id = $project_id
+    AND c.component_revision_id = $candidate_revision_id
+    AND ($from_date IS NULL OR c.article_created_at >= $from_date)
+    AND ($cursor_sort_key IS NULL OR (
+      c.sort_key < $cursor_sort_key
+      OR (
+        c.sort_key IS NOT DISTINCT FROM $cursor_sort_key
+        AND c.article_id > $cursor_article_id
+      )
+    ))
+    /* Optional selected filter:
+       AND EXISTS (
+         SELECT 1
+         FROM app.review_selected_import_component_v5 AS sf
+         WHERE sf.project_id = c.project_id
+           AND sf.component_revision_id = $selected_revision_id
+           AND sf.article_id = c.article_id
+           AND <exact selected predicate>
+       )
+    */
+    /* Optional LLM/Human/Both eligibility uses the same correlated-key form
+       against the exact status revision and list_mode_key. Search, prompt
+       posting and Unassessed queue membership use their existing exact
+       snapshot/component identity in separate EXISTS blocks. */
+  ORDER BY c.sort_key DESC, c.article_id ASC
+  LIMIT $limit_plus_one
+),
+candidate_page AS MATERIALIZED (
+  SELECT
+    prefix.*,
+    row_number() OVER (
+      ORDER BY prefix.sort_key DESC, prefix.article_id ASC
+    ) AS page_ordinal
+  FROM candidate_prefix AS prefix
+)
+SELECT
+  page.page_ordinal,
+  page.article_id,
+  page.article_created_at,
+  page.sort_key,
+  page.activity_sort_at,
+  display.article_id AS hydrated_display_article_id,
+  display.article_updated_at,
+  display.article_title,
+  display.article_external_id,
+  display.arxiv_id,
+  display.biorxiv_id,
+  display.medrxiv_id,
+  display.doi,
+  display.pmid,
+  display.journal_title,
+  display.url,
+  display.full_text_pdf,
+  display.full_text_fetched_at,
+  display.full_text_conversion_status,
+  selected.import_route_id,
+  selected.selected_rank_key,
+  selected.publication_year,
+  selected.duplicate_flag,
+  selected.conflict_flag,
+  llm.llm_status_key,
+  llm.llm_judged_prompt_count,
+  llm.enabled_prompt_count AS llm_enabled_prompt_count,
+  human.human_status_key,
+  human.human_answered_prompt_count,
+  human.enabled_prompt_count AS human_enabled_prompt_count,
+  payload.source_metadata
+FROM candidate_page AS page
+LEFT JOIN mart.review_display_component_v5 AS display
+  ON display.project_id = $project_id
+ AND display.component_revision_id = $display_revision_id
+ AND display.article_id = page.article_id
+LEFT JOIN app.review_selected_import_component_v5 AS selected
+  ON selected.project_id = $project_id
+ AND selected.component_revision_id = $selected_revision_id
+ AND selected.article_id = page.article_id
+LEFT JOIN mart.review_llm_status_component_v5 AS llm
+  ON llm.project_id = $project_id
+ AND llm.component_revision_id = $llm_status_revision_id
+ AND llm.list_mode_key = $list_mode_key
+ AND llm.article_id = page.article_id
+LEFT JOIN mart.review_human_status_component_v5 AS human
+  ON human.project_id = $project_id
+ AND human.component_revision_id = $human_status_revision_id
+ AND human.list_mode_key = $list_mode_key
+ AND human.article_id = page.article_id
+LEFT JOIN mart.review_article_serving_payload_v4 AS payload
+  ON payload.project_id = $project_id
+ AND payload.review_config_hash = $review_config_hash
+ AND payload.snapshot_id = $snapshot_id
+ AND payload.list_mode_key = $list_mode_key
+ AND payload.article_id = page.article_id
+ORDER BY page.page_ordinal ASC;
+```
+
+The target reader must validate every `hydrated_display_article_id` and every
+contract-required status/selected marker before returning data. A `LEFT JOIN`
+keeps a missing required row observable instead of silently shrinking the
+page. Existing payload is deliberately outside the prefix only as an
+US-093-compatible bridge; US-094 decides its final identity and field shape.
+Route-level judgment detail remains the separately capped article-ID
+hydration already traced; it is not silently folded into candidate selection.
+
+| Contract | Exact order | Next-page predicate | Page and cursor behavior |
+| --- | --- | --- | --- |
+| Reviewed LLM, Human and Both | `sort_key DESC, article_id ASC` | `sort_key < cursor.sortKey OR (sort_key IS NOT DISTINCT FROM cursor.sortKey AND article_id > cursor.articleId)` | Request `limit + 1`, hard maximum 501; return at most 500. Cursor signs contract, normalized filters, config, snapshot and every exact component revision ID. |
+| Unassessed | `activity_sort_at DESC, article_id DESC` | `activity_sort_at < cursor.activitySortAt OR (activity_sort_at IS NOT DISTINCT FROM cursor.activitySortAt AND article_id < cursor.articleId)` | Same 501/500 bound and revision binding. The SQL substitutes both order clauses in the two CTEs; it never reuses the reviewed tie direction. |
+| Bounded article set/detail | Caller order for at most 100 unique IDs; one exact article for detail | No page cursor | Hydration preserves caller order or exact singleton identity and uses the same resolved snapshot/revisions. It does not admit a project-wide source join. |
+
+Date predicates stay on the candidate core. Duplicate, conflict, selected
+route and publication-year predicates, if an approved route actually invokes
+them, use the exact selected revision. LLM, Human and Both eligibility use the
+corresponding exact status revisions. Prompt postings, title search and
+Unassessed queue membership keep their separate snapshot/component identities.
+No mapped registry field is treated as a mounted consumer without invocation
+evidence.
+
+Dynamic count is not part of the page-sized claim. During shadowing it remains
+the separately observed current contract and must not gain component joins.
+Final cutover is blocked until an exact background summary/filter-result
+component with matching snapshot/revision/filter identity is validated, or
+product/API owners explicitly approve unavailable/asynchronous count behavior.
+A foreground cross-component recomputation is not an accepted fallback.
+
+### Write, Invalidation, Publication And Failure Contract
+
+| Target | Authoritative inputs and owner | Bounded writes and invalidation | Publication, reuse and failure |
+| --- | --- | --- | --- |
+| `TGT-0018` revision/binding/lease | Component projector owns candidate revision; snapshot promoter owns bindings; reader/worker owns lease | Insert one candidate revision receipt, bounded component rows, seal receipt, then insert one snapshot binding. Lease insert/release is request/job scoped. Any definition, identity, generation, watermark, config or input-watermark change allocates a new revision. | A sealed rowset is immutable and reusable by any snapshot with the exact tuple. Count/checksum mismatch, missing required component, lease failure or mixed tuple rejects admission/read while prior active/LKG stays unchanged. |
+| `TGT-0019` candidate | Project-scope membership plus canonical article create/update time | Build by strict article-ID chunks with one row/article/revision. Membership, route/scope or article-time deltas dirty a new candidate revision; zero-current-membership intake must remain replayable when membership later appears. | Seal only after full key/count/order checksum. Chunk/finalization failure leaves a non-active candidate revision resumable or quarantined; no partial rowset is readable. |
+| `TGT-0020` display | Canonical article display plus selected-source display precedence | Build one row/article/display revision in bounded chunks. Article/import/full-text status changes invalidate only affected display input, then publish a complete new revision. | New snapshots reuse the old revision only when its complete input tuple is unchanged. Missing/ambiguous display precedence, conversion/file-reference error or checksum mismatch blocks sealing; no foreground source repair. |
+| `TGT-0021` selected import | Import-route hot facts, project scope, deterministic winner rule and import delta high-water | Full or dirty work creates one complete immutable winner revision. Import add/update/remap/delete/tombstone, route definition or membership change invalidates it; a dirty pass never mutates a completed revision. | Winner uniqueness, rank and tombstone checks gate seal. Failure retains dirty work and prior revision. Late membership must replay source evidence rather than accept a reconciled zero-row delta as current. |
+| `TGT-0022` LLM status | Canonical active LLM judgment identity, prompt/config applicability and delete generation | Judgment insert/update/delete, prompt link/content, model/content settings or review-config change creates bounded status-revision work; one aggregate row/article/applicable list mode. | Seal requires status counts equal detail for the exact config/natural identity. Missing model/content/delete mapping, failed chunk or summary mismatch blocks the new revision and never downgrades/defaults settings. |
+| `TGT-0023` Human status | Prompt and summary Human answers selected by persisted mode plus review/prompt config | Human answer/comment/delete, blank/null transition, prompt applicability, mode or config change creates bounded status-revision work. | Seal requires mode-specific aggregate/detail equality, including optional blank and Covidence semantics. Missing mode/config/history mapping or failed chunk preserves prior revision and surfaces failure. |
+| `TGT-0024` page composition | Snapshot resolver and route contract; no independent storage owner | No write. One resolved binding and lease precede one bounded selection/hydration statement; count and judgment detail remain separate named contracts. | Stale cursor, revision mismatch, missing required page component, over-cap estimate or unsupported filter fails. The request never retries against current source, another snapshot or resolver defaults. |
+
+Current source writes the display base across four list modes for every
+snapshot and then directly rewrites selected/status fields on wide candidate
+rows. The target's source-defined write grain is one candidate, display or
+selected row per article/revision and at most one LLM/Human aggregate per
+applicable article/list-mode/revision; composing a snapshot writes bindings
+only when a component revision is reused. Those are structural fan-out
+differences, not measured byte, latency or amplification savings. Deployed row
+counts, dirty rates, unchanged-component reuse, WAL/temp bytes, RSS, spill and
+write plans remain unavailable and block recommendation.
+
+### Snapshot Consistency, Retention, Recovery And Cleanup
+
+| Contract | Required target behavior | What remains unproved |
+| --- | --- | --- |
+| Snapshot resolve | Resolve active or explicitly selected LKG once, read all required relational bindings in one consistent transaction and reject any non-ready/missing/mixed revision. Cursor encodes those exact revisions. | Transaction/isolation behavior, concurrent promotion race and historical cursor receipts need a deployed fixture. |
+| Reader protection | Acquire short leases for every referenced revision before querying; release in `finally`, but expiry plus a durable lease row—not `finally` alone—is cleanup authority. Jobs, exports and transfers use durable pins, not request leases. | Lease duration, renewal, crash expiry, concurrent cleanup and desktop sleep/restart behavior are owner decisions. |
+| Retention/reference scan | Protect every revision referenced by active, LKG, candidate, pinned, export, transfer, bulk/search job, retained cursor policy or unexpired reader lease. Keep failed/quarantined candidates for a bounded diagnostic horizon. | Complete deployed references, horizon, schedule, budget and legal/audit requirements are unknown. |
+| Cleanup | Mark a zero-reference revision retired, re-scan references, delete component rows in bounded article-ID chunks, validate zero rows, delete bindings/receipt last and write a durable cleanup receipt. Each component and orphan class has its own cursor. | No scheduler, concurrent-reader proof, receipt schema, interruption matrix or physical deletion receipt exists. |
+| Recovery/restore | Restore source authorities, revision receipts, component rows, row-count/checksum receipts, bindings and pins; validate every referenced revision before reopening routes. Rebuild derived revisions in background when their retained source is authoritative. | Startup mutation restoration, file existence and current protected IDs do not prove crash-safe or executable route restoration. |
+| Failure/replay | Candidate work is resumable by immutable revision/chunk identity; promotion is all-or-nothing at binding/active-pointer grain. Completed-chunk finalization failure remains terminal work with an explicit retry/repair state. | Current readmission/finalization gaps, watermark fencing and operator repair/runbook are unresolved. |
+
+### Migration, Cutover And Rollback Sequence
+
+1. **Freeze contract.** Owners approve exact keys, fields, component kinds,
+   identity dimensions, checksums, indexes, caps, invalidation and response
+   mapping. Inventory the complete lexical migration result plus approved
+   deployed snapshot; the checked-in `0097` bootstrap is not sufficient.
+2. **Bounded backfill.** Build candidate component revisions for every
+   retained active/LKG/pinned snapshot obligation by strict article-ID chunks,
+   then display, selected and status revisions from their own authorities.
+   Never backfill or parse a full project inside a route.
+3. **Validate before reuse.** Compare exact article keys, field values, status
+   and selected facts, row counts/checksums, equal-key order, first/middle/last
+   pages, forward cursors, counts, payload/detail hydration and missing-row
+   failure against the frozen current fixture. Reuse only byte-identical sealed
+   component revisions.
+4. **Shadow read.** Execute the target statement outside the user-visible
+   response under fixed benchmark configuration. Capture DuckDB plans,
+   scanned/returned rows, logical/physical bytes, RSS/spill/temp, statement
+   count, p50/p95/p99 and browser/desktop request/render parity. No mismatch is
+   defaulted or retried.
+5. **Single-writer switch.** Quiesce or version-fence dirty work, publish the
+   last current wide revision, drain/record its high-waters, then switch each
+   projector once to immutable component candidates. Do not broadly dual-write
+   both authorities.
+6. **Reader cutover.** Promote only snapshots with complete target bindings,
+   issue revision-bound cursors and switch list/article-set/detail/export/bulk
+   consumers under one version gate. Keep old wide rows read-only for bounded
+   rollback; a target read failure returns an error or explicitly selects the
+   prior LKG before request admission.
+7. **Rollback and cleanup.** Roll back the version gate without reverse-writing
+   component data. Retire wide rows, patch tables and indexes only after
+   parity, retention, recovery and negative deployed-reference proof pass and
+   every linked non-keep target proof advances. Cleanup follows the bounded
+   reference-scan/receipt protocol above.
+
+No phase is executed by US-093. Until migration/cutover and rollback are
+approved and physically validated, all seven targets remain design-only and
+the current wide row remains the checked-in authority.
+
+### Browser, Desktop, API, Export And Transfer Consequences
+
+| Consumer | Required parity | Required capture before cutover |
+| --- | --- | --- |
+| Eden/RPC list routes | Preserve envelopes, nullable fields, normalized filters, 500-row maximum, `limit + 1` next-page behavior, separate judgment/count contracts and visible stale/missing failures. | Exact request/response and query-count traces for LLM, Human, Both and Unassessed, including empty, equal-key, status/filter/search and stale-cursor cases. |
+| TanStack Query/table state | Existing query keys continue to include page, cursor and filters; filter change resets page cursors/loaded pages; appended pages retain server ordinal with no duplicate/skip. | Browser plus packaged desktop captures for cache reuse, refetch, filter reset, first/middle/last page, back/forward and concurrent promotion. |
+| Browser navigation | Preserve path/query history, title link, detail fetch and PDF/download behavior. Current shared title link still routes every table to the LLM detail path and is not reinterpreted as mode parity. | Actual browser request order, URL, rendered scalar/status/source labels, PDF link and detail hydration captures against immutable fixture. |
+| Packaged desktop | Preserve hash history, outer window URL/hash, loopback API origin, local-file/PDF reachability and restart behavior; no `location.search` or pathname-only inference certifies parity. | Packaged desktop request/order/cache/back-forward/restart captures with exact route/hook state and the same immutable snapshot fixture. |
+| Bulk/export/transfer | Pin exact snapshot and component revisions; hydrate only bounded selected IDs or background chunks; package identity must include the frozen component tuple where historical parity requires it. | Selection/result manifest, hydration time, generated artifact, downloaded bytes, transfer round trip, concurrent cleanup lease and restored-copy validation. |
+
+### US-093 Target-Specific Proof Rows
+
+These proofs are intentionally separate from family preservation and prior
+non-keep replacement rows. Each is `blocked` until its complete finite
+predicate passes; a successful target does not change any disposition
+actionability without a separate later decision.
+
+| rowId | Target-specific finite pass predicate | proofCheckState | Exact evidence | Missing evidence / blockers | Owner question IDs |
+| --- | --- | --- | --- | --- | --- |
+| `PRF-0929` | `TGT-0018` passes only when serving/reliability owners approve immutable revision, relational binding and lease schemas; every component identity dimension is frozen; concurrent build/promotion/read/cleanup, pin/job/export/transfer references, crash expiry, bounded cleanup and executable restore preserve historical cursor results. | `blocked` | `EVD-1098`, `EVD-1102`-`EVD-1103`, `EVD-1106`-`EVD-1107` | Owner/schema authority, deployed identities/references, isolation, lease/schedule/receipt, recovery and physical fixture are unavailable; `BLK-0572`-`BLK-0580`. | `OQ-0576`-`OQ-0584` |
+| `PRF-0930` | `TGT-0019` passes only when scope/read owners approve the six-field candidate key and orders; deployed membership/date parity, equal-key cursor traversal, selective filters, chunk/checksum publication, zero-dirty/late-membership replay, retention/restore and fixed-config plan/RSS/spill benchmark pass without a foreground project scan. | `blocked` | `EVD-1098`-`EVD-1103`, `EVD-1105`-`EVD-1107` | Deployed shape/values/plans, membership replay, order/cursor, physical bounds, lifecycle and restore are unavailable; `BLK-0572`-`BLK-0580`. | `OQ-0576`-`OQ-0584` |
+| `PRF-0931` | `TGT-0020` passes only when article/import/display owners approve all 13 scalar fields and precedence; bounded build and page/article/detail hydration preserve every API/browser/desktop/export/transfer field and file/reference behavior; missing rows fail, reuse is immutable, recovery passes and physical bytes/read/write cost improve. | `blocked` | `EVD-1098`-`EVD-1101`, `EVD-1103`-`EVD-1107` | Field/precedence authority, deployed widths/values, full consumer captures, file lifecycle, migration, restore and physical benefit are unavailable; `BLK-0572`-`BLK-0580`. | `OQ-0576`-`OQ-0584` |
+| `PRF-0932` | `TGT-0021` passes only when import/scope owners approve exact winner/source/rank/filter fields; full and dirty revisions reproduce deployed winners/tombstones and late membership; selected predicates remain indexed before limit; bounded migration/cutover, retention, cleanup, recovery and export/transfer parity pass without mutating sealed history. | `blocked` | `EVD-1098`, `EVD-1100`-`EVD-1103`, `EVD-1105`-`EVD-1107` | Winner/rank/filter authority, deployed dirty equality, historical mapping, plans, lifecycle, restore and fixture are unavailable; `BLK-0572`-`BLK-0580`. | `OQ-0576`-`OQ-0584` |
+| `PRF-0933` | `TGT-0022` passes only when judgment/reliability owners approve LLM natural/config/delete identity and aggregate semantics; every direct/batch/import/repair delta produces exact detail/status/summary equality; foreground eligibility is bounded; migration, rollback, retention, recovery and fixed model/content benchmark pass without fallback. | `blocked` | `EVD-1098`-`EVD-1103`, `EVD-1105`-`EVD-1107` | Model/content/config/delete mapping, deployed status/detail values, full writer/invalidation receipts, plans, restore and benchmark are unavailable; `BLK-0572`-`BLK-0580`. | `OQ-0576`-`OQ-0584` |
+| `PRF-0934` | `TGT-0023` passes only when Human/product owners approve prompt/summary mode, blank/null/Covidence and config applicability; every write/delete/mode transition produces exact detail/status equality; empty-page mode, browser/desktop/detail/export/transfer behavior, migration, retention and restore pass without inferred defaults. | `blocked` | `EVD-1098`-`EVD-1105`, `EVD-1107` | Mode/blank/config/history authority, deployed values, complete invalidation, empty-page/client parity, restore and fixture are unavailable; `BLK-0572`-`BLK-0580`. | `OQ-0576`-`OQ-0584` |
+| `PRF-0935` | `TGT-0024` passes only when read/API/client owners approve the exact two-stage SQL and count behavior; applied plans prove all display/payload/source/JSON work stays above the 501-row barrier; every filter/order/cursor/page/detail/count route matches; browser/desktop/export/bulk captures and fixed benchmark pass with no project-scale foreground work. | `blocked` | `EVD-1099`-`EVD-1107` | Applied plans, statement/row/byte budgets, mounted filter inventory, count target, request traces, UI parity and immutable fixture are unavailable; `BLK-0572`-`BLK-0580`. | `OQ-0576`-`OQ-0584` |
+
+### US-093 Target, Proof And Actionability Accounting
+
+| Register slice | New rows | `satisfied` | `pending` | `blocked` | `not-applicable` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Revision/candidate/display validation | 3 | 0 | 0 | 3 | 0 |
+| Selected/LLM/Human/composition validation | 4 | 0 | 0 | 4 | 0 |
+| **US-093 new** | **7** | **0** | **0** | **7** | **0** |
+| Prior `PRF-0001`-`PRF-0928` | 928 | 8 | 478 | 442 | 0 |
+| **Cumulative proof register** | **935** | **8** | **478** | **449** | **0** |
+
+| Target/disposition slice | Target rows | Disposition rows | `recommendationActionability: unresolved` | `recommendationActionability: blocked` | Actionable |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| US-093 linked keep grains | 7 designs | 19 | 19 | 0 | 0 |
+| US-093 linked non-keep grains | 5 designs | 11 | 0 | 11 | 0 |
+| Other disposition rows | — | 411 | 307 | 104 | 0 |
+| **Cumulative disposition register** | **24 target designs** | **441** | **326** | **115** | **0** |
+
+Target rows intentionally overlap existing dispositions because they are
+layered designs, not a second disposition assignment. The 441-row disposition
+register remains singly accounted and unchanged. `auditStatus`,
+`proofCheckState`, `recommendationActionability` and `overallCertification`
+remain independent: all seven new target proofs are blocked, 19 linked keeps
+remain unresolved, 11 linked non-keeps retain blocked actionability, DBO
+remains 322/322 blocked, CMF remains 1,985/1,985 blocked, FAN remains 91
+blocked plus one not-applicable, and overall certification remains
+`INCOMPLETE`.
+
 ## Recommendation Proof Gate
 
 Create separate `PRF-####` rows for positive and negative proof. For a move,
@@ -16350,6 +16707,13 @@ judgment/reusable-fact shapes. They do not replace the earlier family-domain
 or non-keep target proofs. The cumulative 928-row register is eight satisfied,
 478 pending, 442 blocked and zero not-applicable.
 
+US-093 adds `PRF-0929`-`PRF-0935`: seven separately blocked validation
+rows for immutable component revision/binding/lease, candidate, display,
+selected-import, LLM status, Human status and page composition targets. They
+remain separate from family proof and the 11 linked non-keep replacement
+proofs. The cumulative 935-row register is eight satisfied, 478 pending, 449
+blocked and zero not-applicable.
+
 ### Output 09 - Candidate Target Shapes
 
 Authoritative row family: `TGT-####`. Record ownership and identity, exact
@@ -16359,15 +16723,17 @@ and linked parity/benchmark proof.
 
 Current state: `TGT-0001`-`TGT-0017` map all 65 US-073/US-074 disposition
 rows exactly once into 17 ownership- and invalidation-aligned source,
-configuration, judgment and reusable-fact designs. Each row links exact
-current or proposed keys/fields, representative bounded read/write SQL,
-identity/authority, read and write fan-out, failure, invalidation, retention,
-replay/recovery, export, transfer, benchmark, migration or rebuild, cutover
-and cleanup. The three proposed-only receipt/cold schemas enumerate exact
-columns and JSON keys. Broad dual-write, universal-hash, merged-Human,
-foreground-union/raw-parse and unbounded-rebuild alternatives are explicitly
-rejected. All target validation remains blocked; no target is implementation-
-ready or actionable.
+configuration, judgment and reusable-fact designs. `TGT-0018`-`TGT-0024`
+add seven layered list-serving designs: immutable component revision/binding/
+lease, narrow candidate, page-hydrated display, selected-import winner,
+separate LLM/Human status and one bounded composition contract. Exact proposed
+keys/fields, representative two-stage SQL, both cursor directions, read/write
+fan-out, invalidation, snapshot reuse, failure, retention, recovery,
+browser/desktop/export/transfer consequences, migration, cutover, rollback and
+cleanup are explicit. Mutable identity reuse, pre-limit payload/source work,
+foreground derivation/count scans, broad dual writes and silent fallback are
+rejected. All 24 target validations remain blocked; no target is
+implementation-ready or actionable.
 
 ### Output 10 - Prioritized Implementation Slices With Benchmark Gates
 
@@ -19027,7 +19393,7 @@ The disposition register is also an output family, not a manifest status.
 US-073 through US-080 contribute 441 `DSP-####` rows: 195 object/logical/file,
 202 disjoint column/material and 44 associated-index decisions, comprising 326
 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081
-through US-092 change no disposition: all 326 keep rows retain
+through US-093 change no disposition: all 326 keep rows retain
 `recommendationActionability: unresolved`, while the eight exact US-073
 derive/delete, six exact US-074 archive, two exact US-075 project-cursor
 delete, two exact US-075 search-job delete, 11 exact US-077
@@ -19045,7 +19411,12 @@ source, configuration, judgment and reusable-fact dispositions. Those target
 designs are neither dispositions nor manifest rows and do not change the
 actionability totals.
 
-The proof register is independently 928 `PRF-####` rows. The 16 pre-US-081
+US-093 separately adds seven layered `TGT-####` rows that cross-reference 19
+keep and 11 non-keep list-serving dispositions without assigning any row a
+second disposition. Those designs bring the target register to 24 and leave
+all 326 unresolved/115 blocked/zero actionable disposition states unchanged.
+
+The proof register is independently 935 `PRF-####` rows. The 16 pre-US-081
 rows retain eight `satisfied`, three `pending` and five `blocked` states.
 US-081 adds 60 source/configuration family/domain rows plus seven target
 contracts: 30 pending and 37 blocked. US-082 adds 70 judgment/hot-fact
@@ -19073,8 +19444,10 @@ archive/delete target contracts: 54 pending and 51 blocked. Cumulative state
 before US-092 is eight satisfied, 478 pending, 425 blocked and zero
 not-applicable. US-092 adds 17 blocked target-specific validation rows for
 `TGT-0001`-`TGT-0017`, producing a cumulative eight satisfied, 478 pending,
-442 blocked and zero not-applicable. No
-manifest, measurement,
+442 blocked and zero not-applicable. US-093 adds seven blocked target-specific
+validation rows for `TGT-0018`-`TGT-0024`, producing a cumulative eight
+satisfied, 478 pending, 449 blocked and zero not-applicable. No manifest,
+measurement,
 disposition value or certification state is inferred from those proof states,
 and no planned parity, benchmark or lifecycle work is recorded as passed.
 
@@ -19834,6 +20207,16 @@ commands. A command proves only the claim linked through its evidence record.
 
 | `CMD-0713` | 2026-07-22 / US-092 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check` and strict source-only sequential-ID/reference/table-width/65-row scope/target-key/proof-link/SQL-read-write/fan-out/lifecycle/state/actionability/count/source/worktree/tracker/whitespace validators. Preliminary read-only validator drafts counted first-column BLK/TGT cross-references as duplicate definitions, required uppercase `Reject`, or treated a combined read/write comment as one missing operation; corrected registry-scoped, case-insensitive and statement-aware validators are authoritative and changed no state. Skipped build, tests, browser/desktop, database and runtime gates because this story changes audit Markdown/tracker metadata only and those executions would manufacture prohibited runtime/lifecycle evidence. | Verify concrete target completeness, exact coverage, independent blocked validation, unchanged actionability, audit/tracker-only isolation and relevant repo-native formatting without converting lint debt or planned SQL into product evidence. | Produced `EVD-1096`. Lint preserves the same six unrelated source errors; no typecheck script exists. Corrected validators pass: 322 DBO, 1,985 CMF, 1,096 EVD, 713 CMD, 571 BLK, 575 OQ, 928 PRF, 441 DSP and 17 TGT canonical IDs; 65 target dispositions occur exactly once, all 17 SQL/lifecycle/proof contracts pass static checks, proof reconciles to 8/478/442/0, actionability stays 326 unresolved/115 blocked/zero actionable and no product/runtime source changed. |
 
+| `CMD-0714` | 2026-07-22 / US-093 | Read all reporting, DuckDB, API-server and frontend project skills; the US-093 PRD/patterns; `tasks/prd.json#US-092/#US-093/#US-094`; `.ralph-tui/progress.md`; US-001 state rules; US-076/US-077 dispositions; US-084/US-086/US-092 proof/targets; current IDs/counts; HEAD/worktree and the targeted memory registry. | Establish prerequisite, payload boundary, exact state model, source baseline, next IDs, audit-only/no-live boundary and unrelated worktree state. | Produced `EVD-1097`. US-092 is complete; US-093 was absent, the targeted memory registry had no applicable result, and the engine-owned `tasks/prd.json` timestamp change was preserved. |
+| `CMD-0715` | 2026-07-22 / US-093 | Compared `31b1c024` through `bdc249d3` for `src`, `scripts` and `package.json`; read lexical migration loading and exact migrations `0097`, `0098`, both `0104` files, `0105`, `0106` and `0108` plus candidate/selected/payload/patch indexes. No database was opened. | Freeze the effective checked-in 44-column wide candidate, selected base, payload, patch and index shapes without treating migration source as applied/deployed evidence. | Produced `EVD-1098`. Scoped product/schema source is unchanged from the US-086 baseline and all physical values/plans remain unavailable. |
+| `CMD-0716` | 2026-07-22 / US-093 | Read `reviewServingReadContracts.ts`, `reviewServingSql.ts`, `reviewServingReader.ts`, `reviewServingCursor.ts` and LLM/Human/Both/Unassessed route services, including list, article-set, detail, judgment-hydration and count paths. | Trace selected columns, pre-limit joins, caps, exact reviewed/Unassessed order and cursor predicates, filter inputs, route statement fan-out and count separation. | Produced `EVD-1099`-`EVD-1100`. Current list SQL is wide and joins payload before limit; route pages are 501/500 bounded but dynamic counts remain a separate project-scale contract. |
+| `CMD-0717` | 2026-07-22 / US-093 | Read display, selected-import full/dirty and LLM/Human status projector SQL; projection-identity construction and manifest upsert; snapshot composition/promotion/pins; retention; startup mutation-probe/backup paths and prior lifecycle evidence. | Separate writer fan-out from result counters, mutable projection identity from immutable revision, snapshot binding from cleanup protection, and backup/probe existence from recovery. | Produced `EVD-1101`-`EVD-1103`. Current writers fan out/mutate wide rows, identity alone is not reusable immutable state, ordinary readers lack component leases and recovery remains unproved. |
+| `CMD-0718` | 2026-07-22 / US-093 | Read four TanStack/Eden query builders and table containers, rendered list/PDF/title consumers, app router/history selection and desktop API-origin handling. | Map response fields, page-cursor/cache state, title/detail/PDF behavior and distinct browser-path versus packaged-desktop hash/outer-window consequences. | Produced `EVD-1104`. Shared source does not certify actual browser/desktop request, rendering, navigation, cache, saved-file or restart parity. |
+| `CMD-0719` | 2026-07-22 / US-093 | Compared current and target grains; added `TGT-0018`-`TGT-0024` with exact proposed fields/keys/identities, two-stage SQL, both cursor directions, page/article/detail caps, indexed eligibility, write/invalidation/failure matrices, component reuse, retention/recovery and migration/cutover/rollback/cleanup. Rejected mutable-identity reuse, foreground delta chains/derivation/count joins, pre-limit display/payload/source/JSON work, merged status, broad dual writes and silent fallback. | Provide concrete bounded alternatives while keeping project-scale derivation out of foreground reads and preserving benchmark-critical failure/configuration semantics. | Produced `EVD-1105`-`EVD-1106`. Seven design-only alternatives exist; no schema, actionability or claimed physical benefit advances. |
+| `CMD-0720` | 2026-07-22 / US-093 | Added `PRF-0929`-`PRF-0935`, `BLK-0572`-`BLK-0580`, `OQ-0576`-`OQ-0584` and proof/target/actionability reconciliation; cross-checked 19 linked keeps and 11 linked non-keeps without recounting dispositions. | Keep target validation separate from family proof and keep `auditStatus`, `proofCheckState`, `recommendationActionability` and `overallCertification` independent. | Produced `EVD-1106`. Seven new proofs remain blocked; cumulative proof is 8/478/449/0 across 935 rows, actionability remains 326 unresolved/115 blocked/zero actionable and target designs total 24. |
+| `CMD-0721` | 2026-07-22 / US-093 | Deliberately skipped configured snapshot/query/studio, direct/live DuckDB or SQLite, deployed inventory, fixture DDL/DML, migration, server/app/browser/desktop, writer/projector/operator, repair/backup/restore, export/transfer, cleanup/retention, benchmark, EXPLAIN/profile and physical collectors; audited artifacts/processes before completion. | Preserve schemas, code, routes, projectors, retention, runtime, data and benchmark-critical settings and make unavailable physical/parity/lifecycle evidence explicit rather than zero. | Produced `EVD-1107`. No database/runtime/fixture/product command or mutation ran; no generated artifact or started product process requires cleanup. |
+| `CMD-0722` | 2026-07-22 / US-093 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check`, scoped source-baseline/worktree/tracker checks and strict source-only canonical-ID, proof-state, disposition-actionability, target-definition, blocker/question, SQL/order/cursor/foreground-bound and accounting validators. Preliminary read-only drafts overescaped shell/dynamic regexes or assumed one proof-row state layout; the corrected validator accepts both normalized and legacy target-proof layouts and changed no state. Skipped build, tests, browser/desktop, database and runtime gates because this story changes audit Markdown plus ignored Ralph tracker metadata only and those executions would manufacture prohibited evidence. | Verify exact target/proof/state accounting, design completeness, foreground-work rejection, source isolation and relevant repo-native formatting without treating lint debt or proposed SQL as product evidence. | Produced `EVD-1107`. Lint preserves the same six unrelated errors in three worker files; no typecheck script exists. Final validators pass: 322 DBO, 1,985 CMF, 92 FAN, 1,107 EVD, 722 CMD, 580 BLK, 584 OQ, 935 PRF, 441 DSP and 24 TGT canonical ID sets; proof is 8/478/449/0, actionability is 326 unresolved/115 blocked, all seven US-093 targets/proofs and exact order/cursor/limit contracts are present, whitespace passes and scoped product/schema source is unchanged. The ignored `.ralph-tui/progress.md` append exists; only the audit file plus the preserved pre-existing engine `tasks/prd.json` timestamp appear in Git status. |
+
 ## Blockers
 
 | rowId | Scope | Missing evidence | Why blocked | Owner question IDs | Resolution condition |
@@ -20421,6 +20804,16 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0569` | US-092 fixed-configuration benchmark and resource budgets | Repository fixture declarations exist, but the approved corpus, seed, model/provider/thinking, prompts/content, project/import/Human/snapshot identities, applied shape, runtime and complete collector are absent. | Target design cannot claim savings, boundedness or non-regression; unavailable rows/bytes/latency/RSS/spill/WAL are not zero. | `OQ-0573` | Benchmark/data/runtime owners freeze all critical values and collect source write, rebuild, route/export/transfer read, rows, bytes, latency, RSS, temp and WAL before/after without fallback. |
 | `BLK-0570` | US-092 configuration and legacy history applicability | Review-config identities omit different dimensions; `app.review` and `mart.judgment_fact` lack a deployed field comparison and owner-approved model/content/history policy. | Missing columns, current-source equality or retired checked-in readers cannot prove non-applicability or authorize reconstruction/archive. | `OQ-0574` | Configuration/judgment/audit owners approve the consumer identity matrix, legacy model/content applicability and exact equal-versus-divergent history retention/redaction contract. |
 | `BLK-0571` | US-092 target-specific later validation | All 17 targets have concrete keys, SQL, fan-out and lifecycle designs but none has one immutable release-candidate receipt covering owner approval, deployed inventory, migration/rebuild, cutover, parity, benchmark, failure, recovery, retention and cleanup. | Family proof, design completeness or passing static validators cannot make any target or linked recommendation actionable. | `OQ-0575` | Each target owner executes and signs the complete target-specific validation matrix; only then may its proof and linked recommendation be reconsidered. |
+
+| `BLK-0572` | US-093 target ownership, field and identity authority | Candidate, display, selected-import, LLM-status, Human-status and revision fields are concrete, but owners have not approved component boundaries, scalar precedence, status semantics or every review/model/content/mode identity dimension. | Source reachability and a proposed key cannot decide which fact is authoritative, reusable or inapplicable, and missing legacy dimensions cannot be defaulted. | `OQ-0576` | Data/product/judgment owners approve every field owner, natural/physical/config identity, null/tombstone/mode rule, derived boundary and visible failure. |
+| `BLK-0573` | US-093 deployed shape, values and physical baseline | Full lexical checked-in schema and source consumers are traced, but no approved applied catalog, deployed row/value/reference inventory, widths, component equality/reuse rate, plans or resource measurements exist. | A 44-column declaration, named index or negative source search cannot prove deployed cardinality, width, access path, physical saving or deletion denominator. | `OQ-0577` | Database/runtime owners provide an approved non-live applied ledger and immutable current/target inventory with exact rows, widths, references, plans and resource measurements. |
+| `BLK-0574` | US-093 immutable revision, snapshot binding and reuse | Current projection identities omit generation/watermark and their manifests mutate; the proposed revision, relational binding, count/checksum and reader lease have no approved implementation or concurrency receipt. | Reusing a mutable identity can alter an older snapshot, while a checksum alone cannot prove reader protection, historical interpretation or safe reclamation. | `OQ-0578` | Publication/reliability owners approve the exact immutable receipt/binding/lease transaction and prove build, seal, promotion, cursor, concurrent read and cleanup behavior. |
+| `BLK-0575` | US-093 bounded selection, filter, order, cursor and count | The two-stage SQL and both cursor directions are explicit, but applied plans, mounted-filter invocation, equal-key traversal, scanned rows, hydration estimates, request counts and exact count behavior are unavailable. | `MATERIALIZED` and `LIMIT 501` in design text do not prove a physical cardinality barrier; a foreground component count could still move project-scale work into the route. | `OQ-0579` | Query/API owners approve the route/filter/count contract and capture plans and request traces proving exact order/cursor parity and no pre-limit display/payload/source/JSON or project-scale count work. |
+| `BLK-0576` | US-093 writer fan-out, invalidation, publication and failure | Current direct wide-row mutations are traced and target writers are bounded by design, but no complete delta-to-component matrix, dirty/replay receipts, affected/visible totals, finalization retry or no-dual-authority evidence exists. | Source commit, zero patch count or local completion cannot prove immutable component publication, late-membership replay, snapshot visibility or preserved terminal failure. | `OQ-0580` | Projector/reliability owners approve one writer per component and collect source/delta/dirty/chunk/seal/promotion/failure/visibility receipts for every invalidation case. |
+| `BLK-0577` | US-093 migration, cutover, rollback and legacy residue | Bounded backfill/shadow/writer-switch/reader-switch order is designed, but deployed patch rows, dynamic consumers, version/quiesce fence, component checksums, count transition, rollback horizon and cleanup receipts are unknown. | Design SQL is not a migration; broad dual writes or reader fallback would create mixed authority, and checked-in absence cannot authorize patch/index removal. | `OQ-0581` | Migration/storage owners approve the deployed inventory, batches, validation, one-writer fence, atomic promotion, reader gate, read-only rollback and terminal residue cleanup plan. |
+| `BLK-0578` | US-093 retention, lease, cleanup and executable recovery | Reference categories and cleanup order are explicit, but horizons, durable lease renewal/expiry, scheduler, orphan cursors, cleanup receipt, corruption matrix and clean-host restore are unavailable. | `finally`, a pin, protected snapshot ID, startup mutation restoration or backup-file existence cannot prove concurrent-reader safety, bounded crash cleanup or restored route behavior. | `OQ-0582` | Retention/recovery owners approve horizons and interruption points and prove lease fencing, reference re-scan, bounded deletion, durable receipts and source-plus-component restore before route reopen. |
+| `BLK-0579` | US-093 API, browser, desktop, export and transfer parity | Source contracts and client hooks are mapped, but no actual browser or packaged-desktop request/render/navigation/cache capture, artifact hydration receipt, transfer round trip or concurrent-cleanup proof exists. | Fake adapters, test DOM, shared source, response typing, hash/path declarations and completed jobs cannot prove platform routing, saved-file integrity or immutable hydration. | `OQ-0583` | Product/platform/export/transfer owners approve exact envelopes and capture LLM/Human/Both/Unassessed pages, detail/PDF, cache/back-forward/restart, artifacts and round trips against one immutable fixture. |
+| `BLK-0580` | US-093 fixed benchmark and target-specific final proof | Repository caps and synthetic scale are source-defined, but corpus, seed, model/provider/thinking, prompts/content, project/import/Human/snapshot identities, applied shapes, runtime and full collector are unapproved. | Structural fan-out differences cannot establish storage or latency benefit, and design completeness cannot make `PRF-0929`-`PRF-0935` or linked recommendations actionable. | `OQ-0584` | Benchmark/release owners freeze every critical value, collect before/after read/write/rebuild/rows/bytes/latency/RSS/spill/temp/WAL and sign each complete target validation without retry or fallback. |
 
 ## Owner Questions
 
@@ -21013,6 +21406,16 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0573` | Benchmark/data/runtime owner | Which immutable corpus, seed, model/provider/thinking, prompts/content, project/import/Human/snapshot identities, applied shape, runtime and complete write/rebuild/read/export/transfer/rows/bytes/latency/RSS/temp/WAL collector are approved with no retry or fallback? | All target benchmark rows and `BLK-0569` |
 | `OQ-0574` | Configuration/judgment/legacy/audit owner | Which dimensions belong to applicability, judgment, serving, scope, selected-route, execution, comparison and transfer identities; when are model/content dimensions evidence-backed inapplicable to legacy rows; and which unequal values require cold retention? | `TGT-0005`, `TGT-0008`-`TGT-0013`, `TGT-0017` and `BLK-0570` |
 | `OQ-0575` | Target owners and release validator | What single immutable release-candidate record proves each target's owner/key/SQL/fan-out/failure, deployed mapping, migration/rebuild/cutover, API/browser/desktop/export/transfer parity, fixed benchmark, recovery/restore, retention and cleanup before any proof or recommendation advances? | `PRF-0912`-`PRF-0928` and `BLK-0571` |
+
+| `OQ-0576` | Data/product/judgment owners | For `TGT-0018`-`TGT-0023`, who owns every candidate/display/selected/status/revision field; which config/model/content/Human-mode dimensions and null/tombstone/blank rules are authoritative; and which mismatch must fail? | `PRF-0929`-`PRF-0934` and `BLK-0572` |
+| `OQ-0577` | Database/runtime/operator owners | Which approved non-live applied catalog and immutable deployed inventory supplies exact wide/component rows, values, widths, references, indexes/plans, reuse rate, WAL/temp/RSS/spill and migration denominator without opening the live database? | All US-093 target proofs and `BLK-0573` |
+| `OQ-0578` | Publication/reliability owners | What exact immutable revision ID/unique tuple, row-count/checksum algorithm, seal and snapshot-binding transaction, reader/job/export lease or pin, concurrency isolation and mismatch behavior permit safe component reuse across snapshots? | `PRF-0929` and `BLK-0574` |
+| `OQ-0579` | Query/API/count owners | Which mounted filters use candidate, selected, LLM, Human, posting, search and queue components; what exact list/article/detail/count caps and error behavior apply; and which plans/traces prove reviewed and Unassessed equal-key cursor parity with no project-scale foreground work? | `PRF-0930`-`PRF-0935` and `BLK-0575` |
+| `OQ-0580` | Projector/writer/reliability owners | For every scope/article/import/judgment/prompt/config/mode/delete delta, what one component writer, dirty identity, bounded chunk, accepted/affected/visible totals, seal/promotion receipt, late-membership replay and terminal-failure repair applies without broad dual writes? | `PRF-0929`-`PRF-0934` and `BLK-0576` |
+| `OQ-0581` | Migration/storage/release owners | Which deployed patch/dynamic consumers and retained snapshots are backfilled; what version/quiesce fence, checksums, shadow comparison, writer then reader switch, count transition, rollback horizon and zero-reference cleanup receipt governs cutover? | All US-093 target proofs and `BLK-0577` |
+| `OQ-0582` | Retention/recovery/audit owners | Which active/LKG/candidate/pin/job/export/transfer/cursor/lease/failed references and horizons are mandatory; how are leases renewed/expired and cleanup resumed; and which corruption/restart/clean-host restore validates component rows, bindings, files and routes? | `PRF-0929`-`PRF-0935` and `BLK-0578` |
+| `OQ-0583` | Product/browser/desktop/export/transfer owners | Which exact envelopes, labels, counts, title/detail/PDF routes, TanStack cache/page behavior, browser path history, desktop hash/outer URL/loopback behavior and frozen artifact/package semantics must match, and which physical captures approve them? | `PRF-0931`-`PRF-0935` and `BLK-0579` |
+| `OQ-0584` | Benchmark/data/runtime owners and release validator | Which immutable corpus, seed, model/provider/thinking, prompts/content, project/import/Human/snapshot/component identities, applied shapes, runtime and complete before/after collector are approved, and who signs each `PRF-0929`-`PRF-0935` predicate before actionability changes? | All US-093 proofs and `BLK-0580` |
 
 ## US-001 Quality Gates
 
@@ -25075,6 +25478,61 @@ commands. A command proves only the claim linked through its evidence record.
 - [x] Final sequential-ID/reference/table-width/scope/target/proof/SQL/fan-out/
       lifecycle/state/actionability/count/source/worktree/tracker/whitespace
       invariants pass (`CMD-0713`).
+
+---
+
+## US-093 Quality Gates
+
+- [x] US-092 is complete and scoped `src`/`scripts`/`package.json` source is
+      unchanged from the US-086 baseline. Current source evidence compares the
+      44-column wide row, selected base, four status/display/selected patch
+      shapes and pre-limit payload join without opening DuckDB or inferring
+      applied/deployed state.
+- [x] `TGT-0018`-`TGT-0024` define exact proposed revision/binding/lease,
+      six-field candidate, 13-field display, selected-import, separate
+      LLM/Human status and logical page-composition keys/fields. Component
+      identity reuse requires an immutable input receipt, sealed row
+      count/checksum and relational snapshot binding rather than current
+      projection identity alone.
+- [x] Representative SQL materializes an ordered candidate prefix before
+      page ordinal and display/selected/status/payload hydration. Reviewed
+      `sort_key DESC, article_id ASC` and Unassessed
+      `activity_sort_at DESC, article_id DESC` predicates/ties are exact;
+      list is capped at 501/500, article set at 100 and detail at one.
+- [x] Every target names owner/input, writes, invalidation, immutable
+      publication/reuse, failure, snapshot consistency, retention, reader
+      lease, recovery/restore and bounded cleanup. Migration uses bounded
+      backfill, immutable validation, shadow read, one writer switch, one
+      reader switch, read-only rollback and reference-safe cleanup.
+- [x] Mutable-identity reuse, foreground delta chains, pre-limit
+      display/payload/source/JSON work, foreground selected/status/scope
+      derivation, project-scale component count joins, merged LLM/Human
+      status, broad dual writes and silent fallback are explicitly rejected.
+      Dynamic count remains a separate blocked contract.
+- [x] Browser and packaged-desktop consequences separately cover
+      Eden/TanStack query keys, page/cursor cache, path versus hash/outer URL,
+      loopback origin, title/detail/PDF, cache/back-forward/restart and
+      export/transfer hydration; source sharing is not labeled platform proof.
+- [x] `PRF-0929`-`PRF-0935` add seven independently `blocked` validations.
+      The 935-row proof register remains eight `satisfied`, 478 `pending`, 449
+      `blocked` and zero `not-applicable`. Nineteen linked keeps remain
+      unresolved and 11 linked non-keeps remain blocked; cumulative
+      actionability is 326 unresolved/115 blocked/zero actionable.
+- [x] `auditStatus`, `proofCheckState`,
+      `recommendationActionability` and `overallCertification` remain
+      independent. DBO remains 322/322 blocked, CMF 1,985/1,985 blocked, FAN
+      91 blocked plus one source-proven not-applicable and certification
+      `INCOMPLETE`.
+- [x] `EVD-1097`-`EVD-1107`, `CMD-0714`-`CMD-0722`,
+      `BLK-0572`-`BLK-0580` and `OQ-0576`-`OQ-0584` record exact evidence,
+      commands, blockers, owner decisions and finite resolution conditions.
+      No database/runtime/fixture/product process ran or requires cleanup.
+- [x] `rtk bun run lint` preserves only the same six unrelated source errors
+      and no typecheck script exists. Build, tests, browser/desktop and
+      database/runtime gates are irrelevant or prohibited for this
+      Markdown-only design/proof story and were not run. Final ID/reference/
+      target/SQL/order/cursor/lifecycle/state/actionability/count/source/
+      worktree/tracker/whitespace validators pass (`CMD-0722`).
 
 ---
 
