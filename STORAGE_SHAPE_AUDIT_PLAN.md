@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-078 now contribute 87 table/logical/file-object rows and 95 disjoint column-family rows covering 74 physical tables/catalogs, 13 logical/file/no-table contracts and 1,333 authoritative-source/configuration/judgment/Human/hot-fact/delta/outbox/progress/job/control/publication/candidate/display/status/payload/search/queue CMF rows. The 182 provisional rows comprise 148 `keep`, two `move`, ten `derive`, 16 `delete` and six `archive` decisions; all 182 have `recommendationActionability: unresolved` and zero are actionable. The 83 supporting named-index objects retain their owning-table evidence but are not recounted as tables. US-078 revalidates the two prior async-substring dispositions without double counting, retains snapshot token membership and active prompt-pair queue shapes, proposes bounded auxiliary-field alternatives, and treats the dormant physical queue patch as the eighth full-table delete candidate across its table/field accounting rows. US-072 leaves the physical register at 92 rows: 91 blocked, one source-proven `not-applicable` and zero value-bearing physical observations. The US-015 approval gate remains unmet, final source/audit/benchmark/export/transfer/recovery/ownership/invalidation/retention authority is incomplete, and no bounded replacement has final proof. No manifest or proof-check state advanced, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` therefore remains independent and `INCOMPLETE`. |
+| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-079 now contribute 96 table/logical/file-object rows, 124 disjoint column-family rows and eight separate associated-index rows covering 83 physical tables/catalogs, 13 logical/file/no-table contracts, 1,456 CMF rows and eight current high-fan-out indexes. The 228 provisional rows comprise 170 `keep`, three `move`, 24 `derive`, 25 `delete` and six `archive` decisions; all 228 have `recommendationActionability: unresolved` and zero are actionable. Seventy-five other supporting named indexes retain owning-table evidence without being recounted. US-079 retains exact active posting, summary, filter and partial contracts, treats two dormant tables as the ninth and tenth full-table delete candidates, assigns bounded duplicate-field alternatives, and classifies all eight associated indexes separately while preserving blocked applied-plan/cost evidence and the historical stats-index drop. US-072 leaves the physical register at 92 rows: 91 blocked, one source-proven `not-applicable` and zero value-bearing physical observations. The US-015 approval gate remains unmet, final source/audit/benchmark/export/transfer/recovery/ownership/invalidation/retention authority is incomplete, partial cleanup/replay is unproven, and no retained index has a measured access-path receipt. No manifest or proof-check state advanced, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` therefore remains independent and `INCOMPLETE`. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-078 / 2026-07-22` | Provisionally classified title-token search, physical queue-patch and active unassessed-queue shapes after US-077 while revalidating the existing async-substring table/field delete candidates without recounting them. Exactly three table and nine disjoint column-family `DSP-####` rows cover three physical tables and all 29 new in-scope CMF rows once; three supporting indexes remain owner evidence. The 12 new rows comprise seven keep, one move, two derive and two delete accounting decisions; all remain unresolved and none is actionable. Retained fields name exact snapshot/selectivity, eligibility, priority, ordering and keyset contracts and source caps. The move and derives name bounded one-row-per-article or immutable publication-receipt alternatives, while the queue-patch and prior substring retirements require deployed inventory, lifecycle, parity and restore proof. Tokenizer/index selectivity, async ownership, queue identity/cursor semantics, immutable publication, browser/desktop parity, cleanup, restore and physical evidence remain blocked. DBO/CMF `auditStatus`, existing `proofCheckState` rows, lineage/runtime state and `overallCertification` do not change; no database, runtime, schema, route, projector, retention or data mutation occurred. |
+| Latest normalized story | `US-079 / 2026-07-22` | Provisionally classified nine posting/summary/filter/partial tables, eight associated indexes and 29 disjoint field families after US-078. Exactly 46 `DSP-####` rows cover the nine tables, eight indexes and all 123 new CMF rows once: 22 keep, one move, 14 derive and nine delete decisions, all unresolved and none actionable. Retained posting/count/facet/option variants name exact mounted, bulk, benchmark or server-derived contracts and source caps; retained partials name current owners plus missing terminal cleanup/replay/recovery. Five indexes are conditional keeps tied to blocked `FAN-0064`/`FAN-0072` measurements, one is a measured-path derive candidate and two follow dormant-table delete candidates; no source prefix is presented as optimizer proof. The two dormant tables raise full-table delete candidates to ten, while row-family refinements do not double-claim shared table/CMF grains. Applied shape/plans, physical values, external/raw-field authority, browser/desktop parity, immutable receipts, cleanup and restore remain blocked. DBO/CMF `auditStatus`, existing `proofCheckState` rows, lineage/runtime state and `overallCertification` do not change; no database, runtime, schema, route, projector, retention or data mutation occurred. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
@@ -12469,6 +12469,252 @@ request-wide bound; `async`/`unavailable` is not an empty result; and static
 absence is not deletion authority. `overallCertification` remains
 independently `INCOMPLETE`.
 
+## US-079 Provisional Posting, Summary, Filter, Partial And Index Dispositions
+
+### US-079 Scope, Prerequisite And State Boundary
+
+US-078 is complete. US-079 continues the normalized Phase 5 register without
+reopening Phase 3 lineage or substituting the blocked US-071 physical
+measurements. Physical tables, material column families and named indexes are
+three separate accounting grains:
+
+| Family | Table disposition scope | Disjoint material-field scope | Separate associated-index scope |
+| --- | --- | --- | --- |
+| Posting patch | `DBO-0162` | `CMF-1264`-`CMF-1274` (11) | `DBO-0171` |
+| Posting serving and statistics | `DBO-0163`-`DBO-0164` | `CMF-1275`-`CMF-1294`, `CMF-1379`-`CMF-1380` (22) | `DBO-0172`; the stats lookup dropped by 0114 is historical state, not a current object disposition |
+| Persistent contribution | `DBO-0165` | `CMF-1295`-`CMF-1303` (9) | `DBO-0173` |
+| Named count and facet serving | `DBO-0166`-`DBO-0167` | `CMF-1304`-`CMF-1329` (26) | `DBO-0174`-`DBO-0175` |
+| Filter-option serving | `DBO-0168` | `CMF-1330`-`CMF-1345`, `CMF-1381`-`CMF-1384` (20) | `DBO-0176` |
+| Request-scoped partials | `DBO-0169`-`DBO-0170` | `CMF-1346`-`CMF-1378`, `CMF-1385`-`CMF-1386` (35) | `DBO-0177`-`DBO-0178` |
+| **US-079 total** | **Nine physical tables = nine table decisions** | **123 CMF rows exactly once = 29 disjoint field decisions** | **Eight current named indexes = eight separate index decisions; one historical dropped index is revalidated but not recounted** |
+
+Current source supports provisional `keep` homes for active posting serving,
+posting cardinality state, exact named counts, named facets, prompt filter
+options and both rebuild-partial tables. The posting patch and persistent
+contribution table have no exact non-migration production owner and are
+provisional `delete` candidates at table, field and index grains. Those six
+rows represent two physical targets, not six independent tables.
+
+Posting row kinds remain separate logical contracts within the one retained
+posting table. `promptAnswer` has mounted foreground and bulk membership use;
+`duplicateFlag` and `conflictFlag` have bulk membership use while mounted list
+routes use candidate columns instead. `importRoute`, `publicationYear`,
+`llmStatus` and `humanStatus` have writers, validation and lifecycle state but
+no exact current product posting read, so those row families are provisional
+delete candidates without claiming the shared table or fields a second time.
+The corresponding stats groups follow the posting-kind decision.
+
+The count table retains six exact named definitions: `review.list.total`,
+`review.queue.unassessedReady` and the four prompt-oriented benchmark/internal
+definitions. The fixed-unavailable `review.list.filteredTotal` row family is a
+provisional delete candidate because mounted dynamic counts bypass it and run
+exact direct aggregation. All six named facet families remain provisionally
+retained for the two mounted filter routes even though the current controls
+ignore raw `facets`. Prompt-answer and Human-summary option groups remain
+retained because the server derives the UI `filters` from them; simple/status
+option groups are provisional row-family delete candidates because they are
+only returned raw. These row-family decisions do not create duplicate table or
+CMF disposition rows.
+
+Index decisions are not inferred from `CREATE INDEX` text. `DBO-0174`-
+`DBO-0178` receive conditional provisional keeps tied to their exact one-row,
+128-row, 512-row or request-reduction access shapes. `DBO-0172` is a
+provisional derive/replace candidate because the current sort-before-article
+shape serves the unmounted direct ordering contract differently from active
+membership probes. `FAN-0064` and `FAN-0072` still record every applied
+existence, selected plan, rows scanned/output, residual, timing, maintenance
+and cost value as `unavailable`. Therefore no index is measured, certified or
+actionable; source predicate alignment is only the reason to preserve the
+current five conditional keeps pending measurement.
+
+Every affected DBO and CMF row remains `auditStatus: blocked`.
+`FAN-0060`-`FAN-0064` and `FAN-0067`-`FAN-0074` retain
+`proofCheckState: blocked`; no `PRF-####` row changes. All 46 new `DSP-####`
+rows retain `recommendationActionability: unresolved`, including every
+provisional keep, and `overallCertification` remains independently
+`INCOMPLETE`. Shared proof references are `PRF-0004`, `PRF-0006`,
+`PRF-0008` and `PRF-0016`.
+
+No live/current/project DuckDB or SQLite file, configured snapshot/query/
+studio, fixture DDL/DML, server, app, browser, desktop shell, worker,
+projector, migration, startup repair, export, transfer, cleanup, benchmark or
+physical collector ran. Only this audit file and required Ralph tracker
+metadata may change.
+
+### US-079 Evidence Ledger
+
+| Evidence ID | Class | Exact locator | Finding | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-0901` | `control` | User US-079 PRD and codebase patterns; `tasks/prd.json#US-078/#US-079/#US-080`; `.ralph-tui/progress.md`; US-001 state model; US-013/US-044/US-063 closure; US-071 measurement rows; US-078 prerequisite; reporting and DuckDB skills; HEAD/worktree/ID/count inspection | Fixes the prerequisite, audit-only/no-live boundary, separate nine-table/29-field/eight-index grains, exact 123-CMF scope and unrelated pre-existing `tasks/prd.json` change. | `CMD-0597` |
+| `EVD-0902` | `schema` | `src/db/migrateDuckdb.ts#getDuckdbMigrationFiles`; migrations `0097_reviewServingV4Foundation.sql`, `0099_reviewServingCountScopeAndDetailOptionTables.sql`, `0100_reviewServingFilterOptionValueKey.sql`, `0101_reviewServingFacetSummaryScope.sql`, `0112_reviewServingSummaryRebuildPartial.sql`, `0113_reviewServingSummaryContributionRebuildPartial.sql` and `0114_dropReviewFilterPostingStatsLookupIndex.sql`; `DBO-0162`-`DBO-0178`; `CMF-1264`-`CMF-1386`; scoped diff from US-063 baseline `6f0a1a6c30f3623cea6ec1684ef9a8d62e0777e6` through HEAD `fb256d624f48e6734e44a3b33961208bd7309970` | Full-file-name lexical shape yields nine tables, 115 physical fields, eight material families, eight current indexes and one deliberately dropped stats index. Scoped product/schema source is unchanged; final 0099/0100/0101 rebuilds are destructive and deployed completion remains unavailable. | `CMD-0598` |
+| `EVD-0903` | `production/posting/write` | `reviewServingFilterPostingProjector.ts#getPostingContributionRowsStatement`, `#getPostingServingRecord`, `#getInsertFullRebuildServingRowsStatement`, `#projectReviewServingFilterPostings` | Dirty/full writers directly replace seven posting kinds in active serving, using stable three-key `posting_identity` text and repeated sort/time fields. They do not write the physical patch or persistent contribution tables. | `CMD-0599` |
+| `EVD-0904` | `production/posting/read` | `reviewServingLlmReviewRouteService.ts#getPromptAnswerPredicates`; `reviewServingHumanBothUnassessedRouteService.ts#getPromptAnswerPredicates`; `reviewBulkOperationWorker.ts#getPostingFilterPredicates`/`getPromptAnswerPredicates`; `reviewServingReader.ts#getPostingFilterPredicates`; `reviewServingReadContracts.ts#review.filters.postings` | Mounted LLM/Human/Both prompt filtering and bulk selection use `promptAnswer` before count/order/limit; bulk also uses duplicate/conflict postings. Mounted routes use candidate duplicate/conflict columns. The generic 100-row/2 MB/5 s ordered posting contract is unmounted, and no exact current posting read was found for import route, year or LLM/Human status. | `CMD-0599` |
+| `EVD-0905` | `production/posting/stats` | `reviewServingFilterPostingProjector.ts#getExistingStatsRows`, `#getStatsRecord`, `#getInsertFullRebuildStatsRowsStatement`, `#refreshReviewServingFilterPostingStats`; `reviewServingProjectorWorker.ts#getPostingRebuildChunkOutputChecksum` | Dirty projection reads stored cardinality; full/finalization paths recompute cardinality and selectivity from posting rows and active-scope total. No route/client consumer reads stats, `posting_identity` or selectivity; timestamps participate in startup mutation/restore rather than a product contract. | `CMD-0599` |
+| `EVD-0906` | `production/count` | `reviewServingContracts.ts#namedReviewFastCountDefinitions`; `reviewServingSummaryProjector.ts#getFullRebuildSummaryContributionRows`/`getRowsAsContributionRows`/`getDirectFullSummaryRecords`; `reviewServingSql.ts#getReviewServingRowsSqlCountPredicate`; LLM/Human/Both/Unassessed route services `#getCountValue`; `humanAssessmentRoutesGetOverview`; `reviewServingBenchmark.ts` prompt-count cases | Seven finite count definitions have exact keys and versions. Mounted unfiltered lists/overview consume `review.list.total`; Unassessed consumes prompt-pair `review.queue.unassessedReady`; four prompt counts have benchmark/internal-contract consumers. Dynamic mounted filters bypass the stored unavailable `review.list.filteredTotal` row and execute exact direct counts. | `CMD-0599` |
+| `EVD-0907` | `production/facet` | `reviewServingContracts.ts#namedReviewFastCountDefinitions` six facet definitions; `reviewServingSummaryProjector.ts#getFullRebuildSummaryContributionRows`/`getRowsAsContributionRows`/`getDirectFullSummaryRecords`; `reviewServingReadContracts.ts#review.filters.facets`/`review.human.filters.facets`; `reviewServingSql.ts#getReviewServingRowsSqlFacetVersionPredicate`; `reviewServingFilterRouteService.ts#readFacetRows` | Four review and two Human facet families are versioned, snapshot scoped and read through mounted routes in separate bounded reads of at most 128 rows/2 MB/5 s. `answer_id` is always null; raw facets are returned but current controls consume only derived filters from options. | `CMD-0599` |
+| `EVD-0908` | `production/filter/client` | `reviewServingFilterOptionProjector.ts#getReviewServingFilterOptionIdentity`, `#getFilterOptionSourceRows`, `#getFilterOptionRecord`; `reviewServingFilterRouteService.ts#getOptionPayload`, `#getPromptFilters`, `#readOptionRows`; `reviewsFilterControls.tsx` and `reviewsHumanFilterControls.tsx` query response types | Bounded option reads cap at 512 rows/1 MB/5 s. Prompt and Human-summary typed values feed server-derived UI filters. Simple/status rows and raw counts are only returned; answer ID and numeric bounds are always null. Closed JSON payloads duplicate typed facet/prompt/value data and can be derived only after response/external-contract parity is proven. | `CMD-0599` |
+| `EVD-0909` | `production/contribution/absence` | `reviewServingContributionService.ts#getReviewServingContributionDiffs`; `reviewServingSummaryProjector.ts` current direct/partial records; `reviewServingProjectorWriter.ts#ReviewServingProjectorWritableTable`; exact non-test `mart.review_article_summary_contribution_v4` reference search; `reviewServingRetentionService.ts#cleanupTableSpecs` | Current contribution diffs are in memory or request-partial rows. The persistent contribution table/index have migration/test maintenance only and no writer, reader, startup, retention or cleanup owner. Static absence supports a blocked delete candidate, not deletion safety. | `CMD-0599` |
+| `EVD-0910` | `production/partial` | `reviewServingSummaryProjector.ts#getDirectFullSummaryPartialRecord`, `#getDirectFullSummaryContributionPartialRecord`, `#getCompletedSummaryRebuildPartialChunkJoin`, `#reduceSummaryRebuildPartialChunkBatchIntoAccumulator`, `#getRefreshSummaryRebuildAccumulatorCountsStatement`, `#reduceSummaryRebuildPartialsForRequestSnapshot` | Chunk writers replace exact request/chunk scopes. Completed summary chunks reduce in batches of 256 into a retained accumulator; contribution rows are deduplicated for accumulator counts; publication transactionally replaces count/facet rows for a request snapshot. Keys/values are active intermediate state. | `CMD-0599` |
+| `EVD-0911` | `production/publication/lifecycle` | `reviewServingProjectorWorker.ts#finalizeCompletedReviewServingRebuildRequest` and summary output validation; `reviewServingRetentionService.ts#cleanupTableSpecs`; `duckdbService.ts#duckdbStartupIndexedTableRepairSpecs` | Stats refresh, partial reduction, option refresh, validation, promotion and request terminalization are separate stages. Final serving tables have startup/active-LKG-pin retention paths; partials do not. Source summary rows are deleted after reduction, accumulator rows remain, contribution partials have no terminal delete, and completed-chunk finalization failure has no proven bounded readmission/cleanup path. | `CMD-0599` |
+| `EVD-0912` | `production/index` | Current DDL expressions `DBO-0171`-`DBO-0178`; `reviewServingSql.ts` posting/count/facet/option predicates; `reviewServingFilterRouteService.ts` bounded reads; `reviewServingSummaryProjector.ts` partial reduction predicates | Source equality/order shapes are exact: direct posting order conflicts with active membership article placement; count/facet/option lookups leave version or identity residuals; partial indexes prefix request/project/config/snapshot before completed-chunk and key residuals. These are access-shape hypotheses, not optimizer use or physical cost. | `CMD-0599` |
+| `EVD-0913` | `measurement/control` | US-071 `FAN-0060`-`FAN-0064` and `FAN-0067`-`FAN-0074`; `BLK-0367`-`BLK-0372` | Rows, values, fan-out, duplicate bytes, applied index state, selected plans/operators, rows scanned/output, timings, maintenance, temp/spill/RSS, index cost/bytes, generations/orphans and cleanup results remain `unavailable`, never zero. No conditional index keep is measured. | `CMD-0599` |
+| `EVD-0914` | `control` | DBO/CMF/index expansion and disjointness; row-kind no-recount review; per-field exact-contract or bounded-alternative review; disposition/count derivation | Confirms nine table, eight index and 29 field decisions; exact 123-CMF single coverage; 22 keep/one move/14 derive/nine delete rows; 228 cumulative unresolved recommendations and zero actionable rows. | `CMD-0600` |
+| `EVD-0915` | `control` | US-079 skipped-command ledger and created-process/artifact audit | Confirms zero database/runtime/fixture commands, zero started product processes and zero generated artifacts; cleanup and stop sets are empty. These action counts are not physical measurements. | `CMD-0601` |
+| `EVD-0916` | `control` | Sequential-ID/reference/disposition/actionability/state/count/table-width/scope/disjointness/source/worktree/tracker/whitespace validators; package-script typecheck discovery; repo lint | Confirms the complete US-079 register, independent states, docs-only isolation and relevant quality-gate result without prohibited runtime evidence. | `CMD-0602` |
+
+### Exact Row-Kind, Summary And Filter Contract Decisions
+
+Row-kind decisions below refine a shared physical-table disposition. They do
+not create another table/field recommendation or claim the same CMF row twice.
+
+| Family or exact variant | Provisional row-family decision | Exact current contract and bound | Missing proof before implementation |
+| --- | --- | --- | --- |
+| Posting `promptAnswer` | `keep` within `DBO-0163` | Mounted LLM/Human/Both `EXISTS` membership before exact count/order/limit and bulk prompt membership before a 500-row batch. | Cross-mode/blank/array semantics, direct/embedded/bulk parity, physical selectivity/plan and deployed recovery. |
+| Posting `duplicateFlag` and `conflictFlag` | `keep` within `DBO-0163` for bulk only | Bulk criteria use posting membership; mounted list routes instead use candidate Boolean columns. | Owner approval of duplicated homes, job snapshot parity, physical need and measured index path. |
+| Posting `importRoute`, `publicationYear`, `llmStatus`, `humanStatus` | `delete` row-family candidates | Projector, checksum, startup and retention only; no exact current product posting read. Registered/unmounted generic posting filters are not invocation proof. | Deployed values/references, external/internal direct-contract intent, benchmark/parity, migration/rollback and restore. |
+| Posting stats by kind | `keep` cardinality for the three retained posting families; `delete` companion row candidates for the other four | Dirty diffs read current cardinality; finalizer recomputes. Selectivity and stable identity are derived separately below. | Denominator authority, atomicity with posting writes, exact active row kinds, physical benefit and recovery. |
+| `review.list.total` | `keep` in `DBO-0166` | One-row named lookup for unfiltered LLM/Human/Both plus Human overview; exact `review-list-total:v1`. | Same-snapshot/direct parity, current invocation counts and physical plan. |
+| `review.queue.unassessedReady` | `keep` in `DBO-0166` | One-row named lookup for Unassessed; exact `review-queue-unassessed-ready:v1`. | Prompt-pair versus displayed-article authority and label parity. |
+| Four prompt named counts | `keep` in `DBO-0166` as benchmark/internal summaries | `review.llm.assessedByPrompt`, `review.llm.unassessedByPrompt`, `review.human.reviewedByPrompt` and `review.both.conflictByPrompt` each have exact v1 definitions and benchmark/`review.prompt.badges` contracts of at most 512 rows. | Mounted caller/product authority, prompt/mode/conflict semantics and benchmark fixture. |
+| `review.list.filteredTotal` | `delete` row-family candidate | Persisted only as null/`unavailable` with one fixed stale reason; mounted dynamic routes bypass it for exact `COUNT(DISTINCT article_id)`. | Registry/external contract retirement, deployed rows and error/fallback parity. |
+| Six named facet families | `keep` in `DBO-0167` | Four review plus two Human exact v1 definitions; mounted route reads each identity with a 128-row/2 MB/5 s cap. | External raw-facet need, requested-filter/search scope, browser/desktop capture and physical cardinality/plan. |
+| Review/Human prompt-answer and Human-summary options | `keep` in `DBO-0168` | One identity-scoped 512-row/1 MB/5 s read; server derives enum/numeric/summary `filters` consumed by current controls. | Identity/search/request scope, JSON/typed equality, actual browser/desktop request/cache/render and physical plan. |
+| Simple/status option groups | `delete` row-family candidates | Duplicate/conflict/import/year/LLM/Human-status rows are returned only in raw `filterOptions`; current controls and server decisions ignore them after read. | External API consumer, telemetry/operator use, deployed values, parity, migration and restore. |
+
+### Intermediate Ownership, Lifecycle, Replay And Recovery Contracts
+
+| Physical family | Retained owner and active lifecycle | Cleanup, replay and recovery boundary | Provisional consequence |
+| --- | --- | --- | --- |
+| Posting serving/stats | Posting dirty/full projector; request finalizer refreshes stats; chunk checksum and startup probes validate; active/LKG/pins protect snapshot cleanup. | Posting and stats publication are separate; no ordinary-reader lease, applied physical profile or crash-safe startup restore exists. Stats denominator/identity equality and row-kind retirement remain unresolved. | Keep active membership/cardinality state; move/derive repeated order, identity, selectivity and row-time fields only after bounded replacement proof. |
+| Count/facet serving | Summary dirty/direct and request-partial reducer; one request-snapshot transaction replaces count/facet outputs; mounted/internal readers and startup/retention consume them. | Chunk completion, reduction, final publication, option refresh, promotion and terminalization are not one transaction. Finalization failure after all chunks complete lacks proven readmission. | Keep exact retained variants; row-family deletes and derived fields remain unresolved. |
+| Filter options | Review/Human projector and rebuild finalizer replace identity scopes; mounted filter routes read bounded rows; startup and active/LKG/pin retention apply. | Review/Human refresh can be separate; requested filters/search do not narrow current stored identity; no physical plan or browser/desktop parity exists. | Keep prompt-derived groups; remove raw-only groups/fields only after contract closure. |
+| Summary partial/accumulator | Chunk writer owns source rows; completed manifests fence 256-chunk reduction; accumulator is request/project/config/snapshot scoped and publishes count/facet rows. | Reduced source summary rows are deleted, but accumulator rows remain. Failed/abandoned/orphan/terminal cleanup, durable lease, replay cursor, retention schedule and restore validation are absent. | Keep as active intermediate state, with `recommendationActionability: unresolved` and lifecycle blocker. |
+| Contribution partial | Chunk writer owns request/chunk/article/component/version/key rows; completed-manifest join deduplicates them into accumulator counts. | Same-chunk rewrite deletes old rows, but no successful-terminal, failed, abandoned or orphan delete exists; cheap validation omits them. | Keep as active intermediate state, with mandatory terminal cleanup/replay/recovery proof. |
+| Posting patch/persistent contribution | Migration/index/test maintenance only; current direct-serving/in-memory/partial paths bypass them. | No deployed inventory, producer/consumer history, migration receipt, retention, cleanup, rollback or executable restore. | Delete candidates only; static absence is not actionability. |
+
+### Associated Index Access-Path Disposition Matrix
+
+`FAN-0064`/`FAN-0072` are the mandatory measurement receipts for every row
+below. A source predicate is not a measured plan. Conditional `keep` means
+preserve the current index while evidence is missing; it does not advance the
+index DBO row beyond `auditStatus: blocked`.
+
+| rowId | Index object and exact source access shape | Provisional disposition | Required measured access path or retirement proof | Evidence / unresolved gate | recommendationActionability |
+| --- | --- | --- | --- | --- | --- |
+| `DSP-0183` | `DBO-0171` posting-patch lookup; no production table query | `delete` candidate with patch table | Applied/deployed inventory, dynamic/operator scan, retained history, direct-writer parity, cleanup and restore. | `EVD-0902`/`EVD-0909`/`EVD-0912`-`EVD-0913`; `BLK-0435`/`BLK-0436`; `OQ-0439`/`OQ-0440` | `unresolved` |
+| `DSP-0184` | `DBO-0172` posting-serving lookup; direct order uses sort/article, active membership needs article equality after kind/value/list | `derive` one or two measured access paths | Compare current path, PK and candidate membership-first index for mounted prompt/bulk probes; retain an order path only if the 100-row direct contract is owner-retained. Record plans, rows, timing and write cost. | `EVD-0904`/`EVD-0912`-`EVD-0913`; `BLK-0432`/`BLK-0435`; `OQ-0436`/`OQ-0439` | `unresolved` |
+| `DSP-0185` | `DBO-0173` persistent-contribution lookup; no production table query | `delete` candidate with persistent contribution | Applied/deployed inventory, dynamic/operator/history closure, partial/in-memory parity, cleanup and restore. | `EVD-0909`/`EVD-0912`-`EVD-0913`; `BLK-0434`-`BLK-0436`; `OQ-0438`-`OQ-0440` | `unresolved` |
+| `DSP-0186` | `DBO-0174` count lookup; project/config/snapshot/list/count/filter equality with definition version residual | conditional `keep` for exact one-row named lookup | Approved plan must show selected operator, one logical result, scanned rows, residual/version cost, PK overlap, latency and mutation cost. | `EVD-0906`/`EVD-0912`-`EVD-0913`; `BLK-0433`/`BLK-0435`; `OQ-0437`/`OQ-0439` | `unresolved` |
+| `DSP-0187` | `DBO-0175` facet lookup; project/config/snapshot/summary/kind then key/value order, version residual | conditional `keep` for bounded facet reads | Measure each named 128-row read, residual version, order, rows scanned/output, latency and refresh cost against the PK. | `EVD-0907`/`EVD-0912`-`EVD-0913`; `BLK-0433`/`BLK-0435`; `OQ-0437`/`OQ-0439` | `unresolved` |
+| `DSP-0188` | `DBO-0176` option lookup; project/config/snapshot/search then kind/key/value order, option identity residual | conditional `keep` for bounded option reads | Measure review/Human 512-row reads, identity residual, order, rows scanned/output, latency and full-scope refresh cost against the PK. | `EVD-0908`/`EVD-0912`-`EVD-0913`; `BLK-0433`/`BLK-0435`; `OQ-0437`/`OQ-0439` | `unresolved` |
+| `DSP-0189` | `DBO-0177` summary-partial reduce; request/project/config/snapshot/kind prefix with chunk/serving/completed-manifest residuals | conditional `keep` for 256-chunk reduction | Measure batch discovery, accumulator aggregation and delete paths, rows/operators/temp/spill/time plus insert/delete maintenance under failure/replay. | `EVD-0910`/`EVD-0912`-`EVD-0913`; `BLK-0434`/`BLK-0435`; `OQ-0438`/`OQ-0439` | `unresolved` |
+| `DSP-0190` | `DBO-0178` contribution-partial publish; request/project/config/snapshot prefix with completed-chunk/article/key residuals | conditional `keep` for request reduction | Measure completed-manifest join, dedupe/group scan, rows/operators/temp/spill/time and write/terminal-cleanup cost. | `EVD-0910`/`EVD-0912`-`EVD-0913`; `BLK-0434`/`BLK-0435`; `OQ-0438`/`OQ-0439` | `unresolved` |
+
+The historical `idx_review_filter_posting_stats_v4_lookup` is source-dropped
+by final 0114 and has no current DBO/DSP row. Applied absence, interrupted
+migration state, catalog residue and performance effect remain part of
+`FAN-0064`; source-proven drop text is not a zero-byte measurement.
+
+### Provisional Table Disposition Matrix
+
+| rowId | Family | Physical table | Provisional disposition and exact current need | Evidence / proof / unresolved gate | recommendationActionability |
+| --- | --- | --- | --- | --- | --- |
+| `DSP-0191` | Posting patch | `DBO-0162 mart.review_article_filter_posting_patch_v4` | `delete` candidate after deployed/history/reference inventory proves direct serving replaces every base/watermark/tombstone contract and cutover/rollback/cleanup/restore are receipted. | `EVD-0902`/`EVD-0903`/`EVD-0909`; `PRF-0004`/`PRF-0006`/`PRF-0008`/`PRF-0016`; `BLK-0431`/`BLK-0436`; `OQ-0435`/`OQ-0440` | `unresolved` |
+| `DSP-0192` | Posting serving | `DBO-0163 mart.review_article_filter_posting_serving_v4` | `keep` as snapshot/list/value/article membership for prompt and bulk contracts; unused row kinds, repeated sort/identity/time and index path remain separate candidates. | `EVD-0903`-`EVD-0905`/`EVD-0911`-`EVD-0913`; `PRF-0004`/`PRF-0006`/`PRF-0016`; `BLK-0431`/`BLK-0432`/`BLK-0435`; `OQ-0435`/`OQ-0436`/`OQ-0439` | `unresolved` |
+| `DSP-0193` | Posting stats | `DBO-0164 mart.review_filter_posting_stats_v4` | `keep` as active dirty-projector cardinality state; unused kind rows, derived identity/selectivity/time, denominator authority and dropped-index state remain unresolved. | `EVD-0905`/`EVD-0911`-`EVD-0913`; `PRF-0004`/`PRF-0006`/`PRF-0016`; `BLK-0431`/`BLK-0432`/`BLK-0435`; `OQ-0435`/`OQ-0436`/`OQ-0439` | `unresolved` |
+| `DSP-0194` | Persistent contribution | `DBO-0165 mart.review_article_summary_contribution_v4` | `delete` candidate after deployed/history/reference inventory and proof that in-memory/direct/partial paths preserve every contribution, replay, recovery and operator contract. | `EVD-0902`/`EVD-0909`/`EVD-0913`; `PRF-0004`/`PRF-0006`/`PRF-0008`/`PRF-0016`; `BLK-0431`/`BLK-0434`/`BLK-0436`; `OQ-0435`/`OQ-0438`/`OQ-0440` | `unresolved` |
+| `DSP-0195` | Named count serving | `DBO-0166 mart.review_article_count_serving_v4` | `keep` for six exact retained named definitions and one-row reads; fixed-unavailable filtered-total rows and redundant/lifecycle fields are separate candidates. | `EVD-0906`/`EVD-0910`-`EVD-0913`; `PRF-0004`/`PRF-0006`/`PRF-0016`; `BLK-0431`/`BLK-0433`/`BLK-0435`; `OQ-0435`/`OQ-0437`/`OQ-0439` | `unresolved` |
+| `DSP-0196` | Named facet serving | `DBO-0167 mart.review_filter_facet_serving_v4` | `keep` for six exact versioned mounted facet contracts capped per read; raw-client need, null field and row-time candidates remain blocked. | `EVD-0907`/`EVD-0910`-`EVD-0913`; `PRF-0004`/`PRF-0006`/`PRF-0016`; `BLK-0431`/`BLK-0433`/`BLK-0435`; `OQ-0435`/`OQ-0437`/`OQ-0439` | `unresolved` |
+| `DSP-0197` | Filter-option serving | `DBO-0168 mart.review_filter_option_serving_v4` | `keep` for identity-scoped prompt/Human-summary options that derive current UI filters; raw-only row/field groups and duplicate JSON/time are separate candidates. | `EVD-0908`/`EVD-0911`-`EVD-0913`; `PRF-0004`/`PRF-0006`/`PRF-0008`/`PRF-0016`; `BLK-0431`/`BLK-0433`/`BLK-0435`/`BLK-0436`; `OQ-0435`/`OQ-0437`/`OQ-0439`/`OQ-0440` | `unresolved` |
+| `DSP-0198` | Summary rebuild partial | `DBO-0169 mart.review_article_summary_rebuild_partial_v4` | `keep` as request/chunk source plus accumulator state required by current chunked publication; terminal cleanup, replay, recovery and timestamp derivation remain blocked. | `EVD-0910`-`EVD-0913`; `PRF-0004`/`PRF-0006`/`PRF-0008`/`PRF-0016`; `BLK-0431`/`BLK-0434`/`BLK-0435`; `OQ-0435`/`OQ-0438`/`OQ-0439` | `unresolved` |
+| `DSP-0199` | Contribution rebuild partial | `DBO-0170 mart.review_article_summary_contribution_rebuild_partial_v4` | `keep` as request/chunk/article contribution dedupe input; no terminal delete, complete validation, cleanup schedule, replay fence or restore proof exists. | `EVD-0910`-`EVD-0913`; `PRF-0004`/`PRF-0006`/`PRF-0008`/`PRF-0016`; `BLK-0431`/`BLK-0434`/`BLK-0435`; `OQ-0435`/`OQ-0438`/`OQ-0439` | `unresolved` |
+
+### Disjoint Column-Family Disposition Matrix
+
+| rowId | Family | Exact CMF rows and purpose | Provisional disposition and bounded contract/alternative | Evidence / proof / unresolved gate | recommendationActionability |
+| --- | --- | --- | --- | --- | --- |
+| `DSP-0200` | Posting-patch fields | `CMF-1264`-`CMF-1274` (11): scope, identity, generation/watermark, kind/value/list/order/article, tombstone and time | `delete` with `DBO-0162` only after every deployed row/history/reference is inventoried or migrated and direct serving parity, rollback, cleanup and restore are proven. | `EVD-0902`/`EVD-0903`/`EVD-0909`; `BLK-0436`; `OQ-0440` | `unresolved` |
+| `DSP-0201` | Posting snapshot scope | `CMF-1275`-`CMF-1277` (3): project, review-config and snapshot identities | `keep`; every active prompt/bulk membership predicate binds this immutable publication scope before limit. | `EVD-0903`-`EVD-0904`/`EVD-0911`; `BLK-0432`; `OQ-0436` | `unresolved` |
+| `DSP-0202` | Posting membership | `CMF-1279`-`CMF-1281`, `CMF-1283` (4): kind, value, list mode and article | `keep` for retained row kinds; these fields establish prompt/bulk membership. Row-kind retirement, domains and measured access remain blocked. | `EVD-0903`-`EVD-0905`/`EVD-0913`; `BLK-0432`/`BLK-0435`; `OQ-0436`/`OQ-0439` | `unresolved` |
+| `DSP-0203` | Posting order copy | `CMF-1282 sort_key` | `move` to the existing snapshot/list/article candidate-order owner for any retained direct order. A bounded replacement must join one candidate row before the 100-row limit, preserve cursor/order, checksum, bulk behavior and rollback. | `EVD-0903`-`EVD-0905`/`EVD-0912`-`EVD-0913`; `BLK-0432`/`BLK-0435`/`BLK-0436`; `OQ-0436`/`OQ-0439`/`OQ-0440` | `unresolved` |
+| `DSP-0204` | Posting stable identity copy | `CMF-1278` and `CMF-1379` (2): VARCHAR plus `{filterKind,filterValue,listModeKey}` material paths | `derive` from retained relational kind/value/list fields for diagnostics/checksum; prove byte-stable parity and remove persisted/index references only after migration/restore. | `EVD-0903`/`EVD-0905`/`EVD-0913`; `BLK-0432`/`BLK-0436`; `OQ-0436`/`OQ-0440` | `unresolved` |
+| `DSP-0205` | Posting row time | `CMF-1284 posting_updated_at` | `derive` from immutable posting component/chunk publication receipt after replacing the startup mutation probe; preserve interruption, cleanup, rollback and restore. | `EVD-0905`/`EVD-0911`; `BLK-0432`/`BLK-0436`; `OQ-0436`/`OQ-0440` | `unresolved` |
+| `DSP-0206` | Stats scope/group/cardinality | `CMF-1285`-`CMF-1287`, `CMF-1289`-`CMF-1292` (7): project/config/snapshot, kind/value/list and cardinality | `keep` for retained posting-kind dirty diffs and full recomputation; exact denominator, row-kind scope and atomic publication remain blocked. | `EVD-0905`/`EVD-0911`/`EVD-0913`; `BLK-0432`; `OQ-0436` | `unresolved` |
+| `DSP-0207` | Stats stable identity copy | `CMF-1288` and `CMF-1380` (2): VARCHAR plus three stable material keys | `derive` from relational kind/value/list; prove full/dirty serializer parity, diagnostics replacement, migration and restore. | `EVD-0905`/`EVD-0913`; `BLK-0432`/`BLK-0436`; `OQ-0436`/`OQ-0440` | `unresolved` |
+| `DSP-0208` | Stored selectivity | `CMF-1293 selectivity` | `derive` on bounded diagnostics from cardinality and owner-approved active-scope denominator; no route/client consumer exists. Preserve empty-denominator null semantics and benchmark parity. | `EVD-0905`/`EVD-0913`; `BLK-0432`/`BLK-0436`; `OQ-0436`/`OQ-0440` | `unresolved` |
+| `DSP-0209` | Stats row time | `CMF-1294 stats_updated_at` | `derive` from immutable stats-finalization receipt after startup-probe replacement and crash/replay/restore proof. | `EVD-0905`/`EVD-0911`; `BLK-0432`/`BLK-0436`; `OQ-0436`/`OQ-0440` | `unresolved` |
+| `DSP-0210` | Persistent contribution fields | `CMF-1295`-`CMF-1303` (9): snapshot/article/component/version/key/value/time | `delete` with `DBO-0165` after deployed/history/reference inventory and exact in-memory/direct/partial replay, recovery, cleanup and restore parity. | `EVD-0909`-`EVD-0910`/`EVD-0913`; `BLK-0434`/`BLK-0436`; `OQ-0438`/`OQ-0440` | `unresolved` |
+| `DSP-0211` | Count exact key/value | `CMF-1304`-`CMF-1306`, `CMF-1308`-`CMF-1313` (9): project/config/snapshot, list/count/version/filter, value and availability | `keep` for the six retained exact named definitions and one-row lookup/error semantics; `review.list.filteredTotal` row retirement remains separate. | `EVD-0906`/`EVD-0910`-`EVD-0913`; `BLK-0433`/`BLK-0435`; `OQ-0437`/`OQ-0439` | `unresolved` |
+| `DSP-0212` | Count duplicate summary identity | `CMF-1307 summary_identity` | `derive` from `count_kind` under the closed named-definition registry; prove deployed equality, migration, benchmark and error parity. | `EVD-0906`/`EVD-0913`; `BLK-0433`/`BLK-0436`; `OQ-0437`/`OQ-0440` | `unresolved` |
+| `DSP-0213` | Count stale reason | `CMF-1314 stale_reason` | `derive` the current fixed unavailable error from named contract/admission state after filtered-total row retirement; preserve exact failure and no-fallback behavior. | `EVD-0906`/`EVD-0913`; `BLK-0433`/`BLK-0436`; `OQ-0437`/`OQ-0440` | `unresolved` |
+| `DSP-0214` | Count row time | `CMF-1315 count_updated_at` | `derive` from immutable summary publication receipt after startup-probe replacement and interruption/restore proof. | `EVD-0910`-`EVD-0911`; `BLK-0433`/`BLK-0436`; `OQ-0437`/`OQ-0440` | `unresolved` |
+| `DSP-0215` | Facet exact contract fields | `CMF-1316`-`CMF-1323`, `CMF-1325`-`CMF-1328` (12): snapshot/summary/kind/key/value/prompt/answer-value/version/count/availability | `keep` for six exact versioned mounted contracts capped at 128 rows per read. Raw client need, requested scope and physical access remain blocked. | `EVD-0907`/`EVD-0910`-`EVD-0913`; `BLK-0433`/`BLK-0435`; `OQ-0437`/`OQ-0439` | `unresolved` |
+| `DSP-0216` | Facet unused answer ID | `CMF-1324 answer_id` | `delete` candidate; every current facet writer stores null and no server/client decision reads it. Inventory deployed nonnull/operator/external use and prove response/migration/restore parity. | `EVD-0907`/`EVD-0913`; `BLK-0433`/`BLK-0436`; `OQ-0437`/`OQ-0440` | `unresolved` |
+| `DSP-0217` | Facet row time | `CMF-1329 facet_updated_at` | `derive` from immutable summary publication receipt after startup-probe replacement and interruption/restore proof. | `EVD-0907`/`EVD-0911`; `BLK-0433`/`BLK-0436`; `OQ-0437`/`OQ-0440` | `unresolved` |
+| `DSP-0218` | Option typed identity/value | `CMF-1330`-`CMF-1339` and `CMF-1381` (11): snapshot/search/closed option identity, order/group/value/prompt fields and identity material keys | `keep` for prompt/Human-summary option lookup and server-derived filters; simple/status row retirement and identity equality remain blocked. | `EVD-0908`/`EVD-0911`-`EVD-0913`; `BLK-0433`/`BLK-0435`; `OQ-0437`/`OQ-0439` | `unresolved` |
+| `DSP-0219` | Option unused nullable fields | `CMF-1340`-`CMF-1342` (3): answer ID and numeric min/max | `delete` candidate; all current writers store null and numeric filters derive from values/prompt types. Inventory deployed nonnull/external use and preserve response parity. | `EVD-0908`/`EVD-0913`; `BLK-0433`/`BLK-0436`; `OQ-0437`/`OQ-0440` | `unresolved` |
+| `DSP-0220` | Option duplicate JSON payload | `CMF-1343`, `CMF-1382`-`CMF-1384` (4): JSON scalar plus enum/prompt/Human-summary material variants | `derive` the closed payload from typed kind/key/value/prompt fields at bounded response time, or remove raw payload after external parity; measure parse operations and encoded bytes separately. | `EVD-0908`/`EVD-0913`; `BLK-0433`/`BLK-0436`; `OQ-0437`/`OQ-0440` | `unresolved` |
+| `DSP-0221` | Option stored cardinality | `CMF-1344 count_value` | `delete` candidate with raw-only simple/status counts; no current server/client decision uses it. Preserve benchmark/checksum or replace with an explicit diagnostic contract if owner-required. | `EVD-0908`/`EVD-0911`/`EVD-0913`; `BLK-0433`/`BLK-0436`; `OQ-0437`/`OQ-0440` | `unresolved` |
+| `DSP-0222` | Option row time | `CMF-1345 option_updated_at` | `derive` from immutable option publication receipt after startup-probe replacement and interruption/restore proof. | `EVD-0908`/`EVD-0911`; `BLK-0433`/`BLK-0436`; `OQ-0437`/`OQ-0440` | `unresolved` |
+| `DSP-0223` | Summary-partial ownership scope | `CMF-1346`-`CMF-1350` (5): request, chunk, project, config and snapshot | `keep` as current writer/reducer ownership and completed-manifest join scope; add durable lease/terminal/orphan fences without broad dual writes. | `EVD-0910`-`EVD-0911`/`EVD-0913`; `BLK-0434`; `OQ-0438` | `unresolved` |
+| `DSP-0224` | Summary-partial reduction/publication | `CMF-1351`-`CMF-1366` and `CMF-1385` (17): serving key/material paths, kind/identity/list/count/facet/prompt/answer/availability/stale/value | `keep` for 256-chunk aggregation, accumulator identity and final count/facet publication. Exact terminal cleanup, replay cursor, validation and restore remain mandatory. | `EVD-0910`-`EVD-0913`; `BLK-0434`/`BLK-0435`; `OQ-0438`/`OQ-0439` | `unresolved` |
+| `DSP-0225` | Summary-partial row time | `CMF-1367 partial_updated_at` | `derive` from immutable chunk-reduction/accumulator receipts only after a durable replay/cleanup fence replaces mutable time. | `EVD-0910`-`EVD-0911`; `BLK-0434`/`BLK-0436`; `OQ-0438`/`OQ-0440` | `unresolved` |
+| `DSP-0226` | Contribution-partial ownership scope | `CMF-1368`-`CMF-1375` (8): request, chunk, project, config, snapshot, article, component and version | `keep` for completed-chunk dedupe and request-snapshot accumulator refresh; terminal/orphan ownership and cleanup remain blocked. | `EVD-0910`-`EVD-0911`/`EVD-0913`; `BLK-0434`; `OQ-0438` | `unresolved` |
+| `DSP-0227` | Contribution key/value | `CMF-1376`-`CMF-1377` and `CMF-1386` (3): stable contribution key/material paths and value | `keep` as current dedupe/group/reduction input. Preserve all 13 key paths, value semantics and completed-manifest scope; physical fan-out and bounded replay remain blocked. | `EVD-0910`-`EVD-0913`; `BLK-0434`/`BLK-0435`; `OQ-0438`/`OQ-0439` | `unresolved` |
+| `DSP-0228` | Contribution-partial row time | `CMF-1378 contribution_updated_at` | `derive` from immutable chunk-write/reduction receipt only after terminal cleanup, replay and restore use a durable fence. | `EVD-0910`-`EVD-0911`; `BLK-0434`/`BLK-0436`; `OQ-0438`/`OQ-0440` | `unresolved` |
+
+### Counts, Non-Keep Gate And State Accounting
+
+| Register grain | New rows | `keep` | `move` | `derive` | `delete` | `archive` | `recommendationActionability: unresolved` | Actionable |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Table decisions | 9 | 7 | 0 | 0 | 2 | 0 | 9 | 0 |
+| Associated-index decisions | 8 | 5 | 0 | 1 | 2 | 0 | 8 | 0 |
+| Column-family decisions | 29 | 10 | 1 | 13 | 5 | 0 | 29 | 0 |
+| **US-079 total** | **46** | **22** | **1** | **14** | **9** | **0** | **46** | **0** |
+
+The 29 field rows expand to exactly 123 unique CMF IDs with no overlap or
+omission:
+
+`123 = 11 + (3+4+1+2+1) + (7+2+1+1) + 9 + (9+1+1+1)
++ (12+1+1) + (11+3+4+1+1) + (5+17+1) + (8+3+1)`.
+
+Cumulatively, `DSP-0001`-`DSP-0228` comprise 96 table/logical/file-object
+decisions, 124 disjoint column-family decisions and eight separate index
+decisions. They cover 83 physical tables/catalogs, 13 logical/file/no-table
+contracts, 1,456 CMF rows and eight associated indexes. Counts are 170
+`keep`, three `move`, 24 `derive`, 25 `delete` and six `archive`; all 228
+retain `recommendationActionability: unresolved` and zero are actionable.
+Seventy-five other supporting named indexes remain owning-table evidence and
+are not recounted as table or index recommendations.
+
+The nine new delete rows represent two full physical targets at table, field
+and index grains plus three field-only candidates: facet `answer_id`, option
+answer/range columns and option stored cardinality. The four provisional
+posting row-family, one count row-family and simple/status option row-family
+deletes refine retained mixed tables and are not extra DSP rows. Full-table
+delete candidates increase from eight to ten. None is implementation
+authority.
+
+The posting-order move requires a one-to-one immutable candidate-order join
+before limit with identical cursor/checksum/bulk behavior. The 14 derives
+require exact stable-serializer equality, owner-approved denominators, bounded
+response derivation or immutable component/chunk receipts plus startup-probe
+replacement. Every delete requires deployed/operator/reference inventory,
+retained-history authority, migration/backfill or receipt, parity, rollback,
+cleanup, retention and executable restore. No move, derive or delete is
+actionable.
+
+Manifest accounting remains DBO 322 discovered/322 blocked and CMF 1,985
+discovered/1,985 blocked. API, UI, background, map and lineage counts/states
+are unchanged. `FAN-0060`-`FAN-0064` and `FAN-0067`-`FAN-0074` remain
+blocked, the 92-row physical register remains 91 blocked plus one
+source-proven `not-applicable`, and no `PRF-####` state advances. A
+provisional keep is not a `classified` manifest row; a conditional index keep
+is not a measured access path; a registered/benchmark contract is not mounted
+product use; successful partial reduction is not terminal cleanup or bounded
+replay; and source absence is not deletion authority. `overallCertification`
+remains independently `INCOMPLETE`.
+
 ## Recommendation Proof Gate
 
 Create separate `PRF-####` rows for positive and negative proof. For a move,
@@ -12703,19 +12949,24 @@ reason, bounded replacement when applicable, evidence IDs, proof IDs, and
 `recommendationActionability`. A `classified` manifest row is necessary but
 not sufficient for an actionable disposition.
 
-Current state: US-073 through US-078 add `DSP-0001`-`DSP-0182`. Eighty-seven
-table/logical/file-object rows and 95 disjoint column-family rows cover 74
-physical tables/catalogs, 13 logical/file/no-table contracts and all 1,333
-in-scope CMF rows exactly once. Counts are 148 `keep`, two `move`, ten
-`derive`, 16 `delete` and six `archive`; all 182 are provisional with
-`recommendationActionability: unresolved` and zero are actionable. The 14
-delete rows through US-077 are separate table/field accounting grains for
-seven physical targets; US-078 adds the two queue-patch grains for an eighth
-physical target. The six archive rows are separate grains for two physical
-targets. Eighty-three supporting indexes remain owner evidence rather than
-additional tables or recommendations. US-076 through US-078 prior-owner
-cross-references are revalidated without double counting. Inherited
-dispositions outside the normalized scope remain provisional and unresolved.
+Current state: US-073 through US-079 add `DSP-0001`-`DSP-0228`. Ninety-six
+table/logical/file-object rows, 124 disjoint column-family rows and eight
+associated-index rows cover 83 physical tables/catalogs, 13
+logical/file/no-table contracts, all 1,456 in-scope CMF rows and the eight
+current high-fan-out indexes exactly once. Counts are 170 `keep`, three
+`move`, 24 `derive`, 25 `delete` and six `archive`; all 228 are provisional
+with `recommendationActionability: unresolved` and zero are actionable.
+Through US-078, 16 delete rows represented eight physical targets at table and
+field grains. US-079 adds table/field/index delete grains for two more physical
+targets plus three field-only candidates, so full-table delete candidates are
+ten. The six archive rows remain separate grains for two physical targets.
+Five associated indexes are conditional keeps, one a derive/replace candidate
+and two delete candidates; `FAN-0064`/`FAN-0072` remain blocked, so none is a
+measured or actionable index decision. Seventy-five other supporting indexes
+remain owner evidence rather than additional tables or recommendations.
+US-076 through US-079 row-family and prior-owner cross-references are
+revalidated without double counting. Inherited dispositions outside the
+normalized scope remain provisional and unresolved.
 
 ### Output 08 - Move/Delete Candidates And Proof Requirements
 
@@ -16031,6 +16282,13 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-0595` | 2026-07-22 / US-078 | Deliberately skipped configured snapshot/query/studio, direct/live DuckDB or SQLite, fixture DDL/DML, migrations, server/app/browser/desktop, workers/projectors, startup repair, async/queue execution, export/transfer/cleanup, benchmarks and physical collectors. Audited created artifacts and started product processes. | Preserve repository data/runtime behavior and benchmark-critical settings while making non-execution, cleanup and process-stop accounting explicit. | Produced `EVD-0899`: zero database/runtime/fixture commands, zero generated artifacts and zero started product processes occurred; cleanup and stop sets are empty. Only the audit plan and required Ralph tracker metadata change. |
 | `CMD-0596` | 2026-07-22 / US-078 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check` and strict source-only sequential-ID/reference/table-width/scope/disjointness/no-recount/disposition/actionability/state/count/source/worktree/tracker/whitespace validators. Two preliminary validator drafts were non-authoritative: the first treated repeated DBO first-column cross-references as duplicate canonical rows, and the second scanned BLK references globally instead of the blocker registry. The corrected registry-scoped validator is authoritative. Skipped build, tests, browser/desktop, database and runtime gates because this story changes audit Markdown/tracker metadata only. | Verify the complete register, independent states, non-actionability, docs-only isolation and relevant repo-native formatting without prohibited runtime evidence. | Produced `EVD-0900`. Lint preserves the same six unrelated source errors and no typecheck script exists. Corrected validators pass: 322 DBO, 1,985 CMF, 900 EVD, 596 CMD, 430 BLK, 434 OQ and 182 DSP canonical IDs are contiguous; US-078 scope is 3/9, all 29 CMF IDs occur exactly once, all 12 rows are unresolved and zero is actionable; cumulative dispositions are 148 keep/two move/ten derive/16 delete/six archive; manifests/proof/certification remain unchanged and no product/runtime source changed. |
 
+| `CMD-0597` | 2026-07-22 / US-079 | Read the required reporting and DuckDB skills, user PRD/patterns, `tasks/prd.json#US-078/#US-079/#US-080`, `.ralph-tui/progress.md`, US-001 state rules, US-013/US-044/US-063 closure, US-071 measurements, US-078 prerequisite, current manifests/counts/next IDs, HEAD/status and the targeted memory registry. | Establish prerequisite, exact three-grain accounting, independent-state rules, audit-only/no-live boundary and unrelated worktree state before classification. | Produced `EVD-0901`. US-078 is complete; nine physical tables, 123 in-scope CMF rows and eight current indexes form the new scope. One historical stats index is source-dropped and not recounted. `tasks/prd.json` is the sole pre-existing unrelated modification and the memory registry has no applicable audit result. |
+| `CMD-0598` | 2026-07-22 / US-079 | Compared scoped posting/summary/filter/partial product and schema source from US-063 baseline `6f0a1a6c30f3623cea6ec1684ef9a8d62e0777e6` through HEAD `fb256d624f48e6734e44a3b33961208bd7309970`; read the full-file-name lexical migration loader, exact 0097/0099/0100/0101/0112/0113/0114 chain and DBO/CMF closure. No database was opened. | Freeze current effective table/field/material/index shape and preserve destructive rebuild, dropped-index and applied-ledger boundaries. | Produced `EVD-0902`. Scoped source is unchanged. The scope reconciles to nine tables, 115 physical fields, eight material families, eight current named indexes and one historical dropped index; deployed rebuild/drop completion remains unavailable. |
+| `CMD-0599` | 2026-07-22 / US-079 | Ran source-only exact declaration/caller/consumer/writer/reference searches and reads for seven posting kinds, stats calculations, named counts/facets/options, route/benchmark/client consumption, in-memory/persistent/partial contributions, chunk accumulation/finalization, startup/retention and all eight index predicate/order shapes. | Assign exact row-family and field needs, bounded alternatives, intermediate ownership/lifecycle and conditional index paths while keeping source use, mounted product use, measurements, cleanup and recovery separate. | Produced `EVD-0903`-`EVD-0913`. Active tables/fields have exact source contracts; unused row groups and duplicate fields have bounded candidates; partial cleanup/replay and all physical/index evidence remain incomplete. |
+| `CMD-0600` | 2026-07-22 / US-079 | Expanded every selected DBO/CMF/index range, separated table, index and field grains, checked every posting/count/facet/option row-family decision without double claiming shared fields, verified each keep contract/budget and each non-keep key/migration/lifecycle/parity path, then reconciled counts. | Prevent double counting and derive exact table, index and disjoint field disposition matrices without turning provisional source evidence into actionability. | Produced `EVD-0914`: nine table plus eight index plus 29 field decisions cover nine physical tables, eight current indexes and 123 unique CMF rows. The 46 rows are 22 keep, one move, 14 derive and nine delete; all remain unresolved and zero is actionable. Cumulative counts become 170 keep/three move/24 derive/25 delete/six archive. |
+| `CMD-0601` | 2026-07-22 / US-079 | Deliberately skipped configured snapshot/query/studio, direct/live DuckDB or SQLite, fixture DDL/DML, migrations, server/app/browser/desktop, workers/projectors, posting/summary/filter/partial execution, startup repair, export/transfer/cleanup, benchmarks, EXPLAIN/profile and physical collectors. Audited created artifacts and started product processes. | Preserve repository data/runtime behavior and benchmark-critical settings while making non-execution, cleanup and process-stop accounting explicit. | Produced `EVD-0915`: zero database/runtime/fixture commands, zero generated artifacts and zero started product processes occurred; cleanup and stop sets are empty. Only the audit plan and required Ralph tracker metadata change. |
+| `CMD-0602` | 2026-07-22 / US-079 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check` and strict source-only sequential-ID/reference/table-width/scope/disjointness/row-kind-no-recount/disposition/actionability/state/count/source/worktree/tracker/whitespace validators. Skipped build, tests, browser/desktop, database and runtime gates because this story changes audit Markdown/tracker metadata only. | Verify the complete register, independent states, non-actionability, docs-only isolation and relevant repo-native formatting without prohibited runtime evidence. | Produced `EVD-0916`. Lint preserves the same six unrelated source errors and no typecheck script exists. Validators pass: 322 DBO, 1,985 CMF, 916 EVD, 602 CMD, 436 BLK, 440 OQ and 228 DSP canonical IDs are contiguous; US-079 scope is 9/8/29, all 123 CMF IDs occur exactly once, all 46 rows are unresolved and zero is actionable; cumulative dispositions are 170 keep/three move/24 derive/25 delete/six archive; manifests/proof/certification remain unchanged and no product/runtime source changed. |
+
 ## Blockers
 
 | rowId | Scope | Missing evidence | Why blocked | Owner question IDs | Resolution condition |
@@ -16473,6 +16731,13 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0428` | Queue eligibility, priority, count and keyset authority | Active queue rows derive LLM/Human prompt-pair eligibility from current raw sources. Stable queue identity excludes priority/activity while the physical key includes them; `prompt_id` is declaration-nullable. Mounted existence, registered queue, summary counts, distinct-article preview and prompt-pair worker use different grains. The worker keyset omits `queue_identity`. | Source cannot choose authoritative blank/delete/mode semantics, priority direction, article-versus-pair counts, equal-key completeness, full/dirty parity, snapshot immutability, deployed values/index plans or runtime order. | `OQ-0432` | Product/judgment/queue/projector owners approve queue kinds, source authority, null/identity/priority/count/cursor semantics and prove direct/registered/job/UI parity, publication, benchmark, retention and restore. |
 | `BLK-0429` | Physical queue-patch retirement | `mart.review_queue_patch_v4` and its equal-PK index have migration/test references but no checked-in production reader, writer, startup or retention owner; current code named “patch” directly mutates active queue and reports zero patch rows. | Static absence and direct-serving writes support only blocked delete candidates. They do not establish deployed absence, retained-history irrelevance, dynamic/operator closure, safe index/table deletion, cleanup or recoverability. | `OQ-0433` | Architecture/migration/recovery owners inventory and receipt/migrate every deployed row/field/history/reference, prove direct-writer semantic parity and approve cutover, rollback, cleanup, retention and executable restore. |
 | `BLK-0430` | Search/queue publication, lifecycle and browser/desktop parity | Search and queue write, validate, acknowledge, promote and retain in separate stages. Per-row timestamps are startup mutation cells, not immutable receipts; in-process restore is not crash proof. Retention lacks ordinary-reader leases and omits search jobs/physical patch. Shared URL state reads `location.search` and rewrites pathname/query without retaining desktop hash. | Source caps, shared components, startup probes and active/LKG/pin protection do not prove immutable publication, crash recovery, reader-safe cleanup, web/desktop request/cache/navigation/render parity or non-keep replacement safety. | `OQ-0434` | Publication/client/recovery owners approve immutable component/chunk receipts, startup replacement, reader/cleaner leases, complete lifecycle and platform fixture; prove interruption, parity, cleanup receipts and executable restore. |
+
+| `BLK-0431` | US-079 final authority and physical evidence | Source defines current posting, summary, facet, option and partial owners, but no owner approval, immutable deployed inventory, approved fixture, physical fan-out/width/value profile, same-fixture benchmark, cleanup result or executable restore establishes final homes. | Provisional keep/move/derive/delete rows do not advance DBO/CMF audit status, FAN proof state, recommendation actionability or certification. | `OQ-0435` | Product/query/projector/storage/audit owners approve the boundary and supply immutable deployed, benchmark, lifecycle, cleanup and restore evidence satisfying the recommendation proof gate. |
+| `BLK-0432` | Posting-kind, stats, identity and denominator authority | Three posting kinds have active membership use while four have writer/lifecycle only. Mounted routes and bulk use different duplicate/conflict homes. Stats cardinality drives dirty diffs, but selectivity has no consumer and its active-scope denominator is not a route denominator; stable identity and row times are duplicated. | Source use cannot establish intended row kinds, deployed values, exact group/cardinality parity, immutable atomic publication, physical fan-out/benefit or safe row/field retirement. | `OQ-0436` | Product/query/projector owners approve retained posting kinds, direct/embedded/bulk behavior, denominator and serializer authority; prove full/dirty parity, measurement, migration, rollback, retention and restore. |
+| `BLK-0433` | Named summary, facet, option and client contract authority | Mounted product reads use list total, queue-ready and prompt-derived options; prompt counts also have benchmark/internal contracts. Filtered-total is a fixed unavailable row, raw facets and simple/status options are returned but ignored by current controls, and nullable/range/count fields lack consumers. | Registry membership, benchmark code or raw response presence alone cannot choose product/external contract, field necessity, error behavior, row cardinality, physical access or safe retirement. | `OQ-0437` | Product/API/client/benchmark owners approve every named count/facet/option and raw response field, then prove requested-scope semantics, browser/desktop parity, physical plans, migration, rollback and restore. |
+| `BLK-0434` | Partial ownership, terminal cleanup, replay and recovery | Summary sources reduce in 256-chunk batches into a retained accumulator; contribution rows feed deduplicated counts. Source summary batches are deleted, but accumulator and contribution rows have no successful-terminal cleanup, and failed/abandoned/orphan/finalization-failure states lack a durable lease/cursor/schedule. | Successful invocation/publication is not a durable cleanup receipt or bounded replay/recovery proof. Missing FKs, validation coverage, physical fan-out and restore results keep both intermediate tables blocked. | `OQ-0438` | Projector/reliability/retention owners define request/chunk ownership fences, idempotent replay, terminal/orphan predicates, cleanup schedule/receipt, reader safety and interruption/restore matrix and validate them physically. |
+| `BLK-0435` | Applied index state and measured access paths | Eight current source indexes and one historical drop have no approved applied catalog, selected EXPLAIN/profile, rows scanned/output, residual selectivity, latency, maintenance, rebuild, bytes/cost or orphan result. Active posting membership and direct order need different key shapes. | DDL, predicate prefixes and source caps are not optimizer-use or physical-cost evidence. Conditional keeps and the posting-index derive remain provisional and cannot authorize retaining, replacing or dropping an index. | `OQ-0439` | Query/database/performance owners approve an immutable fixture and collect `FAN-0064`/`FAN-0072` for every access/write/failure path, then decide exact keep/replace/drop expressions and recovery. |
+| `BLK-0436` | Non-keep migration, parity, cleanup and restore | Two dormant tables/indexes, mixed row families, repeated order/identity/payload/time and unused fields have bounded candidates, but deployed rows/history, dynamic/operator/external references, target writers/readers, migration/backfill, cutover, rollback, cleanup and restore are unavailable. Browser/desktop source shares filter controls but no actual parity capture exists. | Static absence, always-null writers, raw-client nonuse, stable derivability or a startup probe cannot prove safe storage removal or unchanged benchmark/product behavior. | `OQ-0440` | Architecture/migration/API/client/recovery owners approve every target and capture deployed inventory, exact parity/benchmark, receipted cutover/cleanup, rollback and executable restore before any non-keep actionability changes. |
 
 ## Owner Questions
 
@@ -16920,6 +17185,13 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0432` | Product/judgment/queue/projector/query owner | Which LLM/Human source and blank/delete/mode semantics define eligibility; what queue kinds, prompt nullability, stable/physical identity, priority direction, article-versus-pair count and complete registered/job keyset are authoritative; and what full/dirty/publication/UI/job/index proof is required? | `DSP-0173`, `DSP-0179`-`DSP-0182` and `BLK-0428` |
 | `OQ-0433` | Architecture/migration/recovery owner | Who approves retirement of `mart.review_queue_patch_v4` and its index; which deployed row/field/reference/operator inventory, retained-history migration/receipt, direct-serving writer parity, cutover, rollback, benchmark, cleanup, retention and restore proof is mandatory? | `DSP-0172`, `DSP-0178` and `BLK-0429` |
 | `OQ-0434` | Publication/client/desktop/recovery/retention owner | Which immutable component/chunk receipt replaces per-row search/queue times, what crash-safe startup and reader/cleaner lease contract applies, and which browser/desktop URL/hash/request/cache/render plus interruption/cleanup/restore matrix must certify the move, derives and retirements? | `DSP-0100`, `DSP-0129`, `DSP-0172`, `DSP-0176`-`DSP-0178`, `DSP-0182` and `BLK-0430` |
+
+| `OQ-0435` | Product/query/projector/storage/audit owner | Do you approve the 46 US-079 decisions across nine tables, eight indexes and 29 CMF families as the final posting/summary/filter/partial boundary, and which immutable deployed profile, benchmark, lifecycle, cleanup and restore evidence is mandatory before actionability changes? | `DSP-0183`-`DSP-0228` and `BLK-0431` |
+| `OQ-0436` | Product/query/projector owner | Which posting kinds and duplicate/conflict homes are authoritative for mounted, bulk and any direct contract; what exact stats cardinality/denominator/identity semantics and atomic full/dirty publication are required; which bounded candidate-order and publication-receipt replacements are approved? | `DSP-0184`, `DSP-0192`-`DSP-0193`, `DSP-0201`-`DSP-0209` and `BLK-0432` |
+| `OQ-0437` | Product/API/client/benchmark owner | Which six retained count definitions, six raw facet families, prompt/Human-summary options, benchmark/internal prompt counts and raw response fields are supported contracts; may filtered-total, simple/status rows, null/range/count fields and duplicate payloads retire, and under what browser/desktop/error parity? | `DSP-0186`-`DSP-0188`, `DSP-0195`-`DSP-0197`, `DSP-0211`-`DSP-0222` and `BLK-0433` |
+| `OQ-0438` | Projector/reliability/retention owner | What durable request/chunk/accumulator/contribution ownership fence, idempotent replay cursor, terminal/failed/abandoned/orphan predicate, cleanup schedule/receipt, concurrent-reader rule and interruption/restore drill governs both partial tables? | `DSP-0189`-`DSP-0190`, `DSP-0194`, `DSP-0198`-`DSP-0199`, `DSP-0210`, `DSP-0223`-`DSP-0228` and `BLK-0434` |
+| `OQ-0439` | Query/database/performance owner | Which immutable fixture/configuration and approved EXPLAIN/profile/cost collector will measure applied existence, operator, rows scanned/output, residual, timing, mutation, rebuild and bytes/cost for `DBO-0171`-`DBO-0178` and the historical stats-index drop; which exact expressions then remain? | `DSP-0183`-`DSP-0190` and `BLK-0435` |
+| `OQ-0440` | Architecture/migration/API/client/recovery owner | For every table/index/row/field move, derive or delete candidate, what deployed/reference/history inventory, target writer/read path, migration/backfill, cutover, rollback, browser/desktop/export/transfer parity, cleanup receipt, retention and executable restore proof is required? | Non-keep `DSP-0183`-`DSP-0185`, `DSP-0191`, `DSP-0194`, `DSP-0200`, `DSP-0203`-`DSP-0205`, `DSP-0207`-`DSP-0210`, `DSP-0212`-`DSP-0214`, `DSP-0216`-`DSP-0217`, `DSP-0219`-`DSP-0222`, `DSP-0225`, `DSP-0228` and `BLK-0436` |
 
 ## US-001 Quality Gates
 
@@ -20223,6 +20495,60 @@ commands. A command proves only the claim linked through its evidence record.
 - [x] Final sequential-ID/reference/table-width/scope/disjointness/no-recount/
       disposition/actionability/state/count/source/worktree/tracker/whitespace
       invariants pass (`CMD-0596`).
+
+## US-079 Quality Gates
+
+- [x] US-078 is complete. The exact non-overlapping scope reconciles to nine
+      physical tables, nine table decisions, eight current named indexes,
+      eight separate index decisions and 29 disjoint material-family
+      decisions covering `CMF-1264`-`CMF-1386` exactly once. The one
+      historical source-dropped stats index is revalidated but not recounted.
+- [x] Every posting kind, posting-stat group, named count, named facet,
+      filter-option group, persistent contribution, summary/contribution
+      partial and associated index has a provisional table, row-family,
+      field and/or separate index decision at its correct accounting grain.
+- [x] Retained summaries and filters name their exact definition, version,
+      mounted/internal consumer and one-row, 128-row or 512-row source bound.
+      Raw response presence, benchmark registration and mapped/unmounted
+      contracts remain distinct from demonstrated current product use.
+- [x] Both retained partial tables name the request/chunk owner, completed-
+      manifest fence, 256-chunk reduction, accumulator/publication path and
+      missing terminal/orphan cleanup, durable replay cursor, reader lease,
+      retention schedule, interruption matrix and executable restore proof.
+- [x] Five conditional index keeps and one derive are tied to exact lookup,
+      order, completed-manifest and reduction shapes plus mandatory applied-
+      catalog, plan/operator, row-scan/output, residual, timing, mutation,
+      rebuild and cost measurements. Those measurements remain unavailable;
+      source DDL/predicate alignment does not certify an index.
+- [x] Every move, derive and delete row names its bounded target or retirement
+      gate. Deployed/reference/history inventory, migration/backfill, parity,
+      benchmark, rollback, cleanup, retention and restore remain mandatory;
+      no non-keep recommendation is actionable.
+- [x] Forty-six sequential `DSP-####` rows reconcile as nine table, eight
+      index and 29 field decisions: 22 `keep`, one `move`, 14 `derive` and
+      nine `delete`. All 46 new and all 228 cumulative rows retain
+      `recommendationActionability: unresolved`; zero are actionable.
+- [x] `auditStatus`, `proofCheckState`,
+      `recommendationActionability` and `overallCertification` remain
+      independent. DBO stays 322 discovered/322 blocked, CMF stays 1,985
+      discovered/1,985 blocked, the affected `FAN-####` rows remain blocked,
+      the physical proof register stays 91 blocked plus one not-applicable,
+      no `PRF-####` state advances and certification remains `INCOMPLETE`.
+- [x] `EVD-0901`-`EVD-0916`, `CMD-0597`-`CMD-0602`,
+      `BLK-0431`-`BLK-0436` and `OQ-0435`-`OQ-0440` record exact evidence,
+      commands, blockers, owner questions, bounded resolution conditions and
+      docs-only/no-live accounting.
+- [x] Zero database/runtime/fixture commands, generated artifacts or started
+      product processes occurred. No schema, code, route, projector,
+      retention, runtime behavior or data changed; cleanup and process-stop
+      sets are empty.
+- [x] `rtk bun run lint` preserves the same six unrelated source errors and
+      no typecheck script exists. Build, tests, browser/desktop and database
+      gates are irrelevant to this Markdown-only audit classification and
+      were not run.
+- [x] Final sequential-ID/reference/table-width/scope/disjointness/row-kind-
+      no-recount/disposition/actionability/state/count/source/worktree/tracker/
+      whitespace invariants pass (`CMD-0602`).
 
 ---
 
