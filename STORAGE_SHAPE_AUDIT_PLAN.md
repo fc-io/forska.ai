@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-095 add 933 finite proof rows without changing a disposition: the 949-row proof register is eight `satisfied`, 478 `pending`, 463 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked` through explicit required target links, and zero are actionable. US-092 through US-095 define 38 concrete but unvalidated `TGT-0001`-`TGT-0038` shapes; US-095 adds exact selective posting/cardinality, named count/facet/typed-option, disjoint aggregate/overlap-safe contribution partial and bounded foreground/async/unavailable filter contracts. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, benchmark fixture/configuration, exact route/browser/desktop proof, posting/summary/filter exactness and selectivity, applied access paths, bounded ID/row/byte/call/attempt hydration and order, search/queue selection, eligibility, priority and cursor parity, legacy/current identity and history mapping, snapshot/publication/file-reference atomicity, canonical path/key and permissions/encryption evidence, export/transfer/portability parity, migration/cutover, temporary lifetime and residue, replay/repair/startup/recovery, retention, cleanup and restore evidence remain incomplete. No prior proof state or manifest state advanced, no planned route, runtime, parity, benchmark or lifecycle work is labeled passed, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` remains independently `INCOMPLETE`. |
+| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-096 add 940 finite proof rows without changing a disposition: the 956-row proof register is eight `satisfied`, 478 `pending`, 470 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked` through explicit required target links, and zero are actionable. US-092 through US-096 define 45 concrete but unvalidated `TGT-0001`-`TGT-0045` shapes; US-096 adds project-specific and globally reusable token alternatives, bounded exact asynchronous substring results, immutable queue eligibility/order/article-access components and intake selection receipts. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, benchmark fixture/configuration, exact route/browser/desktop proof, posting/summary/filter/search exactness and selectivity, applied access paths, bounded ID/row/byte/call/attempt hydration and order, queue eligibility/priority/cursor/intake/claim parity, legacy/current identity and history mapping, snapshot/publication/file-reference atomicity, canonical path/key and permissions/encryption evidence, export/transfer/portability parity, migration/cutover, temporary lifetime and residue, replay/repair/startup/recovery, retention, cleanup and restore evidence remain incomplete. No prior proof state or manifest state advanced, no planned route, runtime, parity, benchmark or lifecycle work is labeled passed, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` remains independently `INCOMPLETE`. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-095 / 2026-07-22` | Designs eight layered `TGT-0031`-`TGT-0038` alternatives for selective posting membership and cardinality receipts, named exact counts/facets, complete typed options, disjoint aggregate partials, overlap-safe request contributions and exact foreground/async/unavailable filter execution. Proposed contracts separately cap dimension/value fan-out, source/candidate articles, membership/contribution rows, probes, encoded bytes, calls/physical attempts, pages/chunks and recursive termination; representative SQL, exactness, write/index amplification, ownership, invalidation, failure, migration, retention, replay, recovery and cleanup are explicit. Approximation, silent truncation, global-for-contextual reuse and unbounded foreground exact work are rejected. `PRF-0942`-`PRF-0949` remain blocked pending owner approval, non-live applied inventory, exact plan/platform/lifecycle proof and a fixed physical benchmark; 22 linked keeps remain unresolved, 24 linked non-keeps remain blocked and no actionability changes. No schema, code, runtime, data or certification state advances. |
+| Latest normalized story | `US-096 / 2026-07-22` | Designs seven layered `TGT-0039`-`TGT-0045` alternatives for project-specific token membership, reusable global title facts plus bounded project binding, exact asynchronous substring work, immutable queue eligibility, exact prompt-pair order/cursors, article-grain queue access and bounded intake selection receipts. Proposed contracts separately cap normalized input, per-title tokens, source/binding/posting rows, prefix probes, candidate intersections, result rows, encoded bytes, calls/physical attempts, pages/chunks/windows and termination. Representative SQL, write/index amplification, ownership, invalidation, snapshot publication, failure, migration, retention, replay, recovery, cleanup and browser/desktop consequences are explicit. Foreground project scans, all-ID materialization, cursor omissions and reinterpreting intake/SQLite/claim order as serving priority are rejected. `PRF-0950`-`PRF-0956` remain blocked pending semantic ownership, non-live applied inventory, exact plan/platform/lifecycle proof and a fixed physical benchmark; seven linked keeps remain unresolved, seven linked non-keeps remain blocked and no actionability changes. No schema, code, runtime, data or certification state advances. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
@@ -17338,6 +17338,589 @@ proof; all 24 linked non-keeps retain their prior blocked replacement proof.
 remains 1,985/1,985 blocked, FAN remains 91 blocked plus one source-proven
 not-applicable, and certification remains `INCOMPLETE`.
 
+## US-096 Search And Queue Target Shapes
+
+US-095 is complete and remains the prerequisite. This story designs exact,
+bounded alternatives for the title-token, asynchronous-substring and active
+Unassessed-queue families classified in US-078 and paired with family and
+replacement proof in US-088. It does not reopen or reassign `DSP-0100`,
+`DSP-0129` or `DSP-0171`-`DSP-0182`. The target names below are design
+contracts, not schema approval, applied objects, measured savings or authority
+to change a route, writer, worker, queue or client.
+
+Scoped `src`, `scripts` and `package.json` source is unchanged from the US-088
+baseline `88ce68f3` through HEAD `807ed4ae`. Effective checked-in shape was
+derived from the lexical migration sequence, including the destructive `0103`
+queue rebuild. No live/current DuckDB or SQLite file, configured snapshot,
+fixture, server, app, worker, projector, migration, browser or packaged desktop
+process was opened or run.
+
+`auditStatus`, `proofCheckState`, `recommendationActionability` and
+`overallCertification` remain separate. Every new target proof is
+`proofCheckState: blocked`. The seven linked keep grains remain
+`recommendationActionability: unresolved`; the seven linked move, derive or
+delete grains retain `recommendationActionability: blocked`; no row becomes
+actionable. DBO, CMF, FAN and disposition accounting does not change.
+
+### US-096 Evidence Ledger
+
+| evidenceId | Evidence class | Exact source | Finding used by this story | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-1133` | `control/prerequisite` | `tasks/prd.json:1888-1924`; `.ralph-tui/progress.md` US-095 entry; US-001 state rules; US-078 dispositions; US-088 and US-095 proofs/targets; HEAD/worktree and canonical-ID counts | US-095 is complete and US-096 was absent. Next IDs are `TGT-0039`, `PRF-0950`, `EVD-1133`, `CMD-0743`, `BLK-0601` and `OQ-0605`. The pre-existing engine-owned `tasks/prd.json` timestamp change is unrelated and preserved. | `CMD-0743` |
+| `EVD-1134` | `production/schema-source` | `src/db/migrateDuckdb.ts#getDuckdbMigrationFiles`; `0097_reviewServingV4Foundation.sql:438-466,482-493,635-649,799-811,873-878`; `0103_reviewServingQueueIdentityPrimaryKey.sql:1-18`; scoped diff `88ce68f3..807ed4ae` | Source declares one pending substring-job table/index, project-repeated title-token rows/index, a migration-only queue-patch table/index and active queue rows. Final `0103` drops and recreates the active queue with mutable priority/activity in its physical key and nullable-declared `prompt_id`. Source DDL is not applied/deployed inventory, data preservation or plan proof. | `CMD-0744` |
+| `EVD-1135` | `production/search-read` | `reviewServingReadContracts.ts:49-123,470-480,779-807`; `reviewServingTitleSearchProjector.ts:214-229`; `reviewServingReader.ts:462-475`; `reviewServingSql.ts:533-583`; `reviewServingHumanBothUnassessedRouteService.ts:167-188,242-253`; `reviewBulkOperationWorker.ts:337-365`; `reviewSearchService.ts:179-219` | Mounted list/count/bulk paths tokenize input and require every normalized prefix under project/search/scope/snapshot/article before their own order/limit. Registered standalone search caps 50 rows/2 MB/5 s and orders token/article, but its service submits one whole lowercased string and no cursor. Input token count, token bytes, raw prefix rows, distinct articles and request-wide probes are not source-capped. | `CMD-0745` |
+| `EVD-1136` | `production/search-write-validation` | `reviewServingTitleSearchProjector.ts#getReviewServingTitleSearchTokens/#getTitleSearchRows/#getTitleSearchRecord/#getTitleSearchManifest/#projectReviewServingTitleSearchRows`; `reviewServingProjectorWriter.ts#getReviewServingTitleSearchRebuildRowsStatements`; `reviewServingProjectorWorker.ts:1073-1093` | Dirty JavaScript and full DuckDB rebuilds repeat token rows per project/search/scope/snapshot. Selected-import title and scope/activity changes invalidate project search. JavaScript NFKD/mark stripping and rebuild `strip_accents` remain unproved equivalent; strict checksum includes token/title prefix but omits activity and row time. A passed chunk cannot certify tokenizer parity, ordering or bounded fan-out. | `CMD-0745` |
+| `EVD-1137` | `production/substring-control` | `reviewSearchService.ts:102-166,222-309`; `reviewServingReadContracts.ts:713-735,795-807`; `reviewServingSql.ts#getReviewServingRowsSqlJobPredicate`; `reviewServingSearchOwnership.ts`; exact non-test caller/executor/result/cleanup search | Internal code can deterministically insert/read one pending job with cursor JSON `{cursor:null,limit:500}` and return async/indexing/unavailable. No mounted caller, claimant, executor, title-chunk reader, result membership/order/cursor writer, progress/visibility owner, pin, retry, expiry, repair or cleanup path exists. Job presence is not exact result availability. | `CMD-0745` |
+| `EVD-1138` | `production/queue-write-eligibility` | `reviewServingQueueProjector.ts:239-375,406-520,570-660`; queue dirty/config/prompt/scope delta paths; `reviewServingProjectorWorker.ts:1212-1236` | Full/dirty queue work derives LLM `unassessed` and Human `human-unreviewed` prompt pairs from project scope, selected state, enabled prompts, model/content settings, current LLM/Human rows and Human mode. Blank/delete/summary/Covidence rules differ. Active rows are directly deleted/upserted while `patchRowCount` remains zero. Strict checksum covers priority and stable identity but omits activity order. | `CMD-0746` |
+| `EVD-1139` | `production/queue-read-order-cursor` | `reviewServingReadContracts.ts:470-480`; `reviewServingReader.ts:242-333`; `reviewServingHumanBothUnassessedRouteService.ts:408-422`; `reviewServingJudgmentJobQueueService.ts:47-145,280-434`; summary and bulk queue predicates | Mounted Unassessed rows use queue existence then candidate activity order; registered queue pages use priority/activity/article/prompt/identity; named counts use prompt pairs; job count uses distinct articles; preview groups maximum priority/activity; intake keysets priority/activity/article/prompt and omits queue identity. Source caps are 100 registered rows, 500 preview articles and 5,000+1 pairs under five-second/no-spill contexts. These units and orders are not interchangeable. | `CMD-0746` |
+| `EVD-1140` | `production/intake-claim-boundary` | `judgmentsJobsCronGetPrompts.ts:14-29`; `judgmentsJobsAddToQueue.ts:36-40,281-333,336-469,623-680`; `judgmentExecutionSnapshotService.ts:809-876`; prior job-local queue/claim proofs `PRF-0332`-`PRF-0342` | Current intake fetches at most one 128-row scan window per tick, advances the serving cursor over fetched rows after central/local rejection, then partitions accepted rows Human-first before durable SQLite insertion. Claim-time execution snapshots later bind model/content/payload separately. Serving priority, intake partition, local insertion order, claim and execution identity are five contracts; success in one does not certify another. | `CMD-0746` |
+| `EVD-1141` | `production/publication-retention-recovery` | search/queue projection manifests and snapshot promotion; `reviewServingRetentionService.ts:29-54,70-124,193-240`; `duckdbService.ts#duckdbStartupIndexedTableRepairSpecs`; `reviewServingProjectorWorker.ts` cleanup schedule; `scripts/dbBackup.ts` | Search/queue revisions, project scope, selected import, review config, source watermarks, chunk checks, ACK and promotion are separate. Current cleanup includes final search/queue tables in rotating 512-row steps and protects active/LKG/pins, but ordinary-reader leases/full-cycle receipts are absent; substring jobs and physical patches are omitted. Mutation-probe restoration and backup creation are not crash-safe publication or clean-host restore. | `CMD-0747` |
+| `EVD-1142` | `production/browser-desktop-source-only` | `useUrlFilters.ts:37-169`; `projectsArticlesUnassessedQuery.ts:31-74`; `reviewsArticlesUnassessedTableContainer.tsx:29-118,175-230`; `getRouterHistoryMode.ts`; `getDesktopApiOrigin.ts`; `getDesktopRuntimeConfig.ts:195-252` | Shared UI applies search on submit, stores it in the outer query string/query key/select-all criteria and renders candidate articles/counts/cursors, not tokens, queue priority/prompt/identity or substring progress. Browser uses path history; packaged desktop uses `views:` hash history and a loopback bridge, while the shared hook reads outer `location.search` and rewrites pathname/query without retaining hash. Source applicability is not actual platform parity. | `CMD-0747` |
+| `EVD-1143` | `measurement/control` | US-070 `FAN-0051`-`FAN-0052`; `BLK-0362`-`BLK-0366`; `reviewServingBenchmark.ts` search/queue workload declarations; approved-snapshot absence; source-baseline and worktree checks | Deployed token/title/binding/pair/article/result cardinalities, encoded/table/index/WAL/temp bytes, selectivity, priority/null/equal-key domains, plans, writes, latency, RSS/spill, platform behavior and restore outcomes remain unavailable, never zero. Source caps and proposed limits are not measured-safe values. | `CMD-0747` |
+| `EVD-1144` | `design/comparison-lifecycle` | `TGT-0039`-`TGT-0045`; US-096 cap, SQL, write/index, snapshot/failure, retention/recovery/cleanup, migration and platform matrices below | Seven exact design-only targets compare project-specific tokens with reusable global facts plus bounded project binding, define a complete async substring state machine, and split queue eligibility, pair order, article access and intake receipts. Every target has per-call/request/revision bounds and explicit failure/continuation. | `CMD-0748`-`CMD-0749` |
+| `EVD-1145` | `design/proof-control` | `PRF-0950`-`PRF-0956`; `BLK-0601`-`BLK-0610`; `OQ-0605`-`OQ-0614`; US-096 accounting, quality gates and command ledger | All seven validations remain blocked pending semantic ownership, immutable applied inventory, exact plans/platform/lifecycle proof and a fixed benchmark. Proof becomes 8/478/470/0 across 956 rows; actionability remains 326 unresolved/115 blocked/zero actionable. | `CMD-0750`-`CMD-0752` |
+
+### Current Contract Versus Bounded Alternatives
+
+| Grain | Current checked-in behavior | Exact bounded alternative | Consequence and explicit failure |
+| --- | --- | --- | --- |
+| Project token-prefix membership | Token rows repeat once for each project/search/scope/snapshot/article. Mounted consumers require every normalized input token by correlated prefix membership, but input/fan-out/probe totals are not capped. | `TGT-0039` retains one versioned project-specific token component plus a separate article receipt/diagnostic row. One bounded raw-token prefix anchor is intersected with the remaining prefixes, then order is restored from `TGT-0024`. | Simple project-local invalidation but repeated token writes across projects. Unknown/over-cap prefix rows, tokenizer mismatch, absent access plan or unfinished revision is indexing/unavailable; no title scan or partial-ready page. |
+| Reusable global tokens plus project intersection | No global token fact exists; selected title can vary by project/import snapshot, so an article ID alone is not reusable title authority. | `TGT-0040` interns an immutable normalized-title fact and token set once, then binds each project/search revision/article to the exact fact selected for that project. Global prefix rows are admitted under a raw-row sentinel and joined only to bounded project bindings/candidates. | Reduces token duplication only when identical title facts are genuinely reused; adds fact/binding/index writes and cross-owner lifecycle. Missing title-fact equality, over-cap global prefix, project-binding mismatch or candidate overrun is async/unavailable. |
+| Exact substring | One pending control row may be created/read; no result or executor exists. | `TGT-0041` freezes query, tokenizer/title-fact, project/candidate/order and filter revisions; background chunks read strict candidate keysets and persist exact ordered membership plus chunk/final/result receipts. | No foreground `LIKE`, full-title scan or recursive drain. Candidate/input/result/call cap excess, missing executor, failed lease/checksum/finalization or incomplete result is failed/unavailable, never empty-ready. |
+| Queue eligibility | Active row means one LLM/Human prompt pair is currently eligible, but full/dirty parity and blank/delete/mode/config authority are unresolved; mutable priority/order participates in the physical key. | `TGT-0042` uses a stable eligibility key independent of priority/activity plus an immutable queue-revision receipt binding source/config/prompt/mode rules, pair/article counts, bytes and complete-field checksum. | Membership identity survives reprioritization. A duplicate/null/unknown pair, source-count mismatch, zero-fan-out replay gap or checksum failure blocks candidate publication and retains active/LKG. |
+| Prompt-pair priority/order/cursor | Registered order includes queue identity; job pair order omits it. Activity is millisecond-truncated in the job path and omitted from strict chunk checksum. | `TGT-0043` registers one exact pair order: `(priority_bucket DESC, activity_sort_at DESC, article_id DESC, prompt_key DESC, queue_identity DESC)` and signs every cursor with queue revision, filter, order version and all five values. | At most 100+1 registered or 5,000+1 worker rows. Equal/null cases must be deterministic. Missing final tie-break, order-field checksum or cursor/revision parity is unavailable; no strict-`>` skip is accepted. |
+| Article-grain queue access | Mounted list uses pair existence but candidate order; job count uses distinct articles; preview groups pair priority/activity at read time. | `TGT-0044` derives one sealed article row per queue kind with exact pair count, maximum priority and activity at that maximum. Mounted list joins existence then preserves `TGT-0024` candidate order; preview uses the article summary order. | Adds one row/index per eligible article but avoids foreground pair grouping for preview/count. Article count, prompt-pair count and displayed total stay named separately; a grouped row cannot replace pair eligibility or candidate order. |
+| Intake, local ready queue and claim | A 128-row serving window advances before later rejection; accepted rows can be partitioned Human-first, then SQLite insertion/claim and execution snapshot use separate identities. | `TGT-0045` persists a selection epoch and one receipt per explicit window: queue revision/order/cursor in/out, fetched/rejected/inserted counts, ordered checksum, intake-policy version and execution-config identity. It references existing local ready/claim/snapshot state rather than copying all IDs centrally. | Cursor progress, durable insertion, Human-first policy, claim and execution visibility reconcile separately. A rejected/duplicate row is accounted, not silently lost; intake policy cannot be called serving priority or weaken its order. |
+
+### Checked-In Search And Queue Semantics To Preserve Or Reject
+
+The current formulas below are source facts, not approved target authority.
+Owners must either preserve each formula exactly under a versioned target or
+approve a typed replacement and migration. A target cannot silently select the
+most convenient behavior from the dirty writer, rebuild writer, standalone
+service, mounted list or job intake path.
+
+| Current contract | Exact checked-in formula | Target consequence |
+| --- | --- | --- |
+| Dirty/title token normalization | Selected import title wins unless selected state is tombstoned, then canonical article title applies. JavaScript applies `NFKD`, removes only `U+0300`-`U+036F`, lowercases, splits on `[^a-z0-9]+`, drops empty tokens and deduplicates in insertion order. Title prefix is the first configured normalized characters. | `TGT-0039`/`TGT-0040` need exact normalized bytes, token set/order and title winner in their identity and checksum; Unicode outside that combining range is an explicit domain decision. |
+| Full rebuild token normalization | DuckDB applies `lower(strip_accents(COALESCE(title,'')))`, then `regexp_split_to_array(...,'[^a-z0-9]+')`; equivalence to JavaScript NFKD/removal and dedup behavior is not proven. | Candidate publication fails until cross-implementation parity covers every approved Unicode/duplicate/empty case; neither writer is presumed authoritative. |
+| Standalone token-prefix service | Sends one `request.searchText.trim().toLowerCase()` value as `searchTokenPrefix`; it does not call the title tokenizer or expose a cursor. Registered SQL orders token then article and caps the returned rows only. | Mounted multi-token all-prefix semantics and standalone one-prefix semantics receive separate contract keys or an owner-approved unification; no cursor or tokenizer behavior is inferred. |
+| LLM queue pair | Scope is curated-or-route. Prompt is enabled, project-enabled and not archived. Latest nondeleted judgment for article/prompt must exactly match project model and four content booleans and is ranked by `created_at DESC NULLS LAST,id DESC`. Pair is eligible only when selected/scope tombstones are false, `is_answered` is false, `answered_original` is null and its array is empty. Priority is `0` with no current-config judgment and `1` otherwise; activity is judgment `created_at`, else scope article updated/created, else the stale constant. | `TGT-0042` must freeze this exact natural identity, answer and priority policy or name an approved replacement. Bucket `1` sorts before `0`; it cannot be reinterpreted as fresh-first without a new revision and migration. |
+| Human queue pair | Prompt mode uses every enabled prompt; summary mode uses pseudo-prompt `summary`. Pair is eligible only when selected/scope tombstones are false and trimmed prompt/summary answer is empty; summary rows with `origin='covidence_import'` are ineligible. Priority is `0` when both applicable updates are null and `1` otherwise; activity is prompt update, summary update, then scope activity. | `TGT-0042` keeps prompt-versus-summary, blank, Covidence, priority and activity rules explicit. Optional blank submission/answered-state policy cannot be inferred from row presence. |
+| Queue identity and registered order | Stable JSON identity contains prompt ID, queue kind and review-config hash. Registered pair order/cursor is priority, activity, article, prompt and queue identity descending; current physical key also contains mutable priority/activity and the schema declares prompt nullable. | `TGT-0042` maps legacy/null identity before cutover; `TGT-0043` removes mutable order from membership identity but preserves every registered order value and precision in checksum/cursor. |
+| Mounted, preview and intake order | Mounted Unassessed filters by queue existence and retains candidate activity/article order. Preview groups articles by maximum pair priority/activity. Worker intake orders pairs by priority/activity/article/prompt, omits queue identity, then partitions accepted rows Human-first. | `TGT-0044` seals the article reduction while preserving mounted candidate order; `TGT-0045` receipts intake separately. Neither preview nor Human-first may be presented as the registered serving order. |
+
+### US-096 Target Shape Register
+
+Every `v5` object below is proposed only. A `*_revision_id`, checksum, count,
+byte field, cursor or receipt is an exact contract field; it is not the current
+mutable projection identity, row timestamp, status enum or inferred plan.
+
+| targetId | Target and linked disposition grains | Exact proposed shape | Owner, source, invalidation and failure | Evidence / proof |
+| --- | --- | --- | --- | --- |
+| `TGT-0039` | Project-specific token search; keeps `DSP-0171`, `DSP-0174`-`DSP-0175`; replaces `DSP-0176`-`DSP-0177` | `mart.review_project_title_token_v5` PK `(project_id,search_revision_id,token,article_id)` contains keys only. `mart.review_project_search_article_v5` PK `(project_id,search_revision_id,article_id)` carries immutable `normalized_title_digest` and only an approved diagnostic activity field. `app.review_project_search_revision_v5` binds tokenizer/collation/prefix-bound version, project-scope and selected-title revisions, source/article/token row counts, encoded bytes, complete checksum and status. | Search projector owns rows from the exact project-selected title and scope revision. Title/import winner, scope, tokenizer or diagnostic-source change creates/repairs a candidate revision. Duplicate token, article token/byte cap, checksum or publication failure blocks candidate and retains active/LKG. No raw-title/current-row fallback. | `EVD-1134`-`EVD-1136`, `EVD-1141`, `EVD-1143`-`EVD-1145`; `PRF-0950` |
+| `TGT-0040` | Reusable global title tokens plus bounded project binding; alternative for the same `DSP-0171`, `DSP-0174`-`DSP-0177` grains without a second disposition | `mart.review_title_fact_v5` PK `title_fact_id` binds canonical normalized-title bytes/digest and tokenizer version. `mart.review_global_title_token_v5` PK `(tokenizer_version,token,title_fact_id)` stores tokens once. `mart.review_project_search_binding_v5` PK `(project_id,search_revision_id,article_id)` stores the exact `title_fact_id`; one receipt binds project scope/selected-title revision and fact/token/binding counts/checksums. | Global title-fact owner interns only byte-identical normalized title content; project search owner writes bindings from selected-import authority. Title content creates a new fact; project winner/scope changes only the binding revision. Hash collision, unresolved legacy title, fact/binding mismatch, global prefix overrun or unmeasured cross-project lifecycle fails explicitly. | `EVD-1134`-`EVD-1136`, `EVD-1143`-`EVD-1145`; `PRF-0951` |
+| `TGT-0041` | Exact asynchronous substring search; candidate retained replacement for blocked delete grains `DSP-0100`/`DSP-0129`; evidence-backed retirement remains valid if product rejects substring | `app.review_substring_request_v5` PK `search_result_id` stores canonical query/filter/order signature, project/search/title-fact/candidate revisions, admitted counts/bytes/calls, strict cursor, status/error/lease/attempt/expiry. Chunk rows bind non-overlapping candidate keysets. `mart.review_substring_result_v5` PK `(search_result_id,order_value,article_id)` stores exact membership/order; a final receipt binds source/result counts, bytes, checksum and availability. | Search API admits only an installed background executor. Worker scans immutable title facts through bounded candidate keysets; retry keeps identical settings and idempotent chunk identity. Source revision change creates a new request. Missing executor, cap/checksum/conflict/finalization exhaustion is failed/unavailable; prior active result remains only under an approved LKG contract. | `EVD-1134`, `EVD-1137`, `EVD-1141`-`EVD-1145`; `PRF-0952` |
+| `TGT-0042` | Immutable queue eligibility/revision; keeps `DSP-0173`, `DSP-0179`-`DSP-0180`; replaces physical patch/time `DSP-0172`, `DSP-0178`, `DSP-0182` | `mart.review_queue_item_v5` PK `(project_id,queue_revision_id,queue_kind,article_id,prompt_key,queue_identity)` with nonnull stable `prompt_key`, integer priority and exact activity value; mutable order fields are not in the membership key. `app.review_queue_revision_v5` binds project-scope, selected-import, review-config, prompt/mode, LLM/Human source revisions, pair/article counts, bytes, complete eligibility+priority+activity checksum and status. | Queue projector owner applies an approved finite eligibility/priority policy for LLM, Human prompt/summary, blank/delete/Covidence/tombstone/config cases. Any source or policy change creates/repairs a candidate revision. Direct dirty/full writers must prove equal output. Missing/null/duplicate pair, zero-fan-out replay gap, incomplete checksum or ACK/promotion failure retains active/LKG. | `EVD-1134`, `EVD-1138`-`EVD-1141`, `EVD-1143`-`EVD-1145`; `PRF-0953` |
+| `TGT-0043` | Exact pair priority/order/cursor; logical access/index over `TGT-0042`; keeps `DSP-0181` | Ordered access path `(project_id,queue_revision_id,queue_kind,priority_bucket DESC,activity_sort_at DESC,article_id DESC,prompt_key DESC,queue_identity DESC)`. Opaque cursor binds contract/filter/revision/order version, direction and all five values. Registered page is 100+1; worker page is at most 5,000+1. | Queue query owner exposes the same full tuple wherever pair order is promised. A different product order gets a different contract/cursor. Reprioritization creates a new queue revision; no cursor crosses it. Null/equal keys, truncation precision, missing tie-break, plan sort/spill, or checksum omission rejects the path. | `EVD-1139`-`EVD-1141`, `EVD-1143`-`EVD-1145`; `PRF-0954` |
+| `TGT-0044` | Exact article-grain queue access; logical/derived companion, no second disposition | `mart.review_queue_article_v5` PK `(project_id,queue_revision_id,queue_kind,article_id)` with nonnegative `eligible_pair_count`, `max_priority_bucket` and `max_priority_activity_sort_at`. A receipt proves exact reduction from `TGT-0042`. Preview index orders maximum priority/activity/article; mounted list uses only existence then `TGT-0024` candidate order. | Queue summary owner derives from the sealed pair revision. Pair membership/priority change invalidates the article revision atomically with or after a separately named availability gate. Reduction conflict, count/checksum mismatch or missing article row fails; pair count, distinct article count, preview total and displayed list total never substitute for one another. | `EVD-1139`, `EVD-1141`, `EVD-1143`-`EVD-1145`; `PRF-0955` |
+| `TGT-0045` | Bounded queue selection/intake receipt; logical control that does not replace local SQLite, accepted-claim or execution-snapshot authorities | `app.review_queue_selection_epoch_v5` PK `selection_id` binds job/project, queue/candidate/config revisions, pair-order version, intake-policy version, execution-config identity, starting cursor, request-wide caps and status. `app.review_queue_selection_page_v5` PK `(selection_id,page_ordinal)` stores cursor in/out, fetched/rejected-central/rejected-local/inserted counts, ordered pair checksum, bytes/attempts and durable local insertion ACK reference; it stores no all-ID JSON/array. | Judgment-job intake owner requests one explicit window, persists its receipt/ACK, then advances. Human-first partition is a versioned intake policy over fetched rows and cannot relabel serving priority. Queue revision/config drift, cursor gap, count/checksum mismatch, local ACK failure or attempt exhaustion stops the epoch. Claim/execution snapshots remain separately required. | `EVD-1139`-`EVD-1140`, `EVD-1143`-`EVD-1145`; `PRF-0956` |
+
+The same search dispositions appear in two alternative target designs because
+US-096 compares architectures; they remain one set of seven physical/material
+recommendations, not duplicate assignments. `TGT-0043`-`TGT-0045` are
+access/composition/control contracts over the active queue and do not create
+new dispositions. The seven keeps are `DSP-0171`, `DSP-0173`-`DSP-0175` and
+`DSP-0179`-`DSP-0181`; the seven blocked non-keeps are `DSP-0100`, `DSP-0129`,
+`DSP-0172`, `DSP-0176`-`DSP-0178` and `DSP-0182`.
+
+### Proposed Cardinality, Payload, Call And Termination Bounds
+
+These are finite proposed maxima, not measured-safe or owner-approved values.
+Later validation may lower them. It may not raise them silently, turn an
+over-cap exact result into a partial/zero value, hide adapter retries, or drain
+pages recursively inside one API, client or worker invocation.
+
+| Contract | Per article/chunk/call maximum | Request/revision-wide maximum | Exact over-cap behavior |
+| --- | --- | --- | --- |
+| Project search build `TGT-0039` | 16 KB normalized title, 64 unique tokens and 4 KB encoded token bytes/article; 10,000 source articles, 640,000 token rows and 64 MB encoded rows/chunk | 10,000,000 source articles, 640,000,000 token rows, 64 GB encoded rows and 1,000 chunks/revision | Split the candidate range earlier. One article/title or revision overrun fails the candidate with observed count/range; no token or article is omitted. |
+| Global facts/bindings `TGT-0040` | Same title/token caps per immutable fact; 10,000 new facts or 10,000 project bindings and 64 MB/chunk | 10,000,000 new fact versions, 640,000,000 fact-token rows and 10,000,000 project bindings per admitted build | Fact or binding candidate fails. It cannot hash-only reuse unmatched bytes, borrow another project's selected title or fall back to project current source. |
+| Project foreground token search `TGT-0039` | Search text 256 UTF-8 bytes; eight unique normalized prefixes, each 64 bytes; 50,001 raw project-token rows/prefix probe, 50,001 distinct anchor articles, 1,000,000 point membership probes, 501 candidate rows and 2 MB | At most three database statements and three physical adapter attempts including revision/admission; five seconds; no automatic continuation | Probe/candidate sentinel, prefix-bound mismatch, unproved plan, timeout or byte/attempt excess returns indexing/async/unavailable before a ready page. A full first page is exact only in registered candidate order. |
+| Global foreground token search `TGT-0040` | Same query caps; 100,001 raw global fact-token rows/prefix probe, 50,001 project-binding rows, 50,001 distinct project anchor articles, 1,000,000 point membership probes, 501 candidate rows and 2 MB | At most three database statements and three physical adapter attempts including fact/binding/revision admission; five seconds; no automatic continuation | Broad global prefix, binding/candidate sentinel, fact mismatch, unproved plan, timeout or byte/attempt excess returns async/unavailable. A small project never authorizes scanning an over-cap global posting. |
+| Async substring `TGT-0041` | Query 256 UTF-8 bytes; 2,000 candidate titles and 32 MB normalized input/chunk; 2,000 result rows and 4 MB/chunk | 250,000 candidates, 512 MB input, 50,000 result rows/64 MB, 125 chunks, 512 physical attempts and three identical-setting attempts/chunk | Request is not admitted when a sealed candidate/input receipt exceeds a cap. Runtime overrun is terminal failed/unavailable with repairable state; no partial result is exposed as ready. |
+| Queue build `TGT-0042`/`TGT-0044` | 512 eligible pairs and 64 KB encoded pair/order data/article; 10,000 source articles, 1,000,000 pair rows, 10,000 article rows and 128 MB/chunk | 10,000,000 articles, 100,000,000 pairs, 10,000,000 article summaries, 16 GB encoded rows and 1,000 chunks/revision | Split earlier by exact article keyset. A single article or revision overrun fails the candidate; pair/article counts remain unavailable rather than truncated. |
+| Registered pair page `TGT-0043` | 100 rows plus one sentinel, 2 MB, one statement and five seconds | At most three statements/physical attempts including revision/cursor validation | Return at most 100 with a signed full-tuple cursor. Sentinel is continuation, not dropped work; missing tie-break/revision/order proof is unavailable. |
+| Worker pair page `TGT-0043` | 5,000 rows plus one sentinel, 2 MB, one statement and five seconds | One explicit page/call; no read-all recursion | Return at most 5,000 with the full five-value cursor. More rows require the caller to persist and explicitly submit continuation. |
+| Article page/preview `TGT-0044` | Mounted page 501 candidate sentinel rows/2 MB; preview 500 rows plus one sentinel/2 MB; exact count one row | Each operation has its own at-most-three-statement binding/read budget | Candidate page preserves candidate order; preview preserves maximum-priority order; count stays separate. No grouped pair scan or count substitution on overrun. |
+| Intake receipt `TGT-0045` | Current-compatible maximum 128 fetched pairs plus one lookahead, 2 MB, one explicit window/tick; separate central/local rejection and insertion counts | 10,000,000 fetched pairs, 78,125 page receipts and 1 GB receipt/diagnostic bytes/selection epoch; physical attempts are counted per page and capped at 1,024 per epoch before explicit rollover | Stop the epoch before exceeding a cap and require an owner-approved new epoch/continuation. Never materialize all IDs, recurse until exhaustion, advance past an unreceipted page or coerce rejected rows to inserted progress. |
+
+The search anchor bounds raw posting rows and distinct articles separately.
+`LIMIT 50001` is only a sentinel inside a plan whose scanned rows, residuals,
+sort and spill have later been proven; it is not itself plan proof. Queue pair,
+article and intake caps likewise bound different grains. The design never
+infers queue-pair cardinality from an article count or execution progress from
+fetched/selected rows.
+
+### Representative Exact SQL
+
+The SQL below is design text only. It was not run or explained. An authorized
+implementation must parameterize inputs, use the exact tokenizer/collation and
+prefix-successor version, capture the applied plan, and reject any path that
+scans, sorts, spills or probes beyond the declared maxima.
+
+For project-specific tokens, one admission statement probes every normalized
+prefix under the raw-row sentinel and selects an approved anchor. The result
+statement bounds that raw anchor, intersects all remaining prefixes, then joins
+the immutable candidate component to restore its registered order. It never
+orders by copied search activity.
+
+~~~sql
+WITH requested_prefix(prefix_ordinal, prefix_lower, prefix_upper) AS (
+  VALUES
+    -- at most eight normalized, nonempty prefixes with exact exclusive upper bounds
+    (0, $prefix_0_lower, $prefix_0_upper)
+),
+raw_anchor AS MATERIALIZED (
+  SELECT token.article_id, token.token
+  FROM mart.review_project_title_token_v5 AS token
+  WHERE token.project_id = $project_id
+    AND token.search_revision_id = $search_revision_id
+    AND token.token >= $anchor_lower
+    AND token.token < $anchor_upper
+  ORDER BY token.token, token.article_id
+  LIMIT 50001
+),
+anchor_guard AS MATERIALIZED (
+  SELECT COUNT(*) AS raw_row_count FROM raw_anchor
+),
+anchor_article AS MATERIALIZED (
+  SELECT DISTINCT article_id FROM raw_anchor LIMIT 50001
+),
+matched AS MATERIALIZED (
+  SELECT anchor.article_id
+  FROM anchor_article AS anchor
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM requested_prefix AS requested
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM mart.review_project_title_token_v5 AS token
+      WHERE token.project_id = $project_id
+        AND token.search_revision_id = $search_revision_id
+        AND token.article_id = anchor.article_id
+        AND token.token >= requested.prefix_lower
+        AND token.token < requested.prefix_upper
+    )
+  )
+)
+SELECT candidate.article_id, candidate.order_value
+FROM anchor_guard
+INNER JOIN matched ON anchor_guard.raw_row_count <= 50000
+INNER JOIN mart.review_candidate_component_v5 AS candidate
+  ON candidate.project_id = $project_id
+ AND candidate.candidate_revision_id = $candidate_revision_id
+ AND candidate.list_mode_key = $list_mode_key
+ AND candidate.article_id = matched.article_id
+WHERE ($cursor_order_value IS NULL OR
+      (candidate.order_value, candidate.article_id) <
+      ($cursor_order_value, $cursor_article_id))
+ORDER BY candidate.order_value DESC, candidate.article_id DESC
+LIMIT 501;
+~~~
+
+The reusable alternative bounds global token facts before project
+intersection. The binding proves which immutable title fact the project
+selected. A broad global prefix is unavailable or asynchronous even when the
+project happens to be small; it never triggers an unbounded global scan.
+
+~~~sql
+WITH requested_prefix(prefix_ordinal, prefix_lower, prefix_upper) AS (
+  VALUES
+    -- at most eight normalized, nonempty prefixes with exact exclusive upper bounds
+    (0, $prefix_0_lower, $prefix_0_upper)
+),
+global_raw AS MATERIALIZED (
+  SELECT token.title_fact_id, token.token
+  FROM mart.review_global_title_token_v5 AS token
+  WHERE token.tokenizer_version = $tokenizer_version
+    AND token.token >= $anchor_lower
+    AND token.token < $anchor_upper
+  ORDER BY token.token, token.title_fact_id
+  LIMIT 100001
+),
+global_guard AS MATERIALIZED (
+  SELECT COUNT(*) AS raw_row_count FROM global_raw
+),
+project_anchor AS MATERIALIZED (
+  SELECT DISTINCT binding.article_id, binding.title_fact_id
+  FROM global_guard
+  INNER JOIN global_raw ON global_guard.raw_row_count <= 100000
+  INNER JOIN mart.review_project_search_binding_v5 AS binding
+    ON binding.project_id = $project_id
+   AND binding.search_revision_id = $search_revision_id
+   AND binding.title_fact_id = global_raw.title_fact_id
+  ORDER BY binding.article_id
+  LIMIT 50001
+)
+SELECT project_anchor.article_id
+FROM project_anchor
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM requested_prefix AS requested
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM mart.review_global_title_token_v5 AS token
+    WHERE token.tokenizer_version = $tokenizer_version
+      AND token.title_fact_id = project_anchor.title_fact_id
+      AND token.token >= requested.prefix_lower
+      AND token.token < requested.prefix_upper
+  )
+)
+ORDER BY project_anchor.article_id
+LIMIT 50001;
+~~~
+
+An asynchronous substring chunk scans one immutable candidate keyset and
+selected title fact. It writes matching rows directly; it never accumulates a
+project-wide ID array. Result order is the frozen requested order, while source
+chunk order is an independent strict article keyset.
+
+~~~sql
+WITH candidate_chunk AS MATERIALIZED (
+  SELECT candidate.article_id, candidate.order_value, binding.title_fact_id
+  FROM mart.review_candidate_component_v5 AS candidate
+  INNER JOIN mart.review_project_search_binding_v5 AS binding
+    ON binding.project_id = candidate.project_id
+   AND binding.search_revision_id = $search_revision_id
+   AND binding.article_id = candidate.article_id
+  WHERE candidate.project_id = $project_id
+    AND candidate.candidate_revision_id = $candidate_revision_id
+    AND candidate.article_id > $source_cursor_article_id
+  ORDER BY candidate.article_id
+  LIMIT 2001
+),
+bounded_chunk AS MATERIALIZED (
+  SELECT * FROM candidate_chunk LIMIT 2000
+)
+INSERT INTO mart.review_substring_result_v5 (
+  search_result_id, order_value, article_id
+)
+SELECT $search_result_id, bounded.order_value, bounded.article_id
+FROM bounded_chunk AS bounded
+INNER JOIN mart.review_title_fact_v5 AS fact
+  ON fact.title_fact_id = bounded.title_fact_id
+WHERE strpos(fact.normalized_title, $normalized_substring) > 0
+ON CONFLICT (search_result_id, order_value, article_id) DO NOTHING;
+~~~
+
+`DO NOTHING` is valid only after the immutable request/fact/order identity and
+conflict predicate prove the duplicate identical. A differing order or source
+fact is a terminal conflict. Chunk checksum, final result checksum, result
+visibility, polling termination and cleanup remain separate receipts.
+
+Queue eligibility uses one stable membership key; priority/activity are values
+validated in the complete checksum rather than physical identity. The
+representative source CTE is bounded by an immutable article chunk and embeds
+the approved LLM/Human rules rather than reading current rows later.
+
+~~~sql
+INSERT INTO mart.review_queue_item_v5 (
+  project_id, queue_revision_id, queue_kind, article_id, prompt_key,
+  queue_identity, priority_bucket, activity_sort_at
+)
+SELECT
+  $project_id, $queue_revision_id, source.queue_kind, source.article_id,
+  source.prompt_key, source.queue_identity, source.priority_bucket,
+  source.activity_sort_at
+FROM bounded_exact_queue_source AS source
+WHERE source.eligible = TRUE
+  AND source.article_id > $chunk_start_article_id
+  AND source.article_id <= $chunk_end_article_id
+ON CONFLICT (
+  project_id, queue_revision_id, queue_kind, article_id, prompt_key,
+  queue_identity
+) DO UPDATE SET
+  priority_bucket = excluded.priority_bucket,
+  activity_sort_at = excluded.activity_sort_at;
+~~~
+
+Pair pagination binds the full registered tuple. All fields are nonnull and
+the cursor is rejected when queue revision, filter or order version changes.
+
+~~~sql
+SELECT article_id, prompt_key, queue_identity,
+       priority_bucket, activity_sort_at
+FROM mart.review_queue_item_v5
+WHERE project_id = $project_id
+  AND queue_revision_id = $queue_revision_id
+  AND queue_kind = $queue_kind
+  AND (
+    $cursor_is_start
+    OR (priority_bucket, activity_sort_at, article_id, prompt_key,
+        queue_identity) <
+       ($cursor_priority, $cursor_activity, $cursor_article_id,
+        $cursor_prompt_key, $cursor_queue_identity)
+  )
+ORDER BY priority_bucket DESC, activity_sort_at DESC, article_id DESC,
+         prompt_key DESC, queue_identity DESC
+LIMIT $limit_plus_one;
+~~~
+
+Article access is a separately sealed reduction. Mounted pages join its
+existence to the candidate component and preserve candidate order; preview
+uses only the article summary's named priority order.
+
+~~~sql
+INSERT INTO mart.review_queue_article_v5 (
+  project_id, queue_revision_id, queue_kind, article_id,
+  eligible_pair_count, max_priority_bucket, max_priority_activity_sort_at
+)
+SELECT project_id, queue_revision_id, queue_kind, article_id,
+       COUNT(*) AS eligible_pair_count,
+       MAX(priority_bucket) AS max_priority_bucket,
+       MAX(activity_sort_at) FILTER (
+         WHERE priority_bucket = article_max_priority
+       ) AS max_priority_activity_sort_at
+FROM bounded_queue_item_with_article_max_priority
+GROUP BY project_id, queue_revision_id, queue_kind, article_id;
+~~~
+
+No SQL block above authorizes a new table or index. Exact output also requires
+the target receipts, byte/call/attempt counters, applied-plan proof and the
+target-specific `PRF-####` row below.
+
+### Exact Queue Grains And Semantics
+
+The proposed queue family preserves the currently distinct units instead of
+normalizing them into one convenient count or order. The registered pair
+contract is the only contract that may call its order serving priority.
+Human-first is an intake policy applied after a fetched serving window; SQLite
+insertion and claim/execution snapshots remain downstream durability and
+execution contracts.
+
+| Operation | Exact eligibility and unit | Exact priority/order | Cursor and continuation | What it cannot prove or replace |
+| --- | --- | --- | --- | --- |
+| Pair eligibility build | One approved LLM `unassessed` or Human `human-unreviewed` article/prompt/identity pair in sealed `TGT-0042`; eligibility includes exact scope, selected state, enabled prompt, mode, model/content, blank/delete/tombstone/summary and Covidence rules | Priority and activity are checksummed values, not membership-key fields | Immutable article build chunks; no read cursor | Does not prove article count, mounted candidate order, local insertion, claim or execution visibility |
+| Registered pair page | One queue item from `TGT-0042`, at most 100 plus sentinel | `priority_bucket DESC, activity_sort_at DESC, article_id DESC, prompt_key DESC, queue_identity DESC` | Signed `TGT-0043` cursor carries queue/filter/order versions and all five values; continuation is explicit | Does not prove a distinct-article count or authorize a cursor that omits identity |
+| Worker pair page | Same pair eligibility, at most 5,000 plus sentinel | Same full five-value tuple; changing precision or tie-break is a new contract | One page per call; worker durably persists the full continuation before another call | Does not authorize read-all recursion, all-ID materialization or advancing after an unreceipted page |
+| Mounted Unassessed list | One `TGT-0024` candidate article whose sealed `TGT-0044` article row exists | Candidate component activity/article order, not queue priority | Existing candidate full-tuple cursor; queue/candidate revisions are both bound | Queue existence does not reorder the mounted page or turn pair count into displayed count |
+| Named queue counts | Explicit `eligible_pair_count` and distinct `eligible_article_count` from the same sealed revision | No order | One signed summary result or typed unavailable | Neither count substitutes for the other, preview rows, list envelope count or client-rendered total |
+| Queue preview | One `TGT-0044` article summary, at most 500 plus sentinel | `max_priority_bucket DESC, max_priority_activity_sort_at DESC, article_id DESC` | Full three-value preview cursor if continuation is exposed | Grouped maximums cannot recreate individual prompt eligibility or pair execution order |
+| Intake selection window | Up to 128 fetched `TGT-0043` pairs plus lookahead under `TGT-0045` | Serving tuple is fetched first; versioned Human-first partition may order only the accepted intake set | Receipt binds cursor in/out and fetched/rejected/inserted counts; next window is explicit | Human-first is not serving priority; fetched, accepted and inserted progress are not equal |
+| Local ready insertion | One durable SQLite row accepted under the existing central/local uniqueness and job rules | Durable insertion order is local queue state | Existing local row/key and ACK, cross-referenced by selection receipt | Does not prove the row was claimed, executed, imported or made visible |
+| Claim/execution | One accepted claim plus immutable execution snapshot | Claim policy and execution bindings are independently versioned | Existing claim/ACK/retry state; no serving cursor reuse | Does not prove canonical import, visibility ACK, terminal cleanup or serving-priority parity |
+
+An article with 512 eligible prompts can therefore consume 512 pair rows, one
+article summary row and one candidate article row. Each number, byte total and
+checksum is reported separately. A source cursor that advances over rejected
+rows is valid only when `TGT-0045` accounts those rows and preserves the exact
+next serving cursor; it is never insertion progress.
+
+### Writes, Ownership, Invalidation And Failure
+
+Let `A` be source articles, `P` admitted unique project-token rows, `F` new
+immutable title facts, `G` global fact-token rows, `B` project bindings, `Q`
+eligible prompt pairs, `U` eligible queue articles, `C` async substring chunks,
+`R` substring results and `W` intake windows. These symbols describe logical
+write amplification; physical bytes, compression, index pages, WAL/temp and
+write latency remain unavailable until measured.
+
+| Target | Candidate writes and indexes | Exact invalidation boundary | Publication/failure behavior |
+| --- | --- | --- | --- |
+| `TGT-0039` | `A` project article rows, `P` project-token rows, revision/chunk/final receipts and token/article plus article-key indexes; the same selected title can be repeated for every project | Project scope, selected-import/title winner, normalized title bytes, tokenizer/collation/prefix-bound version and any approved diagnostic field | Build immutable revision, validate every chunk and complete checksum, then promote. Any overrun/parity/conflict failure leaves candidate failed and active/LKG unchanged; no current-title join |
+| `TGT-0040` | Up to `F` title facts, `G` global tokens, `B` project bindings, two lookup indexes and separate global/project receipts; reuse is a benefit only when measured `F`/`G` is lower than repeated `P` | Fact content/tokenizer changes create a new fact; project scope or selected-title winner changes a project binding revision. Fact retention waits for every project/result/export/reference | Fact publication and project binding publication are separately atomic and validated. Collision, byte mismatch, missing fact or over-broad prefix fails; project-specific target remains an explicit alternative, not silent fallback |
+| `TGT-0041` | One request, at most 125 chunk rows, up to 50,000 result rows, result-order index and chunk/final/visibility/cleanup receipts | Query normalization, filter/order/candidate/search/title-fact revision or executor version change creates a new request/result identity | Pending, running, retryable-failed, terminal-failed, ready, expired and cleaned remain distinct. Only complete final receipt plus visibility gate exposes ready; completed-chunk finalization can be readmitted explicitly |
+| `TGT-0042` | `Q` immutable pair rows, revision/chunk/final receipts and stable membership plus full-order indexes; priority changes are new revision values, not delete/reinsert key churn | Project scope, selected import, review config, prompts, Human mode, model/content, LLM/Human answer/delete/blank/tombstone/summary/Covidence policy or source revisions | Dirty and full builds must converge on identical complete output. Zero dirty fan-out still records source reconciliation; later membership requires replay. Candidate failure preserves active/LKG and does not ACK/publish partial rows |
+| `TGT-0043` | Logical ordered access over `TGT-0042`; physical cost is the full five-value index plus signed cursor bytes | Any priority/activity precision, direction, tie-break, filter or queue revision change invalidates the cursor | Null/missing field, equal-key ambiguity, explicit sort/spill, row/byte/time/attempt cap or cursor mismatch is unavailable, not a weaker order |
+| `TGT-0044` | `U` article summary rows, one preview index, reduction chunk/final receipts and exact pair/article count/checksum | Any pair membership, priority or activity change in the source queue revision; candidate-order changes invalidate mounted binding but not the sealed queue article facts | Publish only against the exact pair revision. Missing/conflicting reduction row fails the article component; mounted and preview paths name which revision is unavailable rather than grouping current pairs |
+| `TGT-0045` | One selection epoch, `W` bounded page receipts and local ACK references; at the proposed 10-million-pair maximum, no more than 78,125 receipts and never an ID array | Job criteria, queue/candidate/config revision, pair-order/intake-policy version, execution-config identity or starting cursor | Persist page receipt and local ACK before cursor advance. Drift, gap, ACK/checksum/count mismatch or attempt cap stops the epoch; retry is idempotent for the same window and never switches model/content/thinking/provider |
+
+Search and queue invalidation are not interchangeable. A selected-title change
+can invalidate `TGT-0039`/`TGT-0040` without changing prompt eligibility. A
+Human answer, model/content configuration or queue policy change can invalidate
+`TGT-0042` without changing title tokens. Candidate, search, queue, substring
+result, intake and execution revisions remain independently named in every
+join, cursor and receipt.
+
+### Required Indexes And Applied-Plan Consequences
+
+These indexes are target hypotheses. Checked-in DDL, a successful checksum or
+an index name cannot prove that an applied database has the index or that the
+optimizer uses a bounded plan.
+
+| Target access | Proposed logical index | Required applied-plan proof and rejection condition |
+| --- | --- | --- |
+| Project prefix anchor/membership | `(project_id,search_revision_id,token,article_id)` plus `(project_id,search_revision_id,article_id,token)` | Range seek touches at most 50,001 raw rows; point membership stays under one million probes; no full token/table scan, external sort, spill or post-limit candidate work |
+| Global prefix and fact lookup | `(tokenizer_version,token,title_fact_id)` plus fact PK | Global range seek hits the 100,001 sentinel before project join. If a broad prefix cannot be bounded, return async/unavailable rather than rely on a small project filter |
+| Project fact binding | `(project_id,search_revision_id,title_fact_id,article_id)` plus binding PK `(project_id,search_revision_id,article_id)` | Prefix-to-project intersection and candidate binding use bounded index lookups; no current-title hydration or cross-project scan |
+| Substring scheduler/result | Request `(status,next_attempt_at,search_result_id)`, chunks `(search_result_id,status,chunk_ordinal)` and result `(search_result_id,order_value DESC,article_id DESC)` | Claim one bounded chunk, strict source keyset, idempotent result insert and bounded ordered page; no one-shot project scan, recursive drain or result sort above caps |
+| Queue membership/pair order | Membership PK from `TGT-0042` and `(project_id,queue_revision_id,queue_kind,priority_bucket DESC,activity_sort_at DESC,article_id DESC,prompt_key DESC,queue_identity DESC)` | Full-tuple keyset seek returns limit plus sentinel with no sort/spill; equal priority/activity/article/prompt rows advance by queue identity |
+| Queue article existence/preview | PK `(project_id,queue_revision_id,queue_kind,article_id)` and preview tuple `(project_id,queue_revision_id,queue_kind,max_priority_bucket DESC,max_priority_activity_sort_at DESC,article_id DESC)` | Mounted existence is a point probe before candidate limit semantics; preview is a bounded keyset seek; neither scans/group-bys pair rows at request time |
+| Selection epoch/pages | Scheduler/status index on selection state and unique page/cursor-in identity | One due epoch and one explicit page are claimed; retry finds the identical window receipt. It never reads every page or stores all selected IDs in one row |
+
+Validation must capture normalized and raw `EXPLAIN`/profiler output on the
+approved immutable fixture for every minimum, boundary, sentinel, equal-key,
+null, broad-prefix and persistent-failure case. It must separately report rows
+read, rows emitted, point probes, statements, underlying adapter attempts,
+sort/spill/temp/WAL bytes, latency and peak RSS. A `LIMIT` node alone is not a
+bounded-plan receipt.
+
+### Snapshot, Availability And Continuation Contracts
+
+| Contract | Immutable identities that must be bound | Ready condition | Stale, unavailable and continuation behavior |
+| --- | --- | --- | --- |
+| Project token search | Project, search revision, selected-title/import, scope, tokenizer/collation/prefix-bound and candidate/filter/order revisions | Search and candidate receipts are complete and cursor signature matches | Missing/current mismatch is indexing or unavailable. LKG use, if approved, names its old revisions; continuation carries the candidate cursor, never a token row offset |
+| Global token search | Global fact/tokenizer revision plus exact project binding/search and candidate revisions | Both global fact and project binding receipts validate, bounded prefix admission passes | Missing fact or binding is unavailable; it cannot join a newer current title or borrow another project. Broad prefix may route only to the explicit async contract |
+| Async substring | Query signature, project, candidate/order, search/binding/title-fact, filter and executor versions | All chunks complete, final count/checksum passes and a separate visibility receipt exposes the immutable result | Pending/running/retryable-failed/terminal-failed/expired/cleaned are explicit. Client polls one status result at a time with bounded backoff and stops at a declared terminal state |
+| Queue pair/article | Project, queue kind/revision, scope, selected import, config/prompt/mode/model/content and LLM/Human source revisions; article receipt names pair revision | Pair and article components are complete and route binds the intended candidate revision/order | Partial pair/article revisions never mix. Approved LKG is labelled; missing current revision is indexing/unavailable, not an empty queue or current-row regroup |
+| Pair/preview cursor | Contract/filter/order version, direction, queue revision and every order value | Exact signature and all values decode and compare under registered types/precision | Any mismatch rejects the cursor. A sentinel yields one explicit next cursor; server/client recursion is forbidden |
+| Selection/intake | Selection/job criteria, queue/candidate/config, serving order, intake-policy and execution-config identities | Current page receipt, local insertion ACK and cursor chain reconcile | Drift stops the epoch. Continuation names next page and exact cursor; later claim/execution/import/visibility statuses remain separate |
+
+The selected-import snapshot ID, serving snapshot ID, review-config hash,
+project scope identity and source watermarks remain distinct. None may be
+compressed into a generic `snapshot_id`. Search/queue component completion and
+promotion also remain separate transactions; a failure after all build chunks
+complete needs an explicit finalization-repair admission path.
+
+### Retention, Replay, Recovery And Cleanup
+
+| Lifecycle domain | Required target contract |
+| --- | --- |
+| Retention/reference scan | Protect active, LKG and candidate revisions; every API cursor, substring request/result, selection epoch, local ACK, export/bulk job, pin, repair state and concurrent-reader lease; enumerate global-title fact references separately from project bindings. A timestamp or status is not a lease fence. |
+| Replay | Candidate chunks use immutable source ranges and natural identities. Identical retry is idempotent; conflicting duplicate fails. Dirty zero-fan-out source rows retain reconciliation evidence and are replayed if later scope/route membership changes. Completed-chunk finalization and visibility failure have explicit repair queues. |
+| Clean-host recovery | Restore canonical sources/config, rebuild title facts/tokens and project bindings/search, rebuild queue pairs then article reductions, re-admit pending substring/selection work under original settings, reconcile local ACK/claim/import/visibility state and validate counts/checksums/routes before promotion. Backup existence or startup probe restoration is insufficient. |
+| Bounded cleanup | One scheduled invocation deletes at most 4,096 rows and at most 64 MB across one rotating lifecycle grain, after an immutable reference scan and reader-lease check. Persist cursor, scanned/deleted/retained/error counts and before/after checksum receipt; resume explicitly. Delete final receipts only after every dependent row and artifact is gone. |
+| Crash/concurrency | Candidate publication uses application temp/rename or database transaction semantics appropriate to each artifact, not an inferred application WAL. Claim/lease tokens survive process restart; expired work is repaired or failed by policy, never force-deleted while a reader or retry can reference it. |
+| Orphans and terminal state | Cover failed/expired substring requests, chunks/results, abandoned search/queue candidates, selection epochs/pages, local ACK references, pins, cursors and global facts with zero references. Terminal job status, cleanup invocation and cleanup completion are three states. |
+
+The current 512-row rotating final-table cleanup is useful source evidence but
+does not meet this contract for proposed request/chunk/result/page/receipt rows,
+ordinary-reader leases, cross-family references or full-cycle durable receipts.
+No byte, duration, deletion-safety or clean-host restore claim is made.
+
+### Migration, Backfill, Cutover And Rollback
+
+1. Owners first freeze exact tokenizer/collation/prefix successor, title
+   authority, queue eligibility/priority/activity precision, Human-first
+   intake, named counts, cursor and availability semantics. Every unsupported
+   or legacy null/open-domain case gets a typed decision.
+2. Capture a non-live applied DuckDB/SQLite inventory and immutable workload
+   snapshot, including effective migration order, rows/bytes/indexes, null and
+   equal-key domains, source revisions, local queue/claim state and existing
+   retention/recovery references. Never inspect a live DuckDB directly.
+3. Create only approved candidate objects, versioned writers, leases and
+   receipts. Backfill immutable article keyset chunks within the proposed caps;
+   project-specific and global-token alternatives are measured separately and
+   never run as silent fallback for one another.
+4. Validate every chunk and final candidate with complete-field checksums,
+   tokenizer parity, exact pair/article/count/order/cursor equality, zero
+   gap/overlap, applied-plan bounds and structural/data write amplification.
+   Preserve source/current tables and active/LKG targets.
+5. Run the fixed benchmark plus real browser-path and packaged-desktop
+   hash/outer-window/loopback captures at below, boundary, sentinel, over-cap,
+   equal-key, null, stale, restart and persistent-failure cases. Missing
+   benchmark-critical values remain blockers; no resolver defaults.
+6. Cut over one writer first, reconcile current/candidate state, then one reader
+   contract at a time. Search, substring, mounted queue, registered pair,
+   preview/count, intake and local claim/execution each have independent feature
+   gates and rollback to the validated prior active/LKG revision.
+7. Observe bounded replay, finalization repair, retention/reference scans,
+   clean-host restore and platform parity for an owner-approved window. A local
+   success or 2xx status does not waive result visibility or terminal cleanup.
+8. Only then archive/delete old project tokens, substring control rows,
+   physical queue patch/time columns or old indexes using their existing
+   blocked dispositions. Record history mapping, final reference scan, recovery
+   copy/manifest, bounded deletion receipts and later validation. Rollback stays
+   possible until those proofs pass.
+
+No step above is authorized by this story. In particular, the migration-only
+queue patch family cannot be called retired merely because current writes
+target the active queue; deployed shape, old tokens/barriers, history,
+retention and recovery references must be proven independently.
+
+### Browser And Desktop Consequences
+
+| Flow | Browser requirement | Packaged-desktop requirement | Required evidence before proof |
+| --- | --- | --- | --- |
+| Token search submit/page/back-forward | Preserve path URL query, TanStack key, exact candidate order/count/select-all filter signature and signed cursor; indexing/unavailable is visible | Preserve `views:` hash route, inner query and outer window state through the loopback bridge; no hook may discard the hash or read only outer `location.search` | Exact request order/count/body, cache key/reuse, history state, cursor/page rendering and response fields in real browser and packaged desktop captures |
+| Async substring | Submit one bounded job, show pending/progress/failed/ready/expired, poll with finite backoff/timeout and stop; result page names immutable revision | Same state machine across restart/offline/reconnect and desktop executor availability; no hidden browser-only fallback | Executor registration, job/result visibility, poll count/interval/termination, cancel/retry identity, restart and stale-result captures |
+| Mounted Unassessed list | Keep candidate activity order and displayed article total while queue existence filters membership; do not expose pair count as article count | Same route, cache and cursor semantics under hash history and loopback origin | All four list modes where applicable, empty/nonempty/equal-key pages, deduplication, navigation and current-versus-LKG labels |
+| Queue preview/count/intake | Name article versus pair totals and preview priority; selection criteria persist exact queue/candidate/config revisions | Desktop job status reports fetched/rejected/inserted/claimed/executed/imported/visible/cleaned separately | Actual API/client field lineage, select-all job criteria, page receipts, status transitions and restart behavior; synthetic adapter/DOM tests are supporting only |
+
+The current client does not render queue priority, prompt/identity or substring
+progress. This story does not invent UI exposure. Product owners must approve
+whether those fields remain internal, receive a named diagnostic surface or
+make async substring unsupported. Source inspection cannot certify browser
+request frequency, cache behavior, navigation or desktop parity.
+
+### Rejected Search And Queue Shapes
+
+- Reject foreground project/title scans, `%substring%`, per-candidate current
+  JSON/full-text hydration, unbounded global-prefix joins and any `LIMIT` used
+  as evidence that the underlying scan/sort/probe is bounded.
+- Reject loading every matching article/pair ID into memory, JSON, SQL arrays,
+  one manifest or recursive read-all loops. Every page/chunk has row, byte,
+  statement, physical-attempt and request/revision caps plus explicit durable
+  continuation.
+- Reject global tokens keyed only by canonical article ID. Reuse requires an
+  immutable normalized-title fact and an exact project-selected-title binding;
+  a current-table join would make old search results mutable.
+- Reject exposing partial substring chunks as ready, treating a pending/job
+  status as result visibility, retrying after settings drift, adopting default
+  provider/model/thinking/content, or using missing executor as permission for
+  a synchronous scan.
+- Reject mutable priority/activity as queue membership identity, nullable or
+  omitted final tie-breaks, activity precision changes, strict keyset cursors
+  that skip equal keys, and checksum success that omits an order field.
+- Reject relabelling Human-first partition, SQLite insertion order or claim
+  policy as serving priority. Preserve rejected/fetched/inserted/claimed/
+  executed/imported/visible/cleaned states separately.
+- Reject pair/article/count/preview/list-total substitution, read-time grouping
+  over an unbounded pair set, or using mounted queue existence to change the
+  candidate component's order.
+- Reject inferring cleanup from `finally`, expiry, status or a scheduled call;
+  deletion needs reference/lease scan, bounded receipt, crash replay and restore
+  validation. Reject conceptual storage savings without encoded table/index/
+  WAL/temp bytes and write/read resource measurements.
+- Reject one family `proofCheckState`, checksum, snapshot ID or promotion as
+  proof for all seven targets. Each target below has independent owner,
+  applied-shape, bound, lifecycle, platform and benchmark obligations.
+
+### US-096 Target-Specific Proof Rows
+
+| proofId | Exact passing condition | proofCheckState | Evidence | Missing evidence / blocker | Owner question |
+| --- | --- | --- | --- | --- | --- |
+| `PRF-0950` | `TGT-0039` passes only when owners freeze selected-title and tokenizer/order semantics; non-live applied inventory and a fixed fixture prove per-title/chunk/revision token rows/bytes, both indexes/plans, exact all-prefix membership and candidate order, complete order-aware receipts, one writer, invalidation/replay, migration/rollback, retention/recovery/cleanup and browser/desktop parity without foreground scans or current-title fallback. | `blocked` | `EVD-1133`-`EVD-1136`, `EVD-1141`-`EVD-1145` | Semantic authority, deployed fan-out/bytes, applied plans, exact tokenizer/order/platform equality, lifecycle and benchmark are unavailable; `BLK-0601`-`BLK-0603`, `BLK-0609`-`BLK-0610`. | `OQ-0605`-`OQ-0607`, `OQ-0613`-`OQ-0614` |
+| `PRF-0951` | `TGT-0040` passes only when immutable fact bytes/tokenizer and project-selected binding authority are approved; measured reuse, collision handling, prefix/intersection/candidate bounds, indexes/plans, cross-project reference lifecycle, exact result parity, migration/rollback, cleanup/restore and both platform captures outperform `TGT-0039` without global scans or mutable current joins. | `blocked` | `EVD-1133`-`EVD-1136`, `EVD-1141`, `EVD-1143`-`EVD-1145` | Fact identity, selected-title mapping, reuse/cardinality/bytes, applied plans, cross-owner retention/recovery and benchmark are unavailable; `BLK-0601`-`BLK-0602`, `BLK-0604`, `BLK-0609`-`BLK-0610`. | `OQ-0605`-`OQ-0606`, `OQ-0608`, `OQ-0613`-`OQ-0614` |
+| `PRF-0952` | `TGT-0041` passes only when product/executor owners approve exact substring semantics and installed background-only availability; immutable candidate/title/order chunks, input/result/call/attempt/termination caps, idempotent writes, complete final/visibility receipts, completed-chunk repair, polling/restart/cancel, retention/cleanup and clean-host restore pass with no partial-ready, foreground scan or settings fallback. | `blocked` | `EVD-1133`-`EVD-1137`, `EVD-1141`-`EVD-1145` | Product support, executor/result consumer, deployed cardinality/bytes/plans, visibility/finalization repair, platform state machine, cleanup/restore and benchmark are unavailable; `BLK-0602`, `BLK-0605`, `BLK-0609`-`BLK-0610`. | `OQ-0606`, `OQ-0609`, `OQ-0613`-`OQ-0614` |
+| `PRF-0953` | `TGT-0042` passes only when owners freeze complete LLM/Human eligibility, stable prompt/identity, priority/activity precision and every scope/import/config/model/content/blank/delete/mode/Covidence rule; dirty/full builders prove equal capped pair output and complete checksums; immutable publication, zero-fan-out replay, migration, recovery, retention and cleanup pass. | `blocked` | `EVD-1133`-`EVD-1134`, `EVD-1138`-`EVD-1141`, `EVD-1143`-`EVD-1145` | Eligibility/priority authority, legacy null mapping, deployed pair fan-out/bytes, dirty/full parity, publication/replay, lifecycle and benchmark are unavailable; `BLK-0602`, `BLK-0606`, `BLK-0609`-`BLK-0610`. | `OQ-0606`, `OQ-0610`, `OQ-0613`-`OQ-0614` |
+| `PRF-0954` | `TGT-0043` passes only when every registered pair consumer uses the approved five-value order and signed cursor; non-live equal/null/precision inventory and applied plans prove 100+1 and 5,000+1 row/byte/time/statement/attempt caps, no sort/spill or equal-key skip, full order checksum, revision rejection, platform parity and explicit continuation without read-all recursion. | `blocked` | `EVD-1133`, `EVD-1139`-`EVD-1140`, `EVD-1143`-`EVD-1145` | Order/cursor authority, null/equal-key domains, exact intake parity, applied plans/resource bounds, actual clients and benchmark are unavailable; `BLK-0602`, `BLK-0607`-`BLK-0608`, `BLK-0610`. | `OQ-0606`, `OQ-0611`-`OQ-0612`, `OQ-0614` |
+| `PRF-0955` | `TGT-0044` passes only when article reduction exactly reconciles sealed pairs, named pair/article counts and maximum-priority semantics; mounted existence preserves candidate order and preview uses its distinct cursor; capped writes/indexes/plans, atomic availability, migration/replay/rollback, retention/recovery/cleanup and browser/desktop displayed-count parity pass. | `blocked` | `EVD-1133`, `EVD-1138`-`EVD-1145` | Reduction/count/preview authority, deployed pair/article ratios, exact plan/order/UI lineage, atomic publication, lifecycle and benchmark are unavailable; `BLK-0602`, `BLK-0606`-`BLK-0607`, `BLK-0609`-`BLK-0610`. | `OQ-0606`, `OQ-0610`-`OQ-0611`, `OQ-0613`-`OQ-0614` |
+| `PRF-0956` | `TGT-0045` passes only when serving order, Human-first intake, local uniqueness/insertion, claim and execution identities are independently approved; each 128-row window has a gap-free full-cursor/count/checksum/local-ACK receipt, epoch caps and explicit rollover; restart/retry/config drift, canonical import/visibility/cleanup reconciliation, migration/recovery and platform job status pass without all-ID materialization or weakened queue semantics. | `blocked` | `EVD-1133`, `EVD-1139`-`EVD-1145` | Intake/claim ownership, deployed rejection/duplicate/equal-key domains, durable ACK/cursor chain, status visibility, recovery/cleanup and benchmark are unavailable; `BLK-0602`, `BLK-0607`-`BLK-0610`. | `OQ-0606`, `OQ-0611`-`OQ-0614` |
+
+### US-096 Accounting Reconciliation
+
+| Proof population | satisfied | pending | blocked | not-applicable | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Prior `PRF-0001`-`PRF-0949` | 8 | 478 | 463 | 0 | 949 |
+| US-096 search targets `PRF-0950`-`PRF-0952` | 0 | 0 | 3 | 0 | 3 |
+| US-096 queue targets `PRF-0953`-`PRF-0956` | 0 | 0 | 4 | 0 | 4 |
+| Cumulative `PRF-0001`-`PRF-0956` | 8 | 478 | 470 | 0 | 956 |
+
+| Disposition population | Target references | Count | unresolved | blocked | actionable |
+| --- | --- | ---: | ---: | ---: | ---: |
+| US-096 linked keeps | `TGT-0039`/`TGT-0040`, `TGT-0042`-`TGT-0044` | 7 | 7 | 0 | 0 |
+| US-096 linked non-keeps | `TGT-0039`/`TGT-0040`, `TGT-0041`-`TGT-0042` | 7 | 0 | 7 | 0 |
+| All other existing dispositions | Existing targets/proofs, unchanged | 427 | 319 | 108 | 0 |
+| Cumulative `DSP-0001`-`DSP-0441` | 45 target designs, alternative/logical references do not duplicate assignments | 441 | 326 | 115 | 0 |
+
+The seven US-096 proofs validate target-specific replacement or preservation
+contracts; they do not change any family disposition. All seven are blocked,
+all seven keeps remain unresolved and all seven non-keeps remain blocked.
+DBO remains 322/322 blocked, CMF remains 1,985/1,985 blocked, FAN remains 91
+blocked plus one source-proven not-applicable, and overall certification remains
+`INCOMPLETE`.
+
 ## Recommendation Proof Gate
 
 Create separate `PRF-####` rows for positive and negative proof. For a move,
@@ -21189,6 +21772,16 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-0740` | 2026-07-22 / US-095 | Added `PRF-0942`-`PRF-0949`, `BLK-0591`-`BLK-0600`, `OQ-0595`-`OQ-0604` and target/proof/actionability reconciliation; cross-checked all 22 keep and 24 non-keep US-079 grains without recounting dispositions. | Keep family proof, target validation, disposition actionability, manifest audit status and certification independent. | Produced `EVD-1132`. Eight new proofs remain blocked; cumulative proof is 8/478/463/0 across 949 rows, actionability remains 326 unresolved/115 blocked/zero actionable and target designs total 38. |
 | `CMD-0741` | 2026-07-22 / US-095 | Deliberately skipped configured snapshot/query/studio, direct/live DuckDB or SQLite, deployed inventory, fixture DDL/DML, migrations, server/app/browser/desktop, writers/projectors/operators, repair/backup/restore, export/transfer, cleanup/retention, benchmark, EXPLAIN/profile and physical collectors; audited scoped artifacts/processes before completion. | Preserve schemas, code, routes, projectors, retention, runtime, data and benchmark-critical settings and keep unavailable physical/parity/lifecycle values explicit rather than zero. | Produced `EVD-1132`. No database/runtime/fixture/product command or mutation ran; no generated artifact or started product process requires cleanup. |
 | `CMD-0742` | 2026-07-22 / US-095 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check`, scoped source-baseline/worktree/tracker checks and strict registry-scoped canonical-ID, proof-state, disposition-actionability, target-link, cap/SQL/rejection/write/index/lifecycle/accounting validators. Preliminary read-only drafts misquoted shell backticks, treated first-column cross-references as canonical definitions, required only the normalized proof-state layout or counted SQL openings as all fences; corrected unique-ID, legacy-aware and paired-fence validators are authoritative and changed no audit state. Skipped build, tests, browser/desktop, database and runtime gates because this story changes audit Markdown plus Ralph tracker metadata only and those executions would manufacture prohibited product/physical evidence. | Verify exact target/proof/state accounting, design completeness, source isolation and relevant repo-native formatting without treating lint debt or proposed SQL as runtime proof. | Produced `EVD-1132`. Lint preserves the same six unrelated errors in three worker files and no typecheck script exists. Final validators pass for 322 DBO, 1,985 CMF, 92 FAN, 1,132 EVD, 742 CMD, 600 BLK, 604 OQ, 949 PRF, 441 DSP and 38 TGT canonical ID sets; proof is 8/478/463/0, actionability is 326 unresolved/115 blocked, all 46 US-095 disposition links occur once, six SQL blocks/tables/whitespace pass and scoped product source is unchanged. Only the audit file plus preserved pre-existing `tasks/prd.json` appear in Git status; ignored progress was appended. |
+| `CMD-0743` | 2026-07-22 / US-096 | Read all reporting, DuckDB, API-server and frontend project skills; the user US-096 PRD/patterns; `tasks/prd.json#US-095/#US-096`; `.ralph-tui/progress.md`; US-001 state rules; US-078 dispositions; US-088/US-095 target/proof boundaries; current IDs/counts; HEAD/worktree and targeted memory registry. | Establish prerequisite, exact four-state model, search/queue grains, next IDs, audit-only/no-live boundary and unrelated worktree state before design. | Produced `EVD-1133`. US-095 is complete, US-096 was absent, no applicable stored result replaced source inspection and the pre-existing engine-owned `tasks/prd.json` timestamp modification was preserved. |
+| `CMD-0744` | 2026-07-22 / US-096 | Compared scoped `src`/`scripts`/`package.json` from US-088 baseline `88ce68f3` through HEAD `807ed4ae`; read migration discovery plus effective `0097_reviewServingV4Foundation.sql` and destructive `0103_reviewServingQueueIdentityPrimaryKey.sql` search-job/title-token/queue-patch/active-queue tables and indexes. No database was opened. | Freeze checked-in shape, distinguish final lexical schema from bootstrap declarations and avoid treating DDL/PK/index names as applied/deployed evidence. | Produced `EVD-1134`. Scoped product/schema source is unchanged; active queue priority/activity participates in the rebuilt physical key, `prompt_id` is nullable-declared and all deployed values/plans remain unavailable. |
+| `CMD-0745` | 2026-07-22 / US-096 | Read search read contracts, SQL/reader predicates, mounted list/count and bulk consumers, standalone/substring search service, title tokenizer/projector/writer/checksum/manifests and exact production caller/executor/result/cleanup references. | Trace project token normalization, selected-title authority, prefix membership/order, per-call versus request-wide bounds and the incomplete asynchronous substring lifecycle. | Produced `EVD-1135`-`EVD-1137`. Current project rows repeat tokens, raw prefix/probe totals are not capped, dirty/rebuild tokenizer/order parity is unproved and pending substring control has no operating executor/result/visibility/cleanup path. |
+| `CMD-0746` | 2026-07-22 / US-096 | Read active queue full/dirty projector source and checksum; registered/mounted/job count/preview/pair readers; queue cursor generation; judgment-job source windows, central/local rejection, Human-first partition, SQLite insertion and claim-time execution-snapshot binding. | Separate exact pair eligibility, serving priority/order, candidate article order, pair/article counts, intake policy, local insertion, claim and execution contracts. | Produced `EVD-1138`-`EVD-1140`. Current pair eligibility has distinct LLM/Human/blank/delete/mode rules; registered and job cursors differ; the 128-row intake cursor advances over fetched rows before rejection and Human-first is not serving priority. |
+| `CMD-0747` | 2026-07-22 / US-096 | Read search/queue manifests, publication/ACK state, strict/cheap checksums, retention registration/schedule, startup repair and backup source; inspected shared URL/query/table code, browser versus desktop routing/origin wiring and benchmark declarations; confirmed no approved non-live physical/platform snapshot. | Trace publication, checksum, retention/recovery and actual browser/desktop applicability without manufacturing runtime evidence. | Produced `EVD-1141`-`EVD-1143`. Current cleanup omits substring/physical-patch lifecycle and ordinary-reader receipts; checksum omits search/queue activity order; shared outer-query hooks do not prove hash-route parity; all physical values remain unavailable, never zero. |
+| `CMD-0748` | 2026-07-22 / US-096 | Compared current behavior with `TGT-0039`-`TGT-0045`; documented project-specific versus global fact/binding token shapes, background substring requests/chunks/results, immutable queue pair/article revisions and intake receipts; added separate article/chunk/call/request/revision bounds and six representative SQL blocks. | Provide finite exact design alternatives and explicit continuation while rejecting foreground scans, all-ID materialization, partial-ready output and weakened queue semantics. | Produced `EVD-1144`. Seven design-only targets bound token/title/binding/candidate/result/pair/article/page rows, encoded bytes, probes, calls, physical attempts, chunks/pages and termination; no target or savings is validated. |
+| `CMD-0749` | 2026-07-22 / US-096 | Documented target-specific writes/indexes, ownership/invalidation/publication/failure; exact queue unit/order/cursor matrix; snapshot/availability bindings; reference/lease retention, bounded cleanup, replay/finalization repair and clean-host recovery; eight-step migration/backfill/cutover/rollback; browser/desktop consequences and rejected shapes. | Keep shape, applied-plan, lifecycle, platform and migration proof separate for each target and every downstream queue grain. | Produced `EVD-1144`. Proposed access paths and caps require owner approval, immutable applied inventory, fixed fixture plans/resources, actual platform captures and recovery/cleanup validation. |
+| `CMD-0750` | 2026-07-22 / US-096 | Added `PRF-0950`-`PRF-0956`, `BLK-0601`-`BLK-0610`, `OQ-0605`-`OQ-0614` and target/proof/actionability reconciliation; cross-checked all seven keep and seven non-keep US-078 grains without recounting alternative/logical target references. | Keep family proof, target validation, disposition actionability, manifest audit status and certification independent. | Produced `EVD-1145`. Seven new proofs remain blocked; cumulative proof is 8/478/470/0 across 956 rows, actionability remains 326 unresolved/115 blocked/zero actionable and target designs total 45. |
+| `CMD-0751` | 2026-07-22 / US-096 | Deliberately skipped configured snapshot/query/studio, direct/live DuckDB or SQLite, deployed inventory, fixture DDL/DML, migrations, server/app/browser/desktop, writers/projectors/workers/operators, repair/backup/restore, export/transfer, cleanup/retention, benchmark, EXPLAIN/profile and physical collectors; audited scoped artifacts/processes before completion. | Preserve schemas, code, routes, projectors, retention, runtime, data and benchmark-critical settings and keep unavailable physical/parity/lifecycle values explicit rather than zero. | Produced `EVD-1145`. No database/runtime/fixture/product command or mutation ran; no generated artifact or started product process requires cleanup. |
+| `CMD-0752` | 2026-07-22 / US-096 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check`, scoped US-088 source-baseline/current-worktree/tracker checks and registry-scoped Bun validators for canonical IDs/reference closure, legacy-aware proof states, disposition actionability, target/disposition links, Markdown table widths, cap/SQL/order/rejection/write/index/snapshot/lifecycle/migration/platform text and accounting. The first read-only proof validator accepted only standalone state cells and therefore found 894 of 956 legacy/current proof layouts; a later draft reused a one-shot state iterator and undercounted all but its first category. The corrected embedded-state and materialized-array validator changed no audit state. Skipped build, tests, browser/desktop, database and runtime gates because this story changes audit Markdown plus Ralph tracker metadata only and those executions would manufacture prohibited product/physical evidence. | Verify exact target/proof/state accounting, bounded-design completeness, source isolation and repo-native formatting without treating lint debt, proposed SQL or source inspection as physical proof. | Produced `EVD-1145`. Lint preserves the same six unrelated errors in `comparisonProjectServingMaintenanceWorker.ts`, `reviewServingProjectorWorker.test.ts` and `reviewServingProjectorWorker.ts`; no typecheck script exists. Final validators pass for 322 DBO, 1,985 CMF, 92 FAN, 1,145 EVD, 752 CMD, 610 BLK, 614 OQ, 956 PRF, 441 DSP and 45 TGT canonical ID sets; proof is 8/478/470/0, actionability is 326 unresolved/115 blocked, all 14 US-096 disposition grains are linked, six SQL blocks/tables/reference closure/whitespace pass, progress is appended and scoped product source is unchanged. Only the audit file plus preserved pre-existing `tasks/prd.json` appear in Git status; ignored progress was appended. |
 
 ## Blockers
 
@@ -21809,6 +22402,16 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0598` | US-095 migration, index deployment, cutover and rollback | Target access paths and eight-phase transition are explicit, but applied index plans, backfill jobs, version/quiesce fence, shadow equality, writer/read switches, rollback horizon and old-shape reference-negative receipts are absent. | A design and source index list are not an executable migration; broad dual writes or mixed v4/v5 reads can diverge while passing local checks. | `OQ-0602` | Migration/release/storage owners approve inventory, bounded build, index timing, validation, one-writer/reader cutover, read-only rollback and residue cleanup. |
 | `BLK-0599` | US-095 retention, leases, cleanup and executable recovery | Reference categories and bounded deletion order are explicit, but horizons, request/result/reader leases, scheduler, cleanup ownership/cursors/receipts, partial orphan handling, corruption matrix and clean-host restore are unavailable. | Finalization success, expiry, current 512-row cleanup invocation or backup existence cannot prove safe deletion, crash completion, reclaimed bytes or restored exact routes. | `OQ-0603` | Retention/recovery owners approve horizons and prove reference scans, lease fencing, bounded crash-resumable cleanup and source-plus-revision/request/result restore. |
 | `BLK-0600` | US-095 fixed benchmark, platform parity and final proof | No approved corpus, seed, model/provider/thinking, prompts/content, project/import/Human/snapshot/revision/filter identities, active filter workload, applied target shapes, runtime or complete collector/browser/desktop capture exists. | Proposed caps, normalization and lower partial fan-out cannot establish benefit or non-regression; unavailable rows/bytes/calls/latency/RSS/spill/temp/WAL values cannot be recorded as zero. | `OQ-0604` | Benchmark/release owners freeze all critical values, capture exact before/after build/update/query/result/cleanup/platform outputs and sign `PRF-0942`-`PRF-0949` without fallback. |
+| `BLK-0601` | US-096 search semantic and title/token authority | Project-selected title/import authority, exact NFKD/accent/case/token/unique-prefix/collation/successor behavior, tokenizer parity between JavaScript and DuckDB, diagnostic activity meaning and unsupported/null/blank/legacy title rules are not owner-approved. | Project-specific and reusable global tokens can each be internally consistent while indexing different title bytes or prefix semantics; a strict checksum that omits order cannot resolve the authority. | `OQ-0605` | Product/search/import/data owners freeze exact title winner, normalized bytes, tokenizer/collation/prefix order, diagnostic fields, versioning and typed mismatch/unavailable behavior. |
+| `BLK-0602` | US-096 applied search/queue shape and physical baseline | No approved non-live applied DuckDB/SQLite catalog, title/token/fact/binding/pair/article/job/result/page rows, null/equal-key/selectivity distributions, table/index/encoded/WAL/temp bytes, residue or applied plans exist. | Checked-in lexical DDL and proposed caps cannot prove deployed shape, fan-out, access-path use, migration fit, storage benefit or resource safety. | `OQ-0606` | Database/runtime/operator owners attach one immutable non-live inventory with exact shape, cardinality, byte, index, residue and plan evidence without opening the live database. |
+| `BLK-0603` | US-096 project-specific token bounds and exact results | No applied trace proves at most eight prefixes, 50,001 raw anchor rows, 50,001 distinct anchors, one million point probes, 501 candidate rows, three attempts/five seconds, exact all-prefix membership or candidate-order restoration for minimum/boundary/over-cap inputs. | Per-call row limits do not bound the underlying range scan, residual work, probe fan-out, sort/spill or request-wide calls; current input/token/title fan-out is source-unbounded. | `OQ-0607` | Search/query/index owners approve caps and capture exact result/order plus raw/scanned/distinct/probe/byte/call/attempt/time/plan evidence for every boundary and failure case. |
+| `BLK-0604` | US-096 reusable global title facts and project binding | Immutable normalized-title fact identity, collision/byte comparison, selected-title-to-fact mapping, cross-project reuse/cardinality, binding invalidation, reference ownership and retirement economics are unavailable. | A global token keyed only by article or joined to current title would corrupt project/import snapshot semantics; added fact/binding/index lifecycle can cost more than repeated project tokens. | `OQ-0608` | Search/import/storage/retention owners approve fact and binding identities and prove exact parity, bounded intersection, measured reuse/cost, collision handling, cross-owner retention and recovery versus `TGT-0039`. |
+| `BLK-0605` | US-096 asynchronous substring product and lifecycle | Product support, installed claimant/executor, immutable candidate/title reader, ordered result API, progress/poll/cancel/retry/finalization repair, visibility receipt, restart, retention and cleanup owners are absent. | One pending control row or async enum does not produce exact results; foreground scan, partial-ready chunks, endless polling or fallback settings would violate the target. | `OQ-0609` | Product/API/executor/reliability/client owners approve supported semantics and prove bounded chunks/results/attempts, installed execution, exact visible order, finite polling, restart/repair and cleanup/restore. |
+| `BLK-0606` | US-096 queue eligibility, priority and dirty/full parity | Complete LLM/Human prompt-pair eligibility, stable nullable/legacy prompt and queue identity mapping, priority/activity precision, blank/delete/tombstone/summary/Covidence/mode/config rules and dirty/full invalidation authority are unresolved. | Queue rows can be missing, duplicated, reprioritized or ACKed after zero dirty fan-out while checksum success omits activity order; active/LKG publication cannot be certified. | `OQ-0610` | Product/judgment/prompt/projector owners approve the finite policy and prove complete pair output, stable nonnull identities, full order checksum, dirty/full equality, replay and atomic pair/article availability. |
+| `BLK-0607` | US-096 queue units, exact order and cursor behavior | Registered pair, mounted candidate, preview article and intake orders differ; no owner-approved full tuple, null/equal-key/precision domain, named pair/article/display count mapping or applied cursor plan exists. | Omitting queue identity or truncating activity can skip equal-key pairs; grouping pairs can change counts/order, while strict `>` progress and selected-row totals can hide unprocessed work. | `OQ-0611` | API/query/job/client owners freeze each unit/order/cursor/count contract and prove no-gap/no-duplicate pages at minimum/boundary/sentinel/equal/null/revision-change cases without sort/spill. |
+| `BLK-0608` | US-096 intake, local queue, claim, configuration and visibility | Serving cursor advancement, central/local rejection, Human-first partition, durable SQLite insertion/ACK, claim, execution snapshot, canonical import, visibility ACK and cleanup do not have one approved reconciliation receipt or restart matrix. | Fetched, accepted, inserted, claimed, executed and visible rows can diverge; an intake policy cannot weaken serving order or silently change benchmark-critical execution settings. | `OQ-0612` | Judgment-job/queue/execution/import owners approve separate identities and prove page receipts, ACK chain, rejection/duplicate accounting, config drift failure, restart/replay, visibility and cleanup. |
+| `BLK-0609` | US-096 migration, retention, replay, recovery and cleanup | Applied backfill/cutover jobs, one-writer/read fences, rollback horizon, global-fact references, ordinary-reader leases, finalization repair, cleanup schedule/cursors/receipts, history mapping and clean-host restoration are unavailable. | Immutable candidate design, current 512-row cleanup, expiry, startup probe or backup file cannot prove safe transition, bounded deletion, crash recovery, reclaimed bytes or restored routes. | `OQ-0613` | Migration/retention/recovery/release owners approve the eight-step transition and prove bounded replay/finalization, references/leases, crash-resumable cleanup, rollback and source-to-route clean-host restore. |
+| `BLK-0610` | US-096 fixed benchmark, browser/desktop parity and final proof | No approved corpus, seed, model/provider/thinking, prompts/content, project/import/Human/search/queue/candidate/config/execution identities, workload, applied targets/runtime or complete physical/browser/desktop collector exists. | Proposed caps and conceptual token/grouping savings cannot establish benefit or non-regression; source-only UI applicability and synthetic tests cannot prove requests, caching, history/hash routing, polling or displayed semantics. | `OQ-0614` | Benchmark/data/runtime/platform/release owners freeze every critical value, capture exact before/after build/update/query/result/intake/cleanup/restore and real browser/packaged-desktop behavior, then sign `PRF-0950`-`PRF-0956` without fallback. |
 
 ## Owner Questions
 
@@ -22433,6 +23036,16 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0602` | Migration/index/storage/release owners | Which deployed v4 rows/indexes/readers/writers and retained snapshots/results require migration; what bounded backfill, index build, shadow equality, quiesce/version fence, one-writer/read switch, rollback horizon and zero-reference cleanup receipt govern v5 cutover? | All US-095 target proofs and `BLK-0598` |
 | `OQ-0603` | Retention/recovery/audit owners | Which active/LKG/candidate/request/result/pin/export/transfer/cursor/ordinary-reader/repair references and horizons apply; how are leases/schedules/cleanup cursors/receipts resumed; which corruption and clean-host restore proves exact result routes before reopen? | `PRF-0942`-`PRF-0949` and `BLK-0599` |
 | `OQ-0604` | Benchmark/data/runtime/platform owners and release validator | Which immutable corpus, seed, model/provider/thinking, prompts/content, project/import/Human/snapshot/revision/filter workload, applied shapes/runtime and complete rows/bytes/index/WAL/temp/calls/attempts/latency/RSS/spill/browser/desktop collector are approved, and who signs `PRF-0942`-`PRF-0949` without fallback? | All US-095 proofs and `BLK-0600` |
+| `OQ-0605` | Product/search/import/data owners | Which project-selected title is authoritative at every import/scope revision; what exact normalized bytes, NFKD/accent/case/token/dedup/collation/prefix-successor/order behavior and diagnostic fields are approved; how do null, blank, invalid UTF-8 and legacy titles fail? | `PRF-0950`-`PRF-0951` and `BLK-0601` |
+| `OQ-0606` | Database/runtime/operator owners | Which immutable non-live DuckDB/SQLite inventory supplies effective migrations, exact token/title/fact/binding/pair/article/job/result/page rows, null/equal/selectivity domains, table/index/encoded/WAL/temp bytes, residue and applied plans without inspecting the live database? | All US-096 proofs and `BLK-0602` |
+| `OQ-0607` | Search/query/index/API owners | Are the eight-prefix/256-byte input, 50,001 raw/distinct anchor, one-million probe, 501 candidate, 2 MB, three-attempt and five-second caps approved; which indexes/plans and first/middle/last/zero/broad/equal/over-cap traces prove exact all-prefix membership and candidate order? | `PRF-0950` and `BLK-0603` |
+| `OQ-0608` | Search/import/storage/retention owners | What immutable normalized-title fact and collision rule, project-selected-title binding, global/project invalidation and reference lifecycle are authoritative; what measured reuse, rows/bytes/index/write/read cost and exact bounded intersection make `TGT-0040` preferable to `TGT-0039`? | `PRF-0951` and `BLK-0604` |
+| `OQ-0609` | Product/API/executor/reliability/browser/desktop owners | Is exact substring supported; which installed executor, immutable candidate/title/order identity, chunk/result caps, retry/finalization/visibility states, poll/backoff/termination, cancel/restart, retention/cleanup and platform UI contract prove it without foreground scan or partial-ready fallback? | `PRF-0952` and `BLK-0605` |
+| `OQ-0610` | Product/judgment/prompt/projector owners | What complete LLM/Human eligibility, stable prompt/queue identity, priority/activity precision and blank/delete/tombstone/summary/Covidence/mode/model/content/config policy is authoritative; which dirty/full/replay/checksum/publication proof covers every pair and article? | `PRF-0953`, `PRF-0955` and `BLK-0606` |
+| `OQ-0611` | API/query/job/client owners | Which pair, article, preview, mounted-list and displayed-count units and exact order/cursor tuples are approved; how are null/equal/activity-precision/revision changes handled; which applied 100+1, 500+1 and 5,000+1 traces prove no gap, duplicate, sort or spill? | `PRF-0954`-`PRF-0956` and `BLK-0607` |
+| `OQ-0612` | Judgment-job/queue/execution/import owners | Which receipt chain separately reconciles fetched, central/local rejected, Human-first accepted, durably inserted, claimed, executed, imported, visible and cleaned rows; what queue/config/execution identities, retry/restart and drift failures preserve serving order and benchmark settings? | `PRF-0954`, `PRF-0956` and `BLK-0608` |
+| `OQ-0613` | Migration/index/retention/recovery/release owners | Which deployed readers/writers/rows/indexes and retained cursors/results/jobs require migration; what bounded backfill, one-writer/read fence, rollback horizon, reference/lease scan, finalization repair, cleanup receipts and clean-host restore govern each target and later old-shape retirement? | `PRF-0950`-`PRF-0953`, `PRF-0955`-`PRF-0956` and `BLK-0609` |
+| `OQ-0614` | Benchmark/data/runtime/browser/desktop owners and release validator | Which immutable corpus, seed, provider/model/thinking, prompt/content, project/import/Human/search/queue/candidate/config/execution workload, target runtime and complete rows/bytes/index/WAL/temp/probes/calls/attempts/latency/RSS/spill/restore/browser/desktop collector are approved, and who signs all seven proofs without fallback? | All US-096 proofs and `BLK-0610` |
 
 ## US-001 Quality Gates
 
@@ -26664,6 +27277,73 @@ commands. A command proves only the claim linked through its evidence record.
       ID/reference/target/cap/SQL/rejection/write/index/lifecycle/state/
       actionability/count/source/
       worktree/tracker/whitespace validators pass (`CMD-0742`).
+
+---
+
+## US-096 Quality Gates
+
+- [x] US-095 is complete and scoped `src`/`scripts`/`package.json` source is
+      unchanged from the US-088 search/queue baseline. Effective search-job,
+      project-token, queue-patch and active-queue shape was derived from the
+      complete lexical migration sequence without opening DuckDB or inferring
+      applied/deployed state.
+- [x] `TGT-0039` and `TGT-0040` compare project-specific tokens with reusable
+      immutable global title facts plus exact project-selected-title binding.
+      Both use bounded prefix admission/intersection, preserve `TGT-0024`
+      candidate order and fail broad/unproved paths rather than scanning a
+      project or joining mutable current titles.
+- [x] `TGT-0041` defines a background-only exact substring request/chunk/result
+      lifecycle with immutable candidate/title/order inputs, row/input/result/
+      byte/call/attempt/chunk/termination caps, complete final and visibility
+      receipts, explicit polling/repair/expiry/cleanup and no partial-ready or
+      settings fallback.
+- [x] `TGT-0042`-`TGT-0045` keep prompt-pair eligibility, full serving
+      priority/order, article existence/preview/count, intake selection,
+      SQLite insertion, claim and execution snapshots separate. Pair/article
+      counts and mounted/preview/intake orders are named independently; every
+      cursor includes the exact tie-break values for its registered contract.
+- [x] Proposed bounds independently cover titles/tokens/prefixes, raw and
+      distinct anchor rows, bindings/candidates, probes, queue pairs/articles,
+      results/pages/chunks, encoded bytes, statements/underlying attempts,
+      revision/request/epoch totals and recursive termination. Sentinel and
+      over-cap behavior is explicit continuation, async, failed or unavailable,
+      never truncation, foreground scan or all-ID materialization.
+- [x] Six representative SQL blocks show bounded project/global token
+      intersection, immutable substring chunks, stable queue membership,
+      full-tuple pair keysets and article reduction. SQL is design text and was
+      neither run nor treated as applied-plan proof.
+- [x] Every target records structural table/index/receipt write amplification,
+      owner/source/invalidation, immutable publication/failure, applied-plan
+      obligations, snapshots/availability, replay/finalization repair,
+      references/leases/retention, bounded cleanup, clean-host recovery and an
+      eight-step migration/backfill/cutover/rollback sequence.
+- [x] Browser path-query/history/cache/select-all behavior and packaged-desktop
+      hash/outer-window/loopback behavior are separate capture requirements.
+      Current source-only applicability, fake adapters or test DOM cannot prove
+      request frequency, polling, navigation, rendering or platform parity.
+- [x] Foreground title/project scans, broad unbounded global joins, read-all or
+      recursive drains, all-ID JSON/arrays, partial-ready results, missing
+      executor/config fallback, weakened queue priority, omitted/equal-key
+      cursors, pair/article/count substitution and cleanup-by-status are
+      explicitly rejected.
+- [x] `PRF-0950`-`PRF-0956` add seven independently `blocked` validations. The
+      956-row proof register is 8 `satisfied`, 478 `pending`, 470 `blocked` and
+      zero `not-applicable`; seven linked keeps remain
+      `recommendationActionability: unresolved`, seven linked non-keeps retain
+      `blocked` actionability, cumulative actionability remains 326 unresolved/
+      115 blocked/zero actionable and certification remains independently
+      `INCOMPLETE`.
+- [x] `EVD-1133`-`EVD-1145`, `CMD-0743`-`CMD-0752`,
+      `BLK-0601`-`BLK-0610` and `OQ-0605`-`OQ-0614` record exact source,
+      commands, blockers, owner decisions and finite target-specific resolution
+      conditions. No database/runtime/fixture/product process or generated
+      artifact ran or requires cleanup.
+- [x] Repo-native lint, typecheck-script discovery, whitespace, source
+      isolation, canonical-ID, proof/actionability accounting, target/link,
+      cap/SQL/order/rejection/write/index/lifecycle/platform and tracker checks
+      are recorded in `CMD-0752`. Build, tests, browser/desktop,
+      database/runtime and physical gates are skipped for this Markdown-only
+      design story so they cannot manufacture prohibited proof.
 
 ---
 

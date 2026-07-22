@@ -1917,11 +1917,12 @@
         "Reject foreground project scans, all-ID materialization, and weakened queue semantics."
       ],
       "priority": 96,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-095"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-097",
@@ -3295,6 +3296,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-07-22T17:13:19.707Z"
+    "updatedAt": "2026-07-22T17:35:12.470Z"
   }
 }
