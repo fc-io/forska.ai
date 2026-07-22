@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-101 add 994 finite proof rows without changing a disposition: the 1,010-row proof register is eight `satisfied`, 478 `pending`, 524 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked`, and zero are actionable. US-092 through US-098 define 80 concrete but unvalidated `TGT-0001`-`TGT-0080` shapes. US-099 adds eight blocked LLM row/order/cursor predicates, US-100 adds three blocked LLM count/filter/search predicates and US-101 adds eight blocked Human row/order/cursor predicates, but none adds a target. No approved common disposable fixture, benchmark-critical configuration, executable v5 candidate bundle, independent semantic oracle or complete applied-plan/rows/writes/bytes/spill/RSS/latency/attempt collector exists, so every physical value remains unavailable rather than zero. Current Human source fixes list membership to aggregate `answered`, hydrates mode-selected prompt/summary rows afterward, infers row/envelope mode from those rows and permits nested retry; aggregate status, per-row `isAnswered`, answer nullness, applicability and response mode therefore remain separate unresolved contracts. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, exact route/browser/desktop proof, applied access paths, bounded ID/row/byte/call/attempt hydration and order, identity/history mapping, snapshot/publication/file-reference atomicity, export/transfer parity, migration/cutover, temporary residue, replay/repair/recovery, retention, cleanup and restore evidence remain incomplete. No prior proof or manifest state advanced, no planned validation is labeled passed, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` remains independently `INCOMPLETE`. |
+| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-102 add 996 finite proof rows without changing a disposition: the 1,012-row proof register is eight `satisfied`, 478 `pending`, 526 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked`, and zero are actionable. US-092 through US-098 define 80 concrete but unvalidated `TGT-0001`-`TGT-0080` shapes. US-099 adds eight blocked LLM row/order/cursor predicates, US-100 adds three blocked LLM count/filter/search predicates, US-101 adds eight blocked Human row/order/cursor predicates and US-102 adds two blocked Human count/filter-option predicates, but none adds a target. No approved common disposable fixture, benchmark-critical configuration, executable v5 candidate bundle, independent semantic oracle or complete applied-plan/rows/writes/bytes/spill/RSS/latency/attempt collector exists, so every scenario value remains unavailable rather than zero. Current Human list totals always execute direct distinct candidate SQL against aggregate `human_status_key='answered'`; named prompt counts, raw answer facets, trimmed option domains and enum-only client selectors use different answer/mode grains. The filter route admits date/duplicate/conflict/search scope without applying it to the summary lookup, can turn rejected reads into empty arrays and exposes project-config mode separately from snapshot state. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, exact route/browser/desktop proof, applied access paths, bounded ID/row/byte/call/attempt work, identity/history mapping, snapshot/publication/file-reference atomicity, export/transfer parity, migration/cutover, temporary residue, replay/repair/recovery, retention, cleanup and restore evidence remain incomplete. No prior proof or manifest state advanced and no planned validation is labeled passed. No common benchmark fixture or live/current/project DuckDB/SQLite ran; nine current-only test-owned temporary DuckDB files used a fixed 256 MiB cap, closed in `finally`, were deleted and left zero matching residue. `overallCertification` remains independently `INCOMPLETE`. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-101 / 2026-07-22` | Freezes eight current-versus-candidate Human membership/order, equal-key cursor, status/applicability, prompt/summary answer, response/hydration, snapshot replay, freshness/unavailable and resource-integrity scenarios. Each records semantic result, rows scanned/written, logical query/response bytes, temp spill, RSS, p50/p95/p99, calls/physical attempts, settings and `proofCheckState`. `PRF-1003`-`PRF-1010` remain blocked because fixture/configuration approval, executable candidate DDL/SQL, independent oracle cases and a complete collector are unavailable; no default, fake row, current project or live database was substituted. Zero fixture/database/product processes or artifacts were created, so no cleanup/stop action is required. Existing target proofs and all actionability, schema, code, runtime, data and certification states remain unchanged. |
+| Latest normalized story | `US-102 / 2026-07-22` | Freezes two current-versus-candidate Human validations: the embedded exact article total and the raw-facet/complete-option/derived-control contract. Each separates prompt/summary/status/value grain, snapshot and unavailable behavior, browser and packaged-desktop behavior, rows scanned/written, logical bytes, temp spill, RSS, p50/p95/p99, calls/physical attempts, settings and `proofCheckState`. `PRF-1011`-`PRF-1012` remain blocked because fixture/configuration approval, executable candidate DDL/SQL, independent count/domain oracle, platform capture and a complete collector are unavailable; no default, current project or live database was substituted. Nine current-only test DuckDB files were closed and removed with zero residue, but they do not supply either same-fixture result. Existing target proofs and all actionability, schema, code, runtime, data and certification states remain unchanged. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
@@ -19153,6 +19153,162 @@ dispositions retain `recommendationActionability: unresolved`; all 115
 non-keep dispositions remain `blocked`; zero recommendations are actionable
 and `overallCertification` remains `INCOMPLETE`.
 
+## US-102 Human Count And Filter/Option Validation
+
+### US-102 Scope, Prerequisite And Execution Gate
+
+US-101 is complete. US-102 owns exactly two mounted Human contracts: the
+embedded list total returned by `POST /api/articlesreviewshuman`, and the raw
+facet, option and derived-control response returned by
+`GET /api/articlesreviewshumanfilters`. Human row membership, order, cursor and
+hydrated response equality remain the independently blocked US-101 proofs;
+US-102 uses their frozen applicability cases only to define the expected count
+and filter populations.
+
+Scoped `src`, `scripts` and `package.json` source is unchanged from the US-100
+parent `8676cd8949dfcda63e73b1a33306fe018a5dcfc0` through HEAD
+`53b8739211f08357a8e50f2a151a49b2bb255030`. The v5 count, facet, option and
+filter-result objects remain design text in this audit file. No checked-in
+candidate DDL, materializer, reader, route adapter, immutable receipt binder or
+cleanup implementation exists.
+
+The story permits isolated disposable-fixture mutation only after an owner
+approves the common fixture and every benchmark-critical value. It does not
+supply those choices. No immutable fixture/report root, generator/seed, model,
+provider, thinking setting, ordered prompts, Human mode, content flags, clock,
+DuckDB memory/runtime/platform profile, executable candidate, independent
+count/domain oracle, complete physical collector or platform controller was
+supplied or found. Same-fixture execution therefore stopped before benchmark
+fixture creation. Existing projects, current/live DuckDB, resolver defaults,
+source constants and fake rows were not substituted.
+
+Focused current-contract tests ran after that gate. Nine tests created their
+own `/tmp/forska-summary-*.duckdb` files with the source-fixed `256MiB` memory
+cap; each connection closed and each file was removed in `finally`, and the
+post-run residue scan found zero matching paths. Those current-only reducer
+fixtures neither execute the candidate nor populate any scenario metric.
+
+Both new proof rows are `blocked`. `auditStatus`, `proofCheckState`,
+`recommendationActionability` and `overallCertification` remain independent;
+no target proof, disposition or recommendation advances.
+
+### US-102 Evidence Ledger
+
+| Evidence ID | Class | Exact locator | Finding | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-1198` | `control/prerequisite/gate` | User US-102 PRD and codebase patterns; `tasks/prd.json#US-101/#US-102/#US-103`; `.ralph-tui/progress.md` US-100/US-101; US-001 state rules; reporting, DuckDB, API-server and frontend skills; HEAD/worktree/source-diff, candidate and environment-name checks | US-101 is complete and the audit-only mutation boundary is unchanged. No approved common fixture/configuration, executable count/filter candidate, independent oracle, complete collector or platform profile appeared; the engine-owned `tasks/prd.json` modification is preserved. | `CMD-0809`-`CMD-0810` |
+| `EVD-1199` | `production/count` | `projectsRoutesGetArticlesReviewsHuman.ts`; `reviewServingHumanBothUnassessedRouteService.ts#getRouteFilters/#hasDynamicFilters/#getFilteredCountValue/#getCountValue/#getHumanReviewArticlesFromServing`; Human count/read-contract and exact service tests | Every valid Human list injects `humanStatus=answered`, so the registered `review.human.count` summary branch is unreachable. The embedded total is direct `COUNT(DISTINCT serving.article_id)` on the selected list snapshot with date, duplicate, conflict, aggregate status, prompt-posting and all-token search predicates. Missing result becomes zero, transient wrappers can compose to 16 physical attempts and failure otherwise rejects the list. | `CMD-0811` |
+| `EVD-1200` | `production/facet/option` | `projectsRoutesGetArticlesReviewsHumanFilters.ts`; `reviewServingFilterRouteService.ts#getReviewFiltersFromServing/#readFacetRows/#readOptionRows/#getPromptFilters`; Human facet/option contracts and SQL; numeric helper; exact service/route tests | The route reads project mode/prompts, resolves active or LKG, issues two 128-row facet reads and one 512-row/1 MB option read, then derives summary enum or prompt enum/numeric controls. Date, duplicate, conflict and search values enter request signatures but not summary-row predicates; rejected reads become empty arrays, accepted empty summary options still produce one empty summary control, while missing manifest returns no controls plus unavailable search. | `CMD-0812` |
+| `EVD-1201` | `production/answer-grain` | `reviewServingHumanStatusProjector.ts`; Human clauses in `reviewServingSummaryProjector.ts`, `reviewServingFilterPostingProjector.ts` and `reviewServingFilterOptionProjector.ts`; exact projector tests; US-101 `EVD-1192`/`EVD-1194` | Direct article total, named reviewed-by-prompt count, raw facets, options and client selectors have different mode and answer membership. Named prompt counts accept nonnull answer or JSON `isAnswered`; facets accept nonnull answer; options additionally remove trimmed blank/null values; the UI consumes values but no count. Covidence-null and optional-blank cases therefore cannot be certified by one aggregate. | `CMD-0813` |
+| `EVD-1202` | `production/browser/desktop` | Human route, `projectsArticlesHumanReviewsQuery.ts`, `reviewsHumanFilterControls.tsx`, Human table container/pagination, `useUrlFilters.ts`, shared Eden client/origin, generated route tree, hash router and desktop preload/fetch bridge; source-level platform tests | The UI makes no separate Human count request: it displays embedded total/pages and passes the total to both select-all controls. The ungated filter query key includes date/duplicate/conflict/submitted-search scope but not selected prompt values; the client casts controls to enum-only, prunes selections and ignores raw facets/options/counts/diagnostics/mode/search scope. Shared source proves platform applicability only; outer URL reads/rewrites do not prove desktop hash parity. | `CMD-0814` |
+| `EVD-1203` | `design/current-to-target` | `TGT-0018`, `TGT-0019`, `TGT-0021`, `TGT-0023`, `TGT-0026`, `TGT-0027`, `TGT-0031`-`TGT-0038`; `PRF-0929`-`PRF-0938`, `PRF-0942`-`PRF-0949`; exact source search for proposed v5 objects | Candidate designs provide immutable Human/status/prompt bindings, selective postings, exact named/dynamic counts, receipt-backed facets and complete typed options with explicit async/unavailable state. They remain unimplemented and unapplied; design SQL, caps and target registration are not candidate execution. | `CMD-0815` |
+| `EVD-1204` | `validation-definition/result` | Frozen two-scenario contract, answer-grain matrix, scenario subcases, measurement definitions and result matrix below; prior Human API/UI/map/lineage and FAN rows | Human count and facets/options each have finite exact semantic, snapshot, unavailable, browser/desktop and resource predicates. Every current/candidate scenario value is `unavailable`, never zero, because the approved common fixture, executable candidate and collector do not exist. | `CMD-0816`-`CMD-0817` |
+| `EVD-1205` | `test/control/proof` | Ten isolated current-contract test files; nine source-owned disposable test databases; `PRF-1011`-`PRF-1012`; `BLK-0658`-`BLK-0664`; `OQ-0662`-`OQ-0668`; accounting, command ledger and quality gates | All 107 focused tests pass with 427 expectations. Nine `256MiB` test databases closed/deleted and residue is zero, but fake/source/in-process/current-only tests do not advance same-fixture or platform proof. Both validations remain blocked; proof becomes 8/478/526/0 across 1,012 rows and actionability remains 326 unresolved/115 blocked/zero actionable. | `CMD-0818`-`CMD-0819` |
+
+### US-102 Conditional Execution Gate
+
+| Required input | Recorded value | Gate consequence |
+| --- | --- | --- |
+| Approved immutable common fixture and retained report root | `unavailable` | No benchmark database, seed, current/candidate materialization or raw report may be created. |
+| Scale, seed, model, provider, thinking, prompt order, Human mode, content flags and clock | `unavailable` | No source, resolver, project or fake value may become the benchmark configuration. |
+| DuckDB memory/runtime plus browser and packaged-desktop profiles | `unavailable` | The source `256MiB` unit-test cap and normal app/desktop data roots cannot substitute for an approved scenario profile. |
+| Executable current/candidate count, facet, option and UI adapter bundle | Current source exists; candidate `unavailable` | One-sided execution cannot satisfy the comparison. |
+| Independent expected article counts, facet counts, complete option domains, controls and state oracle | `unavailable` | Current/candidate agreement could preserve the same status, blank/null, scope, mode or error defect. |
+| Applied-plan/rows/writes/bytes/spill/RSS/latency/attempt collector and budgets | `unavailable` | One-row count output and 128/512 return caps cannot manufacture physical measurements. |
+| Immutable browser/desktop roots, supported controller and exact capture protocol | `unavailable` | Shared query source, source-level origin tests and a desktop fetch bridge prove applicability only. |
+| Raw-report retention, process/artifact inventory and cleanup/signoff receipt | `unavailable` | A transient result could not become reproducible durable evidence. |
+
+Presence-only checks found `DUCKDB_MEMORY_LIMIT` and the nine checked US-102
+fixture/configuration/report/profile variables unset. No benchmark-critical
+setting was chosen, changed, weakened, retried or defaulted. No product process
+started.
+
+### Frozen Two-Scenario Comparison Contract
+
+| Scenario | Current checked-in contract | Candidate contract to execute on the same fixture | Exact pass boundary |
+| --- | --- | --- | --- |
+| Human embedded count | One Human list resolves effective dates/config and active or LKG manifest, reads rows/details, then always runs direct distinct candidate count on the same manifest. Membership fixes aggregate `human_status_key='answered'`; prompt dimensions are AND across prompts and OR within values, and title search requires every normalized token prefix. Total and `ceil(total/limit)` are embedded; no Human count HTTP route exists. Missing count row coerces to zero and nested transient wrappers permit up to 16 attempts. | `TGT-0018`/`TGT-0019`/`TGT-0021`/`TGT-0023`/`TGT-0027` bind the exact candidate/status/prompt tuple. Approved finite signatures read `TGT-0033`; other supported exact scopes use receipt-admitted `TGT-0031`/`TGT-0032` through `TGT-0038`. Unsupported or over-cap work is typed async/unavailable, never direct project-scale fallback. | Prompt and summary modes, exact zero/nonzero, every date/duplicate/conflict/prompt/search combination, optional blank, Covidence-null, deletion/applicability and active/LKG/failure case equal an independent expected article-ID membership count and page count. Count/list identity and typed state match. Approximation, missing-as-zero, raw/project scan, mixed revision, retry, spill, mismatch, fallback or weaker settings fails. |
+| Human facets/options and controls | Filter route reads current project mode and prompts separately from manifest selection, then reads prompt-answer and summary-answer facets in fixed identity order plus one option set. Facets order `(facet_key,facet_value)` within each identity; options order `(filter_kind,facet_key,option_value_key)`. Service derives one summary enum or prompt enum/numeric controls from options; numeric bins trim IQR outliers. Requested scope is not a summary predicate, rejected reads can become empty arrays and no completeness receipt or continuation distinguishes 128/512 truncation. | `TGT-0034` binds exact typed facet sets plus receipts and keyset continuation; `TGT-0035` binds a complete enum domain or owner-approved exhaustive numeric partition plus coverage receipt. Contextual scope uses the exact `TGT-0038` signature and immutable Human/status/prompt/search revisions. Missing, over-cap or incomplete sets are typed async/unavailable; no global or empty-ready substitution. | For prompt/summary mode, scalar/array/blank/null/Covidence values, duplicate contributions, legitimate empty, each and combined request scope, numeric/special values, 128/129 facets and 512/513 options, compare raw ordered rows/counts, complete typed options, derived controls/order/labels and selection pruning to the independent oracle on both platforms. Partial-ready, omitted outlier, silent empty/truncation, global-for-contextual reuse, raw scan, spill, retry, mismatch or weakened settings fails. |
+
+### Human Answer And Count Grains
+
+| Grain | Current membership/value rule | Product exposure | Required independent comparison |
+| --- | --- | --- | --- |
+| Embedded Human total | Distinct Human-list articles whose projected aggregate status is `answered`, after date/duplicate/conflict/prompt/search predicates. | Header total, total pages and both select-all controls; no second Human count request. | Exact expected article IDs and integer, including legitimate zero and list-snapshot identity. |
+| Named `review.human.reviewedByPrompt` | Distinct article/prompt contributions for the mode-selected prompt family when answer is nonnull or judgment JSON says `isAnswered`; this named row is not invoked for the list total. | Registered read contract only; no demonstrated Human-page consumer. | Per-prompt contribution counts remain separate from article total and cannot replace it. |
+| Raw Human facets | Mode-gated prompt or summary rows with nonnull answer, grouped as distinct article/value counts; prompt and summary identities are read separately. | Returned in `facets` but ignored by the Human UI. | Exact identity, prompt, typed value, count and order, including blank/null/Covidence divergence. |
+| Human filter options | Distinct article/value rows across configured Human/Both list modes; scalar and array values are expanded, and trimmed blank/null values are removed. | Returned raw options/counts, then used to derive controls; raw rows/counts are ignored by the UI. | Complete domain, exact per-value counts, typed semantics, receipt and overflow behavior. |
+| Client selectors | Current component assumes enum `answeredOriginalValues`, displays values only and prunes selected values not returned. | Browser and desktop Human filter controls and later list request body. | Exact labels/order/selection/request behavior; value presence is not count or facet lineage proof. |
+
+### Required Same-Fixture Cases, Snapshot And Platform Assertions
+
+| Proof | Required cases | Snapshot and unavailable assertions | Browser and desktop assertions |
+| --- | --- | --- | --- |
+| `PRF-1011` Human count | Prompt and summary projects; pending/answered/optional blank/Covidence-null/delete/inapplicable rows; zero/one/many articles; from/to boundaries; duplicate/conflict; one and multiple prompt OR values across AND groups; blank/one/multiple search tokens; limits 1/100/500. | Active, explicitly admitted LKG, promotion during list composition, missing/failed/incomplete Human/posting/search/summary state and legitimate exact zero. One coherent config/snapshot/revision tuple or exact rejection; no zero/default/alternate snapshot. | Warning-readable gate, exactly one list request and no count request, displayed header/pages, both select-all totals/filter bodies, loading/error/empty states and refetch behavior in browser and packaged desktop. |
+| `PRF-1012` Human facets/options | Prompt/summary modes; zero/one/many enabled prompts; enum/open/numeric/special values; scalar/array/blank/null/Covidence cases; duplicate contributions; no and combined date/duplicate/conflict/search scope; 128/129 facets; 512/513 options; accepted empty, rejected reads and invalid JSON. | Independent facet/option/prompt/Human/search revision promotion; active/LKG/indexing/failed/missing/incomplete and contextual/global mismatch; legitimate empty remains distinct from unavailable, error and continuation. | Ungated filter request key/body and order relative to warnings/list; prompt mode controls versus summary control; consumed/ignored fields, numeric incompatibility, pruning, submit-only search, URL restoration, errors and empty states; exact desktop bridge/hash/back-forward/restart parity. |
+
+### Measurement Definitions And Rejection Rules
+
+| Metric | Required capture for each scenario and side | Rejection rule |
+| --- | --- | --- |
+| Semantic and platform output | Canonical inputs plus independent expected count or raw facets/options/controls, exact mode/status/snapshot/availability/error and serialized HTTP/browser/desktop output. | Any mismatch, omitted value/count/state, approximation, unapproved version difference or unavailable-as-zero/empty fails. |
+| Rows scanned | Applied operator plans for config/manifest/admission, candidate/status/posting/search count work and every facet/option/receipt query, per statement and total. | Missing operator coverage, source/raw/project scan, unbounded correlated probe, plan drift or inferring scans from one result row/limits fails. |
+| Rows written | Common fixture seed/current materialization, candidate build, request/result/lease writes and cleanup separately; request-time zero requires observation. | Undisclosed write, active overwrite, unbounded fan-out or inferred zero fails. |
+| Logical output bytes | Canonical encoded database-result and HTTP bytes; filters split facet rows, option rows, derived controls and final response. | Missing serializer/version, truncation, row-count-derived bytes, incomplete domain or over-cap bytes fails. |
+| Temp spill and residue | Per-statement spill plus isolated temp-root before/peak/after/cleanup inventory. | Any foreground spill, residue, unapproved root or unavailable measurement fails. |
+| RSS | Isolated process-tree start/peak/end/delta with fixed cadence. | Missing child, mixed unrelated process, unavailable sample or over-budget peak/delta fails. |
+| Latency | Retained warm-up/measured samples, randomized side order/cache reset, end-to-end and statement timings; p50/p95/p99 retain failures. | Missing/removed sample, biased protocol, over-budget percentile or weaker rerun fails. |
+| Calls, attempts and settings | Browser/desktop requests, services, statements and physical adapter attempts separately; before/after hashes for every critical setting. | Any unapproved duplicate/retry/fallback, attempt above one, alternate snapshot, setting/default/downgrade change or collector gap fails. |
+
+### US-102 Two-Scenario Result Matrix
+
+| Proof / scenario | Exact semantic and platform comparison | Rows scanned / written, current and candidate | Logical output bytes, current and candidate | Temp spill, current and candidate | RSS start/peak/end/delta, current and candidate | p50/p95/p99, current and candidate | Calls / physical attempts / settings | `proofCheckState` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `PRF-1011` Human embedded count | `unavailable`; no same-fixture exact total/status/snapshot/unavailable/browser/desktop comparison ran | scanned `unavailable`/`unavailable`; request/build writes `unavailable`/`unavailable` | query and response `unavailable`/`unavailable` | `unavailable`/`unavailable`, not zero | all values `unavailable`/`unavailable` | `unavailable`/`unavailable` | calls/statements/attempts `unavailable`; settings unchanged and unchosen | `blocked` |
+| `PRF-1012` Human facets/options/controls | `unavailable`; no raw facet, complete option, derived-control, mode/scope/state/browser/desktop comparison ran | scanned `unavailable`/`unavailable`; request/build writes `unavailable`/`unavailable` | facet, option, derived and response `unavailable`/`unavailable` | `unavailable`/`unavailable`, not zero | all values `unavailable`/`unavailable` | `unavailable`/`unavailable` | calls/statements/attempts `unavailable`; settings unchanged and unchosen | `blocked` |
+
+No row, write, byte, spill, RSS, percentile, call or attempt value is inferred
+from direct SQL, fake call counts, 128/512 caps, the test fixture, an unset
+variable or absence of a benchmark run. Future reports must retain every raw
+sample, plan and first failure and hash the common fixture, configuration,
+current/candidate bundles, platform builds and collector.
+
+### US-102 Validation Proof Rows
+
+| rowId | Finite pass predicate | `proofCheckState` | Evidence | Missing evidence / blockers | Owner question IDs |
+| --- | --- | --- | --- | --- | --- |
+| `PRF-1011` | Human count passes only when current and candidate run every frozen case on one approved immutable fixture, equal an independent exact article-membership count, bind one approved config/snapshot/revision, preserve exact embedded total/pages and browser/desktop behavior, and record complete within-budget metrics with no approximation, missing-as-zero, raw/project scan, spill, retry, mismatch, fallback or setting change. | `blocked` | `EVD-1198`-`EVD-1199`, `EVD-1201`-`EVD-1204`; `PRF-0929`-`PRF-0935`, `PRF-0942`-`PRF-0944`, `PRF-0949`, `PRF-1003`, `PRF-1005`-`PRF-1010` | Common fixture/configuration, executable candidate, count/status/prompt oracle, state matrix, applied plans, collector and actual platform captures unavailable; current direct count/retry remain unresolved; `BLK-0658`-`BLK-0660`, `BLK-0662`-`BLK-0664`. | `OQ-0662`-`OQ-0664`, `OQ-0666`-`OQ-0668` |
+| `PRF-1012` | Human facets/options pass only when raw ordered facets and exact counts, complete typed option domains, derived prompt/summary controls and selection behavior match the approved global/contextual mode oracle for every cap/state case on browser and packaged desktop, with receipts/continuation and complete metrics; blank/null collapse, IQR/sample approximation, silent truncation/empty, global reuse, raw scan, spill, retry, mismatch, fallback or setting change fails. | `blocked` | `EVD-1198`, `EVD-1200`-`EVD-1204`; `PRF-0934`, `PRF-0937`-`PRF-0938`, `PRF-0942`-`PRF-0943`, `PRF-0945`-`PRF-0949`, `PRF-1005`-`PRF-1010` | Common fixture/configuration, candidate facet/option receipts/read path, scope/mode/domain/count oracle, state matrix, collector and actual platform captures unavailable; `BLK-0658`-`BLK-0659`, `BLK-0661`-`BLK-0664`. | `OQ-0662`-`OQ-0663`, `OQ-0665`-`OQ-0668` |
+
+### US-102 Test-Fixture Cleanup And Accounting Reconciliation
+
+| Item | Recorded result | Evidence boundary |
+| --- | --- | --- |
+| Common benchmark current/candidate DDL commands | `0 / 0` | The common fixture and executable candidate were not approved; affected rows remain `unavailable`. |
+| Common benchmark seed/materialization DML commands | `0 / 0` | No current/candidate scenario materialization occurred. |
+| Common fixture paths or raw reports created | `0` | No benchmark artifact exists; this is not a physical byte measurement. |
+| Current-only unit-test DuckDB files | `9 created, 9 closed, 9 removed` | Source-owned tests used `/tmp/forska-summary-*.duckdb` and fixed `memory_limit='256MiB'`; they are not the common fixture or either scenario. |
+| Post-test unit-fixture residue | `0 matching paths` | Exact post-run `find /tmp -maxdepth 1 -name 'forska-summary-*.duckdb*'` observation; it does not prove a benchmark spill value. |
+| Snapshot, live/current/project database accesses | `0` | No snapshot query/studio, app data root, live DuckDB/SQLite, migration, benchmark, projector or route command ran. |
+| Servers, browser, desktop, workers or projectors started | `0` | Agent-started product-process set is empty; no stop action is required. Test Bun processes exited. |
+| Benchmark-critical settings | Unchanged and unchosen | No default, alternate snapshot, downgrade, approximation, page shrink or fallback occurred. The unit-test cap was source-fixed and not a benchmark choice. |
+| Same-fixture semantic and physical result | `unavailable` | Passing source/fake/current-only tests and zero test residue do not execute the candidate or establish scenario values. |
+
+| Proof register slice | Rows | `satisfied` | `pending` | `blocked` | `not-applicable` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Prior `PRF-0001`-`PRF-1010` | 1,010 | 8 | 478 | 524 | 0 |
+| US-102 Human count/filter validations `PRF-1011`-`PRF-1012` | 2 | 0 | 0 | 2 | 0 |
+| **Cumulative proof register** | **1,012** | **8** | **478** | **526** | **0** |
+
+The two proofs are conjunctive later-validation rows. They do not replace or
+advance the Human row proofs, `PRF-0942`-`PRF-0949`, any target proof or any
+family proof. DBO remains 322/322 blocked, CMF remains 1,985/1,985 blocked and
+FAN remains 91 blocked plus one source-proven not-applicable row with zero
+value-bearing scenario observations. All 326 keep dispositions retain
+`recommendationActionability: unresolved`; all 115 non-keep dispositions
+remain `blocked`; zero recommendations are actionable and
+`overallCertification` remains `INCOMPLETE`.
+
 ### Output 01 - API Surface Inventory
 
 Authoritative row family: `API-####`. Record one row per mounted route or
@@ -19467,7 +19623,12 @@ status/applicability, prompt/summary, hydration, snapshot/freshness and resource
 validation scenarios, raising the register to 1,010 rows at eight satisfied,
 478 pending, 524 blocked and zero not-applicable. The approved common fixture,
 executable Human candidate, independent semantics and complete physical
-collector remain unavailable. None changes disposition actionability or final
+collector remain unavailable. US-102 adds `PRF-1011`-`PRF-1012`: two blocked
+Human embedded-count and facet/option/control validations, raising the register
+to 1,012 rows at eight satisfied, 478 pending, 526 blocked and zero
+not-applicable. The common fixture, executable count/filter candidate,
+independent article/domain oracle, platform capture and complete collector
+remain unavailable. None changes disposition actionability or final
 certification.
 
 ### Output 09 - Candidate Target Shapes
@@ -19502,7 +19663,7 @@ US-098 slice maps all 67 US-091 file/material dispositions exactly once into
 owner authority, immutable non-live applied inventory, bounded resource and
 lifecycle policy, platform/export/transfer parity, recovery drills and final
 proof. `recommendationActionability` remains unresolved or blocked; no target
-is implementation-ready. US-099 through US-101 add validation proof only and
+is implementation-ready. US-099 through US-102 add validation proof only and
 do not create, implement or approve another target shape.
 
 ### Output 10 - Prioritized Implementation Slices With Benchmark Gates
@@ -23092,6 +23253,18 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-0807` | 2026-07-22 / US-101 | Six isolated commands: `rtk bun test src/server/reviewServing/reviewServingHumanBothUnassessedRouteService.test.ts`; `rtk bun test src/server/reviewServing/reviewServingReader.test.ts`; `rtk bun test src/server/reviewServing/reviewServingCursor.test.ts`; `rtk bun test src/server/reviewServing/reviewServingHumanStatusProjector.test.ts`; `rtk bun test src/server/reviewServing/reviewServingJudgmentPayloadProjector.test.ts`; `rtk bun test src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHuman.test.ts`. | Corroborate checked-in row, cursor, status, applicability, payload and route composition without cross-file `mock.module()` contamination or claiming physical candidate proof. | Produced `EVD-1197`. All 60 focused tests pass with 331 expectations. They use fake adapters/source-shape assertions and do not execute a common physical fixture or candidate. |
 | `CMD-0808` | 2026-07-22 / US-101 | `rtk bun run lint`; exact Bun package-script inspection for a typecheck command; `git diff --check`; HEAD/baseline and worktree source-isolation checks; `git status --short`; ignored-progress verification; read-only validators for canonical ID continuity/reference closure, proof-state accounting, exactly eight US-101 result/proof rows, required terms and scoped Markdown table widths. | Close audit-only quality gates without running a prohibited database, fixture, product or physical benchmark command. | Lint preserves six unrelated pre-existing errors in untouched worker files; no typecheck script exists. Whitespace, source isolation, IDs/references, 1,010-row proof accounting at 8/478/524/0, eight unavailable/blocked scenario rows, table widths, required terms and tracker checks pass. Git status contains this audit file plus the preserved `tasks/prd.json` modification; the ignored progress entry is present. |
 
+| `CMD-0809` | 2026-07-22 / US-102 | Read the reporting, DuckDB, API-server and frontend project skills; user US-102 PRD/patterns; `tasks/prd.json#US-101/#US-102/#US-103`; `.ralph-tui/progress.md`; US-017/US-041/US-095/US-100/US-101 evidence, targets, blockers and proof state; current IDs/counts, HEAD/worktree and targeted memory registry. | Establish prerequisite completion, the two count/filter grains, browser/desktop applicability, four-state rules, conditional fixture authority, next IDs and unrelated worktree state. | Produced `EVD-1198`. US-101 is complete, US-102 was absent, the memory index supplied no task evidence and the engine-owned `tasks/prd.json` modification remains untouched. |
+| `CMD-0810` | 2026-07-22 / US-102 | `git rev-parse HEAD`; `git log -5`; `git diff --name-status 8676cd8949dfcda63e73b1a33306fe018a5dcfc0 HEAD -- src scripts package.json`; exact source searches for v5 count/facet/option/result implementations; presence-only check for `DUCKDB_MEMORY_LIMIT` and nine US-102 fixture/configuration/report/profile names. | Re-evaluate authorization, frozen configuration, executable candidate, platform profile and collector before any common-fixture/database/product mutation. | Produced `EVD-1198`, `EVD-1203`. HEAD is `53b8739211f08357a8e50f2a151a49b2bb255030`; scoped source is unchanged from the US-100 parent, proposed v5 objects remain audit-only and all checked variables are unset. This agent started no product process. |
+| `CMD-0811` | 2026-07-22 / US-102 | Source-only `rg -n`/`sed -n` reads of the mounted Human list route, Human/Both/Unassessed service count helpers/retry composition, count/read contracts, posting/search predicates, response total/page fields and exact service tests. | Freeze count unit, fixed status, direct-versus-named reachability, date/duplicate/conflict/prompt/search predicates, snapshot reuse, missing-row/failure behavior, page math and attempt boundary without opening DuckDB. | Produced `EVD-1199`. Every Human total is direct distinct candidate SQL because injected `humanStatus=answered` makes the named branch unreachable; missing row becomes zero and nested wrappers permit up to 16 attempts. |
+| `CMD-0812` | 2026-07-22 / US-102 | Source-only reads of the mounted Human filter route, filter service, Human facet/option contracts, reader/SQL identity predicates, option identity, numeric derivation and exact service/route/read-contract tests. | Freeze two facet plus one option calls, fields/order/caps, project mode/prompt inputs, contextual-scope placement, accepted-empty/rejected/missing/error behavior and raw-versus-derived output. | Produced `EVD-1200`. Admitted date/duplicate/conflict/search scope is absent from summary SQL; 128/512 caps have no completion receipt, rejected rows can empty silently and the server can emit numeric controls that the Human client types as enum-only. |
+| `CMD-0813` | 2026-07-22 / US-102 | Source-only reads of Human status, summary, posting and filter-option projector Human clauses plus exact tests; reconciled US-101 prompt/summary/blank/null/Covidence/delete evidence. | Separate article total, article/prompt named count, raw facet, trimmed option and client-value membership before defining equality. | Produced `EVD-1201`. Named counts accept nonnull answer or JSON `isAnswered`, facets require nonnull answer, options exclude trimmed blank/null and the UI ignores counts; no one shape certifies another. |
+| `CMD-0814` | 2026-07-22 / US-102 | Source-only reads of the Human route, list query, filter controls, table/pagination container, URL hook, shared Eden/origin, generated route, hash router and desktop preload/fetch bridge; exact warning/origin/runtime URL tests and prior Human UI rows. | Freeze embedded-count use, filter key/body/gating, consumed/ignored fields, selection pruning, request/cache/navigation expectations and browser versus packaged-desktop evidence boundary. | Produced `EVD-1202`. Shared source establishes applicability, not runtime request order/count, rendering or hash parity; there is no separate Human count query and the filter query is not warning-gated. |
+| `CMD-0815` | 2026-07-22 / US-102 | Read `TGT-0018`/`TGT-0019`/`TGT-0021`/`TGT-0023`/`TGT-0026`/`TGT-0027`, `TGT-0031`-`TGT-0038` plus linked proofs, caps, representative SQL, availability and lifecycle; repeated exact source searches for proposed tables/readers. | Freeze the candidate comparison side without treating design SQL, registrations, caps or source absence as execution. | Produced `EVD-1203`. Exact named/dynamic counts, receipt-backed facets and complete typed options are finite designs but have no executable DDL/writer/reader/route/lease/cleanup or applied plan. |
+| `CMD-0816` | 2026-07-22 / US-102 | Defined exactly two current/candidate scenarios with finite count and facet/option/control subcases; answer-grain, snapshot/unavailable and browser/desktop oracles; and per-side operator-row, write-grain, logical-byte, spill/residue, RSS, p50/p95/p99, call/statement/attempt and setting-hash slots. | Make later execution exact and request-wide while rejecting approximation, silent empty/truncation, raw/project scans, spill, retry, alternate snapshot, defaults and weaker reruns. | Produced `EVD-1204`. Both scenarios have explicit pass/reject boundaries; every semantic and physical slot remains unavailable/blocked rather than inferred from source, caps or tests. |
+| `CMD-0817` | 2026-07-22 / US-102 | Deliberately skipped snapshot/query/studio, live/current/project DuckDB/SQLite, common-fixture DDL/DML, current/candidate materialization, migrations, server/app/browser/desktop, workers/projectors, benchmark smoke/release gate, EXPLAIN/profile and physical collector commands. | Enforce the failed common-fixture gate, preserve live/project data and critical settings, and prevent current-only/source/fake execution from masquerading as two-sided evidence. | Produced `EVD-1198`, `EVD-1203`-`EVD-1204`. Common benchmark database/product access and product-process/artifact sets are empty; every scenario value remains unavailable. |
+| `CMD-0818` | 2026-07-22 / US-102 | Ten isolated commands: `rtk bun test` for `reviewServingHumanBothUnassessedRouteService.test.ts`, `reviewServingFilterRouteService.test.ts`, `projectsRoutesGetArticlesReviewsHumanFilters.test.ts`, `reviewServingSummaryProjector.test.ts`, `reviewServingFilterOptionProjector.test.ts`, `reviewServingReadContracts.test.ts`, `reviewsArticleQueryGating.test.ts`, `client-env.test.ts`, `getDesktopRuntimeConfig.test.ts` and `getApiRequestUrl.test.ts`; then exact source-path and `/tmp` residue inspection. | Corroborate current count/filter/writer/route/source-platform behavior without combined mock contamination; account for and verify cleanup of every test-owned disposable database. | Produced `EVD-1205`. All 107 tests pass with 427 expectations. Nine source-owned `256MiB` DuckDB files were closed and removed in `finally`; zero matching paths remain. These current-only/fake/in-process tests do not execute the candidate or actual platforms. |
+| `CMD-0819` | 2026-07-22 / US-102 | `bun run lint`; exact `package.json` typecheck-script inspection; `git diff --check`; HEAD/baseline and worktree source-isolation checks; `git status --short`; ignored-progress verification; read-only Bun validators for canonical ID continuity/reference closure, legacy-aware proof-state accounting, exactly two US-102 result/proof rows, required terms, scoped Markdown table widths, reusable-pattern placement and tracker content. | Close audit-only quality gates without running the prohibited common fixture, product runtime, actual browser/desktop flow or physical benchmark. | Lint preserves six unrelated pre-existing errors in untouched worker files; no typecheck script exists. Five preliminary proof parsers were non-authoritative because they assumed one state column, contiguous table rows or the `rowId` header and therefore rejected or undercounted known combined-state, blank-separated and `proofId` legacy tables. The corrected stateful legacy-aware parser passes whitespace, source isolation, IDs/references, 1,012-row proof accounting at 8/478/526/0, two unavailable/blocked scenarios, table widths, required terms, progress and zero test-fixture residue. Git status contains this audit file plus the preserved `tasks/prd.json` modification; progress is ignored but updated. |
+
 ## Blockers
 
 | rowId | Scope | Missing evidence | Why blocked | Owner question IDs | Resolution condition |
@@ -23769,6 +23942,14 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0655` | US-101 applied plans and complete resource collector | No approved collector records every statement/operator plan, rows scanned/written, logical query/response bytes, temp spill/residue, RSS, p50/p95/p99, calls, nested attempts and setting snapshots on both sides. | Limits and fake call counts do not bound scans, bytes, writes, memory, spill, retry or tail latency; unavailable values cannot become zero. | `OQ-0659` | Performance/runtime/tooling owners approve metric definitions, instrumentation, budgets and raw-report schema before execution. |
 | `BLK-0656` | US-101 sample, cache, retry and setting-integrity protocol | No approved sample/warm-up count, randomized side order, cache/reset isolation, failure injection, one-attempt assertion or before/after critical-setting hash protocol exists. Current row/detail reads allow four attempts and adjacent count can compose up to 16. | Uncontrolled caches/order can bias results, and a successful retry or weaker rerun can conceal the configured failure that acceptance requires preserved. | `OQ-0660` | Benchmark/reliability owners freeze the protocol, reject every physical attempt above one and require byte-identical critical settings with all failures retained. |
 | `BLK-0657` | US-101 evidence retention, cleanup and final signoff | No approved raw-report retention/reference, fixture/process/artifact inventory, cleanup/stop receipt, post-cleanup residue check or owner signature exists. | A transient successful run would not be durable proof, and unreceipted cleanup could leave data/processes or make evidence irreproducible. | `OQ-0661` | Audit/runtime/release owners approve report retention and sign semantic, resource, failure, cleanup and process-stop receipts for all eight proofs. |
+
+| `BLK-0658` | US-102 approved common fixture and benchmark configuration | No owner-approved immutable fixture/report root or frozen scale, seed, model, provider, thinking, ordered prompts, Human mode, content flags, clock, DuckDB memory, runtime, browser or packaged-desktop profile exists. Presence-only checks found every named value unset. | Evidence-only fixture permission and a source-fixed unit-test memory cap do not authorize benchmark values; adopting defaults, fake rows or current project state could change Human applicability and invalidate both comparisons. | `OQ-0662` | Benchmark/data/product/platform owners approve one fixture/root and every critical value before either side executes. |
+| `BLK-0659` | US-102 executable count/filter candidate and immutable binding | `TGT-0018`/`TGT-0019`/`TGT-0021`/`TGT-0023`/`TGT-0026`/`TGT-0027` and `TGT-0031`-`TGT-0038` are design contracts only. No approved candidate DDL, materializers, receipts, count/facet/option readers, route/UI adapter, immutable binding, lease or cleanup bundle exists. | Current-only execution cannot compare a candidate, and inventing the target inside a validation story would combine implementation with evidence while schema/runtime changes are prohibited. | `OQ-0663` | Query/database/projector/release owners approve an isolated executable bundle, identical-corpus receipts, applied indexes/plans, revision binding and cleanup. |
+| `BLK-0660` | US-102 Human count, prompt and status oracle | Direct list total counts distinct aggregate-answered articles, while the registered reviewed-by-prompt row counts article/prompt contributions using nonnull answer or JSON `isAnswered`. Prompt/summary, optional blank, Covidence-null, delete/applicability, date, duplicate, conflict and search outcomes are not owner-approved. | Current/candidate equality could preserve the wrong unit or status semantics; one integer does not prove expected membership, legitimate zero, list-snapshot identity, total pages or bounded work. | `OQ-0664` | Human-review/product/API owners sign exact expected article IDs/counts and every status/prompt/filter/page/error rule independently of both implementations. |
+| `BLK-0661` | US-102 facet/option scope, mode, completeness and client authority | Current raw facets, trimmed options and enum-only client selectors use different answer/value grains. Requested date/duplicate/conflict/search scope is not applied to summary SQL; 128/512 caps lack completion receipts; numeric derivation drops IQR outliers; rejected/missing reads can look empty; project mode is read outside snapshot binding. | A returned value or count cannot prove the complete requested domain, contextual scope, intended prompt/summary mode, numeric membership, legitimate empty/unavailable distinction or browser selection behavior. | `OQ-0665` | Filter/summary/prompt/UI owners approve exact global/contextual signatures, raw counts/order, complete enum/exhaustive numeric domains, mode binding, continuation and every empty/error/client state. |
+| `BLK-0662` | US-102 snapshot, availability and cross-shape coherence | No signed active/LKG/promotion/indexing/failed/missing/incomplete matrix binds candidate, Human status, prompt, posting, search, summary/facet/option revisions and project-config mode. Current count is embedded after row/detail work, while filter mode/config and manifest are resolved separately. | A ready count and ready options can still describe different revisions or modes; stale-as-ready, missing-as-zero/empty and alternate-snapshot retry could pass value-only checks. | `OQ-0666` | Product/reliability/API owners approve the exact revision tuple, freshness labels, list/filter coherence, typed failure envelopes and promotion/replay outcomes. |
+| `BLK-0663` | US-102 actual browser and packaged-desktop proof | Shared Solid/Eden source and origin/bridge tests prove applicability only. No approved common fixture/controller captures warning/filter/list ordering, embedded count/no-count request, field consumption, prompt/numeric controls, pruning, error/empty rendering, select-all, URL/hash/back-forward or restart behavior. | Query keys and bridge source are not network-count, cache, navigation, rendering or platform-parity observations; normal paths would access mutable project data. | `OQ-0667` | UI/desktop/product owners approve immutable platform roots/controller and capture the complete count/filter waterfall and visible states on both platforms. |
+| `BLK-0664` | US-102 physical collector, protocol, retained evidence and cleanup | No approved collector records per-statement plans, rows scanned/written, logical bytes, spill/residue, RSS, p50/p95/p99, requests/calls/statements/physical attempts and setting hashes on both sides. Budgets, samples, cache/side order, failure injection, raw-report retention and cleanup/signoff are also absent. | One-row/capped output, passing unit tests and zero unit-fixture residue cannot establish scenario work, zero spill/writes, latency/memory, one attempt, unchanged settings, durable evidence or benchmark cleanup. | `OQ-0668` | Performance/runtime/benchmark/audit owners approve definitions, budgets, protocol, raw-report schema and cleanup/process receipts, then sign both scenarios without retry or downgrade. |
 
 ## Owner Questions
 
@@ -24451,6 +24632,14 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0659` | Performance/runtime/tooling owners | Which applied-plan collector and budgets measure per-statement/total operator rows scanned/written, logical query/response bytes, spill/residue, RSS, p50/p95/p99, calls and physical attempts on both sides? | All US-101 proofs and `BLK-0655` |
 | `OQ-0660` | Benchmark/reliability owners | What sample count, warm-up, randomized side order, cache/reset isolation and failure-injection protocol proves one physical attempt, rejects current nested retry, preserves first failure and keeps every critical setting byte-identical? | All US-101 proofs and `BLK-0656` |
 | `OQ-0661` | Audit/runtime/release owners | Where are raw reports retained, which artifact/process inventory and residue checks prove cleanup/stop completion, and who signs semantic, resource, failure and final evidence completeness for all eight scenarios? | All US-101 proofs and `BLK-0657` |
+
+| `OQ-0662` | Benchmark/data/product/platform owners | Which immutable disposable fixture/report root and exact scale, seed, model, provider, thinking, ordered prompt set, Human mode, content flags, clock, DuckDB memory, runtime, browser and packaged-desktop values must remain byte-identical for both scenarios? | `PRF-1011`-`PRF-1012` and `BLK-0658` |
+| `OQ-0663` | Query/database/projector/release owners | Which executable subset of `TGT-0018`-`TGT-0038`, DDL/materializers/receipts/readers/routes/client adapter, immutable revision/lease bindings, applied indexes and cleanup bundle is approved over the identical corpus? | `PRF-1011`-`PRF-1012` and `BLK-0659` |
+| `OQ-0664` | Human-review/product/API/count owners | What exact article membership, prompt/summary/optional-blank/Covidence-null/delete/status, date/duplicate/conflict/search, legitimate-zero, total-pages, snapshot and error contract defines the embedded Human count, and what role remains for `review.human.reviewedByPrompt`? | `PRF-1011` and `BLK-0660` |
+| `OQ-0665` | Filter/summary/prompt/UI owners | Which global or contextual facet/option signatures, prompt/summary mode binding, raw value/count order, complete enum or exhaustive numeric domain, 128/512 overflow continuation, empty/unavailable/error and selection-pruning semantics are authoritative? | `PRF-1012` and `BLK-0661` |
+| `OQ-0666` | Product/reliability/API owners | Which candidate/Human/prompt/posting/search/summary/facet/option revision tuple, active/LKG/promotion/indexing/failed/missing/incomplete outcome and cross-list/filter mode/snapshot coherence must both scenarios expose? | `PRF-1011`-`PRF-1012` and `BLK-0662` |
+| `OQ-0667` | UI/browser/desktop/product owners | Which immutable platform roots/controller and exact warning/filter/list request order/count/cache, embedded-total/no-count-request, control/render/pruning/select-all/error/empty, URL/hash/back-forward, restart and cleanup capture must browser and packaged desktop pass? | `PRF-1011`-`PRF-1012` and `BLK-0663` |
+| `OQ-0668` | Performance/runtime/benchmark/audit/release owners | Which applied-plan/operator-row/write/byte/temp/RSS/latency/request/call/statement/physical-attempt collector, budgets, sample/warm-up/cache/side-order/failure protocol, setting hashes, raw-report retention and cleanup receipts authorize final signoff? | `PRF-1011`-`PRF-1012` and `BLK-0664` |
 
 ## US-001 Quality Gates
 
@@ -29032,6 +29221,69 @@ commands. A command proves only the claim linked through its evidence record.
       unrelated errors in three untouched worker files; no typecheck script
       exists. Product build/full tests/database physical gates are skipped
       because the change is audit-only and the physical gate failed.
+
+---
+
+## US-102 Quality Gates
+
+- [x] US-101 is complete. Scoped `src`, `scripts` and `package.json` source is
+      unchanged from US-100 parent
+      `8676cd8949dfcda63e73b1a33306fe018a5dcfc0` through US-101 HEAD
+      `53b8739211f08357a8e50f2a151a49b2bb255030`, and the engine-owned
+      `tasks/prd.json` worktree change remains untouched.
+- [x] The conditional execution gate was evaluated before database or product
+      mutation. No approved immutable common fixture/report root, frozen Human
+      benchmark tuple, executable candidate, independent count/domain oracle,
+      complete collector or platform profile exists, so same-fixture execution
+      is blocked and every physical value is `unavailable`, never zero.
+- [x] Exactly two scenarios separately freeze the embedded exact Human article
+      total and the raw-facet/complete-option/derived-control contract. Their
+      finite cases cover prompt/summary mode, status and answer grain,
+      date/duplicate/conflict/search scope, caps/continuation, snapshots,
+      legitimate empty/zero, unavailable/error and browser/desktop behavior.
+- [x] Both scenarios retain distinct current/candidate slots for exact output,
+      operator rows scanned, request/build rows written, logical query/response
+      bytes, spill/residue, RSS start/peak/end/delta, p50/p95/p99, calls,
+      statements, physical attempts, critical-setting hashes and
+      `proofCheckState`. No source cap or test result is a physical metric.
+- [x] Current rejection risks remain explicit: the embedded total always uses
+      direct distinct candidate SQL, the registered named count is unreachable
+      and nested retries permit 16 attempts; aggregate answered membership,
+      reviewed-by-prompt counts, raw facets, trimmed options and UI values have
+      different answer/value grains; admitted contextual scope is absent from
+      summary SQL; and rejected/missing reads can resemble empty output.
+- [x] Candidate count, Human/prompt revision binding, selective postings,
+      receipt-backed facets and complete typed options remain design-only.
+      Checked-in source and tests corroborate current behavior but cannot
+      produce candidate equality, applied plans or same-fixture metrics.
+- [x] Shared Solid/Eden source establishes browser and desktop applicability,
+      not actual request order/count/cache, rendering, URL/hash navigation or
+      restart parity. No supported controller or immutable profile was used to
+      access mutable project data, and no synthetic capture advances proof.
+- [x] `PRF-1011`-`PRF-1012` add two independently `blocked` validations. The
+      1,012-row proof register is 8 `satisfied`, 478 `pending`, 526 `blocked`
+      and zero `not-applicable`; actionability remains 326 unresolved/115
+      blocked/zero actionable and `overallCertification` remains `INCOMPLETE`.
+- [x] `EVD-1198`-`EVD-1205`, `CMD-0809`-`CMD-0819`,
+      `BLK-0658`-`BLK-0664` and `OQ-0662`-`OQ-0668` retain exact source,
+      commands, unavailable evidence, owner questions and finite resolution
+      conditions without advancing any target or recommendation.
+- [x] Ten isolated current-contract files pass 107 tests with 427 expectations.
+      Nine source-owned `256MiB` disposable test databases closed and deleted
+      in `finally`, and the exact residue scan is zero. They remain
+      current-only/fake/in-process corroboration rather than candidate,
+      physical or actual-platform proof.
+- [x] No live/current/project database, common fixture, migration, benchmark,
+      server, app, browser, desktop, worker or projector was opened or started;
+      no product process requires stopping. Benchmark-critical settings remain
+      unchanged and unchosen.
+- [x] Repo-native lint/typecheck discovery, whitespace, source isolation,
+      canonical-ID/reference/proof accounting, exactly-two-row, scoped table
+      width/term, tracker and cleanup checks are recorded in `CMD-0819`. Lint
+      retains the same six unrelated errors in three untouched worker files;
+      no typecheck script exists. Product build/full tests and physical gates
+      are skipped because the change is audit-only and the execution gate
+      failed.
 
 ---
 
