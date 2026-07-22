@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-077 now contribute 84 table/logical/file-object rows and 86 disjoint column-family rows covering 71 physical tables/catalogs, 13 logical/file/no-table contracts and 1,304 authoritative-source/configuration/judgment/Human/hot-fact/delta/outbox/progress/job/control/publication/candidate/display/status/payload CMF rows. The 170 provisional rows comprise 141 `keep`, one `move`, eight `derive`, 14 `delete` and six `archive` decisions; all 170 have `recommendationActionability: unresolved` and zero are actionable. The 80 supporting named-index objects retain their owning-table evidence but are not recounted as tables. US-077 revalidates the selected-import header/base dispositions without double counting and treats four dormant patch tables as four physical delete candidates across eight table/field accounting rows. US-072 leaves the physical register at 92 rows: 91 blocked, one source-proven `not-applicable` and zero value-bearing physical observations. The US-015 approval gate remains unmet, final source/audit/benchmark/export/transfer/recovery/ownership/invalidation/retention authority is incomplete, and no bounded replacement has final proof. No manifest or proof-check state advanced, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` therefore remains independent and `INCOMPLETE`. |
+| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-078 now contribute 87 table/logical/file-object rows and 95 disjoint column-family rows covering 74 physical tables/catalogs, 13 logical/file/no-table contracts and 1,333 authoritative-source/configuration/judgment/Human/hot-fact/delta/outbox/progress/job/control/publication/candidate/display/status/payload/search/queue CMF rows. The 182 provisional rows comprise 148 `keep`, two `move`, ten `derive`, 16 `delete` and six `archive` decisions; all 182 have `recommendationActionability: unresolved` and zero are actionable. The 83 supporting named-index objects retain their owning-table evidence but are not recounted as tables. US-078 revalidates the two prior async-substring dispositions without double counting, retains snapshot token membership and active prompt-pair queue shapes, proposes bounded auxiliary-field alternatives, and treats the dormant physical queue patch as the eighth full-table delete candidate across its table/field accounting rows. US-072 leaves the physical register at 92 rows: 91 blocked, one source-proven `not-applicable` and zero value-bearing physical observations. The US-015 approval gate remains unmet, final source/audit/benchmark/export/transfer/recovery/ownership/invalidation/retention authority is incomplete, and no bounded replacement has final proof. No manifest or proof-check state advanced, no fixture or live/current DuckDB/SQLite ran, and `overallCertification` therefore remains independent and `INCOMPLETE`. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-077 / 2026-07-22` | Provisionally classified candidate, display, selected-import patch, LLM/Human status patch, article payload and judgment payload shapes after US-076. Exactly seven table and 16 disjoint column-family `DSP-####` rows cover seven physical tables and all 151 in-scope CMF rows once; nine supporting indexes remain owner evidence and four prior selected-header/base rows are revalidated rather than recounted. The 23 new rows comprise 12 keep, one move, two derive and eight delete accounting decisions; all remain unresolved and none is actionable. Every keep field names its pre-limit, cursor, selective-filter, exact-summary or snapshot need and source budget. The display move and derives name bounded IDs, keys, order, invalidation, retention and browser/desktop paths. Candidate width/use, pre-limit payload work, aggregate recursive/export bounds, immutable publication, patch deployed closure, parity, cleanup, restore and physical evidence remain blocked. DBO/CMF `auditStatus`, existing `proofCheckState` rows, lineage/runtime state and `overallCertification` do not change; no database, runtime, schema, route, projector, retention or data mutation occurred. |
+| Latest normalized story | `US-078 / 2026-07-22` | Provisionally classified title-token search, physical queue-patch and active unassessed-queue shapes after US-077 while revalidating the existing async-substring table/field delete candidates without recounting them. Exactly three table and nine disjoint column-family `DSP-####` rows cover three physical tables and all 29 new in-scope CMF rows once; three supporting indexes remain owner evidence. The 12 new rows comprise seven keep, one move, two derive and two delete accounting decisions; all remain unresolved and none is actionable. Retained fields name exact snapshot/selectivity, eligibility, priority, ordering and keyset contracts and source caps. The move and derives name bounded one-row-per-article or immutable publication-receipt alternatives, while the queue-patch and prior substring retirements require deployed inventory, lifecycle, parity and restore proof. Tokenizer/index selectivity, async ownership, queue identity/cursor semantics, immutable publication, browser/desktop parity, cleanup, restore and physical evidence remain blocked. DBO/CMF `auditStatus`, existing `proofCheckState` rows, lineage/runtime state and `overallCertification` do not change; no database, runtime, schema, route, projector, retention or data mutation occurred. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
@@ -12311,6 +12311,164 @@ manifest row; a source-declared query cap is not a physical measurement or a
 request-wide bound; and static absence is not deletion authority.
 `overallCertification` remains independently `INCOMPLETE`.
 
+## US-078 Provisional Search And Queue Dispositions
+
+### US-078 Scope, Prerequisite And State Boundary
+
+US-077 is complete. US-078 continues the normalized Phase 5 disposition
+register without reopening the Phase 3 manifests or substituting blocked
+Phase 4 measurements. Physical tables, disjoint material column families and
+supporting indexes remain separate accounting grains:
+
+| Family | New table disposition scope | New disjoint material-field scope | Supporting indexes, not dispositions | Prior disposition cross-reference, not recounted |
+| --- | --- | --- | --- | --- |
+| Title-token search | `DBO-0153` | `CMF-1221`-`CMF-1229` (9) | `DBO-0159` | — |
+| Async substring control | — | — | `DBO-0139` remains prior owner evidence | Search job `DBO-0131` and `CMF-1027`-`CMF-1047`, `CMF-1082` remain `DSP-0100`/`DSP-0129`. |
+| Physical queue patch | `DBO-0154` | `CMF-1230`-`CMF-1239` (10) | `DBO-0160` | — |
+| Unassessed queue | `DBO-0155` | `CMF-1240`-`CMF-1249` (10) | `DBO-0161` | — |
+| **US-078 new total** | **Three physical tables = three object decisions** | **29 physical fields exactly once** | **Three supporting indexes retained as evidence, not recounted** | **Two prior substring rows revalidated with zero new recommendations.** |
+
+The title-token table and async substring job are different contracts. Active
+mounted list/count and bulk paths plus the registered queue/Human-init read use
+snapshot-scoped token-prefix membership; the standalone token service has no
+checked-in mounted caller.
+The separate substring service can insert and observe one pending job, but no
+checked-in caller or executor owns results. Likewise, the function named
+`projectReviewServingQueuePatches` directly replaces active queue-serving
+rows and reports zero physical patch rows; it does not write
+`mart.review_queue_patch_v4`.
+
+Current source supports provisional `keep` homes for the title-token and
+active unassessed-queue tables. Their retained fields are limited to exact
+snapshot/selectivity, eligibility, priority, ordering and keyset contracts.
+Repeated title/activity auxiliaries are a provisional `move` to a bounded
+one-row-per-snapshot/article validation shape, while per-row search/queue
+timestamps are provisional `derive` candidates from immutable component/chunk
+publication receipts after startup-probe replacement. The physical queue
+patch is a provisional `delete` candidate at table and field grains. The
+existing async-substring table/field delete candidates remain unresolved and
+are not counted again. No move, derive or delete is actionable.
+
+Every affected DBO and CMF row remains `auditStatus: blocked`. `FAN-0051` and
+`FAN-0052` retain `proofCheckState: blocked`; no `PRF-####` row changes. All
+new and revalidated `DSP-####` rows retain
+`recommendationActionability: unresolved`, and `overallCertification` remains
+independently `INCOMPLETE`. The shared proof references are `PRF-0004`,
+`PRF-0006`, `PRF-0008` and `PRF-0016`.
+
+No live/current/project DuckDB or SQLite file, configured snapshot/query/
+studio, fixture DDL/DML, server, app, browser, desktop shell, worker,
+projector, migration, startup repair, export, transfer, cleanup, benchmark or
+physical collector ran. Only this audit file and required Ralph tracker
+metadata may change.
+
+### US-078 Evidence Ledger
+
+| Evidence ID | Class | Exact locator | Finding | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-0887` | `control` | User US-078 PRD and codebase patterns; `tasks/prd.json#US-077/#US-078/#US-079`; `.ralph-tui/progress.md`; US-001 state model; US-047/US-063 lineage and closure; US-070 measurement rows; US-077 prerequisite; reporting and DuckDB skills; HEAD/worktree/ID/count inspection | Fixes the prerequisite, audit-only/no-live boundary, exact three-table/29-CMF new scope, separate index/prior-substring ownership and unrelated pre-existing `tasks/prd.json` change. | `CMD-0591` |
+| `EVD-0888` | `schema` | `src/db/migrateDuckdb.ts#getDuckdbMigrationFiles`; migrations `0097_reviewServingV4Foundation.sql` and `0103_reviewServingQueueIdentityPrimaryKey.sql`; `DBO-0131`, `DBO-0139`, `DBO-0153`-`DBO-0155`, `DBO-0159`-`DBO-0161`; `CMF-1027`-`CMF-1047`, `CMF-1082`, `CMF-1221`-`CMF-1249`; scoped diff from US-063 baseline `6f0a1a6c30f3623cea6ec1684ef9a8d62e0777e6` through HEAD | Full-file-name lexical shape yields three new physical tables, 29 fields and three named indexes. Title search and physical queue patch remain 0097-only. Final 0103 destructively recreates the active queue with the nine-expression PK/index including nullable-declared `prompt_id` and `queue_identity`. Scoped product/schema source is unchanged. | `CMD-0592` |
+| `EVD-0889` | `production/search/read` | `reviewServingTitleSearchProjector.ts#getReviewServingTitleSearchTokens`; LLM and Human/Both/Unassessed route services `#getSearchTokenPrefixes`/search predicates; `reviewServingReader.ts#getSearchFilterPredicate`; `reviewServingSql.ts#getReviewServingRowsSqlSearchPredicate`/`#getReviewServingRowsSqlQueuePredicate`; Human-init queue route; `reviewBulkOperationWorker.ts#getServingArticleBatchSql`; `reviewServingReadContracts.ts#review.search.tokenPrefix` | Mounted list/count and bulk paths plus the registered queue/Human-init read intersect every submitted normalized token prefix by project/search/scope/snapshot/article before order/limit. The standalone contract is at most 50 rows, 2 MB and 5 s ordered by token/article, but `searchReviewServing` has no non-test checked-in caller. Only the six scope/token/article fields drive membership or standalone order. | `CMD-0593` |
+| `EVD-0890` | `production/search/write/validation` | `reviewServingTitleSearchProjector.ts#titleSearchTokenizerVersion`, `#getReviewServingTitleSearchTokens`, `#getTitleSearchRecord`, dirty/full writers; `reviewServingProjectorWriter.ts#getReviewServingTitleSearchRebuildRowsStatements`; `reviewServingProjectorWorker.ts#getSearchRebuildChunkOutputChecksum` | Dirty JavaScript and rebuild DuckDB paths directly replace token rows. `title_prefix` repeats once per token and participates in strict chunk checksum; `activity_sort_at` is written but has no checked-in read; `search_updated_at` is writer/probe state. JavaScript NFKD/mark stripping and DuckDB `strip_accents` are not proven equivalent, and the row stores no tokenizer version. | `CMD-0593` |
+| `EVD-0891` | `production/substring` | `reviewSearchService.ts#getSearchJobId`, `#createSubstringSearchJob`, `#searchSubstring`, `#searchReviewServing`; `reviewServingReadContracts.ts#review.search.substringAsync`; `reviewServingSql.ts#getReviewServingRowsSqlJobPredicate`; `reviewServingSearchOwnership.ts`; exact non-test caller/executor/updater/reference search | The service can insert deterministic pending `substringAsync` work with `{cursor:null,limit:500}` and observe one 100 KB/5 s job row in async/unavailable state. No checked-in caller, executor, result-membership store/reader, lease, progress, retry, pin, expiry, repair or cleanup owner exists. Registry labels do not establish mounted invocation. | `CMD-0593` |
+| `EVD-0892` | `production/queue/write/absence` | `reviewServingQueueProjector.ts#getQueueRebuildSourceCtes`, `#getQueueIdentity`, `#getUnassessedQueueServingRecord`, `#projectReviewServingQueuePatches`; `reviewServingProjectorWriter.ts#getReviewServingQueueRebuildRowsStatements`; exact qualified `mart.review_queue_patch_v4` production-reference search | Dirty/full queue work derives LLM `unassessed` and Human `human-unreviewed` prompt pairs, priority and activity from scope/settings/current judgments and directly deletes/upserts active serving. Stable identity is `{promptId,queueKind,reviewConfigHash}`; the physical key additionally includes snapshot, priority, activity and article. The physical patch table has migration-only checked-in references, and the projector returns `patchRowCount:0` separately from serving mutations. | `CMD-0593` |
+| `EVD-0893` | `production/queue/read` | `reviewServingReadContracts.ts#review.queue.unassessed`; `reviewServingSql.ts#getReviewServingRowsSqlQueuePredicate`/`#getReviewServingRowsSqlUnassessedQueuePredicate`; `reviewServingHumanBothUnassessedRouteService.ts#getUnassessedQueuePredicate`/`#getUnassessedReviewArticlesFromServing`; `reviewBulkOperationWorker.ts#getTabStatusPredicates`; `reviewServingSummaryProjector.ts` queue count CTEs | The registered queue contract caps one read at 100 rows, 2 MB and 5 s and orders/cursors by priority, activity, article, prompt and queue identity. Mounted Unassessed and bulk selection use article-existence only, then candidate ordering; summary produces prompt-pair named counts. These are different grains and field subsets, not one queue contract. | `CMD-0593` |
+| `EVD-0894` | `production/queue/job` | `reviewServingJudgmentJobQueueService.ts#getJudgmentJobUnassessedCountFromServing`, `#getJudgmentJobUnassessedArticlesFromServing`, `#getCursorPredicate`, `#getJudgmentJobUnassessedPairsFromServing`; cron prompt readers | Job count is distinct articles; preview caps at 500 ordered by maximum priority/activity/article; worker prompt pairs cap at 5,000 plus one and use strict priority/activity/article/prompt keyset predicates under 5 s/no-spill contexts. The job cursor omits `queue_identity`, while the registered queue contract includes it, so equal-key completeness and logical uniqueness remain unproven. | `CMD-0593` |
+| `EVD-0895` | `production/publication/lifecycle` | Search/queue incremental and rebuild writers; snapshot promotion/component state; `reviewServingRetentionService.ts#cleanupTableSpecs`; `duckdbService.ts` title-search and queue startup mutation probes; final 0103 queue rebuild | Search/queue publication, chunk validation, promotion, startup mutation restoration and protected cleanup are separate stages. Active/LKG/pins protect both final tables, but ordinary readers lack durable leases. Per-row update timestamps are used only as probe mutation cells; probe restoration is not crash-safe receipt or a reason to infer product use. Physical queue patch and search jobs are outside this cleanup registry. | `CMD-0593` |
+| `EVD-0896` | `production/client/desktop` | `src/utils/useUrlFilters.ts`; four review routes and `reviewsArticlesUnassessedTableContainer.tsx`; `projectsArticlesUnassessedQuery.ts`; `src/app/router.tsx`; `getRouterHistoryMode.ts`; `getDesktopApiOrigin.ts`; `src/desktop/getDesktopRuntimeConfig.ts` | Shared UI submits title search only after apply, includes it in query keys/URL/select-all criteria and renders Unassessed candidate rows/counts; it does not render token, priority, prompt or queue identity fields and exposes no substring control. The hook reads `window.location.search` and rewrites pathname/query without retaining hash, while packaged desktop uses hash history. Source applicability is not browser/desktop request, cache, navigation or render parity. | `CMD-0593` |
+| `EVD-0897` | `measurement/control` | US-070 `FAN-0051`-`FAN-0052`; `BLK-0362`-`BLK-0366` | Token/article/prefix cardinality and selectivity, repeated auxiliary bytes, queue article/pair cardinality, null/duplicate domains, priority distributions, index plans, pre-limit rows/bytes, writes, temp/spill, RSS, deployed generations and restore results remain `unavailable`, never zero. Source caps and logical repetition are not physical measurements. | `CMD-0593` |
+| `EVD-0898` | `control` | DBO/CMF range expansion and disjointness; supporting-index exclusion; prior-substring no-recount review; per-field requirement/budget and non-keep alternative review; count derivation | Confirms three object and nine material-family decisions, exact 29-CMF single coverage, seven keep/one move/two derive/two delete rows, 182 cumulative unresolved recommendations and zero actionable rows. | `CMD-0594` |
+| `EVD-0899` | `control` | US-078 skipped-command ledger and created-process/artifact audit | Confirms zero database/runtime/fixture commands, zero started product processes and zero generated artifacts; cleanup and stop sets are empty. These action counts are not physical measurements. | `CMD-0595` |
+| `EVD-0900` | `control` | Sequential-ID/reference/disposition/actionability/state/count/table-width/scope/disjointness/no-recount/source/worktree/tracker/whitespace validators; package-script typecheck discovery; repo lint | Confirms the complete US-078 register, independent states, docs-only isolation and relevant quality-gate result without prohibited runtime evidence. | `CMD-0596` |
+
+### Bounded Search, Queue And Alternative Contracts
+
+The budgets below are source-declared admission boundaries, not physical
+measurements. A retained field must name its exact selectivity, snapshot,
+eligibility, priority, ordering or keyset need. A move or derive must preserve
+the immutable publication identity and bounded read grain; a delete candidate
+must close deployed state and lifecycle rather than relying on source absence.
+
+| Family and exact fields | Proven current requirement and source budget | Bounded move/derive/delete alternative | Publication, lifecycle and recovery boundary | Browser/desktop consequence and unresolved proof |
+| --- | --- | --- | --- | --- |
+| Token scope/membership: `project_id`, `search_identity`, `project_scope_identity`, `snapshot_id`, `token`, `article_id` (`CMF-1221`-`CMF-1226`) | All-token `starts_with` intersections constrain mounted list/count and bulk membership plus registered queue/Human-init selection before order/limit. Snapshot/component/scope identity prevents cross-publication joins. Standalone raw search is at most 50 rows/2 MB/5 s ordered by token/article but has no mounted caller. | — | Dirty/full writers replace exact snapshot token rows; optional search publication, active/LKG/pin retention and immutable tokenizer/version equality remain blocked. | Shared search controls submit text, but token rows are not rendered. Web/desktop request/cache/hash parity and deployed selectivity/index plans are unavailable. |
+| Search article auxiliaries: `title_prefix`, `activity_sort_at` (`CMF-1227`-`CMF-1228`) | `title_prefix` participates in strict rebuild-chunk checksum; `activity_sort_at` is copied but has no checked-in reader. Neither selects embedded membership/order; generic standalone `SELECT *` is unmounted. | `move` candidate to at most one row per `(project_id,search_identity,project_scope_identity,snapshot_id,article_id)` carrying only an owner-approved normalized-title digest/prefix and activity diagnostic. Validation must range by bounded rebuild chunk and may not rejoin mutable current source. | Publish/validate/retain the auxiliary row with the same immutable search snapshot; backfill/migrate per-token values, preserve rollback, settle old rows/indexes and prove restore before removal. | No current rendered field changes, but standalone/API shape and browser/desktop parity must be explicitly retired or preserved. Physical fan-out/byte savings remain unavailable. |
+| Search row time: `search_updated_at` (`CMF-1229`) | Writer timestamp and startup mutation/restore cell only; no membership, order, result or mounted response use. | `derive` candidate from an immutable search component/chunk publication receipt keyed by project/search/scope/snapshot. Replace the row mutation probe with an approved non-content/schema-safe probe; do not treat a mutable manifest timestamp as immutable. | Migration must preserve startup detection, interruption handling, old-row cleanup, rollback and executable restore. Current in-process restoration is not crash proof. | No demonstrated client field. Web/desktop parity is still required because generic standalone results currently expose `SELECT *`. |
+| Async substring control: existing `DBO-0131`, `CMF-1027`-`CMF-1047`, `CMF-1082` (`DSP-0100`/`DSP-0129`) | One deterministic pending job may be inserted with a 500-row cursor and observed through a one-row/100 KB/5 s `asyncUnavailable` contract. No mounted caller or executor/result path exists, so result membership is unavailable rather than empty. | Existing `delete` candidate remains. Either implement a bounded async state machine with capped request, immutable filter/snapshot/result identity, owner lease, ordered cursor, result store/reader, pin, retry, expiry, recovery and cleanup, or retire the table/index/contracts after deployed-row/reference/history closure. | Retained mode needs terminal/orphan/pin settlement, reader leases, scheduled cleanup receipts and restore; retirement needs migration/receipt, rollback and complete registry/operator closure. | No current UI control or capture proves reachability. Browser/desktop API, progress, restart and result parity must be implemented or explicitly retired. |
+| Physical queue patch: `CMF-1230`-`CMF-1239` with `DBO-0154` | No checked-in production read/write/lifecycle requirement. A migration-declared PK/index and a function name containing “patch” are not execution evidence. | `delete` candidate with the table/index. Inventory deployed rows, generated/dynamic/operator references and retained history; migrate/receipt any required generation/watermark/tombstone state; prove direct-serving writer equivalence before removal. | Define cutover, rollback, backup/restore, complete reference scan, deletion receipt and retention closure. Static absence is not deletion safety. | Prove mounted API, job, browser/desktop, export/transfer and recovery parity before actionability changes. |
+| Active queue snapshot/eligibility: `project_id`, `review_config_hash`, `snapshot_id`, `queue_identity`, `queue_kind`, `article_id`, `prompt_id` (`CMF-1240`-`CMF-1244`, `CMF-1247`-`CMF-1248`) | Scope/config/snapshot predicates precede every route/job/count read. Queue kind distinguishes `unassessed` and `human-unreviewed`; article/prompt identify eligibility and summary/job grains; stable JSON identity is the final registered-queue tie-break. Registered queue is at most 100 rows/2 MB/5 s; route/bulk existence and counts use distinct bounded or aggregate contracts. | — | Dirty/full direct replacement, component validation/promotion and active/LKG/pin retention apply. Nullable-declared `prompt_id`, stable identity equality and current-source eligibility parity remain blocked. | UI renders candidate articles/counts, not pair identities. Human-init/job/admin and browser/desktop Unassessed behaviors need a common authoritative fixture and parity capture. |
+| Active queue priority/order: `priority_bucket`, `activity_sort_at` (`CMF-1245`-`CMF-1246`) | Registered queue orders/cursors with priority/activity plus article/prompt/queue identity. Job preview caps at 500; prompt-pair worker caps at 5,000 plus one and uses strict priority/activity/article/prompt keyset under 5 s/no spill. | — | Priority/activity are recomputed from current LLM/Human timestamps during dirty/full replacement. Authority, equal-key uniqueness, full/dirty parity, retry and immutable snapshot visibility remain blocked. | Mounted Unassessed list uses queue existence then candidate activity order, while worker/admin surfaces use queue priority. One observed order cannot certify the others or desktop parity. |
+| Queue row time: `queue_updated_at` (`CMF-1249`) | Writer timestamp and startup mutation/restore cell only; no eligibility, priority, keyset, count, route or job result use. | `derive` candidate from an immutable queue component/chunk publication receipt keyed by project/config/snapshot. Replace the row mutation probe without weakening startup/readability evidence. | Preserve destructive-0103 regeneration detection, interruption behavior, rollback, old-row cleanup, reader safety and executable restore before removal. | No client field changes, but queue readiness, admin job progress and browser/desktop rendering must remain parity-verified. |
+
+### Provisional Table Disposition Matrix
+
+| rowId | Family | Physical table | Provisional disposition and home | Product need or bounded replacement requirement | Evidence / proof / unresolved gate | recommendationActionability |
+| --- | --- | --- | --- | --- | --- | --- |
+| `DSP-0171` | Title-token search | `DBO-0153 mart.review_title_search_serving_v4` | `keep` as snapshot-scoped token membership | Mounted list/count and bulk search plus registered queue/Human-init selection need bounded all-token prefix intersections without foreground title scans; only retained key fields establish the keep reason. | `EVD-0888`-`EVD-0890`/`EVD-0895`; `PRF-0004`/`PRF-0006`/`PRF-0016`; `BLK-0425`/`BLK-0426`/`BLK-0430`; `OQ-0429`/`OQ-0430`/`OQ-0434` | `unresolved` |
+| `DSP-0172` | Physical queue patch | `DBO-0154 mart.review_queue_patch_v4` | `delete` candidate | Inventory and receipt/migrate deployed rows/history/references, prove current direct-serving queue writers replace every generation/watermark/tombstone contract, retire the index/registries and prove parity, rollback, cleanup and restore. | `EVD-0888`/`EVD-0892`/`EVD-0895`; `PRF-0004`/`PRF-0006`/`PRF-0008`/`PRF-0016`; `BLK-0425`/`BLK-0429`/`BLK-0430`; `OQ-0429`/`OQ-0433`/`OQ-0434` | `unresolved` |
+| `DSP-0173` | Unassessed queue | `DBO-0155 mart.review_unassessed_queue_serving_v4` | `keep` as snapshot prompt-pair eligibility/order state | Mounted Unassessed existence, registered queue order, summary counts and judgment-job article/pair selection need bounded prompt-pair membership and priority without foreground judgment scans. | `EVD-0888`/`EVD-0892`-`EVD-0895`; `PRF-0004`/`PRF-0006`/`PRF-0016`; `BLK-0425`/`BLK-0428`/`BLK-0430`; `OQ-0429`/`OQ-0432`/`OQ-0434` | `unresolved` |
+
+### Disjoint Column-Family Disposition Matrix
+
+| rowId | Family | Exact CMF rows and purpose | Provisional disposition and home | Exact requirement or bounded alternative | Evidence / proof / unresolved gate | recommendationActionability |
+| --- | --- | --- | --- | --- | --- | --- |
+| `DSP-0174` | Token snapshot scope | `CMF-1221`-`CMF-1224` (4): project, search, project-scope and snapshot identities | `keep` in title-token search | Every embedded/standalone prefix predicate requires the exact component/scope/snapshot before candidate or 50-row standalone limit. | `EVD-0889`/`EVD-0895`; `PRF-0004`/`PRF-0006`/`PRF-0016`; `BLK-0426`/`BLK-0430`; `OQ-0430`/`OQ-0434` | `unresolved` |
+| `DSP-0175` | Token selectivity | `CMF-1225`-`CMF-1226` (2): token and article identity | `keep` in title-token search | `starts_with(token,prefix)` plus article correlation implements all-token membership; token/article also order the 50-row standalone contract. Cardinality/index plans remain unavailable. | `EVD-0889`/`EVD-0897`; `PRF-0004`/`PRF-0006`/`PRF-0016`; `BLK-0426`; `OQ-0430` | `unresolved` |
+| `DSP-0176` | Search article auxiliaries | `CMF-1227`-`CMF-1228` (2): normalized title prefix and activity time repeated per token | `move` to bounded one-row-per-snapshot/article search metadata | Preserve strict checksum input and any approved activity diagnostic under `(project,search,scope,snapshot,article)`; range by rebuild chunk, bind immutable source, migrate/backfill, preserve standalone parity, rollback, retention and restore. | `EVD-0890`/`EVD-0895`-`EVD-0897`; `PRF-0004`/`PRF-0006`/`PRF-0008`/`PRF-0016`; `BLK-0426`/`BLK-0430`; `OQ-0430`/`OQ-0434` | `unresolved` |
+| `DSP-0177` | Search row lifecycle time | `CMF-1229 search_updated_at` | `derive` from immutable search publication receipt | Replace per-token probe time with component/chunk receipt keyed by project/search/scope/snapshot; redesign startup probe and prove interruption, migration, rollback, cleanup and restore. | `EVD-0890`/`EVD-0895`; `PRF-0004`/`PRF-0006`/`PRF-0008`/`PRF-0016`; `BLK-0426`/`BLK-0430`; `OQ-0430`/`OQ-0434` | `unresolved` |
+| `DSP-0178` | Physical queue patch | `CMF-1230`-`CMF-1239` (10): patch identity/generation/watermark/kind/priority/order/article/tombstone/time | `delete` candidate with `mart.review_queue_patch_v4` | Inventory and migrate/receipt every deployed field/history/reference, prove direct active-queue replacement and all route/job/count parity, retire the index/lifecycle and prove rollback/restore. | `EVD-0888`/`EVD-0892`/`EVD-0895`; `PRF-0004`/`PRF-0006`/`PRF-0008`/`PRF-0016`; `BLK-0429`/`BLK-0430`; `OQ-0433`/`OQ-0434` | `unresolved` |
+| `DSP-0179` | Queue snapshot scope | `CMF-1240`-`CMF-1242` (3): project, review-config and snapshot identities | `keep` in active unassessed queue | Every existence, registered queue, summary and judgment-job read requires exact current scope/config/snapshot before limit/count. | `EVD-0892`-`EVD-0895`; `PRF-0004`/`PRF-0006`/`PRF-0016`; `BLK-0428`/`BLK-0430`; `OQ-0432`/`OQ-0434` | `unresolved` |
+| `DSP-0180` | Queue eligibility/identity | `CMF-1243`-`CMF-1244`, `CMF-1247`-`CMF-1248` (4): stable queue identity, kind, article and prompt | `keep` in active unassessed queue | Kind/article/prompt define eligibility and article-versus-pair consumers; queue identity is the registered final tie-break. Null, stable/physical uniqueness and count-grain authority remain blocked. | `EVD-0892`-`EVD-0894`; `PRF-0004`/`PRF-0006`/`PRF-0016`; `BLK-0428`; `OQ-0432` | `unresolved` |
+| `DSP-0181` | Queue priority/order | `CMF-1245`-`CMF-1246` (2): priority bucket and activity time | `keep` in active unassessed queue | Registered 100-row and job 500/5,000-row paths require priority/activity before limit; job keyset also uses article/prompt, while registered order additionally uses queue identity. | `EVD-0893`/`EVD-0894`/`EVD-0897`; `PRF-0004`/`PRF-0006`/`PRF-0016`; `BLK-0428`; `OQ-0432` | `unresolved` |
+| `DSP-0182` | Queue row lifecycle time | `CMF-1249 queue_updated_at` | `derive` from immutable queue publication receipt | Replace per-pair probe time with component/chunk receipt keyed by project/config/snapshot; preserve regeneration detection, startup safety, migration, rollback, cleanup and restore. | `EVD-0892`/`EVD-0895`; `PRF-0004`/`PRF-0006`/`PRF-0008`/`PRF-0016`; `BLK-0428`/`BLK-0430`; `OQ-0432`/`OQ-0434` | `unresolved` |
+
+### Prior-Ownership Revalidation, Counts And State Accounting
+
+| Acceptance family | Existing disposition | Current evidence-backed result | Counting result |
+| --- | --- | --- | --- |
+| Async substring job/control | `DSP-0100` for `DBO-0131`; `DSP-0129` for `CMF-1027`-`CMF-1047`, `CMF-1082` | Current service still only inserts/observes pending async state; no checked-in caller/executor/result/pin/retry/expiry/cleanup path exists. Owners must implement the bounded state machine or prove deployed-safe retirement. | Existing two delete rows remain unresolved; zero new rows. `DBO-0139` remains prior supporting-index evidence. |
+
+| Register slice | New rows | `keep` | `move` | `derive` | `delete` | `archive` | `recommendationActionability: unresolved` | Actionable |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Table decisions | 3 | 2 | 0 | 0 | 1 | 0 | 3 | 0 |
+| Column-family decisions | 9 | 5 | 1 | 2 | 1 | 0 | 9 | 0 |
+| **US-078 new total** | **12** | **7** | **1** | **2** | **2** | **0** | **12** | **0** |
+| Prior substring rows revalidated, not recounted | 2 | 0 | 0 | 0 | 2 | 0 | 2 | 0 |
+
+The nine new column-family rows expand to exactly 29 unique CMF IDs with no
+overlap or omission:
+
+`29 = 4 + 2 + 2 + 1 + 10 + 3 + 4 + 2 + 1`.
+
+Cumulatively, `DSP-0001`-`DSP-0182` comprise 87
+table/logical/file-object decisions and 95 column-family decisions covering
+74 physical tables/catalogs, 13 logical/file/no-table contracts and 1,333 CMF
+rows. Counts are 148 `keep`, two `move`, ten `derive`, 16 `delete` and six
+`archive`; all 182 rows retain
+`recommendationActionability: unresolved` and zero are actionable. The 83
+supporting indexes remain evidence under their owning objects rather than
+additional disposition targets.
+
+No non-keep recommendation is implementation authority. The title-auxiliary
+move lacks an implemented one-row-per-article owner, immutable writer/read
+path, migration, same-fixture benchmark, parity, retention and restore. The
+two timestamp derives require immutable component/chunk receipts and startup-
+probe replacement rather than an inference from mutable manifest time. The
+two new delete rows represent one physical queue-patch target at table/field
+grains; the two prior substring delete rows remain separate prior ownership.
+All lack deployed inventory, retained-history decisions, dynamic-reference
+closure, receipted migration/cleanup, rollback and restore.
+
+Manifest accounting remains DBO 322 discovered/322 blocked and CMF 1,985
+discovered/1,985 blocked. API, UI, background, map and lineage counts/states
+are unchanged. `FAN-0051`-`FAN-0052` remain blocked, the 92-row physical
+register remains 91 blocked plus one source-proven `not-applicable`, and no
+`PRF-####` state advances. A provisional keep home is not a `classified`
+manifest row; a source-declared query cap is not physical selectivity or a
+request-wide bound; `async`/`unavailable` is not an empty result; and static
+absence is not deletion authority. `overallCertification` remains
+independently `INCOMPLETE`.
+
 ## Recommendation Proof Gate
 
 Create separate `PRF-####` rows for positive and negative proof. For a move,
@@ -12545,18 +12703,19 @@ reason, bounded replacement when applicable, evidence IDs, proof IDs, and
 `recommendationActionability`. A `classified` manifest row is necessary but
 not sufficient for an actionable disposition.
 
-Current state: US-073 through US-077 add `DSP-0001`-`DSP-0170`. Eighty-four
-table/logical/file-object rows and 86 disjoint column-family rows cover 71
-physical tables/catalogs, 13 logical/file/no-table contracts and all 1,304
-in-scope CMF rows exactly once. Counts are 141 `keep`, one `move`, eight
-`derive`, 14 `delete` and six `archive`; all 170 are provisional with
+Current state: US-073 through US-078 add `DSP-0001`-`DSP-0182`. Eighty-seven
+table/logical/file-object rows and 95 disjoint column-family rows cover 74
+physical tables/catalogs, 13 logical/file/no-table contracts and all 1,333
+in-scope CMF rows exactly once. Counts are 148 `keep`, two `move`, ten
+`derive`, 16 `delete` and six `archive`; all 182 are provisional with
 `recommendationActionability: unresolved` and zero are actionable. The 14
-delete rows are separate table/field accounting grains for seven physical
-targets; the six archive rows are separate grains for two physical targets.
-Eighty supporting indexes remain owner evidence rather than additional tables
-or recommendations. US-076/US-077 prior-owner cross-references are revalidated
-without double counting. Inherited dispositions outside the normalized scope
-remain provisional and unresolved.
+delete rows through US-077 are separate table/field accounting grains for
+seven physical targets; US-078 adds the two queue-patch grains for an eighth
+physical target. The six archive rows are separate grains for two physical
+targets. Eighty-three supporting indexes remain owner evidence rather than
+additional tables or recommendations. US-076 through US-078 prior-owner
+cross-references are revalidated without double counting. Inherited
+dispositions outside the normalized scope remain provisional and unresolved.
 
 ### Output 08 - Move/Delete Candidates And Proof Requirements
 
@@ -15865,6 +16024,13 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-0589` | 2026-07-22 / US-077 | Deliberately skipped configured snapshot/query/studio, direct/live DuckDB or SQLite, fixture DDL/DML, migrations, server/app/browser/desktop, workers/projectors, startup repair, export/transfer/cleanup execution, benchmarks and physical collectors. Audited created artifacts and started product processes. | Preserve repository data/runtime behavior and benchmark-critical settings while making non-execution, cleanup and process-stop accounting explicit. | Produced `EVD-0885`: zero database/runtime/fixture commands, zero generated artifacts and zero started product processes occurred; cleanup and stop sets are empty. Only the audit plan and required Ralph tracker metadata change. |
 | `CMD-0590` | 2026-07-22 / US-077 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check` and strict source-only sequential-ID/reference/table-width/scope/disjointness/no-recount/disposition/actionability/state/count/source/worktree/tracker/whitespace validators. A preliminary zsh count loop misquoted Markdown backticks and the first count-only Bun regex over-escaped its anchor; neither produced an authoritative result. The corrected Bun validator is authoritative. Skipped build, tests, browser/desktop, database and runtime gates because this story changes audit Markdown/tracker metadata only. | Verify the complete register, independent states, non-actionability, docs-only isolation and relevant repo-native formatting without prohibited runtime evidence. | Produced `EVD-0886`. Lint preserves the same six unrelated source errors and no typecheck script exists. Corrected validators pass: 322 DBO, 1,985 CMF, 886 EVD, 590 CMD, 424 BLK, 428 OQ and 170 DSP canonical IDs are contiguous; US-077 scope is 7/16, all 151 CMF IDs occur exactly once, all 23 rows are unresolved and zero is actionable; cumulative dispositions are 141 keep/one move/eight derive/14 delete/six archive; manifests/proof/certification remain unchanged and no product/runtime source changed. |
 
+| `CMD-0591` | 2026-07-22 / US-078 | Read the required reporting and DuckDB skills, user PRD/patterns, `tasks/prd.json#US-077/#US-078/#US-079`, `.ralph-tui/progress.md`, US-001 state rules, US-047/US-063 lineage and closure, US-070 measurements, US-077 prerequisite, current manifests/counts/next IDs, HEAD/status and the targeted memory registry. | Establish prerequisite, exact non-overlapping accounting grains, independent-state rules, audit-only/no-live boundary and unrelated worktree state before classification. | Produced `EVD-0887`. US-077 is complete; three physical tables, 29 in-scope CMF rows and three supporting indexes form the new scope. Async-substring table/fields retain their US-075 dispositions. `tasks/prd.json` is the sole pre-existing unrelated modification and the memory registry has no applicable audit result. |
+| `CMD-0592` | 2026-07-22 / US-078 | Compared scoped search/queue product/schema source from US-063 baseline `6f0a1a6c30f3623cea6ec1684ef9a8d62e0777e6` through HEAD; read the full-file-name lexical migration loader, exact 0097/0103 migration chain and DBO/CMF closure. No database was opened. | Freeze current effective table/field/index shape and avoid substituting a function name, historical shorter index, supporting index or prior substring control for a new disposition grain. | Produced `EVD-0888`. Scoped product/schema source is unchanged. The new scope reconciles to three physical tables, 29 physical fields and three supporting indexes; final 0103 supplies the active queue PK/index and destructive regeneration boundary. |
+| `CMD-0593` | 2026-07-22 / US-078 | Ran source-only exact declaration/caller/consumer/writer/reference searches and reads for tokenization, prefix predicates, standalone and substring contracts, async jobs, queue eligibility/identity/priority, registered/route/bulk/summary/job reads, strict keysets, publication, validation, startup probes, retention and browser/desktop URL/query behavior. | Assign each retained field an exact bounded selectivity/snapshot/eligibility/priority/order/keyset need and each non-keep field a bounded alternative/lifecycle while preserving unavailable, client and physical-proof boundaries. | Produced `EVD-0889`-`EVD-0897`. Current source supports seven provisional keep, one move, two derive and two delete accounting rows; tokenizer/index selectivity, async execution, queue identity/cursor authority, platform parity, immutable lifecycle, restore and physical proof remain incomplete. |
+| `CMD-0594` | 2026-07-22 / US-078 | Expanded every selected DBO/CMF range, separated physical tables and supporting indexes, excluded the prior async-substring dispositions, checked every keep field name/requirement/budget and every non-keep bounded key/publication/migration/retention/client path, and reconciled counts. | Prevent double counting and derive exact object and disjoint column-family disposition matrices without turning source evidence into actionability. | Produced `EVD-0898`: three object plus nine column-family decisions cover 29 unique CMF rows. The 12 rows are seven keep, one move, two derive and two delete; all remain unresolved and zero is actionable. Cumulative counts become 148 keep/two move/ten derive/16 delete/six archive. |
+| `CMD-0595` | 2026-07-22 / US-078 | Deliberately skipped configured snapshot/query/studio, direct/live DuckDB or SQLite, fixture DDL/DML, migrations, server/app/browser/desktop, workers/projectors, startup repair, async/queue execution, export/transfer/cleanup, benchmarks and physical collectors. Audited created artifacts and started product processes. | Preserve repository data/runtime behavior and benchmark-critical settings while making non-execution, cleanup and process-stop accounting explicit. | Produced `EVD-0899`: zero database/runtime/fixture commands, zero generated artifacts and zero started product processes occurred; cleanup and stop sets are empty. Only the audit plan and required Ralph tracker metadata change. |
+| `CMD-0596` | 2026-07-22 / US-078 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check` and strict source-only sequential-ID/reference/table-width/scope/disjointness/no-recount/disposition/actionability/state/count/source/worktree/tracker/whitespace validators. Two preliminary validator drafts were non-authoritative: the first treated repeated DBO first-column cross-references as duplicate canonical rows, and the second scanned BLK references globally instead of the blocker registry. The corrected registry-scoped validator is authoritative. Skipped build, tests, browser/desktop, database and runtime gates because this story changes audit Markdown/tracker metadata only. | Verify the complete register, independent states, non-actionability, docs-only isolation and relevant repo-native formatting without prohibited runtime evidence. | Produced `EVD-0900`. Lint preserves the same six unrelated source errors and no typecheck script exists. Corrected validators pass: 322 DBO, 1,985 CMF, 900 EVD, 596 CMD, 430 BLK, 434 OQ and 182 DSP canonical IDs are contiguous; US-078 scope is 3/9, all 29 CMF IDs occur exactly once, all 12 rows are unresolved and zero is actionable; cumulative dispositions are 148 keep/two move/ten derive/16 delete/six archive; manifests/proof/certification remain unchanged and no product/runtime source changed. |
+
 ## Blockers
 
 | rowId | Scope | Missing evidence | Why blocked | Owner question IDs | Resolution condition |
@@ -16300,6 +16466,13 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0422` | Four physical patch retirements | Display, selected-import, LLM-status and Human-status patch tables have migration/index/test references but no checked-in production lifecycle. Deployed rows, upgraded backfills, dynamic/generated SQL, operator use, retained history and external copies are unavailable. | Static absence and direct candidate writers support blocked delete candidates only; they cannot prove eight accounting rows are eight targets or authorize dropping four tables/indexes. | `OQ-0426` | Architecture/migration/recovery owners inventory and receipt/migrate every physical target, close all references/commands, prove semantic parity and benchmark, and approve cutover, rollback, cleanup, retention and restore. |
 | `BLK-0423` | Article/judgment payload bounds, identity and publication | Article metadata is physically joined before candidate limit; metadata/open JSON have no encoded ceiling; judgment list/detail caps are per call while detail recursion and export artifact totals are unbounded. Article payload can commit before detail ACK, and active/LKG/current reads lack one request pin. | One-row, 100-ID, 10,000-row, 512-row or 500-ID local bounds do not prove request-wide bytes, immutable hydration, relational/JSON equality, atomic publication or recoverable retention. | `OQ-0427` | Payload/query/export/projector owners approve schemas and aggregate budgets, bind one immutable hydration identity, fence publication/ACK, close open domains and prove plans, parity, retention, cleanup and restore. |
 | `BLK-0424` | Browser/desktop, export/transfer, recovery and lifecycle parity | Shared UI source renders moved fields and payload subsets, all title links target LLM detail, packaged desktop uses hash history/API rebasing, export rehydrates later and transfer regenerates serving. No actual browser/desktop request/cache/navigation/render/download capture, crash restore or retained-copy cleanup result exists. | Shared source, unit tests, startup mutation restoration, backup files and transfer composition do not prove platform parity, hydration order/identity, crash safety, artifact integrity or cleanup-safe readers. | `OQ-0428` | Client/API/export/transfer/recovery owners approve the platform/fixture matrix and capture exact web/desktop requests, rendering/navigation, export/transfer hydration, interruption, restore, retention and cleanup evidence. |
+
+| `BLK-0425` | US-078 final authority and physical evidence | Source proves active token-prefix and prompt-pair queue use plus checked-in physical-patch bypass and dormant substring control, but no owner approval, immutable deployed inventory, approved fixture, physical cardinality/selectivity/width/plan/write profile, same-fixture benchmark, parity, retention or executable restore establishes final homes. | A provisional keep, move, derive or delete is not final authority, physical proof or actionability; DBO/CMF manifests and FAN proof checks remain blocked. | `OQ-0429` | Product/search/queue/query/storage/audit owners approve the authority boundary and immutable deployed, benchmark, parity, lifecycle and restore evidence satisfies the recommendation proof gate. |
+| `BLK-0426` | Tokenizer, selectivity, auxiliary move and row-time derivation | Mounted embedded prefix search uses the six scope/token/article fields, but JavaScript and DuckDB tokenizers lack a proved versioned Unicode equivalence contract. `title_prefix` repeats per token for chunk validation, `activity_sort_at` has no checked-in reader, and `search_updated_at` is a startup probe cell. Standalone `SELECT *` is unmounted. | Source use cannot prove token cardinality/index plans, immutable search publication, product need for raw auxiliaries, the proposed one-row-per-article target, a safe publication-time derivation, deployed values or browser/desktop parity. | `OQ-0430` | Approve tokenizer/version and exact consumer fields; define the bounded auxiliary key/schema/writer/reader and immutable receipt; prove migration, plans, parity, benchmark, retention, rollback and restore. |
+| `BLK-0427` | Async substring product and retirement authority | The search service can insert/read one pending deterministic job, but has no checked-in caller, executor, result store/reader, claimant, progress, retry, pin, expiry, repair or cleanup path. Read-contract/ownership registries label the shape but do not establish invocation. | Pending/async/unavailable state does not prove supported results, operating recovery or safe deletion of prior `DSP-0100`/`DSP-0129`; deployed rows, dynamic callers and owner intent remain unknown. | `OQ-0431` | Product/search/client/runtime owners either approve and prove a bounded end-to-end async state machine or inventory/migrate/receipt deployed state and retire every table/index/contract/registry/client path with parity, rollback and restore. |
+| `BLK-0428` | Queue eligibility, priority, count and keyset authority | Active queue rows derive LLM/Human prompt-pair eligibility from current raw sources. Stable queue identity excludes priority/activity while the physical key includes them; `prompt_id` is declaration-nullable. Mounted existence, registered queue, summary counts, distinct-article preview and prompt-pair worker use different grains. The worker keyset omits `queue_identity`. | Source cannot choose authoritative blank/delete/mode semantics, priority direction, article-versus-pair counts, equal-key completeness, full/dirty parity, snapshot immutability, deployed values/index plans or runtime order. | `OQ-0432` | Product/judgment/queue/projector owners approve queue kinds, source authority, null/identity/priority/count/cursor semantics and prove direct/registered/job/UI parity, publication, benchmark, retention and restore. |
+| `BLK-0429` | Physical queue-patch retirement | `mart.review_queue_patch_v4` and its equal-PK index have migration/test references but no checked-in production reader, writer, startup or retention owner; current code named “patch” directly mutates active queue and reports zero patch rows. | Static absence and direct-serving writes support only blocked delete candidates. They do not establish deployed absence, retained-history irrelevance, dynamic/operator closure, safe index/table deletion, cleanup or recoverability. | `OQ-0433` | Architecture/migration/recovery owners inventory and receipt/migrate every deployed row/field/history/reference, prove direct-writer semantic parity and approve cutover, rollback, cleanup, retention and executable restore. |
+| `BLK-0430` | Search/queue publication, lifecycle and browser/desktop parity | Search and queue write, validate, acknowledge, promote and retain in separate stages. Per-row timestamps are startup mutation cells, not immutable receipts; in-process restore is not crash proof. Retention lacks ordinary-reader leases and omits search jobs/physical patch. Shared URL state reads `location.search` and rewrites pathname/query without retaining desktop hash. | Source caps, shared components, startup probes and active/LKG/pin protection do not prove immutable publication, crash recovery, reader-safe cleanup, web/desktop request/cache/navigation/render parity or non-keep replacement safety. | `OQ-0434` | Publication/client/recovery owners approve immutable component/chunk receipts, startup replacement, reader/cleaner leases, complete lifecycle and platform fixture; prove interruption, parity, cleanup receipts and executable restore. |
 
 ## Owner Questions
 
@@ -16740,6 +16913,13 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0426` | Architecture/migration/recovery owner | Who approves retirement of the four physical patch tables and their four owning indexes; which deployed row/reference/backfill/operator inventory, retained-history migration/receipt, direct-writer parity, cutover, rollback, benchmark, cleanup and restore proof is mandatory? | Patch objects/fields `DSP-0149`-`DSP-0152`, `DSP-0162`-`DSP-0165` and `BLK-0422` |
 | `OQ-0427` | Payload/query/export/projector owner | What versioned article/judgment serializer and aggregate request/export budgets are authoritative; how are snapshot/config/model/content/list/kind identities, relational/JSON equality, publication/ACK, open domains, retention and restore fenced? | Payload keeps `DSP-0153`-`DSP-0154`, `DSP-0166`-`DSP-0170` and `BLK-0423` |
 | `OQ-0428` | Client/API/export/transfer/recovery owner | Which immutable browser/desktop fixture and route/navigation/cache/download matrix must prove display/payload order and identity, all list/detail modes, hash routing, later export/transfer hydration, crash restore, retained copies and cleanup-safe readers? | `DSP-0153`-`DSP-0154`, `DSP-0158`, `DSP-0160`-`DSP-0161`, `DSP-0167`, `DSP-0169`-`DSP-0170` and `BLK-0424` |
+
+| `OQ-0429` | Product/search/queue/query/storage/audit owner | Do you approve the 12 new US-078 provisional decisions and two revalidated async-substring rows as the final search/queue boundary, and which immutable deployed inventory, physical profile, benchmark, parity, lifecycle and restore evidence is mandatory before actionability changes? | `DSP-0171`-`DSP-0182`, `DSP-0100`, `DSP-0129` and `BLK-0425` |
+| `OQ-0430` | Search/product/projector/query/migration owner | Which versioned tokenizer and Unicode corpus are authoritative; which six token membership fields and auxiliary prefix/activity/time values are product-required; what exact one-row-per-article key/schema/checksum and immutable publication receipt may replace repeated fields; and what migration, plan, parity, rollback, retention and restore proof applies? | `DSP-0171`, `DSP-0174`-`DSP-0177` and `BLK-0426` |
+| `OQ-0431` | Search/product/client/runtime/storage owner | Is async substring search a mounted browser/desktop product contract or retired design; if retained, who owns capped admission, immutable job/filter/snapshot/result identity, lease, ordered cursor, results, progress, retry, pins, expiry, recovery and cleanup; if retired, which deployed inventory/history/parity/rollback/restore proof permits deletion? | `DSP-0100`, `DSP-0129` and `BLK-0427` |
+| `OQ-0432` | Product/judgment/queue/projector/query owner | Which LLM/Human source and blank/delete/mode semantics define eligibility; what queue kinds, prompt nullability, stable/physical identity, priority direction, article-versus-pair count and complete registered/job keyset are authoritative; and what full/dirty/publication/UI/job/index proof is required? | `DSP-0173`, `DSP-0179`-`DSP-0182` and `BLK-0428` |
+| `OQ-0433` | Architecture/migration/recovery owner | Who approves retirement of `mart.review_queue_patch_v4` and its index; which deployed row/field/reference/operator inventory, retained-history migration/receipt, direct-serving writer parity, cutover, rollback, benchmark, cleanup, retention and restore proof is mandatory? | `DSP-0172`, `DSP-0178` and `BLK-0429` |
+| `OQ-0434` | Publication/client/desktop/recovery/retention owner | Which immutable component/chunk receipt replaces per-row search/queue times, what crash-safe startup and reader/cleaner lease contract applies, and which browser/desktop URL/hash/request/cache/render plus interruption/cleanup/restore matrix must certify the move, derives and retirements? | `DSP-0100`, `DSP-0129`, `DSP-0172`, `DSP-0176`-`DSP-0178`, `DSP-0182` and `BLK-0430` |
 
 ## US-001 Quality Gates
 
@@ -19992,6 +20172,57 @@ commands. A command proves only the claim linked through its evidence record.
 - [x] Final sequential-ID/reference/table-width/scope/disjointness/no-recount/
       disposition/actionability/state/count/source/worktree/tracker/whitespace
       invariants pass (`CMD-0590`).
+
+## US-078 Quality Gates
+
+- [x] US-077 is complete. The exact non-overlapping search/queue scope
+      reconciles to three new physical tables, three table decisions, nine
+      disjoint material-family decisions covering all 29 CMF rows exactly
+      once, and three supporting indexes retained as evidence rather than
+      extra tables or recommendations.
+- [x] Title-token search, physical queue patch and active unassessed queue each
+      have provisional table and field dispositions. Async-substring table and
+      field rows retain their two US-075 delete-candidate dispositions and are
+      revalidated without double counting.
+- [x] Every retained field is explicitly named with its snapshot/selectivity,
+      eligibility, priority, ordering or keyset requirement and current source
+      cap. `async`/`unavailable` states and missing physical selectivity/plans
+      remain blockers rather than zero values or inferred product support.
+- [x] The title/activity move specifies a one-row-per-project/search/scope/
+      snapshot/article key and bounded rebuild-range validation. Both timestamp
+      derives require immutable component/chunk receipts plus startup-probe,
+      migration, rollback, retention and restore replacement. None is
+      actionable.
+- [x] The physical queue-patch table and its ten-field family are two
+      provisional delete-grain rows representing one physical target. Deployed
+      inventory, retained history, dynamic/operator references, direct-serving
+      parity, benchmark, cleanup and restore remain mandatory; neither is
+      actionable.
+- [x] Twelve sequential `DSP-####` rows reconcile as three table and nine
+      column-family decisions: seven `keep`, one `move`, two `derive` and two
+      `delete`. All 12 new and all 182 cumulative rows retain
+      `recommendationActionability: unresolved`; zero are actionable.
+- [x] `auditStatus`, `proofCheckState`,
+      `recommendationActionability` and `overallCertification` remain
+      independent. DBO stays 322 discovered/322 blocked, CMF stays 1,985
+      discovered/1,985 blocked, `FAN-0051`-`FAN-0052` remain blocked, the
+      physical proof register stays 91 blocked plus one not-applicable, no
+      `PRF-####` state advances and certification remains `INCOMPLETE`.
+- [x] `EVD-0887`-`EVD-0900`, `CMD-0591`-`CMD-0596`,
+      `BLK-0425`-`BLK-0430` and `OQ-0429`-`OQ-0434` record exact evidence,
+      commands, blockers, owner questions, bounded resolution conditions and
+      docs-only/no-live accounting.
+- [x] Zero database/runtime/fixture commands, generated artifacts or started
+      product processes occurred. No schema, code, route, projector,
+      retention, runtime behavior or data changed; cleanup and process-stop
+      sets are empty.
+- [x] `rtk bun run lint` preserves the same six unrelated source errors and
+      no typecheck script exists. Build, tests, browser/desktop and database
+      gates are irrelevant to this Markdown-only audit classification and
+      were not run.
+- [x] Final sequential-ID/reference/table-width/scope/disjointness/no-recount/
+      disposition/actionability/state/count/source/worktree/tracker/whitespace
+      invariants pass (`CMD-0596`).
 
 ---
 
