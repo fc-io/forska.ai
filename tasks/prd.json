@@ -997,11 +997,12 @@
         "Leave unsupported home decisions unresolved."
       ],
       "priority": 50,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-049"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-051",
@@ -3249,6 +3250,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-07-22T01:30:48.152Z"
+    "updatedAt": "2026-07-22T01:57:22.280Z"
   }
 }
