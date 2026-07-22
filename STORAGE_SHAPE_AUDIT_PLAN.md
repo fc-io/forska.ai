@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-070 defines candidate/display/selected-import, status, payload/detail, title-search and queue formulas and adds 12 blocked measurement rows, bringing the physical register to 59 blocked rows with zero value-bearing observations. The US-015 approval gate remains unmet: no immutable fixture, generator/seed, model/provider/thinking identity, prompt/content/serving workload, frozen clock, memory/runtime identity, snapshot/component/generation identity or complete DuckDB/query-profile collector was supplied. Logical payload, byte-exact duplication, index cost or bytes, WAL, temporary work and physical database bytes remain separate and unavailable. No fixture, live/current DuckDB, process or generated artifact ran, no manifest state advanced and no inherited recommendation is actionable. |
+| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-071 defines posting/statistics, summary, filter-option, contribution/partial, index, migration-temporary and runtime-temporary formulas and adds 15 blocked measurement rows, bringing the physical register to 74 blocked rows with zero value-bearing observations. The US-015 approval gate remains unmet: no immutable fixture, generator/seed, model/provider/thinking identity, prompt/content/high-fan-out workload, frozen clock, memory/runtime/snapshot/generation/connection identity or complete DuckDB/query-profile/mutation/temp collector was supplied. Logical payload and duplicate bytes, index cost or bytes, WAL bytes, operator/connection/spill temporary bytes, RSS and physical database bytes remain separate and unavailable. No fixture, live/current DuckDB, process or generated artifact ran, no manifest state advanced and no inherited recommendation is actionable. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-070 / 2026-07-22` | Re-evaluated the Phase 4 gate after US-069. The non-overlapping candidate/status/payload/search/queue scope is 22 DBO and 180 CMF rows terminally blocked by US-062/US-063: ten DuckDB tables, 12 named indexes, 166 physical columns and 14 material JSON/key families. Five family formulas keep candidate membership, projected-before-limit width, bounded post-page/detail hydration, status aggregation, payload copies, token rows and article-versus-prompt-pair queue grains distinct; seven cross-family rows keep applied shape, duplicate/pre/post width, writes/rewrites/RSS/temp, logical payload, index cost/bytes, WAL and physical database bytes separate. All 12 new `FAN-####` rows are blocked and every physical value is `unavailable`, never zero. Current source selects all 44 candidate columns plus joined source metadata before the outer limit, but only predicates/order/cursors select candidates; writer diagnostics report input/deduped records, batches, statements and timing rather than affected inserts/updates/deletes, physical rewrites, RSS or temporary bytes. Application/source benchmark files are unchanged since US-069 and no approval record or complete collector exists. Zero fixture DDL/DML commands, processes and artifacts were created, so cleanup had an empty set. Global DBO/CMF counts remain 322/322 and 1,985/1,985 blocked; proof, actionability, certification, lineage/runtime state and every disposition remain independent and unchanged. |
+| Latest normalized story | `US-071 / 2026-07-22` | Re-evaluated the Phase 4 gate after US-070. The non-overlapping scope is 48 existing DBO and 123 existing CMF rows terminally blocked by US-064/US-065: nine high-fan-out tables, eight current named indexes, 115 permanent physical columns, eight material identity/JSON families, 18 migration-temporary families with 105 declarations and 13 runtime-temporary families with 51 production declaration sites. Seven family formulas keep posting membership/statistics, seven counts, six facets, filter options, durable partials/accumulator rows, index shapes, migration temporaries and runtime connection temporaries distinct; eight cross-family rows keep applied shape, affected writes/full-row emissions/read-modify-write sequences, operator/connection/spill temporary work and RSS, generation/orphan state, logical/duplicate bytes, index cost/bytes, WAL and physical database bytes separate. All 15 new `FAN-####` rows are blocked and every missing physical value is `unavailable`, never zero. Incremental summary publication deletes and re-emits the whole count/facet scope; the reducer reads completed chunks in batches of 256, upserts and updates a durable accumulator, deletes only reduced summary partials and retains contribution partials. Those source shapes are not affected-row, rewrite, peak-temp, RSS or cleanup measurements. The active spill root is configured `DUCKDB_TEMP_DIRECTORY` or sibling `duckdb-temp`; `${databasePath}.tmp` is reset compatibility only. Application/source benchmark files are unchanged since US-070 and no approval record or complete collector exists. Zero fixture DDL/DML commands, processes and artifacts were created, so cleanup had an empty set. Global DBO/CMF counts remain 322/322 and 1,985/1,985 blocked; proof, actionability, certification, lineage/runtime state and every disposition remain independent and unchanged. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
@@ -11049,6 +11049,191 @@ independent. Every affected disposition remains `unresolved`; blocked counts,
 duplicate bytes, widths, plans, writes or resource measurements do not
 strengthen keep, move, derive, archive or delete advice.
 
+## US-071 Posting, Summary, Index, Partial, And Temporary Measurements
+
+### US-071 Scope, Prerequisite And Execution Boundary
+
+US-070 is complete. US-071 measures only the posting/summary/filter/partial
+rows terminally reconciled by US-064 and the temporary families terminally
+reconciled by US-065. The exact non-overlapping scope is 48 DBO and 123 CMF
+rows:
+
+- high-fan-out scope is `DBO-0162`-`DBO-0178` and `CMF-1264`-
+  `CMF-1386`: nine DuckDB tables, eight current named indexes, 115 physical
+  columns and eight material identity/JSON families covering posting patch,
+  active posting membership/statistics, persistent contribution, seven named
+  counts, six named facets, filter options and both rebuild-partial tables;
+- migration-temporary scope is `DBO-0260`-`DBO-0277`: 18 families and 105
+  literal connection-temporary declarations whose effective fields come from
+  their exact migration-stage source or explicit derived select; and
+- runtime-temporary scope is `DBO-0278`-`DBO-0290`: 13 families and 51
+  production declaration sites covering startup probes, dirty/Covidence/job/
+  archive/closeout stages, eight comparison-config tables, two selected-import
+  stages and project-transfer operation/analysis/map/commit stages.
+
+The durable summary partial, contribution partial and accumulator rows are
+persistent mart rows, not connection-temporary objects. SQL CTEs, window/hash/
+group/order operators, connection-temporary tables and on-disk DuckDB spill are
+also separate contracts. The physical spill-path row `DBO-0293`/
+`CMF-1950` remains US-072 scope and is not recounted here; this story only
+requires per-stage use of its active configured/default root. Current runtime
+defaults that root to sibling `duckdb-temp` when
+`DUCKDB_TEMP_DIRECTORY` is unset. `${databasePath}.tmp` appears only in the
+reset compatibility path and is not an active spill root.
+
+Candidate/status/payload/search/queue rows remain US-070 scope. Permanent
+legacy/comparison tables and their indexes plus rooted database/WAL/spill/
+backup/file families remain US-072. Snapshot, chunk, pin and retention-control
+rows are relationship inputs to generation/orphan formulas, not new US-071
+manifest rows.
+
+Current HEAD is the US-070 audit commit `e268c830`. No application, package,
+script or benchmark file has a later committed change, and Ralph's
+`tasks/prd.json` is the only pre-existing worktree modification. Neither the
+task input nor the repository supplies an approved fixture/report/root,
+generator/seed, immutable model/provider/thinking and prompt/content
+configuration, exact posting/summary/filter/partial/temp workload, frozen
+clock, memory/runtime/snapshot/generation/connection identity or complete
+physical collector.
+
+Execution therefore stopped at the gate. No resolver default, synthetic smoke,
+unit-test database, existing project, live/current DuckDB, configured snapshot,
+host path or runtime diagnostic was substituted. All missing physical counts,
+cardinalities, duplicate bytes, writes, full-row rewrites, read-modify-write
+effects, temporary rows/bytes, RSS, generation/orphan values, index cost, WAL
+and database bytes are `unavailable`, never zero.
+
+### US-071 Evidence Ledger
+
+| Evidence ID | Class | Exact locator | Finding | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-0815` | `control` | User US-071 PRD and codebase patterns; `tasks/prd.json#US-070/#US-071/#US-072`; `.ralph-tui/progress.md`; US-001 state model; US-015 physical gate; US-064/US-065 family closure; US-070 prerequisite; reporting and DuckDB skills; HEAD/worktree/ID/count inspection | Fixes the prerequisite, exact 48-DBO/123-CMF non-overlapping scope, allowed measurement state, audit-only/no-live boundary and unrelated pre-existing `tasks/prd.json` change. | `CMD-0552` |
+| `EVD-0816` | `production/control` | `package.json` benchmark/snapshot scripts; `reviewServingBenchmark.ts`; `scripts/benchmarkReviewServingSmoke.ts`; current source diff from `e268c830` through HEAD; exact approval/fixture/report/collector searches | No post-US-070 product or benchmark source change supplies an approved physical fixture, high-fan-out/temp workload, generator/seed, complete critical configuration, mutation/profile/temp/RSS collector or raw-report/cleanup policy. | `CMD-0553` |
+| `EVD-0817` | `schema/production` | US-064 closure and `EVD-0746`-`EVD-0756`; final 0097, 0099-0101, 0112-0114 migration chain; `reviewServingFilterPostingProjector.ts`; `reviewServingSummaryProjector.ts`; `reviewServingFilterOptionProjector.ts`; `reviewServingContributionService.ts`; mapped readers and rebuild finalizer | Supplies the exact nine-table/eight-index/115-column/eight-material-family shape, posting and stats formula, seven count/six facet definitions, option variants, durable partial/accumulator grain and current query/index map. Source shape is not deployed cardinality, bytes or plan proof. | `CMD-0554` |
+| `EVD-0818` | `production/write/projector` | `reviewServingProjectorWriter.ts#writeReviewServingProjectorRecordBatch`, `#writeReviewServingProjectorRecords`, `#writeReviewServingProjectorComponent`; posting dirty/full paths; summary direct/partial/reduction paths; option projection; worker posting/summary batch and request finalization | Generic conflicts emit every non-key column. Incremental summaries delete and reinsert the full count/facet scope. Posting stats use application-side reads before dependent writes. Partial reduction repeatedly reads at most 256 completed chunk IDs, aggregate-upserts and updates the durable accumulator, deletes reduced summary partials, then publishes; contribution partials and accumulator rows have no terminal cleanup. Diagnostics do not expose affected mutation classes or physical rewrites. | `CMD-0554` |
+| `EVD-0819` | `historical-migration/production/runtime-temp/index` | US-065 temp closure and `EVD-0757`-`EVD-0771`; all 105 migration declarations; runtime owners for `DBO-0278`-`DBO-0290`; `env.ts` DuckDB temp default; `duckdbService.ts#getDuckdbTempSpillMetricsSnapshot`, runtime config/diagnostics; `clearLocalDatabases.ts#getDuckdbPaths`; worker RSS gates; eight current family index declarations plus dropped stats lookup | Migration and runtime declaration/cleanup shapes are closed in source, but invocation rows/bytes/peaks/residue are not. Comparison config can retain older project/generation rows until connection close; selected-import stages rely on replacement/teardown. Runtime temp diagnostics expose one instantaneous directory file/byte snapshot and worker gates sample current RSS, not stage-attributed peaks. Active spill uses configured/default sibling `duckdb-temp`; `${databasePath}.tmp` is cleanup compatibility only. | `CMD-0554` |
+| `EVD-0820` | `control` | US-071 approval-gate decision; explicit skipped-command inventory; created-artifact and started-process audit | Zero fixture DDL/DML commands, fixture paths/reports, generated artifacts, database accesses and started processes occurred. Cleanup and stop sets are empty; these action counts are not physical measurements. | `CMD-0555` |
+| `EVD-0821` | `control` | Lint/typecheck discovery; sequential-ID/reference/count/scope/formula/category/state/disposition/source/worktree/tracker/whitespace validators | Relevant audit-document gates pass; the unchanged source lint baseline and absent typecheck script are preserved, while database/runtime/UI gates remain intentionally skipped. | `CMD-0556` |
+
+### Fixture, Configuration And Collector Gate
+
+| Gate dimension | Required immutable value | US-071 recorded value | State and exact blocker |
+| --- | --- | --- | --- |
+| Approval/report identity | Approved fixture/report ID, isolated disposable root, owner authorization and retained raw-report/cleanup policy | `unavailable`; none supplied | `blocked`; `BLK-0367`, `OQ-0372` |
+| Scale/generator/seed and benchmark configuration | Exact project/article/prompt/list-mode/snapshot/filter-value distribution; generator/version/seed; model/provider/thinking/options; ordered prompts/content flags | Source 10M/7/70M shape only; generator, seed, configuration and high-fan-out distribution are `unavailable` | `blocked`; `BLK-0367`, `OQ-0372` |
+| Workload and stage boundaries | Frozen dirty/full posting, direct/chunked summary, reduction/finalization, review/Human option, migration and every runtime-temp operation including failure/cleanup cases | `unavailable`; checked-in entry points and source batch limit are not an executed workload | `blocked`; `BLK-0367`, `BLK-0369`-`BLK-0371`; `OQ-0372`, `OQ-0374`-`OQ-0376` |
+| Runtime, snapshot, generation, connection and clock | DuckDB memory/profile/topology/version; fixture database, project/review/snapshot/component/pin identities; migration ledger; connection IDs/lifetimes; frozen clock | `unavailable`; resolver, host and source defaults are not adopted | `blocked`; `BLK-0367`, `BLK-0370`, `BLK-0371`; `OQ-0372`, `OQ-0375`, `OQ-0376` |
+| Applied shape and value collector | Exact applied equality for nine durable tables, eight indexes, 115 columns, eight material families, 18/105 migration temp families/declarations and 13/51 runtime temp families/sites | `unavailable`; no approved database/root, applied ledger or exact result bundle exists | `blocked`; `BLK-0368`, `OQ-0373` |
+| Count/cardinality/duplicate/index collector | Exact rows, null/distinct/group cardinalities, posting selectivity denominators, byte-equivalence map, partial relationships and approved `EXPLAIN`/profile schema for all eight indexes | `unavailable`; source formulas and declarations cannot substitute | `blocked`; `BLK-0368`, `BLK-0372`; `OQ-0373`, `OQ-0377` |
+| Mutation/read-modify-write collector | Per transaction/statement rows read, inserted, conflict-updated, matched-updated, deleted, unchanged and full-row emitted; dependent read/write identity and first failure | `unavailable`; diagnostics expose inputs/deduped records, batches, statement counts and timings only | `blocked`; `BLK-0369`, `OQ-0374` |
+| Temporary/RSS collector | Per connection/operator/table/stage create/load/peak/clear/drop/close rows and logical bytes; active-root spill file/byte time series; process ownership and RSS cadence/peak | `unavailable`; one instantaneous spill snapshot and threshold sample are insufficient | `blocked`; `BLK-0370`, `OQ-0375` |
+| Generation/orphan/lifecycle collector | Owner-approved active/candidate/LKG/retired/failed/pinned/orphan predicates, request/chunk/partial/temp joins, connection teardown, residue scan and durable cleanup receipt | `unavailable`; identity/status columns and normal cleanup calls do not define or prove the predicates | `blocked`; `BLK-0371`, `OQ-0376` |
+| Storage-byte collector | Canonical logical encoder/equivalence map; index byte or cost method; canonical WAL, active temp/spill and database paths; stage/checkpoint boundaries and stat commands | `unavailable`; no category attribution or checkpoint protocol exists | `blocked`; `BLK-0372`, `OQ-0377` |
+| Retry/downgrade policy | Preserve the first configured result/failure; no weaker rerun, fallback, spill allowance or settings change | Satisfied for this decision: execution stopped before mutation | No physical attempt or failure was converted to another setting. |
+
+### Measurement Definitions And Statement Boundaries
+
+For a frozen checkpoint and explicit scope `s`, let `N(T,s)` be the exact row
+count; `U(c,s)=SUM(c IS NULL)`; and `D(c,s)=COUNT(DISTINCT c)`. For a named
+grouping tuple `g`, `K(T,g,s)=COUNT(DISTINCT g)` and its fan-out is
+`N(T,s)/NULLIF(K(T,g,s),0)`. Every filtered count retains its exact predicate,
+denominator and empty-denominator result. Approximation requires a named
+algorithm, version, seed and error bound and never silently replaces exact
+cardinality.
+
+Let `E(type,value)` be the owner-approved canonical scalar/list/JSON encoder
+and `b_E(value)` its encoded byte length. Byte-exact duplicate payload is
+`Dup_E(c,s)=SUM_v((N(c=v,s)-1)*b_E(v))` for non-null repeated values. Tuple
+framing, null encoding, JSON key order and cross-table equivalence must be
+approved before combining fields. Logical and duplicate bytes never include
+indexes, WAL, operator/connection/spill temporary state, RSS or database-
+container overhead.
+
+For each stage and statement, record `W_insert`, `W_conflict_update`,
+`W_matched_update`, `W_delete` and `W_unchanged`. `R_full` counts logical rows
+emitted through scoped delete/reinsert, replacement or an upsert that assigns
+every non-key column. It is not a DuckDB block/page rewrite. A read-modify-write
+sequence records the read statement/result cardinality, dependent transform,
+each DML statement, transaction/snapshot boundary, affected rows and failure
+point; a source-level statement count or before/after table delta cannot fill
+those fields.
+
+Temporary evidence has four independent grains:
+
+- durable partial and accumulator rows remain ordinary `N(T,s)` rows until a
+  proven delete;
+- connection-temporary rows record declaration, load, scoped clear/replace,
+  peak rows/logical bytes, last use, explicit drop and connection teardown;
+- optimizer work records operator cardinality/memory/temp/spill from the
+  approved profile, never inferred from a CTE declaration; and
+- spill-directory evidence records the active configured/effective path,
+  pre/stage/peak/post/checkpoint/cleanup file count and allocated/apparent bytes.
+
+For high-fan-out rows, snapshot generation state is joined to the owning
+snapshot/component manifest and pins. Active, candidate, LKG, retired, failed,
+pinned and orphan counts remain distinct. Rebuild partials additionally retain
+request/chunk status and output-base-generation. Comparison temp configuration
+uses `(comparison_project_id,generation)` and connection lifetime; selected-
+import temps have no generation column. Migration ledger state is completion,
+not a serving generation. No identity is relabeled as a generic generation.
+
+### Family Measurement Register
+
+| rowId | Family count, cardinality and duplicate formula | Write, read-modify-write and temporary boundary | Generation, orphan and recorded physical result | proofCheckState | Blockers / owner questions |
+| --- | --- | --- | --- | --- | --- |
+| `FAN-0060` | Posting: `X=N(mart.review_article_filter_posting_patch_v4)`, `P=N(mart.review_article_filter_posting_serving_v4)`, `S=N(mart.review_filter_posting_stats_v4)`; group `P` by project/config/snapshot/kind/value/list/article and compute rows per distinct article, membership value and snapshot. `K_P` is the exact stats key count; compare `S` one-to-one with `K_P`, stored cardinality to membership count and selectivity to its named active-scope denominator. Measure `U/D`, value distributions and `Dup_E` for repeated scope, identity, kind/value/list, article and sort fields. | Dirty projection reads old/new contribution rows, existing stats, list totals and current serving totals before dependent deletes and generic full-non-key upserts. Full rebuild uses grouped `INSERT ... ON CONFLICT DO UPDATE`; stats refresh is scoped delete plus aggregate insert. Record each read/result, mutation class, `R_full`, operator/CTE rows/temp/spill and RSS separately. | Group physical patch base/patch, active snapshot/component identity and rebuild output-base generation separately; anti-join dormant patch, serving, stats, manifests and pins under approved predicates. All counts, cardinalities, duplicate bytes, mutations, rewrites, RMW effects, temp, RSS and generation/orphan values are `unavailable`. | `blocked` | `BLK-0367`-`BLK-0372`; `OQ-0372`-`OQ-0377` |
+| `FAN-0061` | Summary: `C=N(mart.review_article_count_serving_v4)`, `F=N(mart.review_filter_facet_serving_v4)`; group by project/config/snapshot plus seven count or six facet definitions, list/filter/prompt/answer/value/version grains. Compare named definitions to physical keys and record exact ready/unavailable/stale/cardinality distributions, `U/D` and `Dup_E` for repeated identities, versions, keys, values and scope columns. | Incremental and direct-full projection read the source contribution union, delete the complete count/facet snapshot scope and reinsert the reduced records; one changed input may therefore emit the full summary scope. Record source rows, affected deletes/inserts, full-row emission amplification per dirty article, query/operator temp/spill and RSS; source record counts are not affected-row counts. | Join count/facet rows to snapshot/component state and pins; retain summary definition and snapshot generation separately and record missing/mismatched/orphan definitions. All physical counts, cardinalities, duplicates, writes, `R_full`, RMW effects, temp, RSS and generation/orphan values are `unavailable`. | `blocked` | `BLK-0367`-`BLK-0372`; `OQ-0372`-`OQ-0377` |
+| `FAN-0062` | Filter options: `O=N(mart.review_filter_option_serving_v4)`; group by project/config/snapshot/search/option identity, review/Human mode, kind/facet/value/prompt and JSON variant. Report options and distinct stored-count articles per identity, raw versus client-derived cardinality, `U/D`, range/null distributions and `Dup_E` for identities, payload JSON, facet/prompt/value and scope copies. | Each projection reads and groups active candidate/detail rows, optionally deletes the complete option-identity scope, then inserts/upserts all records; rebuild finalization can split deletion from later review/Human writes. Record rows scanned/grouped/read, affected mutation classes, `R_full`, query count, union/group/unnest/operator temp/spill and RSS. | Search, summary component, snapshot and base-generation identities remain separate; anti-join option rows to current definitions/manifests and approved active/orphan state. All counts, cardinalities, duplicates, writes, rewrites, RMW effects, temp, RSS and generation/orphan values are `unavailable`. | `blocked` | `BLK-0367`-`BLK-0372`; `OQ-0372`-`OQ-0377` |
+| `FAN-0063` | Contribution/partial: `D=N(mart.review_article_summary_contribution_v4)`, `P=N(mart.review_article_summary_rebuild_partial_v4)`, `Q=N(mart.review_article_summary_contribution_rebuild_partial_v4)`, `A=N(P WHERE chunk_id LIKE '__summary_rebuild_partial_accumulator__:%')`. Report source versus accumulator `P`, rows per request/chunk/snapshot/serving key, `Q` per article/contribution key, duplicate completed-chunk contributions and `U/D/Dup_E` for keys, values, identities and payload strings. | Chunk writes first delete/reinsert that chunk's `P/Q`. Reduction selects at most 256 completed chunk IDs, aggregate-upserts `A`, recomputes accumulator counts from deduplicated `Q`, deletes reduced source `P` and later publishes count/facet rows; the recursive batches and final publication are separate calls. Record every read and DML result, `R_full`, batches, transactions/failures, temp/spill and RSS. `D` has no current owner; terminal `Q/A` cleanup is absent. | Join source partials and contributions to request/chunk status/output-base generation and snapshot state; record completed/failed/abandoned/accumulator/orphan rows under approved predicates. All rows, fan-out, duplicates, writes, RMW effects, temporary work, RSS and generation/orphan values are `unavailable`. | `blocked` | `BLK-0367`-`BLK-0372`; `OQ-0372`-`OQ-0377` |
+| `FAN-0064` | Index family: eight current named indexes `DBO-0171`-`DBO-0178` plus the final 0114 drop of the stats lookup. For each, record applied existence/expression, table rows, exact distinct equality prefixes, ordering suffixes/residuals, selected plan/operator rows and per-stage maintained-row cardinality. Temp-family PKs remain table constraints, not unnamed extra index proof. | Attribute insert/update/delete maintenance and rebuild cost per index without dropping/changing an index or benchmark setting. Record statement mutations, index scans versus table scans, rows scanned/output, timing, memory/temp/spill and write cost; source compatibility or PK overlap is not plan/use evidence. | Bind index state to the applied migration/repair ledger, not serving generation. Record orphan catalog entries or missing applied indexes only from approved catalog evidence. All applied existence, plan, cardinality, maintenance, bytes/cost and orphan values are `unavailable`. | `blocked` | `BLK-0367`-`BLK-0372`; `OQ-0372`-`OQ-0377` |
+| `FAN-0065` | Migration temporaries: for each of 105 declarations in `DBO-0260`-`DBO-0277`, record invocation count, source and temp rows, `U/D`, canonical logical/duplicate bytes, peak simultaneous tables/rows/bytes and copied versus derived fields at that migration-stage schema. Group by the 18 families before any total. | Record create/load/read/copy-back/drop statements, inserted/updated/deleted/re-emitted durable rows, transaction and ledger boundary, peak RSS/operator spill and first failure. Transaction rollback, normal drop and connection close remain separate; 0013/0021 SQL and ledger calls are nontransactional. | Applied, interrupted, rolled-back, residue and orphan tables use ledger/connection/crash predicates, never snapshot generation. All invocation, row, byte, mutation, RSS, spill, completion and orphan values are `unavailable`. | `blocked` | `BLK-0367`-`BLK-0372`; `OQ-0372`-`OQ-0377` |
+| `FAN-0066` | Runtime temporaries: for every 51 declaration site in `DBO-0278`-`DBO-0290`, record invocations/connections, created/reused/replaced/dropped tables, loaded/peak/final rows, `U/D`, canonical logical/duplicate bytes and simultaneous tables. Keep 20/generated startup probes, fixed-name stages, eight comparison config tables, selected-import stages and generated transfer operations separate. | Record declaration/load/read/update/copy/delete/drop/teardown statements and affected durable/temp rows, `R_full`, lifetime, failures, peak RSS/operator spill and active-root directory deltas. `CREATE TEMP TABLE IF NOT EXISTS` plus current-scope delete/reload can retain older comparison rows; `CREATE OR REPLACE` and normal/finally drops are not durable cleanup receipts. | Group comparison temp rows by project/generation and connection; selected-import, transfer, probe and cleanup stages use their own operation/session/table identities. Record stale-scope, collision, failed-drop, teardown residue and orphan values. All physical values are `unavailable`. | `blocked` | `BLK-0367`-`BLK-0372`; `OQ-0372`-`OQ-0377` |
+
+### Cross-Family Resource, Generation And Byte Register
+
+| rowId | Measurement category | Required physical value and boundary | Recorded physical value | proofCheckState | Blockers / owner questions |
+| --- | --- | --- | --- | --- | --- |
+| `FAN-0067` | Approved fixture/configuration and applied shape | Immutable fixture/report/root and every gate value above; applied equality for nine durable tables, eight indexes, 115 columns, eight material families, 18/105 migration-temp families/declarations and 13/51 runtime-temp families/sites, including migration/repair ledger and exact DuckDB version | `unavailable`; only checked-in declarations and source paths exist | `blocked` | `BLK-0367`, `BLK-0368`; `OQ-0372`, `OQ-0373` |
+| `FAN-0068` | Rows written, full-row emission and read-modify-write | Per frozen stage/transaction/statement: rows read, inputs/deduped, inserted, conflict-updated, matched-updated, deleted, unchanged, `R_full`, failures and dependent read/write identity. Report physical DuckDB rewrite evidence separately from logical all-column/full-row emission. | `unavailable`; diagnostics lack affected mutation classes and no stage ran | `blocked` | `BLK-0369`; `OQ-0374` |
+| `FAN-0069` | Temporary materialization and RSS | Per stage: persistent partial/accumulator rows, connection-temp create/load/peak/clear/drop/close rows and logical bytes, operator cardinality/memory/temp/spill, and active spill-root pre/peak/post file count plus allocated/apparent bytes. Record process topology and start/end/peak RSS/cadence separately. The active root is configured/effective `DUCKDB_TEMP_DIRECTORY` or sibling `duckdb-temp`; `${databasePath}.tmp` is compatibility cleanup only. | `unavailable`; instantaneous directory/current-RSS helpers do not establish stage peaks, ownership, teardown or cleanup | `blocked` | `BLK-0367`, `BLK-0370`, `BLK-0372`; `OQ-0372`, `OQ-0375`, `OQ-0377` |
+| `FAN-0070` | Active and orphan generations | Per family and checkpoint: active/candidate/LKG/retired/failed/pinned snapshot/component rows; request/chunk output-base generations; posting patch base/watermark; comparison project/generation/connection temp rows; selected-import and operation/session identities; migration applied/interrupted state. Record exact anti-join/orphan numerator, parent denominator, nullable treatment, oldest age and cleanup result. | `unavailable`; no approved predicates, frozen clock, fixture relationships or cleanup receipt | `blocked` | `BLK-0367`, `BLK-0371`; `OQ-0372`, `OQ-0376` |
+| `FAN-0071` | Logical payload and duplicate bytes | Canonical per durable/temp table, field and identity/JSON family logical totals and width percentiles at named checkpoints; `Dup_E` for repeated project/config/snapshot/list/filter/prompt/article/key/payload values and copied temp rows. Exclude index/WAL/operator/connection/spill/container overhead. | `unavailable`; no approved encoder/equivalence map, fixture rows or query bundle | `blocked` | `BLK-0368`, `BLK-0372`; `OQ-0373`, `OQ-0377` |
+| `FAN-0072` | Index bytes or approved cost | Applied identity and exact plan/use/selectivity/rows scanned plus insert/update/delete/rebuild maintenance cost for all eight current indexes; separately attributable bytes only where the approved DuckDB/version collector supports them | `unavailable`; source names/prefixes are not deployed existence, optimizer use, bytes or cost | `blocked` | `BLK-0368`, `BLK-0372`; `OQ-0373`, `OQ-0377` |
+| `FAN-0073` | WAL bytes | Canonical fixture WAL identity and exact byte deltas at empty, post-seed, after each posting/summary/filter/partial/temp stage, post-cleanup and post-checkpoint; never fold WAL into logical, index, temp/spill or database bytes | `unavailable`, not zero; no fixture WAL, stage or checkpoint protocol exists | `blocked` | `BLK-0367`, `BLK-0372`; `OQ-0372`, `OQ-0377` |
+| `FAN-0074` | Physical database bytes | Canonical DuckDB database path/device/filesystem and exact allocated/apparent file bytes at empty, post-seed, after each stage, post-cleanup and post-checkpoint, separate from logical/index/WAL/temp values and never derived by category subtraction | `unavailable`; no approved database root or physical collector exists | `blocked` | `BLK-0367`, `BLK-0372`; `OQ-0372`, `OQ-0377` |
+
+US-071 adds 15 measurement rows: 0 `satisfied`, 0 `pending`, 15
+`blocked`, 0 `not-applicable` and 0 value-bearing physical observations.
+Together with US-015 and US-067 through US-070, the measurement register has
+74 discovered rows: 0 `satisfied`, 0 `pending`, 74 `blocked`, 0
+`not-applicable` and 0 value-bearing physical observations. Formula text,
+source row/cardinality counters, statement counts, timing diagnostics, batch
+limits, instantaneous RSS/temp snapshots and declaration counts are not
+counted as physical observations.
+
+### Non-Run, Cleanup, State And Manifest Accounting
+
+| Item | Recorded result | Evidence boundary |
+| --- | --- | --- |
+| Fixture DDL/DML commands | `0 commands / 0 commands`; affected physical rows are `unavailable`, not zero | Execution stopped at the approval gate. |
+| Fixture paths/databases/reports created | `0` | Action count only; it is not a database/file-size observation. |
+| Processes/servers/workers/projectors started | `0` | The started-process set is empty, so no stop action is required. |
+| Generated temporary outputs | `0` | The created-artifact set is empty, so cleanup is `not-applicable`. |
+| Live/current/project data access | `0` | No snapshot query, studio, direct DuckDB, server, benchmark, migration, writer, projector, reducer, finalizer, temp operation, cleanup or product command ran. |
+| Benchmark-critical settings | Unchanged and unchosen | No default, retry, downgrade, fallback or weaker rerun occurred. |
+
+No manifest row advances from `blocked` to `measured`: DBO remains 322
+discovered/322 blocked and CMF remains 1,985 discovered/1,985 blocked. The
+48-DBO/123-CMF US-071 scope is a subset of those totals, not a new manifest.
+The adjacent spill-root row remains a cross-reference, not a recounted object.
+API, UI, background, map and lineage counts/states are unchanged.
+`auditStatus`, `proofCheckState`, `recommendationActionability`,
+`overallCertification`, lineage/runtime state and storage disposition remain
+independent. Every affected disposition remains `unresolved`; blocked
+cardinality, duplicate, write, rewrite, RMW, temporary, RSS, generation, plan
+or byte measurements do not strengthen keep, move, derive, archive or delete
+advice.
+
 ## Recommendation Proof Gate
 
 Create separate `PRF-####` rows for positive and negative proof. For a move,
@@ -11263,12 +11448,15 @@ physical-database categories kept separate. US-067 adds 12 source/configuration
 rows: six exact family formulas plus fixture/applied-shape, stage-write/RSS,
 logical-payload, index, WAL and physical-database rows. US-068 adds 11
 judgment/Human/delta/outbox/hot-fact rows: five family formulas plus the same
-six non-overlapping cross-family resource/byte categories. All 32 are
-`blocked` because no approved fixture/configuration or complete physical
-collector was supplied. Row formulas, source scale, qualitative width drivers,
-typed-extraction equations and declared index counts are recorded but remain
-non-physical; there are zero value-bearing physical observations and no
-manifest row advances to `measured`.
+six non-overlapping cross-family resource/byte categories. US-069 adds 15
+control/publication/job rows, US-070 adds 12 candidate/status/payload/search/
+queue rows, and US-071 adds 15 posting/summary/filter/partial/index/migration-
+temp/runtime-temp rows. All 74 are `blocked` because no approved fixture,
+configuration or complete physical collector was supplied. Row formulas,
+source scale, qualitative width drivers, typed-extraction equations, declared
+index/temp counts and source diagnostics remain non-physical; there are zero
+value-bearing physical observations and no manifest row advances to
+`measured`.
 
 ### Output 07 - Storage Disposition Matrix
 
@@ -13936,20 +14124,21 @@ subsets of the `DBO-####` manifest and require separate summary rows.
 | Mounted API/read contracts | 75 | 0 | 0 | 1 | 74 | `75 != 0 + 0 + 1` | US-016 through US-030 normalize and runtime-corroborate list/detail/diagnostic/progress/search/selection plus PDF, CSV export, transfer and generated-file reads; bounded synthetic and desktop-preload evidence does not close snapshot/pin/output/cap/status/lifecycle authority, the health mount conflict, physical budgets, or actual browser/ElectroBun evidence |
 | UI/runtime consumers | 55 | 0 | 0 | 0 | 55 | `55 != 0 + 0 + 0` | Prior 49 consumers plus PDF file, project/prompt CSV, transfer summary/start/progress/download, and mixed-transport consumers remain baselined; US-024 through US-030 add unit/test-DOM and synthetic preload/shared-client evidence while consumed/ignored-field intent, integrity/save/cleanup behavior, actual runtime requests, and browser/desktop parity remain |
 | Background/operator surfaces | 112 | 0 | 0 | 0 | 112 | `112 != 0 + 0 + 0` | Five prior queue/bulk/export surfaces, fourteen US-032 source/project/transfer mutations, ten US-033 judgment/Human/review-state mutations, ten US-034 project review-configuration mutations, twelve US-035 intake/scope/display surfaces, six US-036 status/payload/search/queue surfaces, nine US-037 posting/stat/contribution/summary/filter/partial/finalization surfaces, fourteen US-038 readiness/startup/pin/retention/compaction/repair/replay/recovery/backup/cleanup surfaces, and 32 US-039 portability/PDF/migration/current/legacy/operator/recovery/benchmark surfaces are baselined; identity, lifecycle authority, publication/repair accounting, retention completion, restore validation, deployed behavior, and physical proof remain |
-| DuckDB/persisted objects | 322 | 0 | 0 | 322 | 0 | `322 = 0 + 0 + 322` | US-054 through US-066 terminally reconcile every table, logical shape, index, temporary shape and local-file family as blocked. US-067 measures the existing 39-row source/configuration subset; US-068 measures the existing 22-row judgment/Human/delta/outbox/hot-fact subset; US-069 measures the existing 86-row execution/job/control/identity/snapshot/rebuild/overlay/job/retention subset. None changes manifest status or disposition. |
-| Columns/material fields | 1985 | 0 | 0 | 1985 | 0 | `1985 = 0 + 0 + 1,985` | US-054 through US-066 terminally reconcile every physical column, JSON/key family and local-file material row as blocked. US-067 covers the existing 251-row source/configuration subset, US-068 covers the existing 198-row truth/intake subset and US-069 covers the existing 677-row control/publication/job subset without adding or recounting fields. |
-| Indexes (DBO subset) | 127 | 0 | 0 | 127 | 0 | `127 = 0 + 0 + 127` | All current named-index rows are blocked after source reconciliation. US-067 retains 16 source/configuration indexes, US-068 retains 12 judgment/Human/delta/outbox/hot-fact indexes and US-069 retains 43 control/job indexes (29 DuckDB and 14 SQLite), but approved deployed existence, plans, selectivity, bytes and write/rebuild cost remain unavailable. |
-| Temporary tables (DBO subset) | 31 | 0 | 0 | 31 | 0 | `31 = 0 + 0 + 31` | Eighteen migration families contain 105 literal declarations and thirteen runtime families contain 51 source declaration sites. All are blocked; connection/session lifetime, crash residue and temp/spill cost remain unavailable. |
+| DuckDB/persisted objects | 322 | 0 | 0 | 322 | 0 | `322 = 0 + 0 + 322` | US-054 through US-066 terminally reconcile every table, logical shape, index, temporary shape and local-file family as blocked. US-067 measures the existing 39-row source/configuration subset; US-068 measures the existing 22-row judgment/Human/delta/outbox/hot-fact subset; US-069 measures the existing 86-row execution/job/control/identity/snapshot/rebuild/overlay/job/retention subset; US-070 measures the existing 22-row candidate/status/payload/search/queue subset; US-071 measures the existing 17-row posting/summary/filter/partial/index subset plus 31 temporary families. None changes manifest status or disposition. |
+| Columns/material fields | 1985 | 0 | 0 | 1985 | 0 | `1985 = 0 + 0 + 1,985` | US-054 through US-066 terminally reconcile every physical column, JSON/key family and local-file material row as blocked. US-067 covers the existing 251-row source/configuration subset, US-068 the existing 198-row truth/intake subset, US-069 the existing 677-row control/publication/job subset, US-070 the existing 180-row candidate/status/payload/search/queue subset and US-071 the existing 123-row posting/summary/filter/partial subset without adding or recounting fields. |
+| Indexes (DBO subset) | 127 | 0 | 0 | 127 | 0 | `127 = 0 + 0 + 127` | All current named-index rows are blocked after source reconciliation. US-067 retains 16 source/configuration indexes, US-068 retains 12 judgment/Human/delta/outbox/hot-fact indexes, US-069 retains 43 control/job indexes (29 DuckDB and 14 SQLite), US-070 retains 12 candidate/status/payload/search/queue indexes and US-071 retains eight posting/summary/filter/partial indexes, but approved deployed existence, plans, selectivity, bytes and write/rebuild cost remain unavailable. |
+| Temporary tables (DBO subset) | 31 | 0 | 0 | 31 | 0 | `31 = 0 + 0 + 31` | US-071 measures all 18 migration families/105 literal declarations and 13 runtime families/51 production declaration sites. All remain blocked; invocation counts, connection/session lifetime, rows/bytes/peaks, crash residue, cleanup receipts and temp/spill cost are unavailable. |
 | Payload/file shapes (DBO subset) | 36 | 0 | 0 | 36 | 0 | `36 = 0 + 0 + 36` | Job/worker file containers plus 32 runtime-root, asset, transfer, backup, snapshot, export, lock and generated-file families are terminal blocked. US-069 measures the four job container/lease/lock rows without double-counting overlapping paths; deployed contents, bytes, recovery, retention and browser/desktop parity remain unavailable. |
 
 The physical register is an output row family, not an `auditStatus` manifest.
 US-015 contributes nine baseline rows, US-067 contributes 12 exact
-source/configuration rows, US-068 contributes 11 exact truth/intake rows and
-US-069 contributes 15 exact control/publication/job rows. All 47 `FAN-####`
-rows are blocked with zero value-bearing physical
-observations. No DBO or CMF row advances to `measured`. Source closure and
-formula definitions cannot substitute for Phase 4 deployed schema, value,
-plan, size, runtime, cleanup or recovery evidence.
+source/configuration rows, US-068 contributes 11 exact truth/intake rows,
+US-069 contributes 15 exact control/publication/job rows, US-070 contributes
+12 exact candidate/status/payload/search/queue rows and US-071 contributes 15
+exact high-fan-out/index/temporary rows. All 74 `FAN-####` rows are blocked
+with zero value-bearing physical observations. No DBO or CMF row advances to
+`measured`. Source closure and formula definitions cannot substitute for Phase
+4 deployed schema, value, plan, size, runtime, cleanup or recovery evidence.
 
 The remaining zeros count normalized terminal states, not absent repository
 objects. API remains 64 lifecycle, eight API, two writer and one blocked; UI
@@ -13961,7 +14150,7 @@ US-054 through US-066 complete family-level source reconciliation. DBO rows now
 distribute as 322 blocked and CMF rows as 1,985 blocked, with zero nonterminal,
 classified or out-of-scope rows in either family. This is balanced terminal
 accounting, not certification: every row is blocked and every storage
-disposition remains unresolved. US-067 through US-069 add measurement state
+disposition remains unresolved. US-067 through US-071 add measurement state
 only and leave those manifest distributions unchanged.
 
 US-049-US-053 lineage remains evidence for mutation, publication and lifecycle;
@@ -14533,6 +14722,11 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-0549` | 2026-07-22 / US-070 | Read the exact US-062/US-063 DBO/CMF closure, final 0097 and 0103-0109 migration chain, candidate read SQL, list/detail hydration, display/selected/status/payload/search/queue projectors and generic writer diagnostics; ran exact table/temp/writer/limit/index/reference searches and reconciled the two DBO/CMF range groups. | Freeze row/null/distinct/duplicate/pre-limit/post-limit/generation/write/rewrite/temp/RSS formulas and keep logical projection, optimizer materialization, hydration, physical writes and byte categories separate. | Produced `EVD-0810`-`EVD-0812`: the 22-DBO/180-CMF scope reconciles as ten tables, 12 indexes, 166 physical fields and 14 material families; five family and seven cross-family `FAN` rows cover every US-070 acceptance category without treating source diagnostics or caps as physical observations. |
 | `CMD-0550` | 2026-07-22 / US-070 | Deliberately skipped `db:query:snapshot`, studio, direct DuckDB/CLI, fixture DDL/DML, server/app/desktop startup, migrations, candidate/status/payload/search/queue writers, projectors/rebuilds, benchmarks, checkpoint/WAL/database measurement and physical collectors after the approval gate failed. Audited the created-artifact and started-process sets. | Preserve benchmark settings/failures, avoid live/project data and make cleanup/stop accounting explicit. | Produced `EVD-0813`: zero fixture DDL/DML commands, zero fixture paths/reports, zero started processes and zero generated artifacts. Cleanup/stop sets are empty. These action counts are not physical row/byte/RSS observations. |
 | `CMD-0551` | 2026-07-22 / US-070 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check` and strict source-only sequential-ID/reference/count/table-width/state/formula/category/width/write/disposition/source/worktree/tracker/whitespace validators. Three initial inline-validator checks failed before their authoritative corrections: the first incorrectly required one canonical table row per repeatedly cited blocker ID, the second searched a line-wrapped manifest phrase literally, and the third over-escaped a tab in its trailing-whitespace expression. The corrected unique-ID/whitespace-aware validators are authoritative. Skipped build, full tests, browser/desktop, database and runtime gates because this story changes audit Markdown only and prohibited/unapproved physical commands cannot validate it. | Run relevant repo-native gates and verify scope math, measurement/manifest accounting, selection-versus-hydration width, write/resource distinctions, state independence, category separation, no disposition strengthening and cleanup/source isolation. | Produced `EVD-0814`. Lint preserves the same six unrelated source errors; no typecheck script exists. Corrected validators pass: 322 DBO, 1,985 CMF and all 814 EVD/551 CMD/366 BLK/371 OQ IDs are contiguous; 59 FAN rows are blocked; the 22-DBO/180-CMF scope and all formula/category/width/write/state/disposition/worktree/tracker/whitespace checks reconcile; no product/runtime source changed. |
+| `CMD-0552` | 2026-07-22 / US-071 | Read the required reporting and DuckDB skills, user PRD/patterns, `tasks/prd.json#US-070/#US-071/#US-072`, `.ralph-tui/progress.md`, US-001 state rules, US-015 physical gate, US-064/US-065 family closure, US-070 prerequisite, manifests/counts/next IDs, HEAD/status and the targeted memory registry. | Establish prerequisite, exact non-overlapping high-fan-out/temporary scope, allowed states, audit-only/no-live boundary and unrelated worktree state before any physical action. | Produced `EVD-0815`. US-070 is complete; exactly 48 existing DBO and 123 existing CMF rows cover nine durable tables, eight indexes, 115 permanent physical columns, eight material families, 18 migration-temp families/105 declarations and 13 runtime-temp families/51 declaration sites. `tasks/prd.json` is the sole pre-existing unrelated modification; the memory registry had no applicable audit result. |
+| `CMD-0553` | 2026-07-22 / US-071 | Ran `git diff --name-status e268c830..HEAD -- package.json src scripts REVIEW_STORAGE_SHAPE_AUDIT_PLAN.md`; inspected package benchmark/query scripts and source benchmark/smoke contracts; searched fixture/report, generator/seed, critical high-fan-out/temp workload, mutation/profile/RSS/temp collector, raw-report and cleanup-receipt references. | Determine whether the US-070 fixture/configuration/collector gate changed without opening a database or choosing resolver/host defaults. | Produced `EVD-0816`. No scoped committed file differs from the US-070 commit, and no approved physical fixture, immutable workload/configuration or complete collector exists. |
+| `CMD-0554` | 2026-07-22 / US-071 | Read the exact US-064/US-065 DBO/CMF/temp closure, final high-fan-out migration chain, posting/statistics, summary, contribution, filter-option, shared writer, worker/finalizer, migration-temp and runtime-temp source; inspected active/default/compatibility temp paths, spill/runtime diagnostics and RSS gates; ran exact table/index/temp/create/drop/read/write/reference searches and reconciled the three scope groups. | Freeze count/cardinality/duplicate, mutation/full-row/RMW, temporary/operator/spill/RSS, generation/orphan and byte-category formulas while keeping durable partials, connection temporaries, optimizer materialization and filesystem spill distinct. | Produced `EVD-0817`-`EVD-0819`: the 48-DBO/123-CMF scope reconciles as 17 durable table/index rows plus 31 temp-family rows; seven family and eight cross-family `FAN` rows cover every US-071 acceptance category. Incremental summary delete/reinsert, the 256-chunk reducer, generic all-non-key upserts and instantaneous temp/RSS diagnostics remain source evidence, not physical measurements. |
+| `CMD-0555` | 2026-07-22 / US-071 | Deliberately skipped `db:query:snapshot`, studio, direct DuckDB/CLI, fixture DDL/DML, server/app/desktop startup, migrations, posting/summary/filter/partial writers, projectors/rebuilds/reducers/finalizers, runtime-temp operations, benchmarks, checkpoint/WAL/database/temp measurement and physical collectors after the approval gate failed. Audited the created-artifact and started-process sets. | Preserve benchmark settings/failures, avoid live/project data and make cleanup/stop accounting explicit. | Produced `EVD-0820`: zero fixture DDL/DML commands, zero fixture paths/reports, zero started processes and zero generated artifacts. Cleanup/stop sets are empty. These action counts are not physical row/byte/RSS observations. |
+| `CMD-0556` | 2026-07-22 / US-071 | Ran `rtk bun run lint`, package-script typecheck discovery, `git diff --check` and strict source-only sequential-ID/reference/count/scope/state/formula/category/RMW/temp/generation/disposition/source/worktree/tracker/whitespace validators. Skipped build, full tests, browser/desktop, database and runtime gates because this story changes audit Markdown only and prohibited/unapproved physical commands cannot validate it. | Run relevant repo-native gates and verify scope math, measurement/manifest accounting, statement/temporary/generation distinctions, state independence, byte-category separation, no disposition strengthening and cleanup/source isolation. | Produced `EVD-0821`. Lint preserves the same six unrelated source errors; no typecheck script exists. Validators pass: 322 DBO, 1,985 CMF and all 821 EVD/556 CMD/372 BLK/377 OQ IDs are contiguous; 74 FAN rows are blocked; the 48-DBO/123-CMF scope and all formula/category/RMW/temp/generation/state/disposition/worktree/tracker/whitespace checks reconcile; no product/runtime source changed. |
 
 ## Blockers
 
@@ -14909,6 +15103,12 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0364` | Candidate-selection, projected-width, hydration and physical-plan boundary | Source establishes logical SQL stages, but no owner-approved operation corpus, parameter/filter/cursor set, common snapshot, encoder, query-count/response capture or engine profile records `Q_pre`, `Q_page`, each `Q_hyd`, operator rows/bytes and temp work. | A field projected or joined before `LIMIT` is not necessarily a membership field or physically materialized for every qualifying row. Per-call hydration caps do not prove request-wide width, and an index declaration does not prove use or selectivity. | `OQ-0369` | Product/query/database owners approve exact operations and inputs, selection/hydration field sets, logical-width encoder, response boundary and DuckDB plan/profile schema for the unchanged fixture. |
 | `BLK-0365` | Serving writes, full-row rewrites, temporary work, RSS and generation authority | Current diagnostics expose input/deduped records, batches, statement counts and timings but not affected inserts/conflict-updates/matched-updates/deletes, unchanged rows, `R_full`, DuckDB physical rewrites, temp/operator bytes, spill or process RSS. No owner-approved stage/generation predicates or sampler exists. | Returned projector counters and before/after table counts cannot attribute mutations. Snapshot/component identities, base generation, shared patch watermark, search/queue identities and priority are different contracts; connection-temp rows and process memory require separate measurement. | `OQ-0370` | Projector/runtime/reliability owners define frozen stages, generation/identity groupings, affected-row/rewrite instrumentation, temp/spill boundaries, process topology and RSS cadence while preserving the first configured failure. |
 | `BLK-0366` | Logical payload/duplicate bytes, index cost, WAL, temp and physical database attribution | Logical totals, byte-exact duplicates, index bytes/cost, WAL, temp/spill and database bytes are separate, but no canonical scalar/list/JSON encoder, cross-field equivalence map, DuckDB index attribution/cost proxy, WAL/checkpoint protocol, database path/device inventory or cleanup receipt is approved. | Candidate/payload/detail copies, JSON/relational copies, DuckDB blocks/indexes, WAL and temporary operator state have different domains. `payload_bytes`, file growth or absent files cannot assign categories or produce zero-byte measurements. | `OQ-0371` | Storage/database owners approve encoding and equivalence, engine-specific index method, path/device identity, stage/checkpoint boundaries, stat/profile commands and cleanup verification for every category. |
+| `BLK-0367` | US-071 fixture authorization, benchmark identity and high-fan-out/temporary workload | No approved fixture/report/root, generator/seed, model/provider/thinking and prompt/content identities, posting/summary/filter/partial/index/temp operation distribution, snapshot/component/generation/connection identity, frozen clock, memory/runtime identity or raw-report/cleanup policy was supplied. | Permission to use isolated disposable storage does not select an immutable high-fan-out or temporary workload. Source scale, batch limits, resolver defaults, synthetic validation, test data, host state, existing projects and live/current data cannot be substituted. | `OQ-0372` | Benchmark/data/product/runtime owners approve one immutable fixture/report, every critical workload/configuration/identity, frozen clock and raw-report/cleanup policy before any physical command. |
+| `BLK-0368` | Posting/summary/filter/partial/temp applied shape, cardinality, duplicate and index-plan collector | The nine-table/eight-index/115-field/eight-material-family durable scope and 18/105 migration plus 13/51 runtime temporary scope are closed in source, but no approved database/root, applied migration/repair ledger, exact query/profile bundle or canonical encoder/equivalence map exists. | Checked-in DDL, serializers, declaration counts and compatible index prefixes cannot establish deployed shape, rows, null/distinct/group cardinalities, posting selectivity denominators, byte-exact duplicates, temp values/residue, relationships or optimizer use. | `OQ-0373` | Database/audit owners approve the immutable evidence source, applied-shape proof, exact SQL/profile/raw-result schema and encoder/map for every durable/temp family and index. |
+| `BLK-0369` | High-fan-out mutation, full-row emission and read-modify-write authority | Current diagnostics expose source/input/deduped record counts, batches, statement counts and timings but not rows read by dependency, affected inserts/conflict updates/matched updates/deletes/unchanged rows, `R_full`, transaction snapshots, physical rewrites or first-failure mutation state. | Generic all-non-key upserts, summary scope delete/reinsert, posting stats reads followed by writes and partial reducer statements prove source shapes only. Before/after counts cannot attribute mutation classes or distinguish logical full-row emission from DuckDB physical rewrites. | `OQ-0374` | Projector/database/reliability owners freeze stages and transactions and approve instrumentation for dependent reads, every affected mutation class, logical/physical rewrite boundaries and preserved first failure. |
+| `BLK-0370` | Connection/operator/spill temporary work and RSS authority | No owner-approved per-stage collector records connection IDs, temp declarations/loads/peaks/clears/drops/teardown, optimizer cardinality/memory/temp/spill, active-root file/byte time series, process topology or RSS cadence/peak. Current helpers expose only an instantaneous directory snapshot and current RSS threshold sample. | Durable partials, connection-temp rows, CTE/operator materialization, disk spill and process RSS have different lifetimes. Normal/finally drop, `CREATE OR REPLACE`, connection close or an empty instantaneous directory does not prove bounded rows/bytes, cleanup or attributable resource use. | `OQ-0375` | Runtime/database/storage owners approve stage/connection/process identity, profile schema, active-path sampling cadence, peak calculation, teardown/residue checks and durable cleanup receipt. |
+| `BLK-0371` | Active/orphan generation, partial and temporary lifecycle authority | Source exposes snapshot/component/base/watermark, request/chunk output generation, pin, migration-ledger, comparison generation, session/operation and connection identities, but no owner-approved active/LKG/candidate/retired/failed/pinned/orphan predicates, frozen clock, reference scan or cleanup receipt exists. Contribution partials and summary accumulators lack terminal cleanup; comparison config can retain older scopes until connection close. | A status or identity column does not define lifecycle authority. Migration completion, snapshot generation, patch watermark, request generation, connection scope and transfer operation are distinct; normal cleanup invocation and missing source cleanup cannot prove physical presence, orphanhood, bounded retention or safe deletion. | `OQ-0376` | Publication/rebuild/runtime/reliability owners define per-family state/orphan predicates and supply immutable relationship, age, teardown, cleanup, reader-safety and restore evidence. |
+| `BLK-0372` | Logical/duplicate payload, index cost, WAL, temporary and physical database attribution | Logical totals and byte-exact duplicates, index bytes/cost, WAL, connection/operator/spill temp, RSS and database bytes are separate, but no canonical encoder/equivalence map, DuckDB index attribution/cost proxy, WAL/checkpoint protocol, active temp and database path/device inventory, stage boundaries or cleanup receipt is approved. | The active spill root is configured/default sibling `duckdb-temp`; `${databasePath}.tmp` is compatibility cleanup only. Durable rows, indexes, WAL, process memory, connection/operator state and spill files have different domains, so file growth, source widths or absent files cannot assign categories or produce zero-byte values. | `OQ-0377` | Storage/database owners approve encoding/equivalence, index method, canonical configured/effective paths, device/stat/profile commands, stage/checkpoint boundaries and cleanup verification for every separate category. |
 
 ## Owner Questions
 
@@ -15290,6 +15490,12 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0369` | Product/query/database owner | Which exact list/count/filter/search/queue/bulk/export/detail operations, parameters, filters, cursors, page sizes and snapshot define the corpus; which fields are candidate-selection keys versus projected payload; and what query/profile/response capture measures `Q_pre`, `Q_page`, every `Q_hyd`, query counts, operator bytes/temp and index use without changing settings? | `FAN-0048`-`FAN-0055`, `FAN-0057`, `BLK-0364` |
 | `OQ-0370` | Projector/runtime/reliability owner | Which frozen base/dirty/rebuild/read stages and generation/identity groupings apply; what instrumentation records inserted, conflict-updated, matched-updated, deleted, unchanged and full-row-emitted rows plus transaction/failure boundaries; and what process topology, RSS cadence and temp/spill lifetime must be retained? | `FAN-0048`-`FAN-0055` and `BLK-0365` |
 | `OQ-0371` | Storage/database owner | Which canonical scalar/list/JSON encoding and cross-field map measure logical and duplicate bytes; which DuckDB index-byte attribution or cost proxy applies; which database/WAL/temp/spill paths, devices, stage/checkpoint stat/profile commands and cleanup receipts keep logical, duplicate, index, WAL, temp and physical database categories separate? | `FAN-0048`-`FAN-0059` and `BLK-0366` |
+| `OQ-0372` | Benchmark/data/product/runtime owner | Which immutable disposable fixture/report/root is approved for US-071; what exact generator/seed, model/provider/thinking, ordered prompts/content, posting/summary/filter/partial/index/temp operation distributions, snapshot/component/generation/connection identities, frozen clock, memory/profile/topology/version and raw-report cleanup policy apply? | `FAN-0060`-`FAN-0074` and `BLK-0367` |
+| `OQ-0373` | Database/audit owner | Which immutable DuckDB snapshot or disposable database/root and applied migration/repair ledger may be measured; what exact SQL/result/profile schema records nine durable tables, eight indexes, 115 columns, eight material families, all 18/105 migration and 13/51 runtime temp families/sites, row/null/distinct/group cardinalities, relationships and plans; and which canonical encoder/equivalence map measures duplicates? | `FAN-0060`-`FAN-0067`, `FAN-0071`, `FAN-0072` and `BLK-0368` |
+| `OQ-0374` | Projector/database/reliability owner | Which frozen dirty/full/chunk/reduce/finalize/filter stages and transaction snapshots apply; what instrumentation records dependent rows read, inserted, conflict-updated, matched-updated, deleted, unchanged, logical full-row emitted and physical rewritten rows per statement while retaining the first configured failure? | `FAN-0060`-`FAN-0064`, `FAN-0068` and `BLK-0369` |
+| `OQ-0375` | Runtime/database/storage owner | Which process, connection and stage identities plus sampling cadence measure connection-temp create/load/peak/clear/drop/teardown, optimizer memory/temp/spill, active configured/effective spill-root files/bytes and start/end/peak RSS; what residue scan and durable cleanup receipt prove bounded teardown? | `FAN-0060`-`FAN-0069` and `BLK-0370` |
+| `OQ-0376` | Publication/rebuild/runtime/reliability owner | What exact active/candidate/LKG/retired/failed/pinned/orphan predicates and frozen clock apply to snapshot/component, request/chunk/partial/accumulator, migration-ledger, comparison generation/connection, selected-import and transfer-operation identities; what reference scan, cleanup, reader fence and restore evidence settle each lifecycle? | `FAN-0060`-`FAN-0070` and `BLK-0371` |
+| `OQ-0377` | Storage/database owner | Which canonical scalar/list/JSON/temp encoding and cross-field map measure logical/duplicate bytes; which DuckDB index-byte or cost method applies; which database/WAL/configured-effective spill paths, devices, stage/checkpoint stat/profile commands and cleanup receipts keep logical, duplicate, index, WAL, connection/operator/spill temp, RSS and physical database categories separate? | `FAN-0060`-`FAN-0074` and `BLK-0372` |
 
 ## US-001 Quality Gates
 
@@ -18176,6 +18382,63 @@ commands. A command proves only the claim linked through its evidence record.
 - [x] Final sequential-ID/reference/count/state/formula/category/width/write/
       disposition/source/worktree/tracker/whitespace invariants pass
       (`CMD-0551`).
+
+## US-071 Quality Gates
+
+- [x] US-070 is complete. The exact non-overlapping measurement scope is 48
+      DBO and 123 CMF rows already terminally reconciled by US-064/US-065:
+      nine durable tables, eight indexes, 115 permanent physical columns,
+      eight material families, 18 migration-temp families/105 declarations
+      and 13 runtime-temp families/51 production declaration sites.
+- [x] Seven family rows record exact posting/statistics, seven-count/six-facet
+      summary, filter-option, contribution/partial/accumulator, current-index,
+      migration-temp and runtime-temp formulas for rows, cardinality, duplicate
+      bytes, writes, RMW sequences, temp/RSS and generation/orphan state.
+- [x] Durable partial/accumulator rows, SQL declaration, optimizer
+      materialization, connection-temp lifetime, filesystem spill and process
+      RSS remain separate. The active spill root is configured/effective
+      `DUCKDB_TEMP_DIRECTORY` or sibling `duckdb-temp`; `${databasePath}.tmp`
+      is recorded only as reset compatibility.
+- [x] Logical all-non-key/full-row emission and DuckDB physical rewrites remain
+      separate. Incremental summary scope delete/reinsert, posting stats reads
+      before dependent writes and the 256-chunk partial reducer are exact
+      source RMW shapes, not affected-row or rewrite measurements.
+- [x] Fixture/applied shape, affected writes/full-row/RMW, temp/RSS,
+      generation/orphan state, logical/duplicate bytes, index bytes/cost, WAL
+      and physical database bytes remain separate and explicitly bounded.
+- [x] The fixture/configuration/collector gate was evaluated before execution.
+      Missing identities and tools remain `unavailable` under `BLK-0367`-
+      `BLK-0372`; source declarations/counters/limits, instantaneous
+      diagnostics, synthetic smoke, resolver defaults, test databases and
+      host/project values were not substituted.
+- [x] Fifteen sequential `FAN-####` rows are added and all are `blocked`.
+      Together with US-015 and US-067-US-070, measurement accounting is 74
+      discovered, zero satisfied, zero pending, 74 blocked, zero
+      not-applicable and zero value-bearing physical observations.
+- [x] Manifest accounting remains 322 discovered/322 blocked DBO and 1,985
+      discovered/1,985 blocked CMF. The scoped rows and adjacent spill-path row
+      are not recounted; no row advances to `measured`, and API/UI/background/
+      map/lineage states remain unchanged.
+- [x] Zero fixture DDL/DML commands, fixture paths/reports, generated artifacts,
+      started processes and live/current/project database accesses occurred.
+      Cleanup and process-stop sets are empty; action counts are not reported
+      as physical row/byte/RSS values.
+- [x] Benchmark-critical settings were unchanged and no retry, downgrade,
+      fallback, weaker rerun or failure masking occurred. Direct/live DuckDB,
+      configured snapshot/query/studio, writer/projector/reducer/finalizer,
+      migration/temp operation, checkpoint and physical collector commands
+      remain skipped.
+- [x] `auditStatus`, `proofCheckState`, `recommendationActionability`,
+      `overallCertification`, lineage/runtime state and storage disposition
+      remain independent. Blocked measurements do not strengthen any keep,
+      move, derive, archive or delete recommendation.
+- [x] `rtk bun run lint` preserves the same six unrelated source errors; no
+      typecheck script exists. Build/full tests/browser/desktop are irrelevant
+      to this audit-only Markdown change and prohibited physical gates are not
+      run.
+- [x] Final sequential-ID/reference/count/scope/state/formula/category/RMW/
+      temp/generation/disposition/source/worktree/tracker/whitespace invariants
+      pass (`CMD-0556`).
 
 ---
 
