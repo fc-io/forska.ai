@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has zero nonterminal rows, 82 blocked rows and five out-of-scope rows; UI has zero nonterminal rows, 70 blocked rows and six out-of-scope rows; background has zero nonterminal rows and 123 blocked rows; objects have zero nonterminal rows and 328 blocked rows; material fields have zero nonterminal rows and 1,992 blocked rows. The 441-row disposition register remains 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive`; after US-156, actionability is 156 unresolved + 285 blocked + zero actionable. The 1,086-row proof register is eight `satisfied` + 143 `pending` + 935 `blocked` + zero `not-applicable`: US-156 terminally re-evaluates `PRF-0589`-`PRF-0705`, changes exactly 56 posting, stats, count, facet, filter-option, contribution, partial and index family rows from pending to blocked, retains 40 blocked family rows and 21 blocked replacement rows, and makes all 46 linked dispositions actionability-blocked without changing their 22 keep, one move, 14 derive and nine delete values. The 125 material rows remain 115 physical columns plus ten serializer/material contracts, including the two late posting-value domains already owned by `DSP-0202` and `DSP-0206`; eight current named indexes remain evidence rather than second dispositions, and the dropped historical stats index is not recounted. All 115 non-keep rows remain blocked; 170 keep rows are also actionability-blocked after US-149 through US-156. The 80 `TGT-####` shapes remain unvalidated; the physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Complete checked-in API/runtime/object/field lineage and focused tests do not supply approved deployed/dynamic consumer exhaustion, immutable fixture/configuration, executable current/candidate pair, actual browser/desktop parity, physical collector, exact contract/selectivity/predicate/order proof, optimizer timing/use, request-wide bounds, atomic finalization, replay/recovery, applied migration, or reader-safe retention/cleanup/restore receipts and owner signoff. No unavailable value is treated as zero and no planned future gate is proof. `overallCertification` therefore remains independently `INCOMPLETE`. |
+| `overallCertification` | `INCOMPLETE` | API has zero nonterminal rows, 82 blocked rows and five out-of-scope rows; UI has zero nonterminal rows, 70 blocked rows and six out-of-scope rows; background has zero nonterminal rows and 123 blocked rows; objects have zero nonterminal rows and 328 blocked rows; material fields have zero nonterminal rows and 1,992 blocked rows. The 441-row disposition register remains 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive`; after US-157, actionability is 55 unresolved + 386 blocked + zero actionable. The 1,086-row proof register is eight `satisfied` + 89 `pending` + 989 `blocked` + zero `not-applicable`: US-157 terminally re-evaluates `PRF-0706`-`PRF-0806`, changes exactly 54 current-production, migration, repair, export, transfer and retention family rows from pending to blocked, retains 27 blocked recovery, benchmark and cleanup family rows plus 20 blocked target contracts, and makes all 146 linked dispositions actionability-blocked without changing their 101 keep, three move, 32 delete and ten archive values. The disposition-owned scope remains 36 permanent tables, 36 fixed named indexes, 31 migration/runtime temporary families and 494 material rows; the US-150-owned retired judgment fact plus the ownerless late ordinary startup-repair staging and generated repaired-PK index patterns remain explicit cross-references rather than second dispositions. All 115 non-keep rows remain blocked; 271 keep rows are actionability-blocked after US-149 through US-157 and 55 keep rows remain unresolved for later file/cold proof. The 80 `TGT-####` shapes remain unvalidated; the physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Complete checked-in production/no-consumer, lexical schema, object, field, index and temporary-pattern evidence plus focused tests do not supply approved deployed/dynamic consumer exhaustion, an immutable applied clean/upgraded/repaired catalog, exact fixture/configuration, executable current/candidate pair, physical collector, optimizer timing/use, complete migration/cutover/operator receipts, exact export/transfer parity, bounded replay/repair/recovery, or reader-safe retention/cleanup/restore receipts and owner signoff. No unavailable value is treated as zero and no planned future gate is proof. `overallCertification` therefore remains independently `INCOMPLETE`. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-156 / 2026-07-23` | Terminally re-evaluates all 117 stable posting, stats, count, facet, filter-option, contribution, partial, index and replacement proof rows from exhaustive API, runtime, object, field, measurement, target, list, count, filter, writer, replay, recovery, migration, retention, cleanup and lifecycle evidence. Fifty-six historical pending family rows become blocked and 61 rows remain blocked; no proof is satisfied or not-applicable. All 46 linked dispositions become actionability-blocked while their 22 keep, one move, 14 derive and nine delete values remain unchanged. Global proof accounting is 8 satisfied + 143 pending + 935 blocked; disposition actionability is 156 unresolved + 285 blocked + zero actionable. No schema, code, route, projector, retention, runtime behavior or data changes. |
+| Latest normalized story | `US-157 / 2026-07-23` | Terminally re-evaluates all 101 stable comparison, telemetry/configuration, legacy refresh/dirty/operator, transfer-control, legacy-mart, migration-temporary, runtime-temporary and replacement proof rows from exhaustive production/no-consumer, object, field, index, measurement, target, migration, operator, replay, repair, recovery, export, transfer, retention and cleanup evidence. Fifty-four historical pending family rows become blocked and 47 rows remain blocked; no proof is satisfied or not-applicable. All 146 linked dispositions become actionability-blocked while their 101 keep, three move, 32 delete and ten archive values remain unchanged. Global proof accounting is 8 satisfied + 89 pending + 989 blocked; disposition actionability is 55 unresolved + 386 blocked + zero actionable. No schema, code, route, projector, retention, runtime behavior or data changes. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 Evidence chronology note: the ten-invocation, 36-pass, 300-expectation and
@@ -234,6 +234,16 @@ pending states become blocked and 61 remain blocked. All 46 linked
 dispositions become actionability-blocked without a disposition-value change.
 See `EVD-1674`-`EVD-1676`, `CMD-1303`-`CMD-1305`, `BLK-0934` and the
 US-156 quality gates.
+US-157 likewise runs no product or database test because product source is
+unchanged and the story only terminally evaluates existing proof/actionability
+state. It reconciles all 101 stable current comparison, telemetry/config,
+legacy refresh/dirty/operator, transfer-control, legacy-mart,
+migration-temporary, runtime-temporary and replacement proof rows against the
+completed object/field/index, measurement, target, cleanup, migration,
+operator, replay, repair and recovery record: 54 historical pending states
+become blocked and 47 remain blocked. All 146 linked dispositions become
+actionability-blocked without a disposition-value change. See `EVD-1682`-
+`EVD-1684`, `CMD-1308`-`CMD-1310`, `BLK-0935` and the US-157 quality gates.
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
 `classified`, every reconciliation has zero nonterminal and blocked rows, all
@@ -29141,6 +29151,272 @@ certification remain independent. `BLK-0934` and `OQ-0938` record the
 remaining evidence and owner decision. Because blocked manifests and proof
 rows remain, `overallCertification` stays independently `INCOMPLETE`.
 
+## US-157 Final Legacy, Adjacent-Review, And Temporary Proof Reconciliation
+
+### US-157 Scope, Prerequisite And State Boundary
+
+US-156 is complete at story-start HEAD
+`e9fb7119af35b9f40c3a009fe48e658896b785e4`; only the engine-owned
+`tasks/prd.json` change pre-existed. Product source is unchanged from the
+US-090 proof baseline
+`2d65bcc3eb5bb9b8a6d25cbd9768e251f0f83d7a` and the completed
+object/material audit baseline
+`c1c2b406218d15ebabe9cee7ede91722c28d4fe3`. US-123, US-128, US-140,
+US-147 and US-156 are complete. Their cleanup, replay, repair, operator,
+object, field, index, migration and lifecycle evidence is available for
+terminal evaluation without opening a live database.
+
+The exact proof scope is the stable US-090 register. This story adds no
+`PRF-####`, `DSP-####` or `TGT-####` identity:
+
+| Proof slice | Stable rows | Prior recorded state | US-157 terminal state |
+| --- | --- | ---: | ---: |
+| Current comparison configuration and serving | `PRF-0706`-`PRF-0714` | 6 `pending` + 3 `blocked` | 9 `blocked` |
+| Telemetry and current local configuration | `PRF-0715`-`PRF-0723` | 6 `pending` + 3 `blocked` | 9 `blocked` |
+| Legacy identity, refresh, dirty and operator control | `PRF-0724`-`PRF-0732` | 6 `pending` + 3 `blocked` | 9 `blocked` |
+| Transfer control adjacent to review storage | `PRF-0733`-`PRF-0741` | 6 `pending` + 3 `blocked` | 9 `blocked` |
+| Legacy review facts and marts | `PRF-0742`-`PRF-0750` | 6 `pending` + 3 `blocked` | 9 `blocked` |
+| Migration-temporary shapes | `PRF-0751`-`PRF-0759` | 6 `pending` + 3 `blocked` | 9 `blocked` |
+| Runtime operational and repair temporaries | `PRF-0760`-`PRF-0768` | 6 `pending` + 3 `blocked` | 9 `blocked` |
+| Runtime comparison and selected-import temporaries | `PRF-0769`-`PRF-0777` | 6 `pending` + 3 `blocked` | 9 `blocked` |
+| Runtime transfer temporaries | `PRF-0778`-`PRF-0786` | 6 `pending` + 3 `blocked` | 9 `blocked` |
+| Non-keep target contracts | `PRF-0787`-`PRF-0806` | 20 `blocked` | 20 `blocked` |
+| **US-157 total** | **101 stable proof rows** | **54 `pending` + 47 `blocked`** | **101 `blocked`** |
+
+The terminal tables below supersede only the historical state/evidence
+evaluation of those stable rows; their predicates and US-090 history remain
+intact. A former `pending` state becomes `blocked` only because exhaustive
+reconciliation now identifies a concrete unavailable deployed/dynamic
+consumer inventory, immutable applied catalog, field/value map, executable
+candidate, migration/cutover/operator receipt, physical collector,
+replay/repair/recovery result, bounded retention/cleanup/restore receipt or
+owner decision. A lexical migration, literal source absence, current service,
+normal `DROP`, `finally`, connection close, PK/index prefix, startup repair,
+passing disposable test or planned future gate is not proof.
+
+All 146 linked dispositions at `DSP-0229`-`DSP-0331` and
+`DSP-0364`-`DSP-0406` are re-evaluated under the US-001 state model. Their
+101 keep, three move, 32 delete and ten archive values remain unchanged, but
+every row now has `recommendationActionability: blocked`. The 101 keep rows
+move from unresolved to blocked; the 45 non-keep rows remain blocked through
+their target contracts.
+
+The disposition-owned object slice remains 36 permanent tables, 36 fixed
+named indexes and 31 migration/runtime temporary families. The material slice
+remains 494 rows: 489 physical columns plus five material JSON/array domains.
+The US-150-owned retired `mart.judgment_fact` and its 27 material rows remain
+a named exclusion. Late `DBO-0323` ordinary startup-repair staging and
+`DBO-0324` generated repaired-PK uniqueness remain blocked non-owning
+cross-references; they reuse target fields and do not create a second
+disposition.
+
+No live/current/project DuckDB, snapshot query, Studio, server, app, browser,
+desktop shell, worker, projector, migration, startup repair, operator
+mutation, export, transfer, cleanup, benchmark, `EXPLAIN`/profile or physical
+collector ran. No benchmark-critical value was defaulted or weakened.
+Durable audit results stay in this file; required Ralph progress metadata
+remains separate.
+
+### US-157 Evidence Ledger
+
+| Evidence ID | Class | Exact locator | Finding | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-1677` | `control/prerequisite` | User US-157 PRD and codebase patterns; `.ralph-tui/progress.md`; US-001 state model; reporting, DuckDB and API-server skills; US-123/US-128/US-140/US-147/US-156 completion; story-start HEAD/worktree/task record; product-source diffs from `2d65bcc3eb5bb9b8a6d25cbd9768e251f0f83d7a` and `c1c2b406218d15ebabe9cee7ede91722c28d4fe3` | All prerequisites are complete, only the engine-owned `tasks/prd.json` change pre-existed, product source is unchanged and the documentation-only/no-live-DuckDB boundary applies. The exact update scope is 101 stable proof rows and 146 stable dispositions. | `CMD-1306` |
+| `EVD-1678` | `production/schema/object/no-consumer` | US-140 `EVD-1533`-`EVD-1540`; all 127 lexical migrations; exact current non-test comparison, telemetry/config, dirty/refresh/operator, transfer and legacy references; `DBO-0182`-`DBO-0210`, `DBO-0212`-`DBO-0290`, `DBO-0323`-`DBO-0324` | The exhaustive evidence union remains 106 blocked rows: 37 permanent tables, 37 current fixed/generated index rows and 32 temporary-lifecycle rows. US-157 owns 103 of those through its dispositions; `DBO-0210` remains US-150-owned and the two late generated patterns remain non-owning cross-references. Twelve legacy tables retain cleanup/compatibility or no-literal-reader results, not deployed absence. | `CMD-1307` |
+| `EVD-1679` | `material/index/temporary-closure` | US-147 `EVD-1594`-`EVD-1603`; `CMF-1419`-`CMF-1792`, `CMF-1825`-`CMF-1946`; `DSP-0364`-`DSP-0406`; 105 migration TEMP declarations in 18 files; 51 runtime TEMP declarations in 13 files; startup-repair target/index registry and exact predicate/order crosswalk | The exact owned material slice remains 494 blocked rows. Thirty-six fixed indexes plus the generated repaired-PK pattern retain distinct PK/unique, expression-order/direction, current/historical and optimizer contracts. Eighteen migration TEMP, 13 runtime TEMP and one ordinary repair-stage family remain separate lifecycle grains; no temporary or generated field is double-owned. | `CMD-1307` |
+| `EVD-1680` | `measurement/target/migration-cutover` | `FAN-0065`-`FAN-0087`; direct target contracts `PRF-0787`-`PRF-0806`; all 80 `TGT-####` shapes and their blocked validations; US-090 `EVD-1056`-`EVD-1069`; US-140 applied-shape/index findings | All 23 relevant measurement rows remain blocked with zero value-bearing observations. All 20 direct delete/archive/move target contracts remain blocked; no approved applied clean/upgraded/repaired catalog, deployed rows/values/plans, executable replacement, bounded backfill, writer/reader cutover, index timing, rollback or later parity bundle exists. | `CMD-1308` |
+| `EVD-1681` | `operator/replay/repair/recovery/retention-cleanup` | US-123 `EVD-1389`-`EVD-1399` and `PRF-1071`-`PRF-1073`; US-128 `EVD-1438`-`EVD-1447` and `PRF-1084`-`PRF-1086`; US-140/US-147 lifecycle findings; every applicable downstream row `PRF-1042`-`PRF-1086` | Cleanup invocation, connection teardown, startup probe restoration, one-job repair, completion/outbox replay, system-SQLite recovery and archived/transfer cleanup remain separate. Every applicable cleanup, replay, repair, operator, recovery and restore validation is blocked; per-call limits, local transactions, files or acknowledgements do not provide request-wide termination, visible parity or durable receipts. | `CMD-1308` |
+| `EVD-1682` | `proof/terminal-state` | US-090 predicates/evidence `EVD-1055`-`EVD-1072`; `PRF-0706`-`PRF-0806`; `EVD-1678`-`EVD-1681`; new terminal `BLK-0935`/`OQ-0939` | Exhaustive evidence changes exactly 54 family rows from `pending` to `blocked`; 27 already-blocked family rows and 20 blocked target rows remain blocked. No predicate is satisfied or evidence-backed not-applicable. The slice is terminally 0 satisfied + 0 pending + 101 blocked + 0 not-applicable without adding a proof row. | `CMD-1308` |
+| `EVD-1683` | `disposition/actionability` | `DSP-0229`-`DSP-0331`, `DSP-0364`-`DSP-0406`; family/target proofs `PRF-0706`-`PRF-0806`; object/material/measurement/lifecycle evidence named above; US-001 actionability definition | Every linked disposition has a required blocked proof, so all 146 rows become `recommendationActionability: blocked`. Their 101 keep, three move, 32 delete and ten archive values remain unchanged; object, field, index, temporary pattern and logical target ownership remain disjoint. | `CMD-1308` |
+| `EVD-1684` | `control/terminal-accounting` | Exact proof-state transition, disposition/actionability, family/target/object/material/index/temporary/measurement counts, stable-ID/reference, Markdown-table, command/blocker/question, latest-story, allowed-change, worktree/tracker, whitespace and diff validators | US-157 closes 101 proof rows and 146 dispositions as blocked. The global proof register becomes 8 satisfied + 89 pending + 989 blocked + 0 not-applicable; disposition actionability becomes 55 unresolved + 386 blocked + 0 actionable. DBO/CMF/FAN/target/disposition-value and certification counts remain otherwise unchanged. | `CMD-1310` |
+
+### Exhaustive Legacy And Temporary Evidence-Plane Reconciliation
+
+| Evidence plane | Exact in-scope closure | Why it cannot satisfy a proof |
+| --- | --- | --- |
+| Current production and negative consumers | Comparison configuration/generation/serving, diagnostics/config, refresh/materialization/quarantine, transfer history/session/tokens and their route, worker, cleanup and operator paths are traced. Legacy ordinal, V3 generation, dictionary and eight marts retain exact cleanup/compatibility or no-literal-reader results. | Checked-in reachability or literal absence does not close deployed composition, generated/dynamic SQL, external/operator copies, actual platform use, historical values or safe retirement. No no-consumer predicate is satisfied. |
+| Current schema and migration history | All 127 migrations are applied conceptually in full-filename lexical order. Final rebuilds, drops and replacements distinguish current tables/indexes from superseded shapes; 0013 and 0021 remain nontransactional among the 18 migration-temp files. | Lexical DDL is not an applied clean/upgraded/repaired catalog, migration ledger/value receipt or interrupted-upgrade recovery result. CTAS/rebuild can omit constraints and indexes even when the final source declaration is clean. |
+| Objects, fields and material domains | The owned slice is 36 permanent tables, 36 fixed indexes, 31 temporary families and 494 material rows. `DBO-0210`/27 CMF rows retain US-150 ownership; `DBO-0323`/`DBO-0324` reuse target fields without another disposition. | Complete checked-in single ownership does not prove deployed rows, values, null/distinct/width/encoded-byte domains, serializer equality, history parity, physical cost or deletion authority. |
+| Index access paths | Comparison, dirty/refresh/cutover, transfer and legacy fixed indexes have exact predicates/orders mapped. PK/unique backing, dropped historical indexes, generated repaired-PK uniqueness and replayed secondary indexes remain separate. | Prefix/name overlap, default direction, a PK, no current literal reader or successful index recreation does not prove selected operator, mixed order, selectivity, scanned rows, bytes, write cost, redundancy or safe drop timing. |
+| Migration and runtime temporary lifecycle | The source still declares 105 migration TEMP tables in 18 files and 51 runtime TEMP tables in 13 files. Connection-scoped stages, `CREATE OR REPLACE`, current-scope reload, `finally`, generated names and the ordinary repair table have distinct owners and boundaries. | Transaction rollback, normal drop, connection close, catch/finally or rename does not prove bounded row lifetime, crash cleanup, old-scope removal, interrupted source/staging/canonical settlement or executable restore. |
+| Physical measurement | `FAN-0065`-`FAN-0087` are 23 blocked rows with no value-bearing observation. | Source counts, declarations, route limits and test duration are not deployed rows, values, widths, index bytes/plans, writes, WAL, temp spill, RSS, latency, retention or cleanup measurements. Missing values remain unavailable, never zero. |
+| Targets, migration and cutover | `PRF-0787`-`PRF-0806` keep 20 target-specific contracts for each move/delete/archive grain. Applicable later control, component, retention and file designs remain unvalidated. | Target prose is not owner approval, an executable candidate, deployed inventory, bounded backfill/rebuild, writer-then-reader cutover, operator procedure, rollback, index build/drop timing, cleanup or later route/platform parity. |
+| Export and transfer | Comparison CSV/conflict artifacts, review/prompt export, transfer package/commit/fidelity and current V4 regeneration paths are traced. Legacy row history, ordinal/dictionary identities and temp stages remain explicit. | Current endpoint/package presence does not decide field-level audit applicability, freeze selection and later hydration, preserve divergent history, prove target visibility or supply browser/desktop/client-copy parity. |
+| Replay, repair, recovery, retention and cleanup | US-123 cleanup scenarios and US-128 completion/outbox replay, one-job repair and system-SQLite recovery scenarios remain blocked. Startup probes, comparison repair, dirty/operator scripts, transfer recovery and cleanup registries are separately traced. | Per-call caps, restored probe rows, local terminal state, backup/recovery files, cleanup invocation and ACKs do not prove request-wide replay, immutable receipts, owner fencing, reader leases, bounded history, crash resume, residue removal, clean-host restore or exact visible results. |
+
+These planes are conjunctive and non-substitutable. A no-reader result cannot
+borrow deployed absence from a source search; a lexical schema cannot borrow
+applied state from a migration file; a temporary stage cannot borrow cleanup
+from `finally`; an index cannot borrow use from matching columns; and a
+successful repair, export or transfer call cannot borrow replay, recovery,
+retention or restore proof from another contract.
+
+### Terminal Legacy And Temporary Family Matrix
+
+Every named cell below is the terminal state of one stable `PRF-####` row.
+The predicate text remains the US-090 predicate.
+
+| Family | Current production | Migration | Repair | Recovery | Export | Transfer | Benchmark | Retention | Cleanup | Exact terminal evidence / owners |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Current comparison | `PRF-0706 blocked` | `PRF-0707 blocked` | `PRF-0708 blocked` | `PRF-0709 blocked` | `PRF-0710 blocked` | `PRF-0711 blocked` | `PRF-0712 blocked` | `PRF-0713 blocked` | `PRF-0714 blocked` | `EVD-1678`-`EVD-1682`; `BLK-0538`-`BLK-0547`, `BLK-0935`; `OQ-0542`-`OQ-0551`, `OQ-0939` |
+| Telemetry and local config | `PRF-0715 blocked` | `PRF-0716 blocked` | `PRF-0717 blocked` | `PRF-0718 blocked` | `PRF-0719 blocked` | `PRF-0720 blocked` | `PRF-0721 blocked` | `PRF-0722 blocked` | `PRF-0723 blocked` | `EVD-1678`-`EVD-1682`; `BLK-0538`-`BLK-0546`, `BLK-0935`; `OQ-0542`-`OQ-0550`, `OQ-0939` |
+| Legacy refresh/dirty/operator control | `PRF-0724 blocked` | `PRF-0725 blocked` | `PRF-0726 blocked` | `PRF-0727 blocked` | `PRF-0728 blocked` | `PRF-0729 blocked` | `PRF-0730 blocked` | `PRF-0731 blocked` | `PRF-0732 blocked` | `EVD-1678`-`EVD-1682`; `BLK-0538`-`BLK-0547`, `BLK-0935`; `OQ-0542`-`OQ-0551`, `OQ-0939` |
+| Transfer control | `PRF-0733 blocked` | `PRF-0734 blocked` | `PRF-0735 blocked` | `PRF-0736 blocked` | `PRF-0737 blocked` | `PRF-0738 blocked` | `PRF-0739 blocked` | `PRF-0740 blocked` | `PRF-0741 blocked` | `EVD-1678`-`EVD-1682`; `BLK-0538`-`BLK-0547`, `BLK-0935`; `OQ-0542`-`OQ-0551`, `OQ-0939` |
+| Legacy review marts | `PRF-0742 blocked` | `PRF-0743 blocked` | `PRF-0744 blocked` | `PRF-0745 blocked` | `PRF-0746 blocked` | `PRF-0747 blocked` | `PRF-0748 blocked` | `PRF-0749 blocked` | `PRF-0750 blocked` | `EVD-1678`-`EVD-1682`; `BLK-0538`-`BLK-0547`, `BLK-0935`; `OQ-0542`-`OQ-0551`, `OQ-0939` |
+| Migration temporaries | `PRF-0751 blocked` | `PRF-0752 blocked` | `PRF-0753 blocked` | `PRF-0754 blocked` | `PRF-0755 blocked` | `PRF-0756 blocked` | `PRF-0757 blocked` | `PRF-0758 blocked` | `PRF-0759 blocked` | `EVD-1678`-`EVD-1682`; `BLK-0538`-`BLK-0546`, `BLK-0548`, `BLK-0935`; `OQ-0542`-`OQ-0550`, `OQ-0552`, `OQ-0939` |
+| Operational/repair temporaries | `PRF-0760 blocked` | `PRF-0761 blocked` | `PRF-0762 blocked` | `PRF-0763 blocked` | `PRF-0764 blocked` | `PRF-0765 blocked` | `PRF-0766 blocked` | `PRF-0767 blocked` | `PRF-0768 blocked` | `EVD-1678`-`EVD-1682`; `BLK-0538`-`BLK-0546`, `BLK-0548`, `BLK-0935`; `OQ-0542`-`OQ-0550`, `OQ-0552`, `OQ-0939` |
+| Comparison/selected-import temporaries | `PRF-0769 blocked` | `PRF-0770 blocked` | `PRF-0771 blocked` | `PRF-0772 blocked` | `PRF-0773 blocked` | `PRF-0774 blocked` | `PRF-0775 blocked` | `PRF-0776 blocked` | `PRF-0777 blocked` | `EVD-1678`-`EVD-1682`; `BLK-0538`-`BLK-0546`, `BLK-0548`, `BLK-0935`; `OQ-0542`-`OQ-0550`, `OQ-0552`, `OQ-0939` |
+| Transfer temporaries | `PRF-0778 blocked` | `PRF-0779 blocked` | `PRF-0780 blocked` | `PRF-0781 blocked` | `PRF-0782 blocked` | `PRF-0783 blocked` | `PRF-0784 blocked` | `PRF-0785 blocked` | `PRF-0786 blocked` | `EVD-1678`-`EVD-1682`; `BLK-0538`-`BLK-0546`, `BLK-0548`, `BLK-0935`; `OQ-0542`-`OQ-0550`, `OQ-0552`, `OQ-0939` |
+
+The 54 historical `pending` cells that terminally become `blocked` are
+exactly:
+
+- current comparison `PRF-0706`-`PRF-0708`, `PRF-0710`-`PRF-0711`,
+  `PRF-0713`;
+- telemetry/config `PRF-0715`-`PRF-0717`, `PRF-0719`-`PRF-0720`,
+  `PRF-0722`;
+- legacy refresh/dirty `PRF-0724`-`PRF-0726`, `PRF-0728`-`PRF-0729`,
+  `PRF-0731`;
+- transfer control `PRF-0733`-`PRF-0735`, `PRF-0737`-`PRF-0738`,
+  `PRF-0740`;
+- legacy marts `PRF-0742`-`PRF-0744`, `PRF-0746`-`PRF-0747`,
+  `PRF-0749`;
+- migration temporaries `PRF-0751`-`PRF-0753`, `PRF-0755`-`PRF-0756`,
+  `PRF-0758`;
+- operational/repair temporaries `PRF-0760`-`PRF-0762`,
+  `PRF-0764`-`PRF-0765`, `PRF-0767`;
+- comparison/selected-import temporaries `PRF-0769`-`PRF-0771`,
+  `PRF-0773`-`PRF-0774`, `PRF-0776`; and
+- transfer temporaries `PRF-0778`-`PRF-0780`, `PRF-0782`-`PRF-0783`,
+  `PRF-0785`.
+
+The other 27 family cells were already blocked at recovery, benchmark or
+cleanup grain and remain blocked. Every cell now has concrete terminal
+evidence through `EVD-1678`-`EVD-1682`, `BLK-0935` and `OQ-0939`; none is
+failed, satisfied or not-applicable.
+
+### Terminal Non-Keep Target State
+
+Every target remains separately blocked. Family preservation proof cannot
+settle target-specific ownership, deployed mapping, bounded replacement,
+operator behavior, migration, cutover, rollback, replay, recovery, cleanup or
+later parity.
+
+| Stable row | Target / linked dispositions | Missing mandatory result | US-157 terminal state |
+| --- | --- | --- | --- |
+| `PRF-0787` | Delete project article ordinal; `DSP-0237`, `DSP-0372` | Deployed sequence/history closure, exact replacement order, bounded rebuild/cutover, rollback, cleanup and restored route/job/export parity | `blocked` |
+| `PRF-0788` | Archive hot large-rebuild state; `DSP-0240`, `DSP-0375`, supporting `DSP-0272`-`DSP-0274` | Immutable cold receipt, deployed operator/claim history, replay, reader/index cutover, retention, cleanup and executable restore | `blocked` |
+| `PRF-0789` | Delete V3 generation state/index; `DSP-0243`, `DSP-0277`, `DSP-0378` | Deployed V3-to-V4 identity/history map, no-consumer closure, bounded rebuild/cutover, pin-safe cleanup and four-mode restore parity | `blocked` |
+| `PRF-0790` | Archive cutover fence and delete hot index; `DSP-0249`, `DSP-0286`, `DSP-0384` | Authorized immutable completion/recovery receipt, interrupted-claim replay, operator cutover, retention, cleanup and restored decisions | `blocked` |
+| `PRF-0791` | Delete answer dictionary/index; `DSP-0250`, `DSP-0287`, `DSP-0385` | Deployed ID/value/null/collision map, canonical/cold owner, reader/writer cutover, replay, history retention, cleanup and restore | `blocked` |
+| `PRF-0792` | Delete comparison conflict lookup index; `DSP-0265` | Applied constraint/index catalog, branch plans/timing, independent-benefit and write-cost proof, rollback DDL, cleanup and restored plan parity | `blocked` |
+| `PRF-0793` | Delete comparison filter-member table/index/fields; `DSP-0255`, `DSP-0292`, `DSP-0393` | Deployed consumer/value closure, exact predicate/stats replacement, rebuild/write cutover, rollback, cleanup and restored member/count/order parity | `blocked` |
+| `PRF-0794` | Delete comparison filter-stats index; `DSP-0293` | Applied PK/index plan parity, selected operator/cost, build/drop timing, reader fence, rollback, catalog cleanup and restore | `blocked` |
+| `PRF-0795` | Move copied comparison payload; `DSP-0390` | Immutable generation payload owner, post-selection order, bounded hydration, writer/export/transfer cutover, rollback, cleanup and restored artifacts | `blocked` |
+| `PRF-0796` | Delete five retired user-config tuning fields; `DSP-0387` | Deployed nonnull/alias inventory, owner-approved effective settings map, browser/desktop cutover, rollback, config history cleanup and restore | `blocked` |
+| `PRF-0797` | Archive prompt-answer fact and delete hot index; `DSP-0257`, `DSP-0294`, `DSP-0395` | Benchmark-critical identity applicability, deployed divergent history, cold key/lookup, export/transfer cutover, retention, cleanup and restore | `blocked` |
+| `PRF-0798` | Delete legacy candidate table/index/fields; `DSP-0258`, `DSP-0295`, `DSP-0396` | Deployed rows/references, V4 membership/order/status/count parity, bounded rebuild/cutover, rollback, cleanup and restored four-mode results | `blocked` |
+| `PRF-0799` | Delete legacy filter-member table/index/fields; `DSP-0259`, `DSP-0296`, `DSP-0397` | Deployed answer/membership map, V4 posting/filter parity, full/dirty replay, reader/writer cutover, cleanup and restore | `blocked` |
+| `PRF-0800` | Delete legacy array posting table/fields; `DSP-0260`, `DSP-0398` | Deployed sequence-array/cardinality map, relational posting/count equality, bounded intersection, cutover, quarantine, cleanup and restore | `blocked` |
+| `PRF-0801` | Archive legacy judgment detail and delete hot index; `DSP-0261`, `DSP-0297`, `DSP-0399` | Model/content applicability, divergent detail history, versioned cold lookup, export/transfer cutover, retention, cleanup and restore | `blocked` |
+| `PRF-0802` | Delete legacy rollup table/index/fields; `DSP-0262`, `DSP-0298`, `DSP-0400` | Deployed scope/status/count/order map, V4 candidate/summary parity, rebuild/cutover, replay, cleanup and restored modes | `blocked` |
+| `PRF-0803` | Delete V3 article serving table/index/fields; `DSP-0263`, `DSP-0300`, `DSP-0401` | Deployed field/history map, one-snapshot candidate/payload/status replacement, writer/reader cutover, rollback, cleanup and full route restore | `blocked` |
+| `PRF-0804` | Archive V3 serving detail and delete hot index; `DSP-0264`, `DSP-0299`, `DSP-0402` | Open config/quote and model/content identity map, cold detail lookup, export/transfer cutover, privacy retention, cleanup and restore | `blocked` |
+| `PRF-0805` | Move archived-project comparison detach temp; `DSP-0323` | Durable detach manifest, pre-mutation receipt, owner/replay fence, bounded restore, committed cleanup, comparison/export/transfer parity | `blocked` |
+| `PRF-0806` | Move connection-retained comparison config temps; `DSP-0325` | Operation/generation owner, closed config revision, bounded connection scope, atomic builder cutover, residue cleanup, replay and restored routes | `blocked` |
+
+Exact terminal evidence for every target is `EVD-1678`-`EVD-1682` plus its
+unchanged US-090 predicate/evidence, `PRF-1042`-`PRF-1086`,
+`BLK-0935` and `OQ-0939`.
+
+### Mandatory Production And Lifecycle Conjunction
+
+Actionability requires every applicable family row, target and downstream
+validation to be `satisfied` simultaneously. One blocked value forces
+`recommendationActionability: blocked`; a source map or future run is not a
+pass.
+
+| Required grain | Exact proof checks | Terminal evaluation |
+| --- | --- | --- |
+| No-consumer and current-production closure | Current-production cells `PRF-0706`, `PRF-0715`, `PRF-0724`, `PRF-0733`, `PRF-0742`, `PRF-0751`, `PRF-0760`, `PRF-0769`, `PRF-0778`; canonical API/background/operator manifests | `blocked`; checked-in positive/negative references are finite, but deployed/dynamic/generated/operator/platform consumers and actual use are not exhausted. |
+| Current schema, fields and indexes | `DBO-0182`-`DBO-0290`, `DBO-0323`-`DBO-0324`; 494 owned CMF rows; all nine migration cells and applicable targets | `blocked`; no immutable applied clean/upgraded/repaired catalog, value map, constraint/index equality, optimizer plan or owner-approved current-schema receipt exists. |
+| Migration, backfill and cutover | Migration cells for all nine families; `PRF-0787`-`PRF-0806` | `blocked`; no approved deployed ledger, executable candidate, bounded backfill/rebuild, writer-then-reader cutover, index timing, mixed-version rejection, rollback or later equality bundle exists. |
+| Operator and repair | Repair cells for all nine families; dirty/cutover scripts; `PRF-1085`-`PRF-1086` | `blocked`; scripts, package exposure, local repair and recovery files do not establish deployed authorization, exact affected state, immutable receipt, canonical procedure, completion visibility or cleanup. |
+| Export and transfer | Export/transfer cells for all nine families; `PRF-1045`-`PRF-1046`; target export/transfer clauses | `blocked`; field/history applicability, frozen selection/hydration, package/target identity, client bytes, unsupported behavior and restored parity are unavailable. |
+| Benchmark and physical measurement | Benchmark cells for all nine families; `FAN-0065`-`FAN-0087` | `blocked`; approved fixture/settings, deployed rows/values/plans, current/candidate collector, hard budgets and every physical observation are unavailable. |
+| Replay, repair and recovery | Recovery cells for all nine families; US-123 `PRF-1071`-`PRF-1073`; US-128 `PRF-1084`-`PRF-1086`; applicable `PRF-1077`-`PRF-1086` | `blocked`; no owner-fenced request-wide replay, interruption matrix, target/non-target oracle, exact visible route state, clean-host restore or bounded residue result exists. |
+| Retention and cleanup | Retention/cleanup cells for all nine families; each target cleanup clause; `PRF-1065`-`PRF-1076` | `blocked`; timestamps, TTLs, normal drops, `finally`, registry calls and force-delete do not supply approved horizons, ordinary-reader leases, scheduled bounded cycles, durable receipts, crash resume or restore. |
+
+### Family, Object, Field And Lifecycle Reconciliation
+
+| Family / linked dispositions | Object, field and index evidence | Target and downstream evidence | Terminal result |
+| --- | --- | --- | --- |
+| Current comparison; 32 rows at `DSP-0229`-`DSP-0234`, `DSP-0252`-`DSP-0256`, `DSP-0265`-`DSP-0266`, `DSP-0288`-`DSP-0293`, `DSP-0364`-`DSP-0369`, `DSP-0388`-`DSP-0394` | Eleven current tables, eight fixed indexes and 157 material rows remain blocked; config, candidate/order, copied payload, cells, filter membership and stats are separate. | `PRF-0706`-`PRF-0714`, `PRF-0792`-`PRF-0795` and every applicable export/transfer/build/recovery/cleanup row are blocked. | `blocked`; deployed consumers/values, immutable generation, exact filter/payload parity, plans, cutover, retention and restore unavailable. |
+| Telemetry/config; eight rows at `DSP-0235`-`DSP-0236`, `DSP-0251`, `DSP-0370`-`DSP-0371`, `DSP-0386`-`DSP-0387`, `DSP-0403` | Three tables and 79 material rows remain blocked; newest-row routes, open metrics, current settings and retired tuning fields retain separate owners. | `PRF-0715`-`PRF-0723`, `PRF-0796` and platform/export/transfer/recovery/cleanup checks are blocked. | `blocked`; deployed metric domains/values, redaction, settings migration, browser/desktop equality, retention and restore unavailable. |
+| Legacy refresh/dirty/operator; 31 rows at the exact US-090 allocation | Six current/script/operator tables plus ordinal/V3/dictionary rows, 13 fixed indexes and 92 material rows remain blocked; only refresh/materialization/quarantine are current queue gates. | `PRF-0724`-`PRF-0732`, `PRF-0787`-`PRF-0791` and operator/replay/repair/recovery/cleanup checks are blocked. | `blocked`; deployed gate/history mapping, no-consumer closure, claim/ACK fencing, operator authority, cutover, cleanup and restore unavailable. |
+| Transfer control; 21 rows at `DSP-0244`-`DSP-0248`, `DSP-0278`-`DSP-0285`, `DSP-0379`-`DSP-0383`, `DSP-0404`-`DSP-0406` | Five tables, eight fixed indexes and 51 material rows remain blocked; history, session, coverage, per-surface and unknown tokens remain distinct. | `PRF-0733`-`PRF-0741` plus export/transfer/replay/recovery/cleanup workloads are blocked. | `blocked`; immutable selection/package/target visibility, JSON versioning, round-trip parity, history/session retention and restore unavailable. |
+| Legacy review marts; 23 rows at `DSP-0257`-`DSP-0264`, `DSP-0294`-`DSP-0300`, `DSP-0395`-`DSP-0402` | Eight tables, seven fixed indexes and 115 material rows retain cleanup/no-reader findings and remain blocked. | `PRF-0742`-`PRF-0750`, `PRF-0797`-`PRF-0804` and later four-mode/detail/filter/export/transfer/recovery checks are blocked. | `blocked`; deployed rows/references, canonical/V4 equivalence, model/content applicability, divergent history, cutover, retention, cleanup and restore unavailable. |
+| Migration temporaries; 18 rows `DSP-0301`-`DSP-0318` | Eighteen families and 105 declarations reuse migration-stage fields without current constraints/indexes. | `PRF-0751`-`PRF-0759` and every applicable migration/recovery/cleanup check are blocked. | `blocked`; deployed ledger, stage values, nontransactional interruption, target constraint parity, residue cleanup and restore unavailable. |
+| Operational/repair temporaries; six rows `DSP-0319`-`DSP-0324` | Six runtime families cover startup probes, dirty/Covidence input, token-use replacement, detach and closeout staging; late ordinary repair staging remains a non-owning cross-reference. | `PRF-0760`-`PRF-0768`, `PRF-0805`, startup/repair/cleanup/recovery checks are blocked. | `blocked`; whole-table restoration, durable detach/replacement publication, crash residue, bounded cleanup and restore unavailable. |
+| Comparison/selected-import temporaries; three rows `DSP-0325`-`DSP-0327` | Connection-retained comparison config and two operation-replaced 44-field selected-import shapes reuse current fields. | `PRF-0769`-`PRF-0777`, `PRF-0806` and comparison/selected publication/recovery checks are blocked. | `blocked`; old-scope row lifetime, immutable config/winner identity, teardown, replay, cleanup and restored generation/route parity unavailable. |
+| Transfer temporaries; four rows `DSP-0328`-`DSP-0331` | Sixteen payload, four analysis, one ID-map and nine commit-stage shapes retain generated operation names and few enforced keys. | `PRF-0778`-`PRF-0786` and transfer commit/restart/recovery/cleanup checks are blocked. | `blocked`; input order, typed payload/version, uniqueness, target drift, commit visibility, spill, teardown and restore unavailable. |
+
+No family can borrow a pass from another family, a retained table, a
+supporting index, a serializer, a target design, a cleanup call, a passing
+mock or a planned future validation.
+
+### Terminal Disposition Actionability
+
+| Owning family | Stable disposition rows | Disposition values retained | Prior actionability | US-157 terminal actionability |
+| --- | --- | --- | ---: | ---: |
+| Current comparison | 32 rows in the US-090 allocation | 26 `keep` + 1 `move` + 5 `delete` | 26 unresolved + 6 blocked | 32 blocked |
+| Telemetry/local config | 8 rows in the US-090 allocation | 7 `keep` + 1 `delete` | 7 unresolved + 1 blocked | 8 blocked |
+| Legacy refresh/dirty/operator | 31 rows in the US-090 allocation | 18 `keep` + 9 `delete` + 4 `archive` | 18 unresolved + 13 blocked | 31 blocked |
+| Transfer control | 21 rows in the US-090 allocation | 21 `keep` | 21 unresolved | 21 blocked |
+| Legacy review marts | 23 rows in the US-090 allocation | 17 `delete` + 6 `archive` | 23 blocked | 23 blocked |
+| Migration temporaries | `DSP-0301`-`DSP-0318` | 18 `keep` | 18 unresolved | 18 blocked |
+| Operational/repair temporaries | `DSP-0319`-`DSP-0324` | 5 `keep` + 1 `move` | 5 unresolved + 1 blocked | 6 blocked |
+| Comparison/selected-import temporaries | `DSP-0325`-`DSP-0327` | 2 `keep` + 1 `move` | 2 unresolved + 1 blocked | 3 blocked |
+| Transfer temporaries | `DSP-0328`-`DSP-0331` | 4 `keep` | 4 unresolved | 4 blocked |
+| **US-157 total** | **146 stable dispositions** | **101 `keep` + 3 `move` + 32 `delete` + 10 `archive`** | **101 unresolved + 45 blocked** | **146 blocked** |
+
+Every table, field family, fixed index and temporary pattern retains its
+single US-080 owner and disposition. The 103 object/index/temporary rows and
+43 field-family rows are separate accounting grains; the 494 CMF rows expand
+only through their 43 existing material owners. The US-150 retired fact and
+late repair objects remain cross-references. `blocked` actionability does not
+convert any keep, move, delete or archive value into another recommendation.
+
+### Proof, Disposition And Certification Accounting
+
+| Proof register slice | Rows | `satisfied` | `pending` | `blocked` | `not-applicable` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Rows outside US-157 (`PRF-0001`-`PRF-0705`, `PRF-0807`-`PRF-1086`) | 985 | 8 | 89 | 888 | 0 |
+| US-157 terminal legacy/temporary slice `PRF-0706`-`PRF-0806` | 101 | 0 | 0 | 101 | 0 |
+| **Cumulative proof register** | **1,086** | **8** | **89** | **989** | **0** |
+
+| Disposition register slice | Rows | `recommendationActionability: unresolved` | `recommendationActionability: blocked` | `actionable` |
+| --- | ---: | ---: | ---: | ---: |
+| US-157 legacy/temporary dispositions | 146 | 0 | 146 | 0 |
+| Other dispositions | 295 | 55 | 240 | 0 |
+| **Cumulative disposition register** | **441** | **55** | **386** | **0** |
+
+The storage disposition distribution remains 326 `keep`, six `move`, 24
+`derive`, 61 `delete` and 24 `archive`; only actionability changes. All 115
+non-keep rows remain blocked, 271 keep rows are blocked after US-149 through
+US-157, 55 keep rows remain unresolved for later local-file/cold-storage
+proof and zero recommendation is actionable.
+
+DBO remains `328 = 0 classified + 0 out of scope + 328 blocked`. CMF remains
+`1,992 = 0 classified + 0 out of scope + 1,992 blocked`. The physical
+measurement register remains 91 blocked plus one source-proven
+not-applicable domain with zero value-bearing observations. The 80 target
+shapes remain unvalidated. Product/runtime availability, manifest status,
+proof state, recommendation actionability, disposition value and
+certification remain independent. `BLK-0935` and `OQ-0939` record the
+remaining evidence and owner decision. Because blocked manifests and proof
+rows remain, `overallCertification` stays independently `INCOMPLETE`.
+
 ### Output 01 - API Surface Inventory
 
 Authoritative row family: `API-####`. Record one row per mounted route or
@@ -33720,6 +33996,11 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-1303` | 2026-07-23 / US-156 | Reconciled `FAN-0060`-`FAN-0064`/`FAN-0067`-`FAN-0074`, `TGT-0031`-`TGT-0038`, `PRF-0942`-`PRF-0949`, direct list/count/filter checks, every applicable `PRF-1042`-`PRF-1086` lifecycle row, eight 12-cell family matrices, 21 replacements and the exact 46 linked dispositions; ran exact reconciliation for the historical 56-pending/61-blocked split and proof/actionability arithmetic. | Finalize every stable proof and disposition actionability from exact contract, selectivity, predicate, order, writer, replay, recovery, benchmark, migration, index timing, retention and cleanup evidence while preserving predicates, IDs, values and cross-story ownership. | All 117 proof rows are terminally blocked; exactly 56 transition from pending and 61 remain blocked. All 46 dispositions become actionability-blocked without changing their 22 keep/one move/14 derive/nine delete values. The 1,086-row proof register becomes 8/143/935/0 and the 441-row actionability register becomes 156 unresolved/285 blocked/0 actionable. Produced `EVD-1672`-`EVD-1675`. |
 | `CMD-1304` | 2026-07-23 / US-156 | Ran `rtk bun run lint` and inspected `package.json` for a repo-native `typecheck`, `check` or `test:typecheck` script. | Apply the relevant repo-native static gate without changing unrelated product source. | Lint preserves the same six unrelated pre-existing errors in three untouched worker files: one import-sort error, three projector-worker test formatting errors and two projector-worker formatting errors. No repo-native typecheck/check/test:typecheck script exists. Build and product tests are not relevant to this documentation-only state reconciliation. |
 | `CMD-1305` | 2026-07-23 / US-156 | Ran final exact proof/target/disposition/count/object/material/measurement/stable-ID/evidence/blocker/question/latest-story/progress validators; `git diff --check`; scoped product-source/baseline, worktree, `tasks/prd.json`, allowed-change and ignored-tracker checks. | Close terminal accounting, cross-references and mutation-boundary gates without opening DuckDB or executing product behavior. | A preliminary historical-state parser incorrectly expected target replacements to use the family table's dedicated state cell and stopped; the replacement rows intentionally keep state in their combined terminal-evidence cell. Its first corrected form then used `Array#tally`, unavailable in the installed Ruby. The grain-aware manual-counter validator passes. All final validators pass: eight family rows cover 96 terminal proof cells and 21 replacement rows cover `PRF-0685`-`PRF-0705`; the 56 state transitions, 17 DBO rows, 125 CMF rows, 13 measurement rows and 46 disposition identities/values reconcile; global proof/actionability counts match the certification snapshot; `EVD-1669`-`EVD-1676`, `CMD-1301`-`CMD-1305`, `BLK-0934` and `OQ-0938` define uniquely. Product source is unchanged from both baselines, the engine-owned task change is preserved and only the audit plan plus ignored Ralph progress metadata are story-owned. Produced `EVD-1676`. |
+| `CMD-1306` | 2026-07-23 / US-157 | Read the user PRD/codebase patterns, `.ralph-tui/progress.md`, US-001 state model, required reporting/DuckDB/API-server skills and US-123/US-128/US-140/US-147/US-156 handoffs; captured story-start HEAD/worktree/task state and compared `src`, `scripts`, `package.json`, `bun.lock` and `electrobun.config.ts` with US-090 proof baseline `2d65bcc3eb5bb9b8a6d25cbd9768e251f0f83d7a` and audit baseline `c1c2b406218d15ebabe9cee7ede91722c28d4fe3`. | Establish prerequisites, exact stable-row scope, cross-story ownership, state semantics and documentation-only/no-live-DuckDB boundary before proof finalization. | US-156 is complete at `e9fb7119af35b9f40c3a009fe48e658896b785e4`; all five prerequisites are complete, product source is unchanged from both baselines, only engine-owned `tasks/prd.json` pre-existed and the exact US-157 scope is 101 proof rows plus 146 dispositions. Produced `EVD-1677`. |
+| `CMD-1307` | 2026-07-23 / US-157 | Re-expanded the complete US-140/US-147 legacy/adjacent/temporary object, field, serializer, index and source-reference inventories; verified 127 lexical migrations, 105 migration TEMP declarations in 18 files, 51 runtime TEMP declarations in 13 files and the 20-target/14-PK/two-disabled/12-generated-index startup-repair registry; reconciled 103 disposition-owned object/index/temp rows, 494 owned material rows, the US-150 retired-fact exclusion and late `DBO-0323`/`DBO-0324` cross-references. | Determine whether exhaustive current-schema, no-consumer, object, field, index or temporary-pattern evidence satisfies any proof without borrowing applied, deployed or lifecycle state. | The exhaustive union remains 106 blocked object rows and the owned material slice remains 494 blocked rows. The 103 owner rows, retired fact and two late patterns reconcile exactly; no late field exists. Literal absence, lexical DDL, PK/index overlap, normal drop/finally/close/rename and disposable tests do not establish deployed absence, applied shape, optimizer use, safe retirement, bounded cleanup or restore. Produced `EVD-1678`-`EVD-1679`. |
+| `CMD-1308` | 2026-07-23 / US-157 | Reconciled `FAN-0065`-`FAN-0087`, all 20 target contracts `PRF-0787`-`PRF-0806`, all 80 unvalidated target shapes, US-123 cleanup rows `PRF-1071`-`PRF-1073`, US-128 replay/repair/operator rows `PRF-1084`-`PRF-1086`, every applicable `PRF-1042`-`PRF-1086` lifecycle row, nine nine-cell family matrices and the exact 146 linked dispositions; ran exact reconciliation for the historical 54-pending/47-blocked split and proof/actionability arithmetic. | Finalize each stable proof and disposition actionability from no-consumer, current-schema, migration, cutover, operator, benchmark, export, transfer, replay, repair, recovery, retention and cleanup evidence while preserving predicates, IDs, values and cross-story ownership. | All 101 proof rows are terminally blocked; exactly 54 transition from pending and 47 remain blocked. All 146 dispositions become actionability-blocked without changing their 101 keep/three move/32 delete/ten archive values. The 1,086-row proof register becomes 8/89/989/0 and the 441-row actionability register becomes 55 unresolved/386 blocked/0 actionable. Produced `EVD-1680`-`EVD-1683`. |
+| `CMD-1309` | 2026-07-23 / US-157 | Ran `rtk bun run lint` and inspected `package.json` for a repo-native `typecheck`, `check` or `test:typecheck` script. | Apply the relevant repo-native static gate without changing unrelated product source. | Lint preserves the same six unrelated pre-existing errors in three untouched worker files: one import-sort error, three projector-worker test formatting errors and two projector-worker formatting errors. No repo-native typecheck/check/test:typecheck script exists. Build and product tests are not relevant to this documentation-only state reconciliation. |
+| `CMD-1310` | 2026-07-23 / US-157 | Ran final exact proof/target/transition/disposition/object/material/measurement/count/table/stable-ID/evidence/blocker/question/latest-story/progress validators; `git diff --check`; scoped product-source/baseline, worktree, `tasks/prd.json`, allowed-change and ignored-tracker checks. | Close terminal accounting, cross-references and mutation-boundary gates without opening DuckDB or executing product behavior. | A preliminary section validator expected the target heading to end in “Proofs” instead of the actual “State,” the first ownership expander expected each object code span to close immediately after its DBO ID, and a first final text-presence pass compared wrapped prose with literal line breaks; all stopped before evaluation and their grain-aware, whitespace-normalized corrections pass. All final validators pass: nine family rows cover 81 terminal proof cells and 20 target rows cover `PRF-0787`-`PRF-0806`; the 54 state transitions, 103 DBO owners, 494 CMF rows, 23 measurement rows and 146 disposition identities/prior states/values reconcile; all ten new Markdown tables have consistent columns; global proof/actionability counts match the certification snapshot; `EVD-1677`-`EVD-1684`, `CMD-1306`-`CMD-1310`, `BLK-0935` and `OQ-0939` define uniquely. Product source is unchanged from both baselines, the engine-owned task change is preserved and only the audit plan plus ignored Ralph progress metadata are story-owned. Produced `EVD-1684`. |
 
 ## Blockers
 
@@ -34690,6 +34971,7 @@ commands. A command proves only the claim linked through its evidence record.
 
 | `BLK-0933` | US-155 final prefix-search, substring-search, queue-patch and active Unassessed-queue proof authority | Exhaustive checked-in API/browser/desktop/background/runtime, object, material-field, serializer, index, measurement, target, search, selection, queue, restart and lifecycle reconciliation closes the finite source inventory but supplies no approved deployed/dynamic consumer or executor inventory; immutable current/candidate fixture with exact project/review-config/component/snapshot/search/tokenizer/prefix/substring/article/prompt/queue/model/provider/thinking/content/runtime identity; actual browser/desktop/native request and cache capture; independent exact ID/order/cursor/eligibility/priority/intersection/result/progress/snapshot/recovery oracle; applied migration/backfill/cutover/rollback ledger; hard request-wide row/value/encoded-byte/call/attempt/time/RSS/WAL/temp bounds; owner-fenced restart/replay/retention/cleanup/restore receipts; or owner signoff. All ten relevant measurement rows have unavailable values. Prior search-job proof `PRF-0352`-`PRF-0382`, target validations `PRF-0950`-`PRF-0956`, direct search/queue checks `PRF-1024`-`PRF-1028`/`PRF-1037`-`PRF-1041` and every applicable downstream/lifecycle row `PRF-1042`-`PRF-1086` remain blocked. Embedded product prefix, standalone prefix, pending substring control, pair queue, distinct-article count, preview order, worker cursor, intake cursor, patch retirement and immutable receipt remain separate and unresolved. | Source completeness, mounted product routes, deterministic source algorithms, registered field/order/cursor shapes, per-call limits, current indexes, source-proven patch bypass, 0097/0103 DDL, passing mocks and planned future validation cannot satisfy a proof predicate. Exactly 32 historical `pending` family rows therefore become `blocked`; 16 family rows and four replacement rows remain blocked. All 14 linked dispositions become `recommendationActionability: blocked` without changing their seven keep/one move/two derive/four delete values. No family or replacement has every applicable exact-ID, order, cursor, eligibility, priority, bounded-intersection, async/result, snapshot, recovery, benchmark, migration, retention and cleanup check satisfied. | `OQ-0937` | Product/review-serving/search/queue/Human/bulk/projector/publication/query/API/browser/desktop/export/transfer/database/performance/runtime/reliability/security/storage/retention/recovery/migration/operator/release owners approve and execute the exact finite evidence matrix for every `PRF-0537`-`PRF-0588` predicate. Every applicable selection, order, cursor, eligibility, priority, bounded-intersection, async/result/progress, snapshot, restart/recovery, benchmark, migration, bounded-retention, cleanup and restore check, target validation and downstream workload must be independently `satisfied` under one immutable identity before any linked disposition can become actionable; evidence-backed nonapplicability must remain a separately cited nonapplicable domain. |
 | `BLK-0934` | US-156 final posting, stats, count, facet, filter-option, contribution, partial and index proof authority | Exhaustive checked-in API/browser/desktop/runtime/operator, object, material-field, serializer, index, measurement, target, list/count/filter, writer, replay, recovery and lifecycle reconciliation closes the finite source inventory but supplies no approved deployed/dynamic consumer/operator inventory; immutable current/candidate fixture with exact project/review-config/component/snapshot/posting/summary/filter/request/chunk/model/provider/thinking/content/runtime identity; actual browser/desktop request/cache/render capture; independent exact contract/unit/value/predicate/order/selectivity/publication/result/recovery oracle; applied catalog and migration/backfill/cutover/rollback ledger; complete plan/index-timing and request-wide row/value/encoded-byte/call/attempt/time/RSS/WAL/temp collector; owner-fenced replay/recovery/retention/cleanup/restore receipts; or owner signoff. All 13 relevant measurement rows have unavailable values. Target validations `PRF-0942`-`PRF-0949`, direct list/count/filter checks and every applicable downstream/lifecycle row `PRF-1042`-`PRF-1086` remain blocked. Stored posting groups, stats, named counts, facets, options, persistent/process-local/request contributions, source/accumulator/final partials, current/dropped indexes and exact-filter targets remain separate and unresolved. | Source completeness, mounted routes, deterministic formulas, finite serializers, stable identities, per-call caps, current index declarations, source-proven dormant-table bypass, startup probe restoration, cleanup invocation, passing mocks and planned future validation cannot satisfy a proof predicate. Exactly 56 historical `pending` family rows therefore become `blocked`; 40 family rows and 21 replacement rows remain blocked. All 46 linked dispositions become `recommendationActionability: blocked` without changing their 22 keep/one move/14 derive/nine delete values. No family or replacement has every applicable exact-contract, selectivity, predicate, ordering, writer, replay, recovery, benchmark, migration, index timing, retention and cleanup check satisfied. | `OQ-0938` | Product/review-serving/posting/summary/filter/Human/bulk/projector/publication/query/API/browser/desktop/export/transfer/database/performance/runtime/reliability/security/storage/retention/recovery/migration/operator/release owners approve and execute the exact finite evidence matrix for every `PRF-0589`-`PRF-0705` predicate. Every applicable contract, runtime, exactness, selectivity, predicate, order, writer, replay, recovery, benchmark, migration, access-path timing, bounded-retention, cleanup and restore check, target validation and downstream workload must be independently `satisfied` under one immutable identity before any linked disposition can become actionable; evidence-backed nonapplicability must remain a separately cited not-applicable domain. |
+| `BLK-0935` | US-157 final comparison, telemetry/config, legacy refresh/dirty/operator, transfer-control, legacy-mart, temporary-pattern, field and index proof authority | Exhaustive checked-in production/no-consumer, lexical schema, object, material-field, serializer, index, temporary-pattern, measurement, target, migration, operator, export, transfer, cleanup, replay, repair and recovery reconciliation closes the finite source inventory but supplies no approved deployed/dynamic consumer/operator inventory; immutable non-live clean/upgraded/runtime-repaired applied catalog and current/candidate fixture with exact comparison/config/generation/legacy/transfer/migration/operation/project/model/provider/thinking/content/runtime identity; independent table/field/value/history/plan/export/transfer/recovery oracle; complete row/value/null/distinct/width/encoded-byte/index/write/rebuild/WAL/temp/RSS/time collector; applied migration/backfill/cutover/rollback ledger; canonical operator procedure; owner-fenced replay/repair/recovery/retention/cleanup/restore receipts; or owner signoff. All 23 relevant measurement rows have unavailable values. All 20 direct targets `PRF-0787`-`PRF-0806`, US-123 cleanup checks `PRF-1071`-`PRF-1073`, US-128 replay/repair/operator checks `PRF-1084`-`PRF-1086` and every applicable downstream row `PRF-1042`-`PRF-1086` remain blocked. Current comparison, diagnostics/config, surviving dirty gates, transfer controls, no-reader legacy rows, 105 migration TEMP declarations, 51 runtime TEMP sites, connection-retained rows, ordinary repair staging and generated repaired-PK uniqueness remain separate and unresolved. | Complete source ownership, exact literal absence, lexical migrations, current service/route/script paths, PK/unique backing, matching index fields, normal drop/finally/connection close, startup probe restoration, repair completion, cleanup invocation, passing disposable tests and planned future validation cannot satisfy a proof predicate. Exactly 54 historical `pending` family rows therefore become `blocked`; 27 family rows and 20 target rows remain blocked. All 146 linked dispositions become `recommendationActionability: blocked` without changing their 101 keep/three move/32 delete/ten archive values. No family or target has every applicable no-consumer, current-schema, migration, cutover, operator, benchmark, export, transfer, replay, repair, recovery, retention, cleanup and restore check satisfied. | `OQ-0939` | Product/comparison/telemetry/configuration/dirty-state/review-serving/transfer/legacy/database/performance/runtime/API/browser/desktop/export/security/storage/retention/recovery/migration/operator/release owners approve and execute the exact finite evidence matrix for every `PRF-0706`-`PRF-0806` predicate. Every applicable production/no-consumer, applied-schema, field/value/history, access-path, migration/backfill/cutover/rollback, operator, benchmark, export/transfer, replay/repair/recovery, bounded-retention, cleanup and restore check plus downstream workload must be independently `satisfied` under one immutable identity before any linked disposition can become actionable; evidence-backed nonapplicability must remain a separately cited not-applicable domain. |
 
 ## Owner Questions
 
@@ -35662,6 +35944,7 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0936` | Product/review-serving/selected-import/judgment/Human/projector/publication/query/API/browser/desktop/export/transfer/database/performance/runtime/reliability/security/storage/retention/recovery/migration/operator/release owners | Which approved deployed/dynamic consumer/writer inventory, immutable current/candidate fixture and exact project/review-config/component/selected/snapshot/list-mode/article/prompt/judgment/model/provider/thinking/content/runtime identity, field/ID/order/cursor/snapshot/hydration/export/transfer/recovery oracle, applied migration/backfill/cutover/rollback ledger, physical collector and hard request-wide row/value/encoded-byte/file/call/attempt/time/RSS/WAL/temp budgets will certify every `PRF-0383`-`PRF-0480` predicate? Who owns the authoritative slim candidate, display/selected/status replacement policies, physical patch retirement, relational/JSON payload schema, fixed-versus-latest hydration, request-wide continuation/caps, finite reader-safe retention/cleanup/restore contracts and the final signed decision for the 12 keep, one move, two derive and eight delete dispositions? | `PRF-0383`-`PRF-0480`; `DSP-0148`-`DSP-0170`; `TGT-0018`-`TGT-0030`; `FAN-0048`-`FAN-0050`, `FAN-0053`-`FAN-0059`; `BLK-0932` |
 | `OQ-0937` | Product/review-serving/search/queue/Human/bulk/projector/publication/query/API/browser/desktop/export/transfer/database/performance/runtime/reliability/security/storage/retention/recovery/migration/operator/release owners | Which approved deployed/dynamic consumer/executor inventory, immutable current/candidate fixture and exact project/review-config/component/snapshot/search/tokenizer/prefix/substring/article/prompt/queue/model/provider/thinking/content/runtime identity, exact selection/order/cursor/eligibility/priority/intersection/result/progress/recovery oracle, applied migration/backfill/cutover/rollback ledger, physical collector and hard request-wide row/value/encoded-byte/call/attempt/time/RSS/WAL/temp budgets will certify every `PRF-0537`-`PRF-0588` predicate? Who chooses project versus global prefix semantics, operates or retires substring control, defines pair/article/intake queue grains and orders, maps or retires the physical patch, owns immutable publication/intake receipts and finite reader-safe retention/cleanup/restore contracts, and signs the seven keep/one move/two derive/four delete decisions? | `PRF-0537`-`PRF-0588`; `DSP-0100`, `DSP-0129`, `DSP-0171`-`DSP-0182`; `TGT-0039`-`TGT-0045`; `FAN-0039`, `FAN-0051`-`FAN-0059`; `BLK-0933` |
 | `OQ-0938` | Product/review-serving/posting/summary/filter/Human/bulk/projector/publication/query/API/browser/desktop/export/transfer/database/performance/runtime/reliability/security/storage/retention/recovery/migration/operator/release owners | Which approved deployed/dynamic consumer/operator inventory, immutable current/candidate fixture and exact project/review-config/component/snapshot/posting/summary/filter/request/chunk/model/provider/thinking/content/runtime identity, exact contract/unit/value/predicate/order/selectivity/publication/result/recovery oracle, applied migration/backfill/cutover/rollback ledger, physical/index-timing collector and hard request-wide row/value/encoded-byte/call/attempt/time/RSS/WAL/temp budgets will certify every `PRF-0589`-`PRF-0705` predicate? Who approves the seven posting kinds, stats denominator, count units, facet scope, complete option domains, contribution ownership, disjoint/overlap-safe partial identity, selected index expressions/directions, finalization readmission, target-specific cutovers and finite reader-safe retention/cleanup/restore contracts, and signs the 22 keep/one move/14 derive/nine delete decisions? | `PRF-0589`-`PRF-0705`; `DSP-0183`-`DSP-0228`; `TGT-0031`-`TGT-0038`; `FAN-0060`-`FAN-0064`, `FAN-0067`-`FAN-0074`; `BLK-0934` |
+| `OQ-0939` | Product/comparison/telemetry/configuration/dirty-state/review-serving/transfer/legacy/database/performance/runtime/API/browser/desktop/export/security/storage/retention/recovery/migration/operator/release owners | Which approved deployed/dynamic positive-and-negative consumer/operator inventory, immutable non-live clean/upgraded/runtime-repaired applied catalog and current/candidate fixture, exact comparison/config/generation/legacy/transfer/migration/operation/project/model/provider/thinking/content/runtime identity, table/field/value/history/plan/export/transfer/recovery oracle, physical collector and hard row/value/byte/call/attempt/time/RSS/WAL/temp budgets will certify every `PRF-0706`-`PRF-0806` predicate? Who approves each no-consumer decision, current-schema branch, legacy history mapping, temporary row/connection lifetime, index expression/direction, migration/backfill/cutover/rollback, canonical operator procedure, replay/repair/recovery path, reader-safe retention/cleanup/restore contract and final signed decision for the 101 keep, three move, 32 delete and ten archive dispositions? | `PRF-0706`-`PRF-0806`; `DSP-0229`-`DSP-0331`, `DSP-0364`-`DSP-0406`; `DBO-0182`-`DBO-0210`, `DBO-0212`-`DBO-0290`, `DBO-0323`-`DBO-0324`; `CMF-1419`-`CMF-1818`, `CMF-1825`-`CMF-1947`; `FAN-0065`-`FAN-0087`; `PRF-1042`-`PRF-1086`; `BLK-0935` |
 
 ## US-001 Quality Gates
 
@@ -43937,6 +44220,108 @@ commands. A command proves only the claim linked through its evidence record.
       evidence/owner/latest-story validators, `git diff --check`, scoped
       product-source isolation, allowed-change, worktree/tracker and
       whitespace checks pass through `CMD-1305`.
+- [x] No live, current or project DuckDB is opened. No schema, code, route,
+      projector, retention, runtime behavior, benchmark-critical setting or
+      data is changed.
+- [x] Durable audit results are confined to
+      `STORAGE_SHAPE_AUDIT_PLAN.md`; `.ralph-tui/progress.md` receives only the
+      workflow-required completion entry.
+      `overallCertification` remains independently `INCOMPLETE`.
+
+## US-157 Quality Gates
+
+- [x] US-156, US-123, US-128, US-140 and US-147 prerequisites and
+      story-start worktree ownership are recorded. Product source remains
+      unchanged from the US-090 proof baseline and later object/material
+      audit baseline; `tasks/prd.json` remains the engine-owned pre-existing
+      change.
+- [x] The exact scope is the 101 stable `PRF-0706`-`PRF-0806` rows and 146
+      stable `DSP-0229`-`DSP-0331`/`DSP-0364`-`DSP-0406` rows. No proof,
+      disposition or target ID is added, removed, renumbered, reassigned or
+      double-counted; the US-150 retired judgment fact and late repair
+      table/index patterns retain their prior ownership.
+- [x] Exhaustive production/no-consumer, current-schema, object,
+      material-field/serializer, index, temporary-pattern, measurement,
+      target, migration, cutover, operator, export, transfer, replay, repair,
+      recovery, retention, cleanup and restore evidence planes are reconciled
+      separately with exact evidence IDs and terminal counts.
+- [x] Current comparison, telemetry/config, legacy refresh/dirty/operator,
+      transfer control, legacy review marts, migration temporaries,
+      operational/repair temporaries, comparison/selected-import temporaries
+      and transfer temporaries each have all nine stable domains
+      terminalized: nine families times nine equals 81 blocked proof rows,
+      plus 20 separately blocked target rows.
+- [x] Exactly 54 historical family `pending` states become `blocked` because
+      a concrete deployed inventory, owner decision, immutable applied
+      catalog/fixture/oracle, physical collector, migration/cutover/operator
+      receipt, replay/repair/recovery result or reader-safe cleanup/restore
+      result is unavailable. The other 47 proof rows remain blocked; no
+      source map, absence result, DDL, index, normal drop/finally/close,
+      repair, mock or planned future gate is inferred as proof.
+- [x] The disposition-owned object slice remains 103 rows: 36 permanent
+      tables, 36 fixed named indexes and 31 migration/runtime temporary
+      families. The complete US-140 evidence union remains 106 blocked after
+      separately cross-referencing the US-150-owned retired fact plus late
+      `DBO-0323` ordinary repair staging and `DBO-0324` generated repaired-PK
+      uniqueness.
+- [x] All 494 owned material rows remain blocked as 489 physical columns plus
+      five material JSON/array domains. The 27 retired-fact rows remain
+      US-150-owned; temporary/repaired shapes reuse target fields and add no
+      second CMF row or disposition.
+- [x] All 127 lexical migrations, 105 migration TEMP declarations in 18
+      files, 51 runtime TEMP declarations in 13 files, 20 repair targets, 14
+      registered PK branches, two disabled replacements and 12 generated
+      repaired-PK branches are reconciled. Clean PK, repaired PK-stripped,
+      generated unique, replayed secondary, fixed current and historical
+      index contracts remain distinct.
+- [x] `FAN-0065`-`FAN-0087`, all 20 direct targets
+      `PRF-0787`-`PRF-0806`, all 80 unvalidated target shapes, US-123 cleanup
+      rows `PRF-1071`-`PRF-1073`, US-128 replay/repair/operator rows
+      `PRF-1084`-`PRF-1086` and every applicable downstream/lifecycle row
+      `PRF-1042`-`PRF-1086` are reconciled. None supplies an independently
+      satisfied physical, target, migration, operator, replay, repair,
+      recovery, retention, cleanup or restore result.
+- [x] No-consumer, current schema, field/value/history, access path,
+      migration/backfill/cutover/rollback, operator, export/transfer,
+      benchmark, replay/repair/recovery, retention, cleanup and restore are
+      named as separate mandatory actionability grains for every applicable
+      family and target.
+- [x] Current comparison, diagnostics/config, surviving refresh/dirty gates,
+      transfer control, no-reader legacy rows, migration TEMP, runtime TEMP,
+      connection-retained state, ordinary repair staging, generated
+      uniqueness and physical optimizer use remain distinct contracts.
+- [x] All 146 linked dispositions have
+      `recommendationActionability: blocked`; their exact 101 keep, three
+      move, 32 delete and ten archive values remain unchanged. The 103
+      object/index/temporary owners and 43 material-family owners remain
+      distinct accounting grains.
+- [x] Proof accounting balances at
+      `1,086 = 8 satisfied + 89 pending + 989 blocked + 0 not-applicable`.
+      Disposition actionability balances at
+      `441 = 55 unresolved + 386 blocked + 0 actionable`; all 115 non-keeps
+      remain blocked, 271 keeps are blocked after US-149 through US-157 and
+      55 keeps remain unresolved.
+- [x] DBO remains 328 blocked, CMF remains 1,992 blocked and the physical
+      register remains 91 blocked plus one source-proven not-applicable domain
+      with zero value-bearing observations. No manifest, product status,
+      measurement, target, disposition value or certification state is
+      borrowed from another.
+- [x] `EVD-1677`-`EVD-1684`, `CMD-1306`-`CMD-1310`, `BLK-0935` and
+      `OQ-0939` are uniquely defined and cross-referenced; every blocked
+      terminal row has concrete missing evidence and an owner question.
+- [x] `rtk bun run lint` preserves the same six unrelated errors in three
+      untouched worker files. No repo-native typecheck/check/test:typecheck
+      script exists; no unrelated lint issue is changed. See `CMD-1309`.
+- [x] Product tests, build, migration/server, configured/snapshot/live/current/
+      project DuckDB, operator/repair/export/transfer/cleanup execution,
+      actual browser/desktop execution and physical validation are explicitly
+      skipped. Product source is unchanged and this story changes only audit
+      state/documentation, so rerunning prior product fixtures would not
+      establish any missing proof.
+- [x] Exact proof/target/disposition/count/object/material/index/temporary/
+      measurement/ID/evidence/owner/latest-story validators,
+      `git diff --check`, scoped product-source isolation, allowed-change,
+      worktree/tracker and whitespace checks pass through `CMD-1310`.
 - [x] No live, current or project DuckDB is opened. No schema, code, route,
       projector, retention, runtime behavior, benchmark-critical setting or
       data is changed.
