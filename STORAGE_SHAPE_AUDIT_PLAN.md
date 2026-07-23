@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has zero nonterminal rows, 82 blocked rows and five out-of-scope rows; UI has zero nonterminal rows, 70 blocked rows and six out-of-scope rows; background has zero nonterminal rows and 123 blocked rows; objects have zero nonterminal rows and 328 blocked rows; material fields have zero nonterminal rows and 1,992 blocked rows. The 441-row disposition register remains 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive`; after US-164, actionability remains zero unresolved + 441 blocked + zero actionable. The 1,086-row proof register remains eight `satisfied` + 35 `pending` + 1,043 `blocked` + zero `not-applicable`. US-164 applies Phase 8 admission to the contiguous US-157/US-158 legacy, temporary, payload, generated-file and cold-storage scope: all 206 proof rows and all 213 dispositions are blocked, so zero `SLC-####` implementation rows are created. Fifty-seven non-keep accounting rows map to 26 distinct blocked contracts; 156 keep rows remain preservation contracts. Retained migration/runtime temporaries, PDF/full-text/runtime-asset/generated-client-file contracts and the source-proven ordinary-file application-WAL not-applicability remain proof or preservation concerns rather than invented candidates. Neither priority nor detailed future gates change proof state or authorize work. All 115 non-keep and all 326 keep rows are actionability-blocked. The 80 `TGT-####` shapes remain unvalidated; the physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Complete checked-in runtime, object, key, serializer, output, cleanup, restart and recovery evidence plus focused disposable tests do not supply approved deployed roots/files and dynamic consumers, an immutable fixture/configuration, executable current/candidate target, physical collector, request-wide lookup/write bounds, atomic publication, actual browser/desktop/native-save proof, exact export/transfer portability and migration receipts, permissions/encryption, reader leases, finite retention/cleanup, clean-host restore or owner signoff. No unavailable value is treated as zero and no planned future gate is proof. `overallCertification` therefore remains independently `INCOMPLETE`. |
+| `overallCertification` | `INCOMPLETE` | All five manifests balance, but 2,595 in-scope rows are blocked and zero are classified. MAP has 33 traced-only rows, LIN has 210 traced-only rows, TLI has zero rows, FAN has zero value-bearing physical observations, proof remains 8 satisfied + 35 pending + 1,043 blocked, all 441 dispositions are actionability-blocked, all 80 target shapes are unvalidated, and zero implementation slice is admitted. Seven of twelve completion gates fail. See US-165, `EVD-1735`-`EVD-1741`, `BLK-0943`, and `OQ-0947`. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-164 / 2026-07-23` | Applies implementation-slice admission and the exact seven-position Phase 8 order to the stable US-157/US-158 legacy, temporary, payload, generated-file and cold-storage scope. All 206 proof rows and all 213 linked dispositions are blocked, so no `SLC-####` row is created. Fifty-seven non-keep accounting rows map to 26 distinct blocked contracts and 156 keep rows remain preservation contracts; retained temporary and file families without a non-keep owner remain proof dependencies rather than candidates. Every US-164 blocked contract records dependencies, exact objects/fields or keys, runtime effects, reads, writes, migration/backfill, one-version cutover, database/file cleanup and pins, rollback/recovery, proof references and conditional later-only gates. Proof, disposition, target, manifest, measurement and certification states remain unchanged; no implementation gate is executed and no schema, code, route, reader, projector, retention, runtime behavior or data changes. |
+| Latest normalized story | `US-165 / 2026-07-23` | Certifies the final audit as `INCOMPLETE`, reconciles all eleven outputs, all five manifests, every nonterminal/blocked/empty register and all twelve completion gates, and records the exact command/tooling boundary. It changes no proof, actionability, target, measurement or manifest state, admits no implementation slice and executes no documented later implementation gate. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 Evidence chronology note: the ten-invocation, 36-pass, 300-expectation and
@@ -304,6 +304,13 @@ preservation contracts, retained temporary/file families without a non-keep
 owner remain proof dependencies and unresolved candidates remain zero. See
 `EVD-1732`-`EVD-1734`, `CMD-1343`-`CMD-1345`, `BLK-0942` and the US-164
 quality gates.
+US-165 runs only source/read-only audit validators plus the repo lint quality
+check. It confirms that all eleven output headings exist, but Output 05 has no
+`TLI-####` rows, MAP/LIN remain nonterminal and seven of twelve completion
+gates fail. The five manifests balance with 2,595 blocked in-scope rows and
+zero classified rows; proof/actionability/target/measurement state remains
+unchanged and no slice is admitted. See `EVD-1735`-`EVD-1741`,
+`CMD-1346`-`CMD-1350`, `BLK-0943` and the US-165 quality gates.
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
 `classified`, every reconciliation has zero nonterminal and blocked rows, all
@@ -30842,6 +30849,179 @@ physical measurement state and `overallCertification` remain independent.
 `BLK-0942` and `OQ-0946` capture the admission blocker and owner action.
 Nothing in the priority order or future-gate catalog changes a blocked state.
 
+## US-165 Final Audit Certification
+
+### Scope, Prerequisites, And Decision Boundary
+
+US-159 through US-164 are complete at story-start HEAD
+`382e727d8053232de043a3ff948eac3bc9266ccb`; only the engine-owned
+`tasks/prd.json` change pre-existed. US-165 is a reporting story. It does not
+add, remove, renumber, or change any `API`, `UIR`, `BGO`, `DBO`, `CMF`,
+`MAP`, `LIN`, `TLI`, `FAN`, `DSP`, `PRF`, `TGT`, or `SLC` state row.
+
+The final decision is `overallCertification: INCOMPLETE`. All five
+authoritative manifests balance with zero nonterminal rows, but they contain
+2,595 blocked rows and zero classified in-scope rows. In addition, 33 of 45
+route-map rows and all 210 lineage rows remain explicitly nonterminal, the
+required `TLI-####` inventory has zero rows, 91 of 92 physical-measurement
+rows are blocked with zero value-bearing observations, 35 proof checks remain
+pending and 1,043 are blocked, all 441 dispositions are
+`recommendationActionability: blocked`, and all 80 target shapes remain
+unvalidated. Zero implementation slice is admitted.
+
+No implementation slice is certified actionable. Completing US-165 changes
+neither `proofCheckState` nor `recommendationActionability`, does not convert
+missing evidence into a pass or unavailable values into zero, and does not
+represent any documented later migration, parity, benchmark, browser,
+desktop, retention, cleanup, or recovery gate as executed.
+
+### US-165 Evidence Ledger
+
+| Evidence ID | Class | Exact locator | Finding | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-1735` | `control/prerequisite` | User US-165 PRD and codebase patterns; `.ralph-tui/progress.md`; US-001 state model; `REVIEW_STORAGE_SHAPE_AUDIT_PLAN.md#Required Audit Outputs`, `#Exhaustiveness And Checkoff Strategy`, and `#Audit Completion Quality Gates`; reporting and DuckDB skills; US-159-US-164 completion; story-start HEAD/worktree/task record | Every prerequisite is complete. Only engine-owned `tasks/prd.json` pre-existed, product source is unchanged, the result must remain documentation-only, and no live/configured/current/project/snapshot/fixture DuckDB access is authorized. | `CMD-1346` |
+| `EVD-1736` | `output/cardinality/cross-reference` | Output 01-11 headings; five coverage-manifest headings; stable-ID definitions and canonical row tables for `API`, `MAP`, `DBO`, `CMF`, `LIN`, `TLI`, `FAN`, `DSP`, `PRF`, `TGT`, and `SLC` | All eleven required output sections and all five manifest sections exist. Ten outputs have an explicit populated register or a correctly empty admission ledger; Output 05 remains only a scaffold with zero `TLI-####` rows. Stable cross-output links exist elsewhere, but an empty TLI register and nonterminal MAP/LIN rows prevent complete row-level cross-reference certification. | `CMD-1347` |
+| `EVD-1737` | `manifest/reconciliation` | Coverage Manifests 01-05; Reconciliation Summaries; US-129-US-148 terminal reconciliation and exhaustive-closure sections | API is `87 = 0 classified + 5 out-of-scope + 82 blocked`; UI is `76 = 0 + 6 + 70`; background is `123 = 0 + 0 + 123`; objects are `328 = 0 + 0 + 328`; material fields are `1,992 = 0 + 0 + 1,992`. Index, temporary-lifecycle, and payload/file DBO subsets also balance at 128, 32, and 40 blocked rows. Every nonterminal count is zero, but every in-scope row is blocked. | `CMD-1347` |
+| `EVD-1738` | `state/proof/actionability` | `MAP-0001`-`MAP-0045`; `LIN-0001`-`LIN-0210`; empty `TLI-####` register; `FAN-0001`-`FAN-0092`; US-149-US-158 terminal proof/actionability tables; `TGT-0001`-`TGT-0080`; US-159-US-164 slice-admission tables | MAP has 33 traced-only, seven blocked, and five out-of-scope rows; LIN has 210 traced-only rows; TLI is unbaselined; FAN is 91 blocked plus one source-proven not-applicable domain; proof is 8 satisfied + 35 pending + 1,043 blocked; actionability is 441 blocked; target validation is 80 blocked; and zero `SLC` row is admissible while 68 distinct blocked contracts remain outside implementation work. | `CMD-1347`, `CMD-1348` |
+| `EVD-1739` | `completion-gates` | The twelve audit completion quality gates; all 92 FAN rows; all 80 TGT rows and target proofs `PRF-0912`-`PRF-0991`; canonical API/UI/background/object/material manifests; US-159-US-164 conditional gate matrices | Source inventories, bounded-read plans, platform implications, commands, and skips are documented. The required TLI register, classified fields, complete lineage, keep/delete proof, large-table physical baselines, executable current/candidate parity results, and deployed browser/desktop/runtime/lifecycle evidence are not complete. Seven of twelve completion gates therefore fail. | `CMD-1348` |
+| `EVD-1740` | `commands/tooling/mutation-boundary` | US-165 command rows `CMD-1346`-`CMD-1350`; package scripts; scoped worktree/product-source diff; approved evidence classes in US-001 and database-tool boundary in the DuckDB skill | US-165 uses repository reads and audit-only validators. `bun run lint` executes as a repository quality check and preserves six unrelated pre-existing source errors. No typecheck script exists. No database, migration, test, build, server, browser, desktop, worker, projector, benchmark, physical collector, cleanup, or recovery command supplies audit evidence. | `CMD-1346`-`CMD-1350` |
+| `EVD-1741` | `control/final-certification` | US-165 output, manifest, state, gate, command, blocker, owner-question, mutation-boundary, Markdown, whitespace, stable-ID, latest-story, and Ralph-progress validators | The final artifact reports only audit results, explicitly retains every incomplete state, defines one final blocker and owner question, changes no product/schema/runtime file, and leaves `overallCertification` independently `INCOMPLETE`. | `CMD-1350` |
+
+### Required Output And Cross-Reference Closure
+
+| Required output | Canonical register and audited state | Cross-reference result | Certification consequence |
+| --- | --- | --- | --- |
+| 01. API surface inventory | `API-0001`-`API-0087`; 82 blocked + five out of scope | Manifest 01 links routes/contracts to `MAP`, owning services, tests and evidence; inverse UI/lineage links remain in `UIR`/`LIN`. | Present and terminally accounted, but zero in-scope row is classified. |
+| 02. Route-to-query/table map | `MAP-0001`-`MAP-0045`; 31 `traced-to-lifecycle` + one `traced-to-writer` + one `traced-to-api` + seven blocked + five out of scope | Links API/background entries to exact readers, tables, statement/work bounds, evidence and selected UI/lineage rows. | Present, but 33 traced-only rows make its own reconciliation nonterminal. |
+| 03. Full schema, temporary, and file census | `DBO-0001`-`DBO-0328` and `CMF-0001`-`CMF-1992`; DBO subsets include 128 indexes, 32 temporary-lifecycle shapes and 40 payload/file shapes | Manifests 04-05 link declarations, owners/references, dispositions, proof, evidence, blockers and questions. | Present and exhaustively counted, but every row is blocked. |
+| 04. Column-level lineage | `LIN-0001`-`LIN-0210`; 193 `traced-to-lifecycle` + 13 `traced-to-writer` + four `traced-to-api` | Links CMF/source transforms and persisted copies to route/UI/background consumers, invalidation, publication, retention and evidence. | Present, but all 210 rows are nonterminal. |
+| 05. Table, index, and lifecycle inventory | Required `TLI-####` family; zero rows; Output 05 says `Current state: scaffolded.` | No canonical per-DBO TLI row exists to close owner, predicate/order, create/update/invalidate/publish/pin/retire/delete, replay/repair, retention or orphan links. | Required output heading exists, but the material register is empty and unbaselined. |
+| 06. Fan-out and duplicate-byte report | `FAN-0001`-`FAN-0092`; 91 blocked + one evidence-backed not-applicable application-WAL domain | Links object/field families, formulas, target/proof needs, evidence, blockers and questions while keeping logical, index, WAL, temp and physical bytes distinct. | Present, but zero value-bearing physical observation exists. |
+| 07. Dispositions | `DSP-0001`-`DSP-0441`; 326 keep + six move + 24 derive + 61 delete + 24 archive; all 441 actionability-blocked | Links each object/logical/file/material/index accounting grain to evidence and family/target proof without duplicate ownership. | Present; no disposition is actionable. |
+| 08. Proof candidates | `PRF-0001`-`PRF-1086`; eight satisfied + 35 pending + 1,043 blocked + zero not applicable | Links dispositions and targets to positive/negative route, runtime, writer, lifecycle, recovery, export, transfer, snapshot, benchmark, migration, bounded-read, retention and cleanup predicates. | Present; pending and blocked proof forbid actionability. |
+| 09. Target shapes | `TGT-0001`-`TGT-0080`; target validations `PRF-0912`-`PRF-0991` all blocked | Links target ownership/shape/read/write/lifecycle/migration consequences to dispositions, proof and conditional parity/benchmark plans. | Present; all 80 shapes remain unvalidated. |
+| 10. Implementation slices with benchmark gates | Zero `SLC-####` rows; US-159-US-164 retain 68 distinct blocked contracts in separate Phase 8 queues | Blocked queues link exact dispositions, proofs, targets, dependencies and conditional future gates without treating them as implementation work. | Correctly empty under admission; no slice is certified actionable and no later gate ran. |
+| 11. Exhaustive coverage manifests | Five manifests covering 87 API, 76 UI, 123 background, 328 object and 1,992 material rows | Stable IDs link the other outputs and exact evidence; the terminal arithmetic is recorded below. | Present and arithmetically balanced, but all 2,595 in-scope rows are blocked. |
+
+All eleven headings therefore exist and their current registers are named.
+That structural presence is not a completion pass: Output 05 has no material
+rows, MAP/LIN are nonterminal, and the remaining populated outputs carry
+blocked or pending evidence. Output-level links cannot substitute for missing
+row-level lifecycle and physical proof.
+
+### Terminal Manifest Reconciliation
+
+| Reconciliation category | Discovered | Classified | Out of scope | Blocked | Nonterminal | Required equation | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| Mounted API/read contracts | 87 | 0 | 5 | 82 | 0 | `87 = 0 + 5 + 82` | Balanced; blocks certification. |
+| UI/runtime consumers | 76 | 0 | 6 | 70 | 0 | `76 = 0 + 6 + 70` | Balanced; blocks certification. |
+| Background/operator surfaces | 123 | 0 | 0 | 123 | 0 | `123 = 0 + 0 + 123` | Balanced; blocks certification. |
+| DuckDB/persisted objects | 328 | 0 | 0 | 328 | 0 | `328 = 0 + 0 + 328` | Balanced; blocks certification. |
+| Columns/material fields | 1,992 | 0 | 0 | 1,992 | 0 | `1,992 = 0 + 0 + 1,992` | Balanced; blocks certification. |
+| Indexes, DBO subset | 128 | 0 | 0 | 128 | 0 | `128 = 0 + 0 + 128` | Balanced subset; blocks certification. |
+| Temporary-lifecycle shapes, DBO subset | 32 | 0 | 0 | 32 | 0 | `32 = 0 + 0 + 32` | Balanced subset; blocks certification. |
+| Payload/file shapes, DBO subset | 40 | 0 | 0 | 40 | 0 | `40 = 0 + 0 + 40` | Balanced subset; blocks certification. |
+
+Every required manifest row is accounted for as classified, out of scope, or
+blocked; there is no silent `not-started`, traced-only, or measured-only
+manifest row. Balance is only an accounting property. With 2,595 in-scope
+blocked rows and zero classified rows, the manifest condition for `PASS`
+fails.
+
+### Non-Manifest Output And State Reconciliation
+
+| Register | Exact current accounting | Explicit nonterminal or missing state | Final effect |
+| --- | --- | --- | --- |
+| `MAP` | 45 = 0 classified + 5 out of scope + 7 blocked + 33 nonterminal | 31 lifecycle-traced + one writer-traced + one API-traced | Fails terminal output reconciliation. |
+| `LIN` | 210 = 0 classified + 0 out of scope + 0 blocked + 210 nonterminal | 193 lifecycle-traced + 13 writer-traced + four API-traced | Fails terminal output reconciliation. |
+| `TLI` | 0 canonical rows | Empty/unbaselined required inventory | Fails the required-output and lifecycle-inventory gates. |
+| `FAN` | 92 = 91 blocked + one source-proven not applicable | Zero value-bearing physical observations | Fails large-table physical baseline and benefit/cost proof. |
+| `DSP` | 441 = 0 unresolved + 441 blocked + 0 actionable | 326 keep and all 115 non-keep dispositions are actionability-blocked | No move, derive, archive, or delete is authorized. |
+| `PRF` | 1,086 = 8 satisfied + 35 pending + 1,043 blocked + 0 not applicable | 1,078 required checks do not pass | Positive and negative proof conjunction fails. |
+| `TGT` | 80 target shapes; 80 linked target validations blocked | No executable current/candidate parity result or approved physical result | No target is implementation-ready. |
+| `SLC` | 0 admitted rows; 68 distinct blocked contracts in separate queues | Zero actionable owning disposition and required proofs do not pass | Correctly no implementation work is certified. |
+
+These states are deliberately explicit. The final certification does not hide
+traced-only rows inside the five manifest totals, treat an empty register as a
+zero-risk result, or treat a documented benchmark/parity plan as a measured
+result.
+
+### Audit Completion Quality Gates
+
+| # | Completion gate | US-165 result | Exact basis |
+| ---: | --- | --- | --- |
+| 1 | Audit result artifact exists | `PASS` | This file is the durable result artifact, distinct from the source strategy. |
+| 2 | Every mounted review API route and important background consumer has a surface record | `PASS` for checked-in source inventory | Manifest 01 has 87 terminal rows and Manifest 03 has 123 terminal rows; deployed/dynamic classification remains blocked separately. |
+| 3 | Every current table/index has confirmed producers, consumers, owner and lifecycle or proven unused status | `FAIL` | All 328 DBO rows and 128 index rows are blocked, and the required per-object `TLI` register is empty. |
+| 4 | Every census column has a use classification and disposition | `FAIL` | All 1,992 CMF rows remain `auditStatus: blocked`; disposition assignment cannot substitute for classification. |
+| 5 | Every material mart family has complete lineage and disposition | `FAIL` | All 210 LIN rows remain traced-only and all 441 dispositions remain actionability-blocked. |
+| 6 | Every keep-in-mart decision identifies and proves its pre-limit, exact-summary, or snapshot-consistency need | `FAIL` | Requirements are described, but all 326 keep dispositions are actionability-blocked and physical/deployed necessity is unproved. |
+| 7 | Every move/derive decision includes a bounded-read strategy | `PASS` as a plan only | Target and US-159-US-164 blocked-contract rows document bounded IDs/rows/bytes/calls and no silent fallback; this does not execute or satisfy the strategy. |
+| 8 | Every deletion candidate satisfies positive and negative deletion proof | `FAIL` | All 61 delete dispositions are blocked; route/runtime/writer/lifecycle/recovery/export/transfer/snapshot/migration/retention/cleanup conjunctions do not pass. |
+| 9 | Fan-out formulas and physical baselines exist for every large review table | `FAIL` | Formulas exist, but `FAN` has 91 blocked rows and zero value-bearing physical measurements. |
+| 10 | Candidate shapes have exact parity tests/results and a physical benchmark plan | `FAIL` | Conditional plans and named tests exist, but all 80 target validations are blocked and no executable same-fixture current/candidate result exists. |
+| 11 | Browser and desktop implications are documented | `PASS` as documentation only | API/UI/blocked-candidate rows name shared browser and packaged-desktop consequences; actual browser/native transport/save/restart/resume proof remains blocked. |
+| 12 | Commands and approved database tooling are listed; skipped obvious checks are explained | `PASS` | `CMD-0001`-`CMD-1350` retain the command history. US-165 lists its source-only tools, lint result, approved snapshot boundary and every skipped code/runtime/database gate below. |
+
+Five reporting gates pass, seven completion gates fail. A documentation-only
+pass for a plan or platform implication is not an executed implementation,
+runtime, parity, or physical-evidence pass.
+
+### Final Blocker And Owner-Question Rollup
+
+| Blocking category | Exact unresolved state | Canonical blocker/question lineage | Required owner resolution |
+| --- | --- | --- | --- |
+| Output completeness and terminal cross-reference | Empty `TLI`; 33 MAP and 210 LIN rows remain nonterminal | `BLK-0943`; row-level MAP/LIN blockers/questions; `OQ-0947` | Populate and reconcile TLI, terminally classify or block every MAP/LIN row, and validate complete stable-ID links without changing other state by inference. |
+| Manifest classification and deployed closure | 2,595 in-scope API/UI/background/object/material rows blocked; zero classified | `BLK-0907`-`BLK-0926`; `OQ-0911`-`OQ-0930`; `BLK-0943`/`OQ-0947` | Supply approved deployed/dynamic consumers, applied shape, ownership, lifecycle, recovery, retention and cleanup evidence for each row. |
+| Physical measurement and benchmark integrity | 91 FAN rows blocked; zero value-bearing observations; benchmark-critical fixture/configuration absent | `FAN-0001`-`FAN-0092`; their linked blockers/questions; `BLK-0943`/`OQ-0947` | Approve one immutable non-live fixture/snapshot and complete collector with fixed seed/model/provider/thinking/prompt/content/memory/runtime/platform/snapshot identity. |
+| Target parity and positive/negative proof | 35 pending + 1,043 blocked proofs; 80 target validations blocked | `BLK-0927`-`BLK-0936`; `OQ-0931`-`OQ-0940`; `BLK-0943`/`OQ-0947` | Provide executable current/candidate sides, independent semantic/byte oracle, exact route/runtime/writer/lifecycle/export/transfer/recovery/migration/bounded-read/retention/cleanup results and owner signoff. |
+| Recommendation and slice admission | 441 actionability-blocked dispositions; zero SLC rows; 68 blocked contracts | `BLK-0937`-`BLK-0942`; `OQ-0941`-`OQ-0946`; `BLK-0943`/`OQ-0947` | Transition a disposition only after every linked proof passes or is evidence-backed not applicable; then rerun slice admission. |
+| Browser, desktop, publication, cleanup and restore | Source/test implications exist; actual browser, native desktop, restart/resume, generated-save, durable cleanup and clean-host restore results do not | Row-level manifest/proof blockers plus `BLK-0907`-`BLK-0943`; `OQ-0911`-`OQ-0947` | Run the approved immutable scenario on both platforms with bounded failure/restart matrices, exact visibility and artifact checks, leases/pins and durable cleanup/restore receipts. |
+
+The rollup does not replace any row-level blocker or owner question. It names
+the final conjunction that prevents certification and the owners who must
+resolve the existing evidence rows.
+
+### Commands, Approved Evidence Tooling, And Skipped Checks
+
+- Used for US-165: source-only `rtk rg`, `sed`, read-only Ruby validators,
+  `bun -e` package-script inspection, `rtk git` status/diff/revision checks,
+  `git diff --check`, and whitespace/final-newline validation.
+- Repository lint was run with `rtk bun run lint`. It fails on six unrelated
+  pre-existing import-order/formatting errors in
+  `comparisonProjectServingMaintenanceWorker.ts`,
+  `reviewServingProjectorWorker.test.ts`, and
+  `reviewServingProjectorWorker.ts`; US-165 changes none of them.
+- No repo-native `typecheck`, `check`, or `test:typecheck` script exists.
+  Full/targeted tests and builds are skipped because this story changes only
+  Markdown audit state and they cannot supply the missing deployed, physical,
+  browser, desktop, parity, cleanup, or recovery evidence.
+- The approved database evidence class remains an immutable
+  `approved-snapshot` with fixed configuration, queried only through an
+  approved snapshot path such as
+  `bun run db:query:snapshot -- --sql="..."`. No snapshot identity,
+  configuration, or collector is approved here, so US-165 uses no database
+  tool. `db:studio`, direct DuckDB/SQLite/CLI access, and all live/current/
+  project database inspection are not used.
+- `bun run db:mig`, benchmark commands, server/app/desktop startup, browser
+  execution, writers, workers, projectors, repair, export, transfer,
+  retention, cleanup, restore, and every US-159-US-164 conditional future
+  gate remain unexecuted. No process or artifact cleanup is required.
+
+### Final State
+
+| State field | US-165 result | Independence rule |
+| --- | --- | --- |
+| Manifest `auditStatus` | Unchanged: five primary manifests balance, with 2,595 blocked in-scope rows and 11 out-of-scope rows | Accounting closure is not proof or actionability. |
+| `proofCheckState` | Unchanged: 8 satisfied + 35 pending + 1,043 blocked + 0 not applicable | A documented future gate or source observation does not change proof state. |
+| `recommendationActionability` | Unchanged: 0 unresolved + 441 blocked + 0 actionable | Disposition value and priority do not authorize implementation. |
+| Target/measurement state | Unchanged: 80 unvalidated targets; 91 blocked FAN rows + one not applicable; zero physical values | A target design or formula is not a parity/physical result. |
+| `overallCertification` | `INCOMPLETE` | `PASS` requires every in-scope manifest row classified, zero blockers/nonterminals, every completion gate passed, and complete positive/negative proof for every actionable non-keep recommendation. |
+
+`BLK-0943` and `OQ-0947` are the final certification blocker and owner
+question. The report makes no repository schema, code, route, reader, writer,
+projector, retention, runtime-behavior, benchmark-setting, or data change.
+
 ### Output 01 - API Surface Inventory
 
 Authoritative row family: `API-####`. Record one row per mounted route or
@@ -31019,7 +31199,13 @@ owner, production producers/consumers, the real predicate/order path for each
 index, create/update/invalidate/publish/pin/retire/delete events, replay/repair
 role, retention horizon, orphan handling, and non-production references.
 
-Current state: scaffolded.
+Current state after US-165: the required section exists, but the canonical
+register contains zero `TLI-####` rows. The 328 DBO rows, including 128 index,
+32 temporary-lifecycle and 40 payload/file subset rows, provide census and
+source-reference evidence elsewhere; they do not replace the required
+per-object TLI ownership, predicate/order, lifecycle, replay/repair, retention
+and orphan register. Output 05 remains empty/unbaselined under `BLK-0943` and
+prevents final certification.
 
 ### Output 06 - Row Fan-Out And Duplicate-Byte Report
 
@@ -31225,20 +31411,17 @@ fixed benchmark configuration, semantic parity gates, resource budgets, and
 repo-native commands. A slice can be implementation-ready only when every
 linked recommendation is `actionable`.
 
-Current state after US-163: zero `SLC-####` rows. US-159 through US-162 keep
-22 distinct blocked contracts outside implementation work. US-163 applies
-the same rule to the US-156 posting/summary/filter/partial/index scope: 117
-blocked proof rows, 46 blocked dispositions and zero actionable
-recommendations. Twenty-four non-keep accounting rows map to 20 distinct
-blocked contracts in exact Phase 8 order with dependencies, exact objects/
-fields/contracts, reads, writes, migration/rebuild, cutover, cleanup/pins,
-rollback/recovery and conditional future gates. The 22 keep rows remain
-preservation contracts. `PRF-0686` unused posting/stats-kind retirement and
-duplicate-looking list/count/facet/option API work remain blocked proof
-concerns without an owning non-keep disposition and are not additional
-candidates. Across the five prioritization stories there are 42 distinct
-blocked contracts, zero unresolved candidates and zero admitted slices. No
-prioritization story records a future gate as run or passed.
+Current state after US-165: zero `SLC-####` rows. US-159 through US-164 retain
+68 distinct blocked contracts outside implementation work: seven source/
+configuration, four judgment/fact/control, seven candidate/status/payload,
+four newly owned search/queue, 20 posting/summary/filter/partial/index and 26
+legacy/temporary/payload/file/cold-storage contracts. Cross-story-owned and
+ownerless proof concerns are not recounted as candidates. Every blocked queue
+row records dependencies, exact objects/fields/keys, reads, writes, migration
+or rebuild, one-version cutover, cleanup/pins, rollback/recovery and
+conditional future gates. There are zero unresolved candidates, zero
+actionable recommendations and zero admitted slices. No prioritization or
+certification story records a future gate as run or passed.
 `overallCertification` remains independently `INCOMPLETE`.
 
 ### Output 11 - Exhaustive Coverage Manifests
@@ -33951,6 +34134,11 @@ blocked status.
 
 ## Reconciliation Summaries
 
+US-165's terminal manifest and non-manifest reconciliation tables are the
+authoritative final certification view. The cumulative narrative below
+retains historical story-time counts for provenance; it does not override the
+US-165 totals or change any row state.
+
 For every manifest family `F`, calculate:
 
 ```text
@@ -35474,6 +35662,11 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-1343` | 2026-07-23 / US-164 | Re-read exact `DBO-0182`-`DBO-0322`, `CMF-1419`-`CMF-1982`, legacy/current indexes and temporary shapes, `TGT-0061`-`TGT-0062`, `TGT-0072`-`TGT-0073`, `TGT-0077`-`TGT-0078`, target and lifecycle proofs; searched current migration, comparison, review-serving, settings, archived-cleanup, backup, Studio, import, FHIR, judgment-recovery, retention and browser/desktop parity test paths. | Record the complete bounded future contract and conditional gates for each US-164 blocked candidate without implementing or promoting anything. | Twenty-six blocked candidate rows now name dependencies, exact objects/fields or keys, runtime effects, reads, writes, migration/backfill, one-version cutover, bounded database/file cleanup and pins, rollback/recovery and proof references. Every named test file exists; required migration, isolated tests, lint, shared build, affected all-four-tab/detail browser, desktop restart/resume, unchanged-setting same-fixture physical and OOM/fatal/spill gates are documented but not run. Produced `EVD-1731`-`EVD-1732`. |
 | `CMD-1344` | 2026-07-23 / US-164 | Ran audit-only US-164 section validators for zero `SLC` definitions, 206/213 admission arithmetic, 57-to-26 ownership reconciliation, seven Phase 8 positions, 26 candidate identities across both contract tables, grouped per-candidate gate coverage, required future-gate text, named test-file existence, evidence/blocker/question definitions and Markdown-table consistency. | Prove the planning ledger is internally complete without executing any documented implementation gate. | The audit-only validators pass and confirm zero `SLC` definitions, 26 blocked contracts, 156 preservation dispositions, seven phase positions, consistent candidate tables, existing named test paths, unique `EVD-1728`-`EVD-1734`/`BLK-0942`/`OQ-0946` and unchanged proof/disposition arithmetic. Produced `EVD-1733`. |
 | `CMD-1345` | 2026-07-23 / US-164 | Ran final latest-story, zero-slice, admission/state, preservation-concern, Phase 8, candidate-contract, future-gate, exact-test-path, stable-ID definition/reference, command/blocker/question, Output 10, quality-gate and Ralph-progress validators; `git diff --check`; scoped product-source, allowed-change, worktree, engine-task and whitespace/final-newline checks. Inspected package scripts without running them. | Close US-164 accounting and mutation-boundary gates without opening DuckDB or executing any conditional implementation command. | Final validators confirm zero `SLC` definitions, 26 blocked candidates, 57 unique non-keep accounting rows, six file targets, zero unresolved candidates, existing named test files, unchanged 1,086 proof and 441 disposition arithmetic, unique `EVD-1728`-`EVD-1734`/`CMD-1341`-`CMD-1345`/`BLK-0942`/`OQ-0946`, and one ignored Ralph progress entry. Product-source diff is empty; only this plan and the engine-owned `tasks/prd.json` change are tracked, while ignored Ralph progress contains the required metadata. No repo-native typecheck/check/test:typecheck script exists. Migration, tests, lint, build, server, browser, desktop and physical gates remain unexecuted by explicit acceptance criterion. Produced `EVD-1734`. |
+| `CMD-1346` | 2026-07-23 / US-165 | Read the user PRD/codebase patterns, `.ralph-tui/progress.md`, US-001 state model, `REVIEW_STORAGE_SHAPE_AUDIT_PLAN.md` required outputs/reconciliation/completion gates, reporting and DuckDB skills, US-159-US-164 sections/quality gates, story-start HEAD/worktree/task record and package scripts. | Establish every prerequisite, final-certification predicate, approved evidence boundary, story-start ownership and documentation-only/no-live-DuckDB mutation boundary. | All prerequisites are complete at `382e727d8053232de043a3ff948eac3bc9266ccb`; only engine-owned `tasks/prd.json` pre-existed, product source was unchanged, and no typecheck/check/test:typecheck script exists. Produced `EVD-1735`. |
+| `CMD-1347` | 2026-07-23 / US-165 | Ran source-only `rtk rg`/`sed` and read-only Ruby validators for exactly 11 output headings, five manifest headings, contiguous stable row-family IDs, canonical manifest statuses, MAP/LIN/FAN states, empty TLI/SLC registers, proof/disposition/target/slice totals and cross-output references. | Reconcile every required output and manifest without opening a database or silently dropping nonterminal/empty rows. | The first generic row-cardinality script failed because this host Ruby lacks `Array#tally`; the compatible `Hash` version passed. It confirms 87 API, 45 MAP, 328 DBO, 1,992 CMF, 210 LIN, zero TLI, 92 FAN, 441 DSP, 1,086 PRF, 80 TGT, zero SLC, 76 UIR and 123 BGO unique contiguous IDs. Canonical manifest and non-manifest state counts match `EVD-1736`-`EVD-1738`. |
+| `CMD-1348` | 2026-07-23 / US-165 | Reconciled the twelve completion gates against all five terminal manifests, DBO index/temp/file subsets, MAP/LIN/TLI, all FAN/DSP/PRF/TGT/SLC state, US-159-US-164 blocked queues, target/parity plans, browser/desktop implications and approved-snapshot boundary. | Decide `PASS` versus `INCOMPLETE` from the full conjunction rather than from heading existence, arithmetic balance, source closure or a planned later gate. | Five reporting gates pass and seven completion gates fail. No classified in-scope manifest row, populated TLI register, terminal MAP/LIN closure, large-table physical baseline, executable candidate parity result, deletion proof or actual platform/lifecycle result exists. `overallCertification` is `INCOMPLETE`, and no slice is certified actionable. Produced `EVD-1738`-`EVD-1739`. |
+| `CMD-1349` | 2026-07-23 / US-165 | `rtk bun run lint`; inspected package scripts; explicitly skipped nonexistent typecheck/check/test:typecheck, full/targeted tests, builds, migrations, snapshot/Studio/direct database access, server/app/browser/desktop, workers/projectors, benchmarks, physical collectors, retention/cleanup and recovery commands. | Run the only relevant repository code-quality check requested by the workflow, preserve unrelated failures and document why other obvious or later-only gates do not validate this Markdown-only certification. | Lint exits 1 on the same six unrelated pre-existing import-order/formatting errors in `comparisonProjectServingMaintenanceWorker.ts`, `reviewServingProjectorWorker.test.ts`, and `reviewServingProjectorWorker.ts`. No source fix is attempted. No database/product process or generated artifact is created, and no conditional implementation gate is recorded as passed. Produced `EVD-1740`. |
+| `CMD-1350` | 2026-07-23 / US-165 | Ran final US-165 latest-story, output/cardinality, manifest-equation, MAP/LIN/TLI/FAN/DSP/PRF/TGT/SLC, gate-count, state-independence, no-actionable-slice, evidence/command/blocker/question, approved-tooling/skipped-check, Markdown-table, stable-ID, Ralph-progress, whitespace/final-newline, `git diff --check`, allowed-change, worktree/tracker and scoped product-source-isolation validators. | Verify the final certification and mutation boundary without executing database, runtime, platform, parity, benchmark, cleanup or recovery work. | Final validators pass: all eleven outputs and five manifests are accounted, every nonterminal/blocked/empty state is explicit, five gates pass/seven fail, IDs `EVD-1735`-`EVD-1741`/`CMD-1346`-`CMD-1350`/`BLK-0943`/`OQ-0947` are unique, one US-165 progress entry exists, product-source diff is empty and only this report plus workflow-required Ralph metadata are agent changes beside engine-owned `tasks/prd.json`. Produced `EVD-1741`. |
 
 ## Blockers
 
@@ -36452,6 +36645,7 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0940` | US-162 search and queue implementation-slice admission | The US-155 admission scope contains 52 `proofCheckState: blocked` rows and 14 `recommendationActionability: blocked` dispositions. Seven non-keep accounting rows map to five blocked contracts. Async-substring ownership or retirement remains the singly owned US-160 contract and is not recounted; the four US-162 contracts are bounded search article metadata, immutable search publication time, immutable queue publication time and physical queue-patch retirement. Seven keeps remain preservation contracts. The LLM list/count, judgment-job queue count/preview and later detail requests remain separate blocked route grains without an owning in-scope consolidation disposition. All family, target and workload validations, deployed/dynamic value/reference inventories, product and owner decisions, executable target shapes, immutable same-fixture parity runs, migration/rebuild/cutover/rollback receipts, request-wide bounds, actual browser/desktop results, pin/reference protection, finite cleanup and restore evidence remain unavailable. | Phase 8 priority, an unmounted/executorless job, repeated per-token facts, mutable row times, checked-in patch bypass, adjacent requests, detailed target shapes and documented future commands cannot convert a blocked proof or disposition into implementation authorization. Creating an `SLC-####` row now would misrepresent blocked state as work, duplicate the US-160 contract or invent ownership for a route concern. | `OQ-0944` | Owners independently satisfy or evidence-back as not-applicable every applicable family, target and workload predicate; retain single ownership of the async contract; assign any request-consolidation concern an exact actionable disposition if change is required; transition every owning disposition to `recommendationActionability: actionable`; then rerun slice admission. Only then may a new `SLC-####` row record one bounded contract and executed implementation gates. |
 | `BLK-0941` | US-163 posting, summary, filter, partial and index implementation-slice admission | The US-156 admission scope contains 117 `proofCheckState: blocked` rows and 46 `recommendationActionability: blocked` dispositions. Twenty-four non-keep accounting rows map to 20 blocked contracts: nine unused/duplicate-field or row-family contracts, one persistent-contribution retirement, eight component-owner/receipt contracts, one measured posting access-path contract and one physical posting-patch retirement. Twenty-two keeps remain preservation contracts. `PRF-0686` unused posting/stats-kind retirement and duplicate-looking list/count/facet/option API work remain blocked concerns without an owning non-keep disposition. All family, target and workload validations, deployed/dynamic value/reference inventories, product and owner decisions, executable target shapes, immutable same-fixture parity runs, migration/rebuild/cutover/rollback receipts, request-wide bounds, actual browser/desktop results, selected physical plans, pin/reference protection, finite cleanup and restore evidence remain unavailable. | Phase 8 priority, current null/no-client/no-reader evidence, finite serializers, deterministic formulas, matching index fields, checked-in patch/contribution bypass, detailed targets and documented future commands cannot convert a blocked proof or disposition into implementation authorization. Creating an `SLC-####` row now would misrepresent blocked state as work, invent ownership for row/API concerns or collapse proof state into disposition actionability. | `OQ-0945` | Owners independently satisfy or evidence-back as not-applicable every applicable family, target and workload predicate; assign row-kind or API-consolidation concerns an exact actionable disposition if change is required; transition every owning disposition to `recommendationActionability: actionable`; then rerun slice admission. Only then may a new `SLC-####` row record one bounded contract and executed implementation gates. |
 | `BLK-0942` | US-164 legacy, temporary, payload, generated-file and cold-storage implementation-slice admission | The contiguous US-157/US-158 admission scope contains 206 `proofCheckState: blocked` rows and 213 `recommendationActionability: blocked` dispositions. Fifty-seven non-keep accounting rows map to 26 blocked contracts: six unused/temporary-state contracts, one bounded payload late-hydration contract, nine cold ownership/path contracts, two measured index contracts and eight structural retirements. One hundred fifty-six keeps remain preservation contracts. Retained migration/runtime temporaries, PDF/full-text/runtime assets, export/transfer/generated client files and ordinary-file application-WAL non-applicability have no non-keep owner and are not candidates. All family, target and workload validations, deployed/dynamic row/value/file/reference inventories, exact benchmark-critical identity applicability, executable current/candidate targets, immutable same-fixture parity runs, migration/backfill/cutover/rollback receipts, request-wide row/file/member/byte/call bounds, atomic publication, actual browser/desktop/native-save results, selected physical plans, permissions/encryption/key custody, pin/reference/reader-lease protection, finite database/file cleanup and clean-host restore evidence remain unavailable. | Phase 8 priority, literal no-reader results, normal temporary teardown, matching constraint/index columns, rooted paths, manifest designs, successful local calls, detailed target prose and documented future commands cannot convert a blocked proof or disposition into implementation authorization. Creating an `SLC-####` row now would misrepresent blocked state as work, invent file/temporary ownership or collapse proof state into disposition actionability. | `OQ-0946` | Owners independently satisfy or evidence-back as not-applicable every applicable family, target and workload predicate; assign any retained temporary/file concern an exact actionable non-keep disposition if change is required; transition every owning disposition to `recommendationActionability: actionable`; then rerun slice admission. Only then may a new `SLC-####` row record one bounded contract and executed implementation gates. |
+| `BLK-0943` | US-165 final audit certification | All eleven output headings and five manifest headings exist, but Output 05 has zero `TLI-####` rows; 33 MAP rows and all 210 LIN rows remain traced-only; five primary manifests contain 2,595 blocked in-scope rows and zero classified rows; FAN has 91 blocked rows and zero value-bearing physical observations; proof remains 8 satisfied + 35 pending + 1,043 blocked; all 441 dispositions are actionability-blocked; all 80 target validations are blocked; and seven of twelve audit completion gates fail. Missing evidence includes approved deployed/dynamic consumers and applied shape, complete per-object lifecycle ownership, immutable benchmark fixture/configuration, executable current/candidate sides, exact semantic/byte parity results, selected plans and resource measurements, actual browser/desktop/native-save/restart behavior, request-wide bounds, atomic publication, migration/cutover/rollback receipts, export/transfer/snapshot/recovery parity, permissions/encryption, reader leases/pins, finite retention/cleanup and clean-host restore. | Heading existence, stable IDs, source closure, arithmetic balance, a correctly empty slice ledger, passing audit-only validators, formulas, proposed targets, named conditional tests or documentation-only browser/desktop implications cannot satisfy a missing output row, classify a blocked manifest, terminate traced-only lineage, create a physical observation, pass a proof or authorize a recommendation. `overallCertification: PASS` would misrepresent incomplete evidence as actionable. | `OQ-0947` | Audit, product, data, runtime, platform, performance, reliability, security, storage, retention, recovery, migration and release owners populate/terminally reconcile TLI/MAP/LIN; approve and run immutable non-live physical and exact current/candidate parity evidence; resolve every row-level blocker/question; satisfy or evidence-back as not applicable every proof; transition owning dispositions only after proof passes; rerun all failed completion gates and slice admission; then recalculate certification. |
 
 ## Owner Questions
 
@@ -37432,6 +37626,7 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0944` | Product/review-serving/search/queue/Human/judgment-job/bulk/projector/publication/query/API/client/browser/desktop/export/transfer/database/performance/reliability/storage/retention/recovery/migration/operator/release owners | Which owner-approved project-specific or global reusable search metadata target, immutable search and queue publication receipts and physical queue-patch retirement contract may be promoted while the async-substring decision stays singly owned by US-160? Are the LLM list/count, judgment-job count/preview or later detail requests actually duplicate work requiring a separately owned disposition, or distinct contracts to preserve? Which deployed/dynamic inventory, immutable current/candidate fixture with unchanged model/provider/thinking/prompt/content/memory/runtime/tokenizer/queue-policy/snapshot settings, exact readers/writers and route/runtime oracle, bounded migration/rebuild, one-version cutover, rollback/restore, affected all-four-tab/detail browser and packaged-desktop restart/resume parity, physical budget, pin/reference horizon and durable cleanup receipt satisfy every linked proof and permit each owning disposition to become `actionable` before a slice is created? | US-162 blocked queue; prior-owned US-160 async contract; `PRF-0537`-`PRF-0588`, `PRF-0950`-`PRF-0956`, `PRF-1024`-`PRF-1028`, `PRF-1037`-`PRF-1041`, applicable `PRF-1042`-`PRF-1086`; `DSP-0100`, `DSP-0129`, `DSP-0171`-`DSP-0182`; `TGT-0039`-`TGT-0045`; `API-0001`-`API-0002`, `API-0049`-`API-0051`; `BLK-0940` |
 | `OQ-0945` | Product/review-serving/posting/summary/filter/Human/bulk/projector/publication/query/API/client/browser/desktop/export/transfer/database/performance/reliability/storage/retention/recovery/migration/operator/release owners | Which owner-approved stored-versus-derived identity/payload/selectivity policy, filtered-total/facet/option retirement policy, candidate-order ownership, immutable posting/stats/count/facet/option/partial receipt contracts, persistent-contribution and physical posting-patch retirement contracts and final measured posting access paths may be promoted? Do unused posting/stats kinds or duplicate-looking list/count/facet/option API work require separately owned dispositions? Which deployed/dynamic inventory, immutable current/candidate fixture with unchanged model/provider/thinking/prompt/content/memory/runtime/snapshot settings, exact readers/writers and contract/unit/value/order oracle, bounded migration/rebuild, one-version cutover, rollback/restore, all-four-tab/detail browser and packaged-desktop restart/resume parity, physical plan/resource budget, pin/reference horizon and durable cleanup receipt satisfy every linked proof and permit each owning disposition to become `actionable` before a slice is created? | US-163 blocked queue; ownerless `PRF-0686`; `PRF-0589`-`PRF-0705`, `PRF-0942`-`PRF-0949`, `PRF-1000`-`PRF-1025`, applicable `PRF-1037`-`PRF-1086`; `DSP-0183`-`DSP-0228`; `TGT-0031`-`TGT-0038`; `DBO-0162`-`DBO-0178`; `CMF-1264`-`CMF-1386`, `CMF-1991`-`CMF-1992`; `BLK-0941` |
 | `OQ-0946` | Product/comparison/review-serving/judgment/settings/import/FHIR/database/runtime/API/client/browser/desktop/export/transfer/performance/reliability/security/storage/privacy/retention/recovery/migration/operator/release owners | Which owner-approved unused legacy/temporary decisions, comparison payload hydration target, cold operator/history/source/backup/recovery owners, retained UNIQUE/PK access paths and V4 structural replacements may be promoted? Do any retained migration/runtime temporary, PDF/full-text/runtime-asset/export/transfer/generated-client-file concerns require a separately owned non-keep disposition? Which deployed/dynamic row/value/file/reference inventory, immutable current/candidate same fixture and file corpus with unchanged model/provider/thinking/prompt/content/memory/runtime/platform/snapshot settings, exact readers/writers and semantic/byte oracle, request-wide row/file/member/byte/call caps, bounded migration/backfill, one-version cutover, rollback/clean-host restore, affected all-four-tab/title-detail browser and packaged-desktop restart/resume parity, physical plan/resource budget, permissions/encryption/key custody, pin/reference/reader-lease horizon and durable database/file cleanup receipt satisfy every linked proof and permit each owning disposition to become `actionable` before a slice is created? | US-164 blocked queue; `PRF-0706`-`PRF-0911`, file-target validations `PRF-0972`-`PRF-0973`, `PRF-0983`-`PRF-0984`, `PRF-0988`-`PRF-0989`, applicable `PRF-0992`-`PRF-1086`; `DSP-0229`-`DSP-0441`; `TGT-0061`-`TGT-0062`, `TGT-0072`-`TGT-0073`, `TGT-0077`-`TGT-0078`; `DBO-0182`-`DBO-0322`; `CMF-1419`-`CMF-1982`; `BLK-0942` |
+| `OQ-0947` | Audit/product/data/runtime/API/client/browser/desktop/performance/reliability/security/storage/privacy/retention/recovery/migration/operator/release owners | Who owns completion of the missing `TLI-####` register and terminal MAP/LIN cross-links? Which approved immutable non-live snapshot/fixture, fixed seed/model/provider/thinking/prompt/content/memory/runtime/platform/snapshot configuration, deployed/dynamic inventory, complete physical collector, executable current/candidate target, independent semantic/byte oracle, exact browser and packaged-desktop scenario, migration/backfill/cutover/rollback runbook, request-wide row/file/member/byte/call budgets, export/transfer/snapshot/recovery checks, permissions/encryption/key custody, reader leases/pins, finite retention/cleanup receipts and clean-host restore results will satisfy every row-level proof and all seven failed completion gates? Which owner signs each `classified`, evidence-backed `not-applicable`, `actionable`, and final `PASS` transition after the evidence exists? | US-165 required-output, reconciliation, completion-gate, blocker and final-state tables; `EVD-1735`-`EVD-1741`; `BLK-0943`; all retained row-level blockers/questions |
 
 ## US-001 Quality Gates
 
@@ -46255,6 +46450,57 @@ commands. A command proves only the claim linked through its evidence record.
       in `STORAGE_SHAPE_AUDIT_PLAN.md`; `.ralph-tui/progress.md` receives only
       the workflow-required completion metadata.
       `overallCertification` remains independently `INCOMPLETE`.
+
+## US-165 Quality Gates
+
+- [x] US-159 through US-164 prerequisites, story-start
+      `382e727d8053232de043a3ff948eac3bc9266ccb`, worktree ownership,
+      engine-owned `tasks/prd.json` change, product-source isolation and the
+      documentation-only/no-live-DuckDB boundary are recorded.
+- [x] Exactly eleven required output headings and five coverage-manifest
+      headings exist. Every populated stable row family is contiguous through
+      its recorded maximum. Output 05's zero-row `TLI` register and Output 10's
+      correctly empty `SLC` admission ledger are distinguished explicitly.
+- [x] All primary and subset manifest equations balance with zero
+      nonterminal rows: API 87 = 0 + 5 + 82; UI 76 = 0 + 6 + 70; background
+      123 = 0 + 0 + 123; DBO 328 = 0 + 0 + 328; CMF 1,992 = 0 + 0 + 1,992;
+      indexes 128 blocked; temporary-lifecycle shapes 32 blocked; payload/file
+      shapes 40 blocked.
+- [x] No nonterminal or missing output state is silent. MAP is 31 lifecycle +
+      one writer + one API + seven blocked + five out of scope; LIN is 193
+      lifecycle + 13 writer + four API; TLI is empty; FAN is 91 blocked + one
+      not applicable with zero physical values.
+- [x] Proof, actionability, target and slice accounting remains
+      `1,086 = 8 satisfied + 35 pending + 1,043 blocked + 0 not applicable`,
+      `441 = 0 unresolved + 441 blocked + 0 actionable`, 80 blocked target
+      validations, zero `SLC` rows and 68 separate blocked contracts.
+- [x] Every one of the twelve audit completion quality gates has an explicit
+      result and evidence basis. Five reporting gates pass and seven fail;
+      large-table physical baselines, exact current/candidate parity results,
+      TLI, terminal lineage/classification, deletion proof and deployed
+      browser/desktop/runtime/lifecycle evidence remain blockers.
+- [x] `overallCertification` is explicitly `INCOMPLETE`; no implementation
+      slice is certified actionable. US-165 changes no manifest
+      `auditStatus`, `proofCheckState`, `recommendationActionability`, target
+      validation or measurement state and converts no missing evidence into a
+      pass.
+- [x] Commands, source-only tools, the approved immutable-snapshot evidence
+      boundary and skipped checks are listed. `rtk bun run lint` preserves six
+      unrelated pre-existing source errors; no typecheck/check/test:typecheck
+      script exists; tests/builds/runtime/database/platform/physical and
+      documented later implementation gates remain unexecuted and are not
+      reported as passed.
+- [x] `EVD-1735`-`EVD-1741`, `CMD-1346`-`CMD-1350`, `BLK-0943` and
+      `OQ-0947` are uniquely defined and cross-referenced.
+- [x] Final audit-only cardinality/state/equation/gate/stable-ID/table,
+      `git diff --check`, allowed-change, worktree/tracker,
+      product-source-isolation, whitespace/final-newline and Ralph-progress
+      validators pass through `CMD-1350`.
+- [x] No live, configured, current, project, snapshot or fixture DuckDB is
+      opened. No schema, code, route, reader, writer, projector, retention,
+      runtime behavior, benchmark-critical setting or data changes. Durable
+      audit results stay in this file; `.ralph-tui/progress.md` receives only
+      workflow-required completion metadata.
 
 ## Inherited Audit Material (Provisional)
 
