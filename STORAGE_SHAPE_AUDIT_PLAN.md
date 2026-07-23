@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-123 add 1,057 finite proof rows without changing a disposition: the 1,073-row proof register is eight `satisfied`, 478 `pending`, 587 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked`, and zero are actionable. US-092 through US-098 define 80 concrete but unvalidated `TGT-0001`-`TGT-0080` shapes. US-099 through US-122 retain their prior predicates and US-123 adds three blocked delta-cleanup, dirty-work/acknowledgement-cleanup and contribution/rebuild-partial-cleanup predicates; none adds a target. No approved common disposable fixture, benchmark-critical configuration, executable candidate, all-consumer watermark registry, independent replay/repair/exact-read/restart oracle or complete row/WAL/temp/RSS/time/watermark/generation collector exists, so every US-123 workload value remains unavailable rather than zero. Source inspection finds no current delta delete path even though Human and LLM projectors still read review deltas after intake stamps `reconciled_at`; the callable acknowledgement compactor has no production caller, accepts a supplied threshold, creates a new threshold-keyed row and deletes point receipts without proving snapshot visibility; completed dirty rows still seed missing-snapshot bootstrap watermarks; and summary finalization deletes reduced source summary partials while retaining accumulator and contribution rows for retry, with no terminal cleanup owner and no automatic readmission after an all-chunks-complete finalization failure. Those findings reject certification but are not physical measurements. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, exact platform proof, applied access paths, bounded scan/write/byte/file/call work, snapshot/publication atomicity, failure/retry/recovery, migration/cutover, retention, cleanup and restore evidence remain incomplete. No prior proof or manifest state advanced and no planned validation is labeled passed. No common fixture or live/current/project database ran. Sixteen unique isolated current-path files produced 327 passes; they corroborate current contracts but do not execute the candidate or physical collector. Test-owned disposable files self-cleaned, the exact run-created empty temp directory was removed and no product process started. `overallCertification` remains independently `INCOMPLETE`. |
+| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-124 add 1,060 finite proof rows without changing a disposition: the 1,076-row proof register is eight `satisfied`, 478 `pending`, 590 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked`, and zero are actionable. US-092 through US-098 define 80 concrete but unvalidated `TGT-0001`-`TGT-0080` shapes. US-099 through US-123 retain their prior predicates and US-124 adds three blocked orphan-generation, generated/partial-file and exact retention-boundary predicates; none adds a target. No approved immutable disposable fixture, fixed cleanup identities, executable current-versus-candidate bundle, exact owner/reference/reader registry, independent oracle, physical collector, hard directory/history budgets or owner signoff exists, so every US-124 workload value remains unavailable rather than zero. Source inspection finds that comparison generation deletion protects only the active generation and its callable old-generation cleaners have no production caller; review retention protects active/LKG/selected IDs and pins only while `expires_at > now`; generated transfer artifacts publish sequential final paths; transfer cleanup recursively removes whole roots and enumerates every staging entry while reporting roots rather than files/bytes; ready downloads have no cleanup lease; terminal session pruning is bounded but history is not; database backup and startup-recovery files lack an immutable bounded catalog and restore receipt. Those findings reject certification but are not physical measurements. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, exact platform proof, applied access paths, bounded scan/write/byte/file/call work, publication atomicity, failure/retry/recovery, migration/cutover, retention, cleanup and restore evidence remain incomplete. No prior proof or manifest state advanced and no planned validation is labeled passed. No common fixture or live/current/project database ran. Ten isolated current-path files produced 117 passes; one backup integration file failed twice because its test server could not bind/start, first at Bun's five-second timeout and then at its ten-second health-check timeout. Both exact child PIDs exited, the two bounded test roots were removed, and no current-run process or residue remains. Tests corroborate current source contracts only; they do not execute the candidate or physical collector. `overallCertification` remains independently `INCOMPLETE`. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-123 / 2026-07-23` | Freezes exactly three current-versus-candidate intermediate-state cleanup validations: review/import delta cleanup, dirty-work or acknowledgement cleanup, and contribution or rebuild-partial cleanup. Each side must prove explicit consumer-watermark eligibility, replay, repair, exact reads, interruption/restart safety and bounded cleanup while allocated, reconciled, dirty-admitted, output-sealed, snapshot-visible, active/LKG and retained repair generations remain distinct. Per-table retained/removed rows, total/phase wall time, storage-engine WAL, sibling DuckDB temp spill, process-tree RSS, every watermark position, retained generations, fixed settings and `proofCheckState` remain separate. `PRF-1071`-`PRF-1073` are blocked because all 72 gate names are unset, all 14 candidate markers have zero product-source files and no approved fixture, executable `TGT-0046`/`TGT-0048`/`TGT-0050`-`TGT-0053`/`TGT-0058` bundle, consumer registry, oracle, collector, budgets or owner signoff exists. Source evidence records current predicates and gaps without substituting for execution: `reconciled_at` is only intake state; Human/LLM consumers read delta intervals later; ACK compaction is threshold-keyed and unowned; completed dirty rows remain bootstrap inputs; source-summary reduction retains accumulator/contribution repair state; finalization/visibility and cleanup are separate; and generic retention omits all three intermediate families. Sixteen isolated current-path files produced 327 passes and no failed process. No default, current project or live database was substituted; test-owned files self-cleaned and the exact empty temp residue was removed. Existing targets, actionability, schema, code, runtime, data and certification states remain unchanged. |
+| Latest normalized story | `US-124 / 2026-07-23` | Freezes exactly three current-versus-candidate lifecycle validations: orphan-generation cleanup, generated or partial-file cleanup, and exact retention-boundary cleanup. Ownership, active head/LKG/candidate/retired/failed/orphan state, pins, jobs, exports, transfers, ordinary readers/downloads, artifact manifests, recovery/backup references, terminal history and cleanup receipts remain separate. Each of six side rows retains exact removed/retained row and file identities, file count/bytes, total/phase wall time, storage-engine WAL where applicable, ordinary-file publication domain, sibling temp spill, process-tree RSS, generations/cutoffs, fixed settings and `proofCheckState`. `PRF-1074`-`PRF-1076` are blocked because all 85 gate names are unset, all 18 candidate markers have zero product-source files and no approved fixture, executable `TGT-0048`/`TGT-0049`/`TGT-0058`/`TGT-0061`/`TGT-0063`/`TGT-0074`-`TGT-0076` bundle, owner/reference oracle, collector, budgets or signoff exists. Current source and isolated tests corroborate predicates and gaps without substituting for execution: active-only comparison protection, strict-future pin protection, inclusive transfer expiry/pruning, sequential generated-file publication, unleased ready downloads, recursive workspace deletion, unbounded staging and startup-recovery directory enumeration, indefinite transfer history, and uncatalogued backup/recovery generations. Ten files produced 117 passes; `scripts/dbBackup.test.ts` retained two failed attempts caused by test-server startup/health failure. No benchmark or candidate process ran; both test child PIDs exited and exact test residue was removed. Existing targets, actionability, schema, code, runtime, project data and certification states remain unchanged. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
@@ -23116,6 +23116,228 @@ keep dispositions retain `recommendationActionability: unresolved`; all 115
 non-keep dispositions remain `blocked`; zero recommendations are actionable
 and `overallCertification` remains `INCOMPLETE`.
 
+## US-124 Orphan, Generated-File And Retention-Boundary Cleanup Validation
+
+### US-124 Scope, Prerequisite And Execution Gate
+
+US-123 is complete at HEAD
+`e19450b474f4929d5586f9b8c5aaaa89ea850092`. US-124 owns exactly three
+lifecycle cleanup grains:
+
+1. current and candidate orphan-generation cleanup, including active, LKG,
+   pinned, candidate, failed, retired and unreferenced generations;
+2. current and candidate generated or partial-file cleanup, including upload,
+   build, package, manifest, completion, progress, promoted, recovery, backup
+   and client-delivery boundaries; and
+3. exact retention-boundary cleanup at one tick before, exactly at and one tick
+   after every applicable pin, export, transfer, terminal-history, generated-
+   file and recovery cutoff.
+
+Manifest status, active-head selection, persisted LKG, comparison active
+generation, candidate attempt, pin/ref count/expiry, job/export/transfer
+ownership, ordinary reader/download lease, artifact publication, file
+existence/checksum, recovery/backup reference, terminal history, cleanup
+eligibility, physical deletion and durable cleanup receipt remain separate
+contracts. A successful promotion, ready package, terminal session, expired
+timestamp, removed root or returned row count cannot certify any other
+contract.
+
+Scoped `src`, `scripts`, `package.json` and `bun.lock` product source is
+unchanged from the US-098 target-design commit
+`4ca6a3de229a949ef2662affd1d83127b708df51` through HEAD. The engine-owned
+`tasks/prd.json` modification pre-existed and remains untouched. Exact
+product-source searches found zero files for 18 candidate markers:
+`review_component_revision_v5`, `review_serving_snapshot_v5`,
+`review_serving_snapshot_head_v5`, `review_snapshot_lease_v5`,
+`retention_policy_v5`, `retention_step_receipt_v5`,
+`retention_orphan_journal_v5`, `local_file_object_v1`,
+`local_file_reference_v1`, `comparison_serving_generation_v5`,
+`database_backup_generation_v1`, `startup_recovery_capsule_v1`,
+`project_transfer_package_v1`, `project_transfer_import_workspace_v1`,
+`project_transfer_export_workspace_v1`,
+`project_transfer_delivery_lease_v1`, `generated_delivery_receipt_v1` and
+`retention_cycle_v5`. Linked `TGT-0048`, `TGT-0049`, `TGT-0058`,
+`TGT-0061`, `TGT-0063` and `TGT-0074`-`TGT-0076` designs remain
+unimplemented and unapplied.
+
+The story permits isolated disposable-fixture DDL, DML and generated files
+only after owners approve one immutable fixture, exact current/candidate
+owners and references, fixed cutoff values, isolated bounded roots, both
+executable sides, independent semantic/file/restore oracles, a physical
+collector, hard budgets and cleanup authority. A presence-only Zsh check
+printed no values and found `set=0`, `unset=85`, `total=85` for:
+`DUCKDB_MEMORY_LIMIT`, `FORSKA_REVIEW_AUDIT_FIXTURE_ID`,
+`FIXTURE_SCHEMA_HASH`, `DATABASE_PATH`, `REPORT_ROOT`, `TEMP_ROOT`,
+`OUTPUT_ROOT`, `RECOVERY_ROOT`, `PROJECT_ID`, `COMPARISON_PROJECT_ID`,
+`REVIEW_CONFIG_HASH`, `CURRENT_ACTIVE_SNAPSHOT_ID`,
+`CURRENT_LKG_SNAPSHOT_ID`, `CURRENT_PINNED_SNAPSHOT_ID`,
+`CURRENT_CANDIDATE_SNAPSHOT_ID`, `CURRENT_ORPHAN_SNAPSHOT_ID`,
+`CURRENT_COMPARISON_ACTIVE_GENERATION`,
+`CURRENT_COMPARISON_ORPHAN_GENERATION`,
+`CURRENT_GENERATION_EXPECTED_STATE_HASH`, `CANDIDATE_SNAPSHOT_HEAD_ID`,
+`CANDIDATE_ORPHAN_DECISION_ID`, `CANDIDATE_RETENTION_CYCLE_ID`,
+`TRANSFER_IMPORT_SESSION_ID`, `TRANSFER_EXPORT_SESSION_ID`,
+`TRANSFER_OWNER_GENERATION`, `TRANSFER_DOWNLOAD_ID`,
+`TRANSFER_DOWNLOAD_LEASE_ID`, `CURRENT_GENERATED_FILE_MANIFEST_HASH`,
+`CURRENT_PARTIAL_FILE_MANIFEST_HASH`, `CURRENT_FILE_REFERENCE_HASH`,
+`CURRENT_FILE_OWNER_HASH`, `CURRENT_TRANSFER_PACKAGE_HASH`,
+`CURRENT_TRANSFER_PROMOTION_HASH`, `CURRENT_RECOVERY_FILE_HASH`,
+`CURRENT_BACKUP_FILE_HASH`,
+`CURRENT_GENERATED_CLEANUP_EXPECTED_STATE_HASH`,
+`ORPHAN_CLEANUP_EXPECTED_STATE_HASH`,
+`RETENTION_BOUNDARY_EXPECTED_STATE_HASH`,
+`RETENTION_BOUNDARY_MINUS_ONE`, `RETENTION_BOUNDARY_EXACT`,
+`RETENTION_BOUNDARY_PLUS_ONE`, `PIN_EXPIRY_BOUNDARY`,
+`EXPORT_EXPIRY_BOUNDARY`, `TRANSFER_EXPIRY_BOUNDARY`,
+`TERMINAL_HISTORY_CUTOFF`, `FILE_RETENTION_CUTOFF`,
+`UNCHANGED_SETTINGS_HASH`, `SCALE`, `SEED`, `PROVIDER_ID`, `MODEL_ID`,
+`THINKING_LEVEL`, `PROMPT_SET`, `HUMAN_MODE`, `CONTENT_FLAGS_HASH`,
+`DATE_RANGE_HASH`, `SELECTED_ROUTE_SET_HASH`, `FROZEN_CLOCK`,
+`PROCESS_MEMORY_LIMIT`, `RUNTIME_PROFILE`, `RUNTIME_ROLE`,
+`RUNTIME_TOPOLOGY`, `RUNTIME_VERSION`, `SAMPLE_COUNT`, `CACHE_ORDER`,
+`SIDE_ORDER`, `RETRY_POLICY`, `CURRENT_BUNDLE_HASH`,
+`CANDIDATE_BUNDLE_HASH`, `ORACLE_HASH`, `COLLECTOR_HASH`,
+`WAL_PROFILE_HASH`, `RECOVERY_MATRIX`, `RETENTION_POLICY`,
+`REQUEST_CAPS`, `CLEANUP_CAPS`, `DIRECTORY_SCAN_CAPS`,
+`FILE_COUNT_CAP`, `FILE_BYTE_CAP`, `HISTORY_CAP`, `EXPORT_PROFILE`,
+`TRANSFER_PROFILE`, `BROWSER_PROFILE`, `DESKTOP_PROFILE` and
+`OWNER_SIGNOFF_HASH`.
+
+Execution therefore stopped before benchmark DDL/DML, generation/file/history
+deletion, candidate creation, expiry advancement, interruption, restart or
+restore. No live, current or project DuckDB was opened. No source default,
+unit fixture, current project value, inferred owner, caller-chosen cutoff or
+weaker critical setting was adopted. Every same-fixture semantic and physical
+measurement below is `unavailable`, never zero, passed or not-applicable.
+Three finite proof rows are `blocked`; no target, disposition, recommendation
+actionability or certification state advances.
+
+### US-124 Evidence Ledger
+
+| Evidence ID | Class | Exact locator | Finding | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-1400` | `control/prerequisite/gate` | User US-124 PRD and codebase patterns; `.ralph-tui/progress.md` US-007/US-008/US-098/US-122/US-123; reporting, DuckDB and API-server skills; HEAD/worktree/source-diff, presence-only and marker checks | US-123 is complete and the audit mutation boundary is unchanged. All 85 values are unset, all 18 candidate markers have zero product-source files and the pre-existing engine-owned `tasks/prd.json` edit is preserved untouched. | `CMD-1061`-`CMD-1062` |
+| `EVD-1401` | `production/comparison-orphan-generation` | `comparisonProjectServingGenerationService.ts:34-40,88-159,197-316`; `comparisonProjectServingRebuildService.ts:800-879`; exact non-test caller closure | Explicit cleanup serially deletes one generation across five marts and protects only equality with the mutable active generation. Old-generation cleanup deletes every generation below active without a row/page cap. Neither explicit nor old cleanup has a non-test caller; successful promotion returns zero cleanup, failed rebuild records status while preserving staged rows, and the next build clears only `active+1`. | `CMD-1063` |
+| `EVD-1402` | `production/comparison-owner-reader-export` | `ComparisonProjectsRoutes.ts:3334-3384,3496-3538,4682-4700`; comparison generation tests and rebuild tests | Conflict JSON and streamed CSV bind a previously read `activeGeneration` but acquire no generation/reference lease. Archive is the only production caller of full cleanup and deletes all five marts plus the control row in one route transaction. No pin, export, transfer, ordinary-reader, LKG, recovery or restore reference participates in generation cleanup. | `CMD-1063` |
+| `EVD-1403` | `production/review-pin-retention-boundary` | `reviewServingRetentionService.ts:31-54,70-72,127-246`; `reviewServingSnapshotPinRepository.ts:137-356`; `reviewBulkOperationService.ts:165-191`; projector worker cleanup at `8330-8365`; exact caller/tests | Each due target deletes at most 512 rows from one of 11 rotating data/base tables and target discovery returns at most 16 project/config scopes. Protection covers active/LKG/selected IDs and pins only while unreleased, positive and `expires_at > now`; expiry uses `expires_at <= now`. Candidate rows/control/history are omitted. Production acquires bulk pins but has no release or expiry caller, and cleanup returns a scope rather than deleted/protected identities or a complete-cycle receipt. | `CMD-1064` |
+| `EVD-1404` | `production/generated-partial-publication` | `projectTransferRoutes.ts:912-975,1221-1343`; `projectTransferExportPackage.ts:156-170,611-665,745-778,911-935,1150-1225`; route/export tests | Upload uses owner-specific partial plus rename and in-process failure cleanup. Export package, manifest, completion and progress write sequentially to final paths before ready state; build-root release and failed-worker root removal are recursive process-local cleanup. Ready download opens `Bun.file` after status/expiry checks without a persisted delivery lease, so ready state, bytes/checksum, active streaming and cleanup safety remain separate. | `CMD-1065` |
+| `EVD-1405` | `production/transfer-recovery-retention` | `projectTransferSessionRecovery.ts:112-142,162-260,943-1063,1187-1403`; migrations `0084`/`0085`; session-recovery tests | Recovery scans at most 50 sessions by default and 500 maximum. Import and ready-export expiry use `<= now`; successful root deletion reports one temp artifact, not files/bytes; promoted files require a readable session-owned manifest and failures leave cleanup pending. Terminal sessions prune in a bounded batch after `expires_at <= now` and `terminal_cleanup_at <= now-24h`, but independent transfer history has no cleanup path or finite horizon. | `CMD-1066` |
+| `EVD-1406` | `production/path-directory-reference-bound` | `projectTransferPaths.ts:51-78,98-279`; `projectTransferStaging.ts:297-328`; transfer recovery/download paths and path tests | Writable paths are lexically rooted with 2,048-character and 255-character segment limits, but live staging cleanup performs `readdir` over the whole revision root and recursively deletes every non-current revision with no entry/file/byte cap. Whole session roots are recursively removed without an exact artifact index. Session batching therefore does not bound directory work, and lexical containment does not prove file ownership, reference settlement or concurrent-download safety. | `CMD-1065`-`CMD-1066` |
+| `EVD-1407` | `production/database-backup-recovery-files` | `scripts/dbBackup.ts:7-81`; `duckdbService.ts:3191-3266,3289-3318,4355-4379`; backup/reload tests | Backup sequentially copies a checkpoint snapshot and optional WAL to final names, then deletes the transient snapshot; it has no external generation index, finite retention, reader/reference lease or restore receipt. Startup repair creates preserved DB/WAL/manifest members, enumerates the entire recovery directory and deletes every recognized generation except the newly retained path part. Pattern match, one retained group and invocation success do not prove bounded access, reference safety or recoverability. | `CMD-1067` |
+| `EVD-1408` | `source/test/exact-boundary-gap` | Pin/retention, transfer route/recovery and terminal-prune predicates; exact related test-name and timestamp search | Source establishes strict-future pin protection and inclusive transfer/session cleanup predicates. Current tests exercise expired versus future values and old versus fresh terminal cleanup, but no common `cutoff-1`, exact cutoff and `cutoff+1` matrix covers row/file retention, concurrent owners/readers, restart and restore across all three scenarios. Timestamp predicate inspection is not a physical exact-boundary result. | `CMD-1064`, `CMD-1066`, `CMD-1068` |
+| `EVD-1409` | `candidate/measurement-contract` | `TGT-0048`, `TGT-0049`, `TGT-0058`, `TGT-0061`, `TGT-0063`, `TGT-0074`-`TGT-0076`; `PRF-0969`, `PRF-0972`, `PRF-0974`, `PRF-0985`-`PRF-0987`; marker search and frozen cases | Candidate designs require immutable heads, owner-generation reader leases, complete reference/orphan journals, finite file catalogs and cleanup steps, exact download leases, backup/recovery generations and restore receipts. All remain design-only. No approved executable candidate, fixture, oracle, collector, budgets or owner exists, so every candidate value remains unavailable/blocked. | `CMD-1062`, `CMD-1068` |
+| `EVD-1410` | `test/control/proof` | Eleven unique isolated current-path test files in 12 Bun processes; bounded residue/source/lint/typecheck/control checks; `PRF-1074`-`PRF-1076`; blocker/owner/quality ledgers | Ten files produced 117 passes and 707 expectations. `scripts/dbBackup.test.ts` failed twice: first at Bun's 5-second timeout and then at its 10-second health-check timeout because test servers failed to bind/start on ports 38507 and 38728; both child PIDs were no longer alive. Tests are source-contract corroboration only. Two exact test roots contained 12 and four bounded entries, were explicitly removed, and no current-run residue remains. | `CMD-1069`-`CMD-1072` |
+
+### US-124 Conditional Execution Gate
+
+| Gate | Required before physical execution | Observed state | Decision |
+| --- | --- | --- | --- |
+| Common fixture and destructive authority | Owner-approved immutable disposable database and bounded file roots with exact active/LKG/candidate/orphan/pin/job/export/transfer/recovery/backup identities, expected states and explicit DDL/DML/file-cleanup authority | No fixture, roots, owner/reference set, expected hashes, cutoffs or authority receipt; live/current/project data prohibited | `blocked`; no benchmark mutation |
+| Frozen critical settings | All 85 presence-checked values fixed and hashed, including model/provider/thinking/content, clock, memory/runtime, cutoffs, directory/file/history caps, side/cache order and platform profiles | `set=0`, `unset=85`; no value exposed or defaulted | `blocked`; no weaker/default configuration |
+| Executable current and candidate sides | Checked-in current path plus one coherent applied `TGT-0048`/`TGT-0049`/`TGT-0058`/`TGT-0061`/`TGT-0063`/`TGT-0074`-`TGT-0076` bundle with hashes, cutover, rollback and cleanup | Current contracts are incomplete; all 18 candidate markers have zero product files | `blocked`; no invented candidate or current-only benchmark |
+| Independent semantic/file/restore oracle | Signed row/file manifests, exact counts/bytes/checksums, reader/reference sets, cutoff decisions, route/export/transfer results and clean-host restore vectors | No oracle, catalog, owner-generation registry, browser/desktop capture or restore profile | `blocked`; source/tests are not physical results |
+| Complete collector and hard budgets | Per-phase rows/files/bytes/time/WAL/temp/RSS/generation/cutoff samples plus enforced directory, history, attempt and cleanup caps; reject missing values, lost pins/recovery files, spill, OOM or fatal restart | No collector or approved budgets; current root/revision/recovery scans are not request-wide bounded | `blocked`; every physical value stays `unavailable` |
+
+### US-124 Frozen Three-Scenario Comparison Contract
+
+| Proof | Current-side lifecycle grain | Required candidate contract | Distinct identities |
+| --- | --- | --- | --- |
+| `PRF-1074` orphan-generation cleanup | Comparison five-mart active/staged/failed/old generations; review active/LKG/pinned/candidate/retired/failed snapshot data and control rows; archive/export/read races | `TGT-0048` immutable snapshot/head, `TGT-0049` owner-generation leases and `TGT-0058` complete policy/reference/orphan decisions with bounded receipts | Project/config head epoch; comparison generation; snapshot/component/selected generation; pin/job/export/transfer/reader owner generation; orphan decision/cycle/step |
+| `PRF-1075` generated/partial-file cleanup | Upload partial/rename; export build/package/manifest/completion/progress; promoted assets; transfer workspaces/downloads; backup and startup-recovery files; client-owned copy | `TGT-0058`, `TGT-0061`, `TGT-0063`, `TGT-0074`-`TGT-0076` exact artifact catalogs, publication receipts, delivery leases, finite cleanup and restore | Session/owner/attempt/revision; file object/reference/hash; package/delivery/download; backup/recovery generation; cleanup step/receipt |
+| `PRF-1076` exact retention boundary | `expires_at > now`, `expires_at <= now`, stale-heartbeat cutoffs, terminal `now-24h`, file expiry and recovery retention at `-1`, exact and `+1` tick | Versioned `TGT-0049`/`TGT-0058`/`TGT-0061`/`TGT-0063`/`TGT-0075`/`TGT-0076` clock policy, owner leases, finite history/catalog and restore validation | Frozen clock/time zone/precision; cutoff kind/value; owner/reference state; row/file generation; before/equal/after decision and receipt |
+
+### US-124 Current Cleanup And Protection Inventory
+
+| Family | Admission / owner state | Protection predicate | Cleanup / retention behavior | Unsettled contract |
+| --- | --- | --- | --- | --- |
+| Comparison generations | Mutable row stores active and staged/serving status; maintenance rebuild owns claims | Explicit delete excludes only the exact active generation | Five serial unpaged deletes; old/explicit cleaners have no production caller; archive full-deletes marts and control | No pin, export/reader lease, LKG, orphan journal, bounded step, schedule or restore receipt |
+| Review snapshot data | Manifest active/retired/failed targets; bulk admission can acquire a pin | Active/LKG/selected ID or unreleased positive pin with `expires_at > now` | One of 11 tables, 512 rows/target, up to 16 targets per discovery; writes cursor only | Candidate/control/history omitted; affected/protected identities, cycle completion, pin settlement and row cleanup absent |
+| Upload and generated export files | Upload owner token; export session owner/heartbeat and ready state | Session status/expiry; no ordinary download lease | Upload partial rename; other artifacts sequential final writes; build/failure roots recursively removed | Cross-file atomicity, exact file catalog, crash residue, checksum/reference settlement and bounded deletion absent |
+| Transfer session/history/assets | Session state/owner/heartbeat; promoted manifest | Session-owned promoted path; ready expires at `<= now` | At most 500 session rows; whole root recursive delete; terminal rows prune after 24h; history retained indefinitely | Root count is not file count/bytes; staging `readdir` and recursive work unbounded; live download and history cap absent |
+| Database backup | Snapshot copy and optional source WAL | No installed reference/hold catalog | Sequential final copies; no automatic prune | Pair atomicity, immutable index, finite generations, encryption, reader lease and executable restore absent |
+| Startup recovery files | Newly created path-part is retained | Filename regex plus equality with current path-part | Full directory enumeration; all other recognized groups removed | Unknown/reference-held groups, entry/byte cap, multiple validated generations and restore-before-delete absent |
+
+### US-124 Required Cases, Measurements And Rejection Rules
+
+| Proof | Finite cases that both sides must execute | Required pass evidence |
+| --- | --- | --- |
+| `PRF-1074` | Zero/one/multiple active rows; active, LKG, pinned, candidate, failed, retired, old and unreachable generations; missing/dangling/cross-config references; export and ordinary-reader overlap; archive, promotion, cleaner and retry races; interruption before/after each table and receipt; restart, orphan repair and clean-host restore | Exact retained/removed identities and counts for every data/control/history row; complete owner/reference scan; active/LKG/pin/export/transfer/read equality; bounded cursor/step/cycle; exact routes/exports; time/WAL/temp/RSS/generations; no lost protected or recovery state |
+| `PRF-1075` | Empty/partial/complete upload; failure before/after rename; every sequential export member interruption; malformed/missing/extra manifest member; promoted asset before/after manifest; stale/ready/expired transfer; download during expiry; current/stale revisions; referenced/unreferenced backup and recovery generations; cleanup interruption/restart/restore | Exact file paths, owners, hashes, file counts and encoded bytes removed/retained; row/file receipt equality; bounded catalog/directory access; package/download/transfer parity; backup/recovery validation; time/WAL-domain/temp/RSS/generations; zero unowned residue |
+| `PRF-1076` | One precision tick before, exactly at and one tick after pin expiry, transfer/export expiry, stale heartbeat, terminal-session cutoff, file horizon and backup/recovery retirement; active owner/read/download at every point; clock/time-zone/restart skew; repeated cleanup and history-cap boundaries | One approved clock/precision policy; exact eligible/protected decisions and immutable receipts; row/file/count/byte equality; live references retained; finite terminal/control/history state; restart/restore parity and every physical metric |
+
+Measurements remain separate:
+
+- Row evidence records each table, natural identity, owner generation, status,
+  cutoff, before/after count, removed identities and retained identities.
+- File evidence records each rooted relative path, object/reference/manifest
+  identity, owner, generation, checksum, encoded bytes and removed/retained
+  decision. Root deletion count is not a file count.
+- Time records total and named phases plus retained raw per-case samples;
+  percentiles require an owner-approved sample count and are never inferred
+  from unit-test duration.
+- Storage-engine WAL, ordinary-file publication/rename, filesystem behavior,
+  sibling DuckDB temp baseline/peak/end/delta/events, process-tree RSS
+  baseline/peak/end, calls/attempts and cleanup cursors remain independent.
+- Generations record comparison active/staged/failed/removed, review
+  candidate/active/LKG/pinned/retired/failed, transfer owner/revision/package/
+  download, backup/recovery and cleanup policy/cycle/step identities.
+
+Reject a side immediately for a missing or changed critical setting, missing
+owner, missing measurement, inferred/default cutoff, unknown reference,
+unbounded directory or history scan, unreceipted recursive delete, current-
+only substitution, retry/fallback/downgrade, mixed generation, partial
+publication, deleted active/LKG/pinned/export/transfer/reader/recovery file,
+checksum drift, indefinite history, spill, OOM, fatal restart, residue or
+failed restore. Preserve the failure; never weaken settings or relabel an
+unavailable value zero or passed.
+
+### US-124 Three-Scenario Physical And Semantic Result Matrix
+
+| Scenario / side | Ownership, pins, exports, transfers, recovery | Rows removed / retained | Files removed / retained; count / bytes | Wall time | WAL / temp spill / RSS | Generations and exact cutoffs | Fixed settings | `proofCheckState` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `PRF-1074` current orphan-generation cleanup | `unavailable`; source tests do not supply a complete reference scan | every comparison/review data, control and history identity `unavailable`, not zero | every referenced generated/export/transfer/recovery file `unavailable`; counts/bytes `unavailable` | total/phase/samples `unavailable` | storage WAL, sibling temp and process-tree RSS all `unavailable` | active/LKG/pinned/candidate/failed/retired/orphan generations and decisions `unavailable` | unchanged and unchosen | `blocked` |
+| `PRF-1074` candidate orphan-generation cleanup | `unavailable`; executable head/lease/orphan candidate absent | all `unavailable`, not zero | all `unavailable`, not zero | all `unavailable` | all `unavailable` | head/lease/policy/cycle/step generations `unavailable` | no executable bundle | `blocked` |
+| `PRF-1075` current generated/partial-file cleanup | `unavailable`; upload/recovery tests are not a common physical manifest | every session/history/reference row `unavailable`, not zero | every partial/package/manifest/progress/completion/promoted/backup/recovery/client file identity, count and bytes `unavailable` | total/phase/samples `unavailable` | session-row WAL, ordinary-file publication domain, sibling temp and RSS `unavailable` | session/owner/revision/package/download/backup/recovery generations `unavailable` | unchanged and unchosen | `blocked` |
+| `PRF-1075` candidate generated/partial-file cleanup | `unavailable`; executable file catalog/delivery/recovery candidate absent | all `unavailable`, not zero | all `unavailable`, not zero | all `unavailable` | all `unavailable` | object/reference/package/delivery/backup/recovery/cleanup generations `unavailable` | no executable bundle | `blocked` |
+| `PRF-1076` current exact retention boundary | `unavailable`; predicate inspection is not an owner/reference result | every `-1`/exact/`+1` row decision `unavailable`, not zero | every `-1`/exact/`+1` file decision, count and bytes `unavailable` | total/phase/samples `unavailable` | storage WAL, ordinary-file domain, sibling temp and RSS `unavailable` | every cutoff, precision, time zone, generation and receipt `unavailable` | unchanged and unchosen | `blocked` |
+| `PRF-1076` candidate exact retention boundary | `unavailable`; executable versioned clock/lease/retention candidate absent | all `unavailable`, not zero | all `unavailable`, not zero | all `unavailable` | all `unavailable` | policy/lease/reference/cycle/step/restore generations `unavailable` | no executable bundle | `blocked` |
+
+### US-124 Validation Proof Rows
+
+| Proof ID | Predicate | `proofCheckState` | Evidence | Missing evidence / blocker | Owner question |
+| --- | --- | --- | --- | --- | --- |
+| `PRF-1074` | Orphan-generation cleanup passes only when current and one approved executable immutable-head/lease/retention candidate run every active/LKG/pinned/candidate/failed/retired/orphan/reference/race/interruption/restart/restore case on one fixed fixture; a complete owner/reference scan and bounded receipted step must retain all live readers, exports, transfers and recovery generations while exact rows/routes/files and every physical metric match without fallback, spill, OOM, fatal restart, protected-state loss or residue. | `blocked` | `EVD-0138`, `EVD-0411`, `EVD-0761`-`EVD-0762`, `EVD-0769`, `EVD-1147`-`EVD-1159`, `EVD-1375`, `EVD-1382`-`EVD-1383`, `EVD-1400`-`EVD-1410`; `PRF-0959`-`PRF-0960`, `PRF-0969` | Fixture/settings, executable head/lease/retention candidate, complete owner/reference registry, bounded current comparison cleanup, reader/export/pin settlement, oracle, collector/budgets and restart/restore unavailable; `BLK-0857`-`BLK-0860`, `BLK-0865`-`BLK-0866`. | `OQ-0861`-`OQ-0864`, `OQ-0869`-`OQ-0870` |
+| `PRF-1075` | Generated/partial-file cleanup passes only when both sides run every upload/build/publication/manifest/promotion/session/download/backup/recovery/client boundary with exact owner-generation artifact and reference catalogs; cleanup must be bounded by files and bytes, lease-safe, interruption-resumable and restore-validated, with exact rows/files/checksums and every physical metric matching without recursive unbounded work, partial publication, retry, spill, OOM, fatal restart, recovery loss or residue. | `blocked` | `EVD-0623`, `EVD-0626`-`EVD-0627`, `EVD-0764`, `EVD-0769`, `EVD-1075`, `EVD-1079`, `EVD-1081`, `EVD-1162`, `EVD-1166`-`EVD-1168`, `EVD-1375`, `EVD-1400`-`EVD-1410`; `PRF-0972`, `PRF-0974`, `PRF-0985`-`PRF-0987` | Fixture/settings, executable file/delivery/backup/recovery candidate, exact catalogs and owner/reference leases, atomic publication, bounded directory/file/byte cleanup, oracle, collector/budgets and restore unavailable; `BLK-0857`-`BLK-0858`, `BLK-0861`-`BLK-0862`, `BLK-0864`-`BLK-0866`. | `OQ-0861`-`OQ-0862`, `OQ-0865`-`OQ-0866`, `OQ-0868`-`OQ-0870` |
+| `PRF-1076` | Exact retention-boundary cleanup passes only when both sides execute one frozen-precision `cutoff-1`/exact/`cutoff+1` matrix for every pin, owner, export, transfer, history, file, backup and recovery horizon; immutable decisions must protect live references and retain finite terminal evidence, while repeated cleanup, interruption, restart and clean-host restore reproduce exact rows/files/counts/bytes and every physical metric without fallback, spill, OOM, fatal restart or ambiguous equality. | `blocked` | `EVD-0764`, `EVD-0769`, `EVD-1081`, `EVD-1149`, `EVD-1155`-`EVD-1159`, `EVD-1162`, `EVD-1166`-`EVD-1167`, `EVD-1382`-`EVD-1383`, `EVD-1400`-`EVD-1410`; `PRF-0960`, `PRF-0969`, `PRF-0972`, `PRF-0974`, `PRF-0986`-`PRF-0987` | Fixture/settings, executable versioned clock/lease/retention candidate, approved equality semantics, finite session/history/file/recovery horizons, complete references, oracle, collector/budgets and restart/restore unavailable; `BLK-0857`-`BLK-0858`, `BLK-0860`, `BLK-0863`-`BLK-0866`. | `OQ-0861`-`OQ-0862`, `OQ-0864`, `OQ-0867`-`OQ-0870` |
+
+### US-124 Test-Fixture Cleanup And Accounting Reconciliation
+
+| Item | Recorded result | Evidence boundary |
+| --- | --- | --- |
+| Common benchmark current/candidate DDL, DML or generated-file commands | `0 / 0` | Gate failed before mutation; rows/files/counts/bytes/time/WAL/temp/RSS/generations/cutoffs remain `unavailable`. This command count is not a workload measurement. |
+| Common benchmark cleanup, interruption, restart or restore commands | `0 / 0` | No scenario or common-fixture cleanup ran; no benchmark report exists. |
+| Current-path verification | `11 unique files / 12 isolated Bun processes; 10 files passed; 117 passes; 2 failed attempts; 709 expectations including the failed attempts` | Fake/static paths and test-owned disposable databases/files only; no candidate, common fixture, physical collector, browser/desktop capture or restore comparison. |
+| Retained backup-test failures | Default run timed out after 5 seconds; explicit 30-second test budget reached the test's 10-second health-check failure. Runtime logs record bind/start failures for ports `38507` and `38728`. | Failure is preserved. It proves neither backup failure nor cleanup safety; it blocks this integration receipt in the current sandbox. Exact test child PIDs `77173` and `77329` were no longer alive. |
+| Disposable current-test residue | First exact root had 12 entries under a 1,000-entry inspection cap; second had four under a 100-entry cap. All belonged to the failed test runs and were explicitly unlinked/rmdir-cleaned; both exact roots are absent. | Post-test residue accounting only; no benchmark file cleanup, row deletion, byte measurement or restore proof. |
+| Snapshot, live/current/project database accesses | `0` | No snapshot/query/studio, app data root, direct DuckDB CLI against live data or benchmark command ran. Test-owned DuckDB files only. |
+| Product servers, browser, desktop or persistent workers started | `0` benchmark; two test-owned finite server children attempted | Both known child PIDs exited. Process-list access was sandbox-denied, so exact PID liveness and bounded-root cleanup—not a global process claim—are retained. |
+| Benchmark-critical settings | Unchanged and unchosen | No default, inferred owner/cutoff, cap/retry change, fallback, OOM workaround or spill was accepted. |
+| Same-fixture semantic and physical result | `unavailable` | Source/tests do not execute an approved candidate or establish ownership, exact-boundary parity, bounded cleanup, physical metrics or restore. |
+
+| Proof register slice | Rows | `satisfied` | `pending` | `blocked` | `not-applicable` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Prior `PRF-0001`-`PRF-1073` | 1,073 | 8 | 478 | 587 | 0 |
+| US-124 lifecycle cleanup validations `PRF-1074`-`PRF-1076` | 3 | 0 | 0 | 3 | 0 |
+| **Cumulative proof register** | **1,076** | **8** | **478** | **590** | **0** |
+
+The three proofs are conjunctive later-validation rows. They do not replace or
+advance a component, target, family or prior proof. DBO remains 322/322
+blocked, CMF remains 1,985/1,985 blocked and FAN remains 91 blocked plus one
+source-proven not-applicable row with zero value-bearing observations. All 326
+keep dispositions retain `recommendationActionability: unresolved`; all 115
+non-keep dispositions remain `blocked`; zero recommendations are actionable
+and `overallCertification` remains `INCOMPLETE`.
+
 ### Output 01 - API Surface Inventory
 
 Authoritative row family: `API-####`. Record one row per mounted route or
@@ -27337,6 +27559,18 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-1058` | 2026-07-23 / US-123 | Reconciled current findings with the bounded target designs; froze three current/candidate scenarios, finite cases, measurement schema, rejection rules, six blocked side rows, three proofs, ten blockers and ten owner questions. | Preserve exact execution and resolution conditions without inventing cleanup, consumer watermarks, candidate or physical evidence. | Produced `EVD-1398`, `PRF-1071`-`PRF-1073`, `BLK-0847`-`BLK-0856` and `OQ-0851`-`OQ-0860`; no recommendation became actionable. |
 | `CMD-1059` | 2026-07-23 / US-123 | Created an exact `/private/tmp/us123-test-start.*` marker, ran isolated `rtk proxy bun test <file>` processes for delta ledger/reconciliation, both dirty-intake services, Human/LLM status projectors, dirty work, projector writer, V4 rebuild admission, summary projector, rebuild request/chunk repositories, projector worker, retention, schema and migration files. Inspected test path prefixes, removed only the exact empty run-created `/private/tmp/duckdb-temp` with `rmdir`, unlinked the marker and rescanned matching database/WAL/lock/temp prefixes. The first source-path regex command contained an unescaped quote/backtick shape and exited before searching; the corrected safe expression is retained. | Corroborate current behavior, isolate module mocks, retain tooling failure and remove only current-run disposable residue without calling tests a physical comparison. | Sixteen unique files produced 327 passes and no failed process. Test-owned DuckDB files self-cleaned; the corrected final residue scan is empty. No product process or persistent worker started. Produced `EVD-1399`. |
 | `CMD-1060` | 2026-07-23 / US-123 | Ran `rtk proxy bun run lint`, `rtk jq -r '.scripts.typecheck // empty' package.json`, `rtk git diff --check`, scoped status/product-source/residue checks and a temporary `.us123-validator.ts` created/deleted only through `apply_patch`. Three rejected validator runs exposed validator-only assumptions: an unanchored definition count also matched command cells, proof coverage required an exact pipe after IDs that carry side labels, and one required phrase was more specific than the recorded rejection text. Those checks were corrected without changing evidence. The accepted validator checks new ID continuity/definition closure, exactly three scenarios/proofs, six unavailable/blocked side rows, 72 settings, 14 markers, required metrics/watermark/replay/repair/read/restart/rejection terms, table widths, proof/accounting/actionability summaries, tracker presence, product-source isolation and allowed worktree paths. | Close style, source isolation, accounting, cleanup and durable-ledger gates without touching product source, unrelated lint or the blocked benchmark; retain every tooling failure. | Lint retains the same six unrelated errors in three untouched worker files and no typecheck script exists. `git diff --check` and the accepted validator pass through `EVD-1399`, `CMD-1060`, `BLK-0856`, `OQ-0860`, `PRF-1073`, proof 8/478/587/0, three scenarios, six blocked side rows and zero actionable recommendations. The temporary validator and current-run test residue are removed; the unrelated engine-owned `tasks/prd.json` edit is preserved. |
+| `CMD-1061` | 2026-07-23 / US-124 | Read the user PRD, AGENTS instructions, complete reporting/DuckDB/API-server skills, `.ralph-tui/progress.md`, US-098/US-122/US-123 audit context and current HEAD/worktree. Ran prerequisite, canonical max-ID, source-baseline and scoped diff checks. | Establish prerequisite, mutation boundary, next IDs and unchanged product source before any cleanup decision. | US-123 is complete at `e19450b474f4929d5586f9b8c5aaaa89ea850092`; product source is unchanged from `4ca6a3de229a949ef2662affd1d83127b708df51`; next IDs were `EVD-1400`, `CMD-1061`, `BLK-0857`, `OQ-0861`, `PRF-1074`. Only engine-owned `tasks/prd.json` was dirty. |
+| `CMD-1062` | 2026-07-23 / US-124 | Ran a Zsh presence-only check over the 85 exact fixture, owner/reference, current/candidate generation, file/manifest, cutoff, model/provider/thinking/content, clock/memory/runtime, ordering/retry, bundle, collector, WAL, recovery/retention/cap/platform and signoff names; counted exact product-source files for 18 candidate markers under `src`, `scripts` and `package.json`. | Enforce the benchmark-critical execution gate and freeze the candidate side without exposing values, adopting defaults or converting design prose to implementation evidence. | `set=0`, `unset=85`, `total=85`; every marker has zero files. Execution stopped before benchmark DDL/DML, file generation/deletion, expiry movement, restart or restore; produced `EVD-1400`/`EVD-1409`. |
+| `CMD-1063` | 2026-07-23 / US-124 | Read comparison generation table sets, exact/old/full delete SQL, staged generation creation, promotion, rebuild success/failure, archive cleanup, streamed CSV/conflict export and exact non-test caller/test closure. | Separate active protection, staged/failed/old rows, export/read ownership, archive deletion, bounds and durable orphan cleanup. | Produced `EVD-1401`-`EVD-1402`: exact cleanup protects only active equality, old cleanup is unpaged, old/explicit cleaners have no production caller, successful rebuild cleans zero, and exports/readers have no generation lease. |
+| `CMD-1064` | 2026-07-23 / US-124 | Read review retention target/table/cursor/delete SQL, strict-future active-pin predicate, pin acquire/increment/release/expire/protection/eligibility functions, bulk pin admission, worker scheduling and exact caller/tests; searched exact timestamp-boundary cases. | Keep active/LKG/selected protection, pin lifecycle, candidate/control rows, cycle completion and equality semantics distinct. | Produced `EVD-1403`/`EVD-1408`: one target deletes 512 rows from one of 11 tables, up to 16 scopes; equality is unprotected/expired; production has acquisition but no release/expiry caller; no exact three-point common-fixture test exists. |
+| `CMD-1065` | 2026-07-23 / US-124 | Read transfer upload partial/rename cleanup, sequential export package/manifest/completion/progress writes, scoped build release, failure root cleanup, public expiry and ready download response plus exact route/export/path tests. | Trace file publication, session readiness, bytes/checksum, ordinary download access and cleanup ownership separately. | Produced `EVD-1404`/`EVD-1406`: upload has in-process partial cleanup, generated artifacts publish sequentially, ready download has no persisted lease and lexical path bounds do not establish file/reference lifecycle. |
+| `CMD-1066` | 2026-07-23 / US-124 | Read transfer recovery batch/staleness/expiry predicates, promotion-manifest cleanup, whole-root delete, terminal receipt/prune, live staging cleanup, minute scheduler and migrations `0084`/`0085`; searched history deletion and exact tests. | Derive exact equality, owner/reference failure, directory access, row/file counters, history retention and scheduling. | Produced `EVD-1405`-`EVD-1406`/`EVD-1408`: session scans cap at 500 but root/revision work is not file/byte bounded; malformed manifests fail closed; terminal rows prune at inclusive cutoffs while history has no cleanup path. |
+| `CMD-1067` | 2026-07-23 / US-124 | Read `scripts/dbBackup.ts`, snapshot/WAL copy/delete flow and DuckDB startup recovery copy/quarantine/manifest/regex-prune paths plus backup/reload tests. | Separate backup generation, WAL pairing, startup recovery group, directory enumeration, retention and restore. | Produced `EVD-1407`: backups are sequential uncatalogued copies; startup recovery enumerates the directory and retains one path-part group; neither path proves bounded reference-safe cleanup or restore. |
+| `CMD-1068` | 2026-07-23 / US-124 | Reconciled current findings with `TGT-0048`/`TGT-0049`/`TGT-0058`/`TGT-0061`/`TGT-0063`/`TGT-0074`-`TGT-0076` and prior proofs; searched exact related test names/timestamps; froze three scenarios, finite cases, measurement schema, rejection rules, six side rows, proofs, blockers and owner questions. | Preserve exact later execution and resolution conditions without inventing owners, candidate, physical evidence or recommendation actionability. | Produced `EVD-1408`-`EVD-1409`, `PRF-1074`-`PRF-1076`, `BLK-0857`-`BLK-0866` and `OQ-0861`-`OQ-0870`; no target or recommendation advanced. |
+| `CMD-1069` | 2026-07-23 / US-124 | Created isolated `/private/tmp/us124-tests.NPCDAK`; ran one `rtk proxy bun test <file>` process for comparison generation/rebuild, review retention/pin/bulk, transfer route/export/recovery/path and DuckDB reload files plus the backup integration. Retained the default-timeout failure, checked its exact child PID and bounded residue root. | Corroborate current mechanics in isolated processes while retaining failure and preventing module-mock contamination; do not call tests a physical comparison. | Ten files produced 117 passes and 707 expectations. The backup test timed out after five seconds; its log records server bind/start failure on port 38507. PID 77173 was not alive. The root held 12 inspected entries under a 1,000 cap and was explicitly cleaned. |
+| `CMD-1070` | 2026-07-23 / US-124 | Reran only `scripts/dbBackup.test.ts` with `rtk proxy bun test --timeout 30000` in `/private/tmp/us124-backup-test.cgcCOp`; retained its ten-second health-check failure, inspected four entries under a 100-entry cap, verified exact child PID liveness and explicitly unlinked/rmdir-cleaned the root. Process-list enumeration was sandbox-denied and is retained as a tooling limitation. | Distinguish a default harness timeout from a persistent integration blocker, preserve every failure and close exact test-owned process/residue obligations. | The rerun has zero passes, one failed attempt and one expectation; log records bind/start failure on port 38728. PID 77329 was not alive. Both exact US-124 roots are absent; no benchmark or candidate process ran. |
+| `CMD-1071` | 2026-07-23 / US-124 | Ran `rtk proxy bun run lint`, `rtk jq -r '.scripts.typecheck // empty' package.json` and `rtk git diff --check`; checked current changed paths and the scoped product-source diff from `4ca6a3de229a949ef2662affd1d83127b708df51`. | Close repo-native style, typecheck-discovery, whitespace and product-source-isolation gates without fixing unrelated code. | Lint retains the same six errors in three untouched worker files; no typecheck script exists. `git diff --check` passes and product-source diff count is zero. Durable audit changes are confined to the result file plus required Ralph progress metadata; engine-owned `tasks/prd.json` remains untouched. |
+| `CMD-1072` | 2026-07-23 / US-124 | Ran an inline read-only Bun validator plus exact residue checks. Three rejected validator attempts are retained: the first mis-escaped a template-literal backtick and then reused Zsh's special `path` array so later Git commands were not found; the second assumed one anchored PRF row although the cases and proof tables intentionally provide two; the third searched an unnormalized wrapped phrase. The corrected validator checks ID continuity/definition closure, exactly three proof and six side rows, 85 settings, 18 markers, required metrics/rejection terms, Markdown table widths, proof accounting, tracker order, top summary, allowed product-source isolation and exact residue. | Close durable-ledger consistency while distinguishing document defects from validator-only assumptions and preserving every tooling failure. | Accepted result: 85 settings, 18 markers, six blocked side rows, three blocked proof rows, 67 US-124 table rows, all new definitions, progress order and 8/478/590/0 accounting pass. Both exact test roots are absent; product-source diff count is zero. |
 
 ## Blockers
 
@@ -28225,6 +28459,16 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0854` | US-123 exact-read and browser/desktop cleanup oracle | No signed same-revision oracle or actual browser/desktop capture covers list/count/filter/detail results before cleanup, after cleanup, after replay/repair and after restart across active/LKG generations. | Passing fake/static projector tests cannot prove mounted HTTP execution, same-snapshot order/count/error parity, client caching/navigation or absence of silent missing-row fallback. | `OQ-0858` | Product/API/client/query owners approve exact route vectors, hashes and platform profiles, then capture every consumer at each cleanup/replay/repair/restart checkpoint. |
 | `BLK-0855` | US-123 physical collector and hard cleanup budgets | No approved collector records per-table retained/removed identities, total/phase/p50/p95/p99 time, storage-engine WAL, sibling temp events/bytes, process-tree RSS, all watermark positions, retained generations, calls/attempts or hard cleanup/history bounds. | Missing physical values cannot be zero; intake limits, 256-ID reduction batches and 512-row retention steps do not bound request-wide recursion, scans, writes, WAL, spill, RSS, history or restart work. | `OQ-0859` | Audit/database/performance owners approve the raw collector schema and hard budgets, retain every sample and reject missing values, fallback/retry, spill, OOM, unbounded work/history or changed critical settings. |
 | `BLK-0856` | US-123 interruption, restart, cleanup and restore proof | No finite failure-point matrix, immutable attempt/output/finalization/cleanup receipts, scheduled consumer/reference-safe cleanup, orphan repair, residue accounting, clean-host restore or owner signoff exists for the three intermediate families. | Test process exit, self-cleaned files, startup mutation restoration and retained partial retry tests cannot prove fatal-restart avoidance, recovery convergence, bounded cleanup or preservation of replay/repair and active/LKG results. | `OQ-0860` | Reliability/retention/recovery/release owners approve and execute every interruption/restart/repair/cleanup/restore outcome with exact state, residue, time and signature receipts. |
+| `BLK-0857` | US-124 immutable fixture, critical settings and destructive authority | All 85 fixture/owner/reference/cutoff/oracle/collector/runtime/policy/platform/signoff names are unset; no immutable disposable database, isolated bounded file roots, expected state or authorized deletion exists. | A physical run would invent benchmark-critical configuration and destructive authority or risk current/project data. Missing rows, files, bytes and metrics cannot become zero or defaults. | `OQ-0861` | Benchmark/database/storage/audit owners approve one immutable fixture, all 85 values, exact roots/hashes, DDL/DML/file-cleanup authority and failure-preservation policy. |
+| `BLK-0858` | US-124 executable candidate and applied path | `TGT-0048`, `TGT-0049`, `TGT-0058`, `TGT-0061`, `TGT-0063` and `TGT-0074`-`TGT-0076` are design-only; all 18 candidate markers have zero product-source files and no coherent applied writer/reader/cleaner/restore bundle exists. | Current-only execution cannot establish parity or safety, while building a candidate inside this audit would change schemas/runtime and combine implementation with evidence. | `OQ-0862` | Database/serving/transfer/recovery/release owners approve one executable bundle, hashes, migration-isolated setup, applied paths, cutover, rollback and cleanup. |
+| `BLK-0859` | US-124 orphan-generation cleanup owner and bounds | Comparison explicit cleanup protects only the active generation, old cleanup is unpaged and neither old nor explicit cleaner has a production caller. Successful and failed rebuild paths leave old/staged rows; review retention covers only 11 data/base tables. | Promotion/failure/archive or a unit deleted-row count does not establish candidate/failed/retired/orphan disposition, bounded scheduling, complete family coverage or durable cleanup receipt. | `OQ-0863` | Serving/database/retention owners define generation ownership, all protected/status/control families, orphan eligibility, per-step/cycle bounds, schedule and receipts. |
+| `BLK-0860` | US-124 pin, export, transfer and ordinary-reader settlement | Comparison cleanup has no pin/reference scan; CSV can stream from a prior active generation while archive full-cleans it. Review pins are protected only before expiry; production has no release/expiry caller. Transfer ready downloads have no persisted delivery lease. | Status, positive ref count or pre-stream file existence cannot prove live-reader protection, terminal settlement or cleanup-safe export/download behavior at expiry and restart. | `OQ-0864` | Export/bulk/transfer/query owners define atomic owner-generation admission, renewal/release/expiry, ordinary-reader/download leases, reference equality and restart settlement. |
+| `BLK-0861` | US-124 generated and partial-file publication ownership | Upload uses partial/rename, but package, manifest, completion and progress publish sequential final paths; promoted assets can precede their manifest and backup DB/WAL members copy sequentially. No common immutable artifact/object/reference receipt exists. | Ready/session/completion status or one checksum cannot prove a complete same-generation file set, interruption recovery, later hydration fixedness, reference ownership or cleanup authority. | `OQ-0865` | Transfer/file/backup owners define exact artifact generations, same-directory publication, manifests/hashes, owner/reference settlement, crash recovery and partial-file quarantine. |
+| `BLK-0862` | US-124 bounded directory, file and byte cleanup | Transfer recovery caps session rows but recursively deletes whole roots and reports one root, while stale revision cleanup enumerates the entire directory. Startup recovery enumerates the full recovery directory and removes recognized old groups. | A path-length/root check or session batch limit does not bound entry count, files, bytes, recursive traversal, calls or wall time; root counts cannot satisfy file accounting. | `OQ-0866` | Runtime/storage/performance owners approve exact catalogs/cursors and hard per-call/request file, byte, entry, depth, history, time and deletion caps with stop-before-overrun behavior. |
+| `BLK-0863` | US-124 exact cutoff, clock precision and finite history | Pins are active only for `expires_at > now` and expire at `<=`; transfer expiry and terminal prune use inclusive equality, but no shared `-1`/exact/`+1` fixture defines precision/time-zone/restart semantics. Session rows prune in batches while transfer history has no horizon. | Source predicates and old/future tests do not prove exact physical row/file outcomes, clock skew behavior, repeated idempotency or bounded terminal/control/history retention. | `OQ-0867` | Retention/reliability/audit owners approve clock source/precision/time zone, equality semantics for every cutoff, finite history/control horizons and exact boundary vectors. |
+| `BLK-0864` | US-124 backup and startup-recovery preservation and restore | Backup copies DB and optional WAL without an immutable external index or finite retention. Startup recovery keeps one pattern-matched group and prunes other recognized groups after copy, without a reference/hold scan or restore-before-delete receipt. | File existence or startup repair success does not prove DB/WAL pairing, protected recovery generations, encryption, bounded inventory, clean-host restore or later route/export/transfer equality. | `OQ-0868` | Recovery/backup/security owners define catalog identity, holds/references, minimum validated generations, finite cleanup, encryption/key custody and executable restore validation. |
+| `BLK-0865` | US-124 physical collector and hard rejection budgets | No approved collector records per-table and per-file identities, counts/bytes, total/phase samples, storage WAL, ordinary-file publication, sibling temp events/bytes, process-tree RSS, generations/cutoffs, calls/attempts or hard cleanup/history bounds. | Missing values cannot be zero; source constants and unit durations do not measure the common fixture or reject spill, OOM, fatal restart, unbounded work or changed critical settings. | `OQ-0869` | Audit/database/runtime/performance owners approve the raw collector schema, sampling and hard budgets, retain every value and reject any missing/changed/spilled/OOM run. |
+| `BLK-0866` | US-124 interruption, restart, residue, restore and owner signoff | No finite failure-point matrix, immutable artifact/orphan/retention receipts, scheduled reference-safe cleanup, bounded residue accounting, clean-host restore or owner signatures exist. The backup integration test failed twice because its test server could not start in this sandbox. | Isolated test cleanup, exact child exit, source inspection and passing recovery tests cannot prove benchmark restart convergence, cleanup completion, protected-file survival or restore. | `OQ-0870` | Reliability/retention/recovery/release owners approve and execute every interruption/restart/repair/cleanup/restore outcome with exact row/file/metric/signature receipts. |
 
 ## Owner Questions
 
@@ -29117,6 +29361,16 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0858` | Product/API/client/query owners | Which exact list/count/filter/detail vectors, active/LKG identities, order/count/error hashes and browser/desktop profiles must match before cleanup, after cleanup, after replay/repair and after restart for all three scenarios? | `PRF-1071`-`PRF-1073` and `BLK-0854` |
 | `OQ-0859` | Audit/database/performance owners | Which raw collector and hard per-call/request-wide scan/write/row/byte/WAL/temp/RSS/time/attempt/history budgets record every retained/removed identity, watermark position and generation and reject missing values, spill, OOM or changed settings? | `PRF-1071`-`PRF-1073` and `BLK-0855` |
 | `OQ-0860` | Reliability/retention/recovery/audit/release owners | Which finite failure-point matrix, immutable attempt/output/finalization/cleanup receipts, consumer/reference/reader scans, scheduled horizons, orphan repair, residue accounting, restart outcomes, clean-host restore and signatures settle all three scenarios without fallback, retry, spill, OOM, fatal restart or replay/repair loss? | `PRF-1071`-`PRF-1073` and `BLK-0856` |
+| `OQ-0861` | Benchmark/database/storage/audit owners | Which immutable disposable database and bounded file roots, schema/data/file hashes, active/LKG/candidate/orphan/pin/job/export/transfer/recovery identities, all 85 values, expected states and explicit DDL/DML/file-cleanup authority are approved for US-124? | `PRF-1074`-`PRF-1076` and `BLK-0857` |
+| `OQ-0862` | Database/serving/transfer/recovery/release owners | Which coherent executable `TGT-0048`/`TGT-0049`/`TGT-0058`/`TGT-0061`/`TGT-0063`/`TGT-0074`-`TGT-0076` DDL, writers, readers, cleaners, restore tools, migration-isolated setup, cutover and rollback are approved, and what hashes prove applied paths? | `PRF-1074`-`PRF-1076` and `BLK-0858` |
+| `OQ-0863` | Serving/database/retention owners | Which comparison/review generation and control families, statuses, head/LKG/candidate identities, owner references and orphan predicates are authoritative; who schedules a bounded step/cycle and which receipts prove removal or retention? | `PRF-1074` and `BLK-0859` |
+| `OQ-0864` | Export/bulk/transfer/query/reliability owners | Which atomic owner-generation pin/reference admission, heartbeat/renewal, ordinary-reader/export/download lease, release/expiry/compensation and terminal settlement rules protect every live consumer through cleanup and restart? | `PRF-1074`, `PRF-1076` and `BLK-0860` |
+| `OQ-0865` | Transfer/file/backup/storage owners | Which immutable artifact/object/reference identity and manifest bind upload partials, build/package/manifest/completion/progress, promoted assets and DB/WAL members; what publication, quarantine and cleanup receipts settle every interruption? | `PRF-1075` and `BLK-0861` |
+| `OQ-0866` | Runtime/storage/performance owners | Which exact catalogs/cursors and hard per-call/request-wide directory-entry, file, byte, depth, call, wall-time, history and deletion caps replace full `readdir` and recursive root deletion, and how does cleanup stop before any cap is exceeded? | `PRF-1075` and `BLK-0862` |
+| `OQ-0867` | Retention/reliability/audit owners | Which clock source, precision and time zone define one tick; what are the approved strict/inclusive semantics for every pin, heartbeat, transfer, terminal-history, generated-file and recovery cutoff; and what finite horizons/caps apply? | `PRF-1076` and `BLK-0863` |
+| `OQ-0868` | Recovery/backup/security/release owners | Which immutable backup/recovery catalog, DB/WAL/member hashes, holds/references, minimum validated generations, encryption/key policy and finite cleanup authorize deletion only after clean-host restore and later route/export/transfer equality? | `PRF-1075`-`PRF-1076` and `BLK-0864` |
+| `OQ-0869` | Audit/database/runtime/performance owners | Which raw collector records every retained/removed row and file identity, count/byte, total/phase sample, storage WAL, ordinary-file publication, sibling temp baseline/peak/end/events, process-tree RSS, generation/cutoff, call/attempt and hard rejection budget? | `PRF-1074`-`PRF-1076` and `BLK-0865` |
+| `OQ-0870` | Reliability/retention/recovery/audit/release owners | Which finite failure matrix, immutable artifact/orphan/retention receipts, reference scans, scheduled cleanup, bounded residue accounting, restart outcomes, clean-host restore and signatures settle all scenarios without fallback, spill, OOM, fatal restart, protected-file loss or missing owner? | `PRF-1074`-`PRF-1076` and `BLK-0866` |
 
 ## US-001 Quality Gates
 
@@ -35223,6 +35477,77 @@ commands. A command proves only the claim linked through its evidence record.
       because this is an audit-only Markdown change and the execution gate
       failed. Current isolated tests and source findings do not pass any
       cleanup workload proof.
+
+## US-124 Quality Gates
+
+- [x] US-123 is complete at HEAD
+      `e19450b474f4929d5586f9b8c5aaaa89ea850092`. Scoped `src`,
+      `scripts`, `package.json` and `bun.lock` product source remains unchanged
+      from `4ca6a3de229a949ef2662affd1d83127b708df51`; the engine-owned
+      `tasks/prd.json` modification remains untouched.
+- [x] The conditional gate ran before database, fixture, generation, file,
+      retention, interruption, restart or restore mutation. All 85 named
+      values are unset and all 18 candidate markers have zero product-source
+      files. Every required physical value is `unavailable`, never zero,
+      passed or not-applicable.
+- [x] Exactly three validation grains freeze current/candidate orphan-
+      generation cleanup, generated or partial-file cleanup and exact
+      retention-boundary cleanup. Their owner/reference, race, interruption,
+      restart, residue and restore checks remain finite nested cases rather
+      than extra scenario rows.
+- [x] Active head, LKG, candidate, retired, failed, orphan, pin, job, export,
+      transfer, ordinary reader/download, artifact publication, file
+      existence/checksum, recovery/backup reference, history, eligibility,
+      physical deletion and cleanup receipt remain independent contracts.
+- [x] All six current/candidate side rows retain exact table/file identities,
+      rows and files removed/retained, file counts/encoded bytes, total/phase
+      wall time, storage-engine WAL where applicable, ordinary-file
+      publication, sibling DuckDB temp baseline/peak/end/delta/events,
+      process-tree RSS, all generations/cutoffs, fixed settings and
+      `proofCheckState` slots.
+- [x] Missing required values or owner, changed settings, inferred/default
+      cutoffs, unknown references, unbounded directory/history work,
+      unreceipted recursive deletion, retry/fallback/downgrade, mixed
+      generation, partial publication, lost active/LKG/pinned/export/transfer/
+      reader/recovery state, checksum drift, indefinite history, spill, OOM,
+      fatal restart, residue or failed restore rejects the applicable proof.
+- [x] Current source findings preserve active-only comparison exclusion,
+      absent normal orphan-cleaner callers, unleased comparison exports,
+      strict-future pin protection, absent pin settlement, sequential transfer
+      artifacts, unleased ready downloads, root/revision/recovery enumeration,
+      indefinite transfer history and uncatalogued backup/recovery generations
+      as blockers rather than execution evidence.
+- [x] `PRF-1074`-`PRF-1076` are independently `blocked`; cumulative proof is
+      1,076 rows: eight `satisfied`, 478 `pending`, 590 `blocked` and zero
+      `not-applicable`. Actionability remains 326 unresolved/115 blocked/zero
+      actionable and certification remains `INCOMPLETE`.
+- [x] `EVD-1400`-`EVD-1410`, `CMD-1061`-`CMD-1072`,
+      `BLK-0857`-`BLK-0866` and `OQ-0861`-`OQ-0870` retain exact
+      sources/tooling, unavailable evidence, owner questions and finite
+      resolution conditions without advancing a target or recommendation.
+- [x] Eleven unique current-path files ran in 12 isolated Bun processes. Ten
+      files produced 117 passes and 707 expectations; the backup integration
+      retains two failed attempts caused by test-server bind/start/health
+      failure. Tests do not pass a lifecycle cleanup workload proof.
+- [x] Exact test child PIDs `77173` and `77329` were no longer alive. The two
+      bounded test roots contained 12 and four entries and were explicitly
+      cleaned; both roots are absent. Sandbox denial of global process-list
+      enumeration is retained rather than replaced by an unsupported global
+      claim.
+- [x] No live/current/project database, common fixture, benchmark DDL/DML,
+      generation/file/history deletion, candidate creation, expiry movement,
+      browser/desktop, benchmark interruption, restart or restore ran.
+      Benchmark settings remain unchanged and unchosen.
+- [x] Repo-native lint retains the same six unrelated errors in three untouched
+      worker files and no typecheck script exists. `git diff --check`,
+      product-source isolation, ID/reference/proof, exactly-three-scenario,
+      six-side, 85-setting, 18-marker, required-term, table-width, accounting,
+      tracker and residue gates pass through `CMD-1072`; no unrelated lint
+      issue is fixed.
+- [x] Build/full-suite, migration and physical/platform gates are skipped
+      because this is an audit-only Markdown change and the execution gate
+      failed. Current isolated tests and source findings do not pass any
+      lifecycle workload proof.
 
 ---
 
