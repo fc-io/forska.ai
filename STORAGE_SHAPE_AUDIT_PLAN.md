@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-126 add 1,065 finite proof rows without changing a disposition: the 1,081-row proof register is eight `satisfied`, 478 `pending`, 595 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked`, and zero are actionable. US-092 through US-098 define 80 concrete but unvalidated `TGT-0001`-`TGT-0080` shapes. US-099 through US-125 retain their prior predicates and US-126 adds three blocked expired-lease, failed-publication and application-restart predicates; none adds a target. No approved immutable disposable fixture, fixed failure identities/settings, executable current-versus-candidate bundle, deterministic failure/restart controller, independent claim/retry/active/LKG/route/idempotence/job/cleanup/operator oracle, physical collector, hard claim/retry/job/restart/cleanup budgets or owner signoff exists, so every US-126 workload value remains unavailable rather than zero. Source inspection finds that rebuild lease expiry makes work claimable without independently fencing the old owner because heartbeat and completion check status plus owner string but not the deadline; dirty work and bulk jobs use timestamp-only takeover; failed candidate validation preserves active/LKG inside the promotion transaction while sequential derived finalization can strand failed all-complete requests; startup recovery depends on role, mutation mode, an auto-cleared pause marker and in-process heartbeat timers; low-memory startup omits the bulk worker; job pins and cleanup lack terminal settlement and complete-cycle receipts; and ordinary active fallback, persisted LKG, latest-retired fallback and operator diagnostics remain distinct. Those findings reject certification but are not physical measurements. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, exact platform proof, applied access paths, bounded scan/write/byte/file/call work, publication atomicity, failure/retry/recovery, migration/cutover, retention, cleanup and restore evidence remain incomplete. No prior proof or manifest state advanced and no planned validation is labeled passed. No common fixture or live/current/project database or product process ran. Eighteen isolated current-path files produced 323 passes, 18 intentional skips and 1,756 expectations with no failure; one test-owned disposable warning-route database applied migrations and self-cleaned. The pre-existing empty `/private/tmp/duckdb-temp` retained its baseline metadata and no US-126-named or exact test-root residue exists. Tests corroborate current source contracts only; they do not execute the candidate or physical collector. `overallCertification` remains independently `INCOMPLETE`. |
+| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-127 add 1,067 finite proof rows without changing a disposition: the 1,083-row proof register is eight `satisfied`, 478 `pending`, 597 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked`, and zero are actionable. US-092 through US-098 define 80 concrete but unvalidated `TGT-0001`-`TGT-0080` shapes. US-099 through US-126 retain their prior predicates and US-127 adds two blocked desktop-restart and desktop-resume predicates; none adds a target. All 120 gate names are unset, all 23 candidate/runtime markers have zero product-source files and no approved immutable fixture, executable current/candidate shared-storage desktop bundle, rooted disposable runtime, deterministic restart/resume controller, exact request/route/UI/cache/job/snapshot/pin/recovered-state oracle, physical collector, hard budgets or owner signoff exists. Normal desktop startup would create app-owned roots, select its DuckDB path and run owner-mode migration/recovery mutations, so no desktop or database was started and every physical value remains unavailable rather than zero. Source inspection finds transport 2xx is accepted without semantic readiness, backend exit is unsupervised after readiness, no explicit suspend/wake/resume lifecycle exists, hash routing and outer URL filter state can diverge, list focus refetch is disabled, job tracking handles are process-local, the desktop default memory profile omits the bulk executor, active/LKG/latest-retired selection and pins remain separate, and component/derived/head publication spans transactions. Those findings reject certification but are not physical measurements. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, exact platform proof, applied access paths, bounded scan/write/byte/file/call work, publication atomicity, failure/retry/recovery, migration/cutover, retention, cleanup and restore evidence remain incomplete. No prior proof or manifest state advanced and no planned validation is labeled passed. Twenty-four isolated Bun files produced 168 passes and 733 expectations with no failure; one Vitest file produced ten passes with no failure. No selected test applied DDL/DML, all finite processes exited and no product process or US-127 residue remains. Tests corroborate current source contracts only; they do not execute desktop lifecycle scenarios, the candidate or a physical collector. `overallCertification` remains independently `INCOMPLETE`. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-126 / 2026-07-23` | Freezes exactly three current-versus-candidate control-failure validations: expired lease, failed publication and application restart. Lease deadline, owner identity/generation, heartbeat, takeover, claim, attempt/retry, output, validation, publication, active head, persisted LKG, latest-retired fallback, route result, idempotent side effect, job/pin/delivery state, cleanup step/cycle, operator role/pause/log/diagnostic state and recovered state remain separate. Six side rows retain each state plus total/phase wall time, exact rows written and duplicate effects, storage-engine WAL, sibling temp spill, process-tree RSS, retained generations, fixed settings and `proofCheckState`. `PRF-1079`-`PRF-1081` are blocked because all 82 gate names are unset, all 20 candidate markers have zero product-source files and no approved fixture, executable `TGT-0046`/`TGT-0048`-`TGT-0053`/`TGT-0057`/`TGT-0058` bundle, deterministic controller, oracle, collector, budgets or signoff exists. Current source and 18 isolated passing files corroborate current predicates without substituting for execution: expiry without deadline fencing, timestamp-only dirty/job takeover, bounded chunk but not dirty replay, transaction-local head preservation with non-transactional finalization, role/pause/RSS-dependent restart, low-memory job-worker omission, unsettled pins, partial cleanup and diagnostic/operator gaps. One test-owned disposable database self-cleaned; no benchmark/candidate process or project data ran and no current-run residue remains. Existing targets, actionability, schema, code, routes, projectors, retention, runtime, project data and certification states remain unchanged. |
+| Latest normalized story | `US-127 / 2026-07-23` | Freezes exactly two current-versus-candidate desktop lifecycle validations: whole-desktop/backend restart and same-process resume. Process/child/lease state, rooted runtime paths, transport and semantic readiness, outer/hash navigation, cache, exact requests, all four review tabs, detail, progress, queued jobs/executor results, active/LKG/latest-retired identities, pins, publication, unavailable/recovered state, wall time, process-tree RSS, storage-engine WAL and retained generations remain separate. `PRF-1082`-`PRF-1083` are blocked because all 120 gate names are unset, all 23 candidate/runtime markers have zero product-source files and no approved fixture, executable pair, disposable desktop path, restart/resume controller, exact oracle, collector, budgets, restore evidence or signoff exists. Current source and 25 isolated passing test processes corroborate current predicates without substituting for execution: semantic-readiness admission and post-ready supervision gaps, absent resume lifecycle, hash/filter/cache risk, local job handles, low-memory executor omission and independent active/LKG/pin/publication state. No DDL/DML, desktop, browser, server, database, worker or project-data access ran; no current-run residue remains. Existing targets, actionability, schema, code, routes, projectors, retention, runtime, project data and certification states remain unchanged. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
@@ -23750,6 +23750,258 @@ keep dispositions retain `recommendationActionability: unresolved`; all 115
 non-keep dispositions remain `blocked`; zero recommendations are actionable
 and `overallCertification` remains `INCOMPLETE`.
 
+## US-127 Desktop Restart And Resume Validation
+
+### US-127 Scope, Prerequisite And Execution Gate
+
+US-126 is complete at HEAD
+`d9d6b7421cca9481c7b5e840e9ba43946a58d94f`. US-127 owns exactly two
+desktop lifecycle grains:
+
+1. desktop restart: stop or lose the packaged desktop/backend process at each
+   finite current/candidate control, request, publication, job and pin
+   checkpoint, then relaunch the complete approved desktop topology; and
+2. desktop resume: retain the same desktop process across each approved
+   suspend/wake, background/foreground and connectivity interruption, then
+   prove request, cache, navigation, job, snapshot, pin and UI convergence.
+
+Desktop process state, backend child state, single-instance lease, runtime
+paths, database generation, storage-engine WAL, application log generation,
+outer window URL/hash, client cache, route requests, semantic readiness,
+active snapshot, persisted LKG pointer, latest-retired fallback, snapshot pins,
+queued-job criteria/status, executor progress, detail hydration, warning/
+unavailable state, recovered state and terminal cleanup remain separate
+contracts. A relaunched window, HTTP 2xx, active snapshot, succeeded job
+counter, retained pin, matching list count or visible review tab cannot certify
+another grain.
+
+Scoped `src`, `scripts`, `package.json` and `bun.lock` product source remains
+unchanged from the US-098 target-design commit
+`4ca6a3de229a949ef2662affd1d83127b708df51` through HEAD. The pre-existing
+engine-owned `tasks/prd.json` modification remains untouched. Exact
+product-source searches found zero files for 23 candidate/runtime markers:
+`review_component_revision_v5`, `review_serving_snapshot_v5`,
+`review_serving_snapshot_component_v5`, `review_serving_snapshot_head_v5`,
+`review_consumer_frontier_v5`, `review_snapshot_lease_v5`,
+`review_snapshot_lease_receipt_v5`, `review_bulk_job_v5`,
+`review_bulk_batch_receipt_v5`, `review_bulk_delivery_receipt_v5`,
+`retention_policy_v5`, `retention_step_receipt_v5`, `database_generation`,
+`duckdb-temp/<database_generation>`, `spill_ledger_v1`,
+`generation/head-v1.json`, `startup-recovery/v1`, `leases/v1`,
+`desktop/leases/single-instance.json`, `terminal-index-v1.json`,
+`worker-registry/v1`, `config/v1/forska.settings` and
+`runtime/logs/runtime`. Candidate targets remain design-only and no approved
+current/candidate desktop package, shared-storage bundle or applied runtime
+path exists.
+
+The story permits isolated disposable-fixture DDL, DML and generated outputs
+only after owners approve one immutable fixture, both executable desktop
+shapes, exact current/candidate snapshot, job, generation and lease identities,
+finite restart/resume checkpoints, independent state/route/UI oracles, a
+physical collector, hard budgets and cleanup authority. A presence-only Zsh
+check printed no values and found `set=0`, `unset=120`, `total=120` for:
+
+- fixture, roots and scope: `DUCKDB_MEMORY_LIMIT`,
+  `FORSKA_REVIEW_AUDIT_FIXTURE_ID`, `FIXTURE_SCHEMA_HASH`,
+  `FIXTURE_DATA_HASH`, `DATABASE_PATH`, `REPORT_ROOT`, `TEMP_ROOT`,
+  `OUTPUT_ROOT`, `PROJECT_ID`, `ARTICLE_ID` and `REVIEW_CONFIG_HASH`;
+- current identities: `CURRENT_ACTIVE_SNAPSHOT_ID`,
+  `CURRENT_LKG_SNAPSHOT_ID`, `CURRENT_CANDIDATE_SNAPSHOT_ID`,
+  `CURRENT_PIN_ID`, `CURRENT_BULK_JOB_ID`, `CURRENT_JUDGMENT_JOB_ID`,
+  `CURRENT_TRANSFER_JOB_ID`, `CURRENT_RUNTIME_GENERATION_ID`,
+  `CURRENT_DATABASE_GENERATION_ID`, `CURRENT_RECOVERY_GENERATION_ID`,
+  `CURRENT_DESKTOP_LEASE_ID` and `CURRENT_EXPECTED_STATE_HASH`;
+- candidate identities: `CANDIDATE_ACTIVE_SNAPSHOT_ID`,
+  `CANDIDATE_LKG_SNAPSHOT_ID`, `CANDIDATE_COMPONENT_REVISION_ID`,
+  `CANDIDATE_SNAPSHOT_HEAD_ID`, `CANDIDATE_SNAPSHOT_LEASE_ID`,
+  `CANDIDATE_BULK_JOB_ID`, `CANDIDATE_JUDGMENT_JOB_ID`,
+  `CANDIDATE_TRANSFER_JOB_ID`, `CANDIDATE_RUNTIME_GENERATION_ID`,
+  `CANDIDATE_DATABASE_GENERATION_ID`,
+  `CANDIDATE_RECOVERY_GENERATION_ID`, `CANDIDATE_DESKTOP_LEASE_ID`,
+  `CANDIDATE_RETENTION_CYCLE_ID` and
+  `CANDIDATE_EXPECTED_STATE_HASH`;
+- scenario and oracle identities: `DESKTOP_RESTART_EXPECTED_STATE_HASH`,
+  `DESKTOP_RESUME_EXPECTED_STATE_HASH`, `DESKTOP_RESTART_MATRIX_HASH`,
+  `DESKTOP_RESUME_MATRIX_HASH`, `REQUEST_ORACLE_HASH`,
+  `RECOVERED_STATE_ORACLE_HASH`, `RUNTIME_PATH_ORACLE_HASH`,
+  `ACTIVE_READ_ORACLE_HASH`, `LKG_READ_ORACLE_HASH`,
+  `ROUTE_PARITY_ORACLE_HASH`, `UI_PARITY_ORACLE_HASH`,
+  `DETAIL_ORACLE_HASH`, `PROGRESS_ORACLE_HASH`, `JOB_QUEUE_ORACLE_HASH`,
+  `PIN_ORACLE_HASH`, `UNAVAILABLE_ORACLE_HASH`, `CACHE_STATE_ORACLE_HASH`,
+  `PROCESS_STATE_ORACLE_HASH` and `WAL_ORACLE_HASH`;
+- fixed benchmark settings: `UNCHANGED_SETTINGS_HASH`, `SCALE`, `SEED`,
+  `PROVIDER_ID`, `MODEL_ID`, `THINKING_LEVEL`, `PROMPT_SET`, `HUMAN_MODE`,
+  `CONTENT_FLAGS_HASH`, `DATE_RANGE_HASH`, `SELECTED_ROUTE_SET_HASH`,
+  `FROZEN_CLOCK`, `PROCESS_MEMORY_LIMIT`, `RUNTIME_PROFILE`, `RUNTIME_ROLE`,
+  `RUNTIME_TOPOLOGY` and `RUNTIME_VERSION`;
+- desktop package and platform settings: `DESKTOP_PACKAGE_HASH`,
+  `DESKTOP_DATA_ROOT_HASH`, `DESKTOP_LOG_ROOT_HASH`, `DESKTOP_API_ORIGIN`,
+  `DESKTOP_API_PORT`, `DESKTOP_WINDOW_URL`, `DESKTOP_HISTORY_MODE`,
+  `DESKTOP_PLATFORM_MATRIX_HASH`, `DESKTOP_PROCESS_CONTROLLER_HASH` and
+  `DESKTOP_RESUME_CONTROLLER_HASH`;
+- sampling, order, caps and signoff: `SAMPLE_COUNT`, `CACHE_ORDER`,
+  `REQUEST_ORDER`, `TAB_ORDER`, `SCENARIO_ORDER`, `RETRY_POLICY`,
+  `CURRENT_BUNDLE_HASH`, `CANDIDATE_BUNDLE_HASH`, `ORACLE_HASH`,
+  `COLLECTOR_HASH`, `WAL_PROFILE_HASH`, `RECOVERY_MATRIX`,
+  `RETENTION_POLICY`, `REQUEST_CAPS`, `RESTART_CAPS`, `RESUME_CAPS`,
+  `JOB_CAPS`, `PIN_CAPS`, `CLEANUP_CAPS`, `BROWSER_PROFILE`,
+  `DESKTOP_PROFILE` and `OWNER_SIGNOFF_HASH`; and
+- current runtime environment names:
+  `FORSKA_DESKTOP_API_SERVER_PORT`, `FORSKA_DESKTOP_BUN_BIN`,
+  `FORSKA_RUNTIME_PROFILE`, `FORSKA_RUNTIME_SERVICE`,
+  `FORSKA_DESKTOP_MODE`, `SERVER_ROLE`, `SERVER_DUCKDB_OWNER_URL`,
+  `DUCKDB_PATH`, `VITE_SERVER_API`, `FORSKA_DISABLE_SERVER_MUTATIONS`,
+  `FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES`,
+  `FORSKA_REVIEW_SERVING_PROJECTOR_PAUSE_RECOVERY_MIN_AGE_MS`,
+  `FORSKA_REVIEW_SERVING_PROJECTOR_PAUSE_RECOVERY_POLL_INTERVAL_MS`,
+  `FORSKA_REVIEW_SERVING_PROJECTOR_PAUSE_RECOVERY_QUEUE_RESAMPLE_DELAY_MS`
+  and
+  `FORSKA_REVIEW_SERVING_PROJECTOR_PAUSE_RECOVERY_DUCKDB_RECYCLE_COOLDOWN_MS`.
+
+Execution therefore stopped before ElectroBun, server, browser, database,
+worker, migration, fixture DDL/DML, restart, suspend/wake, resume, job,
+publication, cleanup or restore. Normal desktop startup creates its data/log
+roots, selects its app-owned DuckDB path and owner startup runs migrations and
+recovery mutations; using mutation-disable would change an unapproved critical
+setting. No live, current or project DuckDB was opened. No source default,
+current project value, inferred identity, implicit retry or weaker
+benchmark-critical setting was adopted. Every workload state and measurement
+below is `unavailable`, never zero, passed or not-applicable. Both proof rows
+are `blocked`; no target, disposition, recommendation actionability or
+certification state advances.
+
+### US-127 Evidence Ledger
+
+| Evidence ID | Class | Exact locator | Finding | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-1429` | `control/prerequisite/gate` | User US-127 PRD and codebase patterns; `.ralph-tui/progress.md` US-126; complete reporting, DuckDB, API-server, frontend and browser-control skills; HEAD/worktree/source-diff, presence-only and candidate-marker checks | US-126 is complete and the audit mutation boundary is unchanged. All 120 values are unset, all 23 markers have zero product-source files and the pre-existing engine-owned `tasks/prd.json` edit is preserved untouched. | `CMD-1093`-`CMD-1094` |
+| `EVD-1430` | `production/desktop-runtime-process-path` | `src/desktop/getDesktopRuntimeConfig.ts:184-252`; `src/desktop/index.ts:62-80,137-220,267-310`; `src/server/serverMain.ts:216-263,356`; `src/server/utils/serverMutationMode.ts:1-3` | macOS desktop selects `~/Library/Application Support/Forska/desktop`, creates data/log roots, overrides `DUCKDB_PATH` to its app-owned file and starts one backend child. Normal owner startup runs migrations/recovery/background work. The supported config has no approved disposable physical data-root injection; mutation-disable is a separate critical setting. Desktop exit kills the child and releases the single-instance lock. | `CMD-1095` |
+| `EVD-1431` | `production/readiness-supervision-resume` | `src/desktop/index.ts:29-44,137-220`; `src/server/routes/runtimeReadyRoutes.ts:53-74`; exact `src/desktop` lifecycle-symbol search | Startup polls every 250 ms for at most 30 seconds but accepts any HTTP 2xx and does not inspect semantic `data.ready`. Child exit is guarded only before startup readiness; no post-ready restart supervisor exists. The desktop source has no explicit suspend, wake, resume, reopen, activate, visibility, online or offline lifecycle handler. Transport readiness, semantic readiness, backend supervision and resumed UI availability are unproved. | `CMD-1095`-`CMD-1096` |
+| `EVD-1432` | `production/navigation-cache-four-tabs-detail` | `src/app/getRouterHistoryMode.ts:1-7`; `src/app/router.tsx:25-38`; `src/utils/useUrlFilters.ts:53-102,145-164`; `src/components/main/reviews/reviewsTabs.tsx:14-45`; four review query-option files; four table/container files; LLM detail route | Desktop `views:` uses hash history, while the shared filter hook reads outer `location.search` and rewrites `pathname + search` without retaining the hash. All four lists disable focus refetch. LLM, Human, Both and Unassessed title links resolve to the LLM detail route; detail uses a five-minute cache. Shared source applicability does not prove restart/resume URL, request, cache, navigation or rendered parity. | `CMD-1096` |
+| `EVD-1433` | `production/routes-unavailable-progress` | Four list/filter query options and containers; `reviewsWarningsQuery.ts:147-159`; `reviewsArticleQueryGating.test.ts:8-39`; `reviewDetailReadiness.test.ts:11-35` | Four tabs use distinct list routes; LLM uses a separate count route; Human uses a distinct filter route; Unassessed has no active filter request. The warning/progress route polls every five seconds and list rendering requires semantic `serving.readable === true`; a transport error is not readable. Structured unavailable detail must not render as detail. No approved desktop capture establishes the exact request order, response hashes or unavailable/recovery transitions. | `CMD-1096` |
+| `EVD-1434` | `production/jobs-progress-executor` | `reviewsPaginationControls.tsx:76-79` and add/PDF polling branches; `reviewBulkOperationService.ts:165-192,388-403`; `reviewBulkOperationWorker.ts:94-99` and claim/progress/heartbeat paths; `startBackgroundWork.ts:28-70,235-294` | Add/PDF tracking handles are process-local Solid signals with no local/session storage or persisted query client. A full restart loses those UI handles even if server state remains. Pin acquisition and job insert are separate; deterministic job upsert resets current progress; worker claim/progress lacks owner-generation completion fencing. The desktop default `6400MiB` profile omits the sole bulk heartbeat while admitting jobs. Durable status, executor progress and later UI visibility remain distinct. | `CMD-1095`-`CMD-1097` |
+| `EVD-1435` | `production/snapshot-pin-publication` | `reviewServingManifestRepository.ts:405-490`; `reviewServingReader.ts:143-168,616-643`; `reviewServingSnapshotPinRepository.ts:154-233,275-355`; US-125/US-126 publication evidence | Ordinary reads select active or latest retired; explicit LKG uses the persisted pointer or fallback. Candidate reads are indexing and missing/failed reads are unavailable. Pins use mutable reference counts and active/LKG/future protection without an owner generation. Component writes, derived finalization and head promotion are not one transaction, so restart/resume needs a common immutable identity and partial-publication oracle across every route. | `CMD-1097` |
+| `EVD-1436` | `candidate/scenario/measurement-contract` | `PRF-1082`-`PRF-1083`; US-127 gate, route, state and physical matrices; 23-marker reconciliation | Exactly two finite proofs require one approved executable current/candidate desktop pair and the same fixture. Requests, recovered state, wall time, process-tree RSS, storage-engine WAL, retained generations, runtime paths, route/UI parity, snapshots, pins, jobs, unavailable behavior and fixed settings are independently retained. The candidate and collector are absent, so every physical field remains unavailable. | `CMD-1094`, `CMD-1097` |
+| `EVD-1437` | `test/control/proof` | Twenty-four isolated Bun test processes; one Vitest process; pre/post temp metadata and residue checks; lint/typecheck/source/control validation; `PRF-1082`-`PRF-1083`; blocker/owner/quality ledgers | Current-path tests pass but use static, fake, test-DOM or test-owned boundaries and do not execute an approved desktop restart/resume, current/candidate workload or physical collector. No test-owned DDL/DML ran in this selected inventory. Every finite process exited and no product process was started. | `CMD-1098`-`CMD-1101` |
+
+### US-127 Conditional Physical-Execution Gate
+
+| Gate | Required evidence | Result | `proofCheckState` |
+| --- | --- | --- | --- |
+| Fixture and authority | Immutable disposable database, bounded report/temp/output roots, schema/data hashes and explicit desktop DDL/DML/restart/resume/cleanup authority | All named values unset; no approved fixture or mutation authority | `blocked` |
+| Fixed settings | All 120 identities, package/runtime/platform settings, oracles, orders, caps and signoff fixed without defaults or fallback | `set=0`, `unset=120`; values were not printed | `blocked` |
+| Executable sides | Coherent current and candidate desktop package, shared-storage schema, writers, readers, workers, finalizers and cleaners with applied-path hashes | Current source exists; all 23 candidate/runtime markers have zero product-source files; no executable candidate | `blocked` |
+| Restart controller | Deterministic whole-desktop and backend-child interruption/relaunch at every finite checkpoint, including pre/post semantic readiness and repeated cycles | No approved controller, supervisor receipt or disposable desktop root | `blocked` |
+| Resume controller | Approved same-process suspend/wake, background/foreground and connectivity sequence with frozen clocks and platform semantics | No controller or product lifecycle handler; the meaning of resume is unsigned | `blocked` |
+| Route, UI and state oracle | Signed request/status/body/order/count/error hashes, DOM/navigation/cache state, active/LKG/fallback, job, pin and recovered-state vectors | No independent exact oracle or actual desktop capture | `blocked` |
+| Physical collector and budgets | Monotonic wall samples, process-tree RSS, storage WAL, file/temp/log/runtime-path events, retained generations and hard request/restart/resume/job/pin/cleanup caps | Collector, profile, serializer and budgets absent | `blocked` |
+| Recovery, residue and signoff | Immutable restart/resume/recovery/cleanup receipts, exact residue inventory, clean-host restore and owner signatures | Matrix, receipts, restore evidence and signatures absent | `blocked` |
+
+### US-127 Frozen Two-Scenario Contract
+
+| Proof ID | Finite scenario | Required checkpoints and exact pass boundary |
+| --- | --- | --- |
+| `PRF-1082` | Desktop restart | On the same immutable fixture, execute current then candidate in fixed order. Capture a clean whole-desktop quit/relaunch, forced whole-desktop loss and backend-child loss before readiness, after transport 2xx but before semantic readiness, during every four-tab/filter/count/detail/progress request, during queued-job admission/claim/progress/result, before/after pin acquisition, during component/derived/head publication and during cleanup; repeat to the approved cap. At every checkpoint record process tree, single-instance lease, data/log/database/temp/runtime paths, request vector, UI/hash/cache state, active/LKG/latest-retired identity, pins, jobs and unavailable/recovered state. Pass requires exactly one available desktop and bounded convergence to the signed expected state with no fatal restart, lost state, stale silent fallback, partial publication, duplicate effect, OOM, spill, unbounded recovery or residue. |
+| `PRF-1083` | Desktop resume | On the same fixture and executable sides, keep the desktop process alive across each approved suspend/wake, background/foreground and offline/online interruption before, during and after every four-tab/filter/count/detail/progress request and queued-job/publication/pin phase. Capture outer/hash URL, router state, query cache age/data/error/fetch status, request cancellation/replay/deduplication/order, backend child, semantic readiness, active/LKG/fallback, jobs, pins, unavailable UI and convergence. Pass requires the exact signed request and rendered-state vector, bounded resume/recovery, no lost or duplicated work and no fatal restart, stale silent fallback, partial publication exposure, OOM, spill or residue. |
+
+The exact route vector for both scenarios is:
+
+| Consumer | Exact request or route | Required comparison |
+| --- | --- | --- |
+| Desktop readiness | `GET /api/runtime/ready` | Transport status and semantic `data.ready` independently, including timeout and backend-child state |
+| Progress/admission | `POST /api/projectsreviewswarnings` | Status/body hash, readable/indexing/unavailable state, poll order/count and mutation side effects |
+| LLM tab | `GET /api/articlesreviewsfilters`; `POST /api/articlesreviews`; `POST /api/articlesreviewscount` | Snapshot/status/order/item/count/filter/error hashes and rendered rows/count |
+| Human tab | `GET /api/articlesreviewshumanfilters`; `POST /api/articlesreviewshuman` | Snapshot/status/order/item/filter/error hashes and rendered rows |
+| Both tab | `GET /api/articlesreviewsfilters`; `POST /api/articlesreviewsboth` | Snapshot/status/order/item/filter/error hashes and rendered rows |
+| Unassessed tab | `POST /api/articlesreviewsunassessed`; current filter control disabled | Snapshot/status/order/item/error hashes and rendered rows without an invented filter request |
+| Detail | `POST /api/projectsreview`; every tab title currently navigates through `/projects/$id/reviews-llm/$articleId` | Request count/body/status/payload/error/unavailable hash, cache reuse and exact URL/hash |
+| Add-job progress | `GET /api/projects/add_articles_jobs?jobId&sourceProjectId` | Durable criteria/status versus local tracking handle, executor progress/result and rendered status |
+| Pins and publication | Internal pin, manifest, active/LKG/fallback, job and cleanup state | Exact identities, reference counts, component/frontier state, retained generations and terminal settlement |
+
+At each checkpoint, retain request method/path/body hash, response
+status/body hash, start/end/order/retry/cancel classification and owning
+snapshot identity separately. Retain process ID/generation, child exit,
+single-instance lease, file paths, outer URL/hash, query-cache state,
+readiness, job state/progress, active head, persisted LKG, latest-retired
+fallback, pin reference/expiry and rendered unavailable/recovered state as
+independent values. An HTTP-success error payload, legitimate empty result,
+cached prior response, stale fallback or local terminal signal must not be
+accepted as another state.
+
+Reject a side immediately for a missing or changed critical setting,
+measurement, path or identity; an inferred/default runtime; transport-ready
+but semantic-unready admission; fatal restart; missing or extra child;
+single-instance conflict; lost or duplicated request/work/job; stale silent
+fallback; cross-snapshot route/UI mismatch; partial publication; lost/expired
+pin; unbounded request, retry, restart, resume or cleanup; OOM; spill; residue
+or failed restore. Preserve the failure and never weaken settings, silently
+retry or relabel unavailable as zero, passed or not-applicable.
+
+### US-127 Current Source Findings
+
+| Contract | Current checked-in behavior | Audit consequence |
+| --- | --- | --- |
+| Runtime paths and startup mutation | Desktop fixes the macOS data root under Application Support, creates data/log roots, rewrites `DUCKDB_PATH`, truncates the backend log and starts owner-mode server initialization; normal startup runs migrations and recovery mutations. | No physical desktop may run against an inferred/current root. A fixture path, package hash, exact migration state and mutation authority are mandatory. |
+| Readiness and supervision | Startup accepts any HTTP 2xx from the readiness route even when semantic `data.ready` is false. Backend exit is only guarded before readiness; after readiness there is no child restart supervision. | A window launch or startup success cannot prove semantic availability, fatal-restart rejection or bounded backend recovery. |
+| Resume, hash navigation and cache | No explicit desktop suspend/wake/resume/connectivity lifecycle exists. Desktop uses hash history, while the shared filter hook reads outer search and rewrites pathname/search without retaining hash. Lists disable focus refetch; detail caches for five minutes. | Same-process resume can expose stale cached state or lose hash navigation without a request. Exact outer/hash URL, cache state, request vector and render are required. |
+| Four tabs, detail and unavailable state | Four list routes differ; count and filter calls differ by mode; all titles route through LLM detail. Warning polling gates list readability and structured unavailable detail must not render as data. | Shared components and passing fake/test-DOM checks establish applicability only, not exact four-tab/detail/progress request or UI parity. |
+| Queued jobs and progress | Add/PDF tracking handles are local signals. Pin and job creation are separate; deterministic job upsert mutates current state; worker progress is not owner-generation fenced. The desktop default memory profile omits the bulk worker. | A durable job row, local ID or succeeded counter cannot prove executor registration, resumed progress, pin settlement or later client visibility. |
+| Active/LKG, pins and publication | Ordinary reads use active else latest retired; explicit LKG uses its pointer/fallback. Pins are mutable reference counts. Component/derived/head publication spans transactions. | Every route must bind one signed identity; active, persisted LKG, fallback, pin protection and absence of partial publication require separate capture. |
+
+### US-127 Desktop State Result Matrix
+
+| Scenario / side | Process and runtime paths | Requests, routes and UI | Cache and navigation | Progress and queued jobs | Snapshots, pins and publication | Unavailable and recovered state | `proofCheckState` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `PRF-1082` current desktop restart | pre/post process tree, child, lease, data/log/database/temp path and generation `unavailable` | exact readiness/four-tab/filter/count/detail/progress request and UI hashes `unavailable` | outer/hash URL and query-cache state `unavailable` | durable criteria/status, executor progress/result and local handle `unavailable` | active/LKG/latest-retired IDs, component/head state, pins and retained generations `unavailable` | fatal/transport/semantic/unavailable/recovered sequence and wall bound `unavailable` | `blocked` |
+| `PRF-1082` candidate desktop restart | candidate process/runtime generation and rooted-path receipts `unavailable`; executable side absent | exact candidate route/UI vector `unavailable` | candidate router/cache state `unavailable` | owner-fenced job/progress/result receipts `unavailable` | immutable revision/head/lease/pin/publication receipts `unavailable` | candidate failure/recovery/cleanup sequence `unavailable` | `blocked` |
+| `PRF-1083` current desktop resume | same process/child/lease and path stability across approved lifecycle transitions `unavailable` | resumed request cancel/replay/dedup/order and rendered parity `unavailable` | outer/hash URL, history, filter/page/search and cache age/data/error/fetch state `unavailable` | resumed polling, executor progress/result and local handle `unavailable` | active/LKG/fallback identity, pins and partial-publication state `unavailable` | semantic readiness, offline/unavailable and convergence sequence `unavailable` | `blocked` |
+| `PRF-1083` candidate desktop resume | candidate same-process/child/lease/path state `unavailable`; executable side absent | exact candidate resumed route/UI vector `unavailable` | candidate navigation/cache state `unavailable` | owner-fenced resumed job/progress/result `unavailable` | immutable revision/head/lease/pin continuity `unavailable` | candidate unavailable/recovered sequence `unavailable` | `blocked` |
+
+### US-127 Physical Measurement Matrix
+
+| Scenario / side | Requests | Recovered state | Wall time | Process-tree RSS | Storage-engine WAL | Retained generations | Fixed settings | `proofCheckState` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `PRF-1082` current desktop restart | exact calls/order/status/body/retry/cancel totals `unavailable`, not zero | process/runtime/path/cache/route/job/snapshot/pin/cleanup convergence `unavailable` | total/startup/readiness/route/job/recovery/cleanup/raw samples `unavailable` | baseline/peak/end/delta/events `unavailable` | file/existence/baseline/peak/end/delta/events `unavailable` | runtime/database/recovery/log/active/LKG/candidate/retired/pinned/job generations `unavailable` | unchanged and unchosen | `blocked` |
+| `PRF-1082` candidate desktop restart | all request effects `unavailable`, not zero | all candidate convergence fields `unavailable` | all `unavailable` | all `unavailable` | all `unavailable` | component/snapshot/head/lease/job/retention/runtime generations `unavailable` | no executable bundle | `blocked` |
+| `PRF-1083` current desktop resume | exact cancel/replay/dedup/order/status/body totals `unavailable`, not zero | process/child/readiness/hash/cache/route/job/snapshot/pin convergence `unavailable` | total/suspend/wake/offline/online/route/job/recovery/raw samples `unavailable` | baseline/peak/end/delta/events `unavailable` | file/existence/baseline/peak/end/delta/events `unavailable` | runtime/database/recovery/active/LKG/candidate/retired/pinned/job generations `unavailable` | unchanged and unchosen | `blocked` |
+| `PRF-1083` candidate desktop resume | all request effects `unavailable`, not zero | all candidate convergence fields `unavailable` | all `unavailable` | all `unavailable` | all `unavailable` | component/snapshot/head/lease/job/retention/runtime generations `unavailable` | no executable bundle | `blocked` |
+
+### US-127 Validation Proof Rows
+
+| Proof ID | Predicate | `proofCheckState` | Evidence | Missing evidence / blocker | Owner question |
+| --- | --- | --- | --- | --- | --- |
+| `PRF-1082` | Desktop restart passes only when current and one approved executable candidate run the finite clean/forced whole-desktop and backend-child restart matrix on one fixed shared-storage fixture; every process, runtime path, readiness, request, four-tab/detail/progress UI, cache, job, active/LKG/fallback, pin, publication, unavailable, cleanup and recovered-state value must match its signed oracle under hard time/RSS/WAL/generation/call/restart/cleanup budgets, with no fatal restart, lost state, stale silent fallback, partial publication, duplicate effect, OOM, spill or residue. | `blocked` | `EVD-1384`-`EVD-1386`, `EVD-1413`-`EVD-1419`, `EVD-1424`-`EVD-1437`; `PRF-1077`-`PRF-1081` | Fixture/settings, current/candidate desktop bundle, rooted disposable paths, deterministic restart controller/supervisor, exact route/UI/state oracle, collector/budgets, bounded recovery/cleanup/restore and signoff unavailable; `BLK-0887`-`BLK-0890`, `BLK-0892`-`BLK-0896`. | `OQ-0891`-`OQ-0894`, `OQ-0896`-`OQ-0900` |
+| `PRF-1083` | Desktop resume passes only when both executable sides retain the same process across the approved suspend/wake, background/foreground and connectivity matrix on that fixture; process/child/path, readiness, outer/hash navigation, cache, request cancellation/replay/dedup/order, all four tabs/detail/progress, jobs, active/LKG/fallback, pins, publication and unavailable/recovered state must converge exactly under hard time/RSS/WAL/generation/call/resume/cleanup budgets, with no fatal restart, lost state, stale silent fallback, partial publication, duplicate effect, OOM, spill or residue. | `blocked` | `EVD-1385`-`EVD-1386`, `EVD-1417`-`EVD-1419`, `EVD-1430`-`EVD-1437`; `PRF-1077`-`PRF-1082` | Fixture/settings, signed resume semantics/controller, current/candidate desktop bundle, exact navigation/cache/request/UI/state oracle, collector/budgets, bounded recovery/cleanup/restore and signoff unavailable; `BLK-0887`-`BLK-0889`, `BLK-0891`-`BLK-0896`. | `OQ-0891`-`OQ-0893`, `OQ-0895`-`OQ-0900` |
+
+### US-127 Test-Fixture Cleanup And Accounting Reconciliation
+
+| Item | Recorded result | Evidence boundary |
+| --- | --- | --- |
+| Common benchmark current/candidate DDL or DML commands | `0 / 0` | Gate failed before mutation; requests, recovered state, time, RSS, WAL, generations, routes/UI, paths, snapshots, pins and jobs remain `unavailable`. This command count is not a workload measurement. |
+| Desktop restart or resume scenario commands | `0 / 0` | No ElectroBun, server, browser, database, worker, restart, suspend/wake, resume or common-fixture cleanup ran; no benchmark report exists. |
+| Current-path verification | `24 files / 24 isolated Bun processes: 168 passes, 0 failures, 733 expectations; 1 Vitest file / 1 process: 10 passes, 0 failures` | Static, fake, test-DOM and test-owned current paths only; no candidate, approved desktop lifecycle controller, shared-storage workload, physical collector or actual browser/desktop capture. |
+| Test-owned disposable DDL/DML | `0 / 0` | The selected US-127 verification inventory does not apply migrations or create a DuckDB fixture. |
+| Pre-existing temp baseline | `/private/tmp/duckdb-temp` existed empty before tests with metadata size `64`, mtime `1784787077` and zero children | Preserved pre-existing path; it is not current-run spill evidence and was not removed. |
+| Current-run residue | No `.us127-*`, `us127-*` or repo `*us127*` path remains after validation | Name-bounded current-run accounting only; no global absence claim and no benchmark cleanup receipt. |
+| Snapshot, live/current/project database accesses | `0` | No snapshot/query/studio, app-data root or direct DuckDB CLI against project data ran. |
+| Product servers, browser, desktop or persistent workers started | `0` | Only finite isolated test/validation processes ran and all exited; no stop action remains. |
+| Benchmark-critical settings | Unchanged and unchosen | No default, inferred identity, retry/cap change, fallback, OOM workaround or spill was accepted. |
+| Same-fixture semantic and physical result | `unavailable` | Source/tests do not execute an approved candidate or establish desktop restart/resume, exact route/UI parity, recovered state, job/pin/publication settlement or physical metrics. |
+
+| Proof register slice | Rows | `satisfied` | `pending` | `blocked` | `not-applicable` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Prior `PRF-0001`-`PRF-1081` | 1,081 | 8 | 478 | 595 | 0 |
+| US-127 desktop lifecycle validations `PRF-1082`-`PRF-1083` | 2 | 0 | 0 | 2 | 0 |
+| **Cumulative proof register** | **1,083** | **8** | **478** | **597** | **0** |
+
+The two proofs are conjunctive later-validation rows. They do not replace or
+advance a component, target, family or prior proof. DBO remains 322/322
+blocked, CMF remains 1,985/1,985 blocked and FAN remains 91 blocked plus one
+source-proven not-applicable row with zero value-bearing observations. All 326
+keep dispositions retain `recommendationActionability: unresolved`; all 115
+non-keep dispositions remain `blocked`; zero recommendations are actionable
+and `overallCertification` remains `INCOMPLETE`.
+
 ### Output 01 - API Surface Inventory
 
 Authoritative row family: `API-####`. Record one row per mounted route or
@@ -28003,6 +28255,15 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-1090` | 2026-07-23 / US-126 | Recorded pre-test `/private/tmp/duckdb-temp` metadata and ran one isolated `rtk proxy bun test <file>` process for each of: chunk manifest, dirty work, projector service, projector worker, manifest repository, snapshot promotion, reader, diagnostics, reviews-warning route, startup background work, projector heartbeat, bulk service, bulk worker, snapshot pins, retention, route-parity runner, route-parity evidence and desktop-interruption evidence. The first metadata helper used `rtk zsh -f`, whose reduced PATH could not find `stat`, `find` or `sort`; corrected helpers used absolute system paths. | Corroborate current lease/publication/restart/read/job/cleanup/operator contracts in isolated processes, preserve runner/tooling behavior and avoid calling tests a physical comparison. | Eighteen files produced 323 passes, 18 intentional skips, zero failures and 1,756 expectations. The warning-route test applied migrations to one disposable temp database and self-cleaned. All processes exited; produced `EVD-1428`. |
 | `CMD-1091` | 2026-07-23 / US-126 | Ran `rtk proxy bun run lint`, `rtk jq -r '.scripts.typecheck // empty' package.json`, `rtk git diff --check`, raw scoped baseline/worktree product-source checks, `rtk git status --short`, corrected pre/post temp metadata and exact US-126/warning-test-root residue scans. | Close repo-native style, typecheck discovery, whitespace, product-source isolation and cleanup gates without fixing unrelated code or touching project data. | Lint retains the same six unrelated errors in three untouched worker files; no typecheck script exists. `git diff --check` passes; baseline/worktree product-source diffs are empty. `/private/tmp/duckdb-temp` retains size `64`, mtime `1784787077` and zero children; no US-126-named or exact warning-test-root residue exists. |
 | `CMD-1092` | 2026-07-23 / US-126 | Created a temporary read-only Bun validator with `apply_patch`, ran `rtk proxy bun ./.us126-validator.ts`, corrected two real Markdown separator-width defects, reran it successfully, removed the validator with `apply_patch`, then repeated `rtk git diff --check`, raw scoped baseline/worktree product-source checks, `rtk git status --short`, exact temp/residue checks and bounded maximum-ID/definition checks. The first validator attempt rejected an invalid Unicode regular expression containing an escaped backtick; the next two attempts exposed the two table defects and were preserved rather than treated as acceptance. A final residue helper referenced nonexistent macOS `/usr/bin/test`; the exact assertion was repeated with `/bin/test`. | Mechanically close US-126 identifier definitions, three-proof/six-state/six-physical cardinality, 82-setting/20-marker gates, required state/metric terminology, table shape, proof accounting, actionability, tracker ordering, product-source isolation and residue. | Accepted validator result: nine evidence rows, nine command rows, ten blockers, ten owner questions, three blocked proofs, six blocked state rows, six blocked physical rows, 82 settings, 20 markers and cumulative `8/478/595/0` across 1,081 proofs. Final source isolation, whitespace and corrected residue checks pass; only the two permitted audit documents plus pre-existing engine-owned `tasks/prd.json` remain modified. |
+| `CMD-1093` | 2026-07-23 / US-127 | Read the user PRD and codebase patterns, AGENTS instructions, complete reporting/DuckDB/API-server/frontend/browser-control skills, `.ralph-tui/progress.md`, `tasks/prd.json#US-126/#US-127`, US-125/US-126 audit context, current HEAD/worktree and next IDs. | Establish prerequisite completion, exact desktop restart versus resume grains, mutation boundary, required platform evidence and unrelated worktree state before execution. | US-126 is complete at `d9d6b7421cca9481c7b5e840e9ba43946a58d94f`; next IDs were `EVD-1429`, `CMD-1093`, `BLK-0887`, `OQ-0891` and `PRF-1082`. Only engine-owned `tasks/prd.json` was dirty before this story. |
+| `CMD-1094` | 2026-07-23 / US-127 | Ran raw scoped baseline/worktree product-source checks, a presence-only Zsh loop over the exact 120 fixture/identity/package/runtime/platform/oracle/collector/cap/signoff names and exact fixed-string product-source searches for each of 23 candidate/runtime markers; printed Bun/RTK/host/OS versions without printing setting values. | Enforce immutable-fixture, benchmark-critical setting, executable-candidate and tooling gates before any desktop, database or fixture mutation. | Product source is unchanged from `4ca6a3de229a949ef2662affd1d83127b708df51`; `set=0`, `unset=120`, `total=120`; all 23 markers have zero product-source files. Bun is 1.3.13, RTK is 0.42.4 and the host is Darwin 25.5.0 arm64 / macOS 26.5.2. Execution stopped before product start or mutation; produced `EVD-1429`/`EVD-1436`. |
+| `CMD-1095` | 2026-07-23 / US-127 | Used bounded source-only `rg`/`sed` reads of desktop runtime config and main process, runtime-ready route, server owner startup/mutation mode and background-work admission. | Trace rooted paths, log/database creation, process topology, readiness, child supervision, owner mutations, memory policy and executor registration without starting the desktop or opening DuckDB. | Produced `EVD-1430`-`EVD-1431` and part of `EVD-1434`: transport 2xx is accepted without semantic readiness, post-ready child exit is unsupervised, normal startup mutates app-owned state and the 6400MiB desktop default omits the bulk executor. |
+| `CMD-1096` | 2026-07-23 / US-127 | Read hash-history/origin/filter hooks, four tabs and their list/filter/count query options, table title links, detail route, warnings/progress gating, pagination controls and exact tests; searched desktop lifecycle symbols and persistence APIs. Initial unquoted paths containing `$id`/`$articleId` expanded in Zsh and produced nonexistent-path errors; corrected single-quoted paths and bounded reads are authoritative. | Freeze exact route/UI/cache/navigation/unavailable/resume contracts while preserving discovery failures and avoiding a synthetic browser claim. | Produced `EVD-1431`-`EVD-1434`: no explicit resume lifecycle exists; hash and outer-search state can diverge; focus refetch is disabled; all four titles use LLM detail; job handles are local signals; route and UI parity remain unobserved. |
+| `CMD-1097` | 2026-07-23 / US-127 | Read manifest active/LKG selection, reader readiness/fallback, snapshot pins, bulk job admission/claim/progress, publication evidence and exact tests; reconciled 23 candidate/runtime markers and froze the two scenario, route, state and physical matrices. Broad discovery output was bounded after truncation. | Keep active, persisted LKG, latest-retired fallback, pins, component/head publication, job status, executor result, request/UI state and physical metrics independent. | Produced `EVD-1434`-`EVD-1436`, `PRF-1082`-`PRF-1083`, `BLK-0887`-`BLK-0896` and `OQ-0891`-`OQ-0900`; no target or recommendation advanced. |
+| `CMD-1098` | 2026-07-23 / US-127 | Recorded pre-test `/private/tmp/duckdb-temp` metadata and exact US-127 residue, then ran one isolated `rtk proxy bun test <file>` process for each of 24 desktop/runtime/navigation/route/detail/warning/reader/manifest/pin/job/retention/admission/parity files. | Corroborate checked-in current contracts in isolated processes, avoid module-mock contamination and avoid calling static/fake/test-owned results a physical desktop lifecycle comparison. | Twenty-four files produced 168 passes, zero failures and 733 expectations. No selected test applied DDL/DML; all processes exited and the pre-existing empty temp path retained its baseline metadata. Produced `EVD-1437`. |
+| `CMD-1099` | 2026-07-23 / US-127 | Ran `rtk proxy bunx vitest run src/components/main/reviews/reviewsProjectWarnings.vitest.tsx` because `.vitest.tsx` requires Vitest. | Corroborate warning/progress rendering and unavailable behavior with the correct runner without treating test DOM as actual browser/desktop capture. | One file produced ten passes and zero failures in 429 ms. Vitest reported that `baseline-browser-mapping` data is over two months old; the unrelated dependency warning was preserved and not fixed. |
+| `CMD-1100` | 2026-07-23 / US-127 | Ran `rtk proxy bun run lint`, exact typecheck-script discovery, `rtk git diff --check`, raw scoped baseline/worktree product-source checks, `git status --short`, corrected temp metadata and exact US-127/validator residue checks. One helper referenced nonexistent macOS `/bin/stat`; the corrected `/usr/bin/stat` check is authoritative. | Close repo-native style, typecheck discovery, whitespace, source isolation, allowed-path and cleanup gates without fixing unrelated code or touching project data. | Lint retains the same six unrelated errors in three untouched worker files; no typecheck script exists. Whitespace and both product-source checks pass. The empty `/private/tmp/duckdb-temp` retains size `64`, mtime `1784787077` and zero children; no current-run residue remains. |
+| `CMD-1101` | 2026-07-23 / US-127 | Created a temporary read-only Bun validator with `apply_patch`, ran it successfully once with `rtk proxy bun`, removed it with `apply_patch`, then repeated whitespace, source-isolation, status, temp/residue, maximum-ID and tracker checks. | Mechanically close US-127 definition continuity, exactly-two-proof/four-state/four-physical cardinality, 120-setting/23-marker gates, required route/state/metric/rejection terms, Markdown table shape, proof accounting, actionability, tracker order and product-source isolation. | Accepted result: nine evidence rows, nine command rows, ten blockers, ten owner questions, two blocked proofs, four blocked state rows, four blocked physical rows, 120 settings, 23 markers and cumulative `8/478/597/0` across 1,083 proofs. Final source isolation, whitespace and residue checks pass; only the two permitted audit documents plus pre-existing engine-owned `tasks/prd.json` remain modified. |
 
 ## Blockers
 
@@ -28921,6 +29182,16 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0884` | US-126 jobs, pins, delivery and cleanup settlement | Pin acquisition precedes a separate job upsert; bulk claims are timestamp-only; workers neither validate nor settle pins; low-memory startup omits the bulk heartbeat. Retention omits job/pin/control cleanup, candidate-only protection and a complete-cycle receipt. | Pending/completed job status, a future pin or one 512-row cleanup step cannot prove atomic admission, unique execution, artifact delivery, reference-safe retention, bounded cleanup or restart settlement. | `OQ-0888` | Job/export/storage/retention owners define atomic owner-generation job+lease admission, typed batch/delivery receipts, pin settlement and bounded reference-safe cleanup cycles. |
 | `BLK-0885` | US-126 physical collector and hard rejection budgets | No approved collector records per-statement effects and duplicate/no-op classifications, total/phase raw time, storage WAL, sibling temp events/bytes, process-tree RSS, claims/attempts/jobs/generations/operator transitions or hard claim/retry/job/restart/cleanup ceilings. | Missing physical values cannot be zero; unit durations, source constants and a self-cleaned test database cannot reject spill, OOM, fatal restart, unbounded replay/cleanup or changed settings. | `OQ-0889` | Audit/database/runtime/performance owners approve the raw collector, sampling, serializers and hard budgets, retaining every value and failing closed on missing/changed/spilled/OOM state. |
 | `BLK-0886` | US-126 recovery, residue, restore and owner signoff | No approved finite expired-lease/publication/restart matrix, deterministic controller, immutable recovery/cleanup/operator receipts, bounded residue inventory, clean-host restore or owner signatures exists. | Eighteen passing isolated files corroborate current source only; they cannot prove process stop/start, current/candidate convergence, duplicate suppression, active/LKG/routes, job/pin settlement or cleanup completion. | `OQ-0890` | Reliability/recovery/retention/audit/release owners execute and sign every failure, restart, convergence, cleanup, residue and restore outcome without fallback, spill, OOM or fatal restart. |
+| `BLK-0887` | US-127 immutable fixture, fixed settings and desktop-lifecycle authority | All 120 fixture/identity/package/runtime/platform/oracle/collector/cap/signoff names are unset; no immutable disposable database, bounded roots or authorized desktop restart/resume/cleanup controller exists. | A run would invent benchmark-critical settings and lifecycle authority or risk current/project data. Missing requests, recovered state, time, RSS, WAL, generations, paths, routes/UI, jobs and pins cannot become zero or defaults. | `OQ-0891` | Benchmark/database/runtime/audit owners approve one immutable fixture, all 120 values, exact roots/hashes, DDL/DML/restart/resume/cleanup authority and failure-preservation policy. |
+| `BLK-0888` | US-127 executable current/candidate shared-storage desktop bundle | All 23 candidate/runtime markers have zero product-source files and no coherent applied current/candidate package, schema, writer, reader, worker, finalizer or cleaner pair exists. | Current-source-only execution cannot establish candidate parity; implementing the candidate in this audit would change schema/runtime and combine implementation with evidence. | `OQ-0892` | Desktop/database/projector/job/retention/release owners approve both package/bundle hashes, migration-isolated setup, shared-storage paths, applied paths, cutover, rollback and cleanup. |
+| `BLK-0889` | US-127 disposable desktop paths, package and process controller | Desktop creates a fixed macOS Application Support data/log root, rewrites `DUCKDB_PATH`, truncates its log and starts owner-mode migrations/recovery. No approved disposable root injection, package hash, complete process-tree controller or single-instance-lease receipt exists. | Starting the checked-in desktop could mutate app-owned state; a window relaunch or child exit cannot prove deterministic whole-topology restart, exact paths or cleanup. | `OQ-0893` | Desktop/runtime/database owners provide rooted disposable package execution, exact process/single-instance semantics and deterministic whole-desktop/backend-child control with cleanup. |
+| `BLK-0890` | US-127 semantic readiness, backend supervision and restart receipt | Startup treats any readiness HTTP 2xx as ready and guards backend exit only before that point. No post-ready child supervisor or durable restart/recovery generation binds the before/after state. | Transport success, visible window or one restarted child cannot reject semantic unavailability, fatal restart, duplicate child, lost work or unbounded recovery. | `OQ-0894` | Desktop/runtime/reliability owners define semantic readiness admission, post-ready supervision, fatal-exit rules, restart generations and hard startup/recovery bounds. |
+| `BLK-0891` | US-127 resume semantics, lifecycle, hash navigation and cache settlement | No approved suspend/wake/background/connectivity matrix or product resume handler exists. Desktop uses hash history, while shared filters read outer search and can rewrite without retaining the hash; list focus refetch is disabled and detail cache lasts five minutes. | Same-process return can show stale cached content or lose navigation without a request. Static source cannot prove exact cancel/replay/dedup/order, URL/hash, cache or render convergence. | `OQ-0895` | Desktop/client owners sign the resume matrix and exact outer/hash navigation, cache freshness, request settlement and unavailable/recovery rules for each platform. |
+| `BLK-0892` | US-127 four-tab, detail, progress and unavailable route/UI oracle | LLM, Human, Both and Unassessed use different request vectors; all titles route through LLM detail; warning progress gates readability. No signed status/body/order/count/error/DOM/navigation oracle or actual desktop capture exists. | Passing fake/test-DOM checks and shared components cannot prove exact route/UI parity, legitimate empty versus unavailable state, request counts, hydration identity or rendering across lifecycle transitions. | `OQ-0896` | Product/API/client/query owners approve and capture the exact readiness, four-tab/filter/count/detail/progress request and rendered-state vectors before, during and after recovery. |
+| `BLK-0893` | US-127 queued jobs, executor progress and pin settlement | Add/PDF UI tracking IDs are process-local signals; pin acquisition and job upsert are separate; job progress lacks owner-generation completion fencing; the desktop default memory profile omits the bulk executor. | Durable status, a local ID, succeeded counter or retained pin cannot prove admission, executor registration, unique resumption, exact progress/result visibility, pin settlement or cleanup. | `OQ-0897` | Job/export/storage/runtime owners define atomic job+lease admission, executor topology, owner-generation claims, batch/result/delivery receipts, UI rediscovery and pin settlement across restart/resume. |
+| `BLK-0894` | US-127 active/LKG/pin identity and partial-publication oracle | Ordinary active fallback, persisted LKG, latest-retired fallback, mutable refcount pins, component writes, derived finalization and head promotion remain distinct; no common signed identity spans every route. | One active read, pin row or successful promotion cannot prove exact fallback, generation protection, absence of mixed publication, route parity or recovery. | `OQ-0898` | Query/publication/retention owners approve immutable component/head/visible-frontier and pin identities plus exact active/LKG/fallback vectors at every lifecycle checkpoint. |
+| `BLK-0895` | US-127 request, wall-time, RSS, WAL and generation collector with hard budgets | No approved collector records exact request effects, monotonic total/phase time, process-tree RSS, storage-engine WAL, runtime path/file/log events, retained generations or hard request/restart/resume/job/pin/cleanup ceilings. | Missing physical values cannot be zero; unit-test counts/durations and source constants cannot reject OOM, spill, fatal restart, lost/duplicate request, unbounded recovery or changed settings. | `OQ-0899` | Audit/database/runtime/performance owners approve raw samples, serializers and hard budgets, retaining every value and failing closed on missing/changed/spilled/OOM state. |
+| `BLK-0896` | US-127 recovery, residue, restore, platform matrix and owner signoff | No approved finite restart/resume matrix, immutable recovery/cleanup receipts, bounded residue inventory, clean-host restore, platform capture or owner signatures exists. | Passing current-path tests cannot prove actual process interruption/resume, current/candidate convergence, routes/UI, jobs/pins, retained generations, cleanup or restore. | `OQ-0900` | Reliability/recovery/retention/audit/release owners execute and sign every restart/resume, convergence, cleanup, residue and restore outcome without fallback, spill, OOM or fatal restart. |
 
 ## Owner Questions
 
@@ -29843,6 +30114,16 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0888` | Job/export/storage/retention owners | Which atomic owner-generation job+snapshot-lease admission, heartbeat, batch/result/artifact/delivery receipt, pin renewal/release/expiry/compensation and bounded reference-safe cleanup cycle settle every terminal and restart state? | `PRF-1079`-`PRF-1081` and `BLK-0884` |
 | `OQ-0889` | Audit/database/runtime/performance owners | Which collector records every claim/attempt/statement/duplicate/job/operator effect, total/phase raw time, storage WAL, sibling temp, process-tree RSS, retained generations and hard claim/retry/job/restart/cleanup budgets, rejecting every missing or changed value? | `PRF-1079`-`PRF-1081` and `BLK-0885` |
 | `OQ-0890` | Reliability/recovery/retention/audit/release owners | Which finite expiry/publication/application-restart controller, immutable recovery/cleanup/operator receipts, residue/restore checks and signatures settle all three scenarios without fallback, spill, OOM, fatal restart, lost work, duplicate effect, unsettled job or route mismatch? | `PRF-1079`-`PRF-1081` and `BLK-0886` |
+| `OQ-0891` | Benchmark/database/runtime/audit owners | Which immutable disposable database and bounded report/temp/output roots, schema/data hashes, exact current/candidate snapshot/job/pin/runtime/database/recovery/desktop-lease identities, all 120 fixed values and explicit DDL/DML/restart/resume/cleanup authority are approved for US-127? | `PRF-1082`-`PRF-1083` and `BLK-0887` |
+| `OQ-0892` | Desktop/database/projector/job/retention/release owners | Which coherent executable current/candidate desktop packages, shared-storage schemas, writers, readers, workers, finalizers, cleaners, migration-isolated setup, cutover and rollback are approved, and what hashes prove the applied paths? | `PRF-1082`-`PRF-1083` and `BLK-0888` |
+| `OQ-0893` | Desktop/runtime/database owners | Which supported disposable data/log/database/temp roots, package hash, process-tree and single-instance-lease controller permit clean and forced whole-desktop plus backend-child restart without touching app-owned or project data? | `PRF-1082`-`PRF-1083` and `BLK-0889` |
+| `OQ-0894` | Desktop/runtime/reliability owners | Must desktop admission inspect semantic `data.ready`; which post-ready supervisor, fatal-exit rule, restart generation and startup/recovery caps govern backend loss before and after readiness? | `PRF-1082` and `BLK-0890` |
+| `OQ-0895` | Desktop/client owners | What exact suspend/wake, background/foreground and offline/online sequence defines resume on each platform, and which outer/hash URL, filter/page/search, cache age/data/error/fetch and request cancel/replay/dedup/order states must settle? | `PRF-1083` and `BLK-0891` |
+| `OQ-0896` | Product/API/client/query owners | Which signed request/status/body/order/count/error and rendered-state hashes cover readiness, LLM, Human, Both, Unassessed, detail and progress before interruption, during unavailable state and after recovery? | `PRF-1082`-`PRF-1083` and `BLK-0892` |
+| `OQ-0897` | Job/export/storage/runtime owners | Which atomic owner-generation job+snapshot-lease admission, executor topology, heartbeat, batch/result/artifact/delivery receipt, client rediscovery and pin renewal/release/expiry/compensation settle queued work across restart and resume? | `PRF-1082`-`PRF-1083` and `BLK-0893` |
+| `OQ-0898` | Query/publication/retention owners | Which immutable component/head/visible-frontier publication receipt and pin owner generation bind exact active, persisted-LKG and latest-retired fallback identities across every route and lifecycle checkpoint? | `PRF-1082`-`PRF-1083` and `BLK-0894` |
+| `OQ-0899` | Audit/database/runtime/performance owners | Which collector records exact request effects, recovered-state transitions, total/phase wall samples, process-tree RSS, storage WAL, rooted path/file/log events, retained generations and hard request/restart/resume/job/pin/cleanup budgets? | `PRF-1082`-`PRF-1083` and `BLK-0895` |
+| `OQ-0900` | Reliability/recovery/retention/audit/release owners | Which finite restart/resume controller, immutable recovery/cleanup receipts, platform capture, residue/restore checks and signatures settle both scenarios without fallback, spill, OOM, fatal restart, lost state, duplicate effect, unsettled job/pin or route/UI mismatch? | `PRF-1082`-`PRF-1083` and `BLK-0896` |
 
 ## US-001 Quality Gates
 
@@ -36165,6 +36446,84 @@ commands. A command proves only the claim linked through its evidence record.
       skipped because this is an audit-only Markdown change and the execution
       gate failed. The one test-owned migration run and current source findings
       do not pass a current/candidate workload proof.
+
+## US-127 Quality Gates
+
+- [x] US-126 is complete at HEAD
+      `d9d6b7421cca9481c7b5e840e9ba43946a58d94f`. Scoped `src`,
+      `scripts`, `package.json` and `bun.lock` product source remains unchanged
+      from `4ca6a3de229a949ef2662affd1d83127b708df51`; the engine-owned
+      `tasks/prd.json` modification remains untouched.
+- [x] The conditional gate ran before desktop, server, browser, database,
+      fixture, worker, migration, restart, suspend/wake, resume, job,
+      publication, cleanup or restore mutation. All 120 named values are unset
+      and all 23 candidate/runtime markers have zero product-source files.
+      Every workload value is `unavailable`, never zero, passed or
+      not-applicable.
+- [x] Exactly two validation grains freeze whole-desktop/backend restart and
+      same-process resume. Clean/forced stops, readiness boundaries, four-tab/
+      filter/count/detail/progress requests, jobs, pins, publication,
+      unavailable state and repeated cycles remain finite nested checkpoints
+      rather than extra proof rows.
+- [x] Process, backend child, single-instance lease, rooted data/log/database/
+      temp paths, transport readiness, semantic readiness, outer/hash URL,
+      cache, request, rendered UI, active, persisted LKG, latest-retired
+      fallback, pin, job criteria/status, executor progress/result,
+      publication, recovered state and cleanup remain independent contracts.
+- [x] Four current/candidate state rows retain process/path, exact request/
+      route/UI, cache/navigation, progress/jobs, snapshot/pin/publication and
+      unavailable/recovered state. Four matching physical rows independently
+      retain request effects, recovered state, total/phase wall time,
+      process-tree RSS, storage-engine WAL, retained generations, fixed
+      settings and `proofCheckState`.
+- [x] The route vector covers semantic readiness; LLM filter/list/count; Human
+      filter/list; Both shared-filter/list; Unassessed list with no invented
+      filter request; common LLM detail; warnings/progress; add-job status; and
+      internal pin/publication state. Request and UI parity remain separately
+      signed requirements.
+- [x] Missing or changed settings, measurements, paths or identities;
+      transport-only readiness; fatal restart; duplicate child; lost/duplicate
+      request or work; stale silent fallback; cross-snapshot route/UI mismatch;
+      partial publication; lost pin; unbounded request/retry/restart/resume/
+      cleanup; OOM; spill; residue or failed restore rejects the applicable
+      proof.
+- [x] Current source findings preserve semantic-readiness and post-ready
+      supervision gaps, absent resume lifecycle, hash/filter/cache risk,
+      process-local job handles, low-memory executor omission and independent
+      active/LKG/fallback/pin/publication state as blockers rather than
+      execution evidence.
+- [x] `PRF-1082`-`PRF-1083` are independently `blocked`; cumulative proof is
+      1,083 rows: eight `satisfied`, 478 `pending`, 597 `blocked` and zero
+      `not-applicable`. Actionability remains 326 unresolved/115 blocked/zero
+      actionable and certification remains `INCOMPLETE`.
+- [x] `EVD-1429`-`EVD-1437`, `CMD-1093`-`CMD-1101`,
+      `BLK-0887`-`BLK-0896` and `OQ-0891`-`OQ-0900` retain exact
+      sources/tooling, failed checks, unavailable evidence, owner questions and
+      finite resolution conditions without advancing a target or
+      recommendation.
+- [x] Twenty-four current-path files ran in isolated Bun processes and produced
+      168 passes, zero failures and 733 expectations. One Vitest file produced
+      ten passes and zero failures. Tests corroborate current contracts only
+      and do not pass either desktop lifecycle proof.
+- [x] No selected test applied DDL/DML. The pre-existing empty
+      `/private/tmp/duckdb-temp` retained size `64`, mtime `1784787077` and zero
+      children; no US-127-named or validator residue exists and no product
+      process was started.
+- [x] No live/current/project database, snapshot, common fixture, benchmark
+      DDL/DML, current-only workload, executable candidate, product server/
+      worker, browser/desktop capture, lifecycle interruption, publication,
+      benchmark cleanup or restore ran. Critical settings remain unchanged and
+      unchosen.
+- [x] Repo-native lint retains the same six unrelated errors in three untouched
+      worker files and no typecheck script exists. `git diff --check`,
+      product-source isolation, ID/reference/proof, exactly-two-scenario,
+      four-state-side, four-physical-side, 120-setting, 23-marker,
+      required-term, table-width, accounting, tracker and current-run residue
+      gates pass through `CMD-1101`; no unrelated lint issue is fixed.
+- [x] Build/full-suite, product migration and physical/platform gates are
+      skipped because this is an audit-only Markdown change and the execution
+      gate failed. Current source, static/fake/test-DOM checks and unit-test
+      duration do not pass a current/candidate desktop lifecycle workload.
 
 ---
 
