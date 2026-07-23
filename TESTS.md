@@ -42,4 +42,19 @@ Stop any existing primary `dev:server` stack before running the complete gate be
 
 If that marker is active, preserve and inspect its contents before recovery. With all primary processes stopped, move it to a timestamped backup path, run `bun run test:dev-server:current-db`, and then run `bun run test:network-smoke`. Restore the marker if the mutation-enabled phase reports a DuckDB crash, owner failure, or stalled review-serving progress; remove the backup only after both phases pass.
 
+## Review Storage Evidence Commands
+
+Use these focused commands for the storage-shape evidence-unblocker slice:
+
+```bash
+bun test scripts/operatorScriptDuckdbAccess.test.ts
+bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-current-db-physical.md
+bun test src/server/reviewServing/reviewServingRouteParityCoverage.test.ts src/server/reviewServing/reviewServingRouteParityEvidence.test.ts src/server/reviewServing/reviewServingRouteParityRunner.test.ts
+bun run bench:review-serving-release-gate
+```
+
+These commands produce evidence and benchmark-contract artifacts. They do not
+replace `bun run test:network-smoke:current-db` for review-serving/DuckDB
+lifecycle changes.
+
 Quality gates: run the narrow test for your change first, then `bun run lint` or `bun run build` when the changed layer needs it.
