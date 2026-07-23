@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has zero nonterminal rows, 82 blocked rows and five out-of-scope rows; UI has zero nonterminal rows, 70 blocked rows and six out-of-scope rows; background has zero nonterminal rows and 123 blocked rows; objects have zero nonterminal rows and 328 blocked rows; material fields have zero nonterminal rows and 1,992 blocked rows. The 441-row disposition register remains 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive`; after US-161, actionability remains zero unresolved + 441 blocked + zero actionable. The 1,086-row proof register remains eight `satisfied` + 35 `pending` + 1,043 `blocked` + zero `not-applicable`. US-161 applies the Phase 8 admission rule to the US-154 candidate, display, selected-import, LLM/Human-status and article/judgment-payload scope: all 98 linked proof rows and all 23 dispositions are blocked, so zero `SLC-####` implementation rows are created. The 11 non-keep accounting rows remain seven separately listed blocked candidates; the 12 keep rows are preservation contracts, not placeholder changes. Duplicate LLM count work has no owning actionable disposition and is not promoted to an eighth contract. Neither priority nor detailed future gates change proof state or authorize work. All 115 non-keep and all 326 keep rows are actionability-blocked. The 80 `TGT-####` shapes remain unvalidated; the physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Complete checked-in runtime, object, key, serializer, output, cleanup, restart and recovery evidence plus focused disposable tests do not supply approved deployed roots/files and dynamic consumers, an immutable fixture/configuration, executable current/candidate target, physical collector, request-wide lookup/write bounds, atomic publication, actual browser/desktop/native-save proof, exact export/transfer portability and migration receipts, permissions/encryption, reader leases, finite retention/cleanup, clean-host restore or owner signoff. No unavailable value is treated as zero and no planned future gate is proof. `overallCertification` therefore remains independently `INCOMPLETE`. |
+| `overallCertification` | `INCOMPLETE` | API has zero nonterminal rows, 82 blocked rows and five out-of-scope rows; UI has zero nonterminal rows, 70 blocked rows and six out-of-scope rows; background has zero nonterminal rows and 123 blocked rows; objects have zero nonterminal rows and 328 blocked rows; material fields have zero nonterminal rows and 1,992 blocked rows. The 441-row disposition register remains 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive`; after US-162, actionability remains zero unresolved + 441 blocked + zero actionable. The 1,086-row proof register remains eight `satisfied` + 35 `pending` + 1,043 `blocked` + zero `not-applicable`. US-162 applies Phase 8 admission to the stable US-155 search/queue scope: all 52 proof rows and all 14 dispositions are blocked, so zero `SLC-####` implementation rows are created. Seven non-keep rows map to five blocked contracts; the async-substring contract remains singly owned by US-160 and four distinct search/queue contracts remain in the US-162 blocked queue. Seven keep rows are preservation contracts, and duplicate-looking list/count/preview/detail requests have no owning actionable disposition. Neither priority nor detailed future gates change proof state or authorize work. All 115 non-keep and all 326 keep rows are actionability-blocked. The 80 `TGT-####` shapes remain unvalidated; the physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Complete checked-in runtime, object, key, serializer, output, cleanup, restart and recovery evidence plus focused disposable tests do not supply approved deployed roots/files and dynamic consumers, an immutable fixture/configuration, executable current/candidate target, physical collector, request-wide lookup/write bounds, atomic publication, actual browser/desktop/native-save proof, exact export/transfer portability and migration receipts, permissions/encryption, reader leases, finite retention/cleanup, clean-host restore or owner signoff. No unavailable value is treated as zero and no planned future gate is proof. `overallCertification` therefore remains independently `INCOMPLETE`. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-161 / 2026-07-23` | Applies implementation-slice admission and the exact seven-position Phase 8 order to the stable US-154 candidate, display, selected-import, status and payload scope. All 98 proof rows and all 23 linked dispositions are blocked, so no `SLC-####` row is created. Eleven non-keep accounting rows map to seven blocked contracts, while 12 keep rows and the separately blocked duplicate-count API concern remain preservation/proof dependencies rather than placeholder work. Each blocked contract records dependencies, exact objects/fields, route/runtime effects, reads, writes, migration/rebuild, cutover, cleanup/pins, rollback/recovery, proof references and conditional later-only gates. Proof, disposition, target, manifest, measurement and certification states remain unchanged; no implementation gate is executed and no schema, code, route, projector, retention, runtime behavior or data changes. |
+| Latest normalized story | `US-162 / 2026-07-23` | Applies implementation-slice admission and the exact seven-position Phase 8 order to the stable US-155 token-prefix, async-substring, physical queue-patch and active Unassessed-queue scope. All 52 proof rows and all 14 linked dispositions are blocked, so no `SLC-####` row is created. Seven non-keep accounting rows map to five blocked contracts: one prior-owned US-160 async contract is cross-referenced without recounting and four distinct contracts remain in the US-162 blocked queue; seven keep rows remain preservation contracts. Duplicate-looking route requests have no owning actionable disposition. Each US-162 blocked contract records dependencies, exact objects/fields, route/runtime effects, reads, writes, migration/rebuild, cutover, bounded cleanup/pins, rollback/recovery, proof references and conditional later-only gates. Proof, disposition, target, manifest, measurement and certification states remain unchanged; no implementation gate is executed and no schema, code, route, projector, retention, runtime behavior or data changes. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 Evidence chronology note: the ten-invocation, 36-pass, 300-expectation and
@@ -281,6 +281,18 @@ blocked contracts in a separate Phase 8 queue; 12 keep rows remain
 preservation contracts, duplicate LLM count work has no owning actionable
 disposition and unresolved candidates remain zero. See `EVD-1710`-
 `EVD-1713`, `CMD-1327`-`CMD-1330`, `BLK-0939` and the US-161 quality gates.
+US-162 likewise runs no product, database, migration, lint, build, browser,
+desktop or physical benchmark command because those remain conditional gates
+for later implementation changes, not audit gates. It rechecks the US-155
+search/queue scope: all 52 proof rows and all 14 dispositions are blocked,
+zero are actionable and no `SLC-####` row is admitted. Seven non-keep
+accounting rows map to five blocked contracts; the US-160-owned
+async-substring contract is referenced without recounting, while four
+distinct search metadata/publication/queue-patch contracts remain in the
+US-162 blocked Phase 8 queue. Seven keep rows remain preservation contracts,
+duplicate-looking request pairs have no owning actionable disposition and
+unresolved candidates remain zero. See `EVD-1717`-`EVD-1720`,
+`CMD-1332`-`CMD-1335`, `BLK-0940` and the US-162 quality gates.
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
 `classified`, every reconciliation has zero nonterminal and blocked rows, all
@@ -30188,6 +30200,194 @@ physical measurement state and `overallCertification` remain independent.
 `BLK-0939` and `OQ-0943` capture the admission blocker and owner action.
 Nothing in the priority order or future-gate catalog changes a blocked state.
 
+## US-162 Prioritized Search And Queue Implementation Slices
+
+### US-162 Scope, Prerequisite And Admission Boundary
+
+US-161 and US-155 are complete at story-start HEAD
+`7972b4768c8fd44be088a9cf677070e01e244128`; only the engine-owned
+`tasks/prd.json` timestamp change pre-existed. US-155 is the exact search and
+queue proof prerequisite:
+
+- 52 stable proof rows, `PRF-0537`-`PRF-0588`, all
+  `proofCheckState: blocked`; and
+- 14 stable dispositions, `DSP-0100`, `DSP-0129`,
+  `DSP-0171`-`DSP-0182`, all
+  `recommendationActionability: blocked`.
+
+`proofCheckState` belongs to proof rows and
+`recommendationActionability` belongs to dispositions. A search or queue
+slice can therefore be admitted only when every owning disposition is
+`recommendationActionability: actionable` and every linked family, target and
+workload proof is independently `satisfied` or evidence-backed
+`not-applicable`. No in-scope row meets either condition.
+
+US-162 consequently creates no `SLC-####` row. The seven blocked `keep`
+dispositions preserve token membership/scope and active queue
+scope/eligibility/priority; they are not placeholder changes. The seven
+non-keep accounting dispositions map to five distinct blocked contracts.
+Async-substring ownership or retirement (`DSP-0100`/`DSP-0129`) is already
+the singly owned US-160 blocked contract and is referenced here without
+recounting it. The remaining five non-keep rows map to four US-162 blocked
+contracts: bounded search article metadata, immutable search publication
+time, immutable queue publication time and physical queue-patch retirement.
+
+The LLM list/count pair, judgment-job queue count/preview pair and later
+title-link/detail request are separately blocked route contracts. Their
+adjacency does not prove duplicate work, and no in-scope disposition owns
+request consolidation. They are not promoted to additional candidates.
+There are zero unresolved candidates after US-158; blocked and unresolved
+states are not combined.
+
+No product source, schema, route, reader, writer, projector, retention path,
+runtime behavior, benchmark-critical setting or data is changed. No live,
+configured, current, project or snapshot DuckDB is opened. Commands named
+below are conditional future implementation gates and are not run as US-162
+audit gates.
+
+### US-162 Evidence Ledger
+
+| Evidence ID | Class | Exact locator | Finding | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-1714` | `control/prerequisite` | User US-162 PRD and Phase 8 order; `.ralph-tui/progress.md`; reporting and DuckDB skills; US-155/US-161 completion; story-start HEAD/worktree/task record | Both prerequisites are complete. Product source is unchanged, only engine-owned `tasks/prd.json` pre-existed, and the documentation-only/no-live-DuckDB boundary applies. | `CMD-1331` |
+| `EVD-1715` | `state/admission` | US-001 state model; US-155 `PRF-0537`-`PRF-0588`, `DSP-0100`, `DSP-0129`, `DSP-0171`-`DSP-0182`; US-158 global terminal accounting; Output 10 `SLC-####` rule | The exact search/queue scope is 52 blocked proofs plus 14 blocked dispositions. Zero owning disposition is actionable, so zero implementation slice is admissible. | `CMD-1332` |
+| `EVD-1716` | `target/phase-order/ownership` | Non-keep rows `DSP-0100`, `DSP-0129`, `DSP-0172`, `DSP-0176`-`DSP-0178`, `DSP-0182`; replacements `PRF-0585`-`PRF-0588`; targets `TGT-0039`-`TGT-0045`; US-160 async-substring blocked contract; `API-0001`-`API-0002`, `API-0049`-`API-0050`, `API-0051` | Seven non-keep accounting rows map to five blocked contracts. The prior-owned async contract is not duplicated; four distinct contracts remain in the US-162 blocked queue. Duplicate-looking route pairs remain separate proof concerns without an owning disposition. | `CMD-1332` |
+| `EVD-1717` | `contract/lifecycle` | Exact DBO/CMF/index/TGT/PRF rows in the two blocked-candidate tables below; current route/runtime, reader/writer, projector, startup, export/transfer and retention evidence from US-019, US-021, US-043, US-075, US-078, US-088, US-106, US-110, US-117 through US-128, US-138, US-146 and US-155 | Each US-162 blocked contract records dependencies, exact objects/fields, route/runtime effects, reads, writes, migration/rebuild, one-version cutover, bounded cleanup and pins/protection, rollback/recovery and proof references without promoting it to work. | `CMD-1333` |
+| `EVD-1718` | `future-gates` | Existing adjacent test inventory under `src/db`, `src/server/routes`, `src/server/reviewServing`, `src/server/cron/judgmentsJobs`, `src/server/utils` and project-transfer services; AGENTS quality gates; user US-162 acceptance criteria | Conditional gates cover DuckDB migration, isolated targeted route/reader/projector/retention/migration tests, lint, shared API/client build, affected all-four-tab/detail browser checks, desktop build/restart/resume for shared storage/runtime, unchanged-setting same-fixture physical comparison, and zero new OOM/fatal-restart/foreground-spill outcomes. `OOM_ERRORS.md` applies only to an actual OOM fix. | `CMD-1333` |
+| `EVD-1719` | `state/accounting` | Exact US-155 admission arithmetic; US-160 cross-story ownership; global US-158 through US-161 terminal accounting; `BLK-0940`/`OQ-0944` | US-162 changes no proof, disposition, target, manifest, measurement or certification state: zero `SLC` rows, zero actionable candidates, four US-162 blocked contracts, one prior-owned blocked dependency and zero unresolved candidates. Global proof/actionability counts remain 1,086 = 8/35/1,043/0 and 441 = 0/441/0. | `CMD-1334` |
+| `EVD-1720` | `control/validation` | Exact section/table/ID/state/phase/gate/path/reference validators; `git diff --check`; scoped product-source, allowed-change, worktree/tracker and whitespace checks | US-162 preserves stable IDs and state arithmetic, defines no `SLC-####`, keeps blocked and prior-owned candidates outside implementation work, records every mandatory contract/gate, and changes only this audit artifact plus workflow-required Ralph progress metadata. | `CMD-1335` |
+
+### Slice Admission Result
+
+| Proof/disposition family | In-scope proof rows | Blocked keep dispositions | Blocked non-keep dispositions | US-162 blocked contracts | Prior-owned blocked contracts | Actionable recommendations | Admitted `SLC-####` rows |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Token-prefix search plus replacements; `PRF-0537`-`PRF-0548`, `PRF-0585`-`PRF-0586` | 14 blocked | 3 | 2 | 2 | 0 | 0 | 0 |
+| Async-substring control; `PRF-0549`-`PRF-0560` | 12 blocked | 0 | 2 delete | 0 | 1 US-160-owned | 0 | 0 |
+| Physical queue patch plus replacement; `PRF-0561`-`PRF-0572`, `PRF-0587` | 13 blocked | 0 | 2 delete | 1 | 0 | 0 | 0 |
+| Active Unassessed queue plus replacement; `PRF-0573`-`PRF-0584`, `PRF-0588` | 13 blocked | 4 | 1 derive | 1 | 0 | 0 | 0 |
+| **US-162 total** | **52 blocked** | **7** | **7** | **4** | **1, not recounted** | **0** | **0** |
+
+Prior search-job lifecycle proof `PRF-0352`-`PRF-0382` remains US-153-owned
+and is not included in the 52-row arithmetic. US-160 already records the
+single async-substring contract's dependencies, 21 physical fields, open
+cursor domain, index, reads, writes, migration, cutover, cleanup/pins,
+rollback/recovery, proof references and conditional test matrix. US-162
+retains that row at Phase 8 position one but does not create a second
+contract, disposition owner or gate result.
+
+Every in-scope proof row is terminally `proofCheckState: blocked`; every
+in-scope disposition is terminally
+`recommendationActionability: blocked`. No proof state is described as
+actionable, no disposition is described as satisfied and
+`overallCertification` remains independently `INCOMPLETE`.
+
+### Phase 8 Priority Reconciliation
+
+This is ordering for future reconsideration, not an implementation backlog.
+A candidate appears at its earliest applicable Phase 8 position, while every
+later parity, cutover and cleanup gate remains mandatory.
+
+| Phase 8 position | Search/queue result | Admission consequence |
+| --- | --- | --- |
+| 1. Proven unused rows and duplicate requests | First reconsider the unmounted, executorless `app.review_search_job`, but retain its US-160 ownership. Separately reconcile `API-0001`/`API-0002`, `API-0049`/`API-0050` and the later `API-0051` detail request as distinct list/count/preview/detail grains before calling any request duplicate. No search/queue disposition owns request consolidation. | One prior-owned blocked contract and zero new request candidate. Source absence, missing mounting or adjacent requests do not prove deployed emptiness, result equivalence or safe retirement. |
+| 2. Bounded reusable search or queue facts | Reconsider `CMF-1227 title_prefix` and `CMF-1228 activity_sort_at` as one bounded row per immutable search revision/article through exactly one of `TGT-0039` or `TGT-0040`. `TGT-0042`-`TGT-0044` define pair and article queue facts, but their owning rows are blocked keeps rather than new non-keep recommendations. | One blocked search-metadata contract. No reusable queue-fact slice or placeholder row is admitted until exact pair/article/count/order ownership and physical parity pass. |
+| 3. Component-ownership splits | Replace `CMF-1229 search_updated_at` and `CMF-1249 queue_updated_at` only with separate immutable search and queue component/chunk publication receipts. `TGT-0039`-`TGT-0045` remain comparison designs; a receipt cannot silently become membership, priority, readiness or cleanup authority. | Two blocked receipt contracts. No component table, writer or duplicated authority is authorized by a blocked target or keep disposition. |
+| 4. Indexes only after target shapes | `DBO-0139`, `DBO-0159`-`DBO-0161` remain supporting evidence, not independent dispositions. The search-job and queue-patch indexes may disappear only with their owning tables; token and active-queue access paths require final predicates/directions plus physical plan, selectivity, size and write-cost proof. | No index slice. Matching PK order, name or prefix does not prove optimizer use, redundancy or safe deletion. |
+| 5. Structural replacements behind parity gates | Only after approved `TGT-0042`-`TGT-0045` semantics and exact current/candidate parity may `PRF-0587` retire `mart.review_queue_patch_v4` and its index. Checked-in direct queue writes and zero returned patch rows do not prove deployed emptiness, history mapping or later equality. | One blocked structural contract. No DDL, writer or reader change occurs until exact Unassessed/Human/job/intake/export/transfer/restart and physical parity pass. |
+| 6. Clear cutover without permanent dual writes | Each future metadata move, receipt derivation or patch retirement uses a version-fenced writer stop, bounded backfill/rebuild, count/hash/order validation and one reader switch. Temporary shadow comparison is read-only and bounded; failed validation keeps the prior sole authority. | Broad or permanent dual writes/reads are forbidden. Cleanup cannot start while revisions, ACKs, promotion, route results or restore receipts disagree. |
+| 7. Bounded pin-protected cleanup | Cleanup scans active/LKG search and queue revisions, candidate/serving snapshots, jobs, exports/transfers, snapshot pins, result/read leases, audit/history horizons and restore requirements. It is batched, request-wide bounded, restartable and durably receipted. | Cleanup remains last. No field, row, table or index is removed merely because source references are absent, cutover returned success, expiry elapsed or an in-process cleanup call ran. |
+
+### Cross-Story Blocked Dependency, Not Recounted
+
+| Contract | Owning prior section | Exact scope and current route/runtime effect | US-162 treatment |
+| --- | --- | --- | --- |
+| Async-substring job ownership or retirement; `DSP-0100`/`DSP-0129` | US-160 blocked candidate; family `PRF-0352`-`PRF-0382`, later family `PRF-0549`-`PRF-0560`, target `TGT-0041` and validation `PRF-0952` | `DBO-0131 app.review_search_job`, `CMF-1027`-`CMF-1047`, open cursor `CMF-1082` and `DBO-0139`. Current internal code inserts/observes pending state, but no mounted UI caller, executor, result membership consumer, owner lease, pin settlement or cleanup owner is proven. | Keep first in Phase 8, preserve the complete US-160 dependency/read/write/migration/cutover/cleanup/pin/rollback/recovery/gate record, and create no duplicate US-162 candidate or `SLC` row. |
+
+### Blocked Candidate Contracts: Dependencies, Objects, Routes, Reads And Writes
+
+Every row below has terminal status `blocked candidate; not implementation
+work`.
+
+| Candidate in future Phase 8 order | Dependencies | Exact objects and fields | Route and runtime effects | Required reads | Required writes |
+| --- | --- | --- | --- | --- | --- |
+| Bounded search article metadata; `DSP-0176` | Token family `PRF-0537`-`PRF-0548`, replacement `PRF-0585`, retained `DSP-0171`/`DSP-0174`-`DSP-0175`, owner choice between `TGT-0039` and `TGT-0040`, validations `PRF-0950`-`PRF-0951`, direct prefix `PRF-1037` and applicable workloads through `PRF-1086` must pass. | Move `CMF-1227 title_prefix` and `CMF-1228 activity_sort_at` out of each token row in `DBO-0153 mart.review_title_search_serving_v4`. Choose one owner: `TGT-0039 mart.review_project_search_article_v5` keyed by project/search revision/article, or the `TGT-0040` global title fact plus project binding. `DBO-0159` remains supporting access-path evidence, not a separate change. | LLM/Human/Both/Unassessed list, count, filters and bulk membership continue to use only bounded token intersections. The unmounted standalone token contract currently exposes whole rows; owners must preserve a versioned bounded shape or retire it. Strict rebuild checksums, returned article order, title-link/detail identity, unavailable behavior and browser/desktop search parity cannot change. | Complete checked-in/generated/dynamic/operator/deployed reads; strict checksum input; any approved activity diagnostic; standalone/export/transfer consumers; active/LKG revisions, selected-title source and every retained nondefault/null value. | Dirty/full title-search projectors write one immutable metadata row per approved revision/article and no repeated per-token copy after cutover. Title/import winner, scope, tokenizer or diagnostic-source change creates exact dirty work, chunk/output validation, ACK and publication receipts. |
+| Immutable search publication time; `DSP-0177` | Token family `PRF-0537`-`PRF-0548`, replacement `PRF-0586`, chosen `TGT-0039`/`TGT-0040`, validations `PRF-0950`-`PRF-0951`, `PRF-1037`, startup/restart and applicable lifecycle checks through `PRF-1086` must pass. | Derive `CMF-1229 search_updated_at` from the immutable search revision/chunk/final receipt in the chosen target; current physical home is `DBO-0153`. The receipt key binds project/search/scope/selected-title/tokenizer/snapshot revision, counts, checksum, status and publication time. | No current client field is proven, but standalone `SELECT *`, diagnostics/readiness, startup mutation/restore and all-four-tab search unavailable/restart behavior remain observable contracts. The receipt is not a substitute for row membership or an ordinary-reader lease. | Every timestamp consumer/value, startup probe and repair path; full/dirty revision/chunk/ACK/head history; active/LKG and pin references; diagnostics, exports/transfers, restart/replay and restore reads. | Projectors write one immutable attempt/output/final publication receipt per revision and stop mutating per-token time only after the new startup/readiness path passes. Failed/retried attempts retain distinct receipts and cannot overwrite terminal history. |
+| Immutable queue publication time; `DSP-0182` | Active queue family `PRF-0573`-`PRF-0584`, replacement `PRF-0588`, retained `DSP-0173`/`DSP-0179`-`DSP-0181`, `TGT-0042`-`TGT-0045`, validations `PRF-0953`-`PRF-0956`, queue/restart `PRF-1024`-`PRF-1028` and applicable lifecycle checks through `PRF-1086` must pass. | Derive `CMF-1249 queue_updated_at` from one immutable `app.review_queue_revision_v5` chunk/final publication receipt keyed by project/review-config/source/policy/queue revision. Current physical home is `DBO-0155 mart.review_unassessed_queue_serving_v4`; `DBO-0161` remains supporting evidence. | No client field is proven, but Unassessed list/count, Human init, judgment-job count/preview/intake, worker cursors, diagnostics/readiness, destructive-0103 regeneration and startup/restart behavior must remain exact. The receipt cannot collapse pair, distinct-article, priority, intake or claim grains. | Every row-time consumer/value and startup probe; full/dirty pair output, article reductions, ACK/head state; registered/direct job/intake reads; active/LKG revisions, jobs, pins, exports/transfers, restart/replay and restore references. | Queue dirty/full projectors write immutable revision/chunk/output/final receipts with exact pair/article counts and complete eligibility/priority/activity checksum. Per-pair timestamp writes stop only after startup, readiness and full/dirty parity use the receipt. |
+| Physical queue-patch retirement; `DSP-0172`/`DSP-0178` | Patch family `PRF-0561`-`PRF-0572`, replacement `PRF-0587`, approved `TGT-0042`-`TGT-0045`, validations `PRF-0953`-`PRF-0956`, queue/restart `PRF-1024`-`PRF-1028` and applicable route/lifecycle checks through `PRF-1086` must pass. | `DBO-0154 mart.review_queue_patch_v4`; all ten fields `CMF-1230`-`CMF-1239`: project/queue identities, base generation, patch watermark, kind, priority, sort time, article, tombstone and patch time; `DBO-0160 idx_review_queue_patch_v4_order`. | Current checked-in queue projectors bypass the physical patch and write active prompt-pair rows, but deployed/generated/operator use and historical values remain open. Unassessed list/count, Human init, job count/preview/intake/worker, bulk/export/transfer, browser/desktop and restart/restore behavior must equal the approved immutable queue target. | Complete table/index rows, migrations, aliases, generated SQL/types, scripts/operators, history and dynamic/deployed references; field-by-field equality to queue revisions, pair/article facts, priority/order/cursors, tombstones and retained active/LKG state. | No current production patch writer is found. Promoted queue writers publish only the approved immutable pair/article/revision/selection contracts with exact invalidation, ACK, validation and visibility receipts; no patch write or fallback remains after cutover. |
+
+### Blocked Candidate Contracts: Migration, Cutover And Recovery
+
+| Candidate | Migration or rebuild | Cutover | Cleanup and pins/protection | Rollback or recovery | Exact proof references |
+| --- | --- | --- | --- | --- | --- |
+| Bounded search article metadata | Choose one target and bounded-backfill every retained active/LKG/pinned search revision by article-ID/chunk. Compare normalized-title bytes/digest/prefix, diagnostic activity, token membership, counts, checksums, encoded bytes and route ordinals; conflict or missing source stops the batch. | Version-fence title-search writers, publish/validate the metadata target, switch checksum/standalone readers once, then stop per-token copies. `TGT-0039` and `TGT-0040` never remain co-authoritative. | Protect token/metadata facts, selected-title sources, active/LKG revisions, jobs/results, exports/transfers, pins, reader leases and audit/history. Clean repeated fields only after complete references and durable bounded receipts. | Preserve prior token rows and writer/serializer version. Failed target write, validation, ACK or promotion retains the old per-token values; restore reproduces the same search IDs/order/checksum under the frozen tokenizer. | `PRF-0537`-`PRF-0548`, `PRF-0585`, `PRF-0950`-`PRF-0951`, `PRF-1037`, applicable `PRF-1039`-`PRF-1086`; `BLK-0524`, `BLK-0933`, `BLK-0940`; `OQ-0528`, `OQ-0937`, `OQ-0944`. |
+| Immutable search publication time | Inventory timestamp consumers and retained revisions; create attempt/chunk/output/final receipts without converting mutable manifest times; backfill only owner-approved historical publication facts and record unknowns explicitly. | Cut projectors, diagnostics and startup/readability probes to one receipt version, then stop per-token timestamp writes. No stored-plus-derived permanent time authority. | Protect active/LKG revisions, jobs/results, exports/transfers, pins, audit/history and reader leases. Old timestamps and failed/orphan receipts have separate bounded retention and cleanup receipts. | Preserve old timestamps and probe behavior through the rollback window. Restart resumes the exact attempt; rollback restores the former sole time writer, and restore proves readiness plus later search equality. | `PRF-0537`-`PRF-0548`, `PRF-0586`, `PRF-0950`-`PRF-0951`, `PRF-1037`, applicable `PRF-1047`-`PRF-1086`; `BLK-0524`, `BLK-0933`, `BLK-0940`; `OQ-0528`, `OQ-0937`, `OQ-0944`. |
+| Immutable queue publication time | Inventory per-pair times and every startup/diagnostic consumer; bounded-rebuild complete queue revisions and receipts from one frozen eligibility/priority policy; compare pair/article counts, full order, checksum and 0103-regenerated state. | Cut full/dirty writers, readiness/diagnostics and startup probes to one queue-receipt version, then stop per-pair timestamp writes. No mutable row time remains a second publication authority. | Protect active/LKG queue/candidate snapshots, jobs/selection epochs/claims, exports/transfers, pins, audit/history and reader leases. Retain failed attempts and old row times through a finite, restartable cleanup cycle. | Preserve the old queue rows/times and publication version. Failed output, ACK, validation or promotion retains the old authority; restart/restore reproduces pair/article eligibility, priority, cursors and later visibility. | `PRF-0573`-`PRF-0584`, `PRF-0588`, `PRF-0953`-`PRF-0956`, `PRF-1024`-`PRF-1028`, applicable `PRF-1047`-`PRF-1086`; `BLK-0525`, `BLK-0933`, `BLK-0940`; `OQ-0529`, `OQ-0937`, `OQ-0944`. |
+| Physical queue-patch retirement | Inventory/hash every deployed table/index row, field, alias and reference; map required generation/watermark/kind/priority/order/tombstone/time history into the approved immutable queue contracts or an owner-approved archive; bounded-rebuild retained revisions and reconcile exact values. | Version-fence any discovered patch writer, validate the sole queue writer/read path, switch all consumers once, then remove `DBO-0160` and the table. No patch fallback or permanent dual writes. | Protect active/LKG queue and serving snapshots, jobs/claims/selection epochs, exports/transfers, pins, audit/history and reader leases. Bounded cleanup records scanned/protected/migrated/deleted counts and hashes. | Preserve a full pre-cutover table/index/reference snapshot and queue writer version. Rollback restores the prior sole path before cleanup; interruption/restart and family restore reproduce later Unassessed/Human/job results. | `PRF-0561`-`PRF-0572`, `PRF-0587`, `PRF-0953`-`PRF-0956`, `PRF-1024`-`PRF-1028`, applicable `PRF-1047`-`PRF-1086`; `BLK-0525`, `BLK-0933`, `BLK-0940`; `OQ-0529`, `OQ-0937`, `OQ-0944`. |
+
+### Conditional Future Gates Per Candidate
+
+These are promotion and implementation-completion gates only. US-162 did not
+run them, does not record them as passed and does not use them to change a
+proof or recommendation state.
+
+Every future promoted candidate must satisfy all applicable common gates:
+
+- Run `bun run db:mig` for any schema/index/constraint change. Run
+  `bun test src/db/migrateDuckdb.test.ts` in its own process plus every
+  adjacent migration/schema suite.
+- Run each named targeted `bun test <file>` below in an isolated process when
+  `mock.module()` state could cross-contaminate combined execution. Add
+  adjacent route, reader, projector, retention and migration tests for every
+  actually changed path.
+- Run `bun run lint`. Run `bun run build` whenever shared API/client types,
+  response contracts or UI code change.
+- Where affected, verify actual browser LLM, Human, Both, Unassessed and
+  title-link/detail flows, including submitted search, list/count/filter,
+  queue article/pair totals, order/cursors, unavailable/error behavior,
+  mutation visibility and common result/detail identity.
+- For shared storage/runtime changes, run `bun run desktop:build` and verify
+  packaged desktop restart/resume, semantic readiness, pending requests/jobs,
+  cache/navigation settlement and bounded convergence.
+- On one approved immutable fixture, compare current and candidate before/
+  after with unchanged model, provider, thinking level, prompts, content
+  flags, project/scope/review configuration, tokenizer/queue policy, seed,
+  memory limit, runtime role/topology and snapshot/component identities.
+  Record exact semantic parity plus rows read/written, calls/attempts,
+  encoded/output bytes, indexes/plans, WAL/temp, RSS and p50/p95/p99.
+- Require zero new DuckDB OOM, fatal restart or foreground temp spill. Add
+  `OOM_ERRORS.md` only when the later change actually fixes an OOM; never add
+  an entry merely because the gate exists.
+
+| Blocked candidate | Targeted adjacent suites required if promoted | Additional conditional gates |
+| --- | --- | --- |
+| Bounded search article metadata | `src/db/migrateDuckdb.test.ts`; `src/server/reviewServing/reviewServingSchema.test.ts`; `src/server/reviewServing/reviewServingTitleSearchProjector.test.ts`; `src/server/reviewServing/reviewServingProjectorWriter.test.ts`; `src/server/reviewServing/reviewServingReader.test.ts`; `src/server/reviewServing/reviewServingReadContracts.test.ts`; `src/server/reviewServing/reviewServingSql.test.ts`; `src/server/reviewServing/reviewServingSearchOwnership.test.ts`; `src/server/reviewServing/reviewServingRouteParityEvidence.test.ts`; `src/server/reviewServing/reviewServingRetentionService.test.ts`. | Exact tokenizer/title bytes, checksum, token ID/order/cursor, standalone-contract and missing-row parity; all-four-tab search plus result-title/detail identity; bulk/export/transfer equality; target conflict/rollback/restore; packaged-desktop restart/resume and same-fixture fan-out/byte/plan/write comparison. |
+| Immutable search publication time | `src/db/migrateDuckdb.test.ts`; `src/server/reviewServing/reviewServingSchema.test.ts`; `src/server/reviewServing/reviewServingTitleSearchProjector.test.ts`; `src/server/reviewServing/reviewServingProjectorWriter.test.ts`; `src/server/reviewServing/reviewServingDiagnosticsRepository.test.ts`; `src/server/utils/duckdbServiceDiagnostics.test.ts`; `src/server/utils/duckdbServiceReload.test.ts`; `src/server/reviewServing/reviewServingRetentionService.test.ts`. | Attempt/chunk/final receipt immutability; startup/readiness failure and interruption cases; active/LKG/pin behavior; later search equality and bounded cleanup/restore; affected all-four-tab/detail and packaged-desktop restart/resume parity. |
+| Immutable queue publication time | `src/db/migrateDuckdb.test.ts`; `src/server/reviewServing/reviewServingSchema.test.ts`; `src/server/reviewServing/reviewServingQueueProjector.test.ts`; `src/server/reviewServing/reviewServingProjectorWriter.test.ts`; `src/server/reviewServing/reviewServingHumanBothUnassessedRouteService.test.ts`; `src/server/reviewServing/reviewServingJudgmentJobQueueService.test.ts`; `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.test.ts`; `src/server/routes/judgmentsJobsRoutesApiReadModel.test.ts`; `src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts`; `src/server/utils/duckdbServiceReload.test.ts`; `src/server/reviewServing/reviewServingRetentionService.test.ts`. | Pair/article/count/priority/order/cursor and full/dirty checksum parity; 0103 regeneration, Human-init and job count/preview/intake behavior; interruption/rollback/restore; Unassessed plus affected detail/browser flow and packaged-desktop restart/resume. |
+| Physical queue-patch retirement | `src/db/migrateDuckdb.test.ts`; `src/server/reviewServing/reviewServingSchema.test.ts`; `src/server/reviewServing/reviewServingPhase5BStaticGuards.test.ts`; `src/server/reviewServing/reviewServingQueueProjector.test.ts`; `src/server/reviewServing/reviewServingProjectorWriter.test.ts`; `src/server/reviewServing/reviewServingReader.test.ts`; `src/server/reviewServing/reviewServingHumanBothUnassessedRouteService.test.ts`; `src/server/reviewServing/reviewServingJudgmentJobQueueService.test.ts`; `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.test.ts`; `src/server/routes/judgmentsJobsRoutesDirtyMaterializationFreshness.test.ts`; `src/server/reviewServing/reviewServingRetentionService.test.ts`. | Deployed/generated/operator negative-reference and field/history inventory; exact immutable-target migration and Unassessed/Human/job/intake/export/transfer parity; interruption/rollback/restore; affected all-four-tab/detail browser checks and packaged-desktop restart/resume. |
+
+The prior-owned async-substring candidate retains the exact US-160 conditional
+gate row and is not repeated here as a fifth US-162 gate. If its owner later
+promotes or retires it, both the US-160 family proofs and the US-155
+`PRF-0549`-`PRF-0560` family must pass under the same immutable fixture and
+unchanged critical settings.
+
+### US-162 State And Certification Accounting
+
+| Register | Before US-162 | US-162 change | After US-162 |
+| --- | ---: | ---: | ---: |
+| Proofs: satisfied / pending / blocked / not-applicable | 8 / 35 / 1,043 / 0 | 0 / 0 / 0 / 0 | 8 / 35 / 1,043 / 0 |
+| Dispositions: unresolved / blocked / actionable | 0 / 441 / 0 | 0 / 0 / 0 | 0 / 441 / 0 |
+| US-162 search/queue blocked candidate contracts | 0 | +4 | 4 |
+| Prior-owned async-substring blocked dependency | 1 US-160-owned | 0 | 1 US-160-owned |
+| Search/queue unresolved candidates | 0 | 0 | 0 |
+| `SLC-####` implementation rows | 0 | 0 | 0 |
+
+Manifest `auditStatus`, `proofCheckState`,
+`recommendationActionability`, disposition value, target-validation state,
+physical measurement state and `overallCertification` remain independent.
+`BLK-0940` and `OQ-0944` capture the admission blocker and owner action.
+Nothing in the priority order or future-gate catalog changes a blocked state.
+
 ### Output 01 - API Surface Inventory
 
 Authoritative row family: `API-####`. Record one row per mounted route or
@@ -30571,18 +30771,22 @@ fixed benchmark configuration, semantic parity gates, resource budgets, and
 repo-native commands. A slice can be implementation-ready only when every
 linked recommendation is `actionable`.
 
-Current state after US-161: zero `SLC-####` rows. US-159 and US-160 keep their
-11 earlier blocked contracts outside implementation work. US-161 applies the
-same rule to the US-154 candidate, display, selected-import, LLM/Human-status
-and article/judgment-payload scope: 98 blocked proof rows, 23 blocked
-dispositions and zero actionable recommendations. Eleven non-keep accounting
-rows map to seven blocked contracts, recorded separately in exact Phase 8
-order with dependencies, lifecycle, cutover, recovery and conditional future
-gates. The other 12 rows remain blocked `keep` preservation contracts.
-Duplicate LLM count work remains a blocked proof concern without an owning
-actionable disposition and is not an eighth candidate. Unresolved candidates
-remain zero. No prioritization story records a future gate as run or passed.
-`overallCertification` remains independently `INCOMPLETE`.
+Current state after US-162: zero `SLC-####` rows. US-159 through US-161 keep
+18 distinct blocked contracts outside implementation work. US-162 applies
+the same rule to the US-155 search/queue scope: 52 blocked proof rows, 14
+blocked dispositions and zero actionable recommendations. Seven non-keep
+accounting rows map to five blocked contracts. The async-substring contract
+remains singly owned by US-160 and is referenced without recounting; four
+distinct search metadata/publication and queue publication/patch contracts
+are recorded separately in exact Phase 8 order with dependencies, route/
+runtime effects, lifecycle, cutover, recovery and conditional future gates.
+The seven keep rows remain preservation contracts. Duplicate-looking list/
+count/preview/detail requests remain blocked proof concerns without an owning
+actionable disposition and are not additional candidates. Across the four
+prioritization stories there are 22 distinct blocked contracts, zero
+unresolved candidates and zero admitted slices. No prioritization story
+records a future gate as run or passed. `overallCertification` remains
+independently `INCOMPLETE`.
 
 ### Output 11 - Exhaustive Coverage Manifests
 
@@ -34802,6 +35006,11 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-1328` | 2026-07-23 / US-161 | Re-read exact `DBO-0117`-`DBO-0118`, `DBO-0124`, `DBO-0140`-`DBO-0152`, `DBO-0156`-`DBO-0158`, `CMF-1084`-`CMF-1220`, `CMF-1250`-`CMF-1263`, target and proof/lifecycle rows; searched current migration, route, reader, projector, retention and project-transfer test paths. | Record the complete bounded future contract and conditional gates for each blocked candidate without implementing or promoting it. | Seven blocked candidate rows now name dependencies, exact objects/fields, route/runtime effects, reads, writes, migration/rebuild, one-version cutover, cleanup/pins, rollback/recovery and proof references. Every named test file exists. Required migration, isolated tests, lint, shared build, all-four-tab/detail browser, desktop restart/resume, unchanged-setting physical and OOM/fatal/spill gates are documented but not run. Produced `EVD-1710`-`EVD-1711`. |
 | `CMD-1329` | 2026-07-23 / US-161 | Ran audit-only US-161 section validators for zero `SLC` definitions, 98/23 admission arithmetic, seven Phase 8 positions, seven candidate identities across both contract tables and the gate matrix, required future-gate text, named test-file existence, evidence/blocker/question definitions and Markdown-table consistency. | Prove the planning ledger is internally complete without executing any documented implementation gate. | Validators confirm zero `SLC` definitions, seven blocked contracts represented in all three required tables, seven phase positions, seven consistent new tables, 22 unique existing named test paths, unique `EVD-1707`-`EVD-1713`/`BLK-0939`/`OQ-0943`, unchanged proof/disposition arithmetic and one US-161 progress entry. Produced `EVD-1712`. |
 | `CMD-1330` | 2026-07-23 / US-161 | Ran final latest-story, zero-slice, admission/state, Phase 8, candidate-contract, future-gate, exact-test-path, stable-ID definition/reference, command/blocker/question, Output 10, quality-gate and Ralph-progress validators; `git diff --check`; scoped product-source, allowed-change, worktree, engine-task and whitespace/final-newline checks. Inspected package scripts without running them. | Close US-161 accounting and mutation-boundary gates without opening DuckDB or executing any conditional implementation command. | Final validators confirm zero `SLC` definitions, seven blocked candidates, zero unresolved candidates, 22 existing named test files, seven consistent new tables, unchanged 1,086 proof and 441 disposition arithmetic, unique `EVD-1707`-`EVD-1713`/`CMD-1326`-`CMD-1330`/`BLK-0939`/`OQ-0943`, and one ignored Ralph progress entry. Product-source diff is empty; only this plan and the engine-owned `tasks/prd.json` timestamp are tracked changes, while ignored Ralph progress contains the required metadata. No repo-native typecheck/check/test:typecheck script exists. Migration, tests, lint, build, server, browser, desktop and physical gates remain unexecuted by explicit acceptance criterion. Produced `EVD-1713`. |
+| `CMD-1331` | 2026-07-23 / US-162 | Read the user PRD/codebase patterns, `.ralph-tui/progress.md`, US-001 state model, required reporting and DuckDB skills, US-155/US-161 handoffs, Output 10 scaffold, story-start HEAD/worktree/task record and product-source isolation. | Establish both prerequisites, the exact search/queue scope, cross-story ownership, state semantics, allowed mutation boundary and the rule that conditional implementation commands remain documentation-only in this audit story. | US-155 and US-161 are complete at `7972b4768c8fd44be088a9cf677070e01e244128`; only engine-owned `tasks/prd.json` pre-existed, product source is unchanged and no live/configured/current/project/snapshot DuckDB or product command is authorized. Produced `EVD-1714`. |
+| `CMD-1332` | 2026-07-23 / US-162 | Re-expanded US-155 `PRF-0537`-`PRF-0588`, `DSP-0100`, `DSP-0129`, `DSP-0171`-`DSP-0182`, replacements `PRF-0585`-`PRF-0588`, targets `TGT-0039`-`TGT-0045`, their validations/mapped workloads, route pairs `API-0001`-`API-0002`/`API-0049`-`API-0051`, US-160 async ownership and US-158 through US-161 global terminal accounting; reconciled Phase 8 admission and ordering. | Admit only search/queue recommendations whose owning dispositions are actionable and linked proofs pass; keep blocked, prior-owned and unresolved candidates outside `SLC-####`. | All 52 proofs and 14 dispositions are blocked. Seven keeps remain preservation contracts; seven non-keep accounting rows map to five blocked contracts, of which one remains US-160-owned and four enter the US-162 blocked queue. Duplicate-looking requests have no owning disposition; zero candidate is unresolved/actionable and zero `SLC-####` row is created. Produced `EVD-1715`-`EVD-1716`. |
+| `CMD-1333` | 2026-07-23 / US-162 | Re-read exact `DBO-0131`, `DBO-0139`, `DBO-0153`-`DBO-0155`, `DBO-0159`-`DBO-0161`, `CMF-1027`-`CMF-1047`, `CMF-1082`, `CMF-1221`-`CMF-1249`, target and proof/lifecycle rows; searched current migration, route, reader, projector, judgment-job, startup/diagnostic, retention and project-transfer test paths. | Record the complete bounded future contract and conditional gates for each US-162 blocked candidate while retaining prior async ownership and without implementing or promoting anything. | Four blocked candidate rows now name dependencies, exact objects/fields, route/runtime effects, reads, writes, migration/rebuild, one-version cutover, bounded cleanup/pins, rollback/recovery and proof references. The prior-owned async row points to its complete US-160 contract. Every named test file exists; required migration, isolated tests, lint, shared build, affected all-four-tab/detail browser, desktop restart/resume, unchanged-setting physical and OOM/fatal/spill gates are documented but not run. Produced `EVD-1717`-`EVD-1718`. |
+| `CMD-1334` | 2026-07-23 / US-162 | Ran audit-only US-162 section validators for zero `SLC` definitions, 52/14 admission arithmetic, five-contract cross-story reconciliation, seven Phase 8 positions, four US-162 candidate identities across both contract tables and the gate matrix, required future-gate text, named test-file existence, evidence/blocker/question definitions and Markdown-table consistency. | Prove the planning ledger is internally complete without executing any documented implementation gate. | Validators confirm zero `SLC` definitions, four US-162 blocked contracts plus one prior-owned dependency, seven phase positions, consistent candidate tables, existing named test paths, unique `EVD-1714`-`EVD-1720`/`BLK-0940`/`OQ-0944`, unchanged proof/disposition arithmetic and one US-162 progress entry. Produced `EVD-1719`. |
+| `CMD-1335` | 2026-07-23 / US-162 | Ran final latest-story, zero-slice, admission/state, cross-story ownership, Phase 8, candidate-contract, future-gate, exact-test-path, stable-ID definition/reference, command/blocker/question, Output 10, quality-gate and Ralph-progress validators; `git diff --check`; scoped product-source, allowed-change, worktree, engine-task and whitespace/final-newline checks. Inspected package scripts without running them. | Close US-162 accounting and mutation-boundary gates without opening DuckDB or executing any conditional implementation command. | Final validators confirm zero `SLC` definitions, four new blocked candidates, one prior-owned dependency, zero unresolved candidates, existing named test files, unchanged 1,086 proof and 441 disposition arithmetic, unique `EVD-1714`-`EVD-1720`/`CMD-1331`-`CMD-1335`/`BLK-0940`/`OQ-0944`, and one ignored Ralph progress entry. Product-source diff is empty; only this plan and the engine-owned `tasks/prd.json` timestamp are tracked changes, while ignored Ralph progress contains the required metadata. No repo-native typecheck/check/test:typecheck script exists. Migration, tests, lint, build, server, browser, desktop and physical gates remain unexecuted by explicit acceptance criterion. Produced `EVD-1720`. |
 
 ## Blockers
 
@@ -35777,6 +35986,7 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0937` | US-159 source/configuration implementation-slice admission | The exact source/configuration admission scope contains 67 `proofCheckState: blocked` rows and 41 `recommendationActionability: blocked` dispositions. The eight non-keep accounting rows map to seven blocked target contracts; all relevant target and workload validations, deployed/dynamic reference inventories, owner decisions, executable candidates, immutable same-fixture parity runs, migration/backfill/cutover/rollback receipts, bounded request/resource measurements, browser/desktop results, pin/reference protection, cleanup and restore evidence remain unavailable. | Phase 8 priority, checked-in no-reader evidence, concrete target detail and documented future commands cannot convert a blocked proof or recommendation into implementation authorization. Creating an `SLC-####` row now would misrepresent a blocked candidate as work and collapse proof state into actionability. | `OQ-0941` | Owners independently satisfy or evidence-back as not-applicable every applicable family, target and workload predicate; transition each owning disposition to `recommendationActionability: actionable`; then rerun slice admission. Only then may a new `SLC-####` row record an exact bounded implementation contract and executed gates. |
 | `BLK-0938` | US-160 judgment, fact and control implementation-slice admission | The contiguous US-150 through US-153 admission scope contains 299 `proofCheckState: blocked` rows and 106 `recommendationActionability: blocked` dispositions. Ten non-keep accounting rows map to four blocked contracts: `app.review_project_import_delta_cursor`, `mart.judgment_fact`, `app.review_search_job` and `app.review`. All family, target and workload validations, deployed/dynamic row/reference inventories, owner decisions, executable candidates, immutable same-fixture parity runs, migration/rebuild/cutover/rollback receipts, bounded request/resource measurements, actual browser/desktop results, pin/reference protection, finite cleanup and restore evidence remain unavailable. | Phase 8 priority, current no-owner/no-reader evidence, duplicate-looking state, detailed targets and documented future commands cannot convert a blocked proof or recommendation into implementation authorization. Creating an `SLC-####` row now would misrepresent blocked state as work and collapse proof state into disposition actionability. | `OQ-0942` | Owners independently satisfy or evidence-back as not-applicable every applicable family, target and workload predicate; transition every owning disposition to `recommendationActionability: actionable`; then rerun slice admission. Only then may a new `SLC-####` row record one exact bounded contract and executed implementation gates. |
 | `BLK-0939` | US-161 candidate, display, status and payload implementation-slice admission | The US-154 admission scope contains 98 `proofCheckState: blocked` rows and 23 `recommendationActionability: blocked` dispositions. Eleven non-keep accounting rows map to seven blocked contracts: dormant candidate review-state derivation, bounded display hydration, bounded selected-rank derivation and retirement of the display, selected-import, LLM-status and Human-status physical patch tables. Twelve keeps remain preservation contracts. Duplicate LLM count work remains separately blocked without an owning in-scope disposition. All family, target and workload validations, deployed/dynamic value/reference inventories, owner decisions, executable target shapes, immutable same-fixture parity runs, migration/rebuild/cutover/rollback receipts, request-wide bounds, actual browser/desktop results, pin/reference protection, finite cleanup and restore evidence remain unavailable. | Phase 8 priority, checked-in constant/no-client or patch-bypass evidence, detailed target shapes and documented future commands cannot convert a blocked proof or disposition into implementation authorization. Creating an `SLC-####` row now would misrepresent blocked state as work, duplicate the ownerless API concern or collapse proof state into disposition actionability. | `OQ-0943` | Owners independently satisfy or evidence-back as not-applicable every applicable family, target and workload predicate; assign the duplicate-count concern an exact actionable disposition if it requires change; transition every owning disposition to `recommendationActionability: actionable`; then rerun slice admission. Only then may a new `SLC-####` row record one bounded contract and executed implementation gates. |
+| `BLK-0940` | US-162 search and queue implementation-slice admission | The US-155 admission scope contains 52 `proofCheckState: blocked` rows and 14 `recommendationActionability: blocked` dispositions. Seven non-keep accounting rows map to five blocked contracts. Async-substring ownership or retirement remains the singly owned US-160 contract and is not recounted; the four US-162 contracts are bounded search article metadata, immutable search publication time, immutable queue publication time and physical queue-patch retirement. Seven keeps remain preservation contracts. The LLM list/count, judgment-job queue count/preview and later detail requests remain separate blocked route grains without an owning in-scope consolidation disposition. All family, target and workload validations, deployed/dynamic value/reference inventories, product and owner decisions, executable target shapes, immutable same-fixture parity runs, migration/rebuild/cutover/rollback receipts, request-wide bounds, actual browser/desktop results, pin/reference protection, finite cleanup and restore evidence remain unavailable. | Phase 8 priority, an unmounted/executorless job, repeated per-token facts, mutable row times, checked-in patch bypass, adjacent requests, detailed target shapes and documented future commands cannot convert a blocked proof or disposition into implementation authorization. Creating an `SLC-####` row now would misrepresent blocked state as work, duplicate the US-160 contract or invent ownership for a route concern. | `OQ-0944` | Owners independently satisfy or evidence-back as not-applicable every applicable family, target and workload predicate; retain single ownership of the async contract; assign any request-consolidation concern an exact actionable disposition if change is required; transition every owning disposition to `recommendationActionability: actionable`; then rerun slice admission. Only then may a new `SLC-####` row record one bounded contract and executed implementation gates. |
 
 ## Owner Questions
 
@@ -36754,6 +36964,7 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0941` | Source/import/project/scope/configuration/projector/API/browser/desktop/export/transfer/database/performance/reliability/storage/retention/recovery/migration/release owners | Which owner-approved canonical bridge binding, subproject provenance policy, content/date/selected-route versions, physical-scope publication identity and review-configuration serializer may be promoted? Which immutable current/candidate fixture and unchanged model/provider/thinking/prompt/content/runtime settings, deployed/dynamic inventory, exact readers/writers, bounded migration/backfill/rebuild, one-version cutover, rollback/restore, browser/desktop parity, physical budget, pin/reference horizon and cleanup receipt satisfy every linked proof and permit each disposition to become `actionable` before an implementation slice is created? | US-159 blocked queue; `PRF-0017`-`PRF-0083`, `PRF-0914`, `PRF-0916`-`PRF-0917`, `PRF-0921`, applicable `PRF-1045`-`PRF-1086`; `DSP-0001`-`DSP-0041`; `TGT-0003`, `TGT-0005`, `TGT-0006`, `TGT-0010`; `BLK-0937` |
 | `OQ-0942` | Product/judgment/Human/import/search/projector/publication/API/browser/desktop/export/transfer/database/performance/reliability/storage/retention/recovery/migration/operator/release owners | Which owner-approved legacy-section and judgment-divergence archive policies, project-cursor mapping or retirement, and async-substring operating or retirement contract may be promoted? Which deployed/dynamic inventory, immutable current/candidate fixture with unchanged model/provider/thinking/prompt/content/runtime/snapshot settings, exact readers/writers, bounded migration/rebuild, one-version cutover, rollback/restore, all-four-tab/detail browser and packaged-desktop parity, physical budget, job/snapshot/pin/reference horizon and cleanup receipt satisfy every linked proof and permit each owning disposition to become `actionable` before an implementation slice is created? | US-160 blocked queue; `PRF-0084`-`PRF-0382`, `PRF-0549`-`PRF-0560`, `PRF-0924`, `PRF-0928`, `PRF-0952`, `PRF-0961`, `PRF-0963`, `PRF-0969`, applicable `PRF-1037`-`PRF-1086`; `DSP-0042`-`DSP-0147`; `TGT-0013`, `TGT-0017`, `TGT-0041`, `TGT-0050`-`TGT-0052`, `TGT-0058`; `BLK-0938` |
 | `OQ-0943` | Product/review-serving/selected-import/LLM/Human/projector/publication/query/API/client/browser/desktop/export/transfer/database/performance/reliability/storage/retention/recovery/migration/operator/release owners | Which owner-approved constant-versus-omission policy, bounded display and selected-rank hydration targets, immutable component ownership and physical display/selected/LLM/Human patch retirement contracts may be promoted? Does duplicate LLM count work require a separately owned disposition? Which deployed/dynamic inventory, immutable current/candidate fixture with unchanged model/provider/thinking/prompt/content/memory/runtime/snapshot settings, exact readers/writers and route/runtime oracle, bounded migration/rebuild, one-version cutover, rollback/restore, all-four-tab/detail browser and packaged-desktop restart/resume parity, physical budget, pin/reference horizon and durable cleanup receipt satisfy every linked proof and permit each owning disposition to become `actionable` before a slice is created? | US-161 blocked queue; `PRF-0383`-`PRF-0480`, `PRF-0929`-`PRF-0941`, `PRF-1000`, applicable `PRF-1037`-`PRF-1086`; `DSP-0148`-`DSP-0170`; `TGT-0018`-`TGT-0030`; `API-0001`-`API-0002`; `BLK-0939` |
+| `OQ-0944` | Product/review-serving/search/queue/Human/judgment-job/bulk/projector/publication/query/API/client/browser/desktop/export/transfer/database/performance/reliability/storage/retention/recovery/migration/operator/release owners | Which owner-approved project-specific or global reusable search metadata target, immutable search and queue publication receipts and physical queue-patch retirement contract may be promoted while the async-substring decision stays singly owned by US-160? Are the LLM list/count, judgment-job count/preview or later detail requests actually duplicate work requiring a separately owned disposition, or distinct contracts to preserve? Which deployed/dynamic inventory, immutable current/candidate fixture with unchanged model/provider/thinking/prompt/content/memory/runtime/tokenizer/queue-policy/snapshot settings, exact readers/writers and route/runtime oracle, bounded migration/rebuild, one-version cutover, rollback/restore, affected all-four-tab/detail browser and packaged-desktop restart/resume parity, physical budget, pin/reference horizon and durable cleanup receipt satisfy every linked proof and permit each owning disposition to become `actionable` before a slice is created? | US-162 blocked queue; prior-owned US-160 async contract; `PRF-0537`-`PRF-0588`, `PRF-0950`-`PRF-0956`, `PRF-1024`-`PRF-1028`, `PRF-1037`-`PRF-1041`, applicable `PRF-1042`-`PRF-1086`; `DSP-0100`, `DSP-0129`, `DSP-0171`-`DSP-0182`; `TGT-0039`-`TGT-0045`; `API-0001`-`API-0002`, `API-0049`-`API-0051`; `BLK-0940` |
 
 ## US-001 Quality Gates
 
@@ -45384,6 +45595,70 @@ commands. A command proves only the claim linked through its evidence record.
 - [x] Audit-only admission/phase/contract/gate/path/table validators,
       `git diff --check`, scoped product-source isolation, allowed-change,
       worktree/tracker and whitespace checks pass through `CMD-1330`.
+- [x] No live, configured, current, project or snapshot DuckDB is opened. No
+      server, app, writer, worker, projector, migration, repair or cleanup
+      command runs.
+- [x] No schema, code, route, reader, projector, retention, runtime behavior,
+      benchmark-critical setting or data changes. Durable audit results stay
+      in `STORAGE_SHAPE_AUDIT_PLAN.md`; `.ralph-tui/progress.md` receives only
+      the workflow-required completion metadata.
+      `overallCertification` remains independently `INCOMPLETE`.
+
+## US-162 Quality Gates
+
+- [x] US-155 and US-161 prerequisites, story-start HEAD/worktree ownership,
+      product-source isolation and the engine-owned `tasks/prd.json` timestamp
+      change are recorded.
+- [x] Slice admission keeps `proofCheckState` and
+      `recommendationActionability` distinct: all 52
+      `PRF-0537`-`PRF-0588` rows are blocked and all 14 `DSP-0100`,
+      `DSP-0129`, `DSP-0171`-`DSP-0182` dispositions are blocked.
+- [x] Zero actionable dispositions admit exactly zero `SLC-####` rows. Seven
+      non-keep accounting dispositions map to five distinct blocked contracts:
+      one async-substring contract remains singly owned by US-160 and four
+      contracts remain in the separate US-162 queue. Seven keep rows remain
+      preservation contracts and unresolved candidates remain zero.
+      Duplicate-looking request pairs have no owning in-scope disposition and
+      are not additional candidates.
+- [x] The exact Phase 8 order is recorded: unused rows and duplicate requests
+      first; bounded reusable search or queue facts next; component ownership
+      splits after that; indexes only after approved target shapes; structural
+      replacement behind parity; one-version rebuild cutover without permanent
+      dual writes; bounded pin/reference-protected cleanup last.
+- [x] Every US-162 blocked candidate records dependencies, exact
+      objects/fields, route/runtime effects, reads, writes, migration/rebuild,
+      cutover, cleanup, pins/protection, rollback/recovery and exact proof
+      references. The prior-owned async contract points to its complete US-160
+      record instead of duplicating ownership.
+- [x] Conditional later gates include `bun run db:mig` for schema work,
+      isolated targeted adjacent `bun test` suites for changed migrations,
+      routes, readers, projectors and retention, `bun run lint`, and
+      `bun run build` for shared API/client changes.
+- [x] Conditional runtime gates cover affected actual browser LLM, Human,
+      Both, Unassessed and title-link/detail flows, plus
+      `bun run desktop:build` and packaged restart/resume when shared storage/
+      runtime changes.
+- [x] Conditional physical gates require the same immutable fixture before
+      and after with unchanged model/provider/thinking/prompt/content/memory/
+      runtime/tokenizer/queue-policy/snapshot settings, complete semantic/
+      resource measurements and zero new DuckDB OOM, fatal restart or
+      foreground temp spill. `OOM_ERRORS.md` is required only for an actual
+      OOM fix.
+- [x] None of the documented future migration, test, lint, build,
+      browser/desktop or physical benchmark commands ran as a US-162 audit
+      gate, and none is recorded as passed.
+- [x] Proof accounting remains
+      `1,086 = 8 satisfied + 35 pending + 1,043 blocked + 0 not-applicable`;
+      disposition actionability remains
+      `441 = 0 unresolved + 441 blocked + 0 actionable`. No disposition value,
+      target, manifest, measurement or certification state changes.
+- [x] `EVD-1714`-`EVD-1720`, `CMD-1331`-`CMD-1335`, `BLK-0940` and
+      `OQ-0944` are uniquely defined and cross-referenced. Every exact test
+      file named by the conditional gate matrix exists.
+- [x] Audit-only admission/phase/ownership/contract/gate/path/table
+      validators, `git diff --check`, scoped product-source isolation,
+      allowed-change, worktree/tracker and whitespace checks pass through
+      `CMD-1335`.
 - [x] No live, configured, current, project or snapshot DuckDB is opened. No
       server, app, writer, worker, projector, migration, repair or cleanup
       command runs.
