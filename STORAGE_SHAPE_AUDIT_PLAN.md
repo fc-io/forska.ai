@@ -14,9 +14,9 @@ the manifests and proof records below.
 
 | Field | Value | Reason |
 | --- | --- | --- |
-| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-127 add 1,067 finite proof rows without changing a disposition: the 1,083-row proof register is eight `satisfied`, 478 `pending`, 597 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked`, and zero are actionable. US-092 through US-098 define 80 concrete but unvalidated `TGT-0001`-`TGT-0080` shapes. US-099 through US-126 retain their prior predicates and US-127 adds two blocked desktop-restart and desktop-resume predicates; none adds a target. All 120 gate names are unset, all 23 candidate/runtime markers have zero product-source files and no approved immutable fixture, executable current/candidate shared-storage desktop bundle, rooted disposable runtime, deterministic restart/resume controller, exact request/route/UI/cache/job/snapshot/pin/recovered-state oracle, physical collector, hard budgets or owner signoff exists. Normal desktop startup would create app-owned roots, select its DuckDB path and run owner-mode migration/recovery mutations, so no desktop or database was started and every physical value remains unavailable rather than zero. Source inspection finds transport 2xx is accepted without semantic readiness, backend exit is unsupervised after readiness, no explicit suspend/wake/resume lifecycle exists, hash routing and outer URL filter state can diverge, list focus refetch is disabled, job tracking handles are process-local, the desktop default memory profile omits the bulk executor, active/LKG/latest-retired selection and pins remain separate, and component/derived/head publication spans transactions. Those findings reject certification but are not physical measurements. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, exact platform proof, applied access paths, bounded scan/write/byte/file/call work, publication atomicity, failure/retry/recovery, migration/cutover, retention, cleanup and restore evidence remain incomplete. No prior proof or manifest state advanced and no planned validation is labeled passed. Twenty-four isolated Bun files produced 168 passes and 733 expectations with no failure; one Vitest file produced ten passes with no failure. No selected test applied DDL/DML, all finite processes exited and no product process or US-127 residue remains. Tests corroborate current source contracts only; they do not execute desktop lifecycle scenarios, the candidate or a physical collector. `overallCertification` remains independently `INCOMPLETE`. |
+| `overallCertification` | `INCOMPLETE` | API has 74 nonterminal rows and one blocked row; UI has 55 nonterminal rows; background has 112 nonterminal rows; objects have zero nonterminal and 322 blocked rows; material fields have zero nonterminal and 1,985 blocked rows. US-073 through US-080 contribute 441 provisional decisions: 326 `keep`, six `move`, 24 `derive`, 61 `delete` and 24 `archive` rows. US-081 through US-128 add 1,070 finite proof rows without changing a disposition: the 1,086-row proof register is eight `satisfied`, 478 `pending`, 600 `blocked` and zero `not-applicable`; 326 disposition rows remain `recommendationActionability: unresolved`, all 115 non-keep rows remain `blocked`, and zero are actionable. US-092 through US-098 define 80 concrete but unvalidated `TGT-0001`-`TGT-0080` shapes. US-099 through US-127 retain their prior predicates and US-128 adds three blocked replay, targeted-repair and documented-operator-recovery predicates; none adds a target. All 112 US-128 gate names are unset, all 17 candidate/runtime markers have zero product-source files and no approved immutable fixture, executable current/candidate recovery pair, interruption controller, exact row/file/watermark/snapshot/job/route/cleanup oracle, canonical signed operator runbook, physical collector, hard budgets or owner signoff exists. Execution stopped before a common fixture or benchmark recovery command and every physical value remains unavailable rather than zero. Current source shows per-cycle completion/outbox limits and duplicate suppression, but recursive flush/prune and direct system-SQLite read-all recovery lack request-wide bounds; canonical import deliberately precedes visibility acknowledgement; repair/job/route state remains separate; mutable recovery sidecars lack immutable revisions/application/visibility/cleanup receipts; and the exact healthy-job route test fails consistently. Those findings reject certification but are not physical measurements. The physical register remains 91 blocked plus one source-proven not-applicable domain with zero value-bearing observations. Approved deployed writer/reader inventory, owner authority, applied access paths, bounded scan/write/byte/file/call work, publication atomicity, failure/retry/recovery, migration/cutover, retention, cleanup and restore evidence remain incomplete. No prior proof or manifest state advanced and no planned validation is labeled passed. Ten isolated Bun invocations produced 36 passes and 300 expectations; the same healthy-route test failed twice and one initial selector matched no tests. Six test-owned current-shape DuckDB fixtures and local SQLite fixtures were source-controlled corroboration only. Two new test recovery directories containing four files/26,245,884 bytes were removed, all finite processes exited and no product process or US-128 residue remains. Tests do not execute an approved current/candidate scenario or physical collector. `overallCertification` remains independently `INCOMPLETE`. |
 | Framework version | `US-001 / 2026-07-21` | First normalized, resumable evidence structure. |
-| Latest normalized story | `US-127 / 2026-07-23` | Freezes exactly two current-versus-candidate desktop lifecycle validations: whole-desktop/backend restart and same-process resume. Process/child/lease state, rooted runtime paths, transport and semantic readiness, outer/hash navigation, cache, exact requests, all four review tabs, detail, progress, queued jobs/executor results, active/LKG/latest-retired identities, pins, publication, unavailable/recovered state, wall time, process-tree RSS, storage-engine WAL and retained generations remain separate. `PRF-1082`-`PRF-1083` are blocked because all 120 gate names are unset, all 23 candidate/runtime markers have zero product-source files and no approved fixture, executable pair, disposable desktop path, restart/resume controller, exact oracle, collector, budgets, restore evidence or signoff exists. Current source and 25 isolated passing test processes corroborate current predicates without substituting for execution: semantic-readiness admission and post-ready supervision gaps, absent resume lifecycle, hash/filter/cache risk, local job handles, low-memory executor omission and independent active/LKG/pin/publication state. No DDL/DML, desktop, browser, server, database, worker or project-data access ran; no current-run residue remains. Existing targets, actionability, schema, code, routes, projectors, retention, runtime, project data and certification states remain unchanged. |
+| Latest normalized story | `US-128 / 2026-07-23` | Freezes exactly three current-versus-candidate recovery validations: replay, one-job targeted repair and documented stopped-stack operator recovery. Local completion/outbox state, central marker/canonical/delta/dirty effects, source/consumer/projector/visible watermarks, active/LKG/latest-retired snapshots, files/WAL/spill, job/storage state, exact routes, retained generations, cleanup and recovery outcome remain separate. `PRF-1084`-`PRF-1086` are blocked because all 112 gate names are unset, all 17 candidate/runtime markers have zero product-source files and no approved fixture, executable pair, interruption controller, exact oracle, canonical signed runbook, collector, budgets, restore evidence or signoff exists. Current source/tests corroborate per-call replay/repair and one interruption-point duplicate suppression while preserving request-wide bound, visibility, route, sidecar and cleanup gaps; the healthy-job route test fails twice. No common-fixture or benchmark recovery command, live/current/project database, product process or candidate ran. Six test-owned disposable current-shape fixtures self-cleaned except two timestamped recovery directories, which were inspected and removed; no current-run residue remains. Existing targets, actionability, schema, code, routes, projectors, retention, runtime, project data and certification states remain unchanged. |
 | Durable result file | `STORAGE_SHAPE_AUDIT_PLAN.md` | The only audit-result artifact; Ralph may separately update tracker metadata. |
 
 `overallCertification: PASS` is forbidden until every in-scope manifest row is
@@ -24002,6 +24002,256 @@ keep dispositions retain `recommendationActionability: unresolved`; all 115
 non-keep dispositions remain `blocked`; zero recommendations are actionable
 and `overallCertification` remains `INCOMPLETE`.
 
+## US-128 Replay, Repair And Operator Recovery Validation
+
+### US-128 Scope, Prerequisite And Execution Gate
+
+US-127 is complete at HEAD
+`2df465e44bbcc9f5ddbca1f9e33eda4bde25a099`. US-128 owns exactly three
+recovery grains:
+
+1. replay: owner-completion and judgment-SQLite-outbox work is interrupted at
+   each approved handoff, then the same immutable receipt is replayed;
+2. targeted repair: exactly one named judgment job is preflighted, repaired
+   and observed through terminal cleanup without admitting unrelated jobs; and
+3. documented operator recovery: the stopped-stack system-`sqlite3` recovery
+   procedure exports one named job, applies its generated update, reconciles
+   central/local state and retains or cleans its evidence under an approved
+   runbook.
+
+Completion-journal ACK, accepted-claim deletion, SQLite outbox claim,
+central import marker, canonical judgment, review delta, dirty-work intake,
+source/consumer/projector/visible watermarks, active snapshot, persisted LKG,
+latest-retired fallback, job status, storage state, route response, recovery
+sidecars, WAL checkpoint, file cleanup and retained generations remain
+separate contracts. One owner ACK, duplicate counter, canonical row, empty
+queue, active storage state, successful route status, advanced legacy token or
+`fullyRecovered: true` cannot certify another grain.
+
+Scoped `src`, `scripts`, `package.json` and `bun.lock` product source remains
+unchanged from the US-098 target-design commit
+`4ca6a3de229a949ef2662affd1d83127b708df51` through HEAD and the worktree.
+The pre-existing engine-owned `tasks/prd.json` modification remains untouched.
+Exact product-source searches found zero files for 17 candidate/runtime
+markers: `app.review_component_revision_v5`,
+`app.review_serving_snapshot_v5`, `app.review_serving_snapshot_head_v5`,
+`app.review_source_event_v5`, `app.review_source_frontier_v5`,
+`app.review_dirty_work_v5`, `app.review_dirty_output_receipt_v5`,
+`app.review_dirty_ack_lane_v5`, `app.review_consumer_frontier_v5`,
+`app.maintenance_run_v5`, `app.review_snapshot_lease_receipt_v5`,
+`app.retention_policy_v5`, `cold:judgment-recovery/v1`,
+`source_sqlite_identity`, `recovery_revision`, `MAX_ACTIVE_ROWS_PER_JOB` and
+`MAX_SELECTION_PAGES`. `TGT-0048`, `TGT-0050`-`TGT-0056` and `TGT-0078`
+remain design-only; no executable candidate recovery side exists.
+
+The story permits disposable-fixture DDL, DML and generated output only after
+owners approve one immutable fixture, both executable shapes, exact job/
+receipt/watermark/snapshot/file identities, finite interruption order,
+independent state and route oracles, a physical collector, hard budgets,
+cleanup authority and the canonical operator runbook. A presence-only Zsh
+check printed no values and found `set=0`, `unset=112`, `total=112` for:
+
+- fixture, roots and scope: `DUCKDB_MEMORY_LIMIT`,
+  `FORSKA_REVIEW_AUDIT_FIXTURE_ID`, `FIXTURE_SCHEMA_HASH`,
+  `FIXTURE_DATA_HASH`, `DATABASE_PATH`, `DUCKDB_PATH`, `SQLITE_JOB_PATH`,
+  `REPORT_ROOT`, `TEMP_ROOT`, `OUTPUT_ROOT`, `RECOVERY_ROOT`, `PROJECT_ID`,
+  `ARTICLE_ID`, `PROMPT_ID` and `REVIEW_CONFIG_HASH`;
+- current identities: `CURRENT_JOB_ID`, `CURRENT_QUEUE_RECORD_ID`,
+  `CURRENT_OUTBOX_SEQ`, `CURRENT_CLAIM_ID`, `CURRENT_JUDGMENT_ID`,
+  `CURRENT_EXECUTION_SNAPSHOT_ID`, `CURRENT_IMPORT_MARKER_ID`,
+  `CURRENT_DELTA_ID`, `CURRENT_DIRTY_WORK_IDS_HASH`,
+  `CURRENT_SOURCE_WATERMARK`, `CURRENT_DIRTY_WATERMARK`,
+  `CURRENT_PROJECTOR_WATERMARK`, `CURRENT_VISIBLE_WATERMARK`,
+  `CURRENT_ACTIVE_SNAPSHOT_ID`, `CURRENT_LKG_SNAPSHOT_ID`,
+  `CURRENT_DATABASE_GENERATION_ID`, `CURRENT_RUNTIME_GENERATION_ID`,
+  `CURRENT_RECOVERY_GENERATION_ID`, `CURRENT_EXPECTED_STATE_HASH`,
+  `CURRENT_SQLITE_FILE_HASH` and `CURRENT_SQLITE_WAL_HASH`;
+- candidate identities: `CANDIDATE_JOB_ID`, `CANDIDATE_SELECTION_ID`,
+  `CANDIDATE_CLAIM_RECEIPT_ID`, `CANDIDATE_EXECUTION_RECEIPT_ID`,
+  `CANDIDATE_RESULT_RECEIPT_ID`, `CANDIDATE_IMPORT_RECEIPT_ID`,
+  `CANDIDATE_VISIBILITY_RECEIPT_ID`,
+  `CANDIDATE_TOKEN_CLOSEOUT_RECEIPT_ID`,
+  `CANDIDATE_COMPONENT_REVISION_ID`, `CANDIDATE_SNAPSHOT_ID`,
+  `CANDIDATE_SNAPSHOT_HEAD_ID`, `CANDIDATE_CONSUMER_FRONTIER_ID`,
+  `CANDIDATE_MAINTENANCE_RUN_ID`, `CANDIDATE_RECOVERY_BUNDLE_ID`,
+  `CANDIDATE_RECOVERY_REVISION` and `CANDIDATE_EXPECTED_STATE_HASH`;
+- scenario and oracle identities: `REPLAY_EXPECTED_STATE_HASH`,
+  `TARGETED_REPAIR_EXPECTED_STATE_HASH`,
+  `OPERATOR_RECOVERY_EXPECTED_STATE_HASH`, `REPLAY_MATRIX_HASH`,
+  `TARGETED_REPAIR_MATRIX_HASH`, `OPERATOR_RECOVERY_MATRIX_HASH`,
+  `ROW_EFFECT_ORACLE_HASH`, `FILE_EFFECT_ORACLE_HASH`,
+  `DUPLICATE_ORACLE_HASH`, `WATERMARK_ORACLE_HASH`,
+  `SNAPSHOT_ORACLE_HASH`, `JOB_STATE_ORACLE_HASH`,
+  `ROUTE_STATE_ORACLE_HASH`, `CLEANUP_ORACLE_HASH` and
+  `RECOVERY_OUTCOME_ORACLE_HASH`;
+- fixed benchmark settings: `UNCHANGED_SETTINGS_HASH`, `SCALE`, `SEED`,
+  `PROVIDER_ID`, `MODEL_ID`, `THINKING_LEVEL`, `PROMPT_SET`,
+  `CONTENT_FLAGS_HASH`, `FROZEN_CLOCK`, `PROCESS_MEMORY_LIMIT`,
+  `RUNTIME_PROFILE`, `RUNTIME_ROLE`, `RUNTIME_TOPOLOGY` and
+  `RUNTIME_VERSION`;
+- sampling, order, caps, tools and signoff: `SAMPLE_COUNT`,
+  `SCENARIO_ORDER`, `FAILURE_POINT_ORDER`, `RETRY_POLICY`,
+  `CURRENT_BUNDLE_HASH`, `CANDIDATE_BUNDLE_HASH`, `ORACLE_HASH`,
+  `COLLECTOR_HASH`, `WAL_PROFILE_HASH`, `SQLITE_PROFILE_HASH`,
+  `REPLAY_CAPS`, `REPAIR_CAPS`, `OPERATOR_RECOVERY_CAPS`, `ROW_CAPS`,
+  `BYTE_CAPS`, `FILE_CAPS`, `CALL_CAPS`, `ATTEMPT_CAPS`, `CLEANUP_CAPS`,
+  `RETENTION_POLICY`, `RESTORE_MATRIX_HASH`, `OWNER_SIGNOFF_HASH`,
+  `BUN_BINARY_HASH`, `SQLITE_BINARY_HASH` and `DUCKDB_BINARY_HASH`; and
+- current runtime environment names: `SERVER_ROLE`,
+  `SERVER_DUCKDB_OWNER_URL`, `FORSKA_RUNTIME_PROFILE`,
+  `FORSKA_RUNTIME_SERVICE`, `FORSKA_DISABLE_SERVER_MUTATIONS` and
+  `JUDGMENT_JOBS_ROOT`.
+
+Execution therefore stopped before a common current/candidate fixture,
+benchmark DDL/DML, completion/outbox interruption, replay, repair command,
+operator command, route call, projector/publication, restore or benchmark
+cleanup. No live, current or project DuckDB was opened. No source default,
+test-defined `20GB` memory value, inferred identity, implicit retry, fallback
+or weaker benchmark-critical setting was adopted. Every scenario measurement
+below is `unavailable`, never zero, passed or not-applicable.
+
+Focused current-path tests were then run only as source-controlled
+corroboration. Their disposable databases and SQLite files are not the
+approved physical fixture and their source-defined settings are not benchmark
+values. They cannot advance any proof. Two operator smoke tests left two
+current-run startup-recovery directories containing four files and 26,245,884
+bytes; those exact timestamped test artifacts were inspected and removed.
+Twenty-six older matching directories were present before US-128 and remain
+untouched. The pre-existing empty `/private/tmp/duckdb-temp` retained size
+`64`, mtime `1784787077` and zero children.
+
+All three proof rows are `blocked`; no target, disposition, recommendation
+actionability or certification state advances.
+
+### US-128 Evidence Ledger
+
+| Evidence ID | Class | Exact locator | Finding | Command |
+| --- | --- | --- | --- | --- |
+| `EVD-1438` | `control/prerequisite/gate` | User US-128 PRD and codebase patterns; `.ralph-tui/progress.md` US-127; complete reporting, DuckDB and API-server skills; HEAD/worktree/source-diff, presence-only and marker checks | US-127 is complete and the audit mutation boundary is unchanged. All 112 values are unset, all 17 markers have zero product-source files and the engine-owned `tasks/prd.json` edit is preserved. | `CMD-1102`-`CMD-1103` |
+| `EVD-1439` | `production/worker-completion-replay` | `judgeWorkerCompletionJournal.ts:214-223,295-358,1588-1662,2360-2483`; `judgmentsJobsSendToLLM.ts:73-75,1158-1171`; completion/rollout tests | The worker journal uses WAL/FULL SQLite, keeps accepted claim and completion rows distinct, marks stale replay discarded, records transient failure and deletes an accepted claim only after owner ACK. Startup processes at most one replay candidate; normal pre-dispatch replay admits 64 every five seconds. A per-call limit is not a request-wide drain or visibility proof. | `CMD-1104`, `CMD-1108` |
+| `EVD-1440` | `production/sqlite-outbox-replay-idempotence` | `judgmentJobSqliteOutboxImport.ts:23-27,513-668`; `judgmentsJobsMarkDirtyWork.ts:307-398,434-585`; `judgmentJobSqliteOutboxImport.test.ts:1694-1815,1913-2076` | One cycle claims at most 100 rows/4 MiB and commits canonical insert, review delta/dirty intake, comparison invalidation and `(job_id,outbox_seq)` marker in one central transaction. Crash-after-commit replay keeps one judgment, one marker and five dirty rows, then clears the local outbox. The returned `importedCount` counts importable entries, not necessarily inserted rows; recursive `flush` has no request-wide row/call/time bound. | `CMD-1104`, `CMD-1108` |
+| `EVD-1441` | `production/targeted-repair` | `judgmentJobRepair.ts:157-166,425-660,787-843,1040-1326`; `runJudgmentJobRepair.ts:20-116`; repair tests | The repair API/CLI names one job, preflights, handles a stale lease with one recovery/retry, flushes outbox, requeues sent/orphan rows, reaps claims, prunes, finalizes and checkpoints. Orphan repair is 1,000 rows per action; automatic startup repair is bounded by 100 batches/30 s. Full repair still recursively flushes and prunes until zero with no request-wide row/byte/call/time ceiling. | `CMD-1105`, `CMD-1108`-`CMD-1109` |
+| `EVD-1442` | `production/route-and-job-state` | `JudgmentsJobsRoutes.ts:2630-2723,3041-3281,3475-3585`; `judgmentsJobsService.ts:395-420`; route tests | Repair routes return structured action/live-SQLite/change state and are job-scoped. Current checks pass missing-SQLite, orphan requeue, multi-batch clearing, drain isolation, storage-policy and stopped-stack guidance. The exact healthy-job route test fails consistently, including alone, because the response cannot be parsed as JSON; exact post-recovery route state is therefore blocked and the failure is preserved. | `CMD-1105`, `CMD-1109` |
+| `EVD-1443` | `production/operator-recovery-files` | `recoverJudgmentJobWithSystemSqlite.ts:143-163,165-331,333-565`; SQL-import wrapper; `package.json:55`; operator/recovery tests; `BGO-0106`, `DBO-0315`, `DSP-0356`, `DSP-0431` | Direct recovery reads all unexported outbox and orphan rows with system `sqlite3`, chunks only central pair lookups by 500, writes mutable `${sqlitePath}.recovery-export.json` and `.recovery-update.sql`, imports centrally, advances a legacy local ACK token, deletes local rows, checkpoints WAL and updates current job state. It has no whole-request row/byte/file/RSS/time cap, immutable manifest, source identity/revision, signature/encryption, application/visibility/cleanup receipt or retained-generation policy. It is not package-exposed or named by the runtime's stopped-stack guidance. | `CMD-1106`, `CMD-1110` |
+| `EVD-1444` | `production/watermark-snapshot-visibility-boundary` | `judgmentsJobsMarkDirtyWork.ts:361-396,543-585`; `judgmentJobSqliteOutboxImport.test.ts:2015-2076`; `TGT-0048`, `TGT-0050`-`TGT-0052` | Canonical import appends source delta and dirty work, but the test explicitly proves local visibility acknowledgement remains unchanged until a later worker. No current replay/repair/operator result binds source persisted, dirty admitted, projector output, consumer visible, active head, persisted LKG and route identity in one receipt. | `CMD-1104`-`CMD-1106`, `CMD-1108` |
+| `EVD-1445` | `candidate/recovery-contract` | `TGT-0048`, `TGT-0050`-`TGT-0056`, `TGT-0078`; 17-marker reconciliation | Candidate design requires immutable source/frontier, owner-fenced work/output/ACK, consumer visibility, immutable snapshot/head, typed job handoff receipts, maintenance receipts and a signed/encrypted versioned recovery bundle with application/visibility/cleanup receipts and finite caps. None is executable in product source. | `CMD-1103`, `CMD-1106` |
+| `EVD-1446` | `scenario/physical-measurement-contract` | `PRF-1084`-`PRF-1086`; US-128 gate, scenario, state and physical matrices | Exactly three finite proofs require one approved executable current/candidate pair and the same fixture. Rows/files read/written, wall time, RSS, DuckDB/SQLite WAL, temp spill, retained generations, job/route/snapshot state, cleanup and recovery outcome remain independently retained. Every physical field is unavailable. | `CMD-1103`, `CMD-1106` |
+| `EVD-1447` | `test/control/cleanup` | Ten isolated Bun invocations; pre/post temp inventory; scoped residue cleanup; lint/typecheck/source/control validation | Current tests provide 36 passes and 300 expectations, but the healthy-route test fails in two independent invocations and one initial selector matches no tests. Six test-owned current-shape DuckDB fixtures plus local SQLite fixtures ran and exited; two new recovery directories were removed. Tests do not execute the approved scenarios, candidate or collector. | `CMD-1107`-`CMD-1112` |
+
+### US-128 Conditional Physical-Execution Gate
+
+| Gate | Required evidence | Result | `proofCheckState` |
+| --- | --- | --- | --- |
+| Fixture and authority | Immutable disposable DuckDB and local SQLite/job/journal inputs, bounded report/temp/output/recovery roots, schema/data hashes and explicit DDL/DML/interruption/replay/repair/operator/cleanup authority | All named values unset; no approved fixture or mutation authority | `blocked` |
+| Fixed settings | All 112 fixture, current/candidate identity, oracle, benchmark, order, cap, tool and signoff values fixed without defaults or fallback | `set=0`, `unset=112`; values were not printed | `blocked` |
+| Executable sides | Coherent current and candidate schemas, writers, readers, workers, finalizers, files, recovery tools and cleaners with applied-path hashes | Current source exists; all 17 markers have zero product-source files; no executable candidate | `blocked` |
+| Finite interruption controller | Deterministic crash points before/after local write, owner ACK, central commit, local ACK, repair step and operator file/update application, with repeated-attempt caps | No approved controller, failure matrix or receipt | `blocked` |
+| State and route oracle | Signed row/file effect, duplicate, watermark, snapshot, job, exact route, cleanup and recovery-outcome hashes for every checkpoint | No independent exact oracle; the current healthy-route test fails | `blocked` |
+| Collector and budgets | Monotonic wall samples, process-tree RSS, DuckDB and SQLite WAL, temp spill, rows/files read/written, retained generations and hard row/byte/file/call/attempt/time/cleanup limits | Collector, profiles and budgets absent | `blocked` |
+| Operator runbook and bundle | Canonical stopped-stack command, package/tool hashes, source SQLite identity, immutable revision/manifest, signature/encryption, application/visibility/cleanup receipts and rollback | Runtime guidance names repair CLI; direct system recovery is non-package and lacks an authoritative runbook/bundle contract | `blocked` |
+| Recovery, residue and signoff | Exact restored state, clean-host restore, repeat/mismatch rejection, finite retained history, residue inventory and owner signatures | Restore/repeat/mismatch evidence, retention and signatures absent | `blocked` |
+
+### US-128 Frozen Three-Scenario Contract
+
+| Proof ID | Finite scenario | Required checkpoints and exact pass boundary |
+| --- | --- | --- |
+| `PRF-1084` | Replay | On the same immutable fixture, execute current then candidate in fixed order. Interrupt completion and outbox handoffs before local journal/outbox insert, after local commit, before/after owner ACK, before central transaction, after central commit but before local ACK, after local ACK but before maintenance completion and before/after visibility publication. Replay exactly to the approved attempt/call/time cap. Capture accepted claim, completion, queue/outbox claim, import marker, canonical judgment, delta, dirty/output/ACK/consumer frontiers, job, active/LKG/fallback snapshot, exact route, WAL/files and cleanup. Pass requires the signed final state, one effect per immutable receipt, bounded duplicate suppression and no lost data, duplicate conflict/effect, changed setting, silent fallback, unbounded replay, OOM, spill, fatal restart or residue. |
+| `PRF-1085` | Targeted repair | Name one job and execute preflight plus the approved route/CLI repair under stopped/live semantics fixed by the oracle. Interrupt before/after lease recovery, outbox flush, sent/orphan repair, claim reap, prune, drain finalization, WAL checkpoint, job-state update, visibility publication and cleanup; repeat to the cap and prove all non-target jobs/files unchanged. Pass requires exact local/central rows, files, watermarks, snapshot/head, job/storage/route state and cleanup with bounded work and no lost data, unrelated effect, duplicate effect, lease bypass, fallback, OOM, spill, fatal restart or residue. |
+| `PRF-1086` | Documented operator recovery | With the approved stack stopped, invoke the signed canonical system-`sqlite3` runbook for one quarantined job and immutable source SQLite identity/revision. Interrupt generation and application before/after export, central import, update/reconcile member publication, SQLite update, WAL checkpoint, job state, visibility ACK and cleanup; perform same-revision repeat, differing-revision rejection and clean restore. Pass requires immutable checksummed/signature-validated files, exact row/file effects, canonical visibility and token closeout, bounded retained generations, idempotent repeat, mismatch rejection, rollback and zero unapproved residue with no lost data, duplicate effect, unbounded read/application, missing operator step, fallback, OOM, spill or fatal restart. |
+
+At every checkpoint, retain the following values separately:
+
+| Grain | Required current and candidate values |
+| --- | --- |
+| Admission/control | fixture/schema/data/tool/config hashes, scenario/failure-point/attempt, owner/generation/lease, unchanged-settings hash and exact command |
+| Local execution | journal/job SQLite identity and hash; queue, accepted claim, execution snapshot, result/completion/outbox/import-claim rows and their statuses |
+| Central effects | import marker, canonical judgment, review delta, dirty work, output/ACK receipt, maintenance run and duplicate-conflict classification |
+| Watermarks/publication | allocated/persisted/reconciled/dirty-admitted/output-sealed/consumer-visible values, component revision, candidate, active, LKG, latest-retired and head epoch |
+| Job and routes | admission-only status, executor progress/result, storage/quarantine state and exact health/detail/list route status/body/error/snapshot hashes |
+| Files/lifecycle | every file read/written/deleted, encoded bytes/checksum, DuckDB/SQLite WAL, temp/spill, retained generations, reader lease, cleanup receipt, residue and restore outcome |
+
+Reject a side immediately for a missing or changed setting, identity,
+measurement, command, receipt or oracle; lost data; duplicate effect or
+conflicting duplicate; unrelated-job mutation; advanced watermark without its
+prior receipt; cross-snapshot or exact-route mismatch; mutable/unsigned
+operator evidence; missing operator step; unbounded row/byte/file/call/attempt/
+time/cleanup work; implicit retry; stale/silent fallback; OOM; spill; fatal
+restart; residue or failed restore. Preserve the failure and never weaken a
+critical setting or relabel unavailable as zero, passed or not-applicable.
+
+### US-128 Current Source Findings
+
+| Contract | Current checked-in behavior | Audit consequence |
+| --- | --- | --- |
+| Completion replay | Journal rows use durable SQLite WAL/FULL; replay orders unacked rows, applies a failure backoff, discards explicit stale conflicts, records failures and deletes accepted claims only after ACK. Startup limit is one and normal background limit is 64/five seconds. | These are per-invocation controls. No persisted request-wide replay cursor, total cap, consumer-visible receipt or cleanup history proves bounded complete replay. |
+| Outbox import and duplicate suppression | A 100-row/4 MiB claim feeds one central transaction. Natural-identity insert and `(job_id,outbox_seq)` marker suppress reapplication; crash-after-commit test retains one canonical row, one marker and five dirty rows. | Current idempotence is supported at this interruption point, but `importedCount` is importable rather than inserted count and recursive flush is unbounded request-wide. |
+| Watermark and snapshot settlement | Import appends review delta and dirty work; visibility ACK is deliberately deferred to a worker. Active/LKG/head and route state are not part of the import result. | Canonical import or empty local outbox cannot certify consumer visibility, active publication, exact fallback or route parity. |
+| Targeted repair | Route and CLI identify one job. Full repair can initialize SQLite, preflight/fallback, flush, requeue, reap, repair up to 1,000 orphan rows, prune until stable, finalize, checkpoint and update storage state. Automatic orphan repair has 100-batch/30-second bounds. | One-job scope is source-supported, but full flush/prune recursion, total rows/bytes/files/RSS/time, retained history and later visibility remain unbounded or unmeasured. |
+| Repair route state | Structured repair/action tests pass for missing storage, orphan requeue, multiple batches, stopped-stack guidance and drain isolation. | The exact healthy-job health-route test fails twice with a non-JSON response, so an exact recovered route vector cannot be certified from the current suite. |
+| Operator command surface | The runtime message documents stopped-stack `bun scripts/runJudgmentJobRepair.ts --action=repair --jobId=<job>`. Package exposes `db:judgment-job:repair`. Direct system recovery is a separate non-package script and wrapper. | There is no single approved runbook selecting the repair CLI versus direct recovery or fixing shutdown, tool identity, sidecar security, rollback, repeat and cleanup rules. |
+| Direct system recovery | System `sqlite3` reads all pending/outlier rows, writes mutable JSON/SQL sidecars, imports centrally, updates the legacy ACK token, deletes local rows, checkpoints and sets current job state. Pair lookups alone are chunked by 500. | Read-all/materialization, mutable filenames, missing revision/manifest/signature/encryption/application/visibility/cleanup receipts and absent retention prevent bounded exact operator certification. |
+| Candidate | `TGT-0055` keeps typed bounded job handoffs; `TGT-0056` keeps maintenance attempts; `TGT-0048`/`TGT-0050`-`TGT-0052` bind immutable publication/frontiers; `TGT-0078` defines a finite signed/encrypted recovery bundle. | The design supplies the comparison predicate but cannot be executed. Implementing it here would violate the audit-only boundary. |
+
+### US-128 Recovery State Result Matrix
+
+| Scenario / side | Local execution state | Central rows and duplicate effects | Watermarks, snapshots and routes | Files, jobs and cleanup | Recovery outcome | `proofCheckState` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `PRF-1084` current replay | exact journal/job SQLite, queue/claim/completion/outbox/ACK states `unavailable` | rows read/written and receipt/canonical/delta/dirty duplicate classification `unavailable` | source/dirty/output/consumer watermarks, active/LKG/fallback and route hashes `unavailable` | WAL/files/job/executor/retention/cleanup state `unavailable` | bounded exact replay and idempotence `unavailable` | `blocked` |
+| `PRF-1084` candidate replay | typed intake/claim/execution/result/import/visibility/closeout receipt state `unavailable`; executable side absent | immutable receipt and conflict effects `unavailable` | candidate frontier/component/head/route state `unavailable` | candidate files/jobs/history/cleanup `unavailable` | candidate replay convergence `unavailable` | `blocked` |
+| `PRF-1085` current targeted repair | one-job preflight/lease/queue/claim/outbox/prune state `unavailable` | target and non-target rows/effects `unavailable` | dirty/projector/visible watermarks, active/LKG/fallback and exact health/detail state `unavailable` | SQLite/WAL/job/storage/quarantine/retention/cleanup `unavailable` | bounded exact repair `unavailable`; current healthy-route test failed | `blocked` |
+| `PRF-1085` candidate targeted repair | owner-generation maintenance/job receipt state `unavailable`; executable side absent | target/non-target immutable effects `unavailable` | consumer frontier/snapshot/head/route state `unavailable` | candidate files/jobs/histories/cleanup `unavailable` | candidate repair convergence `unavailable` | `blocked` |
+| `PRF-1086` current operator recovery | stopped-stack source SQLite/export/import/update/reconcile state `unavailable` | canonical/marker/delta/dirty/ACK/token row effects `unavailable` | consumer visibility, active/LKG/fallback and exact route state `unavailable` | sidecar hashes/bytes, WAL, job/storage, retained copies and cleanup `unavailable` | signed repeat/mismatch/restore outcome `unavailable` | `blocked` |
+| `PRF-1086` candidate operator recovery | immutable source identity/revision/application receipt state `unavailable`; executable side absent | bundle application and conflict effects `unavailable` | visibility receipt/frontier/snapshot/head/route state `unavailable` | manifest/members/signature/encryption/generations/cleanup `unavailable` | candidate repeat/mismatch/restore outcome `unavailable` | `blocked` |
+
+### US-128 Physical Measurement Matrix
+
+| Scenario / side | Rows read / written | Files read / written / deleted | Wall time and RSS | WAL and temp spill | Retained generations | Recovery outcome | `proofCheckState` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `PRF-1084` current replay | exact per-table/local/central counts and bytes `unavailable`, not zero | journal/SQLite/WAL/temp/report event counts, paths, bytes and hashes `unavailable` | total/phase/raw wall samples and process-tree baseline/peak/end/delta/events `unavailable` | DuckDB/SQLite WAL baseline/peak/end/delta and temp/spill events `unavailable` | local/central/runtime/database/recovery/snapshot/receipt histories `unavailable` | signed idempotent convergence/cleanup `unavailable` | `blocked` |
+| `PRF-1084` candidate replay | all candidate row effects `unavailable`, not zero | all candidate file effects `unavailable` | all `unavailable` | all `unavailable` | component/head/job/receipt/retention generations `unavailable` | executable candidate absent | `blocked` |
+| `PRF-1085` current targeted repair | target/non-target rows read/written/deleted and bytes `unavailable`, not zero | job SQLite/WAL/lease/temp/report/cleanup effects `unavailable` | total/preflight/flush/repair/prune/publication/cleanup samples and RSS `unavailable` | both WALs and spill `unavailable` | job/maintenance/import/snapshot/runtime/recovery histories `unavailable` | exact target restored/non-target unchanged `unavailable` | `blocked` |
+| `PRF-1085` candidate targeted repair | all candidate target/non-target effects `unavailable` | all candidate file effects `unavailable` | all `unavailable` | all `unavailable` | maintenance/job/component/snapshot/retention generations `unavailable` | executable candidate absent | `blocked` |
+| `PRF-1086` current operator recovery | export/orphan/central/local/update/cleanup row and byte counts `unavailable`, not zero | source SQLite, export/update/reconcile/manifest/WAL/temp/report/retained/deleted events `unavailable` | total/export/import/apply/visibility/restore/cleanup samples and RSS `unavailable` | DuckDB/SQLite WAL and temp/spill `unavailable` | source/recovery/application/visibility/job/snapshot/backup generations `unavailable` | repeat/mismatch/rollback/clean-restore `unavailable` | `blocked` |
+| `PRF-1086` candidate operator recovery | all candidate application/visibility/cleanup row effects `unavailable` | immutable bundle/member/signature/encryption and cleanup effects `unavailable` | all `unavailable` | all `unavailable` | eight-revision/90-day and application/visibility/cleanup generations `unavailable` | executable candidate absent | `blocked` |
+
+### US-128 Validation Proof Rows
+
+| Proof ID | Predicate | `proofCheckState` | Evidence | Missing evidence / blocker | Owner question |
+| --- | --- | --- | --- | --- | --- |
+| `PRF-1084` | Replay passes only when current and one approved executable candidate run the finite interruption/replay matrix on one immutable fixture; every local claim/completion/outbox state, central marker/canonical/delta/dirty effect, watermark, active/LKG/fallback snapshot, exact route, file/job/cleanup state and physical value matches its signed oracle under hard row/byte/file/call/attempt/time/RSS/WAL/spill/generation/cleanup budgets, with one effect per immutable receipt and no lost data, duplicate effect, fallback, OOM, fatal restart or residue. | `blocked` | `EVD-0676`, `EVD-1153`-`EVD-1159`, `EVD-1438`-`EVD-1447`; `PRF-0966`-`PRF-0967` | Fixture/settings, executable candidate, interruption controller, exact receipt/watermark/snapshot/route oracle, request-wide caps, collector/budgets, cleanup/restore and signoff unavailable; `BLK-0897`-`BLK-0900`, `BLK-0902`-`BLK-0906`. | `OQ-0901`-`OQ-0904`, `OQ-0906`-`OQ-0910` |
+| `PRF-1085` | Targeted repair passes only when both executable sides repair exactly one named job through the finite preflight/lease/flush/requeue/reap/orphan/prune/finalize/checkpoint/publication/cleanup matrix; target and non-target rows/files, watermarks, snapshots, job/storage state and exact routes must match the signed oracle under hard budgets, with no unrelated mutation, lost/duplicate effect, lease bypass, fallback, OOM, spill, fatal restart or residue. | `blocked` | `EVD-1438`, `EVD-1441`-`EVD-1442`, `EVD-1444`-`EVD-1447`; `PRF-0966`-`PRF-0967` | Fixture/settings, candidate, request-wide flush/prune caps, route oracle after the persistent healthy-route failure, collector/budgets, exact retained history, cleanup/restore and signoff unavailable; `BLK-0897`-`BLK-0899`, `BLK-0901`-`BLK-0903`, `BLK-0905`-`BLK-0906`. | `OQ-0901`-`OQ-0903`, `OQ-0905`-`OQ-0907`, `OQ-0909`-`OQ-0910` |
+| `PRF-1086` | Documented operator recovery passes only when both executable sides follow one signed stopped-stack runbook for an immutable job/source/revision, run the finite export/import/apply/reconcile/visibility/cleanup interruption matrix, repeat the same revision idempotently, reject a differing replay, clean-restore and match every signed row/file/watermark/snapshot/job/route outcome under hard budgets without missing steps, lost data, duplicate effect, unbounded work, fallback, OOM, spill, fatal restart or residue. | `blocked` | `EVD-0424`, `EVD-0426`-`EVD-0427`, `EVD-0924`-`EVD-0926`, `EVD-1438`, `EVD-1443`-`EVD-1447`; `TGT-0078` | Fixture/settings, canonical runbook/command, executable candidate, immutable signed/encrypted bundle, application/visibility/cleanup receipts, exact route/restore oracle, collector/budgets, retention/cleanup and signoff unavailable; `BLK-0897`-`BLK-0899`, `BLK-0902`-`BLK-0906`. | `OQ-0901`-`OQ-0903`, `OQ-0906`-`OQ-0910` |
+
+### US-128 Test-Fixture Cleanup And Accounting Reconciliation
+
+| Item | Recorded result | Evidence boundary |
+| --- | --- | --- |
+| Common benchmark current/candidate DDL or DML commands | `0 / 0` | Gate failed before mutation; all scenario rows/files/time/RSS/WAL/spill/generation/job/route/cleanup/outcome values remain `unavailable`. This count is not a workload measurement. |
+| Replay, targeted-repair or operator-recovery scenario commands | `0 / 0` | No approved common fixture, current/candidate comparison, interruption, benchmark command, projector/publication, restore or benchmark cleanup ran. |
+| Current-path verification | `10 isolated Bun invocations: 36 passes, 300 expectations; the same healthy-route test failed twice; one initial selector matched no tests` | Source-controlled current behavior only. Failures are preserved. No test result passes a current/candidate proof or supplies benchmark settings/measurements. |
+| Test-owned disposable DDL/DML | Six current-shape DuckDB fixture migrations plus test-owned local SQLite journal/job state | One outbox-import process, one repair process, two route processes and two operator smoke cases used unique temp databases. They are source-defined smoke scale, not the common fixture, and all database/SQLite roots were removed. |
+| Pre-existing temp baseline | `/private/tmp/duckdb-temp` existed empty with size `64`, mtime `1784787077`, zero children; 26 `f1-sqlite-recovery-*` startup-recovery directories already existed | Preserved pre-existing paths; they are not US-128 spill or cleanup evidence and were not removed. |
+| Current-run generated recovery residue | Two new timestamped startup-recovery directories, each with one 13,119,488-byte pre-repair DuckDB and one 3,454-byte JSON receipt; four files / 26,245,884 bytes total | Exact paths were inspected, then removed because the operator smoke did not clean them. Post-cleanup matching count returned to the pre-run 26. Removal is scoped test cleanup, not a durable candidate cleanup receipt. |
+| Current-run residue | No `f1-judge-worker-journal-*`, `f1-judge-worker-rollout-*`, `f1-judgment-job-sqlite-import-*`, `f1-judgment-job-repair-*`, `f1-judgments-jobs-routes-*`, `.us128-*`, `us128-*` or repo `*us128*` path remains | Name-bounded current-run accounting only; no global absence claim and no benchmark cleanup/restore proof. |
+| Snapshot, live/current/project database accesses | `0` | No snapshot/query/studio, app-data root or direct DuckDB CLI against project data ran. |
+| Product servers, browser, desktop or persistent workers started | `0` | Only finite test/validation processes ran and all exited; no stop action remains. |
+| Benchmark-critical settings | Unchanged and unchosen | No default, test-defined 20GB memory, inferred identity, retry/cap change, fallback, OOM workaround or spill was accepted. |
+| Same-fixture semantic and physical result | `unavailable` | Source/tests do not execute the candidate or establish bounded replay/repair/operator recovery, exact watermarks/snapshots/routes/files/jobs/cleanup or physical metrics. |
+
+| Proof register slice | Rows | `satisfied` | `pending` | `blocked` | `not-applicable` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Prior `PRF-0001`-`PRF-1083` | 1,083 | 8 | 478 | 597 | 0 |
+| US-128 recovery validations `PRF-1084`-`PRF-1086` | 3 | 0 | 0 | 3 | 0 |
+| **Cumulative proof register** | **1,086** | **8** | **478** | **600** | **0** |
+
+The three proofs are conjunctive later-validation rows. They do not replace or
+advance a component, target, family or prior proof. DBO remains 322/322
+blocked, CMF remains 1,985/1,985 blocked and FAN remains 91 blocked plus one
+source-proven not-applicable row with zero value-bearing observations. All 326
+keep dispositions retain `recommendationActionability: unresolved`; all 115
+non-keep dispositions remain `blocked`; zero recommendations are actionable
+and `overallCertification` remains `INCOMPLETE`.
+
 ### Output 01 - API Surface Inventory
 
 Authoritative row family: `API-####`. Record one row per mounted route or
@@ -28264,6 +28514,17 @@ commands. A command proves only the claim linked through its evidence record.
 | `CMD-1099` | 2026-07-23 / US-127 | Ran `rtk proxy bunx vitest run src/components/main/reviews/reviewsProjectWarnings.vitest.tsx` because `.vitest.tsx` requires Vitest. | Corroborate warning/progress rendering and unavailable behavior with the correct runner without treating test DOM as actual browser/desktop capture. | One file produced ten passes and zero failures in 429 ms. Vitest reported that `baseline-browser-mapping` data is over two months old; the unrelated dependency warning was preserved and not fixed. |
 | `CMD-1100` | 2026-07-23 / US-127 | Ran `rtk proxy bun run lint`, exact typecheck-script discovery, `rtk git diff --check`, raw scoped baseline/worktree product-source checks, `git status --short`, corrected temp metadata and exact US-127/validator residue checks. One helper referenced nonexistent macOS `/bin/stat`; the corrected `/usr/bin/stat` check is authoritative. | Close repo-native style, typecheck discovery, whitespace, source isolation, allowed-path and cleanup gates without fixing unrelated code or touching project data. | Lint retains the same six unrelated errors in three untouched worker files; no typecheck script exists. Whitespace and both product-source checks pass. The empty `/private/tmp/duckdb-temp` retains size `64`, mtime `1784787077` and zero children; no current-run residue remains. |
 | `CMD-1101` | 2026-07-23 / US-127 | Created a temporary read-only Bun validator with `apply_patch`, ran it successfully once with `rtk proxy bun`, removed it with `apply_patch`, then repeated whitespace, source-isolation, status, temp/residue, maximum-ID and tracker checks. | Mechanically close US-127 definition continuity, exactly-two-proof/four-state/four-physical cardinality, 120-setting/23-marker gates, required route/state/metric/rejection terms, Markdown table shape, proof accounting, actionability, tracker order and product-source isolation. | Accepted result: nine evidence rows, nine command rows, ten blockers, ten owner questions, two blocked proofs, four blocked state rows, four blocked physical rows, 120 settings, 23 markers and cumulative `8/478/597/0` across 1,083 proofs. Final source isolation, whitespace and residue checks pass; only the two permitted audit documents plus pre-existing engine-owned `tasks/prd.json` remain modified. |
+| `CMD-1102` | 2026-07-23 / US-128 | Read the user PRD/codebase patterns and AGENTS instructions; completely read `.opencode/skills/forskai-reporting/SKILL.md`, `forskai-duckdb/SKILL.md` and `forskai-api-server/SKILL.md`; read `.ralph-tui/progress.md`, `tasks/prd.json#US-127/#US-128`, US-127 and relevant target/operator audit rows; inspected HEAD/worktree and next IDs. | Establish prerequisite completion, three exact recovery grains, no-live-DuckDB/mutation boundary, required quality gates and unrelated worktree state. | US-127 is complete at `2df465e44bbcc9f5ddbca1f9e33eda4bde25a099`; next IDs were `EVD-1438`, `CMD-1102`, `BLK-0897`, `OQ-0901` and `PRF-1084`. Only engine-owned `tasks/prd.json` was dirty before US-128. |
+| `CMD-1103` | 2026-07-23 / US-128 | Ran raw scoped baseline/worktree product-source checks, a presence-only Zsh loop over the exact 112 fixture/current/candidate/oracle/benchmark/order/cap/tool/signoff/runtime names and exact fixed-string searches for each of 17 candidate/runtime markers; printed Bun/host/SQLite versions without printing setting values. | Enforce immutable-fixture, fixed-setting, executable-candidate and tool gates before any recovery mutation. | Product source is unchanged from `4ca6a3de229a949ef2662affd1d83127b708df51`; `set=0`, `unset=112`, `total=112`; all 17 markers have zero product-source files. Bun is 1.3.13 on macOS 26.5.2 arm64; SQLite is 3.51.0. Execution stopped before common-fixture or benchmark mutation; produced `EVD-1438`, `EVD-1445`-`EVD-1446`. |
+| `CMD-1104` | 2026-07-23 / US-128 | Used bounded `rg`/`nl`/`sed` reads of `judgeWorkerCompletionJournal.ts`, `judgmentsJobsSendToLLM.ts`, `judgmentJobSqliteOutboxImport.ts`, `judgmentsJobsMarkDirtyWork.ts` and exact replay/import tests. | Trace completion ACK/claim cleanup, outbox claim/commit/local ACK, duplicate suppression, watermarks and request-wide bounds without opening live DuckDB. | Produced `EVD-1439`-`EVD-1440` and `EVD-1444`: startup replay limit one, background replay 64/five seconds, outbox 100 rows/4 MiB per cycle, one central idempotent transaction, recursive unbounded flush and deliberately deferred visibility ACK. |
+| `CMD-1105` | 2026-07-23 / US-128 | Read `judgmentJobRepair.ts`, `runJudgmentJobRepair.ts`, `JudgmentsJobsRoutes.ts`, `judgmentsJobsService.ts` and exact repair/route tests with bounded `rg`/`nl`/`sed`. | Trace one-job admission, lease/preflight/fallback, flush/requeue/reap/orphan/prune/finalize/checkpoint, route state and stopped-stack guidance as distinct contracts. | Produced `EVD-1441`-`EVD-1442`: automatic orphan repair is 100 batches/30 s and each orphan/prune step is 1,000 rows, but full flush/prune recursion lacks a request-wide bound. |
+| `CMD-1106` | 2026-07-23 / US-128 | Read `recoverJudgmentJobWithSystemSqlite.ts`, its SQL-import wrapper/tests, `operatorScriptDuckdbAccess.test.ts`, `package.json`, `BGO-0106`, `DBO-0315`, `DSP-0356`, `DSP-0431`, `TGT-0048`, `TGT-0050`-`TGT-0056` and `TGT-0078`; searched exact command exposure and operator documentation. | Freeze current operator file/application behavior, canonical-command gap and executable candidate contract. | Produced `EVD-1443`-`EVD-1446`: direct recovery materializes unbounded source rows, writes mutable JSON/SQL sidecars and is non-package; candidate typed receipts/bundle are design-only. |
+| `CMD-1107` | 2026-07-23 / US-128 | Counted exact test prefixes in `/private/tmp`, recorded `/private/tmp/duckdb-temp` metadata/children and checked exact US-128 repo residue before tests. | Establish a name-bounded cleanup baseline without deleting pre-existing files. | Zero selected current-test prefixes existed except 26 pre-existing `f1-sqlite-recovery-*` startup-recovery directories. The empty `duckdb-temp` baseline was size `64`, mtime `1784787077`, zero children; no US-128 repo residue existed. |
+| `CMD-1108` | 2026-07-23 / US-128 | Ran isolated `rtk bun test` processes for `judgeWorkerCompletionJournal.test.ts -t 'completion replay|rollout cleanup'`, all `judgmentOwnerBackedRollout.test.ts`, five named interruption/visibility cases in `judgmentJobSqliteOutboxImport.test.ts`, and all `judgmentJobRepair.test.ts`. | Corroborate current replay/idempotence/maintenance/repair predicates without treating source-defined fixtures and limits as the approved physical scenario. | Four processes produced 23 passes, zero failures and 114 expectations. Test-owned temp state was finite; current results do not pass a proof. |
+| `CMD-1109` | 2026-07-23 / US-128 | Ran isolated `rtk bun test` on eight named health/repair/drain cases in `JudgmentsJobsRoutes.test.ts`, reran `^judgment job health route returns healthy job details$` alone, then ran the stopped-stack guidance case in `JudgmentsJobsRoutes.crashContainment.test.ts`. | Verify exact job-scoped route behavior and preserve combined/isolated failures under the repo mock-isolation rule. | Three processes produced eight passes and 74 expectations. The same healthy-job route test failed in the combined and isolated runs at `response.json()` with `SyntaxError: Failed to parse JSON`; source was not changed and exact route-state recovery remains blocked. |
+| `CMD-1110` | 2026-07-23 / US-128 | Ran `rtk bun test ./scripts/recoverJudgmentJobWithSystemSqlite.test.ts`; then `rtk bun test ./scripts/operatorScriptDuckdbAccess.test.ts -t 'judgment|recovery'` (no test names matched) and corrected with the full `rtk bun test ./scripts/operatorScriptDuckdbAccess.test.ts`. | Corroborate current system-SQLite central/local effects and script-access classification while preserving the selector failure. | Recovery and access tests produced five passes, zero assertion failures and 112 expectations; the initial selector command failed because it matched zero tests. Smoke uses source-defined `20GB`, one row and no candidate/physical collector, so it is non-physical evidence. |
+| `CMD-1111` | 2026-07-23 / US-128 | Recounted exact temp prefixes; inspected `realpath`, type, mode, size, mtime and member files for the two new timestamped `*.startup-recovery` directories; removed only those exact paths with `rm -r`; repeated prefix, `duckdb-temp`, repo-residue and status checks. | Satisfy current-run test-artifact cleanup without touching 26 pre-existing directories or broad paths. | Removed exactly four files/26,245,884 bytes from two current-run directories; this deletion is not recoverable and was limited to test output. Matching count returned from 28 to baseline 26. All other selected prefixes are zero; `duckdb-temp` is unchanged; only audit docs plus pre-existing `tasks/prd.json` are modified. |
+| `CMD-1112` | 2026-07-23 / US-128 | Ran `rtk bun run lint`, exact typecheck-script discovery, `git diff --check`, scoped baseline/worktree product-source isolation, temporary and final inline Markdown/ID/reference/proof/table/count validators, `git status --short`, temp/residue and tracker checks; skipped build/full-suite/product migration/runtime/physical scenarios. The first temporary validator had an escaped-backtick parse error and its next run used a wrong-case required term; a later inline recheck repeated the escaped-backtick parse error. Those failures were preserved, corrected and followed by passing runs; the temporary file was removed with `apply_patch`. An initial final-check shell used Zsh's read-only `status` name; the corrected task-specific `us128_git_state` run is authoritative. | Close repo-native style, source isolation, durable-register integrity, cleanup and allowed-path gates without changing unrelated code or live/project data. | Lint retains the same six unrelated errors in three untouched worker files and no typecheck script exists. The accepted validators report ten evidence rows, eleven command rows, ten blockers, ten owner questions, three proofs, six state rows, six physical rows, 112 settings and 17 markers. Whitespace, source isolation, row-width, accounting, tracker and residue gates pass. Build/full-suite/product migration/runtime and physical recovery checks are out of scope or blocked. |
 
 ## Blockers
 
@@ -29192,6 +29453,16 @@ commands. A command proves only the claim linked through its evidence record.
 | `BLK-0894` | US-127 active/LKG/pin identity and partial-publication oracle | Ordinary active fallback, persisted LKG, latest-retired fallback, mutable refcount pins, component writes, derived finalization and head promotion remain distinct; no common signed identity spans every route. | One active read, pin row or successful promotion cannot prove exact fallback, generation protection, absence of mixed publication, route parity or recovery. | `OQ-0898` | Query/publication/retention owners approve immutable component/head/visible-frontier and pin identities plus exact active/LKG/fallback vectors at every lifecycle checkpoint. |
 | `BLK-0895` | US-127 request, wall-time, RSS, WAL and generation collector with hard budgets | No approved collector records exact request effects, monotonic total/phase time, process-tree RSS, storage-engine WAL, runtime path/file/log events, retained generations or hard request/restart/resume/job/pin/cleanup ceilings. | Missing physical values cannot be zero; unit-test counts/durations and source constants cannot reject OOM, spill, fatal restart, lost/duplicate request, unbounded recovery or changed settings. | `OQ-0899` | Audit/database/runtime/performance owners approve raw samples, serializers and hard budgets, retaining every value and failing closed on missing/changed/spilled/OOM state. |
 | `BLK-0896` | US-127 recovery, residue, restore, platform matrix and owner signoff | No approved finite restart/resume matrix, immutable recovery/cleanup receipts, bounded residue inventory, clean-host restore, platform capture or owner signatures exists. | Passing current-path tests cannot prove actual process interruption/resume, current/candidate convergence, routes/UI, jobs/pins, retained generations, cleanup or restore. | `OQ-0900` | Reliability/recovery/retention/audit/release owners execute and sign every restart/resume, convergence, cleanup, residue and restore outcome without fallback, spill, OOM or fatal restart. |
+| `BLK-0897` | US-128 immutable fixture, fixed settings and recovery authority | All 112 fixture/current/candidate/oracle/benchmark/order/cap/tool/signoff/runtime names are unset; no immutable DuckDB plus SQLite/journal fixture, bounded roots or authorized interruption/replay/repair/operator/cleanup controller exists. | A run would invent benchmark-critical settings or risk current/project data. Missing rows/files/time/RSS/WAL/spill/generations/state/outcome cannot become zero or defaults. | `OQ-0901` | Benchmark/database/runtime/audit owners approve one immutable fixture, all 112 values, exact roots/hashes and DDL/DML/interruption/recovery/cleanup authority. |
+| `BLK-0898` | US-128 executable current/candidate recovery pair | All 17 candidate/runtime markers have zero product-source files and no coherent applied pair covers receipts, frontiers, snapshots, jobs, files, recovery tools and cleaners. | Current-only execution cannot establish candidate restoration; implementing the candidate here would violate the audit-only boundary. | `OQ-0902` | Database/reliability/projector/job/file/retention/release owners approve both executable bundle hashes, applied paths, isolated setup, cutover, rollback and cleanup. |
+| `BLK-0899` | US-128 completion and outbox replay request-wide bound | Startup/background completion replay and outbox import have per-call limits, but no persisted finite total replay plan/cursor binds calls, attempts, time, rows, bytes and terminal cleanup. Full outbox flush recursively runs until zero. | Per-batch success cannot reject unbounded replay, starvation, repeated failure or incomplete cleanup, and imported-entry count is not inserted-effect count. | `OQ-0903` | Judgment/reliability owners publish the immutable replay plan, exact receipt identities, total caps, continuation, failure quarantine and finite history/cleanup rules. |
+| `BLK-0900` | US-128 canonical-import, watermark, snapshot and route settlement | Central import atomically creates marker/canonical/delta/dirty work, but visibility ACK is later; output/consumer frontier, active/LKG/fallback snapshot and route state are not part of the result. | One marker, canonical row, empty outbox or dirty count cannot prove visible exact route restoration or retained publication identity. | `OQ-0904` | Import/projector/publication/query owners approve exact source-to-visible receipts and active/LKG/fallback/route hashes for every replay checkpoint. |
+| `BLK-0901` | US-128 targeted-repair total bound, ownership and non-target proof | One-job repair is scoped, but full flush/prune recursion lacks request-wide caps; lease recovery retries once; orphan repair, job/storage changes, visibility and cleanup remain separate. | A successful action can leave unmeasured total work or later state and does not independently prove all non-target jobs/files unchanged. | `OQ-0905` | Judgment/storage/reliability owners fix the repair matrix, owner generations, total caps, target/non-target oracle, terminal history and cleanup. |
+| `BLK-0902` | US-128 exact recovered route-state oracle and current test failure | No signed health/detail/list route oracle exists. The checked-in healthy-job route test fails consistently, including in an isolated process, because its response is not parseable JSON. | Repair counters or storage state cannot substitute for exact route status/body/error/snapshot behavior; the current failure must remain unresolved. | `OQ-0906` | API/job/query owners diagnose and approve the exact route vector and signed expected responses for current and candidate after each recovery point. |
+| `BLK-0903` | US-128 canonical documented operator procedure | Runtime guidance names stopped-stack `runJudgmentJobRepair.ts`; package exposes its repair alias; direct system-SQLite recovery is a separate non-package script and has no authoritative checked-in runbook selecting it. | Operators lack one signed command sequence, shutdown/preflight/tool/version/input/rollback/repeat/cleanup contract; a source script cannot prove documented deployability. | `OQ-0907` | Operations/reliability/security owners select and document the canonical procedure, exact commands/tools/preconditions, failure stops, rollback and validation. |
+| `BLK-0904` | US-128 operator recovery bundle identity, security and lifecycle | Current direct recovery overwrites mutable suffix sidecars, materializes all source rows and lacks source identity/revision, manifest/member checksums, signature/encryption and application/visibility/cleanup receipts. | A generated JSON/SQL path or `fullyRecovered` job counter cannot prove immutable evidence, bounded safe reapplication, canonical visibility, retention or deletion safety. | `OQ-0908` | Judgment recovery/security/retention owners approve the `TGT-0078` schema, caps, identity, signing/encryption, application receipts, retention and cleanup. |
+| `BLK-0905` | US-128 physical row/file/time/RSS/WAL/spill/generation collector and budgets | No approved collector records exact rows/files read/written/deleted, encoded bytes/checksums, monotonic phase/total time, process-tree RSS, both WALs, temp spill, retained generations or hard caps. | Test counts/durations and source constants cannot reject OOM, spill, fatal restart, unbounded work, lost/duplicate effects or changed settings. | `OQ-0909` | Audit/database/runtime/performance owners approve the collector, raw serializer and hard row/byte/file/call/attempt/time/RSS/WAL/spill/generation/cleanup budgets. |
+| `BLK-0906` | US-128 interruption, repeat/mismatch, cleanup, restore and signoff | No approved finite failure-point order, same-receipt repeat, conflicting replay, clean-host restore, immutable cleanup receipt, bounded residue inventory, retained-history proof or owner signatures exists. | Passing current smoke tests cannot prove exact bounded restoration, mismatch rejection, rollback, terminal cleanup or absence of lost/duplicate effects. | `OQ-0910` | Reliability/recovery/retention/audit/release owners execute and sign all three finite scenarios, cleanup, residue and restore outcomes without fallback, spill, OOM or fatal restart. |
 
 ## Owner Questions
 
@@ -30124,6 +30395,16 @@ commands. A command proves only the claim linked through its evidence record.
 | `OQ-0898` | Query/publication/retention owners | Which immutable component/head/visible-frontier publication receipt and pin owner generation bind exact active, persisted-LKG and latest-retired fallback identities across every route and lifecycle checkpoint? | `PRF-1082`-`PRF-1083` and `BLK-0894` |
 | `OQ-0899` | Audit/database/runtime/performance owners | Which collector records exact request effects, recovered-state transitions, total/phase wall samples, process-tree RSS, storage WAL, rooted path/file/log events, retained generations and hard request/restart/resume/job/pin/cleanup budgets? | `PRF-1082`-`PRF-1083` and `BLK-0895` |
 | `OQ-0900` | Reliability/recovery/retention/audit/release owners | Which finite restart/resume controller, immutable recovery/cleanup receipts, platform capture, residue/restore checks and signatures settle both scenarios without fallback, spill, OOM, fatal restart, lost state, duplicate effect, unsettled job/pin or route/UI mismatch? | `PRF-1082`-`PRF-1083` and `BLK-0896` |
+| `OQ-0901` | Benchmark/database/runtime/audit owners | Which immutable DuckDB plus SQLite/journal fixture, bounded report/temp/output/recovery roots, schema/data hashes, exact current/candidate receipt/watermark/snapshot/job/file identities, all 112 fixed values and DDL/DML/interruption/recovery/cleanup authority are approved? | `PRF-1084`-`PRF-1086` and `BLK-0897` |
+| `OQ-0902` | Database/reliability/projector/job/file/retention/release owners | Which coherent executable current/candidate recovery bundles, applied schemas, receipts, workers, frontiers, snapshots, operator tools and cleaners are approved, and what hashes prove setup, cutover, rollback and cleanup paths? | `PRF-1084`-`PRF-1086` and `BLK-0898` |
+| `OQ-0903` | Judgment/reliability owners | What immutable completion/outbox replay plan, receipt keys, per-call and request-wide row/byte/call/attempt/time caps, continuation, failure quarantine and finite terminal cleanup/history are required? | `PRF-1084` and `BLK-0899` |
+| `OQ-0904` | Import/projector/publication/query owners | Which exact receipts bind local ACK, central marker/canonical/delta/dirty work, output/consumer visibility, active/LKG/latest-retired snapshot and route body for each replay interruption point? | `PRF-1084` and `BLK-0900` |
+| `OQ-0905` | Judgment/storage/reliability owners | Which one-job targeted-repair sequence, owner generations, total flush/prune/orphan caps, target/non-target row/file oracle, retry policy, terminal history and cleanup rules are approved? | `PRF-1085` and `BLK-0901` |
+| `OQ-0906` | API/job/query owners | What exact health/detail/list method/path/status/body/error/snapshot vector is expected after replay, repair and operator recovery, and who owns the current isolated healthy-route JSON failure? | `PRF-1084`-`PRF-1086` and `BLK-0902` |
+| `OQ-0907` | Operations/reliability/security owners | Is the canonical stopped-stack procedure `db:judgment-job:repair`, the direct system-`sqlite3` script, its SQL-import wrapper or a new runbook; what exact shutdown, tool/version, input, validation, rollback, repeat and cleanup commands must operators follow? | `PRF-1086` and `BLK-0903` |
+| `OQ-0908` | Judgment recovery/security/retention owners | Will `TGT-0078` govern source SQLite identity, recovery revision, member schema/caps, manifest/checksums, signature/encryption, application/visibility/cleanup receipts, eight-revision/90-day retention and deletion? | `PRF-1086` and `BLK-0904` |
+| `OQ-0909` | Audit/database/runtime/performance owners | Which collector and hard budgets record exact rows/files/bytes/checksums, phase/total wall samples, process-tree RSS, DuckDB/SQLite WAL, temp spill, retained generations and cleanup for all three scenarios? | `PRF-1084`-`PRF-1086` and `BLK-0905` |
+| `OQ-0910` | Reliability/recovery/retention/audit/release owners | Which finite failure-point/repeat/mismatch controller, clean-host restore, immutable cleanup receipt, bounded residue inventory, retained-history proof and signatures settle all three scenarios without fallback, OOM, spill, fatal restart, lost data or duplicate effect? | `PRF-1084`-`PRF-1086` and `BLK-0906` |
 
 ## US-001 Quality Gates
 
@@ -36524,6 +36805,83 @@ commands. A command proves only the claim linked through its evidence record.
       skipped because this is an audit-only Markdown change and the execution
       gate failed. Current source, static/fake/test-DOM checks and unit-test
       duration do not pass a current/candidate desktop lifecycle workload.
+
+## US-128 Quality Gates
+
+- [x] US-127 is complete at HEAD
+      `2df465e44bbcc9f5ddbca1f9e33eda4bde25a099`. Scoped `src`,
+      `scripts`, `package.json` and `bun.lock` product source remains unchanged
+      from `4ca6a3de229a949ef2662affd1d83127b708df51`; the engine-owned
+      `tasks/prd.json` modification remains untouched.
+- [x] The conditional gate ran before a common fixture, benchmark DDL/DML,
+      interruption, replay, repair, operator command, route request,
+      publication, restore or benchmark cleanup. All 112 named values are
+      unset and all 17 candidate/runtime markers have zero product-source
+      files. Every scenario value is `unavailable`, never zero, passed or
+      not-applicable.
+- [x] Exactly three validation grains freeze replay, targeted one-job repair
+      and documented stopped-stack operator recovery. Failure points, repeats
+      and mismatch/restore checks remain finite nested checkpoints rather than
+      extra proof rows.
+- [x] Completion/owner ACK, accepted claim, local queue/outbox, central import
+      marker, canonical judgment, delta, dirty/output/ACK/consumer frontiers,
+      active/LKG/latest-retired snapshot, job/storage state, exact route,
+      recovery file, WAL, retained generation and cleanup state remain
+      independent contracts.
+- [x] Six current/candidate state rows retain local execution, central row/
+      duplicate effects, watermarks/snapshots/routes, files/jobs/cleanup and
+      recovery outcome. Six matching physical rows independently retain rows
+      read/written, files read/written/deleted, wall time, RSS, both WALs, temp
+      spill, retained generations, outcome and `proofCheckState`.
+- [x] Missing or changed settings, identities, commands, measurements,
+      receipts or oracles; lost data; duplicate/conflicting effects;
+      unrelated-job mutation; watermark advance without prior receipt;
+      snapshot/route mismatch; unsigned operator evidence; missing operator
+      path; unbounded work; retry/fallback; OOM; spill; fatal restart; residue
+      or failed restore rejects the applicable proof.
+- [x] Current source findings preserve per-call replay/repair limits versus
+      request-wide recursion, import versus visibility, job versus exact
+      route state, and mutable sidecar versus immutable operator-bundle
+      lifecycle. Candidate target design is not execution evidence.
+- [x] The checked-in healthy-job route test failed in the targeted group and
+      again alone at `response.json()` with `SyntaxError: Failed to parse
+      JSON`. The failure is retained as `BLK-0902`; no unrelated source fix or
+      weaker route oracle was introduced.
+- [x] `PRF-1084`-`PRF-1086` are independently `blocked`; cumulative proof is
+      1,086 rows: eight `satisfied`, 478 `pending`, 600 `blocked` and zero
+      `not-applicable`. Actionability remains 326 unresolved/115 blocked/zero
+      actionable and certification remains `INCOMPLETE`.
+- [x] `EVD-1438`-`EVD-1447`, `CMD-1102`-`CMD-1112`,
+      `BLK-0897`-`BLK-0906` and `OQ-0901`-`OQ-0910` retain exact
+      sources/tooling, failed checks, unavailable evidence, owner questions and
+      finite resolution conditions without advancing a target or
+      recommendation.
+- [x] Ten isolated Bun invocations produced 36 passes and 300 expectations;
+      the same route test failed twice and one initial selector matched no
+      tests. Tests corroborate current contracts only and do not pass a
+      current/candidate recovery proof.
+- [x] Six current-shape test DuckDB fixtures and test-owned local SQLite state
+      ran in unique temp roots. Two newly retained startup-recovery directories
+      held four files/26,245,884 bytes and were removed by exact path. The 26
+      pre-existing matching directories remain untouched.
+- [x] The pre-existing empty `/private/tmp/duckdb-temp` retains size `64`,
+      mtime `1784787077` and zero children. No selected current-test prefix,
+      US-128-named or validator residue remains; every finite process exited
+      and no product process was started.
+- [x] No live/current/project database, snapshot, approved common fixture,
+      executable candidate, product server/worker, physical recovery workload,
+      publication, clean-host restore or project data access ran. Critical
+      settings remain unchanged and unchosen.
+- [x] Repo-native lint retains the same six unrelated errors in three untouched
+      worker files and no typecheck script exists. `git diff --check`,
+      product-source isolation, ID/reference/proof, exactly-three-scenario,
+      six-state-side, six-physical-side, 112-setting, 17-marker, required-term,
+      table-width, accounting, tracker and residue gates pass through
+      `CMD-1112`; no unrelated lint issue is fixed.
+- [x] Build/full-suite, product migration and physical runtime gates are
+      skipped because this is an audit-only Markdown change and the execution
+      gate failed. Source-controlled disposable tests do not substitute for
+      an approved same-fixture current/candidate recovery workload.
 
 ---
 
