@@ -82,12 +82,12 @@ test('retention cleanup cursor includes selected-import cleanup and wraps over c
   expect(joined).toContain("candidate.project_id = 'project-1'")
   expect(joined).toContain('ORDER BY candidate.selected_import_snapshot_id')
   expect(joined).toContain('LIMIT 25')
-  expect(joined).toContain('"tableIndex":0')
+  expect(joined).toContain('"tableIndex":11')
 })
 
 test('retention cleanup no longer references legacy patch or contribution tables at runtime', async () => {
   const {database, statements} = createRetentionDatabase({
-    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 11}, patchWatermark: 0, snapshotId: null},
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 14}, patchWatermark: 0, snapshotId: null},
   })
 
   await cleanupReviewServingRetentionState(
@@ -106,6 +106,96 @@ test('retention cleanup no longer references legacy patch or contribution tables
       return joined.includes(table)
     }),
   ).toEqual([])
+})
+
+test('retention cleanup allowlists terminal summary contribution partial cleanup with conservative rebuild guards', async () => {
+  const {database, statements} = createRetentionDatabase({
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 11}, patchWatermark: 0, snapshotId: null},
+  })
+
+  await cleanupReviewServingRetentionState(
+    {batchSize: 25, now: '2026-06-16T00:00:00.000Z', projectId: 'project-1', reviewConfigHash: 'review-config-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
+  expect(joined).toContain('INNER JOIN app.review_rebuild_request request')
+  expect(joined).toContain('INNER JOIN app.review_rebuild_chunk_manifest chunk')
+  expect(joined).toContain('chunk.snapshot_id = candidate.snapshot_id')
+  expect(joined).toContain("chunk.projection_component = 'summary'")
+  expect(joined).toContain("candidate.project_id = 'project-1'")
+  expect(joined).toContain("candidate.review_config_hash IS NOT DISTINCT FROM 'review-config-1'")
+  expect(joined).toContain("request.status = 'completed'")
+  expect(joined).toContain("chunk.status = 'completed'")
+  expect(joined).toContain("'pending_admission'")
+  expect(joined).toContain("'blocked_over_budget'")
+  expect(joined).toContain("'quarantined'")
+  expect(joined).toContain('retryable_chunk')
+  expect(joined).toContain('last_known_good_snapshot_id')
+  expect(joined).toContain('FROM app.review_serving_snapshot_pin pin')
+  expect(joined).toContain('diagnostic_request.status IN')
+  expect(joined).toContain('ORDER BY candidate.request_id, candidate.chunk_id, candidate.snapshot_id')
+  expect(joined).toContain('LIMIT 25')
+  expect(joined).toContain('"tableIndex":12')
+})
+
+test('retention cleanup allowlists terminal summary partial cleanup with the same bounded guards', async () => {
+  const {database, statements} = createRetentionDatabase({
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 12}, patchWatermark: 0, snapshotId: null},
+  })
+
+  await cleanupReviewServingRetentionState(
+    {batchSize: 17, now: '2026-06-16T00:00:00.000Z', projectId: 'project-1', reviewConfigHash: 'review-config-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
+  expect(joined).toContain("candidate.project_id = 'project-1'")
+  expect(joined).toContain("candidate.review_config_hash IS NOT DISTINCT FROM 'review-config-1'")
+  expect(joined).toContain("request.status = 'completed'")
+  expect(joined).toContain("chunk.status = 'completed'")
+  expect(joined).toContain('last_known_good_snapshot_id')
+  expect(joined).toContain('FROM app.review_serving_snapshot_pin pin')
+  expect(joined).toContain('diagnostic_request.status IN')
+  expect(joined).toContain('LIMIT 17')
+  expect(joined).toContain('"tableIndex":13')
+})
+
+test('retention cleanup allowlists chunk manifest cleanup only after dependent partial rows are gone', async () => {
+  const {database, statements} = createRetentionDatabase({
+    retentionState: {baseGeneration: 0, cursorJson: {tableIndex: 13}, patchWatermark: 0, snapshotId: null},
+  })
+
+  await cleanupReviewServingRetentionState(
+    {batchSize: 9, now: '2026-06-16T00:00:00.000Z', projectId: 'project-1', reviewConfigHash: 'review-config-1'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('DELETE FROM app.review_rebuild_chunk_manifest')
+  expect(joined).toContain("candidate.project_id = 'project-1'")
+  expect(joined).toContain('candidate.snapshot_id IS NOT NULL')
+  expect(joined).toContain('candidate.request_id IS NOT NULL')
+  expect(joined).toContain("candidate.projection_component = 'summary'")
+  expect(joined).toContain('cleanup_snapshot.review_config_hash IS NOT DISTINCT FROM')
+  expect(joined).toContain("request.status = 'completed'")
+  expect(joined).toContain("candidate.status = 'completed'")
+  expect(joined).toContain('mart.review_article_summary_contribution_rebuild_partial_v4 contribution_partial')
+  expect(joined).toContain('contribution_partial.request_id = candidate.request_id')
+  expect(joined).toContain('contribution_partial.chunk_id = candidate.chunk_id')
+  expect(joined).toContain('contribution_partial.snapshot_id = candidate.snapshot_id')
+  expect(joined).toContain('mart.review_article_summary_rebuild_partial_v4 summary_partial')
+  expect(joined).toContain('summary_partial.request_id = candidate.request_id')
+  expect(joined).toContain('summary_partial.chunk_id = candidate.chunk_id')
+  expect(joined).toContain('summary_partial.snapshot_id = candidate.snapshot_id')
+  expect(joined).toContain('last_known_good_snapshot_id')
+  expect(joined).toContain('FROM app.review_serving_snapshot_pin pin')
+  expect(joined).toContain('diagnostic_request.status IN')
+  expect(joined).toContain('ORDER BY candidate.request_id, candidate.chunk_id')
+  expect(joined).toContain('LIMIT 9')
+  expect(joined).toContain('"tableIndex":0')
 })
 
 test('retention cleanup target discovery scopes normal cleanup by project and review config', async () => {
