@@ -150,7 +150,7 @@ test('projector replay keys include snapshot, generation, watermark, identity, a
   expect(first).not.toBe(nextPatch)
 })
 
-test('queue rebuild rows upsert overlapping split chunk boundary rows', async () => {
+test('queue rebuild rows ignore overlapping split chunk boundary rows', async () => {
   const {database, statements} = createWriterDatabase()
 
   await writeReviewServingQueueRebuildRows(
@@ -179,9 +179,10 @@ test('queue rebuild rows upsert overlapping split chunk boundary rows', async ()
   })
 
   expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id, queue_identity) DO UPDATE SET',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id, queue_identity) DO NOTHING',
   )
-  expect(insertStatement).toContain('queue_updated_at = excluded.queue_updated_at')
+  expect(insertStatement).not.toContain('DO UPDATE SET')
+  expect(insertStatement).not.toContain('queue_updated_at = excluded.queue_updated_at')
 })
 
 test('title search rebuild ranges insert rows with conflict-ignore and no scoped indexed deletes', async () => {
