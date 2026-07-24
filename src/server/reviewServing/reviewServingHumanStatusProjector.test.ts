@@ -323,6 +323,8 @@ test('human rebuild chunks copy-replace serving without scoped patch rows', asyn
   expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_human_status_serving_rebuild_v4 AS')
   expect(joined).toContain('SELECT serving.* REPLACE')
   expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
+  expect(joined).toContain('replacement.human_status_identity = serving.human_status_identity')
+  expect(joined).toContain('replacement.base_generation = serving.base_generation')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
 })
 
@@ -342,6 +344,8 @@ test('human direct full rebuild chunks copy-replace serving without patch rows',
   expect(joined).not.toContain('UPDATE mart.review_article_serving_v4 serving')
   expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_human_status_serving_rebuild_v4 AS')
   expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
+  expect(joined).toContain('replacement.human_status_identity = serving.human_status_identity')
+  expect(joined).toContain('replacement.base_generation = serving.base_generation')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
 })
 

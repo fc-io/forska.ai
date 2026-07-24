@@ -836,7 +836,9 @@ const getApplyLlmStatusServingReplacementStatements = (input: {
            SELECT 1
            FROM review_llm_status_serving_rebuild_v4 replacement
            WHERE replacement.project_id = serving.project_id
+             AND replacement.llm_status_identity = serving.llm_status_identity
              AND replacement.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+             AND replacement.base_generation = serving.base_generation
              AND replacement.snapshot_id = serving.snapshot_id
              AND replacement.list_mode_key = serving.list_mode_key
              AND replacement.article_id = serving.article_id
@@ -889,7 +891,9 @@ const getResetEmptyLlmStatusServingReplacementStatements = (input: {
        SELECT 1
        FROM review_llm_status_serving_rebuild_v4 replacement
        WHERE replacement.project_id = serving.project_id
+         AND replacement.llm_status_identity = serving.llm_status_identity
          AND replacement.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+         AND replacement.base_generation = serving.base_generation
          AND replacement.snapshot_id = serving.snapshot_id
          AND replacement.list_mode_key = serving.list_mode_key
          AND replacement.article_id = serving.article_id
