@@ -78,6 +78,20 @@ test('DuckDB migrations keep projector watermark unindexed after primary-key rep
   expect(dropSql).toContain('DROP INDEX IF EXISTS idx_review_serving_projector_watermark_lookup;')
 })
 
+test('DuckDB migrations retire bounded review-serving patch tables with forward drops', () => {
+  const reviewQueuePatchDropSql = readFileSync(
+    resolve(migrationsFolder, '0118_dropReviewQueuePatchV4.sql'),
+    'utf8',
+  ).trim()
+  const reviewHumanStatusPatchDropSql = readFileSync(
+    resolve(migrationsFolder, '0119_dropReviewHumanStatusPatchV4.sql'),
+    'utf8',
+  ).trim()
+
+  expect(reviewQueuePatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_queue_patch_v4;')
+  expect(reviewHumanStatusPatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_human_status_patch_v4;')
+})
+
 test('DuckDB migrations repair legacy review serving judgment detail payload-kind schema drift', async () => {
   const duckdbPath = `/tmp/forska-review-serving-judgment-detail-payload-kind-${Date.now()}.duckdb`
   const targetMigrationFile = '0109_reviewServingJudgmentDetailPayloadKindForwardMigration.sql'

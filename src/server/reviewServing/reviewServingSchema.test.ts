@@ -20,6 +20,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0112_reviewServingSummaryRebuildPartial.sql',
   '../../db/duckdbMigrations/0113_reviewServingSummaryContributionRebuildPartial.sql',
   '../../db/duckdbMigrations/0118_dropReviewQueuePatchV4.sql',
+  '../../db/duckdbMigrations/0119_dropReviewHumanStatusPatchV4.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -49,6 +50,8 @@ const judgmentDetailPayloadKindForwardMigrationSql =
   ]
 const reviewQueuePatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0118_dropReviewQueuePatchV4.sql']
+const reviewHumanStatusPatchRetirementForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0119_dropReviewHumanStatusPatchV4.sql']
 const selectedImportPatchDisplayFieldsForwardMigrationSql = readFileSync(
   resolve(import.meta.dir, '../../db/duckdbMigrations/0108_reviewSelectedImportPatchDisplayFields.sql'),
   'utf8',
@@ -89,7 +92,6 @@ const reviewServingPhase1Tables = [
   'mart.review_article_display_patch_v4',
   'mart.review_selected_import_patch_v4',
   'mart.review_llm_status_patch_v4',
-  'mart.review_human_status_patch_v4',
   'mart.review_article_filter_posting_patch_v4',
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_filter_posting_stats_v4',
@@ -103,7 +105,10 @@ const reviewServingPhase1Tables = [
   'mart.review_filter_option_serving_v4',
   'mart.review_unassessed_queue_serving_v4',
 ] as const
-const retiredReviewServingTables = new Set<string>(['mart.review_queue_patch_v4'])
+const retiredReviewServingTables = new Set<string>([
+  'mart.review_queue_patch_v4',
+  'mart.review_human_status_patch_v4',
+])
 
 const deltaEnvelopeColumns = [
   'delta_id',
@@ -207,9 +212,13 @@ test('Phase 1 schema migration creates every review-serving table', () => {
   expect(missingTables).toEqual([])
 })
 
-test('review queue patch table is retired from the active review-serving schema', () => {
+test('retired patch tables are absent from the active review-serving schema', () => {
   expect(getTableSql('mart.review_queue_patch_v4')).toBe('')
   expect(reviewQueuePatchRetirementForwardMigrationSql.trim()).toBe('DROP TABLE IF EXISTS mart.review_queue_patch_v4;')
+  expect(getTableSql('mart.review_human_status_patch_v4')).toBe('')
+  expect(reviewHumanStatusPatchRetirementForwardMigrationSql.trim()).toBe(
+    'DROP TABLE IF EXISTS mart.review_human_status_patch_v4;',
+  )
 })
 
 test('Phase 1 schema migration creates every read-contract physical table', () => {
@@ -239,15 +248,18 @@ const getRuntimeSourceFiles = (directoryPath: string): string[] => {
   })
 }
 
-test('runtime review-serving code does not reference retired queue patch storage', () => {
+test('runtime review-serving code does not reference retired patch storage', () => {
   const runtimeSourceFiles = [
     ...getRuntimeSourceFiles(resolve(import.meta.dir, '.')),
     ...getRuntimeSourceFiles(resolve(import.meta.dir, '../workers')),
   ]
   const runtimeReferences = runtimeSourceFiles.flatMap((sourcePath) => {
     const source = readFileSync(sourcePath, 'utf8')
+    const retiredReference = [...retiredReviewServingTables].find((tableName) => {
+      return source.includes(tableName)
+    })
 
-    return source.includes('mart.review_queue_patch_v4') ? [sourcePath] : []
+    return retiredReference === undefined ? [] : [`${sourcePath}: ${retiredReference}`]
   })
 
   expect(runtimeReferences).toEqual([])
