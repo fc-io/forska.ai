@@ -28,6 +28,13 @@ snapshot status and active/LKG protection. `import_route_id`,
 `source_record_key`, `selected_rank_key`, and `selected_rank_numeric` stay out
 of the write-suppression claim because they remain identity/rank/source state.
 
+The later duplicate/conflict proof slice is deliberately narrower than the
+display-copy migration. `duplicate_flag` and `conflict_flag` may be preferred
+from `app.review_import_article_hot_field` when the retained
+`(import_route_id, article_id, source_record_key)` selected-base identity can
+resolve a hot row, but selected-base fallback/default behavior and selected-base
+flag writers remain required.
+
 ## Latest Evidence
 
 Generated with:
@@ -56,6 +63,17 @@ The global/current-DB display-copy evidence found:
 - Selected-import snapshot status/protection rows: `completed` active/LKG protected = 582,757, `completed` unprotected/other = 38,035
 - For `publication_year`, `article_title`, `journal_title`, and `external_id`: selected-base nulls 620,792, selected-base non-nulls 0
 
+Additional current primary DB duplicate/conflict evidence after the
+display-copy migration found:
+
+- Selected-base rows: 620,792
+- Hot-field rows resolved by `(import_route_id, article_id, source_record_key)` from those selected-base rows: 0
+- Selected-base `duplicate_flag = TRUE` rows: 0
+- Selected-base `conflict_flag = TRUE` rows: 0
+- Hot `duplicate_flag = TRUE` rows: 0
+- Hot `conflict_flag = TRUE` rows: 0
+- `IS DISTINCT FROM` mismatches for both flags: 620,792, because hot columns are null while selected-base flags default false
+
 ## Verdict
 
 This is no schema-slimming authorization.
@@ -71,4 +89,7 @@ and migration `0124_dropReviewSelectedImportDisplayCopyColumns.sql` retires
 those physical columns, while
 `import_route_id`, `source_record_key`, `selected_rank_key`, and
 `selected_rank_numeric` remain active identity/rank/source state and are not
-part of the write-suppression claim.
+part of the write-suppression claim. Duplicate/conflict consumers can prefer hot
+fields only with selected-base fallback/default semantics preserved; the current
+DB does not authorize stopping selected-base flag writers or removing the
+selected-base flag columns.

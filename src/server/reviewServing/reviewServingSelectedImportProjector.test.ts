@@ -79,6 +79,18 @@ const expectSelectedImportBaseInsertOmitsDisplayCopyColumns = (statement: string
   expect(insertTargetSql).not.toContain('external_id')
 }
 
+const expectSelectedImportBaseInsertKeepsProtectedColumns = (statement: string) => {
+  const insertTargetSql = getInsertTargetSql(statement)
+
+  expect(insertTargetSql).toContain('import_route_id')
+  expect(insertTargetSql).toContain('source_record_key')
+  expect(insertTargetSql).toContain('selected_rank_key')
+  expect(insertTargetSql).toContain('selected_rank_numeric')
+  expect(insertTargetSql).toContain('duplicate_flag')
+  expect(insertTargetSql).toContain('conflict_flag')
+  expect(insertTargetSql).toContain('tombstone')
+}
+
 test('selected-import projector creates snapshot cursor and selected article import rows', async () => {
   const {database, statements} = createSelectedImportProjectorDatabase({
     batchRows: [
@@ -99,6 +111,11 @@ test('selected-import projector creates snapshot cursor and selected article imp
     }),
   ).toBe(true)
   expectSelectedImportBaseInsertOmitsDisplayCopyColumns(
+    statements.find((statement) => {
+      return statement.includes('INSERT INTO app.review_selected_article_import_v4')
+    }) ?? '',
+  )
+  expectSelectedImportBaseInsertKeepsProtectedColumns(
     statements.find((statement) => {
       return statement.includes('INSERT INTO app.review_selected_article_import_v4')
     }) ?? '',
@@ -262,16 +279,24 @@ test('selected-import article range rebuild can refresh final serving rows from 
   expect(joined).toContain('INNER JOIN scoped_article scoped')
   expect(joined).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
   expect(joined).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
+  expect(joined).toContain('selected.import_route_id AS selected_import_route_id')
+  expect(joined).toContain('selected.selected_rank_key')
+  expect(joined).toContain('selected_hot.source_record_key = selected.source_record_key')
+  expect(joined).toContain('AND NOT selected.tombstone')
   expect(joined).toContain("selected.selected_import_snapshot_id = 'selected-import-snapshot-1'")
   expect(joined).toContain("serving.selected_import_identity = 'selectedImport:identity-1'")
   expect(joined).toContain('COALESCE(selected_hot.article_title, article.article_title) AS article_title')
   expect(joined).toContain('COALESCE(selected_hot.external_id, article.article_id) AS article_external_id')
   expect(joined).toContain('selected_hot.journal_title AS journal_title')
   expect(joined).toContain('selected_hot.publication_year AS publication_year')
+  expect(joined).toContain('COALESCE(selected_hot.duplicate_flag, selected.duplicate_flag, FALSE) AS duplicate_flag')
+  expect(joined).toContain('COALESCE(selected_hot.conflict_flag, selected.conflict_flag, FALSE) AS conflict_flag')
   expect(joined).not.toContain('selected.article_title')
   expect(joined).not.toContain('selected.external_id')
   expect(joined).not.toContain('selected.journal_title')
   expect(joined).not.toContain('COALESCE(selected_hot.publication_year, selected.publication_year)')
+  expect(joined).not.toContain('COALESCE(selected.duplicate_flag, FALSE) AS duplicate_flag')
+  expect(joined).not.toContain('COALESCE(selected.conflict_flag, FALSE) AS conflict_flag')
   expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
   expect(joined).toContain('article.full_text_pdf')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
