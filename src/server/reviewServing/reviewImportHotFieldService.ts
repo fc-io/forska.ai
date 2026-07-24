@@ -147,7 +147,14 @@ export const upsertReviewImportArticleHotFieldEffect = (
 ) => {
   const row = getReviewImportHotFieldRow(input)
 
-  return Effect.promise(() => {
+  return Effect.promise(async () => {
+    await tx.run(`
+      DELETE FROM app.review_import_article_hot_field
+      WHERE import_route_id = ${getSqlLiteral(row.importRouteId)}
+        AND article_id = ${getSqlLiteral(row.articleId)}
+        AND source_record_key = ${getSqlLiteral(row.sourceRecordKey)}
+    `)
+
     return tx.run(`
       INSERT INTO app.review_import_article_hot_field (
         import_route_id,
@@ -192,23 +199,6 @@ export const upsertReviewImportArticleHotFieldEffect = (
         now(),
         now()
       )
-      ON CONFLICT(import_route_id, article_id, source_record_key) DO UPDATE SET
-        source_record_hash = excluded.source_record_hash,
-        source_kind = excluded.source_kind,
-        selected_rank_key = excluded.selected_rank_key,
-        selected_rank_numeric = excluded.selected_rank_numeric,
-        publication_year = excluded.publication_year,
-        article_title = excluded.article_title,
-        journal_title = excluded.journal_title,
-        external_id = excluded.external_id,
-        duplicate_key = excluded.duplicate_key,
-        duplicate_flag = excluded.duplicate_flag,
-        conflict_flag = excluded.conflict_flag,
-        filter_bucket_key = excluded.filter_bucket_key,
-        filter_bucket_value = excluded.filter_bucket_value,
-        source_updated_at = excluded.source_updated_at,
-        tombstone = excluded.tombstone,
-        updated_at = now()
     `)
   })
 }
