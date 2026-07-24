@@ -26,6 +26,7 @@ type EvidenceReport = {
   generatedAt: string
   mode: 'readonly-snapshot'
   options: CliOptions
+  projectorWatermarkNullableFieldEvidence: ProjectorWatermarkNullableFieldReport
   retentionCleanupEligibility: RetentionCleanupEligibilityReport
   selectedImportPayloadSlimmingReadiness: SelectedImportPayloadSlimmingReadinessReport
   summaryContributionServingReadiness: SummaryContributionServingReadinessReport
@@ -33,8 +34,28 @@ type EvidenceReport = {
   tables: TableEvidence[]
 }
 type QueryRuntime = Awaited<ReturnType<typeof getSnapshotQueryRuntime>>
+type ProjectorWatermarkNullableFieldColumnEvidence = {
+  column: (typeof projectorWatermarkNullableColumns)[number]
+  currentProjectNonNullCount: number | null
+  currentProjectNullCount: number | null
+  globalNonNullCount: number | null
+  globalNullCount: number | null
+}
+type ProjectorWatermarkNullableFieldReport = {
+  columns: ProjectorWatermarkNullableFieldColumnEvidence[]
+  currentProjectRows: number | null
+  error: string | null
+  globalRows: number | null
+  note: string
+  projectId: string
+  rowsByProjectScope: SummaryContributionServingRowCount[]
+  rowsBySourcePartition: SummaryContributionServingRowCount[]
+  table: 'app.review_serving_projector_watermark'
+  verdict: 'not-authorized' | 'blocked'
+}
 type RetentionCleanupEligibilityTable = {
   activeOrLastKnownGoodSnapshotProtectedRows: number | null
+  blockerCounts: RetentionCleanupEligibilityBlockerCount[]
   completedRequestAndSummaryChunkCandidateRows: number | null
   dependentPartialBlockedRows: number | null
   eligibleRows: number | null
@@ -45,6 +66,11 @@ type RetentionCleanupEligibilityTable = {
   table: string
   totalScopedRows: number | null
 }
+type RetentionCleanupEligibilityBlockerCount = {category: string; rowCount: number}
+type RetentionCleanupEligibilityAggregateRow = Omit<
+  RetentionCleanupEligibilityTable,
+  'blockerCounts' | 'error' | 'table'
+>
 type RetentionCleanupEligibilityReport = {note: string; projectId: string; tables: RetentionCleanupEligibilityTable[]}
 type SelectedImportPayloadColumnEvidence = {
   column: (typeof selectedImportPayloadColumns)[number]
@@ -374,6 +400,15 @@ const selectedImportPayloadColumns = [
 ] as const
 
 const selectedImportDisplayCopyColumns = ['publication_year', 'article_title', 'journal_title', 'external_id'] as const
+
+const projectorWatermarkNullableColumns = [
+  'snapshot_id',
+  'import_route_id',
+  'lease_owner',
+  'lease_expires_at',
+  'cursor_json',
+  'last_error',
+] as const
 
 const getNullSelectedBaseColumnExpressions = (column: string) => {
   return `NULL::BIGINT AS selectedBase_${column}_nullCount,
@@ -819,6 +854,83 @@ const getChunkManifestPartialRowsGonePredicate = () => {
           )`
 }
 
+const getRetentionCleanupBlockerCategorySql = (
+  table: (typeof retentionCleanupEligibilityTables)[number],
+  projectId: string,
+) => {
+  const projectPredicate = `candidate.project_id = ${getSqlLiteral(projectId)}`
+  const activeSnapshotPredicate = getActiveSnapshotManifestGuardPredicate('snapshot_id')
+  const activePinPredicate = getActiveSnapshotPinGuardPredicate('snapshot_id')
+  const protectedRequestPredicate = getProtectedRebuildRequestPredicate('request')
+  const newestDiagnosticPredicate = getNewestDiagnosticRebuildRequestPredicate('request')
+
+  if (table === 'app.review_rebuild_chunk_manifest') {
+    const dependentPartialsGonePredicate = getChunkManifestPartialRowsGonePredicate()
+
+    return `
+      WITH classified AS (
+        SELECT
+          CASE
+            WHEN ${activeSnapshotPredicate} THEN 'active_or_last_known_good_snapshot_protected'
+            WHEN ${activePinPredicate} THEN 'pinned_snapshot_protected'
+            WHEN candidate.request_id IS NULL THEN 'missing_request_id'
+            WHEN candidate.snapshot_id IS NULL THEN 'missing_snapshot_id'
+            WHEN candidate.projection_component IS DISTINCT FROM 'summary' THEN 'not_summary_chunk'
+            WHEN NOT (${getManifestReviewConfigHashPredicate()}) THEN 'missing_snapshot_manifest'
+            WHEN request.request_id IS NULL THEN 'missing_rebuild_request'
+            WHEN ${protectedRequestPredicate} THEN 'protected_rebuild_request'
+            WHEN ${newestDiagnosticPredicate} THEN 'newest_diagnostic_request'
+            WHEN request.status IS DISTINCT FROM 'completed' OR request.admission_state IS DISTINCT FROM 'admitted' THEN 'request_not_completed_admitted'
+            WHEN candidate.status IS DISTINCT FROM 'completed' OR candidate.admission_state IS DISTINCT FROM 'admitted' THEN 'chunk_not_completed_admitted'
+            WHEN NOT (${dependentPartialsGonePredicate}) THEN 'dependent_partial_blocker'
+            ELSE 'eligible'
+          END AS category
+        FROM ${table} candidate
+        LEFT JOIN app.review_rebuild_request request
+          ON request.request_id = candidate.request_id
+          AND request.project_id = candidate.project_id
+        WHERE ${projectPredicate}
+      )
+      SELECT category, CAST(COUNT(*) AS BIGINT) AS rowCount
+      FROM classified
+      GROUP BY category
+      ORDER BY rowCount DESC, category
+    `
+  }
+
+  return `
+    WITH classified AS (
+      SELECT
+        CASE
+          WHEN ${activeSnapshotPredicate} THEN 'active_or_last_known_good_snapshot_protected'
+          WHEN ${activePinPredicate} THEN 'pinned_snapshot_protected'
+          WHEN request.request_id IS NULL THEN 'missing_rebuild_request'
+          WHEN ${protectedRequestPredicate} THEN 'protected_rebuild_request'
+          WHEN ${newestDiagnosticPredicate} THEN 'newest_diagnostic_request'
+          WHEN request.status IS DISTINCT FROM 'completed' OR request.admission_state IS DISTINCT FROM 'admitted' THEN 'request_not_completed_admitted'
+          WHEN chunk.chunk_id IS NULL THEN 'missing_summary_chunk'
+          WHEN chunk.status IS DISTINCT FROM 'completed' OR chunk.admission_state IS DISTINCT FROM 'admitted' THEN 'summary_chunk_not_completed_admitted'
+          ELSE 'eligible'
+        END AS category
+      FROM ${table} candidate
+      LEFT JOIN app.review_rebuild_request request
+        ON request.request_id = candidate.request_id
+        AND request.project_id = candidate.project_id
+      LEFT JOIN app.review_rebuild_chunk_manifest chunk
+        ON chunk.request_id = candidate.request_id
+        AND chunk.chunk_id = candidate.chunk_id
+        AND chunk.project_id = candidate.project_id
+        AND chunk.snapshot_id = candidate.snapshot_id
+        AND chunk.projection_component = 'summary'
+      WHERE ${projectPredicate}
+    )
+    SELECT category, CAST(COUNT(*) AS BIGINT) AS rowCount
+    FROM classified
+    GROUP BY category
+    ORDER BY rowCount DESC, category
+  `
+}
+
 const getRetentionCleanupEligibilitySql = (
   table: (typeof retentionCleanupEligibilityTables)[number],
   projectId: string,
@@ -908,14 +1020,21 @@ const getRetentionCleanupEligibilityTable = async (
   projectId: string,
 ): Promise<RetentionCleanupEligibilityTable> => {
   try {
-    const rows = await runReadonlyQuery<Omit<RetentionCleanupEligibilityTable, 'error' | 'table'>>(
+    const rows = await runReadonlyQuery<RetentionCleanupEligibilityAggregateRow>(
       runtime,
       getRetentionCleanupEligibilitySql(table, projectId),
+    )
+    const blockerRows = await runReadonlyQuery<{category: string; rowCount: number | string}>(
+      runtime,
+      getRetentionCleanupBlockerCategorySql(table, projectId),
     )
     const row = rows[0]
 
     return {
       activeOrLastKnownGoodSnapshotProtectedRows: getNumberOrNull(row?.activeOrLastKnownGoodSnapshotProtectedRows),
+      blockerCounts: blockerRows.map((blocker) => {
+        return {category: blocker.category, rowCount: Number(blocker.rowCount)}
+      }),
       completedRequestAndSummaryChunkCandidateRows: getNumberOrNull(row?.completedRequestAndSummaryChunkCandidateRows),
       dependentPartialBlockedRows: getNumberOrNull(row?.dependentPartialBlockedRows),
       eligibleRows: getNumberOrNull(row?.eligibleRows),
@@ -929,6 +1048,7 @@ const getRetentionCleanupEligibilityTable = async (
   } catch (error) {
     return {
       activeOrLastKnownGoodSnapshotProtectedRows: null,
+      blockerCounts: [],
       completedRequestAndSummaryChunkCandidateRows: null,
       dependentPartialBlockedRows: null,
       eligibleRows: null,
@@ -953,9 +1073,91 @@ const getRetentionCleanupEligibilityReport = async (
   }
 
   return {
-    note: 'Read-only aggregate eligibility evidence for the first storage-slimming cleanup slice. Counts are project-wide aggregates, while runtime cleanup still runs through per-project/per-config retention targets and guardrails; this section does not authorize deletion.',
+    note: 'Read-only aggregate eligibility evidence for the first storage-slimming cleanup slice. Counts and first-blocker rows are project-wide diagnostic aggregates, while runtime cleanup still runs through per-project/per-config retention targets and guardrails; first-blocker rows classify each scoped row by the first matching diagnostic predicate and do not authorize deletion or predicate broadening.',
     projectId,
     tables,
+  }
+}
+
+const getProjectorWatermarkNullableFieldReport = async (
+  runtime: QueryRuntime,
+  projectId: string,
+  limit: number,
+): Promise<ProjectorWatermarkNullableFieldReport> => {
+  const table = 'app.review_serving_projector_watermark' as const
+  const nullableColumnExpressions = projectorWatermarkNullableColumns
+    .map((column) => {
+      return `CAST(COUNT(*) FILTER (WHERE ${column} IS NULL) AS BIGINT) AS global_${column}_nullCount,
+        CAST(COUNT(*) FILTER (WHERE ${column} IS NOT NULL) AS BIGINT) AS global_${column}_nonNullCount,
+        CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)} AND ${column} IS NULL) AS BIGINT) AS currentProject_${column}_nullCount,
+        CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)} AND ${column} IS NOT NULL) AS BIGINT) AS currentProject_${column}_nonNullCount`
+    })
+    .join(',\n        ')
+
+  try {
+    const rows = await runReadonlyQuery<Record<string, number | string | null>>(
+      runtime,
+      `
+        SELECT
+          CAST(COUNT(*) AS BIGINT) AS globalRows,
+          CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows,
+          ${nullableColumnExpressions}
+        FROM ${table}
+      `,
+    )
+    const projectScopeRows = await getSummaryContributionServingGroupedRows(
+      runtime,
+      table,
+      `CASE
+        WHEN project_id IS NULL THEN 'global-null-project'
+        WHEN project_id = ${getSqlLiteral(projectId)} THEN 'current-project'
+        ELSE 'other-project'
+      END`,
+      'projectScope',
+      null,
+    )
+    const sourcePartitionRows = await getSummaryContributionServingGroupedRows(
+      runtime,
+      table,
+      'source_partition',
+      'sourcePartition',
+      limit,
+    )
+    const row = rows[0] ?? {}
+
+    return {
+      columns: projectorWatermarkNullableColumns.map((column) => {
+        return {
+          column,
+          currentProjectNonNullCount: getNumberOrNull(row[`currentProject_${column}_nonNullCount`]),
+          currentProjectNullCount: getNumberOrNull(row[`currentProject_${column}_nullCount`]),
+          globalNonNullCount: getNumberOrNull(row[`global_${column}_nonNullCount`]),
+          globalNullCount: getNumberOrNull(row[`global_${column}_nullCount`]),
+        }
+      }),
+      currentProjectRows: getNumberOrNull(row.currentProjectRows),
+      error: null,
+      globalRows: getNumberOrNull(row.globalRows),
+      note: 'Read-only global/current-project aggregate evidence for nullable projector watermark fields. Null evidence is not schema-slimming authorization: import_route_id is part of the watermark identity for import-route scoped watermarks, while the lease/cursor/error/snapshot fields remain protected lifecycle/recovery state until code, recovery, route, benchmark, and live progress proof show otherwise.',
+      projectId,
+      rowsByProjectScope: projectScopeRows,
+      rowsBySourcePartition: sourcePartitionRows,
+      table,
+      verdict: 'not-authorized',
+    }
+  } catch (error) {
+    return {
+      columns: [],
+      currentProjectRows: null,
+      error: error instanceof Error ? error.message : String(error),
+      globalRows: null,
+      note: 'Projector watermark nullable field evidence collection failed. Failed evidence collection is not slimming authorization.',
+      projectId,
+      rowsByProjectScope: [],
+      rowsBySourcePartition: [],
+      table,
+      verdict: 'blocked',
+    }
   }
 }
 
@@ -1986,6 +2188,11 @@ const renderMarkdown = (report: EvidenceReport) => {
       table.error ? `Blocked: ${table.error}` : 'ok',
     ]
   })
+  const retentionCleanupBlockerRows = report.retentionCleanupEligibility.tables.flatMap((table) => {
+    return table.blockerCounts.map((blocker) => {
+      return [`\`${table.table}\``, `\`${blocker.category}\``, formatValue(blocker.rowCount)]
+    })
+  })
   const selectedImportPayloadRows = report.selectedImportPayloadSlimmingReadiness.columns.map((column) => {
     return [
       `\`${column.column}\``,
@@ -2046,6 +2253,24 @@ const renderMarkdown = (report: EvidenceReport) => {
         formatValue(row.selectedBaseFalseOrDefaultConflictRowsWithoutHot),
         formatValue(row.selectedBaseTrueConflictRowsWithoutHot),
       ]
+    })
+  const projectorWatermarkNullableColumnRows = report.projectorWatermarkNullableFieldEvidence.columns.map((column) => {
+    return [
+      `\`${column.column}\``,
+      formatValue(column.globalNullCount),
+      formatValue(column.globalNonNullCount),
+      formatValue(column.currentProjectNullCount),
+      formatValue(column.currentProjectNonNullCount),
+    ]
+  })
+  const projectorWatermarkProjectScopeRows = report.projectorWatermarkNullableFieldEvidence.rowsByProjectScope.map(
+    (row) => {
+      return [`\`${row.label}\``, formatValue(row.rowCount)]
+    },
+  )
+  const projectorWatermarkSourcePartitionRows =
+    report.projectorWatermarkNullableFieldEvidence.rowsBySourcePartition.map((row) => {
+      return [`\`${row.label}\``, formatValue(row.rowCount)]
     })
   const summaryContributionDuplicateRows = report.summaryContributionServingReadiness.duplicateProbes.map((probe) => {
     return [
@@ -2192,6 +2417,10 @@ const renderMarkdown = (report: EvidenceReport) => {
       retentionCleanupEligibilityRows,
     ),
     '',
+    retentionCleanupBlockerRows.length > 0
+      ? formatMarkdownTable(['Table', 'First blocker/category', 'Rows'], retentionCleanupBlockerRows)
+      : '_No retention cleanup blocker categories were collected._',
+    '',
     '## Selected-Import Payload Slimming Readiness',
     '',
     `Verdict: ${report.selectedImportPayloadSlimmingReadiness.verdict === 'not-authorized' ? 'not deletion/slimming authorization' : 'blocked'}`,
@@ -2336,6 +2565,37 @@ const renderMarkdown = (report: EvidenceReport) => {
       ? formatMarkdownTable(['Selected-import snapshot status', 'Rows'], selectedImportSnapshotStatusRows)
       : '_No selected-import snapshot status rows were collected._',
     '',
+    '## Projector Watermark Nullable Field Evidence',
+    '',
+    `Verdict: ${
+      report.projectorWatermarkNullableFieldEvidence.verdict === 'not-authorized'
+        ? 'not-authorized (not deletion/slimming authorization)'
+        : 'blocked'
+    }`,
+    '',
+    report.projectorWatermarkNullableFieldEvidence.note,
+    '',
+    `Table: \`${report.projectorWatermarkNullableFieldEvidence.table}\``,
+    '',
+    `Global rows: ${formatValue(report.projectorWatermarkNullableFieldEvidence.globalRows)}`,
+    '',
+    `Current-project rows: ${formatValue(report.projectorWatermarkNullableFieldEvidence.currentProjectRows)}`,
+    '',
+    projectorWatermarkNullableColumnRows.length > 0
+      ? formatMarkdownTable(
+          ['Nullable column', 'Global nulls', 'Global non-nulls', 'Current-project nulls', 'Current-project non-nulls'],
+          projectorWatermarkNullableColumnRows,
+        )
+      : '_No projector watermark nullable column evidence rows were collected._',
+    '',
+    projectorWatermarkProjectScopeRows.length > 0
+      ? formatMarkdownTable(['Project scope', 'Rows'], projectorWatermarkProjectScopeRows)
+      : '_No projector watermark project-scope rows were collected._',
+    '',
+    projectorWatermarkSourcePartitionRows.length > 0
+      ? formatMarkdownTable(['Source partition', 'Rows'], projectorWatermarkSourcePartitionRows)
+      : '_No projector watermark source-partition rows were collected._',
+    '',
     '## Summary Contribution Serving Readiness',
     '',
     `Verdict: ${report.summaryContributionServingReadiness.verdict === 'not-authorized' ? 'not-authorized (not deletion authorization)' : 'blocked'}`,
@@ -2467,6 +2727,11 @@ const inspectPhysicalEvidence = (options: CliOptions) => {
               generatedAt: new Date().toISOString(),
               mode: 'readonly-snapshot',
               options,
+              projectorWatermarkNullableFieldEvidence: await getProjectorWatermarkNullableFieldReport(
+                runtime,
+                options.projectId,
+                options.limit,
+              ),
               retentionCleanupEligibility: await getRetentionCleanupEligibilityReport(runtime, options.projectId),
               selectedImportPayloadSlimmingReadiness: await getSelectedImportPayloadSlimmingReadinessReport(
                 runtime,

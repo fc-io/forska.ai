@@ -19,6 +19,17 @@ This slice has low rollback risk because it can be feature-gated or disabled,
 can run in small batches, and does not change route read contracts, DuckDB
 schema, or source-of-truth data.
 
+Current read-only terminal-cleanup proof keeps the runtime implementation
+bounded but explains why the current DB does not delete rows yet: the physical
+inspector now reports project-wide first-blocker categories for the existing
+retention predicates. For project `7dfb4dd5-d2fe-4b21-b626-7ab26953f6ac`, the
+inspected state has zero terminal candidates and zero eligible rows across the
+first-slice tables. The large partial tables are blocked by non-completed or
+non-admitted rebuild requests plus protected/newest diagnostic request trails;
+chunk-manifest rows are mostly missing request ids or are not summary chunks.
+This is diagnostic evidence to keep the current predicates conservative, not an
+exact per-config runtime eligibility report or authorization to broaden cleanup.
+
 ## Non-Goals
 
 - Do not drop tables, columns, indexes, migrations, or historical schema files.
@@ -47,6 +58,9 @@ schema, or source-of-truth data.
   current-DB cleanup run.
 - Treat zero eligible rows as a valid safe outcome, not a reason to broaden the
   predicate.
+- When zero rows are eligible, preserve first-blocker/category evidence so the
+  result distinguishes protected/nonterminal state from an inspector or runtime
+  predicate bug.
 
 ## Required Evidence Before Touching Storage
 
