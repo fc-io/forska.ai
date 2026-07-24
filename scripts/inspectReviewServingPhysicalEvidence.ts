@@ -156,7 +156,12 @@ type RebuildArtifactDispositionArtifactRow = {
   requestDisposition: string
   rows: number
 }
-type RebuildArtifactDispositionRequestRow = {chunkRows: number; requestDisposition: string; requests: number}
+type RebuildArtifactDispositionRequestRow = {
+  chunkRows: number
+  requestDisposition: string
+  requests: number
+  sampleRequestIds: string[]
+}
 type RebuildArtifactDispositionRequestlessChunkRow = {
   adoptionHint: string
   distinctChunks: number
@@ -1470,6 +1475,7 @@ const getRebuildArtifactDispositionEvidenceReport = async (
       chunkRows: number | string
       requestDisposition: string
       requests: number | string
+      sampleRequestIds: string | null
     }>(
       runtime,
       `
@@ -1500,7 +1506,8 @@ const getRebuildArtifactDispositionEvidenceReport = async (
         SELECT
           request_disposition AS requestDisposition,
           CAST(COUNT(*) AS BIGINT) AS requests,
-          CAST(SUM(chunk_rows) AS BIGINT) AS chunkRows
+          CAST(SUM(chunk_rows) AS BIGINT) AS chunkRows,
+          string_agg(request_id, ', ' ORDER BY request_id) AS sampleRequestIds
         FROM request_scope
         GROUP BY request_disposition
         ORDER BY requests DESC, request_disposition
@@ -1528,6 +1535,7 @@ const getRebuildArtifactDispositionEvidenceReport = async (
           chunkRows: Number(requestRow.chunkRows ?? 0),
           requestDisposition: requestRow.requestDisposition,
           requests: Number(requestRow.requests ?? 0),
+          sampleRequestIds: (requestRow.sampleRequestIds ?? '').split(', ').filter(Boolean),
         }
       }),
       requestlessChunkRows: getNumberOrNull(row?.requestlessChunkRows),
@@ -3460,7 +3468,12 @@ const renderMarkdown = (report: EvidenceReport) => {
   )
   const rebuildRequestDispositionRows = report.rebuildArtifactDispositionEvidence.requestRowsByDisposition.map(
     (row) => {
-      return [`\`${row.requestDisposition}\``, formatValue(row.requests), formatValue(row.chunkRows)]
+      return [
+        `\`${row.requestDisposition}\``,
+        formatValue(row.requests),
+        formatValue(row.chunkRows),
+        row.sampleRequestIds.map((requestId) => `\`${requestId}\``).join(', '),
+      ]
     },
   )
   const rebuildRequestLifecycleColumnRows = report.rebuildRequestLifecycleFieldEvidence.columns.map((column) => {
@@ -3830,7 +3843,10 @@ const renderMarkdown = (report: EvidenceReport) => {
       : '_No partial/chunk artifact disposition rows were collected._',
     '',
     rebuildRequestDispositionRows.length > 0
-      ? formatMarkdownTable(['Request disposition', 'Requests', 'Chunk rows'], rebuildRequestDispositionRows)
+      ? formatMarkdownTable(
+          ['Request disposition', 'Requests', 'Chunk rows', 'Sample request ids'],
+          rebuildRequestDispositionRows,
+        )
       : '_No rebuild request disposition rows were collected._',
     '',
     '## Rebuild Request Lifecycle Field Evidence',
