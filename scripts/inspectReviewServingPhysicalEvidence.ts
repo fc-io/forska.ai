@@ -988,10 +988,10 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
       comparisonStatus:
         'Selected-base counts are split into active/LKG protected selected-import rows, candidate selected-import rows, and other rows. Hot-field counts are scoped through app.project_import_route for the same project. Non-null hot-field values with null selected-base values mean source data exists but the selected-base projection did not carry it for this scoped snapshot.',
       consumerWriterStatus:
-        'Current code still writes these fields from app.review_import_article_hot_field into selected-import base rows and reads selected-base values in downstream review-serving projection paths. Treat this as evidence for investigation only.',
+        'Current code no longer writes or consumes selected-base display-copy values for publication_year, article_title, journal_title, and external_id. Selected-base identity/rank fields remain active runtime state, and the nullable schema columns still exist. Treat this as write-suppression and consumer-migration evidence only.',
       error: null,
       hotFieldScopedRows: getNumberOrNull(hotFieldRow.hotFieldScopedRows),
-      note: 'This section is not deletion/slimming authorization. Slimming is only safe after runtime non-population is proven across the intended scope and writer/reader/recovery consumers are changed or proven irrelevant.',
+      note: 'This section is not deletion/slimming authorization. It is a regression/readiness check for selected-base display-copy write suppression; schema slimming still needs separate migration, recovery, route parity, benchmark, and live progress proof.',
       otherSelectedImportRows: getNumberOrNull(selectedBaseRow.otherSelectedImportRows),
       projectId,
       rowsBySelectedImportSnapshotStatus: snapshotStatusRows.map((row) => {
@@ -1007,7 +1007,7 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
       columns: [],
       comparisonStatus: 'Blocked before source/hot-field comparison could be collected.',
       consumerWriterStatus:
-        'Current code still writes/reads selected-import payload fields; failed evidence collection cannot authorize slimming.',
+        'Selected-import payload evidence collection failed; this cannot authorize schema slimming or deletion.',
       error: error instanceof Error ? error.message : String(error),
       hotFieldScopedRows: null,
       note: 'This section is not deletion/slimming authorization.',

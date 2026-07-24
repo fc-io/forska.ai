@@ -63,6 +63,22 @@ const selectedImportRow = (input: {articleId: string; rankKeySort: string; rankN
   }
 }
 
+const getInsertTargetSql = (statement: string) => {
+  return statement.slice(
+    statement.indexOf('INSERT INTO app.review_selected_article_import_v4 ('),
+    statement.indexOf('\n    )', statement.indexOf('INSERT INTO app.review_selected_article_import_v4 (')),
+  )
+}
+
+const expectSelectedImportBaseInsertOmitsDisplayCopyColumns = (statement: string) => {
+  const insertTargetSql = getInsertTargetSql(statement)
+
+  expect(insertTargetSql).not.toContain('publication_year')
+  expect(insertTargetSql).not.toContain('article_title')
+  expect(insertTargetSql).not.toContain('journal_title')
+  expect(insertTargetSql).not.toContain('external_id')
+}
+
 test('selected-import projector creates snapshot cursor and selected article import rows', async () => {
   const {database, statements} = createSelectedImportProjectorDatabase({
     batchRows: [
@@ -82,6 +98,11 @@ test('selected-import projector creates snapshot cursor and selected article imp
       return statement.includes('INSERT INTO app.review_selected_article_import_v4')
     }),
   ).toBe(true)
+  expectSelectedImportBaseInsertOmitsDisplayCopyColumns(
+    statements.find((statement) => {
+      return statement.includes('INSERT INTO app.review_selected_article_import_v4')
+    }) ?? '',
+  )
   expect(
     statements.some((statement) => {
       return statement.includes('INSERT INTO app.review_selected_import_snapshot') && statement.includes("'completed'")
@@ -204,13 +225,20 @@ test('selected-import article range rebuild writes selected rows directly in SQL
   expect(insertStatement).toContain('WITH selected_import_candidates AS')
   expect(insertStatement).toContain('ROW_NUMBER() OVER')
   expect(insertStatement).toContain("WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)")
+  expectSelectedImportBaseInsertOmitsDisplayCopyColumns(insertStatement ?? '')
+  expect(insertStatement).toContain('hot.article_title')
+  expect(insertStatement).toContain('hot.external_id')
+  expect(insertStatement).not.toContain('publication_year = excluded.publication_year')
+  expect(insertStatement).not.toContain('article_title = excluded.article_title')
+  expect(insertStatement).not.toContain('journal_title = excluded.journal_title')
+  expect(insertStatement).not.toContain('external_id = excluded.external_id')
   expect(insertStatement).toContain(
     'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO UPDATE SET',
   )
   expect(sourceQueries).toHaveLength(0)
 })
 
-test('selected-import article range rebuild can refresh final serving rows from base rows', async () => {
+test('selected-import article range rebuild can refresh final serving rows from hot fields', async () => {
   const {database, statements} = createSelectedImportProjectorDatabase({rangeRowCount: 3})
 
   await projectReviewServingSelectedImportArticleRange(
@@ -236,10 +264,14 @@ test('selected-import article range rebuild can refresh final serving rows from 
   expect(joined).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(joined).toContain("selected.selected_import_snapshot_id = 'selected-import-snapshot-1'")
   expect(joined).toContain("serving.selected_import_identity = 'selectedImport:identity-1'")
-  expect(joined).toContain('COALESCE(selected_hot.article_title, selected.article_title, article.article_title) AS article_title')
-  expect(joined).toContain('COALESCE(selected_hot.external_id, selected.external_id, article.article_id) AS article_external_id')
-  expect(joined).toContain('COALESCE(selected_hot.journal_title, selected.journal_title) AS journal_title')
-  expect(joined).toContain('COALESCE(selected_hot.publication_year, selected.publication_year) AS publication_year')
+  expect(joined).toContain('COALESCE(selected_hot.article_title, article.article_title) AS article_title')
+  expect(joined).toContain('COALESCE(selected_hot.external_id, article.article_id) AS article_external_id')
+  expect(joined).toContain('selected_hot.journal_title AS journal_title')
+  expect(joined).toContain('selected_hot.publication_year AS publication_year')
+  expect(joined).not.toContain('selected.article_title')
+  expect(joined).not.toContain('selected.external_id')
+  expect(joined).not.toContain('selected.journal_title')
+  expect(joined).not.toContain('COALESCE(selected_hot.publication_year, selected.publication_year)')
   expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
   expect(joined).toContain('article.full_text_pdf')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
