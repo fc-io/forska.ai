@@ -10,6 +10,8 @@ Snapshot path used during collection: `/Users/fredrik/.openclaw/tmp/forska-duckd
 
 This file is a small follow-up evidence artifact for the storage-shape audit. It does not update `STORAGE_SHAPE_AUDIT_PLAN.md` and does not authorize deletion, slimming, or migration work by itself.
 
+Post-#140 note: this artifact was generated before migrations `0118` through `0122` retired the five empty legacy patch tables listed below (`mart.review_queue_patch_v4`, `mart.review_human_status_patch_v4`, `mart.review_llm_status_patch_v4`, `mart.review_article_filter_posting_patch_v4`, and `mart.review_article_display_patch_v4`). Use freshly generated physical evidence for current active-table inventories.
+
 ## Table Summary
 
 | Table | Rows | Columns | Scope | Indexes | Duplicate keys | Status |
