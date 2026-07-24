@@ -8,11 +8,6 @@ type ConflictUpdateInventoryEntry = {path: string; reason: string; snippet: stri
 
 const allowedConflictUpdates: ConflictUpdateInventoryEntry[] = [
   {
-    path: 'src/server/reviewServing/reviewServingSnapshotPinRepository.ts',
-    reason: 'snapshot pins merge ref-count and expiry lifecycle state',
-    snippet: 'ON CONFLICT(pin_id) DO UPDATE SET',
-  },
-  {
     path: 'src/server/reviewServing/reviewServingDirtyWorkService.ts',
     reason: 'dirty work merges high-water ranges, status, and retry state',
     snippet: 'ON CONFLICT(dirty_work_id) DO UPDATE SET',

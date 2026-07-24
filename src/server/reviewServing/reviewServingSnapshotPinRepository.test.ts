@@ -92,36 +92,28 @@ const createFakeSnapshotPinDatabase = (initialManifests: FakeManifestRow[] = [])
   const pins = new Map<string, FakePinRow>()
   const manifests = [...initialManifests]
   const statements: string[] = []
-  const upsertPin = (statement: string) => {
+  const insertMissingPin = (statement: string) => {
     const strings = getSqlStrings(statement)
     const pinId = strings[0] ?? ''
-    const existing = pins.get(pinId)
     const expiresAt = getTimestampLiteral(statement) ?? strings[6] ?? ''
 
-    pins.set(
+    if (pins.has(pinId)) {
+      return
+    }
+
+    pins.set(pinId, {
+      composedIdentity: JSON.parse(strings[3] ?? '{}') as ReviewServingIdentityValue,
+      createdAt: getClock(statements),
+      expiresAt,
+      ownerId: strings[5] ?? '',
+      ownerKind: strings[4] ?? '',
       pinId,
-      existing === undefined
-        ? {
-            composedIdentity: JSON.parse(strings[3] ?? '{}') as ReviewServingIdentityValue,
-            createdAt: getClock(statements),
-            expiresAt,
-            ownerId: strings[5] ?? '',
-            ownerKind: strings[4] ?? '',
-            pinId,
-            projectId: strings[1] ?? '',
-            refCount: 1,
-            releasedAt: null,
-            snapshotId: strings[2] ?? '',
-            updatedAt: getClock(statements),
-          }
-        : {
-            ...existing,
-            expiresAt: existing.expiresAt > expiresAt ? existing.expiresAt : expiresAt,
-            refCount: existing.refCount + 1,
-            releasedAt: null,
-            updatedAt: getClock(statements),
-          },
-    )
+      projectId: strings[1] ?? '',
+      refCount: 1,
+      releasedAt: null,
+      snapshotId: strings[2] ?? '',
+      updatedAt: getClock(statements),
+    })
   }
   const incrementPin = (statement: string) => {
     const pinId = getWhereLiteral(statement, 'pin_id') ?? ''
@@ -166,7 +158,7 @@ const createFakeSnapshotPinDatabase = (initialManifests: FakeManifestRow[] = [])
     statements.push(statement)
 
     if (statement.includes('INSERT INTO app.review_serving_snapshot_pin')) {
-      upsertPin(statement)
+      insertMissingPin(statement)
       return
     }
 
@@ -271,18 +263,33 @@ const createFakeSnapshotPinDatabase = (initialManifests: FakeManifestRow[] = [])
 }
 
 test('snapshot pin acquisition is idempotent by project snapshot identity and owner', async () => {
-  const {database} = createFakeSnapshotPinDatabase()
+  const {database, statements} = createFakeSnapshotPinDatabase()
   const first = await acquireReviewServingSnapshotPin(basePinInput, database)
   const second = await acquireReviewServingSnapshotPin(
     {...basePinInput, expiresAt: '2026-06-16T14:00:00.000Z'},
     database,
   )
+  const joined = statements.join('\n')
+  const updateStatements = statements.filter((statement) => {
+    return statement.includes('UPDATE app.review_serving_snapshot_pin')
+  })
+  const insertStatements = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_serving_snapshot_pin')
+  })
 
   expect(first?.pinId).toBe(getReviewServingSnapshotPinId(basePinInput))
   expect(second?.pinId).toBe(first?.pinId)
   expect(second?.refCount).toBe(2)
   expect(second?.expiresAt).toBe('2026-06-16T14:00:00.000Z')
   expect(second?.releasedAt).toBeNull()
+  expect(updateStatements).toHaveLength(2)
+  expect(insertStatements).toHaveLength(2)
+  expect(joined.indexOf('UPDATE app.review_serving_snapshot_pin')).toBeLessThan(
+    joined.indexOf('INSERT INTO app.review_serving_snapshot_pin'),
+  )
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain("(existing.pin_id || '')")
+  expect(joined).not.toContain('ON CONFLICT(pin_id) DO UPDATE SET')
 })
 
 test('snapshot pin increment and release update ref counts before releasing', async () => {
