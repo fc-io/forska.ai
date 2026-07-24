@@ -29,6 +29,7 @@ type EvidenceReport = {
   mode: 'readonly-snapshot'
   options: CliOptions
   projectorWatermarkNullableFieldEvidence: ProjectorWatermarkNullableFieldReport
+  rebuildArtifactDispositionEvidence: RebuildArtifactDispositionEvidenceReport
   retentionCleanupEligibility: RetentionCleanupEligibilityReport
   selectedImportPayloadSlimmingReadiness: SelectedImportPayloadSlimmingReadinessReport
   summaryContributionServingReadiness: SummaryContributionServingReadinessReport
@@ -147,6 +148,33 @@ type RetentionCleanupEligibilityAggregateRow = Omit<
   'blockerCounts' | 'error' | 'table'
 >
 type RetentionCleanupEligibilityReport = {note: string; projectId: string; tables: RetentionCleanupEligibilityTable[]}
+type RebuildArtifactDispositionArtifactRow = {
+  artifactTable: string
+  distinctChunks: number
+  distinctRequests: number
+  requestDisposition: string
+  rows: number
+}
+type RebuildArtifactDispositionRequestRow = {chunkRows: number; requestDisposition: string; requests: number}
+type RebuildArtifactDispositionRequestlessChunkRow = {
+  adoptionHint: string
+  distinctChunks: number
+  partialDependencyRows: number
+  rows: number
+  summaryRows: number
+}
+type RebuildArtifactDispositionEvidenceReport = {
+  artifactRowsByRequestDisposition: RebuildArtifactDispositionArtifactRow[]
+  currentProjectChunkRows: number | null
+  error: string | null
+  note: string
+  projectId: string
+  requestRowsByDisposition: RebuildArtifactDispositionRequestRow[]
+  requestlessChunkRows: number | null
+  requestlessRowsByAdoptionHint: RebuildArtifactDispositionRequestlessChunkRow[]
+  table: 'app.review_rebuild_chunk_manifest'
+  verdict: 'not-authorized' | 'blocked'
+}
 type SelectedImportPayloadColumnEvidence = {
   column: (typeof selectedImportPayloadColumns)[number]
   hotFieldNonNullCount: number | null
@@ -1196,6 +1224,304 @@ const getRetentionCleanupEligibilityReport = async (
     note: 'Read-only aggregate eligibility evidence for the first storage-slimming cleanup slice. Counts and first-blocker rows are project-wide diagnostic aggregates, while runtime cleanup still runs through per-project/per-config retention targets and guardrails; first-blocker rows classify each scoped row by the first matching diagnostic predicate and do not authorize deletion or predicate broadening.',
     projectId,
     tables,
+  }
+}
+
+const getRebuildRequestDispositionCaseSql = (requestAlias: string) => {
+  return `CASE
+            WHEN ${requestAlias}.request_id IS NULL THEN 'missing-rebuild-request'
+            WHEN ${requestAlias}.status IN ('pending_admission', 'admitted', 'running')
+              AND ${requestAlias}.admission_state = 'admitted' THEN 'admitted-with-chunks'
+            WHEN ${requestAlias}.status IN ('pending_admission', 'admitted', 'running')
+              THEN 'nonterminal-not-admitted'
+            WHEN ${requestAlias}.status = 'failed'
+              AND ${requestAlias}.admission_state = 'admitted'
+              AND (
+                ${requestAlias}.retry_after IS NULL
+                OR ${requestAlias}.retry_after <= current_timestamp
+              )
+              AND EXISTS (
+                SELECT 1
+                FROM app.review_rebuild_chunk_manifest retryable_chunk
+                WHERE retryable_chunk.request_id = ${requestAlias}.request_id
+                  AND retryable_chunk.project_id = ${requestAlias}.project_id
+                  AND (
+                    retryable_chunk.status IN ('pending', 'running')
+                    OR (
+                      retryable_chunk.status = 'failed'
+                      AND COALESCE(retryable_chunk.retry_count, 0) < COALESCE(
+                        GREATEST(
+                          1,
+                          TRY_CAST(json_extract_string(${requestAlias}.retry_policy_json, '$.maxAttempts') AS INTEGER)
+                        ),
+                        3
+                      )
+                    )
+                  )
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM app.review_rebuild_chunk_manifest terminal_blocker_chunk
+                WHERE terminal_blocker_chunk.request_id = ${requestAlias}.request_id
+                  AND terminal_blocker_chunk.project_id = ${requestAlias}.project_id
+                  AND terminal_blocker_chunk.status IN ('blocked_over_budget', 'quarantined')
+              ) THEN 'failed-retryable'
+            WHEN ${requestAlias}.status = 'failed'
+              AND EXISTS (
+                SELECT 1
+                FROM app.review_rebuild_chunk_manifest terminal_failed_chunk
+                WHERE terminal_failed_chunk.request_id = ${requestAlias}.request_id
+                  AND terminal_failed_chunk.project_id = ${requestAlias}.project_id
+                  AND terminal_failed_chunk.status IN ('blocked_over_budget', 'quarantined')
+              ) THEN 'failed-blocked-terminal'
+            WHEN ${requestAlias}.status = 'failed'
+              AND lower(COALESCE(${requestAlias}.last_error, '')) LIKE '%superseded%' THEN 'failed-superseded-derived'
+            WHEN ${requestAlias}.status = 'failed' THEN 'failed-terminal-unclassified'
+            WHEN ${requestAlias}.status = 'completed'
+              AND ${requestAlias}.admission_state = 'admitted' THEN 'completed-terminal'
+            WHEN ${requestAlias}.status IN ('blocked_over_budget', 'quarantined')
+              OR ${requestAlias}.admission_state = 'blocked_over_budget' THEN 'blocked-terminal'
+            ELSE CONCAT('other:', COALESCE(${requestAlias}.status, 'NULL'), '/', COALESCE(${requestAlias}.admission_state, 'NULL'))
+          END`
+}
+
+const getRebuildArtifactDispositionEvidenceReport = async (
+  runtime: QueryRuntime,
+  projectId: string,
+  limit: number,
+): Promise<RebuildArtifactDispositionEvidenceReport> => {
+  const table = 'app.review_rebuild_chunk_manifest' as const
+  const projectPredicate = `project_id = ${getSqlLiteral(projectId)}`
+  const requestDispositionSql = getRebuildRequestDispositionCaseSql('request')
+
+  try {
+    const totals = await runReadonlyQuery<{
+      currentProjectChunkRows: number | string
+      requestlessChunkRows: number | string
+    }>(
+      runtime,
+      `
+        SELECT
+          CAST(COUNT(*) AS BIGINT) AS currentProjectChunkRows,
+          CAST(COUNT(*) FILTER (WHERE request_id IS NULL) AS BIGINT) AS requestlessChunkRows
+        FROM ${table}
+        WHERE ${projectPredicate}
+      `,
+    )
+    const requestlessRowsByAdoptionHint = await runReadonlyQuery<{
+      adoptionHint: string
+      distinctChunks: number | string
+      partialDependencyRows: number | string
+      rows: number | string
+      summaryRows: number | string
+    }>(
+      runtime,
+      `
+        WITH requestless_chunk AS (
+          SELECT
+            chunk.*,
+            CASE
+              WHEN chunk.projection_component IS DISTINCT FROM 'summary' THEN 'requestless-non-summary'
+              WHEN EXISTS (
+                SELECT 1
+                FROM app.review_rebuild_request request
+                WHERE request.project_id = chunk.project_id
+                  AND request.request_id LIKE 'requestless-%'
+                  AND request.status IN ('admitted', 'running')
+                  AND request.admission_state = 'admitted'
+                  AND json_extract_string(request.identity_json, '$.snapshotId') IS NOT DISTINCT FROM chunk.snapshot_id
+                  AND TRY_CAST(json_extract_string(request.identity_json, '$.outputBaseGeneration') AS BIGINT)
+                    IS NOT DISTINCT FROM chunk.output_base_generation
+                  AND json_extract_string(request.identity_json, '$.inputDigest') IS NOT DISTINCT FROM chunk.input_digest
+              ) THEN 'requestless-adoptable-active-request'
+              ELSE 'requestless-unadopted'
+            END AS adoption_hint
+          FROM ${table} chunk
+          WHERE chunk.project_id = ${getSqlLiteral(projectId)}
+            AND chunk.request_id IS NULL
+        ),
+        classified AS (
+          SELECT
+            requestless_chunk.adoption_hint,
+            requestless_chunk.chunk_id,
+            requestless_chunk.projection_component,
+            CAST((
+              SELECT COUNT(*)
+              FROM mart.review_article_summary_contribution_rebuild_partial_v4 contribution_partial
+              WHERE contribution_partial.project_id = requestless_chunk.project_id
+                AND contribution_partial.chunk_id = requestless_chunk.chunk_id
+                AND contribution_partial.snapshot_id IS NOT DISTINCT FROM requestless_chunk.snapshot_id
+            ) + (
+              SELECT COUNT(*)
+              FROM mart.review_article_summary_rebuild_partial_v4 summary_partial
+              WHERE summary_partial.project_id = requestless_chunk.project_id
+                AND summary_partial.chunk_id = requestless_chunk.chunk_id
+                AND summary_partial.snapshot_id IS NOT DISTINCT FROM requestless_chunk.snapshot_id
+            ) AS BIGINT) AS partial_dependency_rows
+          FROM requestless_chunk
+        )
+        SELECT
+          adoption_hint AS adoptionHint,
+          CAST(COUNT(*) AS BIGINT) AS rows,
+          CAST(COUNT(DISTINCT chunk_id) AS BIGINT) AS distinctChunks,
+          CAST(COUNT(*) FILTER (WHERE projection_component = 'summary') AS BIGINT) AS summaryRows,
+          CAST(SUM(partial_dependency_rows) AS BIGINT) AS partialDependencyRows
+        FROM classified
+        GROUP BY adoption_hint
+        ORDER BY rows DESC, adoption_hint
+        LIMIT ${Math.max(1, limit)}
+      `,
+    )
+    const artifactRowsByRequestDisposition = await runReadonlyQuery<{
+      artifactTable: string
+      distinctChunks: number | string
+      distinctRequests: number | string
+      requestDisposition: string
+      rows: number | string
+    }>(
+      runtime,
+      `
+        WITH artifact AS (
+          SELECT
+            'app.review_rebuild_chunk_manifest' AS artifact_table,
+            project_id,
+            request_id,
+            chunk_id
+          FROM ${table}
+          WHERE project_id = ${getSqlLiteral(projectId)}
+          UNION ALL
+          SELECT
+            'mart.review_article_summary_contribution_rebuild_partial_v4' AS artifact_table,
+            project_id,
+            request_id,
+            chunk_id
+          FROM mart.review_article_summary_contribution_rebuild_partial_v4
+          WHERE project_id = ${getSqlLiteral(projectId)}
+          UNION ALL
+          SELECT
+            'mart.review_article_summary_rebuild_partial_v4' AS artifact_table,
+            project_id,
+            request_id,
+            chunk_id
+          FROM mart.review_article_summary_rebuild_partial_v4
+          WHERE project_id = ${getSqlLiteral(projectId)}
+        ),
+        classified AS (
+          SELECT
+            artifact.artifact_table,
+            artifact.request_id,
+            artifact.chunk_id,
+            CASE
+              WHEN artifact.request_id IS NULL THEN 'requestless-unadopted'
+              ELSE ${requestDispositionSql}
+            END AS request_disposition
+          FROM artifact
+          LEFT JOIN app.review_rebuild_request request
+            ON request.project_id = artifact.project_id
+            AND request.request_id = artifact.request_id
+        )
+        SELECT
+          artifact_table AS artifactTable,
+          request_disposition AS requestDisposition,
+          CAST(COUNT(*) AS BIGINT) AS rows,
+          CAST(COUNT(DISTINCT request_id) AS BIGINT) AS distinctRequests,
+          CAST(COUNT(DISTINCT chunk_id) AS BIGINT) AS distinctChunks
+        FROM classified
+        GROUP BY artifact_table, request_disposition
+        ORDER BY artifact_table, rows DESC, request_disposition
+        LIMIT ${Math.max(1, limit * 3)}
+      `,
+    )
+    const requestRowsByDisposition = await runReadonlyQuery<{
+      chunkRows: number | string
+      requestDisposition: string
+      requests: number | string
+    }>(
+      runtime,
+      `
+        WITH request_scope AS (
+          SELECT
+            request.request_id,
+            CASE
+              WHEN COUNT(chunk.chunk_id) = 0
+                AND request.status IN ('pending_admission', 'admitted', 'running')
+                AND request.admission_state = 'admitted' THEN 'admitted-no-chunks'
+              ELSE ${requestDispositionSql}
+            END AS request_disposition,
+            CAST(COUNT(chunk.chunk_id) AS BIGINT) AS chunk_rows
+          FROM app.review_rebuild_request request
+          LEFT JOIN ${table} chunk
+            ON chunk.project_id = request.project_id
+            AND chunk.request_id = request.request_id
+          WHERE request.project_id = ${getSqlLiteral(projectId)}
+          GROUP BY
+            request.request_id,
+            request.project_id,
+            request.status,
+            request.admission_state,
+            request.retry_after,
+            request.retry_policy_json,
+            request.last_error
+        )
+        SELECT
+          request_disposition AS requestDisposition,
+          CAST(COUNT(*) AS BIGINT) AS requests,
+          CAST(SUM(chunk_rows) AS BIGINT) AS chunkRows
+        FROM request_scope
+        GROUP BY request_disposition
+        ORDER BY requests DESC, request_disposition
+        LIMIT ${Math.max(1, limit)}
+      `,
+    )
+    const row = totals[0]
+
+    return {
+      artifactRowsByRequestDisposition: artifactRowsByRequestDisposition.map((artifactRow) => {
+        return {
+          artifactTable: artifactRow.artifactTable,
+          distinctChunks: Number(artifactRow.distinctChunks ?? 0),
+          distinctRequests: Number(artifactRow.distinctRequests ?? 0),
+          requestDisposition: artifactRow.requestDisposition,
+          rows: Number(artifactRow.rows ?? 0),
+        }
+      }),
+      currentProjectChunkRows: getNumberOrNull(row?.currentProjectChunkRows),
+      error: null,
+      note: 'Proof-only, read-only current-project disposition evidence for terminal rebuild artifact blockers. Requestless adoption and superseded labels are derived from observable request/chunk state and error text; they explain blocker shape only and do not authorize retention predicate broadening.',
+      projectId,
+      requestRowsByDisposition: requestRowsByDisposition.map((requestRow) => {
+        return {
+          chunkRows: Number(requestRow.chunkRows ?? 0),
+          requestDisposition: requestRow.requestDisposition,
+          requests: Number(requestRow.requests ?? 0),
+        }
+      }),
+      requestlessChunkRows: getNumberOrNull(row?.requestlessChunkRows),
+      requestlessRowsByAdoptionHint: requestlessRowsByAdoptionHint.map((requestlessRow) => {
+        return {
+          adoptionHint: requestlessRow.adoptionHint,
+          distinctChunks: Number(requestlessRow.distinctChunks ?? 0),
+          partialDependencyRows: Number(requestlessRow.partialDependencyRows ?? 0),
+          rows: Number(requestlessRow.rows ?? 0),
+          summaryRows: Number(requestlessRow.summaryRows ?? 0),
+        }
+      }),
+      table,
+      verdict: 'not-authorized',
+    }
+  } catch (error) {
+    return {
+      artifactRowsByRequestDisposition: [],
+      currentProjectChunkRows: null,
+      error: error instanceof Error ? error.message : String(error),
+      note: 'Read-only rebuild artifact disposition evidence collection failed. Failed evidence collection is not retention cleanup authorization.',
+      projectId,
+      requestRowsByDisposition: [],
+      requestlessChunkRows: null,
+      requestlessRowsByAdoptionHint: [],
+      table,
+      verdict: 'blocked',
+    }
   }
 }
 
@@ -2986,6 +3312,32 @@ const renderMarkdown = (report: EvidenceReport) => {
       return [`\`${table.table}\``, `\`${blocker.category}\``, formatValue(blocker.rowCount)]
     })
   })
+  const rebuildRequestlessArtifactDispositionRows =
+    report.rebuildArtifactDispositionEvidence.requestlessRowsByAdoptionHint.map((row) => {
+      return [
+        `\`${row.adoptionHint}\``,
+        formatValue(row.rows),
+        formatValue(row.distinctChunks),
+        formatValue(row.summaryRows),
+        formatValue(row.partialDependencyRows),
+      ]
+    })
+  const rebuildArtifactDispositionRows = report.rebuildArtifactDispositionEvidence.artifactRowsByRequestDisposition.map(
+    (row) => {
+      return [
+        `\`${row.artifactTable}\``,
+        `\`${row.requestDisposition}\``,
+        formatValue(row.rows),
+        formatValue(row.distinctRequests),
+        formatValue(row.distinctChunks),
+      ]
+    },
+  )
+  const rebuildRequestDispositionRows = report.rebuildArtifactDispositionEvidence.requestRowsByDisposition.map(
+    (row) => {
+      return [`\`${row.requestDisposition}\``, formatValue(row.requests), formatValue(row.chunkRows)]
+    },
+  )
   const selectedImportPayloadRows = report.selectedImportPayloadSlimmingReadiness.columns.map((column) => {
     return [
       `\`${column.column}\``,
@@ -3301,6 +3653,40 @@ const renderMarkdown = (report: EvidenceReport) => {
     retentionCleanupBlockerRows.length > 0
       ? formatMarkdownTable(['Table', 'First blocker/category', 'Rows'], retentionCleanupBlockerRows)
       : '_No retention cleanup blocker categories were collected._',
+    '',
+    '## Rebuild Artifact Disposition Evidence',
+    '',
+    `Verdict: ${report.rebuildArtifactDispositionEvidence.verdict === 'not-authorized' ? 'not-authorized (not retention cleanup authorization)' : 'blocked'}`,
+    '',
+    report.rebuildArtifactDispositionEvidence.note,
+    '',
+    `Table: \`${report.rebuildArtifactDispositionEvidence.table}\``,
+    '',
+    `Current-project chunk-manifest rows: ${formatValue(report.rebuildArtifactDispositionEvidence.currentProjectChunkRows)}`,
+    '',
+    `Requestless chunk-manifest rows: ${formatValue(report.rebuildArtifactDispositionEvidence.requestlessChunkRows)}`,
+    '',
+    report.rebuildArtifactDispositionEvidence.error
+      ? `Status: Blocked: ${report.rebuildArtifactDispositionEvidence.error}`
+      : 'Status: ok',
+    '',
+    rebuildRequestlessArtifactDispositionRows.length > 0
+      ? formatMarkdownTable(
+          ['Adoption hint', 'Rows', 'Distinct chunks', 'Summary rows', 'Partial dependency rows'],
+          rebuildRequestlessArtifactDispositionRows,
+        )
+      : '_No requestless chunk-manifest rows were collected._',
+    '',
+    rebuildArtifactDispositionRows.length > 0
+      ? formatMarkdownTable(
+          ['Artifact table', 'Request disposition', 'Rows', 'Distinct requests', 'Distinct chunks'],
+          rebuildArtifactDispositionRows,
+        )
+      : '_No partial/chunk artifact disposition rows were collected._',
+    '',
+    rebuildRequestDispositionRows.length > 0
+      ? formatMarkdownTable(['Request disposition', 'Requests', 'Chunk rows'], rebuildRequestDispositionRows)
+      : '_No rebuild request disposition rows were collected._',
     '',
     '## Selected-Import Payload Slimming Readiness',
     '',
@@ -3818,6 +4204,11 @@ const inspectPhysicalEvidence = (options: CliOptions) => {
               mode: 'readonly-snapshot',
               options,
               projectorWatermarkNullableFieldEvidence: await getProjectorWatermarkNullableFieldReport(
+                runtime,
+                options.projectId,
+                options.limit,
+              ),
+              rebuildArtifactDispositionEvidence: await getRebuildArtifactDispositionEvidenceReport(
                 runtime,
                 options.projectId,
                 options.limit,
