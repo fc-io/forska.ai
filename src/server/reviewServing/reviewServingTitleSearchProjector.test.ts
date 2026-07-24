@@ -262,10 +262,12 @@ test('sql-native title search rebuild clears stale chunk tokens before inserting
   expect(insertStatement).toContain('tokenized_source AS')
   expect(insertStatement).toContain('GROUP BY article_id, token')
   expect(insertStatement).toContain('final_rows AS')
+  expect(insertStatement).toContain('activity_sort_at,')
   expect(insertStatement).toContain(
     'GROUP BY project_id, search_identity, project_scope_identity, snapshot_id, tokenized.token, tokenized.article_id',
   )
   expect(insertStatement).toContain('MAX(activity_sort_at) AS activity_sort_at')
+  expect(insertStatement).toContain('final_rows.activity_sort_at')
   expect(insertStatement).not.toContain('ON CONFLICT')
 })
 

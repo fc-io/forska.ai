@@ -394,9 +394,17 @@ test('readReviewServingRows applies ordered-prefix filters and mixed-direction c
   expect(sql).toContain('review:promptAnswer:prompt-2:no')
   expect(sql.match(/FROM mart\.review_article_filter_posting_serving_v4 filter_/gu)?.length).toBe(2)
   expect(sql).toContain('EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search')
+  expect(sql).toContain("search.project_id = 'project-1'")
+  expect(sql).toContain("search.search_identity = 'search-identity'")
+  expect(sql).toContain("search.project_scope_identity = 'projectScope-identity'")
+  expect(sql).toContain("search.snapshot_id = 'active-snapshot'")
+  expect(sql).toContain('search.article_id = mart.review_article_serving_v4.article_id')
+  expect(sql).toContain('starts_with(search.token, search_prefix.token_prefix)')
   expect(sql).toContain(
     "(mart.review_article_serving_v4.sort_key < '2026-01-01') OR (mart.review_article_serving_v4.sort_key IS NOT DISTINCT FROM '2026-01-01' AND mart.review_article_serving_v4.article_id > 'article-1')",
   )
+  expect(sql).toContain('ORDER BY sort_key DESC, article_id ASC LIMIT 25')
+  expect(sql).not.toContain('search.activity_sort_at')
   expect(sql).not.toContain('(sort_key DESC')
   expect(sql).not.toContain('$cursor0')
 })
