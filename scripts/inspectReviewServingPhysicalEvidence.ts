@@ -27,6 +27,7 @@ type EvidenceReport = {
   mode: 'readonly-snapshot'
   options: CliOptions
   retentionCleanupEligibility: RetentionCleanupEligibilityReport
+  selectedImportPayloadSlimmingReadiness: SelectedImportPayloadSlimmingReadinessReport
   snapshotPath: string
   tables: TableEvidence[]
 }
@@ -47,6 +48,24 @@ type RetentionCleanupEligibilityReport = {
   note: string
   projectId: string
   tables: RetentionCleanupEligibilityTable[]
+}
+type SelectedImportPayloadColumnEvidence = {
+  column: (typeof selectedImportPayloadColumns)[number]
+  hotFieldNonNullCount: number | null
+  hotFieldNullCount: number | null
+  selectedBaseNonNullCount: number | null
+  selectedBaseNullCount: number | null
+}
+type SelectedImportPayloadSlimmingReadinessReport = {
+  comparisonStatus: string
+  consumerWriterStatus: string
+  error: string | null
+  hotFieldScopedRows: number | null
+  note: string
+  projectId: string
+  selectedBaseScopedRows: number | null
+  verdict: 'not-authorized' | 'blocked'
+  columns: SelectedImportPayloadColumnEvidence[]
 }
 type TableColumn = {column_name: string; data_type: string}
 type TableEvidence = {
@@ -219,6 +238,17 @@ const retentionCleanupEligibilityTables = [
   'mart.review_article_summary_contribution_rebuild_partial_v4',
   'mart.review_article_summary_rebuild_partial_v4',
   'app.review_rebuild_chunk_manifest',
+] as const
+
+const selectedImportPayloadColumns = [
+  'import_route_id',
+  'source_record_key',
+  'selected_rank_key',
+  'selected_rank_numeric',
+  'publication_year',
+  'article_title',
+  'journal_title',
+  'external_id',
 ] as const
 
 const getArgValue = (names: string[]) => {
@@ -748,6 +778,86 @@ const getRetentionCleanupEligibilityReport = async (
   }
 }
 
+const getSelectedImportPayloadSlimmingReadinessReport = async (
+  runtime: QueryRuntime,
+  projectId: string,
+): Promise<SelectedImportPayloadSlimmingReadinessReport> => {
+  const selectedBaseExpressions = selectedImportPayloadColumns
+    .map((column) => {
+      return `CAST(COUNT(*) FILTER (WHERE selected_base.${column} IS NULL) AS BIGINT) AS selectedBase_${column}_nullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.${column} IS NOT NULL) AS BIGINT) AS selectedBase_${column}_nonNullCount`
+    })
+    .join(',\n        ')
+  const hotFieldExpressions = selectedImportPayloadColumns
+    .map((column) => {
+      return `CAST(COUNT(*) FILTER (WHERE hot_field.${column} IS NULL) AS BIGINT) AS hotField_${column}_nullCount,
+        CAST(COUNT(*) FILTER (WHERE hot_field.${column} IS NOT NULL) AS BIGINT) AS hotField_${column}_nonNullCount`
+    })
+    .join(',\n        ')
+
+  try {
+    const selectedBaseRows = await runReadonlyQuery<Record<string, number | string | null>>(
+      runtime,
+      `
+        SELECT
+          CAST(COUNT(*) AS BIGINT) AS selectedBaseScopedRows,
+          ${selectedBaseExpressions}
+        FROM app.review_selected_article_import_v4 selected_base
+        WHERE selected_base.project_id = ${getSqlLiteral(projectId)}
+      `,
+    )
+    const hotFieldRows = await runReadonlyQuery<Record<string, number | string | null>>(
+      runtime,
+      `
+        SELECT
+          CAST(COUNT(*) AS BIGINT) AS hotFieldScopedRows,
+          ${hotFieldExpressions}
+        FROM app.review_import_article_hot_field hot_field
+        INNER JOIN app.project_import_route project_route
+          ON project_route.import_route_id = hot_field.import_route_id
+          AND project_route.project_id = ${getSqlLiteral(projectId)}
+      `,
+    )
+    const selectedBaseRow = selectedBaseRows[0] ?? {}
+    const hotFieldRow = hotFieldRows[0] ?? {}
+
+    return {
+      columns: selectedImportPayloadColumns.map((column) => {
+        return {
+          column,
+          hotFieldNonNullCount: getNumberOrNull(hotFieldRow[`hotField_${column}_nonNullCount`]),
+          hotFieldNullCount: getNumberOrNull(hotFieldRow[`hotField_${column}_nullCount`]),
+          selectedBaseNonNullCount: getNumberOrNull(selectedBaseRow[`selectedBase_${column}_nonNullCount`]),
+          selectedBaseNullCount: getNumberOrNull(selectedBaseRow[`selectedBase_${column}_nullCount`]),
+        }
+      }),
+      comparisonStatus:
+        'Hot-field counts are scoped through app.project_import_route for the same project. Non-null hot-field values with null selected-base values mean source data exists but the selected-base projection did not carry it for this scoped snapshot.',
+      consumerWriterStatus:
+        'Current code still writes these fields from app.review_import_article_hot_field into selected-import base rows and reads selected-base values in downstream review-serving projection paths. Treat this as evidence for investigation only.',
+      error: null,
+      hotFieldScopedRows: getNumberOrNull(hotFieldRow.hotFieldScopedRows),
+      note: 'This section is not deletion/slimming authorization. Slimming is only safe after runtime non-population is proven across the intended scope and writer/reader/recovery consumers are changed or proven irrelevant.',
+      projectId,
+      selectedBaseScopedRows: getNumberOrNull(selectedBaseRow.selectedBaseScopedRows),
+      verdict: 'not-authorized',
+    }
+  } catch (error) {
+    return {
+      columns: [],
+      comparisonStatus: 'Blocked before source/hot-field comparison could be collected.',
+      consumerWriterStatus:
+        'Current code still writes/reads selected-import payload fields; failed evidence collection cannot authorize slimming.',
+      error: error instanceof Error ? error.message : String(error),
+      hotFieldScopedRows: null,
+      note: 'This section is not deletion/slimming authorization.',
+      projectId,
+      selectedBaseScopedRows: null,
+      verdict: 'blocked',
+    }
+  }
+}
+
 const getTableEvidence = async (runtime: QueryRuntime, table: string, options: CliOptions): Promise<TableEvidence> => {
   try {
     const columns = await getTableColumns(runtime, table)
@@ -824,6 +934,15 @@ const renderMarkdown = (report: EvidenceReport) => {
       formatValue(table.dependentPartialBlockedRows),
       formatValue(table.eligibleRows),
       table.error ? `Blocked: ${table.error}` : 'ok',
+    ]
+  })
+  const selectedImportPayloadRows = report.selectedImportPayloadSlimmingReadiness.columns.map((column) => {
+    return [
+      `\`${column.column}\``,
+      formatValue(column.selectedBaseNullCount),
+      formatValue(column.selectedBaseNonNullCount),
+      formatValue(column.hotFieldNullCount),
+      formatValue(column.hotFieldNonNullCount),
     ]
   })
 
@@ -908,6 +1027,31 @@ const renderMarkdown = (report: EvidenceReport) => {
       retentionCleanupEligibilityRows,
     ),
     '',
+    '## Selected-Import Payload Slimming Readiness',
+    '',
+    `Verdict: ${report.selectedImportPayloadSlimmingReadiness.verdict === 'not-authorized' ? 'not deletion/slimming authorization' : 'blocked'}`,
+    '',
+    report.selectedImportPayloadSlimmingReadiness.note,
+    '',
+    `Selected-base scoped rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedBaseScopedRows)}`,
+    '',
+    `Hot-field scoped rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.hotFieldScopedRows)}`,
+    '',
+    report.selectedImportPayloadSlimmingReadiness.comparisonStatus,
+    '',
+    report.selectedImportPayloadSlimmingReadiness.consumerWriterStatus,
+    '',
+    report.selectedImportPayloadSlimmingReadiness.error
+      ? `Status: Blocked: ${report.selectedImportPayloadSlimmingReadiness.error}`
+      : 'Status: ok',
+    '',
+    selectedImportPayloadRows.length > 0
+      ? formatMarkdownTable(
+          ['Column', 'Selected-base nulls', 'Selected-base non-nulls', 'Hot-field nulls', 'Hot-field non-nulls'],
+          selectedImportPayloadRows,
+        )
+      : '_No selected-import payload evidence rows were collected._',
+    '',
     ...sections,
     '',
   ].join('\n')
@@ -946,6 +1090,10 @@ const inspectPhysicalEvidence = (options: CliOptions) => {
               mode: 'readonly-snapshot',
               options,
               retentionCleanupEligibility: await getRetentionCleanupEligibilityReport(runtime, options.projectId),
+              selectedImportPayloadSlimmingReadiness: await getSelectedImportPayloadSlimmingReadinessReport(
+                runtime,
+                options.projectId,
+              ),
               snapshotPath: snapshot.snapshotPath,
               tables,
             })
