@@ -136,7 +136,7 @@ test('filter-option no-ack snapshot passes do not publish shared manifests or wa
   expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
 })
 
-test('filter option refresh can upsert rows without deleting existing scoped options', async () => {
+test('filter option refresh can insert rows idempotently without deleting existing scoped options', async () => {
   const {database, statements} = createFilterOptionDatabase({sourceRows: [sourceRow()]})
 
   const result = await projectReviewServingFilterOptions({...projectInput(), deleteExisting: false}, database)
@@ -145,6 +145,11 @@ test('filter option refresh can upsert rows without deleting existing scoped opt
   expect(result.optionRowCount).toBe(1)
   expect(joined).not.toContain('DELETE FROM mart.review_filter_option_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_filter_option_serving_v4')
+  expect(joined).not.toContain('DO UPDATE SET')
+  expect(joined).not.toContain('count_value = excluded.count_value')
+  expect(joined).not.toContain('option_payload_json = excluded.option_payload_json')
+  expect(joined).not.toContain('option_updated_at = excluded.option_updated_at')
+  expect(joined).toContain('WHERE NOT EXISTS')
 })
 
 test('source query preserves active search and filter scope without using posting rows as response rows', async () => {

@@ -695,14 +695,7 @@ test('projector writer uses larger scan-guarded insert-missing batches for summa
     }
   })
 
-  const result = await writeReviewServingProjectorComponent(
-    {
-      component: 'summary',
-      records,
-      statements: [],
-    },
-    database,
-  )
+  const result = await writeReviewServingProjectorComponent({component: 'summary', records, statements: []}, database)
 
   const insertStatements = statements.filter((statement) => {
     return statement.includes('INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4')
@@ -803,6 +796,63 @@ test('projector writer keeps judgment detail replacement rows idempotent after s
   expect(insertStatement?.match(/'article-1'/gu)).toHaveLength(1)
   expect(insertStatement).toContain('judgment-new')
   expect(insertStatement).not.toContain('judgment-old')
+})
+
+test('projector writer supports explicit scan-guarded insert-missing record tables without scoped deletes', async () => {
+  const {database, statements} = createWriterDatabase()
+  const keyColumns = [
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'search_identity',
+    'filter_option_identity',
+    'filter_kind',
+    'facet_key',
+    'option_value_key',
+  ]
+
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'summary',
+      records: [
+        {
+          keyColumns,
+          table: 'mart.review_filter_option_serving_v4',
+          values: {
+            answer_id: null,
+            count_value: 3,
+            facet_key: 'promptAnswer',
+            facet_value: 'yes',
+            filter_kind: 'review',
+            filter_option_identity: 'filter-option:identity-1',
+            numeric_max: null,
+            numeric_min: null,
+            option_payload_json: {filterType: 'enum', value: 'yes'},
+            option_updated_at: new Date('2026-04-02T12:00:00.000Z'),
+            option_value_key: 'review:promptAnswer:prompt-1:yes',
+            project_id: 'project-1',
+            prompt_id: 'prompt-1',
+            review_config_hash: 'review-config-1',
+            search_identity: 'search:identity-1',
+            snapshot_id: 'snapshot-1',
+          },
+        },
+      ],
+      scanGuardedInsertMissingRecordTables: ['mart.review_filter_option_serving_v4'],
+      statements: [],
+    },
+    database,
+  )
+
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_filter_option_serving_v4')
+  })
+
+  expect(insertStatement).toBeDefined()
+  expect(insertStatement).not.toContain('ON CONFLICT')
+  expect(insertStatement).not.toContain('DO UPDATE SET')
+  expect(insertStatement).toContain('WHERE NOT EXISTS')
+  expect(insertStatement).toContain("'review:promptAnswer:prompt-1:yes'")
 })
 
 test('only the projector writer boundary writes V4 mart rows and promotes active snapshots', () => {

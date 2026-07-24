@@ -134,6 +134,7 @@ export type WriteReviewServingProjectorComponentInput = {
   projectionManifests?: readonly ReviewServingProjectionIdentityManifestInput[]
   records?: readonly ReviewServingProjectorRecord[]
   repairDirtyWork?: readonly ReviewServingDirtyWorkInput[]
+  scanGuardedInsertMissingRecordTables?: readonly ReviewServingProjectorWritableTable[]
   selectedImportSnapshotCursor?: ReviewServingSelectedImportSnapshotCursorInput
   snapshotPromotion?: PromoteReviewServingProjectorSnapshotInput
   statements?: readonly string[]
@@ -272,9 +273,10 @@ const writeReviewServingProjectorRecordBatch = async (
       return `${column} = excluded.${column}`
     })
   const conflictUpdate = assignments.length === 0 ? 'DO NOTHING' : `DO UPDATE SET ${assignments.join(', ')}`
-  const conflictClause = options.insertOnly || options.scanGuardedInsertMissing
-    ? ''
-    : `
+  const conflictClause =
+    options.insertOnly || options.scanGuardedInsertMissing
+      ? ''
+      : `
     ON CONFLICT(${keyColumns.join(', ')}) ${conflictUpdate}`
   const valuesSql = records
     .map((record) => {
@@ -349,7 +351,7 @@ const getDedupedReviewServingProjectorRecords = (records: readonly ReviewServing
 const writeReviewServingProjectorRecords = async (
   records: readonly ReviewServingProjectorRecord[],
   tx: ReviewServingProjectorWriterTransaction,
-  options: {insertOnlyTables?: ReadonlySet<string>} = {},
+  options: {insertOnlyTables?: ReadonlySet<string>; scanGuardedInsertMissingTables?: ReadonlySet<string>} = {},
 ) => {
   const recordGroups = new Map<string, ReviewServingProjectorRecord[]>()
   const diagnostics: ReviewServingProjectorRecordWriteDiagnostics = {
@@ -380,7 +382,9 @@ const writeReviewServingProjectorRecords = async (
     const dedupedGroup = getDedupedReviewServingProjectorRecords(group)
     const table = group[0]?.table ?? 'unknown'
     const insertOnly = options.insertOnlyTables?.has(table) ?? false
-    const scanGuardedInsertMissing = reviewServingProjectorScanGuardedInsertMissingTables.has(table)
+    const scanGuardedInsertMissing =
+      reviewServingProjectorScanGuardedInsertMissingTables.has(table)
+      || (options.scanGuardedInsertMissingTables?.has(table) ?? false)
 
     diagnostics.dedupedRecordCount += dedupedGroup.length
     incrementDiagnosticsCounter(diagnostics.dedupedRecordsByTable, table, dedupedGroup.length)
@@ -798,6 +802,7 @@ export const writeReviewServingProjectorComponent = async (
   return database.transaction(async (tx) => {
     const statements = input.statements ?? []
     const insertOnlyTables = getReviewServingProjectorDeleteScopedTables(statements)
+    const scanGuardedInsertMissingTables = new Set<string>(input.scanGuardedInsertMissingRecordTables ?? [])
     const phaseTimings: Record<string, number> = {}
     const measure = async <T>(phase: string, operation: () => Promise<T>) => {
       const startedAtMs = Date.now()
@@ -841,7 +846,10 @@ export const writeReviewServingProjectorComponent = async (
     })
 
     const recordDiagnostics = await measure('recordsMs', async () => {
-      return writeReviewServingProjectorRecords(input.records ?? [], tx, {insertOnlyTables})
+      return writeReviewServingProjectorRecords(input.records ?? [], tx, {
+        insertOnlyTables,
+        scanGuardedInsertMissingTables,
+      })
     })
 
     if (input.selectedImportSnapshotCursor !== undefined) {
