@@ -255,6 +255,37 @@ test('selected-import article range rebuild writes selected rows directly in SQL
   expect(sourceQueries).toHaveLength(0)
 })
 
+test('selected-import article range no-replace mode keeps existing rows', async () => {
+  const {database, statements} = createSelectedImportProjectorDatabase({rangeRowCount: 7})
+
+  await projectReviewServingSelectedImportArticleRange(
+    {
+      chunkEndArticleId: 'article-9',
+      chunkStartArticleId: 'article-1',
+      projectId: 'project-1',
+      projectScopeIdentity: 'projectScope:identity-1',
+      replaceExistingRows: false,
+      selectedImportSnapshotId: 'selected-import-snapshot-1',
+      sourceDeltaHighWater: 9,
+    },
+    database,
+  )
+
+  const joined = statements.join('\n')
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_selected_article_import_v4')
+  })
+
+  expect(joined).not.toContain('DELETE FROM app.review_selected_article_import_v4')
+  expect(insertStatement).toContain(
+    'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO NOTHING',
+  )
+  expect(insertStatement).not.toContain('DO UPDATE SET')
+  expect(insertStatement).not.toContain('import_route_id = excluded.import_route_id')
+  expect(insertStatement).not.toContain('source_record_key = excluded.source_record_key')
+  expect(insertStatement).not.toContain('selected_import_updated_at = excluded.selected_import_updated_at')
+})
+
 test('selected-import article range rebuild can refresh final serving rows from hot fields', async () => {
   const {database, statements} = createSelectedImportProjectorDatabase({rangeRowCount: 3})
 

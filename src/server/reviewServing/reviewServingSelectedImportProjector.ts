@@ -303,7 +303,21 @@ const getDeleteSelectedImportArticleRangeRowsStatement = (
 
 const getInsertSelectedImportArticleRangeRowsStatement = (
   input: ProjectReviewServingSelectedImportArticleRangeInput,
+  options: {replaceExistingRows?: boolean} = {},
 ) => {
+  const conflictAction =
+    options.replaceExistingRows === false
+      ? 'DO NOTHING'
+      : `DO UPDATE SET
+      import_route_id = excluded.import_route_id,
+      source_record_key = excluded.source_record_key,
+      selected_rank_key = excluded.selected_rank_key,
+      selected_rank_numeric = excluded.selected_rank_numeric,
+      duplicate_flag = excluded.duplicate_flag,
+      conflict_flag = excluded.conflict_flag,
+      tombstone = excluded.tombstone,
+      selected_import_updated_at = excluded.selected_import_updated_at`
+
   return `
     INSERT INTO app.review_selected_article_import_v4 (
       project_id,
@@ -388,15 +402,7 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
       candidate.tombstone,
       current_timestamp AS selected_import_updated_at
     FROM selected_import_winner candidate
-    ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO UPDATE SET
-      import_route_id = excluded.import_route_id,
-      source_record_key = excluded.source_record_key,
-      selected_rank_key = excluded.selected_rank_key,
-      selected_rank_numeric = excluded.selected_rank_numeric,
-      duplicate_flag = excluded.duplicate_flag,
-      conflict_flag = excluded.conflict_flag,
-      tombstone = excluded.tombstone,
-      selected_import_updated_at = excluded.selected_import_updated_at
+    ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) ${conflictAction}
   `
 }
 
@@ -745,12 +751,12 @@ export const projectReviewServingSelectedImportArticleRange = async (
         statements:
           params.replaceExistingRows === false
             ? [
-                getInsertSelectedImportArticleRangeRowsStatement(params),
+                getInsertSelectedImportArticleRangeRowsStatement(params, {replaceExistingRows: false}),
                 ...getRefreshSelectedImportServingArticleRangeStatements(params),
               ]
             : [
                 getDeleteSelectedImportArticleRangeRowsStatement(params),
-                getInsertSelectedImportArticleRangeRowsStatement(params),
+                getInsertSelectedImportArticleRangeRowsStatement(params, {replaceExistingRows: true}),
                 ...getRefreshSelectedImportServingArticleRangeStatements(params),
               ],
         selectedImportSnapshotCursor:
