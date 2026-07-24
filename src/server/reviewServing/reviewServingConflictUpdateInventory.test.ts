@@ -13,12 +13,6 @@ const allowedConflictUpdates: ConflictUpdateInventoryEntry[] = [
     snippet: 'ON CONFLICT(chunk_id) DO UPDATE SET',
   },
   {
-    path: 'src/server/reviewServing/reviewServingSummaryProjector.ts',
-    reason: 'summary rebuild accumulator adds chunk partial totals across batches',
-    snippet:
-      'ON CONFLICT(request_id, chunk_id, project_id, review_config_hash, snapshot_id, serving_key) DO UPDATE SET',
-  },
-  {
     path: 'src/server/reviewServing/reviewServingProjectorWriter.ts',
     reason: 'generic writer fallback remains for non-allowlisted tables without a scoped replacement proof',
     snippet: 'DO UPDATE SET ${assignments.join',

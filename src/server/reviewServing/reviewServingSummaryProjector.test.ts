@@ -554,7 +554,12 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   expect(joined).toContain('chunk.snapshot_id = ')
   expect(joined).toContain("partial.chunk_id IN ('chunk-001', 'chunk-002'")
   expect(joined).toContain("partial.chunk_id IN ('chunk-257')")
-  expect(joined).toContain(
+  expect(joined).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_accumulator_batch AS')
+  expect(joined).toContain('UPDATE mart.review_article_summary_rebuild_partial_v4 accumulator')
+  expect(joined).toContain('FROM temp_summary_rebuild_accumulator_batch batch')
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain("(existing.request_id || '') = (batch.request_id || '')")
+  expect(joined).not.toContain(
     'ON CONFLICT(request_id, chunk_id, project_id, review_config_hash, snapshot_id, serving_key) DO UPDATE SET',
   )
   expect(joined).toContain("AND chunk_id = '__summary_rebuild_partial_accumulator__:")
