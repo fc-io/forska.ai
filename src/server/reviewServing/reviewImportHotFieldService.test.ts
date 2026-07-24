@@ -87,7 +87,7 @@ test('missing source hot fields are typed null values without raw JSON fallback'
   expect(row.selectedRankKey).toBe('3110:article-2:record-2')
 })
 
-test('hot-field upsert writes only compact columns and no serving projection rows', async () => {
+test('hot-field replacement writes scoped delete then compact insert without indexed conflict update', async () => {
   const {statements, tx} = createFakeHotFieldTransaction()
 
   await upsertReviewImportArticleHotField(tx, {
@@ -102,6 +102,9 @@ test('hot-field upsert writes only compact columns and no serving projection row
     sourceRecordKey: 'record-1',
   })
 
+  expect(statements).toHaveLength(2)
+
+  const [deleteStatement, insertStatement] = statements
   const statement = statements.join('\n')
   const compactColumns = [
     'selected_rank_key',
@@ -128,10 +131,16 @@ test('hot-field upsert writes only compact columns and no serving projection row
     'json_merge_patch',
   ]
 
-  expect(statement).toContain('INSERT INTO app.review_import_article_hot_field')
+  expect(deleteStatement).toContain('DELETE FROM app.review_import_article_hot_field')
+  expect(deleteStatement).toContain("import_route_id = 'route-1'")
+  expect(deleteStatement).toContain("article_id = 'article-1'")
+  expect(deleteStatement).toContain("source_record_key = 'record-1'")
+  expect(insertStatement).toContain('INSERT INTO app.review_import_article_hot_field')
+  expect(statement).not.toContain('ON CONFLICT')
+  expect(statement).not.toContain('DO UPDATE')
   expect(
     compactColumns.every((columnName) => {
-      return statement.includes(columnName)
+      return insertStatement.includes(columnName)
     }),
   ).toBe(true)
   expect(
