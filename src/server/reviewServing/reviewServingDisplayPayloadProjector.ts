@@ -8,7 +8,6 @@ import {
 } from './reviewServingManifestRepository.ts'
 import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
-  getDeleteReviewServingProjectorRowsStatement,
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
   type ReviewServingProjectorWriterDiagnostics,
@@ -673,13 +672,7 @@ const getPayloadRebuildRowsStatements = (input: ProjectReviewServingPayloadInput
       PARTITION BY project_id, display_identity, payload_identity, snapshot_id, article_id
       ORDER BY article_created_at DESC NULLS LAST, payload_updated_at DESC
     ) = 1
-    ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id) DO UPDATE SET
-      abstract_text = excluded.abstract_text,
-      article_created_at = excluded.article_created_at,
-      full_text_preview = excluded.full_text_preview,
-      payload_bytes = excluded.payload_bytes,
-      payload_updated_at = excluded.payload_updated_at,
-      source_metadata = excluded.source_metadata
+    ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id) DO NOTHING
   `,
   ]
 }
@@ -794,9 +787,7 @@ export const projectReviewServingDisplayBaseRows = async (
 }
 
 const getDisplayBaseRowsStatements = (input: ProjectReviewServingDisplayBaseInput) => {
-  return [
-    input.listModeKeys.length === 0 ? null : getInsertDisplayBaseRowsStatement(input),
-  ].flatMap((statement) => {
+  return [input.listModeKeys.length === 0 ? null : getInsertDisplayBaseRowsStatement(input)].flatMap((statement) => {
     return statement === null ? [] : [statement]
   })
 }
