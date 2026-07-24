@@ -77,6 +77,12 @@ type JudgmentDetailPayloadKindRow = {
   rows: number
 }
 type JudgmentDetailPayloadListModeRow = {judgmentPayloadNonNullRows: number; listModeKey: string; rows: number}
+type JudgmentDetailPayloadTopLevelKeyRow = {
+  currentProjectRows: number
+  globalRows: number
+  key: string
+  payloadKind: string
+}
 type JudgmentDetailPayloadReadinessReport = {
   answeredArrayNonNullRows: number | null
   answeredOriginalNonNullRows: number | null
@@ -90,6 +96,7 @@ type JudgmentDetailPayloadReadinessReport = {
   note: string
   rowsByListMode: JudgmentDetailPayloadListModeRow[]
   rowsByPayloadKind: JudgmentDetailPayloadKindRow[]
+  rowsByPayloadTopLevelKey: JudgmentDetailPayloadTopLevelKeyRow[]
   table: 'mart.review_article_judgment_detail_serving_v4'
   verdict: 'not-authorized' | 'blocked'
 }
@@ -2692,6 +2699,62 @@ const getJudgmentDetailPayloadReadinessReport = async (
         LIMIT ${Math.max(1, limit)}
       `,
     )
+    const rowsByPayloadTopLevelKey = await runReadonlyQuery<{
+      currentProjectRows: number | string
+      globalRows: number | string
+      key: string | null
+      payloadKind: string | null
+    }>(
+      runtime,
+      `
+        WITH key_rows AS (
+          SELECT
+            detail.project_id,
+            COALESCE(detail.payload_kind, 'NULL') AS payloadKind,
+            payload_key.key AS key
+          FROM ${table} detail, json_each(detail.judgment_payload_json) payload_key
+          WHERE detail.judgment_payload_json IS NOT NULL
+        ),
+        aggregate_rows AS (
+          SELECT
+            'ALL' AS payloadKind,
+            key,
+            CAST(COUNT(*) AS BIGINT) AS globalRows,
+            CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows
+          FROM key_rows
+          GROUP BY key
+          UNION ALL
+          SELECT
+            payloadKind,
+            key,
+            CAST(COUNT(*) AS BIGINT) AS globalRows,
+            CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows
+          FROM key_rows
+          GROUP BY payloadKind, key
+        ),
+        ranked_rows AS (
+          SELECT
+            payloadKind,
+            key,
+            globalRows,
+            currentProjectRows,
+            ROW_NUMBER() OVER (PARTITION BY payloadKind ORDER BY globalRows DESC, key) AS payloadKindRank
+          FROM aggregate_rows
+        )
+        SELECT
+          payloadKind,
+          key,
+          globalRows,
+          currentProjectRows
+        FROM ranked_rows
+        WHERE payloadKindRank <= ${Math.max(1, limit)}
+        ORDER BY
+          CASE WHEN payloadKind = 'ALL' THEN 0 ELSE 1 END,
+          payloadKind,
+          globalRows DESC,
+          key
+      `,
+    )
     const row = totals[0]
 
     return {
@@ -2722,6 +2785,14 @@ const getJudgmentDetailPayloadReadinessReport = async (
           rows: Number(payloadKindRow.rows ?? 0),
         }
       }),
+      rowsByPayloadTopLevelKey: rowsByPayloadTopLevelKey.map((keyRow) => {
+        return {
+          currentProjectRows: Number(keyRow.currentProjectRows ?? 0),
+          globalRows: Number(keyRow.globalRows ?? 0),
+          key: String(keyRow.key ?? 'NULL'),
+          payloadKind: String(keyRow.payloadKind ?? 'NULL'),
+        }
+      }),
       table,
       verdict: 'not-authorized',
     }
@@ -2739,6 +2810,7 @@ const getJudgmentDetailPayloadReadinessReport = async (
       note: 'Read-only judgment detail payload evidence collection failed. Failed evidence collection is not field-slimming authorization.',
       rowsByListMode: [],
       rowsByPayloadKind: [],
+      rowsByPayloadTopLevelKey: [],
       table,
       verdict: 'blocked',
     }
@@ -3047,6 +3119,16 @@ const renderMarkdown = (report: EvidenceReport) => {
   const judgmentDetailListModeRows = report.judgmentDetailPayloadReadiness.rowsByListMode.map((row) => {
     return [`\`${row.listModeKey}\``, formatValue(row.rows), formatValue(row.judgmentPayloadNonNullRows)]
   })
+  const judgmentDetailPayloadTopLevelKeyRows = report.judgmentDetailPayloadReadiness.rowsByPayloadTopLevelKey.map(
+    (row) => {
+      return [
+        `\`${row.payloadKind}\``,
+        `\`${row.key}\``,
+        formatValue(row.globalRows),
+        formatValue(row.currentProjectRows),
+      ]
+    },
+  )
   const summaryContributionIndexRows = report.summaryContributionServingReadiness.indexes.map((index) => {
     return [formatValue(JSON.stringify(index))]
   })
@@ -3501,6 +3583,13 @@ const renderMarkdown = (report: EvidenceReport) => {
     judgmentDetailListModeRows.length > 0
       ? formatMarkdownTable(['List mode', 'Rows', 'Payload non-nulls'], judgmentDetailListModeRows)
       : '_No judgment detail list-mode rows were collected._',
+    '',
+    judgmentDetailPayloadTopLevelKeyRows.length > 0
+      ? formatMarkdownTable(
+          ['Payload kind', 'Top-level payload JSON key', 'Global rows with key', 'Current-project rows with key'],
+          judgmentDetailPayloadTopLevelKeyRows,
+        )
+      : '_No judgment payload top-level JSON key rows were collected._',
     '',
     '## Summary Contribution Serving Readiness',
     '',
