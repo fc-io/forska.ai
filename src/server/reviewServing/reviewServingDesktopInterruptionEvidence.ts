@@ -73,7 +73,7 @@ export const reviewServingDesktopInterruptionEvidence: readonly ReviewServingDes
     ],
     requiredMarkers: [
       'INSERT INTO app.review_search_job',
-      'ON CONFLICT (job_id) DO UPDATE SET updated_at = current_timestamp',
+      'ON CONFLICT (job_id) DO NOTHING',
       'FROM app.review_search_job',
       'creates bounded async substring work without synchronous title scans',
     ],

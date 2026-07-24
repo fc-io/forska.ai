@@ -136,6 +136,8 @@ test('searchReviewServing creates bounded async substring work without synchrono
   expect(searchDatabase.runs[0]).toContain('INSERT INTO app.review_search_job')
   expect(searchDatabase.runs[0]).toContain("'substringAsync'")
   expect(searchDatabase.runs[0]).toContain('{"cursor":null,"limit":500}')
+  expect(searchDatabase.runs[0]).toContain('ON CONFLICT (job_id) DO NOTHING')
+  expect(searchDatabase.runs[0]).not.toContain('DO UPDATE SET')
   expect(searchDatabase.statements).toHaveLength(1)
   expect(searchDatabase.statements[0]).toContain('FROM app.review_search_job')
   expect(searchDatabase.statements[0]).toContain("search_mode = 'substringAsync'")
