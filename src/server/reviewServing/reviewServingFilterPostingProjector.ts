@@ -622,10 +622,7 @@ const getInsertFullRebuildServingRowsStatement = (input: ProjectReviewServingFil
       posting.sortKey AS sort_key,
       current_timestamp AS posting_updated_at
     FROM serving_source posting
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO UPDATE SET
-      posting_identity = excluded.posting_identity,
-      sort_key = excluded.sort_key,
-      posting_updated_at = excluded.posting_updated_at`
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO NOTHING`
 }
 
 const getDeleteFullRebuildStatsRowsStatement = (

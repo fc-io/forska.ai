@@ -281,6 +281,10 @@ test('full posting rebuilds write serving without contribution or incremental pa
   expect(joined).toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)',
   )
+  expect(joined).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO NOTHING',
+  )
+  expect(joined).not.toContain('posting_updated_at = excluded.posting_updated_at')
   expect(joined).not.toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
   expect(joined).not.toContain('INSERT INTO mart.review_article_summary_contribution_v4')
   expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
@@ -314,8 +318,9 @@ test('full posting rebuilds scope set-based serving upserts to article ranges', 
   expect(joined).toContain('scope.article_id >=')
   expect(joined).toContain('scope.article_id <=')
   expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO NOTHING',
   )
+  expect(joined).not.toContain('sort_key = excluded.sort_key')
   expect(joined).not.toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
 })
 
@@ -340,8 +345,9 @@ test('chunked full posting rebuilds can defer stats refresh outside chunk writes
   expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
   expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO NOTHING',
   )
+  expect(joined).not.toContain('posting_identity = excluded.posting_identity')
   expect(joined).not.toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
   expect(joined).not.toContain('INSERT INTO mart.review_filter_posting_stats_v4')
 })
