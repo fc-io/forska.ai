@@ -56,7 +56,6 @@ test('title search projection writes token rows and search-only component state 
   const {database, statements} = createTitleSearchDatabase({
     rows: [
       {
-        activitySortAt: '2026-01-02T00:00:00.000Z',
         articleId: 'article-1',
         articleTitle: 'Alpha Beta alpha',
         tombstone: false,
@@ -110,7 +109,6 @@ test('title search no-ack snapshot passes do not publish shared manifests or wat
   const {database, statements} = createTitleSearchDatabase({
     rows: [
       {
-        activitySortAt: '2026-01-02T00:00:00.000Z',
         articleId: 'article-1',
         articleTitle: 'Alpha Beta',
         tombstone: false,
@@ -144,7 +142,6 @@ test('title search direct projection reads selected import base rows without pat
   const {database, statements} = createTitleSearchDatabase({
     rows: [
       {
-        activitySortAt: '2026-01-02T00:00:00.000Z',
         articleId: 'article-1',
         articleTitle: 'Selected Base',
         tombstone: false,
@@ -178,7 +175,6 @@ test('project-scoped title search rebuilds scoped articles and clears snapshot s
   const {database, statements} = createTitleSearchDatabase({
     rows: [
       {
-        activitySortAt: '2026-01-02T00:00:00.000Z',
         articleId: 'article-2',
         articleTitle: 'Gamma Delta',
         tombstone: false,
@@ -262,12 +258,10 @@ test('sql-native title search rebuild clears stale chunk tokens before inserting
   expect(insertStatement).toContain('tokenized_source AS')
   expect(insertStatement).toContain('GROUP BY article_id, token')
   expect(insertStatement).toContain('final_rows AS')
-  expect(insertStatement).toContain('activity_sort_at,')
   expect(insertStatement).toContain(
     'GROUP BY project_id, search_identity, project_scope_identity, snapshot_id, tokenized.token, tokenized.article_id',
   )
-  expect(insertStatement).toContain('MAX(activity_sort_at) AS activity_sort_at')
-  expect(insertStatement).toContain('final_rows.activity_sort_at')
+  expect(insertStatement).not.toContain('activity_sort_at')
   expect(insertStatement).not.toContain('ON CONFLICT')
 })
 

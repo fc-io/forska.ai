@@ -24,6 +24,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0120_dropReviewLlmStatusPatchV4.sql',
   '../../db/duckdbMigrations/0121_dropReviewArticleFilterPostingPatchV4.sql',
   '../../db/duckdbMigrations/0122_dropReviewArticleDisplayPatchV4.sql',
+  '../../db/duckdbMigrations/0123_dropReviewTitleSearchActivitySortAt.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -63,6 +64,8 @@ const reviewArticleFilterPostingPatchRetirementForwardMigrationSql =
   ]
 const reviewArticleDisplayPatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0122_dropReviewArticleDisplayPatchV4.sql']
+const reviewTitleSearchActivitySortAtDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0123_dropReviewTitleSearchActivitySortAt.sql']
 const selectedImportPatchDisplayFieldsForwardMigrationSql = readFileSync(
   resolve(import.meta.dir, '../../db/duckdbMigrations/0108_reviewSelectedImportPatchDisplayFields.sql'),
   'utf8',
@@ -151,7 +154,7 @@ const getLastDropTableIndex = (tableName: string) => {
 const getTableSql = (tableName: string) => {
   const matches = [
     ...schemaMigrationSql.matchAll(
-      new RegExp(`CREATE TABLE IF NOT EXISTS ${escapeRegex(tableName)} \\([\\s\\S]*?\\n\\);`, 'g'),
+      new RegExp(`CREATE TABLE(?: IF NOT EXISTS)? ${escapeRegex(tableName)} \\([\\s\\S]*?\\n\\);`, 'g'),
     ),
   ]
   const lastMatch = matches.at(-1)
@@ -180,11 +183,27 @@ const getTableColumnSql = (tableName: string) => {
 }
 
 const getTableColumns = (tableName: string) => {
-  return new Set(
-    [...getTableSql(tableName).matchAll(/^ {2}([a-z_][\w]*)\s+/gm)].map((match) => {
+  const repairTableName = `${tableName}_repair`
+  const hasRepairRename = schemaMigrationSql.includes(
+    `ALTER TABLE ${repairTableName} RENAME TO ${tableName.split('.').at(-1)};`,
+  )
+  const sourceTableSql = hasRepairRename ? getTableSql(repairTableName) : getTableSql(tableName)
+  const columns = new Set(
+    [...sourceTableSql.matchAll(/^ {2}([a-z_][\w]*)\s+/gm)].map((match) => {
       return match[1]
     }),
   )
+  const droppedColumnMatches = [
+    ...schemaMigrationSql.matchAll(
+      new RegExp(`ALTER TABLE ${escapeRegex(tableName)} DROP COLUMN IF EXISTS ([a-z_][\\w]*);`, 'g'),
+    ),
+  ]
+
+  droppedColumnMatches.forEach((match) => {
+    columns.delete(match[1])
+  })
+
+  return columns
 }
 
 const getPhysicalColumnNameFromContractField = (field: string) => {
@@ -241,6 +260,25 @@ test('retired patch tables are absent from the active review-serving schema', ()
   expect(reviewArticleDisplayPatchRetirementForwardMigrationSql.trim()).toBe(
     'DROP TABLE IF EXISTS mart.review_article_display_patch_v4;',
   )
+})
+
+test('title search serving schema drops repeated activity sort metadata', () => {
+  expect(reviewTitleSearchActivitySortAtDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_title_search_serving_v4_repair',
+  )
+  expect(reviewTitleSearchActivitySortAtDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_title_search_serving_v4_repair RENAME TO review_title_search_serving_v4;',
+  )
+  expect([...getTableColumns('mart.review_title_search_serving_v4')]).toEqual([
+    'project_id',
+    'search_identity',
+    'project_scope_identity',
+    'snapshot_id',
+    'token',
+    'article_id',
+    'title_prefix',
+    'search_updated_at',
+  ])
 })
 
 test('Phase 1 schema migration creates every read-contract physical table', () => {
