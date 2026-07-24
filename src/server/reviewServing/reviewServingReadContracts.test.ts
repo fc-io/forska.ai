@@ -229,6 +229,54 @@ test('direct ordered row contracts advertise only migrated route filters', () =>
   ])
 })
 
+test('title-search row contracts keep ordering and cursors on primary article serving rows', () => {
+  const titleSearchRowContracts = reviewServingReadContractList.filter((contract) => {
+    return contract.searchMode === 'tokenPrefix' && contract.allowedFilters.includes('searchTokenPrefix')
+      && contract.key.endsWith('.rows')
+  })
+
+  expect(
+    titleSearchRowContracts.map((contract) => {
+      return [
+        contract.key,
+        contract.servingTable,
+        contract.optionalComponents,
+        contract.cursorFields,
+        contract.sort.fields,
+      ]
+    }),
+  ).toEqual([
+    [
+      'review.llm.rows',
+      'mart.review_article_serving_v4',
+      ['search'],
+      ['sort_key DESC', 'article_id ASC'],
+      ['sort_key', 'article_id ASC'],
+    ],
+    [
+      'review.human.rows',
+      'mart.review_article_serving_v4',
+      ['search'],
+      ['sort_key DESC', 'article_id ASC'],
+      ['sort_key', 'article_id ASC'],
+    ],
+    [
+      'review.both.rows',
+      'mart.review_article_serving_v4',
+      ['search'],
+      ['sort_key DESC', 'article_id ASC'],
+      ['sort_key', 'article_id ASC'],
+    ],
+    [
+      'review.unassessed.rows',
+      'mart.review_article_serving_v4',
+      ['search'],
+      ['activity_sort_at DESC', 'article_id DESC'],
+      ['activity_sort_at', 'article_id'],
+    ],
+  ])
+})
+
 test('prompt preview contract does not advertise prompt filters on article payload serving rows', () => {
   const promptPreview = getReviewServingReadContract('review.prompt.preview')
 
