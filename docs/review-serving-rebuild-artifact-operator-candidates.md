@@ -53,3 +53,26 @@ bun run db:duck:release-failed-requestless-review-serving-rebuild-chunks -- --pr
 Only apply after the dry run reports no refusal reasons, the target request and
 chunk counts match the current evidence, and the current-DB progress gates are
 planned for the post-apply state.
+
+## Dry-Run Results
+
+The following read-only dry runs were executed after this evidence section
+started printing sample request ids:
+
+```bash
+bun run db:duck:release-failed-requestless-review-serving-rebuild-chunks -- --project-id=7dfb4dd5-d2fe-4b21-b626-7ab26953f6ac --request-id=requestless-bootstrap:0d51c37206c26e26ed0f9109
+bun run db:duck:release-failed-requestless-review-serving-rebuild-chunks -- --project-id=7dfb4dd5-d2fe-4b21-b626-7ab26953f6ac --request-id=requestless-bootstrap:6100fc2a4e93df428c3b97cd
+```
+
+Both returned `status: "dry_run"` with no refusal reasons:
+
+| Request id | Affected chunks | Dry-run status | Refusal reasons |
+| --- | --- | --- | --- |
+| `requestless-bootstrap:0d51c37206c26e26ed0f9109` | 1,509 | `dry_run` | none |
+| `requestless-bootstrap:6100fc2a4e93df428c3b97cd` | 78,343 | `dry_run` | none |
+
+This means the existing guarded operator can release those chunk rows if an
+operator explicitly chooses to apply it with the acknowledgement token. It is
+not an apply recommendation by itself: applying would mutate the live current
+DB, detach the chunks from the failed requestless-bootstrap rows, and require
+the current-DB progress gates afterward.
