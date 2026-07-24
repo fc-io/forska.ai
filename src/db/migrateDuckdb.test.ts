@@ -151,6 +151,246 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewSelectedImportDisplayCopyColumnDropSql).not.toContain('external_id')
 })
 
+test('DuckDB migration drops selected-import display-copy columns while preserving retained rows and upserts', async () => {
+  const duckdbPath = `/tmp/forska-selected-import-display-copy-drop-${Date.now()}.duckdb`
+  const targetMigrationFile = '0124_dropReviewSelectedImportDisplayCopyColumns.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE app.review_selected_article_import_v4 (
+            project_id VARCHAR NOT NULL,
+            project_scope_identity VARCHAR NOT NULL,
+            selected_import_snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            import_route_id VARCHAR,
+            source_record_key VARCHAR,
+            selected_rank_key VARCHAR,
+            selected_rank_numeric DOUBLE,
+            publication_year INTEGER,
+            article_title VARCHAR,
+            journal_title VARCHAR,
+            external_id VARCHAR,
+            duplicate_flag BOOLEAN,
+            conflict_flag BOOLEAN,
+            tombstone BOOLEAN NOT NULL DEFAULT FALSE,
+            selected_import_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            PRIMARY KEY(project_id, project_scope_identity, selected_import_snapshot_id, article_id)
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.review_selected_article_import_v4 (
+            project_id,
+            project_scope_identity,
+            selected_import_snapshot_id,
+            article_id,
+            import_route_id,
+            source_record_key,
+            selected_rank_key,
+            selected_rank_numeric,
+            publication_year,
+            article_title,
+            journal_title,
+            external_id,
+            duplicate_flag,
+            conflict_flag,
+            tombstone,
+            selected_import_updated_at
+          )
+          VALUES (
+            'project-a',
+            'scope-a',
+            'snapshot-a',
+            'article-a',
+            'route-a',
+            'source-a',
+            'rank-a',
+            42.5,
+            2026,
+            'Retired title copy',
+            'Retired journal copy',
+            'retired-external-id',
+            TRUE,
+            FALSE,
+            FALSE,
+            TIMESTAMPTZ '2026-07-24T08:00:00Z'
+          )
+        \`)
+
+        await migrateDuckdb()
+
+        await database.run(\`
+          INSERT INTO app.review_selected_article_import_v4 (
+            project_id,
+            project_scope_identity,
+            selected_import_snapshot_id,
+            article_id,
+            import_route_id,
+            source_record_key,
+            selected_rank_key,
+            selected_rank_numeric,
+            duplicate_flag,
+            conflict_flag,
+            tombstone,
+            selected_import_updated_at
+          )
+          VALUES (
+            'project-a',
+            'scope-a',
+            'snapshot-a',
+            'article-a',
+            'route-b',
+            'source-b',
+            'rank-b',
+            99.5,
+            FALSE,
+            TRUE,
+            TRUE,
+            TIMESTAMPTZ '2026-07-24T08:05:00Z'
+          )
+          ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO UPDATE SET
+            import_route_id = excluded.import_route_id,
+            source_record_key = excluded.source_record_key,
+            selected_rank_key = excluded.selected_rank_key,
+            selected_rank_numeric = excluded.selected_rank_numeric,
+            duplicate_flag = excluded.duplicate_flag,
+            conflict_flag = excluded.conflict_flag,
+            tombstone = excluded.tombstone,
+            selected_import_updated_at = excluded.selected_import_updated_at
+        \`)
+
+        const columnRows = await database.queryJson(
+          "SELECT column_name AS columnName FROM information_schema.columns WHERE table_schema = 'app' AND table_name = 'review_selected_article_import_v4' ORDER BY ordinal_position"
+        )
+        const indexRows = await database.queryJson(
+          "SELECT index_name AS indexName FROM duckdb_indexes() WHERE schema_name = 'app' AND table_name = 'review_selected_article_import_v4' ORDER BY index_name"
+        )
+        const rows = await database.queryJson(\`
+          SELECT
+            import_route_id AS importRouteId,
+            source_record_key AS sourceRecordKey,
+            selected_rank_key AS selectedRankKey,
+            selected_rank_numeric AS selectedRankNumeric,
+            duplicate_flag AS duplicateFlag,
+            conflict_flag AS conflictFlag,
+            tombstone,
+            selected_import_updated_at AS selectedImportUpdatedAt
+          FROM app.review_selected_article_import_v4
+          ORDER BY article_id
+        \`)
+
+        console.log(JSON.stringify({columnRows, indexRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      columnRows: {columnName: string}[]
+      indexRows: {indexName: string}[]
+      rows: {
+        conflictFlag: boolean
+        duplicateFlag: boolean
+        importRouteId: string
+        selectedImportUpdatedAt: string
+        selectedRankKey: string
+        selectedRankNumeric: number
+        sourceRecordKey: string
+        tombstone: boolean
+      }[]
+    }
+    const columns = parsed.columnRows.map((row) => {
+      return row.columnName
+    })
+    const indexNames = parsed.indexRows.map((row) => {
+      return row.indexName
+    })
+
+    expect(columns).toEqual([
+      'project_id',
+      'project_scope_identity',
+      'selected_import_snapshot_id',
+      'article_id',
+      'import_route_id',
+      'source_record_key',
+      'selected_rank_key',
+      'selected_rank_numeric',
+      'duplicate_flag',
+      'conflict_flag',
+      'tombstone',
+      'selected_import_updated_at',
+    ])
+    expect(columns).not.toContain('publication_year')
+    expect(columns).not.toContain('article_title')
+    expect(columns).not.toContain('journal_title')
+    expect(columns).not.toContain('external_id')
+    expect(indexNames).toContain('idx_review_selected_article_import_v4_repaired_pk')
+    expect(indexNames).toContain('idx_review_selected_article_import_v4_order')
+    expect(parsed.rows).toEqual([
+      {
+        conflictFlag: true,
+        duplicateFlag: false,
+        importRouteId: 'route-b',
+        selectedImportUpdatedAt: expect.stringContaining('2026-07-24'),
+        selectedRankKey: 'rank-b',
+        selectedRankNumeric: 99.5,
+        sourceRecordKey: 'source-b',
+        tombstone: true,
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
 test('DuckDB migrations repair legacy review serving judgment detail payload-kind schema drift', async () => {
   const duckdbPath = `/tmp/forska-review-serving-judgment-detail-payload-kind-${Date.now()}.duckdb`
   const targetMigrationFile = '0109_reviewServingJudgmentDetailPayloadKindForwardMigration.sql'
