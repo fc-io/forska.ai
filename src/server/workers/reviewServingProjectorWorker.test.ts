@@ -4340,6 +4340,26 @@ test('shared rebuild chunk batch writer splits splittable chunks after DuckDB OO
   expect(recoverySource).toContain("status: 'completed'")
 })
 
+test('selected import rebuild checksum excludes retired display-copy columns while preserving identity and rank fields', () => {
+  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+  const start = source.indexOf('const getSelectedImportRebuildChunkOutputChecksum = async')
+  const end = source.indexOf('\nconst getSelectedImportRebuildChunkOutputCount', start)
+
+  expect(start).toBeGreaterThanOrEqual(0)
+
+  const checksumSource = source.slice(start, end)
+
+  expect(checksumSource).toContain('COALESCE(CAST(import_route_id AS VARCHAR)')
+  expect(checksumSource).toContain('COALESCE(CAST(source_record_key AS VARCHAR)')
+  expect(checksumSource).toContain('COALESCE(CAST(selected_rank_key AS VARCHAR)')
+  expect(checksumSource).toContain('COALESCE(CAST(selected_rank_numeric AS VARCHAR)')
+  expect(checksumSource).toContain('COALESCE(CAST(tombstone AS VARCHAR)')
+  expect(checksumSource).not.toContain('publication_year')
+  expect(checksumSource).not.toContain('article_title')
+  expect(checksumSource).not.toContain('journal_title')
+  expect(checksumSource).not.toContain('external_id')
+})
+
 test('selected import runner releases dirty work while base projection is still batching', async () => {
   const runStatements: string[] = []
   const selectedImportRows = new Array(512).fill(null).map((_, index) => {

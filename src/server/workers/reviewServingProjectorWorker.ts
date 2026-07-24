@@ -2619,10 +2619,6 @@ const getSelectedImportRebuildChunkOutputChecksum = async (
         COALESCE(CAST(source_record_key AS VARCHAR), '') || ':' ||
         COALESCE(CAST(selected_rank_key AS VARCHAR), '') || ':' ||
         COALESCE(CAST(selected_rank_numeric AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(publication_year AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(article_title AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(journal_title AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(external_id AS VARCHAR), '') || ':' ||
         COALESCE(CAST(tombstone AS VARCHAR), '') AS row_value
       FROM app.review_selected_article_import_v4 base
       WHERE project_id = ${getSqlLiteral(projectId)}

@@ -103,6 +103,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0123_dropReviewTitleSearchActivitySortAt.sql'),
     'utf8',
   ).trim()
+  const reviewSelectedImportDisplayCopyColumnDropSql = readFileSync(
+    resolve(migrationsFolder, '0124_dropReviewSelectedImportDisplayCopyColumns.sql'),
+    'utf8',
+  ).trim()
 
   expect(reviewQueuePatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_queue_patch_v4;')
   expect(reviewHumanStatusPatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_human_status_patch_v4;')
@@ -124,6 +128,27 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewTitleSearchActivitySortAtDropSql).not.toContain('PRIMARY KEY')
   expect(reviewTitleSearchActivitySortAtDropSql).not.toContain('activity_sort_at')
   expect(reviewTitleSearchActivitySortAtDropSql).toContain('CREATE INDEX IF NOT EXISTS idx_review_title_search_serving_v4_token')
+  expect(reviewSelectedImportDisplayCopyColumnDropSql).toContain(
+    'CREATE TABLE app.review_selected_article_import_v4_repair',
+  )
+  expect(reviewSelectedImportDisplayCopyColumnDropSql).toContain(
+    'INSERT INTO app.review_selected_article_import_v4_repair',
+  )
+  expect(reviewSelectedImportDisplayCopyColumnDropSql).toContain('DROP TABLE app.review_selected_article_import_v4;')
+  expect(reviewSelectedImportDisplayCopyColumnDropSql).toContain(
+    'ALTER TABLE app.review_selected_article_import_v4_repair RENAME TO review_selected_article_import_v4;',
+  )
+  expect(reviewSelectedImportDisplayCopyColumnDropSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_selected_article_import_v4_repaired_pk',
+  )
+  expect(reviewSelectedImportDisplayCopyColumnDropSql).toContain(
+    'CREATE INDEX IF NOT EXISTS idx_review_selected_article_import_v4_order',
+  )
+  expect(reviewSelectedImportDisplayCopyColumnDropSql).not.toContain('PRIMARY KEY')
+  expect(reviewSelectedImportDisplayCopyColumnDropSql).not.toContain('publication_year')
+  expect(reviewSelectedImportDisplayCopyColumnDropSql).not.toContain('article_title')
+  expect(reviewSelectedImportDisplayCopyColumnDropSql).not.toContain('journal_title')
+  expect(reviewSelectedImportDisplayCopyColumnDropSql).not.toContain('external_id')
 })
 
 test('DuckDB migrations repair legacy review serving judgment detail payload-kind schema drift', async () => {
