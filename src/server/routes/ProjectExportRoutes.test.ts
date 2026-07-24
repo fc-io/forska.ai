@@ -1,3 +1,5 @@
+import {readFileSync} from 'node:fs'
+
 import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
@@ -596,6 +598,34 @@ test('project export download hydrates completed durable job selection as CSV', 
   expect(queryStatements.join('\n')).toContain(
     'detail.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash',
   )
+})
+
+test('project export serving queries preserve judgment payload JSON consumers', () => {
+  const routeText = readFileSync('src/server/routes/ProjectExportRoutes.ts', 'utf8')
+  const promptMetadataQuery = routeText.slice(
+    routeText.indexOf('const getExportPromptDetails'),
+    routeText.indexOf('const getExportArticles'),
+  )
+  const judgmentExportQuery = routeText.slice(
+    routeText.indexOf('const getExportJudgments'),
+    routeText.indexOf('const getAnswerValue'),
+  )
+
+  expect(promptMetadataQuery).toContain(
+    "json_extract_string(detail.judgment_payload_json, '$.prompt.promptHeading') AS promptHeading",
+  )
+  expect(promptMetadataQuery).toContain(
+    "json_extract_string(detail.judgment_payload_json, '$.prompt.originalText') AS originalText",
+  )
+  expect(promptMetadataQuery).toContain("json_extract_string(detail.judgment_payload_json, '$.prompt.type') AS type")
+
+  expect(judgmentExportQuery).toContain(
+    "json_extract_string(detail.judgment_payload_json, '$.explanation') AS explanation",
+  )
+  expect(judgmentExportQuery).toContain("json_extract(detail.judgment_payload_json, '$.quotes') AS quotes")
+  expect(judgmentExportQuery).toContain('detail.judgment_payload_json AS judgmentPayloadJson')
+  expect(judgmentExportQuery).toContain('TO_JSON(detail.answered_original_as_array) AS answeredOriginalAsArray')
+  expect(judgmentExportQuery).toContain('detail.answered_original AS answeredOriginal')
 })
 
 test('project export download rejects partially unavailable source snapshots', async () => {
