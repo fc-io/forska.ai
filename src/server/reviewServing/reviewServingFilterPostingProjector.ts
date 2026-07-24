@@ -238,7 +238,7 @@ const getFullRebuildPostingContributionRowsStatement = (input: ProjectReviewServ
             scoped.sort_key,
             selected.import_route_id,
             selected.selected_rank_key,
-            COALESCE(selected_hot.publication_year, selected.publication_year) AS publication_year,
+            selected_hot.publication_year AS publication_year,
             COALESCE(selected_hot.duplicate_flag, selected.duplicate_flag, FALSE) AS duplicate_flag,
             COALESCE(selected_hot.conflict_flag, selected.conflict_flag, FALSE) AS conflict_flag,
             scoped.scope_tombstone AS tombstone

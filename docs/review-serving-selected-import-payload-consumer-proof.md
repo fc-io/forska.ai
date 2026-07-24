@@ -13,7 +13,12 @@ This is a read-only evidence slice for the selected-import payload slimming cand
 - `journal_title`
 - `external_id`
 
-The proof extends the physical evidence inspector only. It does not change runtime projector code, schemas, migrations, retention behavior, or route consumers.
+The initial proof extended the physical evidence inspector only. The follow-up
+consumer-migration slices changed runtime projectors so the display-copy
+columns `publication_year`, `article_title`, `journal_title`, and `external_id`
+are no longer written into selected-base rows and no longer used as downstream
+fallbacks. Schema, migrations, retention behavior, recovery probes, and the
+identity/rank/source columns remain unchanged.
 
 ## Latest Evidence
 
@@ -37,4 +42,11 @@ For project `7dfb4dd5-d2fe-4b21-b626-7ab26953f6ac`, the read-only snapshot evide
 
 This is not deletion or schema-slimming authorization.
 
-The evidence only shows that the scoped project has no non-null selected-base values for the eight candidate columns and no same-project hot-field rows available through project import routes. Runtime writer, reader, and recovery paths still carry these fields, and future slimming work still needs consumer changes or consumer irrelevance proof, route parity, benchmark evidence, recovery behavior, and the required live progress gate for any runtime/storage change.
+The evidence shows that the scoped project has no non-null selected-base values
+for the eight candidate columns and no same-project hot-field rows available
+through project import routes. The current runtime now treats the four display
+copy columns as write-suppressed/consumer-migrated, while
+`import_route_id`, `source_record_key`, `selected_rank_key`, and
+`selected_rank_numeric` remain active identity/rank state. Future schema
+slimming still needs a separate migration slice with route parity, benchmark
+evidence, recovery behavior, and the required live progress gate.

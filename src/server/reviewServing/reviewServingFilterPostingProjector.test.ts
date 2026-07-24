@@ -450,7 +450,8 @@ test('selected-import filter postings prefer hot fields for payload filters whil
   expect(selectStatement).toContain('selected_hot.article_id = selected.article_id')
   expect(selectStatement).toContain('selected_hot.source_record_key = selected.source_record_key')
   expect(selectStatement).toContain('AND NOT selected_hot.tombstone')
-  expect(selectStatement).toContain('COALESCE(selected_hot.publication_year, selected.publication_year) AS publication_year')
+  expect(selectStatement).toContain('selected_hot.publication_year AS publication_year')
+  expect(selectStatement).not.toContain('COALESCE(selected_hot.publication_year, selected.publication_year)')
   expect(selectStatement).toContain(
     'COALESCE(selected_hot.duplicate_flag, selected.duplicate_flag, FALSE) AS duplicate_flag',
   )

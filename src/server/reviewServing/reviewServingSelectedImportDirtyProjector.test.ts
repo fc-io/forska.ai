@@ -76,6 +76,22 @@ const projectDirtyInput = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   }
 }
 
+const getInsertTargetSql = (statement: string) => {
+  return statement.slice(
+    statement.indexOf('INSERT INTO app.review_selected_article_import_v4 ('),
+    statement.indexOf('\n    )', statement.indexOf('INSERT INTO app.review_selected_article_import_v4 (')),
+  )
+}
+
+const expectSelectedImportBaseInsertOmitsDisplayCopyColumns = (statement: string) => {
+  const insertTargetSql = getInsertTargetSql(statement)
+
+  expect(insertTargetSql).not.toContain('publication_year')
+  expect(insertTargetSql).not.toContain('article_title')
+  expect(insertTargetSql).not.toContain('journal_title')
+  expect(insertTargetSql).not.toContain('external_id')
+}
+
 test('selected-import dirty routine updates only claimed articles', async () => {
   const {database, statements} = createSelectedImportDirtyDatabase({
     dirtyRows: [
@@ -103,6 +119,9 @@ test('selected-import dirty routine updates only claimed articles', async () => 
     return statement.includes('WITH dirty_article(article_id)')
   })
   const joined = statements.join('\n')
+  const baseInsertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_selected_article_import_v4')
+  })
 
   expect(result).toEqual({dirtyRowCount: 1, dirtyWatermark: 9})
   expect(selectStatement).toContain("VALUES ('article-1')")
@@ -124,6 +143,7 @@ test('selected-import dirty routine updates only claimed articles', async () => 
   expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
   expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
+  expectSelectedImportBaseInsertOmitsDisplayCopyColumns(baseInsertStatement ?? '')
   expect(joined).toContain('source_record_key')
   expect(joined).toContain('changed_raw(article_id, import_route_id, selected_rank_key')
   expect(joined).toContain('PARTITION BY raw.article_id')

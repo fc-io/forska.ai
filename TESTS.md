@@ -78,8 +78,9 @@ serving readiness sections in the physical evidence report. The selected-import
 payload proof classifies active/LKG protected, candidate, and other
 selected-import snapshot rows; per-column selected-base null/non-null counts;
 and same-project hot-field availability through `app.project_import_route`.
-It remains investigation evidence only and does not authorize deletion or
-schema slimming. The summary
+It now acts as a regression/readiness check for selected-base display-copy
+write suppression, but still does not authorize deletion or schema slimming.
+The summary
 contribution evidence classifies active/LKG snapshot protected rows, pinned
 snapshot rows, missing-manifest rows, rows by project/component
 kind/definition version/snapshot status, and top contribution-key counts while

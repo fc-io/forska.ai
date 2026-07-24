@@ -186,7 +186,7 @@ const getSelectedImportTitleSql = (
 
   return `CASE
         WHEN COALESCE(selected_base.tombstone, FALSE) THEN article.article_title
-        ELSE COALESCE(selected_hot.article_title, selected_base.article_title, article.article_title)
+        ELSE COALESCE(selected_hot.article_title, article.article_title)
       END`
 }
 

@@ -299,14 +299,14 @@ const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, opti
       COALESCE(
         CASE
           WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-          ELSE COALESCE(selected_hot.article_title, selected_base.article_title)
+          ELSE selected_hot.article_title
         END,
         article.article_title
       ) AS articleTitle,
       COALESCE(
         CASE
           WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-          ELSE COALESCE(selected_hot.external_id, selected_base.external_id)
+          ELSE selected_hot.external_id
         END,
         article.article_id
       ) AS articleExternalId,
@@ -324,7 +324,7 @@ const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, opti
       END AS sourceMetadata,
       CASE
         WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-        ELSE COALESCE(selected_hot.journal_title, selected_base.journal_title)
+        ELSE selected_hot.journal_title
       END AS journalTitle,
       COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
       article.full_text_pdf AS fullTextPdf,
@@ -340,7 +340,7 @@ const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, opti
       END AS selectedRankKey,
       CASE
         WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-        ELSE COALESCE(selected_hot.publication_year, selected_base.publication_year)
+        ELSE selected_hot.publication_year
       END AS publicationYear,
       CASE
         WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
@@ -507,8 +507,8 @@ const getDisplayPatchRows = async (
           article.article_updated_at AS articleUpdatedAt,
           COALESCE(article.article_created_at, scope.article_created_at, current_timestamp) AS sortKey,
           COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at, current_timestamp) AS activitySortAt,
-          COALESCE(CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_hot.article_title, selected_base.article_title) END, article.article_title) AS articleTitle,
-          COALESCE(CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_hot.external_id, selected_base.external_id) END, article.article_id) AS articleExternalId,
+          COALESCE(CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_hot.article_title END, article.article_title) AS articleTitle,
+          COALESCE(CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_hot.external_id END, article.article_id) AS articleExternalId,
           article.arxiv_id AS arxivId,
           article.biorxiv_id AS biorxivId,
           article.medrxiv_id AS medrxivId,
@@ -524,9 +524,9 @@ const getDisplayPatchRows = async (
           article.full_text_pdf AS fullTextPdf,
           article.full_text_fetched_at AS fullTextFetchedAt,
           article.full_text_conversion_status AS fullTextConversionStatus,
-          CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_hot.journal_title, selected_base.journal_title) END AS journalTitle,
+          CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_hot.journal_title END AS journalTitle,
           COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
-          CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_hot.publication_year, selected_base.publication_year) END AS publicationYear,
+          CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_hot.publication_year END AS publicationYear,
           article.id IS NULL AS tombstone
         FROM dirty_article dirty
         LEFT JOIN app."article" article
