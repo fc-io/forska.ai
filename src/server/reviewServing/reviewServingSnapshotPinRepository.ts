@@ -159,6 +159,16 @@ export const acquireReviewServingSnapshotPin = async (
 
   return database.transaction(async (tx) => {
     await tx.run(`
+      UPDATE app.review_serving_snapshot_pin
+      SET
+        ref_count = ref_count + 1,
+        expires_at = greatest(expires_at, ${getReviewServingSnapshotPinTimestampLiteral(input.expiresAt)}),
+        released_at = NULL,
+        updated_at = current_timestamp
+      WHERE pin_id = ${getSqlLiteral(pinId)}
+    `)
+
+    await tx.run(`
       INSERT INTO app.review_serving_snapshot_pin (
         pin_id,
         project_id,
@@ -170,7 +180,8 @@ export const acquireReviewServingSnapshotPin = async (
         expires_at,
         released_at,
         updated_at
-      ) VALUES (
+      )
+      SELECT
         ${getSqlLiteral(pinId)},
         ${getSqlLiteral(input.projectId)},
         ${getSqlLiteral(input.snapshotId)},
@@ -181,12 +192,11 @@ export const acquireReviewServingSnapshotPin = async (
         ${getReviewServingSnapshotPinTimestampLiteral(input.expiresAt)},
         NULL,
         current_timestamp
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM app.review_serving_snapshot_pin existing
+        WHERE (existing.pin_id || '') = (${getSqlLiteral(pinId)} || '')
       )
-      ON CONFLICT(pin_id) DO UPDATE SET
-        ref_count = app.review_serving_snapshot_pin.ref_count + 1,
-        expires_at = greatest(app.review_serving_snapshot_pin.expires_at, excluded.expires_at),
-        released_at = NULL,
-        updated_at = current_timestamp
     `)
 
     return getReviewServingSnapshotPin({pinId}, tx)
