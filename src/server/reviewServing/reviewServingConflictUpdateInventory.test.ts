@@ -13,11 +13,6 @@ const allowedConflictUpdates: ConflictUpdateInventoryEntry[] = [
     snippet: 'ON CONFLICT(dirty_work_id) DO UPDATE SET',
   },
   {
-    path: 'src/server/reviewServing/reviewServingRebuildRequestRepository.ts',
-    reason: 'foreground rebuild request upserts preserve scheduling and retry lifecycle state',
-    snippet: 'ON CONFLICT(request_id) DO UPDATE SET',
-  },
-  {
     path: 'src/server/reviewServing/reviewServingChunkManifestRepository.ts',
     reason: 'chunk manifest upserts preserve leases, attempts, diagnostics, and active chunk state',
     snippet: 'ON CONFLICT(chunk_id) DO UPDATE SET',

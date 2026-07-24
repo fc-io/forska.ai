@@ -9,8 +9,8 @@ import {
   boostReviewServingRebuildRequestPriority,
   createReviewServingRebuildRequest,
   releaseFailedRequestlessReviewServingRebuildChunks,
-  terminalizeStaleZeroChunkReviewServingRebuildRequest,
   type ReviewServingRebuildRequestStatus,
+  terminalizeStaleZeroChunkReviewServingRebuildRequest,
 } from './reviewServingRebuildRequestRepository.ts'
 
 type FakeRequestRow = {
@@ -223,7 +223,9 @@ const createFakeRequestDatabase = (options: FakeRequestDatabaseOptions = {}) => 
 
     if (statement.includes('FROM app.review_rebuild_request')) {
       if (statement.includes('SELECT request.request_id AS requestId') && getSqlStrings(statement).length === 0) {
-        return [...requests.values()].map((request) => ({requestId: request.requestId})) as T[]
+        return [...requests.values()].map((request) => {
+          return {requestId: request.requestId}
+        }) as T[]
       }
 
       const requestId = getSqlStrings(statement)[0] ?? ''
@@ -331,7 +333,13 @@ const createFakeTerminalizationDatabase = (input: {chunkCount?: number; request?
     },
   } satisfies ReviewServingChunkManifestRepositoryDatabase
 
-  return {database, getRequest: () => request, statements}
+  return {
+    database,
+    getRequest: () => {
+      return request
+    },
+    statements,
+  }
 }
 
 const createFakeReleaseRequestlessChunksDatabase = (input: {
@@ -357,7 +365,9 @@ const createFakeReleaseRequestlessChunksDatabase = (input: {
     const requestId =
       getSqlStrings(statements.at(-1) ?? '').find((value) => {
         return value.startsWith('requestless-bootstrap:') || value.startsWith('requestless-summary:')
-      }) ?? request?.requestId ?? ''
+      })
+      ?? request?.requestId
+      ?? ''
 
     return [...chunks.values()].filter((chunk) => {
       return chunk.requestId === requestId
@@ -500,7 +510,14 @@ const createFakeReleaseRequestlessChunksDatabase = (input: {
     },
   } satisfies ReviewServingChunkManifestRepositoryDatabase
 
-  return {chunks, database, getRequest: () => request, statements}
+  return {
+    chunks,
+    database,
+    getRequest: () => {
+      return request
+    },
+    statements,
+  }
 }
 
 const createFakeReleaseChunk = (overrides: Partial<FakeReleaseChunkRow> = {}): FakeReleaseChunkRow => {
@@ -604,6 +621,8 @@ test('requestless V4 rebuild request re-admission does not mutate the request ro
   expect(secondInsertCount).toBe(1)
   expect(joined).toContain('SELECT request.request_id AS requestId')
   expect(joined).toContain('FROM app.review_rebuild_request request')
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain("(existing.request_id || '')")
   expect(joined).not.toContain('ON CONFLICT(request_id) DO UPDATE SET')
 })
 
@@ -663,13 +682,17 @@ test('V4 rebuild request re-admission clears terminal request metadata', async (
 
   const joined = statements.join('\n')
 
-  expect(joined).toContain('ON CONFLICT(request_id) DO UPDATE SET')
+  expect(joined).toContain('UPDATE app.review_rebuild_request')
+  expect(joined).toContain('INSERT INTO app.review_rebuild_request')
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain("(existing.request_id || '')")
   expect(joined).toContain('retry_count = 0')
   expect(joined).toContain('lease_owner = NULL')
   expect(joined).toContain('lease_expires_at = NULL')
   expect(joined).toContain('completed_at = NULL')
   expect(joined).toContain('failed_at = NULL')
   expect(joined).toContain('last_error = NULL')
+  expect(joined).not.toContain('ON CONFLICT(request_id) DO UPDATE SET')
 })
 
 test('boosting rebuild request priority refreshes update time for diagnostics ordering', async () => {

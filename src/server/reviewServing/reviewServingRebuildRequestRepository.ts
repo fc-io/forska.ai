@@ -10,9 +10,9 @@ import {
   releaseInactiveRequestRebuildChunkManifestsForUpsert,
   type ReviewServingChunkManifestRepositoryDatabase,
   type ReviewServingChunkManifestRepositoryTransaction,
-  type ReviewServingRebuildChunkStatus,
   type ReviewServingRebuildChunkBudgetFields,
   type ReviewServingRebuildChunkManifestInput,
+  type ReviewServingRebuildChunkStatus,
   upsertReviewServingRebuildChunkManifests,
 } from './reviewServingChunkManifestRepository.ts'
 import {
@@ -371,7 +371,9 @@ const staleZeroChunkTerminalizationLastError =
   'Operator terminalized stale malformed V4 review rebuild request: admitted/running request has no rebuild chunks; no cleanup authorized.'
 const requestlessRebuildRequestPrefixes = ['requestless-bootstrap:', 'requestless-summary:'] as const
 const isRequestlessRebuildRequestId = (requestId: string) => {
-  return requestlessRebuildRequestPrefixes.some((prefix) => requestId.startsWith(prefix))
+  return requestlessRebuildRequestPrefixes.some((prefix) => {
+    return requestId.startsWith(prefix)
+  })
 }
 const requestlessRebuildChunkReleaseStatuses = [
   'pending',
@@ -1061,7 +1063,11 @@ const getFailedRequestlessRebuildChunkReleaseRefusalReasons = (input: {
     reasons.push('wrong_project')
   }
 
-  if (!requestlessRebuildRequestPrefixes.some((prefix) => input.request.requestId.startsWith(prefix))) {
+  if (
+    !requestlessRebuildRequestPrefixes.some((prefix) => {
+      return input.request.requestId.startsWith(prefix)
+    })
+  ) {
     reasons.push('non_requestless_request_id')
   }
 
@@ -1483,9 +1489,45 @@ export const createReviewServingRebuildRequestEffect = (
               FROM app.review_rebuild_request request
             `)
           : []
-        const requestRowExists = existingRequestRows.some((row) => row.requestId === requestId)
+        const requestRowExists = existingRequestRows.some((row) => {
+          return row.requestId === requestId
+        })
 
         if (!requestRowExists) {
+          if (!requestlessRequest) {
+            await tx.run(`
+          UPDATE app.review_rebuild_request
+          SET
+            priority = CASE
+              WHEN ${getSqlLiteral(getNormalizedPriority(input.priority))} > priority
+                THEN ${getSqlLiteral(getNormalizedPriority(input.priority))}
+              ELSE priority
+            END,
+            status = ${getSqlLiteral(status)},
+            admission_state = ${getSqlLiteral(admissionState)},
+            retry_after = ${getOptionalTimestampLiteral(null)},
+            retry_count = 0,
+            oom_category = ${getSqlLiteral(overBudgetReason === null ? null : 'request_over_budget')},
+            over_budget_reason = ${getSqlLiteral(overBudgetReason)},
+            diagnostics_json = ${getJsonSqlLiteral({
+              budget: input.budget ?? {},
+              diagnostics: input.diagnostics ?? {},
+              estimate: input.estimate ?? {},
+            })},
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            admitted_at = CASE
+              WHEN ${getSqlLiteral(status)} = 'admitted' THEN COALESCE(admitted_at, ${nowSql})
+              ELSE admitted_at
+            END,
+            completed_at = NULL,
+            failed_at = NULL,
+            last_error = NULL,
+            updated_at = ${nowSql}
+          WHERE request_id = ${getSqlLiteral(requestId)}
+        `)
+          }
+
           const requestInsertSql = `
           INSERT INTO app.review_rebuild_request (
           request_id,
@@ -1505,7 +1547,8 @@ export const createReviewServingRebuildRequestEffect = (
           diagnostics_json,
           admitted_at,
           updated_at
-        ) VALUES (
+        )
+        SELECT
           ${getSqlLiteral(requestId)},
           ${getSqlLiteral(input.projectId)},
           ${getSqlLiteral(input.reason)},
@@ -1527,35 +1570,13 @@ export const createReviewServingRebuildRequestEffect = (
           })},
           ${status === 'admitted' ? nowSql : 'NULL'},
           ${nowSql}
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM app.review_rebuild_request existing
+          WHERE (existing.request_id || '') = (${getSqlLiteral(requestId)} || '')
         )
-        `
-          const requestConflictSql = requestlessRequest
-            ? ''
-            : `
-        ON CONFLICT(request_id) DO UPDATE SET
-          priority = CASE
-            WHEN excluded.priority > app.review_rebuild_request.priority THEN excluded.priority
-            ELSE app.review_rebuild_request.priority
-          END,
-          status = excluded.status,
-          admission_state = excluded.admission_state,
-          retry_after = excluded.retry_after,
-          retry_count = 0,
-          oom_category = excluded.oom_category,
-          over_budget_reason = excluded.over_budget_reason,
-          diagnostics_json = excluded.diagnostics_json,
-          lease_owner = NULL,
-          lease_expires_at = NULL,
-          admitted_at = CASE
-            WHEN excluded.status = 'admitted' THEN COALESCE(app.review_rebuild_request.admitted_at, ${nowSql})
-            ELSE app.review_rebuild_request.admitted_at
-          END,
-          completed_at = NULL,
-          failed_at = NULL,
-          last_error = NULL,
-          updated_at = ${nowSql}
       `
-          await tx.run(`${requestInsertSql}${requestConflictSql}`)
+          await tx.run(requestInsertSql)
         }
 
         if (input.chunks !== undefined) {
