@@ -87,7 +87,6 @@ export type ReviewServingSelectedImportSnapshotCursorInput = {
 }
 
 export type WriteReviewServingTitleSearchRebuildRowsInput = {
-  activitySortAtSql: string
   articleRangePredicateSql: string
   articleTitleSql: string
   projectId: string
@@ -554,14 +553,12 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
       token,
       article_id,
       title_prefix,
-      activity_sort_at,
       search_updated_at
     )
     WITH source_rows AS (
       SELECT
         scope.article_id,
-        lower(strip_accents(COALESCE(${input.articleTitleSql}, ''))) AS normalized_title,
-        ${input.activitySortAtSql} AS activity_sort_at
+        lower(strip_accents(COALESCE(${input.articleTitleSql}, ''))) AS normalized_title
       FROM mart.project_scope_article scope
       LEFT JOIN app."article" article
         ON article.id = scope.article_id
@@ -573,16 +570,14 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
     ), source AS (
       SELECT
         article_id,
-        ANY_VALUE(normalized_title) AS normalized_title,
-        MAX(activity_sort_at) AS activity_sort_at
+        ANY_VALUE(normalized_title) AS normalized_title
       FROM source_rows
       GROUP BY article_id
     ), tokenized_source AS (
       SELECT DISTINCT
         source.article_id,
         token_rows.token,
-        left(source.normalized_title, ${getSqlLiteral(input.titlePrefixLength)}) AS title_prefix,
-        source.activity_sort_at
+        left(source.normalized_title, ${getSqlLiteral(input.titlePrefixLength)}) AS title_prefix
       FROM source
       CROSS JOIN unnest(regexp_split_to_array(source.normalized_title, '[^a-z0-9]+')) AS token_rows(token)
       WHERE token_rows.token <> ''
@@ -590,8 +585,7 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
       SELECT
         article_id,
         token,
-        ANY_VALUE(title_prefix) AS title_prefix,
-        MAX(activity_sort_at) AS activity_sort_at
+        ANY_VALUE(title_prefix) AS title_prefix
       FROM tokenized_source
       GROUP BY article_id, token
     ), final_rows AS (
@@ -602,8 +596,7 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
         ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
         tokenized.token,
         tokenized.article_id,
-        ANY_VALUE(tokenized.title_prefix) AS title_prefix,
-        MAX(tokenized.activity_sort_at) AS activity_sort_at
+        ANY_VALUE(tokenized.title_prefix) AS title_prefix
       FROM tokenized
       GROUP BY project_id, search_identity, project_scope_identity, snapshot_id, tokenized.token, tokenized.article_id
     )
@@ -615,7 +608,6 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
       final_rows.token,
       final_rows.article_id,
       final_rows.title_prefix,
-      final_rows.activity_sort_at,
       current_timestamp AS search_updated_at
     FROM final_rows
   `,

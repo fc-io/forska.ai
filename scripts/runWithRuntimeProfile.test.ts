@@ -88,6 +88,8 @@ const reviewServingWarningRouteProbeProjectId =
   process.env.FORSKA_REVIEW_SERVING_WARNING_ROUTE_PROBE_PROJECT_ID ?? '4ec939b2-47bb-48dd-ad62-ad9f4b5acecf'
 const staleReviewServingQueuedProgressMs = 10 * 60_000
 const reviewServingWarningFetchTimeoutMs = 60_000
+const currentDbReviewServingQueuedWorkProgressTimeoutMs = 75_000
+const currentDbReviewServingQueuedWorkProgressPollMs = 5_000
 const forbiddenDevServerOutputPatterns = [
   {label: 'API role DuckDB ownership', pattern: /Current server role api cannot own DuckDB/},
   {label: 'DuckDB fatal runtime restart', pattern: /\[duckdb\] restarting embedded runtime after fatal invalidation/},
@@ -125,6 +127,7 @@ test('current-db network smoke includes read-only browser and mutation-enabled s
   expect(scripts['test:network-smoke:current-db']).toBe(
     'bun run test:network-smoke:current-db:readonly && bun run test:dev-server:current-db',
   )
+  expect(scripts['test:network-smoke:current-db']).not.toContain('setTimeout')
   expect(scripts['test:network-smoke:current-db:readonly']).toContain('FORSKA_DISABLE_SERVER_MUTATIONS=true')
   expect(scripts['test:dev-server:current-db']).toContain('FORSKA_REAL_DEV_SERVER_SMOKE=true')
   expect(scripts['test:dev-server:current-db']).toContain('-t "real primary dev:server startup')
@@ -797,6 +800,66 @@ const didReviewServingWorkProgress = (before: ReviewServingProgressSnapshot, aft
   )
 }
 
+type ReviewServingProgressPollOptions = {
+  getCandidates?: (apiPort: number) => Promise<ReviewServingProgressCandidate[]>
+  now?: () => number
+  pollIntervalMs?: number
+  postWarnings?: (apiPort: number, projectId: string) => Promise<ReviewsWarningsBody>
+  timeoutMs?: number
+  wait?: (ms: number) => Promise<void>
+}
+
+const getCurrentDbReviewServingQueuedWorkProbeResult = async (
+  apiPort: number,
+  beforeSnapshots: Array<{candidate: ReviewServingProgressCandidate; snapshot: ReviewServingProgressSnapshot}>,
+  postWarnings: (apiPort: number, projectId: string) => Promise<ReviewsWarningsBody>,
+) => {
+  const details = await Promise.all(
+    beforeSnapshots.map(async ({candidate, snapshot}) => {
+      try {
+        const body = await postWarnings(apiPort, candidate.projectId)
+        const after = getReviewServingProgressSnapshot(body)
+        const progressed = didReviewServingWorkProgress(snapshot, after)
+        const candidateNow = isReviewServingProgressCandidate(body)
+        const staleNow = isStaleReviewServingProgressSnapshot(after)
+
+        return {
+          after,
+          before: snapshot,
+          candidate: candidateNow,
+          error: null,
+          progressed,
+          projectId: candidate.projectId,
+          resolved: progressed || !candidateNow || !staleNow,
+          stale: staleNow,
+        }
+      } catch (error) {
+        return {
+          after: null,
+          before: snapshot,
+          candidate: false,
+          error: error instanceof Error ? error.message : String(error),
+          progressed: false,
+          projectId: candidate.projectId,
+          resolved: true,
+          stale: false,
+        }
+      }
+    }),
+  )
+
+  return {
+    details,
+    passed:
+      details.some((detail) => {
+        return detail.progressed
+      })
+      || details.every((detail) => {
+        return detail.resolved
+      }),
+  }
+}
+
 const getRuntimeStabilityFailure = ({
   output,
   pidsAfter,
@@ -906,48 +969,183 @@ test('runtime stability accepts only healthy bounded maintenance restarts with r
   ).toEqual(['maintenance restart', 'maintenance unexpected exit'])
 })
 
-const expectCurrentDbReviewServingQueuedWorkProgresses = async (apiPort: number) => {
-  const candidates = await getReviewServingProgressCandidates(apiPort)
+const expectCurrentDbReviewServingQueuedWorkProgresses = async (
+  apiPort: number,
+  {
+    getCandidates = getReviewServingProgressCandidates,
+    now = Date.now,
+    pollIntervalMs = currentDbReviewServingQueuedWorkProgressPollMs,
+    postWarnings = postReviewWarnings,
+    timeoutMs = currentDbReviewServingQueuedWorkProgressTimeoutMs,
+    wait = waitFor,
+  }: ReviewServingProgressPollOptions = {},
+) => {
+  const candidates = await getCandidates(apiPort)
 
   if (candidates.length === 0) {
     return
   }
 
-  const hasStaleCandidate = candidates.some((candidate) => {
-    return isStaleReviewServingProgressSnapshot(getReviewServingProgressSnapshot(candidate.body))
-  })
+  const beforeSnapshots = candidates
+    .map((candidate) => {
+      return {candidate, snapshot: getReviewServingProgressSnapshot(candidate.body)}
+    })
+    .filter(({snapshot}) => {
+      return isStaleReviewServingProgressSnapshot(snapshot)
+    })
 
-  if (!hasStaleCandidate) {
+  if (beforeSnapshots.length === 0) {
     return
   }
 
-  const beforeSnapshots = candidates.map((candidate) => {
-    return {candidate, snapshot: getReviewServingProgressSnapshot(candidate.body)}
-  })
+  const deadlineMs = now() + timeoutMs
+  let latestDetails: Awaited<ReturnType<typeof getCurrentDbReviewServingQueuedWorkProbeResult>>['details'] = []
 
-  await waitFor(20_000)
-  const afterSnapshots = await Promise.all(
-    beforeSnapshots.map(async ({candidate, snapshot}) => {
-      return {
-        candidate,
-        snapshot,
-        after: getReviewServingProgressSnapshot(await postReviewWarnings(apiPort, candidate.projectId)),
-      }
-    }),
-  )
-  const progressed = afterSnapshots.some(({after, snapshot}) => {
-    return didReviewServingWorkProgress(snapshot, after)
-  })
-  const details = afterSnapshots.map(({after, candidate, snapshot}) => {
-    return {after, before: snapshot, projectId: candidate.projectId}
-  })
+  while (true) {
+    const result = await getCurrentDbReviewServingQueuedWorkProbeResult(apiPort, beforeSnapshots, postWarnings)
+    latestDetails = result.details
+
+    if (result.passed) {
+      return
+    }
+
+    if (now() >= deadlineMs) {
+      break
+    }
+
+    await wait(Math.min(pollIntervalMs, Math.max(deadlineMs - now(), 0)))
+  }
 
   expect(
-    progressed,
+    false,
     'Review serving work stayed refreshing without a maintenance-worker progress signal. '
-      + `candidates=${JSON.stringify(details)}`,
+      + `candidates=${JSON.stringify(latestDetails)}`,
   ).toBe(true)
 }
+
+const createReviewServingProgressCandidateBody = (
+  overrides: NonNullable<NonNullable<ReviewsWarningsBody['data']>['indexing']> = {},
+): ReviewsWarningsBody => {
+  return {
+    data: {
+      indexing: {
+        activeWorkCount: 1,
+        blockedReason: null,
+        eligibleConsumerCount: 1,
+        inFlightRefreshCount: 1,
+        lastProgressedAt: '2026-07-07T11:30:00.000Z',
+        pendingRefreshCount: 9,
+        progressState: 'processing',
+        queuedRefreshCount: 0,
+        serving: {
+          diagnostics: {rebuildChunks: {pendingCount: 8, runningCount: 1, updatedAt: '2026-07-07T11:30:00.000Z'}},
+        },
+        status: 'refreshing',
+        ...overrides,
+      },
+    },
+  }
+}
+
+test('current-db review-serving smoke polls until original queued work progresses', async () => {
+  let nowMs = Date.parse('2026-07-24T10:00:00.000Z')
+  const initialBody = createReviewServingProgressCandidateBody()
+  const progressedBody = createReviewServingProgressCandidateBody({
+    pendingRefreshCount: 8,
+    serving: {
+      diagnostics: {rebuildChunks: {pendingCount: 7, runningCount: 1, updatedAt: '2026-07-07T11:30:00.000Z'}},
+    },
+  })
+  let probeCount = 0
+  const waits: number[] = []
+
+  await expectCurrentDbReviewServingQueuedWorkProgresses(3001, {
+    getCandidates: async () => {
+      return [{body: initialBody, projectId: 'project-a'}]
+    },
+    now: () => {
+      return nowMs
+    },
+    postWarnings: async () => {
+      probeCount += 1
+
+      return probeCount < 3 ? initialBody : progressedBody
+    },
+    wait: async (ms) => {
+      waits.push(ms)
+      nowMs += ms
+    },
+  })
+
+  expect(probeCount).toBe(3)
+  expect(waits).toEqual([
+    currentDbReviewServingQueuedWorkProgressPollMs,
+    currentDbReviewServingQueuedWorkProgressPollMs,
+  ])
+})
+
+test('current-db review-serving smoke accepts original queued work becoming non-candidate', async () => {
+  const initialBody = createReviewServingProgressCandidateBody()
+  const resolvedBody = createReviewServingProgressCandidateBody({
+    activeWorkCount: 0,
+    inFlightRefreshCount: 0,
+    pendingRefreshCount: 0,
+    progressState: 'ready',
+    queuedRefreshCount: 0,
+    serving: {
+      diagnostics: {rebuildChunks: {pendingCount: 0, runningCount: 0, updatedAt: '2026-07-07T11:30:00.000Z'}},
+    },
+    status: 'ready',
+  })
+  let probeCount = 0
+
+  await expectCurrentDbReviewServingQueuedWorkProgresses(3001, {
+    getCandidates: async () => {
+      return [{body: initialBody, projectId: 'project-a'}]
+    },
+    postWarnings: async () => {
+      probeCount += 1
+
+      return resolvedBody
+    },
+    wait: async () => {
+      throw new Error('resolved candidates should not wait')
+    },
+  })
+
+  expect(probeCount).toBe(1)
+})
+
+test('current-db review-serving smoke accepts original queued work becoming non-stale', async () => {
+  const initialBody = createReviewServingProgressCandidateBody()
+  const nonStaleBody = createReviewServingProgressCandidateBody({
+    lastProgressedAt: '2026-07-24T10:00:00.000Z',
+    serving: {
+      diagnostics: {rebuildChunks: {pendingCount: 8, runningCount: 1, updatedAt: '2026-07-24T10:00:00.000Z'}},
+    },
+  })
+  const nowMs = Date.parse('2026-07-24T10:00:01.000Z')
+  let probeCount = 0
+
+  await expectCurrentDbReviewServingQueuedWorkProgresses(3001, {
+    getCandidates: async () => {
+      return [{body: initialBody, projectId: 'project-a'}]
+    },
+    now: () => {
+      return nowMs
+    },
+    postWarnings: async () => {
+      probeCount += 1
+
+      return nonStaleBody
+    },
+    wait: async () => {
+      throw new Error('non-stale candidates should not wait')
+    },
+  })
+
+  expect(probeCount).toBe(1)
+})
 
 test('current-db review-serving smoke treats active refresh work as a progress candidate', () => {
   const body: ReviewsWarningsBody = {

@@ -6,7 +6,7 @@ This ledger is limited to review-serving storage surfaces observed in `REVIEW_ST
 
 Current-DB gates now have passing evidence after PR #131: `bun run test:dev-server:current-db` and `bun run test:network-smoke:current-db` completed without the forbidden DuckDB fatal runtime restart. That unblocks investigation, but every storage deletion or slimming candidate still needs per-candidate route parity, benchmark, recovery, and live progress proof before implementation.
 
-Post-#140 status: the five empty legacy patch tables observed in the original evidence have been retired by bounded forward migrations `0118` through `0122`. The selected-import payload evidence added after PR #140 still does not authorize column slimming because the inspected project has no same-project hot-field rows and current writer/reader/recovery paths still carry those fields.
+Post-#140 status: the five empty legacy patch tables observed in the original evidence have been retired by bounded forward migrations `0118` through `0122`. After PR #142's title-search contract proof, `mart.review_title_search_serving_v4.activity_sort_at` is retired by bounded forward migration `0123`. The selected-import payload evidence added after PR #140 still does not authorize column slimming because the inspected project has no same-project hot-field rows and current writer/reader/recovery paths still carry those fields.
 
 ## Retired Since Original Evidence
 
@@ -17,6 +17,7 @@ Post-#140 status: the five empty legacy patch tables observed in the original ev
 | `mart.review_llm_status_patch_v4` | `0120_dropReviewLlmStatusPatchV4.sql` | Retired | Removed from active schema/evidence expectations; guarded against non-test runtime reintroduction. |
 | `mart.review_article_filter_posting_patch_v4` | `0121_dropReviewArticleFilterPostingPatchV4.sql` | Retired | Removed from active schema/evidence expectations; guarded against non-test runtime reintroduction. |
 | `mart.review_article_display_patch_v4` | `0122_dropReviewArticleDisplayPatchV4.sql` | Retired | Removed from active schema/evidence expectations; guarded against non-test runtime reintroduction. |
+| `mart.review_title_search_serving_v4.activity_sort_at` | `0123_dropReviewTitleSearchActivitySortAt.sql` | Retired | Removed from active title-search schema and writers after PR #142 contract proof; title-search rows remain token membership only. |
 
 ## Candidate Ledger
 
@@ -38,15 +39,14 @@ Post-#140 status: the five empty legacy patch tables observed in the original ev
 | Very large contribution rebuild partial | `mart.review_article_summary_contribution_rebuild_partial_v4` | 4,257,474 rows, 11 columns; largest row-count surface in evidence | Summary contribution rebuild worker/finalizer | High | Prove partial rows are transient, reproducible, and safe to clean after finalization; benchmark and live progress proof | Highest-priority retention candidate, not reader deletion |
 | Main article serving table | `mart.review_article_serving_v4` | 150,272 rows, 45 columns, 0 duplicate keys | Primary review list/detail routes | Very high | Full route parity, cursor/order parity, physical benchmark, recovery and live progress proof | Non-candidate; use as protected baseline |
 | Filter posting serving table | `mart.review_article_filter_posting_serving_v4` | 244,758 rows, 10 columns, 0 duplicate keys | Filtered list readers and count/facet consumers | Very high | Filter route parity, ordering/cursor proof, benchmark under filter workloads | Non-candidate; protected unless a replacement index is proven |
-| Title search serving table | `mart.review_title_search_serving_v4` | 229,174 rows, 9 columns, 1 index; `activity_sort_at` 100% null | Title search route/read model | High | Search parity, ranking/order proof, benchmark for title query workload | Possible column-slimming candidate for null sort column; table is a non-candidate |
+| Title search serving table | `mart.review_title_search_serving_v4` | 229,174 rows, 9 columns, 1 index in original evidence; `activity_sort_at` retired by migration `0123` after PR #142 | Title search route/read model | High | Continue to protect token membership route parity and benchmark evidence for the table itself | Keep table; retired repeated null sort metadata |
 
 ## Post-#140 Remaining Candidate Ranking
 
-1. `mart.review_title_search_serving_v4.activity_sort_at` is the best future schema canary, but it needs a focused search/order contract proof first. The proof must show title-search rows only provide token membership and that ordering/cursor behavior comes from the protected serving/queue surfaces.
-2. `mart.review_article_summary_contribution_v4` has encouraging static evidence because current summary recompute paths write count/facet serving tables directly, but it is not ready for a drop. The current physical proof is one-project scoped; global/current-DB row proof and summary route parity evidence should come first.
-3. `app.review_selected_article_import_v4` payload columns stay blocked. PR #140 makes the null evidence explicit, but same-project hot-field rows are also zero and active writer/reader/recovery paths still carry the fields.
-4. `mart.review_unassessed_queue_serving_v4` stays protected. Current code actively uses it for foreground unassessed routes, queue ordering, judgment-job scheduling, summary projection, and retention.
-5. `app.review_serving_projector_watermark` nullable lease/cursor fields stay protected because they belong to lifecycle and recovery semantics, even when current scoped evidence shows nulls.
+1. `mart.review_article_summary_contribution_v4` has encouraging static evidence because current summary recompute paths write count/facet serving tables directly, but it is not ready for a drop. The current physical proof is one-project scoped; global/current-DB row proof and summary route parity evidence should come first.
+2. `app.review_selected_article_import_v4` payload columns stay blocked. PR #140 makes the null evidence explicit, but same-project hot-field rows are also zero and active writer/reader/recovery paths still carry the fields.
+3. `mart.review_unassessed_queue_serving_v4` stays protected. Current code actively uses it for foreground unassessed routes, queue ordering, judgment-job scheduling, summary projection, and retention.
+4. `app.review_serving_projector_watermark` nullable lease/cursor fields stay protected because they belong to lifecycle and recovery semantics, even when current scoped evidence shows nulls.
 
 ## Quality Gates
 

@@ -187,7 +187,6 @@ test('queue rebuild rows upsert overlapping split chunk boundary rows', async ()
 test('title search rebuild ranges commit scoped deletes before same-key inserts', async () => {
   const {database, getTransactionCount, statements, workloadContexts} = createWriterDatabase()
   const baseRange = {
-    activitySortAtSql: 'article.created_at',
     articleRangePredicateSql: "AND scope.article_id >= 'article-1' AND scope.article_id <= 'article-2'",
     articleTitleSql: 'article.title',
     projectId: 'project-1',

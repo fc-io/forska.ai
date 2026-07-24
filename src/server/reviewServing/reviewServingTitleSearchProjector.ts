@@ -52,7 +52,6 @@ export type ProjectReviewServingTitleSearchRebuildRangesInput = {
 }
 
 type TitleSearchSourceRow = {
-  activitySortAt: Date | string | null
   articleId: string
   articleTitle: string | null
   tombstone: boolean
@@ -248,7 +247,6 @@ const getTitleSearchRows = async (
     SELECT
       scope.article_id AS articleId,
       ${getSelectedImportTitleSql(input, {includeSelectedPatchOverlay})} AS articleTitle,
-      COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at) AS activitySortAt,
       article.id IS NULL OR NOT (scope.in_curated_scope OR scope.in_route_scope) AS tombstone
     FROM mart.project_scope_article scope
     ${dirtyJoinSql}
@@ -271,7 +269,6 @@ const getTitleSearchRecord = (
     keyColumns: ['project_id', 'search_identity', 'project_scope_identity', 'snapshot_id', 'token', 'article_id'],
     table: 'mart.review_title_search_serving_v4',
     values: {
-      activity_sort_at: row.activitySortAt,
       article_id: row.articleId,
       project_id: input.projectId,
       project_scope_identity: input.projectScopeIdentity,
@@ -411,8 +408,6 @@ export const projectReviewServingTitleSearchRebuildRows = async (
 
 const getReviewServingTitleSearchRebuildWriterInput = (input: ProjectReviewServingTitleSearchRebuildInput) => {
   return {
-    activitySortAtSql:
-      'COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at)',
     articleRangePredicateSql: getArticleRangePredicate(input),
     articleTitleSql: getSelectedImportTitleSql(input, {includeSelectedPatchOverlay: false}),
     projectId: input.projectId,

@@ -78,7 +78,7 @@ test('DuckDB migrations keep projector watermark unindexed after primary-key rep
   expect(dropSql).toContain('DROP INDEX IF EXISTS idx_review_serving_projector_watermark_lookup;')
 })
 
-test('DuckDB migrations retire bounded review-serving patch tables with forward drops', () => {
+test('DuckDB migrations retire bounded review-serving storage with forward drops', () => {
   const reviewQueuePatchDropSql = readFileSync(
     resolve(migrationsFolder, '0118_dropReviewQueuePatchV4.sql'),
     'utf8',
@@ -99,6 +99,10 @@ test('DuckDB migrations retire bounded review-serving patch tables with forward 
     resolve(migrationsFolder, '0122_dropReviewArticleDisplayPatchV4.sql'),
     'utf8',
   ).trim()
+  const reviewTitleSearchActivitySortAtDropSql = readFileSync(
+    resolve(migrationsFolder, '0123_dropReviewTitleSearchActivitySortAt.sql'),
+    'utf8',
+  ).trim()
 
   expect(reviewQueuePatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_queue_patch_v4;')
   expect(reviewHumanStatusPatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_human_status_patch_v4;')
@@ -107,6 +111,19 @@ test('DuckDB migrations retire bounded review-serving patch tables with forward 
     'DROP TABLE IF EXISTS mart.review_article_filter_posting_patch_v4;',
   )
   expect(reviewArticleDisplayPatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_article_display_patch_v4;')
+  expect(reviewTitleSearchActivitySortAtDropSql).toContain(
+    'CREATE TABLE mart.review_title_search_serving_v4_repair',
+  )
+  expect(reviewTitleSearchActivitySortAtDropSql).toContain('DROP TABLE mart.review_title_search_serving_v4;')
+  expect(reviewTitleSearchActivitySortAtDropSql).toContain(
+    'ALTER TABLE mart.review_title_search_serving_v4_repair RENAME TO review_title_search_serving_v4;',
+  )
+  expect(reviewTitleSearchActivitySortAtDropSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_title_search_serving_v4_repaired_pk',
+  )
+  expect(reviewTitleSearchActivitySortAtDropSql).not.toContain('PRIMARY KEY')
+  expect(reviewTitleSearchActivitySortAtDropSql).not.toContain('activity_sort_at')
+  expect(reviewTitleSearchActivitySortAtDropSql).toContain('CREATE INDEX IF NOT EXISTS idx_review_title_search_serving_v4_token')
 })
 
 test('DuckDB migrations repair legacy review serving judgment detail payload-kind schema drift', async () => {
