@@ -29,6 +29,7 @@ type EvidenceReport = {
   mode: 'readonly-snapshot'
   options: CliOptions
   projectorWatermarkNullableFieldEvidence: ProjectorWatermarkNullableFieldReport
+  rebuildRequestLifecycleFieldEvidence: RebuildRequestLifecycleFieldReport
   rebuildArtifactDispositionEvidence: RebuildArtifactDispositionEvidenceReport
   retentionCleanupEligibility: RetentionCleanupEligibilityReport
   selectedImportPayloadSlimmingReadiness: SelectedImportPayloadSlimmingReadinessReport
@@ -173,6 +174,31 @@ type RebuildArtifactDispositionEvidenceReport = {
   requestlessChunkRows: number | null
   requestlessRowsByAdoptionHint: RebuildArtifactDispositionRequestlessChunkRow[]
   table: 'app.review_rebuild_chunk_manifest'
+  verdict: 'not-authorized' | 'blocked'
+}
+type RebuildRequestLifecycleFieldColumnEvidence = {
+  column: (typeof rebuildRequestLifecycleNullableColumns)[number]
+  currentProjectNonNullCount: number | null
+  currentProjectNullCount: number | null
+  globalNonNullCount: number | null
+  globalNullCount: number | null
+}
+type RebuildRequestLifecycleReasonRow = {
+  admissionState: string
+  nonNullLifecycleFieldRows: number
+  reason: string
+  rows: number
+  status: string
+}
+type RebuildRequestLifecycleFieldReport = {
+  columns: RebuildRequestLifecycleFieldColumnEvidence[]
+  currentProjectRows: number | null
+  error: string | null
+  globalRows: number | null
+  note: string
+  projectId: string
+  rowsByReasonAndStatus: RebuildRequestLifecycleReasonRow[]
+  table: 'app.review_rebuild_request'
   verdict: 'not-authorized' | 'blocked'
 }
 type SelectedImportPayloadColumnEvidence = {
@@ -556,6 +582,14 @@ const projectorWatermarkNullableColumns = [
   'lease_expires_at',
   'cursor_json',
   'last_error',
+] as const
+
+const rebuildRequestLifecycleNullableColumns = [
+  'retry_after',
+  'oom_category',
+  'over_budget_reason',
+  'lease_owner',
+  'lease_expires_at',
 ] as const
 
 const getNullSelectedBaseColumnExpressions = (column: string) => {
@@ -1519,6 +1553,97 @@ const getRebuildArtifactDispositionEvidenceReport = async (
       requestRowsByDisposition: [],
       requestlessChunkRows: null,
       requestlessRowsByAdoptionHint: [],
+      table,
+      verdict: 'blocked',
+    }
+  }
+}
+
+const getRebuildRequestLifecycleFieldReport = async (
+  runtime: QueryRuntime,
+  projectId: string,
+  limit: number,
+): Promise<RebuildRequestLifecycleFieldReport> => {
+  const table = 'app.review_rebuild_request' as const
+  const nonNullLifecyclePredicate = rebuildRequestLifecycleNullableColumns
+    .map((column) => {
+      return `${column} IS NOT NULL`
+    })
+    .join(' OR ')
+  const nullableColumnExpressions = rebuildRequestLifecycleNullableColumns
+    .map((column) => {
+      return `CAST(COUNT(*) FILTER (WHERE ${column} IS NULL) AS BIGINT) AS global_${column}_nullCount,
+        CAST(COUNT(*) FILTER (WHERE ${column} IS NOT NULL) AS BIGINT) AS global_${column}_nonNullCount,
+        CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)} AND ${column} IS NULL) AS BIGINT) AS currentProject_${column}_nullCount,
+        CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)} AND ${column} IS NOT NULL) AS BIGINT) AS currentProject_${column}_nonNullCount`
+    })
+    .join(',\n        ')
+
+  try {
+    const rows = await runReadonlyQuery<Record<string, number | string | null>>(
+      runtime,
+      `
+        SELECT
+          CAST(COUNT(*) AS BIGINT) AS globalRows,
+          CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows,
+          ${nullableColumnExpressions}
+        FROM ${table}
+      `,
+    )
+    const rowsByReasonAndStatus = await runReadonlyQuery<RebuildRequestLifecycleReasonRow>(
+      runtime,
+      `
+        SELECT
+          COALESCE(reason, 'unknown') AS reason,
+          COALESCE(status, 'unknown') AS status,
+          COALESCE(admission_state, 'unknown') AS admissionState,
+          CAST(COUNT(*) AS BIGINT) AS rows,
+          CAST(COUNT(*) FILTER (WHERE ${nonNullLifecyclePredicate}) AS BIGINT) AS nonNullLifecycleFieldRows
+        FROM ${table}
+        WHERE project_id = ${getSqlLiteral(projectId)}
+        GROUP BY reason, status, admission_state
+        ORDER BY rows DESC, reason, status, admission_state
+        LIMIT ${Math.max(1, limit)}
+      `,
+    )
+    const row = rows[0] ?? {}
+
+    return {
+      columns: rebuildRequestLifecycleNullableColumns.map((column) => {
+        return {
+          column,
+          currentProjectNonNullCount: getNumberOrNull(row[`currentProject_${column}_nonNullCount`]),
+          currentProjectNullCount: getNumberOrNull(row[`currentProject_${column}_nullCount`]),
+          globalNonNullCount: getNumberOrNull(row[`global_${column}_nonNullCount`]),
+          globalNullCount: getNumberOrNull(row[`global_${column}_nullCount`]),
+        }
+      }),
+      currentProjectRows: getNumberOrNull(row.currentProjectRows),
+      error: null,
+      globalRows: getNumberOrNull(row.globalRows),
+      note: 'Read-only nullness and lifecycle-bucket evidence for rebuild request retry/OOM/lease fields. Null evidence is not schema-slimming authorization: these fields are admission, retry, over-budget, owner lease, and operator recovery state until lifecycle tests and live progress proof show otherwise.',
+      projectId,
+      rowsByReasonAndStatus: rowsByReasonAndStatus.map((reasonRow) => {
+        return {
+          admissionState: reasonRow.admissionState,
+          nonNullLifecycleFieldRows: Number(reasonRow.nonNullLifecycleFieldRows ?? 0),
+          reason: reasonRow.reason,
+          rows: Number(reasonRow.rows ?? 0),
+          status: reasonRow.status,
+        }
+      }),
+      table,
+      verdict: 'not-authorized',
+    }
+  } catch (error) {
+    return {
+      columns: [],
+      currentProjectRows: null,
+      error: error instanceof Error ? error.message : String(error),
+      globalRows: null,
+      note: 'Rebuild request lifecycle field evidence collection failed. Failed evidence collection is not slimming authorization.',
+      projectId,
+      rowsByReasonAndStatus: [],
       table,
       verdict: 'blocked',
     }
@@ -3338,6 +3463,26 @@ const renderMarkdown = (report: EvidenceReport) => {
       return [`\`${row.requestDisposition}\``, formatValue(row.requests), formatValue(row.chunkRows)]
     },
   )
+  const rebuildRequestLifecycleColumnRows = report.rebuildRequestLifecycleFieldEvidence.columns.map((column) => {
+    return [
+      `\`${column.column}\``,
+      formatValue(column.globalNullCount),
+      formatValue(column.globalNonNullCount),
+      formatValue(column.currentProjectNullCount),
+      formatValue(column.currentProjectNonNullCount),
+    ]
+  })
+  const rebuildRequestLifecycleReasonRows = report.rebuildRequestLifecycleFieldEvidence.rowsByReasonAndStatus.map(
+    (row) => {
+      return [
+        `\`${row.reason}\``,
+        `\`${row.status}\``,
+        `\`${row.admissionState}\``,
+        formatValue(row.rows),
+        formatValue(row.nonNullLifecycleFieldRows),
+      ]
+    },
+  )
   const selectedImportPayloadRows = report.selectedImportPayloadSlimmingReadiness.columns.map((column) => {
     return [
       `\`${column.column}\``,
@@ -3687,6 +3832,40 @@ const renderMarkdown = (report: EvidenceReport) => {
     rebuildRequestDispositionRows.length > 0
       ? formatMarkdownTable(['Request disposition', 'Requests', 'Chunk rows'], rebuildRequestDispositionRows)
       : '_No rebuild request disposition rows were collected._',
+    '',
+    '## Rebuild Request Lifecycle Field Evidence',
+    '',
+    `Verdict: ${
+      report.rebuildRequestLifecycleFieldEvidence.verdict === 'not-authorized'
+        ? 'not-authorized (not deletion/slimming authorization)'
+        : 'blocked'
+    }`,
+    '',
+    report.rebuildRequestLifecycleFieldEvidence.note,
+    '',
+    `Table: \`${report.rebuildRequestLifecycleFieldEvidence.table}\``,
+    '',
+    `Global rows: ${formatValue(report.rebuildRequestLifecycleFieldEvidence.globalRows)}`,
+    '',
+    `Current-project rows: ${formatValue(report.rebuildRequestLifecycleFieldEvidence.currentProjectRows)}`,
+    '',
+    report.rebuildRequestLifecycleFieldEvidence.error
+      ? `Status: Blocked: ${report.rebuildRequestLifecycleFieldEvidence.error}`
+      : 'Status: ok',
+    '',
+    rebuildRequestLifecycleColumnRows.length > 0
+      ? formatMarkdownTable(
+          ['Lifecycle column', 'Global nulls', 'Global non-nulls', 'Current-project nulls', 'Current-project non-nulls'],
+          rebuildRequestLifecycleColumnRows,
+        )
+      : '_No rebuild request lifecycle column evidence rows were collected._',
+    '',
+    rebuildRequestLifecycleReasonRows.length > 0
+      ? formatMarkdownTable(
+          ['Reason', 'Status', 'Admission state', 'Rows', 'Rows with any lifecycle field'],
+          rebuildRequestLifecycleReasonRows,
+        )
+      : '_No rebuild request lifecycle reason/status rows were collected._',
     '',
     '## Selected-Import Payload Slimming Readiness',
     '',
@@ -4204,6 +4383,11 @@ const inspectPhysicalEvidence = (options: CliOptions) => {
               mode: 'readonly-snapshot',
               options,
               projectorWatermarkNullableFieldEvidence: await getProjectorWatermarkNullableFieldReport(
+                runtime,
+                options.projectId,
+                options.limit,
+              ),
+              rebuildRequestLifecycleFieldEvidence: await getRebuildRequestLifecycleFieldReport(
                 runtime,
                 options.projectId,
                 options.limit,
