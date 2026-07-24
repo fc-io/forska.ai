@@ -149,14 +149,21 @@ test('createReviewBulkOperationJob persists pinned PDF criteria and verifies thr
     snapshotPinId: 'pin-1',
     status: 'pending',
   })
-  expect(bulkDatabase.runs).toHaveLength(2)
-  expect(bulkDatabase.runs[0]).toContain('INSERT INTO app.review_serving_snapshot_pin')
-  expect(bulkDatabase.runs[1]).toContain('INSERT INTO app.review_bulk_operation_job')
-  expect(bulkDatabase.runs[1]).toContain("'review.pdf.selection'")
-  expect(bulkDatabase.runs[1]).toContain('heart failure')
-  expect(bulkDatabase.runs[1]).toContain('FALSE')
-  expect(bulkDatabase.runs[1]).toContain('"cursor":null')
-  expect(bulkDatabase.runs[1]).toContain('"jobId":"')
+  expect(bulkDatabase.runs).toHaveLength(4)
+  expect(bulkDatabase.runs[0]).toContain('UPDATE app.review_serving_snapshot_pin')
+  expect(bulkDatabase.runs[1]).toContain('INSERT INTO app.review_serving_snapshot_pin')
+  expect(bulkDatabase.runs[2]).toContain('UPDATE app.review_bulk_operation_job')
+  expect(bulkDatabase.runs[2]).toContain("status = 'pending'")
+  expect(bulkDatabase.runs[2]).toContain('completed_at = NULL')
+  expect(bulkDatabase.runs[3]).toContain('INSERT INTO app.review_bulk_operation_job')
+  expect(bulkDatabase.runs[3]).toContain("'review.pdf.selection'")
+  expect(bulkDatabase.runs[3]).toContain('heart failure')
+  expect(bulkDatabase.runs[3]).toContain('FALSE')
+  expect(bulkDatabase.runs[3]).toContain('"cursor":null')
+  expect(bulkDatabase.runs[3]).toContain('"jobId":"')
+  expect(bulkDatabase.runs[3]).toContain('WHERE NOT EXISTS')
+  expect(bulkDatabase.runs[3]).toContain("(existing.job_id || '')")
+  expect(bulkDatabase.runs.join('\n')).not.toContain('ON CONFLICT (job_id) DO UPDATE')
   expect(
     bulkDatabase.statements.some((statement) => {
       return statement.includes('FROM app.review_bulk_operation_job')
@@ -198,10 +205,12 @@ test('createReviewBulkOperationJob persists latest-snapshot add-by-filter criter
     snapshotId: null,
     snapshotPinId: null,
   })
-  expect(bulkDatabase.runs).toHaveLength(1)
-  expect(bulkDatabase.runs[0]).toContain('INSERT INTO app.review_bulk_operation_job')
-  expect(bulkDatabase.runs[0]).toContain('TRUE')
-  expect(bulkDatabase.runs[0]).toContain('addToProject')
+  expect(bulkDatabase.runs).toHaveLength(2)
+  expect(bulkDatabase.runs[0]).toContain('UPDATE app.review_bulk_operation_job')
+  expect(bulkDatabase.runs[1]).toContain('INSERT INTO app.review_bulk_operation_job')
+  expect(bulkDatabase.runs[1]).toContain('TRUE')
+  expect(bulkDatabase.runs[1]).toContain('addToProject')
+  expect(bulkDatabase.runs.join('\n')).not.toContain('ON CONFLICT (job_id) DO UPDATE')
   expect(
     bulkDatabase.statements.some((statement) => {
       return statement.includes('app.article')

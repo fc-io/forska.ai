@@ -216,6 +216,25 @@ const insertBulkOperationJob = async (input: {
   const totalEstimateSql = getTotalEstimateSql(input.request)
 
   await input.database.run(`
+    UPDATE app.review_bulk_operation_job
+    SET
+      updated_at = current_timestamp,
+      cursor_json = ${getJsonSql({cursor: null, jobId: input.jobId, limit: batchSize})},
+      status = 'pending',
+      result_manifest_json = ${getJsonSql({
+        articleIdOnly: Array.isArray(input.request.criteria.articleIds),
+        operation: input.request.criteria.operation,
+      })},
+      processed_count = 0,
+      total_estimate = ${totalEstimateSql},
+      completed_at = NULL,
+      cancel_requested = FALSE,
+      retry_count = 0,
+      last_error = NULL
+    WHERE job_id = ${getSqlLiteral(input.jobId)}
+  `)
+
+  await input.database.run(`
     INSERT INTO app.review_bulk_operation_job (
       job_id,
       job_kind,
@@ -237,7 +256,8 @@ const insertBulkOperationJob = async (input: {
       retry_count,
       last_error,
       updated_at
-    ) VALUES (
+    )
+    SELECT
       ${getSqlLiteral(input.jobId)},
       ${getSqlLiteral(input.request.jobKind)},
       ${getSqlLiteral(input.request.projectId)},
@@ -258,17 +278,11 @@ const insertBulkOperationJob = async (input: {
       0,
       NULL,
       current_timestamp
-    ) ON CONFLICT (job_id) DO UPDATE SET
-      updated_at = EXCLUDED.updated_at,
-      cursor_json = EXCLUDED.cursor_json,
-      status = 'pending',
-      result_manifest_json = EXCLUDED.result_manifest_json,
-      processed_count = 0,
-      total_estimate = ${totalEstimateSql},
-      completed_at = NULL,
-      cancel_requested = FALSE,
-      retry_count = 0,
-      last_error = NULL
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_bulk_operation_job existing
+      WHERE (existing.job_id || '') = (${getSqlLiteral(input.jobId)} || '')
+    )
   `)
 }
 

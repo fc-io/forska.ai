@@ -23,11 +23,6 @@ const allowedConflictUpdates: ConflictUpdateInventoryEntry[] = [
     snippet: 'ON CONFLICT(chunk_id) DO UPDATE SET',
   },
   {
-    path: 'src/server/reviewServing/reviewBulkOperationService.ts',
-    reason: 'bulk jobs reset cursor, status, cancellation, retry, and manifest state for explicit reruns',
-    snippet: 'ON CONFLICT (job_id) DO UPDATE SET',
-  },
-  {
     path: 'src/server/reviewServing/reviewServingSummaryProjector.ts',
     reason: 'summary rebuild accumulator adds chunk partial totals across batches',
     snippet:
