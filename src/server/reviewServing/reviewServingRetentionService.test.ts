@@ -62,7 +62,6 @@ const legacyRetentionTables = [
   'mart.review_selected_import_patch_v4',
   'mart.review_llm_status_patch_v4',
   'mart.review_human_status_patch_v4',
-  'mart.review_queue_patch_v4',
   'mart.review_article_filter_posting_patch_v4',
   'mart.review_article_summary_contribution_v4',
 ]
