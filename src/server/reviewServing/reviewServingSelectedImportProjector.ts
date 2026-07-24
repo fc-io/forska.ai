@@ -805,7 +805,7 @@ export const projectReviewServingSelectedImportArticleRanges = async (
         statements: params.ranges.flatMap((range) => {
           return range.replaceExistingRows === false
             ? [
-                getInsertSelectedImportArticleRangeRowsStatement(range),
+                getInsertSelectedImportArticleRangeRowsStatement(range, {replaceExistingRows: false}),
                 ...getRefreshSelectedImportServingArticleRangeStatements(range),
               ]
             : [
