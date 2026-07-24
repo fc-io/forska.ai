@@ -962,6 +962,19 @@ export const getReviewServingRebuildRequest = async (
   return row === undefined ? null : getRequestFromRow(row)
 }
 
+const getReviewServingRebuildRequestScanSafe = async (
+  input: {requestId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const [row] = await database.queryJson<ReviewServingRebuildRequestRow>(`
+    ${getRequestSelectSql()}
+    WHERE (request_id || '') = ${getSqlLiteral(input.requestId)}
+    LIMIT 1
+  `)
+
+  return row === undefined ? null : getRequestFromRow(row)
+}
+
 const getFailedRequestlessRebuildChunkCounts = async (
   input: {requestId: string},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -978,7 +991,7 @@ const getFailedRequestlessRebuildChunkCounts = async (
       admission_state AS admissionState,
       CAST(COUNT(*) AS INTEGER) AS chunkCount
     FROM app.review_rebuild_chunk_manifest
-    WHERE request_id = ${getSqlLiteral(input.requestId)}
+    WHERE (request_id || '') = ${getSqlLiteral(input.requestId)}
     GROUP BY status, projection_component, admission_state
     ORDER BY status, projection_component, admission_state
   `)
@@ -1000,7 +1013,7 @@ const getFailedRequestlessRebuildChunkSampleIds = async (
   const rows = await database.queryJson<{chunkId: string}>(`
     SELECT chunk_id AS chunkId
     FROM app.review_rebuild_chunk_manifest
-    WHERE request_id = ${getSqlLiteral(input.requestId)}
+    WHERE (request_id || '') = ${getSqlLiteral(input.requestId)}
     ORDER BY updated_at ASC, chunk_id ASC
     LIMIT 20
   `)
@@ -1026,7 +1039,7 @@ const getFailedRequestlessRebuildChunkGuardCounts = async (
       CAST(COUNT(*) FILTER (WHERE status NOT IN ${requestlessRebuildChunkReleaseStatusSql}) AS INTEGER) AS unsafeStatusCount,
       CAST(COUNT(*) FILTER (WHERE lease_owner IS NOT NULL OR lease_expires_at IS NOT NULL) AS INTEGER) AS liveLeaseCount
     FROM app.review_rebuild_chunk_manifest
-    WHERE request_id = ${getSqlLiteral(input.requestId)}
+    WHERE (request_id || '') = ${getSqlLiteral(input.requestId)}
   `)
 
   return {
@@ -1112,7 +1125,7 @@ const releaseFailedRequestlessRebuildChunks = async (
         started_at = NULL,
         completed_at = NULL,
         updated_at = current_timestamp
-    WHERE request_id = ${getSqlLiteral(input.requestId)}
+    WHERE (request_id || '') = ${getSqlLiteral(input.requestId)}
       AND project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
       AND status IN ${requestlessRebuildChunkReleaseStatusSql}
       AND lease_owner IS NULL
@@ -1142,7 +1155,7 @@ export const releaseFailedRequestlessReviewServingRebuildChunks = async (
   database: ReviewServingChunkManifestRepositoryDatabase = getReviewServingRebuildRequestDatabase(),
 ): Promise<ReleaseFailedRequestlessReviewServingRebuildChunksResult> => {
   return database.transaction(async (tx) => {
-    const request = await getReviewServingRebuildRequest({requestId: input.requestId}, tx)
+    const request = await getReviewServingRebuildRequestScanSafe({requestId: input.requestId}, tx)
 
     if (request === null) {
       return {
