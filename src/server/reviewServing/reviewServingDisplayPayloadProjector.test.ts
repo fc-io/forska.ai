@@ -2,6 +2,7 @@ import {expect, test} from 'bun:test'
 
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
+  projectReviewServingDisplayBaseRanges,
   projectReviewServingDisplayBaseRows,
   projectReviewServingDisplayPatches,
   projectReviewServingPayloadRanges,
@@ -500,15 +501,15 @@ test('display base rows flow through writer with display fields and selected imp
   expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
   expect(selectStatement).not.toContain('selected_patch')
   expect(selectStatement).toContain('json_merge_patch')
-  expect(deletes).toHaveLength(1)
-  expect(deletes[0]).toContain("project_id = 'project-1'")
-  expect(deletes[0]).toContain("review_config_hash = 'review-config-1'")
-  expect(deletes[0]).toContain("snapshot_id = 'snapshot-1'")
-  expect(deletes[0]).toContain("list_mode_key IN ('llm', 'human')")
-  expect(deletes[0]).not.toContain('display_identity')
-  expect(deletes[0]).not.toContain('base_generation')
+  expect(deletes).toHaveLength(0)
   expect(inserts).toHaveLength(1)
-  expect(inserts[0]).not.toContain('ON CONFLICT')
+  expect(inserts[0]).toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id)')
+  expect(inserts[0]).toContain('base_generation = excluded.base_generation')
+  expect(inserts[0]).toContain('patch_watermark = excluded.patch_watermark')
+  expect(inserts[0]).toContain('llm_status_key = excluded.llm_status_key')
+  expect(inserts[0]).toContain('human_status_key = excluded.human_status_key')
+  expect(inserts[0]).toContain('review_opened = excluded.review_opened')
+  expect(inserts[0]).toContain('review_sections_completed = excluded.review_sections_completed')
   expect(inserts[0]).not.toContain('mart.review_selected_import_patch_v4')
   expect(inserts[0]).not.toContain('selected_patch')
   expect(inserts[0]).toContain('WITH display_base AS')
@@ -519,4 +520,108 @@ test('display base rows flow through writer with display fields and selected imp
   expect(inserts.join('\n')).toContain('doi')
   expect(inserts.join('\n')).toContain('full_text_pdf')
   expect(inserts.join('\n')).toContain('full_text_fetched_at')
+})
+
+test('display base range rebuilds upsert candidate rows without scoped serving deletes', async () => {
+  const {database, statements} = createDisplayPayloadDatabase()
+
+  const result = await projectReviewServingDisplayBaseRanges(
+    {
+      ranges: [
+        {
+          baseGeneration: 1,
+          chunkEndArticleId: 'article-050',
+          chunkStartArticleId: 'article-001',
+          displayIdentity: 'display:identity-1',
+          humanStatusIdentity: 'humanStatus:identity-1',
+          listModeKeys: ['llm'],
+          llmStatusIdentity: 'llmStatus:identity-1',
+          payloadIdentity: 'payload:identity-1',
+          postingIdentity: 'posting:identity-1',
+          projectId: 'project-1',
+          projectScopeIdentity: 'projectScope:identity-1',
+          reviewConfigHash: 'review-config-1',
+          selectedImportIdentity: 'selectedImport:identity-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          snapshotId: 'snapshot-1',
+          summaryIdentity: 'summary:identity-1',
+        },
+        {
+          baseGeneration: 1,
+          chunkEndArticleId: 'article-099',
+          chunkStartArticleId: 'article-051',
+          displayIdentity: 'display:identity-1',
+          humanStatusIdentity: 'humanStatus:identity-1',
+          listModeKeys: ['llm'],
+          llmStatusIdentity: 'llmStatus:identity-1',
+          payloadIdentity: 'payload:identity-1',
+          postingIdentity: 'posting:identity-1',
+          projectId: 'project-1',
+          projectScopeIdentity: 'projectScope:identity-1',
+          reviewConfigHash: 'review-config-1',
+          selectedImportIdentity: 'selectedImport:identity-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          snapshotId: 'snapshot-1',
+          summaryIdentity: 'summary:identity-1',
+        },
+      ],
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result).toEqual({rangeCount: 2})
+  expect(getProjectorDiagnostics(result).phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
+  expect(joined).not.toContain('DELETE FROM mart.review_article_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
+  expect(joined).toContain("scope.article_id >= 'article-001'")
+  expect(joined).toContain("scope.article_id <= 'article-050'")
+  expect(joined).toContain("scope.article_id >= 'article-051'")
+  expect(joined).toContain("scope.article_id <= 'article-099'")
+  expect(joined).toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id)')
+  expect(joined).toContain('DO UPDATE SET')
+  expect(joined).toContain('article_title = excluded.article_title')
+  expect(joined).toContain('selected_import_route_id = excluded.selected_import_route_id')
+  expect(joined).toContain('llm_status_key = excluded.llm_status_key')
+  expect(joined).toContain('human_status_key = excluded.human_status_key')
+  expect(joined).not.toContain('mart.review_selected_import_patch_v4')
+  expect(joined).not.toContain('selected_patch')
+})
+
+test('display base rebuilds emit no stale row deletion statement', async () => {
+  const {database, statements} = createDisplayPayloadDatabase()
+
+  await projectReviewServingDisplayBaseRanges(
+    {
+      ranges: [
+        {
+          baseGeneration: 1,
+          chunkEndArticleId: 'article-050',
+          chunkStartArticleId: 'article-001',
+          displayIdentity: 'display:identity-1',
+          humanStatusIdentity: 'humanStatus:identity-1',
+          listModeKeys: ['llm'],
+          llmStatusIdentity: 'llmStatus:identity-1',
+          payloadIdentity: 'payload:identity-1',
+          postingIdentity: 'posting:identity-1',
+          projectId: 'project-1',
+          projectScopeIdentity: 'projectScope:identity-1',
+          reviewConfigHash: 'review-config-1',
+          selectedImportIdentity: 'selectedImport:identity-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          snapshotId: 'snapshot-1',
+          summaryIdentity: 'summary:identity-1',
+        },
+      ],
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  // This hardening slice is statement-shape only: stale row cleanup remains a
+  // future semantic cleanup path, separate from avoiding the indexed scoped DELETE.
+  expect(joined).toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id)')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_serving_v4')
+  expect(joined).not.toContain('NOT EXISTS')
+  expect(joined).not.toContain('stale')
 })
