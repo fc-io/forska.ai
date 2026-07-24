@@ -903,31 +903,12 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
   const scopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'partial'})
   const chunkIdPredicate = getSummaryRebuildPartialChunkIdPredicate(input.chunkIds)
 
-  await database.run(`
-      INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
-        request_id,
-        chunk_id,
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        serving_key,
-        summary_kind,
-        summary_identity,
-        list_mode_key,
-        count_kind,
-        summary_definition_version,
-        filter_key,
-        facet_kind,
-        facet_key,
-        facet_value,
-        prompt_id,
-        answer_id,
-        answer_value,
-        availability,
-        stale_reason,
-        count_value,
-        partial_updated_at
-      )
+  await database.transaction(async (tx) => {
+    await tx.run(`
+      DROP TABLE IF EXISTS temp_summary_rebuild_accumulator_batch
+    `)
+    await tx.run(`
+      CREATE TEMPORARY TABLE temp_summary_rebuild_accumulator_batch AS
       SELECT
         partial.request_id,
         ${getSqlLiteral(input.accumulatorChunkId)} AS chunk_id,
@@ -956,14 +937,88 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
       WHERE ${scopePredicate}
         AND partial.${chunkIdPredicate}
       GROUP BY partial.request_id, partial.project_id, partial.review_config_hash, partial.snapshot_id, partial.serving_key, partial.summary_kind, partial.summary_identity
-      ON CONFLICT(request_id, chunk_id, project_id, review_config_hash, snapshot_id, serving_key) DO UPDATE SET
+    `)
+    await tx.run(`
+      UPDATE mart.review_article_summary_rebuild_partial_v4 accumulator
+      SET
         count_value = CASE
-          WHEN excluded.availability = 'ready' AND availability = 'ready'
-          THEN COALESCE(count_value, 0) + COALESCE(excluded.count_value, 0)
+          WHEN batch.availability = 'ready' AND accumulator.availability = 'ready'
+          THEN COALESCE(accumulator.count_value, 0) + COALESCE(batch.count_value, 0)
           ELSE NULL
         END,
         partial_updated_at = now()
+      FROM temp_summary_rebuild_accumulator_batch batch
+      WHERE (accumulator.request_id || '') = (batch.request_id || '')
+        AND (accumulator.chunk_id || '') = (batch.chunk_id || '')
+        AND (accumulator.project_id || '') = (batch.project_id || '')
+        AND (accumulator.review_config_hash || '') = (batch.review_config_hash || '')
+        AND (accumulator.snapshot_id || '') = (batch.snapshot_id || '')
+        AND (accumulator.serving_key || '') = (batch.serving_key || '')
     `)
+    await tx.run(`
+      INSERT INTO mart.review_article_summary_rebuild_partial_v4 (
+        request_id,
+        chunk_id,
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        serving_key,
+        summary_kind,
+        summary_identity,
+        list_mode_key,
+        count_kind,
+        summary_definition_version,
+        filter_key,
+        facet_kind,
+        facet_key,
+        facet_value,
+        prompt_id,
+        answer_id,
+        answer_value,
+        availability,
+        stale_reason,
+        count_value,
+        partial_updated_at
+      )
+      SELECT
+        batch.request_id,
+        batch.chunk_id,
+        batch.project_id,
+        batch.review_config_hash,
+        batch.snapshot_id,
+        batch.serving_key,
+        batch.summary_kind,
+        batch.summary_identity,
+        batch.list_mode_key,
+        batch.count_kind,
+        batch.summary_definition_version,
+        batch.filter_key,
+        batch.facet_kind,
+        batch.facet_key,
+        batch.facet_value,
+        batch.prompt_id,
+        batch.answer_id,
+        batch.answer_value,
+        batch.availability,
+        batch.stale_reason,
+        batch.count_value,
+        batch.partial_updated_at
+      FROM temp_summary_rebuild_accumulator_batch batch
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM mart.review_article_summary_rebuild_partial_v4 existing
+        WHERE (existing.request_id || '') = (batch.request_id || '')
+          AND (existing.chunk_id || '') = (batch.chunk_id || '')
+          AND (existing.project_id || '') = (batch.project_id || '')
+          AND (existing.review_config_hash || '') = (batch.review_config_hash || '')
+          AND (existing.snapshot_id || '') = (batch.snapshot_id || '')
+          AND (existing.serving_key || '') = (batch.serving_key || '')
+      )
+    `)
+    await tx.run(`
+      DROP TABLE IF EXISTS temp_summary_rebuild_accumulator_batch
+    `)
+  })
   await database.run(getRefreshSummaryRebuildAccumulatorCountsStatement(input))
 }
 
