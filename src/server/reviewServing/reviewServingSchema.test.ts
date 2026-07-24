@@ -25,6 +25,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0121_dropReviewArticleFilterPostingPatchV4.sql',
   '../../db/duckdbMigrations/0122_dropReviewArticleDisplayPatchV4.sql',
   '../../db/duckdbMigrations/0123_dropReviewTitleSearchActivitySortAt.sql',
+  '../../db/duckdbMigrations/0124_dropReviewSelectedImportDisplayCopyColumns.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -66,6 +67,10 @@ const reviewArticleDisplayPatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0122_dropReviewArticleDisplayPatchV4.sql']
 const reviewTitleSearchActivitySortAtDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0123_dropReviewTitleSearchActivitySortAt.sql']
+const reviewSelectedImportDisplayCopyColumnDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath[
+    '../../db/duckdbMigrations/0124_dropReviewSelectedImportDisplayCopyColumns.sql'
+  ]
 const selectedImportPatchDisplayFieldsForwardMigrationSql = readFileSync(
   resolve(import.meta.dir, '../../db/duckdbMigrations/0108_reviewSelectedImportPatchDisplayFields.sql'),
   'utf8',
@@ -278,6 +283,29 @@ test('title search serving schema drops repeated activity sort metadata', () => 
     'article_id',
     'title_prefix',
     'search_updated_at',
+  ])
+})
+
+test('selected import schema drops retired display-copy columns only', () => {
+  expect(reviewSelectedImportDisplayCopyColumnDropForwardMigrationSql).toContain(
+    'CREATE TABLE app.review_selected_article_import_v4_repair',
+  )
+  expect(reviewSelectedImportDisplayCopyColumnDropForwardMigrationSql).toContain(
+    'ALTER TABLE app.review_selected_article_import_v4_repair RENAME TO review_selected_article_import_v4;',
+  )
+  expect([...getTableColumns('app.review_selected_article_import_v4')]).toEqual([
+    'project_id',
+    'project_scope_identity',
+    'selected_import_snapshot_id',
+    'article_id',
+    'import_route_id',
+    'source_record_key',
+    'selected_rank_key',
+    'selected_rank_numeric',
+    'duplicate_flag',
+    'conflict_flag',
+    'tombstone',
+    'selected_import_updated_at',
   ])
 })
 

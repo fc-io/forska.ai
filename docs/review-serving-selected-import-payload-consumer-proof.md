@@ -17,7 +17,9 @@ The initial proof extended the physical evidence inspector only. The follow-up
 consumer-migration slices changed runtime projectors so the display-copy
 columns `publication_year`, `article_title`, `journal_title`, and `external_id`
 are no longer written into selected-base rows and no longer used as downstream
-fallbacks. Schema, migrations, retention behavior, recovery probes, and the
+fallbacks. After PR #151, bounded forward migration
+`0124_dropReviewSelectedImportDisplayCopyColumns.sql` drops only those four
+nullable display-copy columns. Retention behavior, recovery probes, and the
 identity/rank/source columns remain unchanged.
 
 After PR #150, the inspector also reports global/current-DB selected-base
@@ -62,11 +64,11 @@ The evidence shows that the scoped project has no non-null selected-base values
 for the eight candidate columns and no same-project hot-field rows available
 through project import routes. The current runtime now treats the four
 display-copy columns as write-suppressed/consumer-migrated, and global/current-DB
-selected-base evidence shows those four columns are 100% null across active/LKG
-protected and other completed selected-import rows. Display-copy writer/consumer
-suppression is implemented, while
+selected-base evidence showed those four columns were 100% null across
+active/LKG protected and other completed selected-import rows before the
+bounded schema drop. Display-copy writer/consumer suppression is implemented
+and migration `0124_dropReviewSelectedImportDisplayCopyColumns.sql` retires
+those physical columns, while
 `import_route_id`, `source_record_key`, `selected_rank_key`, and
 `selected_rank_numeric` remain active identity/rank/source state and are not
-part of the write-suppression claim. Schema drop still needs separate
-migration/recovery proof, plus route parity, benchmark evidence, and the
-required live progress gate.
+part of the write-suppression claim.

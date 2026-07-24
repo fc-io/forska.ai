@@ -80,15 +80,13 @@ payload proof classifies active/LKG protected, candidate, and other
 selected-import snapshot rows; per-column selected-base null/non-null counts;
 and same-project hot-field availability through `app.project_import_route`.
 It now acts as a regression/readiness check for selected-base display-copy
-write suppression, but still does not authorize deletion or schema slimming.
+write suppression and the bounded `0124` display-copy schema drop.
 The display-copy global evidence artifact extends that check to current-DB
 selected-base counts for only `publication_year`, `article_title`,
 `journal_title`, and `external_id`, split by selected-import snapshot status
 and active/LKG protection. `import_route_id`, `source_record_key`,
 `selected_rank_key`, and `selected_rank_numeric` stay out of the
-write-suppression claim. This is no schema-slimming authorization; display-copy
-writer/consumer suppression is implemented; schema drop still needs separate
-migration/recovery proof.
+write-suppression claim and remain active after the display-copy column drop.
 The summary
 contribution evidence classifies active/LKG snapshot protected rows, pinned
 snapshot rows, missing-manifest rows, rows by project/component

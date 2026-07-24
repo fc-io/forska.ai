@@ -54,6 +54,7 @@ type SelectedImportPayloadColumnEvidence = {
   column: (typeof selectedImportPayloadColumns)[number]
   hotFieldNonNullCount: number | null
   hotFieldNullCount: number | null
+  selectedBaseColumnStatus: 'active' | 'retired/dropped'
   selectedBaseActiveOrLastKnownGoodNonNullCount: number | null
   selectedBaseActiveOrLastKnownGoodNullCount: number | null
   selectedBaseCandidateNonNullCount: number | null
@@ -75,12 +76,13 @@ type SelectedImportDisplayCopyGlobalColumnEvidence = {
   column: (typeof selectedImportDisplayCopyColumns)[number]
   nonNullCount: number | null
   nullCount: number | null
+  status: 'active' | 'retired/dropped'
 }
 type SelectedImportDisplayCopyGlobalStatusRow = {
   activeOrLastKnownGoodProtected: boolean
   candidateRows: number
-  nonNullCounts: Record<(typeof selectedImportDisplayCopyColumns)[number], number>
-  nullCounts: Record<(typeof selectedImportDisplayCopyColumns)[number], number>
+  nonNullCounts: Record<(typeof selectedImportDisplayCopyColumns)[number], number | null>
+  nullCounts: Record<(typeof selectedImportDisplayCopyColumns)[number], number | null>
   otherRows: number
   rowCount: number
   snapshotStatus: string
@@ -356,6 +358,45 @@ const selectedImportDisplayCopyColumns = [
   'journal_title',
   'external_id',
 ] as const
+
+const getNullSelectedBaseColumnExpressions = (column: string) => {
+  return `NULL::BIGINT AS selectedBase_${column}_nullCount,
+        NULL::BIGINT AS selectedBase_${column}_nonNullCount,
+        NULL::BIGINT AS selectedBase_${column}_activeOrLastKnownGoodNullCount,
+        NULL::BIGINT AS selectedBase_${column}_activeOrLastKnownGoodNonNullCount,
+        NULL::BIGINT AS selectedBase_${column}_candidateNullCount,
+        NULL::BIGINT AS selectedBase_${column}_candidateNonNullCount,
+        NULL::BIGINT AS selectedBase_${column}_otherNullCount,
+        NULL::BIGINT AS selectedBase_${column}_otherNonNullCount`
+}
+
+const getSelectedBaseColumnExpressions = (column: string, presentColumns: ReadonlySet<string>) => {
+  if (!presentColumns.has(column)) {
+    return getNullSelectedBaseColumnExpressions(column)
+  }
+
+  return `CAST(COUNT(*) FILTER (WHERE selected_base.${column} IS NULL) AS BIGINT) AS selectedBase_${column}_nullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.${column} IS NOT NULL) AS BIGINT) AS selectedBase_${column}_nonNullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'active-or-last-known-good' AND selected_base.${column} IS NULL) AS BIGINT) AS selectedBase_${column}_activeOrLastKnownGoodNullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'active-or-last-known-good' AND selected_base.${column} IS NOT NULL) AS BIGINT) AS selectedBase_${column}_activeOrLastKnownGoodNonNullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'candidate' AND selected_base.${column} IS NULL) AS BIGINT) AS selectedBase_${column}_candidateNullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'candidate' AND selected_base.${column} IS NOT NULL) AS BIGINT) AS selectedBase_${column}_candidateNonNullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'other' AND selected_base.${column} IS NULL) AS BIGINT) AS selectedBase_${column}_otherNullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'other' AND selected_base.${column} IS NOT NULL) AS BIGINT) AS selectedBase_${column}_otherNonNullCount`
+}
+
+const getGlobalDisplayCopyExpressions = (
+  column: (typeof selectedImportDisplayCopyColumns)[number],
+  presentColumns: ReadonlySet<string>,
+) => {
+  if (!presentColumns.has(column)) {
+    return `NULL::BIGINT AS ${column}_nullCount,
+        NULL::BIGINT AS ${column}_nonNullCount`
+  }
+
+  return `CAST(COUNT(*) FILTER (WHERE selected_base.${column} IS NULL) AS BIGINT) AS ${column}_nullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.${column} IS NOT NULL) AS BIGINT) AS ${column}_nonNullCount`
+}
 
 const getArgValue = (names: string[]) => {
   const matchedArgument = process.argv.slice(2).find((argument) => {
@@ -888,28 +929,10 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
   runtime: QueryRuntime,
   projectId: string,
 ): Promise<SelectedImportPayloadSlimmingReadinessReport> => {
-  const selectedBaseExpressions = selectedImportPayloadColumns
-    .map((column) => {
-      return `CAST(COUNT(*) FILTER (WHERE selected_base.${column} IS NULL) AS BIGINT) AS selectedBase_${column}_nullCount,
-        CAST(COUNT(*) FILTER (WHERE selected_base.${column} IS NOT NULL) AS BIGINT) AS selectedBase_${column}_nonNullCount,
-        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'active-or-last-known-good' AND selected_base.${column} IS NULL) AS BIGINT) AS selectedBase_${column}_activeOrLastKnownGoodNullCount,
-        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'active-or-last-known-good' AND selected_base.${column} IS NOT NULL) AS BIGINT) AS selectedBase_${column}_activeOrLastKnownGoodNonNullCount,
-        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'candidate' AND selected_base.${column} IS NULL) AS BIGINT) AS selectedBase_${column}_candidateNullCount,
-        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'candidate' AND selected_base.${column} IS NOT NULL) AS BIGINT) AS selectedBase_${column}_candidateNonNullCount,
-        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'other' AND selected_base.${column} IS NULL) AS BIGINT) AS selectedBase_${column}_otherNullCount,
-        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'other' AND selected_base.${column} IS NOT NULL) AS BIGINT) AS selectedBase_${column}_otherNonNullCount`
-    })
-    .join(',\n        ')
   const hotFieldExpressions = selectedImportPayloadColumns
     .map((column) => {
       return `CAST(COUNT(*) FILTER (WHERE hot_field.${column} IS NULL) AS BIGINT) AS hotField_${column}_nullCount,
         CAST(COUNT(*) FILTER (WHERE hot_field.${column} IS NOT NULL) AS BIGINT) AS hotField_${column}_nonNullCount`
-    })
-    .join(',\n        ')
-  const globalDisplayCopyExpressions = selectedImportDisplayCopyColumns
-    .map((column) => {
-      return `CAST(COUNT(*) FILTER (WHERE selected_base.${column} IS NULL) AS BIGINT) AS ${column}_nullCount,
-        CAST(COUNT(*) FILTER (WHERE selected_base.${column} IS NOT NULL) AS BIGINT) AS ${column}_nonNullCount`
     })
     .join(',\n        ')
   const emptyGlobalDisplayCopyEvidence: SelectedImportDisplayCopyGlobalEvidence = {
@@ -922,6 +945,30 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
   }
 
   try {
+    const selectedBaseColumnRows = await runReadonlyQuery<{columnName: string}>(
+      runtime,
+      `
+        SELECT column_name AS "columnName"
+        FROM information_schema.columns
+        WHERE table_schema = 'app'
+          AND table_name = 'review_selected_article_import_v4'
+      `,
+    )
+    const selectedBaseColumnNames = new Set(
+      selectedBaseColumnRows.map((row) => {
+        return row.columnName
+      }),
+    )
+    const selectedBaseExpressions = selectedImportPayloadColumns
+      .map((column) => {
+        return getSelectedBaseColumnExpressions(column, selectedBaseColumnNames)
+      })
+      .join(',\n        ')
+    const globalDisplayCopyExpressions = selectedImportDisplayCopyColumns
+      .map((column) => {
+        return getGlobalDisplayCopyExpressions(column, selectedBaseColumnNames)
+      })
+      .join(',\n        ')
     const selectedBaseRows = await runReadonlyQuery<Record<string, number | string | null>>(
       runtime,
       `
@@ -1066,8 +1113,10 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
         totals.otherRows += Number(row.otherRows ?? 0)
 
         for (const column of selectedImportDisplayCopyColumns) {
-          totals.nullCounts[column] += Number(row[`${column}_nullCount`] ?? 0)
-          totals.nonNullCounts[column] += Number(row[`${column}_nonNullCount`] ?? 0)
+          if (selectedBaseColumnNames.has(column)) {
+            totals.nullCounts[column] += Number(row[`${column}_nullCount`] ?? 0)
+            totals.nonNullCounts[column] += Number(row[`${column}_nonNullCount`] ?? 0)
+          }
         }
 
         return totals
@@ -1095,8 +1144,9 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
       columns: selectedImportDisplayCopyColumns.map((column) => {
         return {
           column,
-          nonNullCount: globalDisplayCopyTotals.nonNullCounts[column],
-          nullCount: globalDisplayCopyTotals.nullCounts[column],
+          nonNullCount: selectedBaseColumnNames.has(column) ? globalDisplayCopyTotals.nonNullCounts[column] : null,
+          nullCount: selectedBaseColumnNames.has(column) ? globalDisplayCopyTotals.nullCounts[column] : null,
+          status: selectedBaseColumnNames.has(column) ? 'active' : 'retired/dropped',
         }
       }),
       otherRows: globalDisplayCopyTotals.otherRows,
@@ -1106,14 +1156,20 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
           candidateRows: Number(row.candidateRows ?? 0),
           nonNullCounts: Object.fromEntries(
             selectedImportDisplayCopyColumns.map((column) => {
-              return [column, Number(row[`${column}_nonNullCount`] ?? 0)]
+              return [
+                column,
+                selectedBaseColumnNames.has(column) ? Number(row[`${column}_nonNullCount`] ?? 0) : null,
+              ]
             }),
-          ) as Record<(typeof selectedImportDisplayCopyColumns)[number], number>,
+          ) as Record<(typeof selectedImportDisplayCopyColumns)[number], number | null>,
           nullCounts: Object.fromEntries(
             selectedImportDisplayCopyColumns.map((column) => {
-              return [column, Number(row[`${column}_nullCount`] ?? 0)]
+              return [
+                column,
+                selectedBaseColumnNames.has(column) ? Number(row[`${column}_nullCount`] ?? 0) : null,
+              ]
             }),
-          ) as Record<(typeof selectedImportDisplayCopyColumns)[number], number>,
+          ) as Record<(typeof selectedImportDisplayCopyColumns)[number], number | null>,
           otherRows: Number(row.otherRows ?? 0),
           rowCount: Number(row.rowCount ?? 0),
           snapshotStatus: String(row.snapshotStatus ?? 'NULL'),
@@ -1130,6 +1186,7 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
           column,
           hotFieldNonNullCount: getNumberOrNull(hotFieldRow[`hotField_${column}_nonNullCount`]),
           hotFieldNullCount: getNumberOrNull(hotFieldRow[`hotField_${column}_nullCount`]),
+          selectedBaseColumnStatus: selectedBaseColumnNames.has(column) ? 'active' : 'retired/dropped',
           selectedBaseActiveOrLastKnownGoodNonNullCount: getNumberOrNull(
             selectedBaseRow[`selectedBase_${column}_activeOrLastKnownGoodNonNullCount`],
           ),
@@ -1147,12 +1204,12 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
         }
       }),
       comparisonStatus:
-        'Selected-base counts are split into active/LKG protected selected-import rows, candidate selected-import rows, and other rows. Hot-field counts are scoped through app.project_import_route for the same project. Non-null hot-field values with null selected-base values mean source data exists but the selected-base projection did not carry it for this scoped snapshot.',
+        'Selected-base counts are split into active/LKG protected selected-import rows, candidate selected-import rows, and other rows. Retired/dropped selected-base columns report null counts instead of binding the absent physical columns. Hot-field counts are scoped through app.project_import_route for the same project. Non-null hot-field values with null selected-base values mean source data exists but the selected-base projection did not carry it for this scoped snapshot.',
       consumerWriterStatus:
-        'Current code no longer writes or consumes selected-base display-copy values for publication_year, article_title, journal_title, and external_id. Selected-base identity/rank/source fields remain active runtime state, and the nullable schema columns still exist. Treat this as write-suppression and consumer-migration evidence only.',
+        'Current code no longer writes or consumes selected-base display-copy values for publication_year, article_title, journal_title, and external_id. Post-drop databases report those columns as retired/dropped. Selected-base identity/rank/source fields remain active runtime state.',
       error: null,
       hotFieldScopedRows: getNumberOrNull(hotFieldRow.hotFieldScopedRows),
-      note: 'This section is not deletion/slimming authorization. It is a regression/readiness check for selected-base display-copy write suppression; schema slimming still needs separate migration, recovery, route parity, benchmark, and live progress proof.',
+      note: 'This section is not broad deletion/slimming authorization. It is a regression/readiness check for selected-base display-copy write suppression and the bounded display-copy schema drop; identity/rank/source fields remain active.',
       otherSelectedImportRows: getNumberOrNull(selectedBaseRow.otherSelectedImportRows),
       projectId,
       rowsBySelectedImportSnapshotStatus: snapshotStatusRows.map((row) => {
@@ -1719,6 +1776,7 @@ const renderMarkdown = (report: EvidenceReport) => {
   const selectedImportPayloadRows = report.selectedImportPayloadSlimmingReadiness.columns.map((column) => {
     return [
       `\`${column.column}\``,
+      column.selectedBaseColumnStatus,
       formatValue(column.selectedBaseNullCount),
       formatValue(column.selectedBaseNonNullCount),
       formatValue(column.selectedBaseActiveOrLastKnownGoodNullCount),
@@ -1737,7 +1795,7 @@ const renderMarkdown = (report: EvidenceReport) => {
     })
   const selectedImportDisplayCopyGlobalColumnRows =
     report.selectedImportPayloadSlimmingReadiness.selectedImportDisplayCopyGlobalEvidence.columns.map((column) => {
-      return [`\`${column.column}\``, formatValue(column.nullCount), formatValue(column.nonNullCount)]
+      return [`\`${column.column}\``, column.status, formatValue(column.nullCount), formatValue(column.nonNullCount)]
     })
   const selectedImportDisplayCopyGlobalStatusRows =
     report.selectedImportPayloadSlimmingReadiness.selectedImportDisplayCopyGlobalEvidence.rows.map((row) => {
@@ -1900,7 +1958,7 @@ const renderMarkdown = (report: EvidenceReport) => {
     '',
     report.selectedImportPayloadSlimmingReadiness.consumerWriterStatus,
     '',
-    'Global/current-DB display-copy evidence is limited to `publication_year`, `article_title`, `journal_title`, and `external_id`. This is no schema-slimming authorization; display-copy writer/consumer suppression is implemented; schema drop still needs separate migration/recovery proof. `import_route_id`, `source_record_key`, `selected_rank_key`, and `selected_rank_numeric` stay out of this write-suppression claim and remain active identity/rank/source state.',
+    'Global/current-DB display-copy evidence is limited to `publication_year`, `article_title`, `journal_title`, and `external_id`. Post-drop databases report those columns as `retired/dropped` instead of binding absent physical columns. `import_route_id`, `source_record_key`, `selected_rank_key`, and `selected_rank_numeric` stay out of this claim and remain active identity/rank/source state.',
     '',
     `Global/current-DB selected-base rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDisplayCopyGlobalEvidence.totalRows)}`,
     '',
@@ -1912,7 +1970,7 @@ const renderMarkdown = (report: EvidenceReport) => {
     '',
     selectedImportDisplayCopyGlobalColumnRows.length > 0
       ? formatMarkdownTable(
-          ['Global display-copy column', 'Selected-base nulls', 'Selected-base non-nulls'],
+          ['Global display-copy column', 'Status', 'Selected-base nulls', 'Selected-base non-nulls'],
           selectedImportDisplayCopyGlobalColumnRows,
         )
       : '_No global display-copy column evidence rows were collected._',
@@ -1942,6 +2000,7 @@ const renderMarkdown = (report: EvidenceReport) => {
       ? formatMarkdownTable(
           [
             'Column',
+            'Selected-base status',
             'Selected-base nulls',
             'Selected-base non-nulls',
             'Active/LKG nulls',

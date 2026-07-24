@@ -2,8 +2,8 @@
 
 ## Scope
 
-This is a bounded read-only evidence slice for display-copy write suppression in
-`app.review_selected_article_import_v4` after PR #150.
+This is a bounded evidence slice for display-copy write suppression and the
+post-PR #151 schema-drop follow-up in `app.review_selected_article_import_v4`.
 
 The display-copy columns are:
 
@@ -39,7 +39,7 @@ The generated read-only snapshot evidence found:
 
 ## Verdict
 
-This is no schema-slimming authorization. Display-copy writer/consumer
-suppression is implemented. Schema drop still needs separate migration/recovery
-proof, including route parity, benchmark evidence, and the required live
-progress gate.
+Display-copy writer/consumer suppression is implemented, and bounded forward
+migration `0124_dropReviewSelectedImportDisplayCopyColumns.sql` retires only
+`publication_year`, `article_title`, `journal_title`, and `external_id`.
+Identity/rank/source columns remain active selected-base runtime state.
