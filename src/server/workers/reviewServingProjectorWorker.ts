@@ -5255,30 +5255,6 @@ const repairRequestlessBootstrapRebuildAdoptions = async (input: {
       AND chunk.input_digest IS NOT DISTINCT FROM request_scope.input_digest
       AND chunk.status NOT IN ('blocked_over_budget', 'quarantined')
   `)
-
-  await input.database.run(`
-    WITH request_scope AS (${requestScope}),
-    request_components AS (
-      SELECT
-        request_scope.request_id,
-        TO_JSON(list(DISTINCT chunk.projection_component ORDER BY chunk.projection_component)) AS requested_components_json
-      FROM request_scope
-      INNER JOIN app.review_rebuild_chunk_manifest chunk
-        ON chunk.request_id = request_scope.request_id
-      WHERE chunk.status NOT IN ('blocked_over_budget', 'quarantined')
-      GROUP BY request_scope.request_id
-    )
-    UPDATE app.review_rebuild_request AS request
-    SET
-      requested_components_json = request_components.requested_components_json,
-      diagnostics_json = json_merge_patch(
-        COALESCE(request.diagnostics_json, '{}'::JSON),
-        '{"repairedRequestlessBootstrapAdoption":true}'::JSON
-      ),
-      updated_at = current_timestamp
-    FROM request_components
-    WHERE request.request_id = request_components.request_id
-  `)
 }
 
 const getRebuildRequestPendingChunkCount = async (
@@ -6740,50 +6716,55 @@ const adoptRequestlessRebuildChunk = async (
         ? `AND input_watermark = ${getSqlLiteral(input.chunk.inputWatermark)}`
         : ''
     await requireClaimedRebuildChunk(input, tx)
-    await tx.run(`
-      INSERT INTO app.review_rebuild_request (
-        request_id,
-        project_id,
-        reason,
-        requested_components_json,
-        source_watermarks_json,
-        identity_json,
-        priority,
-        status,
-        admission_state,
-        retry_policy_json,
-        diagnostics_json,
-        admitted_at,
-        updated_at
-      )
-      SELECT
-        ${getSqlLiteral(adoption.requestId)} AS request_id,
-        ${getSqlLiteral(projectId)} AS project_id,
-        ${getSqlLiteral(adoption.reason)} AS reason,
-        ${getSqlLiteral(JSON.stringify(adoption.requestedComponents))}::JSON AS requested_components_json,
-        '{}'::JSON AS source_watermarks_json,
-        ${getSqlLiteral(
-          JSON.stringify({
-            inputDigest: input.chunk.inputDigest,
-            inputWatermark: input.chunk.inputWatermark,
-            outputBaseGeneration: input.chunk.outputBaseGeneration,
-            projectionIdentity: input.chunk.projectionIdentity,
-            snapshotId: input.chunk.snapshotId,
-          }),
-        )}::JSON AS identity_json,
-        100 AS priority,
-        'admitted' AS status,
-        'admitted' AS admission_state,
-        '{}'::JSON AS retry_policy_json,
-        ${getSqlLiteral(JSON.stringify(adoption.diagnostics))}::JSON AS diagnostics_json,
-        now() AS admitted_at,
-        now() AS updated_at
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM app.review_rebuild_request existing_request
-        WHERE (existing_request.request_id || '') = ${getSqlLiteral(adoption.requestId)}
-      )
+    const existingRequests = await tx.queryJson<{requestId: string}>(`
+      SELECT existing_request.request_id AS requestId
+      FROM app.review_rebuild_request existing_request
+      WHERE (existing_request.request_id || '') = ${getSqlLiteral(adoption.requestId)}
+      LIMIT 1
     `)
+
+    if (existingRequests.length === 0) {
+      await tx.run(`
+        INSERT INTO app.review_rebuild_request (
+          request_id,
+          project_id,
+          reason,
+          requested_components_json,
+          source_watermarks_json,
+          identity_json,
+          priority,
+          status,
+          admission_state,
+          retry_policy_json,
+          diagnostics_json,
+          admitted_at,
+          updated_at
+        )
+        VALUES (
+          ${getSqlLiteral(adoption.requestId)},
+          ${getSqlLiteral(projectId)},
+          ${getSqlLiteral(adoption.reason)},
+          ${getSqlLiteral(JSON.stringify(adoption.requestedComponents))}::JSON,
+          '{}'::JSON,
+          ${getSqlLiteral(
+            JSON.stringify({
+              inputDigest: input.chunk.inputDigest,
+              inputWatermark: input.chunk.inputWatermark,
+              outputBaseGeneration: input.chunk.outputBaseGeneration,
+              projectionIdentity: input.chunk.projectionIdentity,
+              snapshotId: input.chunk.snapshotId,
+            }),
+          )}::JSON,
+          100,
+          'admitted',
+          'admitted',
+          '{}'::JSON,
+          ${getSqlLiteral(JSON.stringify(adoption.diagnostics))}::JSON,
+          now(),
+          now()
+        )
+      `)
+    }
     await tx.run(`
       UPDATE app.review_rebuild_chunk_manifest
       SET
