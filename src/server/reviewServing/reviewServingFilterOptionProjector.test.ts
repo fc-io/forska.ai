@@ -141,15 +141,19 @@ test('filter option refresh can insert rows idempotently without deleting existi
 
   const result = await projectReviewServingFilterOptions({...projectInput(), deleteExisting: false}, database)
   const joined = statements.join('\n')
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_filter_option_serving_v4')
+  })
 
   expect(result.optionRowCount).toBe(1)
   expect(joined).not.toContain('DELETE FROM mart.review_filter_option_serving_v4')
-  expect(joined).toContain('INSERT INTO mart.review_filter_option_serving_v4')
-  expect(joined).not.toContain('DO UPDATE SET')
-  expect(joined).not.toContain('count_value = excluded.count_value')
-  expect(joined).not.toContain('option_payload_json = excluded.option_payload_json')
-  expect(joined).not.toContain('option_updated_at = excluded.option_updated_at')
-  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(insertStatement).toBeDefined()
+  expect(insertStatement).not.toContain('ON CONFLICT')
+  expect(insertStatement).not.toContain('DO UPDATE SET')
+  expect(insertStatement).not.toContain('count_value = excluded.count_value')
+  expect(insertStatement).not.toContain('option_payload_json = excluded.option_payload_json')
+  expect(insertStatement).not.toContain('option_updated_at = excluded.option_updated_at')
+  expect(insertStatement).toContain('WHERE NOT EXISTS')
 })
 
 test('source query preserves active search and filter scope without using posting rows as response rows', async () => {

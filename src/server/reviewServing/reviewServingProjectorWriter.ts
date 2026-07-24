@@ -115,6 +115,9 @@ const reviewServingProjectorScanGuardedInsertMissingTables = new Set<string>([
   'mart.review_article_summary_contribution_rebuild_partial_v4',
   'mart.review_article_summary_rebuild_partial_v4',
 ])
+const reviewServingDeleteFreeSummaryScanGuardedInsertMissingTables = new Set<string>([
+  'mart.review_filter_option_serving_v4',
+])
 
 export type WriteReviewServingQueueRebuildRowsInput = {
   projectId: string
@@ -416,6 +419,41 @@ const getReviewServingProjectorDeleteScopedTables = (statements: readonly string
       if (table !== undefined && reviewServingProjectorDeleteScopedInsertOnlyTables.has(table)) {
         tables.add(table)
       }
+    }
+  })
+
+  return tables
+}
+
+const getReviewServingProjectorDeleteFreeSummaryScanGuardedInsertMissingTables = (
+  input: WriteReviewServingProjectorComponentInput,
+) => {
+  if (input.component !== 'summary') {
+    return new Set<string>()
+  }
+
+  const statements = input.statements ?? []
+  const deletedTables = new Set<string>()
+
+  statements.forEach((statement) => {
+    for (const match of statement.matchAll(/\bDELETE\s+FROM\s+([a-zA-Z_]\w*\.[a-zA-Z_]\w*)\b/giu)) {
+      const table = match[1]
+
+      if (table !== undefined) {
+        deletedTables.add(table)
+      }
+    }
+  })
+
+  const tables = new Set<string>()
+  const records = input.records ?? []
+
+  records.forEach((record) => {
+    if (
+      reviewServingDeleteFreeSummaryScanGuardedInsertMissingTables.has(record.table)
+      && !deletedTables.has(record.table)
+    ) {
+      tables.add(record.table)
     }
   })
 
@@ -813,6 +851,9 @@ export const writeReviewServingProjectorComponent = async (
     const statements = input.statements ?? []
     const insertOnlyTables = getReviewServingProjectorDeleteScopedTables(statements)
     const scanGuardedInsertMissingTables = new Set<string>(input.scanGuardedInsertMissingRecordTables ?? [])
+    getReviewServingProjectorDeleteFreeSummaryScanGuardedInsertMissingTables(input).forEach((table) => {
+      scanGuardedInsertMissingTables.add(table)
+    })
     const phaseTimings: Record<string, number> = {}
     const measure = async <T>(phase: string, operation: () => Promise<T>) => {
       const startedAtMs = Date.now()

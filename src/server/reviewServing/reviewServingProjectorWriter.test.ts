@@ -808,7 +808,7 @@ test('projector writer keeps judgment detail replacement rows idempotent after s
   expect(insertStatement).not.toContain('judgment-old')
 })
 
-test('projector writer supports explicit scan-guarded insert-missing record tables without scoped deletes', async () => {
+test('projector writer uses scan-guarded insert-missing for summary filter options without scoped deletes', async () => {
   const {database, statements} = createWriterDatabase()
   const keyColumns = [
     'project_id',
@@ -848,7 +848,6 @@ test('projector writer supports explicit scan-guarded insert-missing record tabl
           },
         },
       ],
-      scanGuardedInsertMissingRecordTables: ['mart.review_filter_option_serving_v4'],
       statements: [],
     },
     database,
