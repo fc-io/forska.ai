@@ -618,7 +618,7 @@ test('projector writer collapses duplicate primary-key records before a DuckDB c
   expect(insertStatement).toContain('2026-04-02T12:01:00.000Z')
 })
 
-test('projector writer keeps count serving replacement writes idempotent after scoped deletes', async () => {
+test('projector writer uses insert-only count serving replacement writes after scoped deletes', async () => {
   const {database, statements} = createWriterDatabase()
 
   await writeReviewServingProjectorComponent(
@@ -668,9 +668,8 @@ test('projector writer keeps count serving replacement writes idempotent after s
   })
 
   expect(insertStatement).toBeDefined()
-  expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, count_kind, summary_definition_version, filter_key) DO UPDATE SET',
-  )
+  expect(insertStatement).not.toContain('ON CONFLICT')
+  expect(insertStatement).not.toContain('DO UPDATE SET')
 })
 
 test('projector writer uses larger scan-guarded insert-missing batches for summary contribution partials', async () => {
@@ -722,7 +721,7 @@ test('projector writer uses larger scan-guarded insert-missing batches for summa
   })
 })
 
-test('projector writer keeps judgment detail replacement rows idempotent after scoped deletes', async () => {
+test('projector writer uses insert-only judgment detail replacement rows after scoped deletes', async () => {
   const {database, statements} = createWriterDatabase()
   const keyColumns = [
     'project_id',
@@ -800,12 +799,72 @@ test('projector writer keeps judgment detail replacement rows idempotent after s
   })
 
   expect(insertStatement).toBeDefined()
-  expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO UPDATE SET',
-  )
+  expect(insertStatement).not.toContain('ON CONFLICT')
+  expect(insertStatement).not.toContain('DO UPDATE SET')
   expect(insertStatement?.match(/'article-1'/gu)).toHaveLength(1)
   expect(insertStatement).toContain('judgment-new')
   expect(insertStatement).not.toContain('judgment-old')
+})
+
+test('projector writer uses insert-only filter facet replacement rows after scoped deletes', async () => {
+  const {database, statements} = createWriterDatabase()
+
+  await writeReviewServingProjectorComponent(
+    {
+      component: 'summary',
+      records: [
+        {
+          keyColumns: [
+            'project_id',
+            'review_config_hash',
+            'snapshot_id',
+            'summary_identity',
+            'facet_kind',
+            'facet_key',
+            'facet_value',
+            'summary_definition_version',
+          ],
+          table: 'mart.review_filter_facet_serving_v4',
+          values: {
+            answer_id: 'answer-1',
+            answer_value: 'yes',
+            availability: 'ready',
+            count_value: 4,
+            facet_key: 'promptAnswer',
+            facet_kind: 'review',
+            facet_updated_at: new Date('2026-04-02T12:00:00.000Z'),
+            facet_value: 'yes',
+            project_id: 'project-1',
+            prompt_id: 'prompt-1',
+            review_config_hash: 'review-config-1',
+            snapshot_id: 'snapshot-1',
+            summary_definition_version: 'review-serving-summary:v1',
+            summary_identity: 'review.prompt.answer',
+          },
+        },
+      ],
+      statements: [
+        `
+          DELETE FROM mart.review_filter_facet_serving_v4
+          WHERE project_id = 'project-1'
+            AND review_config_hash = 'review-config-1'
+            AND snapshot_id = 'snapshot-1'
+            AND facet_key = 'promptAnswer'
+        `,
+      ],
+    },
+    database,
+  )
+
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_filter_facet_serving_v4')
+  })
+
+  expect(insertStatement).toBeDefined()
+  expect(insertStatement).not.toContain('ON CONFLICT')
+  expect(insertStatement).not.toContain('DO UPDATE SET')
+  expect(insertStatement).toContain("'review.prompt.answer'")
+  expect(insertStatement).toContain("'yes'")
 })
 
 test('projector writer uses scan-guarded insert-missing for summary filter options without scoped deletes', async () => {

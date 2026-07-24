@@ -108,6 +108,9 @@ const reviewServingProjectorRecordBatchSizeByTable = new Map<string, number>([
 ])
 const reviewServingProjectorDeleteScopedInsertOnlyTables = new Set<string>([
   'app.review_selected_article_import_v4',
+  'mart.review_article_count_serving_v4',
+  'mart.review_article_judgment_detail_serving_v4',
+  'mart.review_filter_facet_serving_v4',
   'mart.review_filter_posting_stats_v4',
   'mart.review_title_search_serving_v4',
 ])
