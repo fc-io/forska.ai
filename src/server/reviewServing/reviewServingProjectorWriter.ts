@@ -490,6 +490,20 @@ const writeReviewServingSelectedImportSnapshotCursor = async (
   tx: ReviewServingProjectorWriterTransaction,
 ) => {
   await tx.run(`
+    UPDATE app.review_selected_import_snapshot
+    SET
+      project_id = ${getSqlLiteral(input.projectId)},
+      project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)},
+      source_delta_high_water = ${getSqlLiteral(input.sourceDeltaHighWater)},
+      cursor_json = ${getReviewServingNullableJsonLiteral(input.cursorJson)},
+      status = ${getSqlLiteral(input.status)},
+      completed_at = ${input.status === 'completed' ? 'current_timestamp' : 'NULL'},
+      last_error = NULL,
+      updated_at = current_timestamp
+    WHERE (selected_import_snapshot_id || '') = (${getSqlLiteral(input.selectedImportSnapshotId)} || '')
+  `)
+
+  await tx.run(`
     INSERT INTO app.review_selected_import_snapshot (
       selected_import_snapshot_id,
       project_id,
@@ -500,7 +514,8 @@ const writeReviewServingSelectedImportSnapshotCursor = async (
       started_at,
       completed_at,
       updated_at
-    ) VALUES (
+    )
+    SELECT
       ${getSqlLiteral(input.selectedImportSnapshotId)},
       ${getSqlLiteral(input.projectId)},
       ${getSqlLiteral(input.projectScopeIdentity)},
@@ -510,16 +525,11 @@ const writeReviewServingSelectedImportSnapshotCursor = async (
       current_timestamp,
       ${input.status === 'completed' ? 'current_timestamp' : 'NULL'},
       current_timestamp
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_selected_import_snapshot existing
+      WHERE (existing.selected_import_snapshot_id || '') = (${getSqlLiteral(input.selectedImportSnapshotId)} || '')
     )
-    ON CONFLICT(selected_import_snapshot_id) DO UPDATE SET
-      project_id = excluded.project_id,
-      project_scope_identity = excluded.project_scope_identity,
-      source_delta_high_water = excluded.source_delta_high_water,
-      cursor_json = excluded.cursor_json,
-      status = excluded.status,
-      completed_at = excluded.completed_at,
-      last_error = NULL,
-      updated_at = excluded.updated_at
   `)
 }
 

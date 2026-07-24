@@ -399,7 +399,7 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
   expect(getTransactionCount()).toBe(1)
 })
 
-test('selected import snapshot cursor writes are idempotent upserts', async () => {
+test('selected import snapshot cursor writes update before insert-missing', async () => {
   const statements: string[] = []
   const database: ReviewServingProjectorWriterDatabase = {
     queryJson: async <T>(statement: string) => {
@@ -431,12 +431,16 @@ test('selected import snapshot cursor writes are idempotent upserts', async () =
   )
 
   const joined = statements.join('\n')
+  expect(joined).toContain('UPDATE app.review_selected_import_snapshot')
   expect(joined).toContain('INSERT INTO app.review_selected_import_snapshot')
-  expect(joined).toContain('ON CONFLICT(selected_import_snapshot_id) DO UPDATE SET')
-  expect(joined).not.toContain('FROM app.review_selected_import_snapshot')
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).not.toContain('ON CONFLICT(selected_import_snapshot_id) DO UPDATE SET')
+  expect(joined.indexOf('UPDATE app.review_selected_import_snapshot')).toBeLessThan(
+    joined.indexOf('INSERT INTO app.review_selected_import_snapshot'),
+  )
 })
 
-test('selected import snapshot cursor writes unchanged rows through the same upsert path', async () => {
+test('selected import snapshot cursor writes unchanged rows through update and insert guard', async () => {
   const statements: string[] = []
   const database: ReviewServingProjectorWriterDatabase = {
     queryJson: async <T>(statement: string) => {
@@ -468,11 +472,17 @@ test('selected import snapshot cursor writes unchanged rows through the same ups
   )
 
   const writeStatements = statements.filter((statement) => {
-    return statement.includes('INSERT INTO app.review_selected_import_snapshot')
+    return (
+      statement.includes('UPDATE app.review_selected_import_snapshot')
+      || statement.includes('INSERT INTO app.review_selected_import_snapshot')
+    )
   })
 
-  expect(writeStatements).toHaveLength(1)
-  expect(writeStatements[0]).toContain('ON CONFLICT(selected_import_snapshot_id) DO UPDATE SET')
+  expect(writeStatements).toHaveLength(2)
+  expect(writeStatements[0]).toContain('UPDATE app.review_selected_import_snapshot')
+  expect(writeStatements[1]).toContain('INSERT INTO app.review_selected_import_snapshot')
+  expect(writeStatements[1]).toContain('WHERE NOT EXISTS')
+  expect(writeStatements.join('\n')).not.toContain('ON CONFLICT(selected_import_snapshot_id) DO UPDATE SET')
 })
 
 test('projector writer batches same-shape record upserts into one statement', async () => {
