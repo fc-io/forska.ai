@@ -28,11 +28,6 @@ const allowedConflictUpdates: ConflictUpdateInventoryEntry[] = [
     snippet: 'ON CONFLICT (job_id) DO UPDATE SET',
   },
   {
-    path: 'src/server/reviewServing/reviewWriteOverlayService.ts',
-    reason: 'write overlays reconcile pending overlay lifecycle state by stable overlay id',
-    snippet: 'ON CONFLICT(overlay_id) DO UPDATE SET',
-  },
-  {
     path: 'src/server/reviewServing/reviewServingSummaryProjector.ts',
     reason: 'summary rebuild accumulator adds chunk partial totals across batches',
     snippet:

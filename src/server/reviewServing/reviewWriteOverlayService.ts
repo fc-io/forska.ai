@@ -141,6 +141,17 @@ export const appendReviewWriteOverlay = async (
   const overlayId = getReviewWriteOverlayId(input)
 
   await tx.run(`
+    UPDATE app.review_write_overlay
+    SET
+      overlay_value_json = ${getReviewWriteOverlayJsonLiteral(input.overlayValueJson)},
+      read_surface = ${getSqlLiteral(input.readSurface)},
+      reconcile_status = 'pending',
+      expires_at = ${getReviewWriteOverlayTimestampLiteral(expiresAt)},
+      reconciled_at = NULL
+    WHERE overlay_id = ${getSqlLiteral(overlayId)}
+  `)
+
+  await tx.run(`
     INSERT INTO app.review_write_overlay (
       overlay_id,
       project_id,
@@ -158,7 +169,8 @@ export const appendReviewWriteOverlay = async (
       created_at,
       expires_at,
       reconciled_at
-    ) VALUES (
+    )
+    SELECT
       ${getSqlLiteral(overlayId)},
       ${getSqlLiteral(input.projectId)},
       ${getSqlLiteral(input.reviewConfigHash ?? null)},
@@ -175,13 +187,11 @@ export const appendReviewWriteOverlay = async (
       ${getReviewWriteOverlayTimestampLiteral(createdAt)},
       ${getReviewWriteOverlayTimestampLiteral(expiresAt)},
       NULL
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_write_overlay existing
+      WHERE (existing.overlay_id || '') = (${getSqlLiteral(overlayId)} || '')
     )
-    ON CONFLICT(overlay_id) DO UPDATE SET
-      overlay_value_json = excluded.overlay_value_json,
-      read_surface = excluded.read_surface,
-      reconcile_status = 'pending',
-      expires_at = excluded.expires_at,
-      reconciled_at = NULL
   `)
 
   return {overlayId, reconcileStatus: 'pending'}
