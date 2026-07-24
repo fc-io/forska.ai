@@ -114,6 +114,51 @@ runtime restart output. The complete `test:network-smoke:current-db` gate also
 passed both phases: the read-only audited route smoke and the mutation-enabled
 current-DB dev-server smoke.
 
+## Follow-Up Current-DB Rebuild Hardening
+
+PR #164 (`Harden review rebuild current-db recovery`) followed the same current
+DB workload after the duplicate requestless-bootstrap fix and found additional
+indexed-table mutation hazards:
+
+1. Empty retry-policy aggregation let failed rebuild chunks strand themselves
+   instead of falling back to the configured max attempts.
+2. Summary finalization, judgment-input rebuilds, queue rebuilds, and display
+   payload rebuilds still used scoped delete/update shapes on indexed DuckDB
+   tables.
+3. Superseded requestless-bootstrap cleanup updated
+   `app.review_rebuild_request`, then terminal failure finalization updated the
+   same request table again.
+4. The warning route counted a superseded `requestless_bootstrap_rebuild`
+   request as the active terminal failure even when readable serving rows were
+   present.
+
+The fix keeps requestless-bootstrap request rows as evidence, links or
+quarantines chunks instead of mutating request rows, excludes terminal
+requestless-bootstrap bookkeeping from live failure diagnostics, and changes the
+remaining rebuild write paths to avoid indexed scoped deletes.
+
+Preserved runtime recovery manifests for this follow-up include:
+
+```text
+~/Library/Application Support/Forska/runtime/primary/forska.duckdb.startup-recovery/2026-07-24T15-28-28.646Z.ad464fbf-37c4-48fe-a435-d8e0957904af.recovery.json
+~/Library/Application Support/Forska/runtime/primary/forska.duckdb.startup-recovery/2026-07-24T15-31-07.705Z.9367de5a-6ba5-4029-a240-674fb2229dfa.recovery.json
+~/Library/Application Support/Forska/runtime/primary/forska.duckdb.startup-recovery/2026-07-24T15-33-40.097Z.a45bcd3f-a561-4c39-b86a-d199d17d0e3c.recovery.json
+~/Library/Application Support/Forska/runtime/primary/forska.duckdb.startup-recovery/2026-07-24T15-37-37.755Z.c3ac22e8-9e33-4a14-b6b6-bad11e1d2d53.recovery.json
+```
+
+The verified passing commands for PR #164 were:
+
+```bash
+bun test src/server/workers/reviewServingProjectorWorker.test.ts src/server/reviewServing/reviewServingRebuildRequestRepository.test.ts src/server/reviewServing/reviewServingV4RebuildRequestService.test.ts src/server/reviewServing/reviewServingChunkManifestRepository.test.ts src/server/reviewServing/reviewServingDisplayPayloadProjector.test.ts src/server/reviewServing/reviewServingSummaryProjector.test.ts src/server/reviewServing/reviewServingJudgmentPayloadProjector.test.ts src/server/reviewServing/reviewServingDiagnosticsRepository.test.ts src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts
+bun test src/server/utils/duckdbServiceReload.test.ts
+bun test src/server/reviewServing/reviewServingRouteParityEvidence.test.ts src/server/reviewServing/reviewServingRouteParityCoverage.test.ts
+bun run bench:review-serving-release-gate
+git diff --check
+bun run test:dev-server:current-db
+bun run test:network-smoke:current-db:readonly
+bun run test:network-smoke:current-db
+```
+
 ## Operator Recovery Rules
 
 1. Preserve evidence first; recovery without logs, manifests, and backup paths
