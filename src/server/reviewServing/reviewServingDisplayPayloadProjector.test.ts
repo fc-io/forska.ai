@@ -260,7 +260,7 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
   expect(joined).not.toContain('payload_json')
 })
 
-test('payload rebuild ranges upsert payload rows with SQL-native range statements', async () => {
+test('payload rebuild ranges insert payload rows idempotently with SQL-native range statements', async () => {
   const {database, statements} = createDisplayPayloadDatabase()
 
   const result = await projectReviewServingPayloadRanges(
@@ -302,6 +302,10 @@ test('payload rebuild ranges upsert payload rows with SQL-native range statement
   expect(joined).toContain("scope.article_id >= 'article-051'")
   expect(joined).toContain("scope.article_id <= 'article-099'")
   expect(joined).toContain('ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id)')
+  expect(joined).toContain('DO NOTHING')
+  expect(joined).not.toContain('DO UPDATE SET')
+  expect(joined).not.toContain('abstract_text = excluded.abstract_text')
+  expect(joined).not.toContain('payload_bytes = excluded.payload_bytes')
   expect(joined).not.toContain('mart.review_selected_import_patch_v4')
   expect(joined).not.toContain('selected_patch')
   expect(joined).not.toContain('VALUES (')
