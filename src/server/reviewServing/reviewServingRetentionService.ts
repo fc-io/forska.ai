@@ -109,6 +109,16 @@ const writeRetentionMark = async (
   database: ReviewServingRetentionServiceTransaction,
 ) => {
   await database.run(`
+    UPDATE app.review_serving_retention_mark
+    SET
+      cutoff_snapshot_id = ${getSqlLiteral(input.snapshotId)},
+      cutoff_base_generation = ${getSqlLiteral(input.baseGeneration)},
+      cutoff_patch_watermark = ${getSqlLiteral(input.patchWatermark)},
+      cleanup_cursor_json = ${input.cursor === null ? 'NULL' : `${getSqlLiteral(JSON.stringify(input.cursor))}::JSON`},
+      last_cleaned_at = current_timestamp,
+      updated_at = current_timestamp
+    WHERE (retention_scope || '') = (${getSqlLiteral(input.retentionScope)} || '');
+
     INSERT INTO app.review_serving_retention_mark (
       retention_scope,
       cutoff_snapshot_id,
@@ -117,7 +127,8 @@ const writeRetentionMark = async (
       cleanup_cursor_json,
       last_cleaned_at,
       updated_at
-    ) VALUES (
+    )
+    SELECT
       ${getSqlLiteral(input.retentionScope)},
       ${getSqlLiteral(input.snapshotId)},
       ${getSqlLiteral(input.baseGeneration)},
@@ -125,14 +136,11 @@ const writeRetentionMark = async (
       ${input.cursor === null ? 'NULL' : `${getSqlLiteral(JSON.stringify(input.cursor))}::JSON`},
       current_timestamp,
       current_timestamp
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_serving_retention_mark existing
+      WHERE (existing.retention_scope || '') = (${getSqlLiteral(input.retentionScope)} || '')
     )
-    ON CONFLICT(retention_scope) DO UPDATE SET
-      cutoff_snapshot_id = excluded.cutoff_snapshot_id,
-      cutoff_base_generation = excluded.cutoff_base_generation,
-      cutoff_patch_watermark = excluded.cutoff_patch_watermark,
-      cleanup_cursor_json = excluded.cleanup_cursor_json,
-      last_cleaned_at = excluded.last_cleaned_at,
-      updated_at = excluded.updated_at
   `)
 }
 
