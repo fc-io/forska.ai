@@ -6745,20 +6745,6 @@ const adoptRequestlessRebuildChunk = async (
         : ''
     await requireClaimedRebuildChunk(input, tx)
     await tx.run(`
-      UPDATE app.review_rebuild_request
-      SET
-        requested_components_json = ${getSqlLiteral(JSON.stringify(adoption.requestedComponents))}::JSON,
-        diagnostics_json = ${getSqlLiteral(JSON.stringify(adoption.diagnostics))}::JSON,
-        status = 'admitted',
-        admission_state = CASE
-          WHEN admission_state = 'blocked_over_budget' THEN admission_state
-          ELSE 'admitted'
-        END,
-        updated_at = now()
-      WHERE request_id = ${getSqlLiteral(adoption.requestId)}
-        AND status NOT IN ('completed', 'failed')
-    `)
-    await tx.run(`
       INSERT INTO app.review_rebuild_request (
         request_id,
         project_id,
@@ -6799,7 +6785,7 @@ const adoptRequestlessRebuildChunk = async (
       WHERE NOT EXISTS (
         SELECT 1
         FROM app.review_rebuild_request existing_request
-        WHERE existing_request.request_id = ${getSqlLiteral(adoption.requestId)}
+        WHERE (existing_request.request_id || '') = ${getSqlLiteral(adoption.requestId)}
       )
     `)
     await tx.run(`
