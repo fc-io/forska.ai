@@ -745,37 +745,31 @@ const getSummaryRebuildPartialAccumulatorState = async (
 
   return {
     accumulatorChunkId: `${summaryRebuildPartialAccumulatorChunkIdPrefix}${digest}`,
+    chunkIds: rows.map((row) => {
+      return row.chunkId
+    }),
     hasManifestChunks: rows.length > 0,
   }
 }
 
-const getNextSummaryRebuildPartialReductionChunkIds = async (
+const getNextSummaryRebuildPartialReductionChunkIds = (
   input: {
     accumulatorChunkId: string
+    chunkIds: readonly string[]
     projectId: string
     requestId: string
     reviewConfigHash: string
     snapshotId: string
   },
-  database: ReviewServingSummaryProjectorDatabase,
+  offset: number,
 ) => {
-  const scopePredicate = getSummaryRebuildPartialScopePredicate({...input, alias: 'partial'})
-
-  return database.queryJson<{chunkId: string}>(`
-    SELECT partial.chunk_id AS chunkId
-    FROM mart.review_article_summary_rebuild_partial_v4 partial
-    ${getCompletedSummaryRebuildPartialChunkJoin('partial')}
-    WHERE ${scopePredicate}
-      AND partial.chunk_id NOT LIKE ${getSqlLiteral(`${summaryRebuildPartialAccumulatorChunkIdPrefix}%`)}
-    GROUP BY partial.chunk_id
-    ORDER BY partial.chunk_id
-    LIMIT ${summaryRebuildPartialReductionBatchSize}
-  `)
+  return input.chunkIds.slice(offset, offset + summaryRebuildPartialReductionBatchSize)
 }
 
 const getSummaryRebuildAccumulatorPartialCount = async (
   input: {
     accumulatorChunkId: string
+    chunkIds: readonly string[]
     projectId: string
     requestId: string
     reviewConfigHash: string
@@ -878,6 +872,23 @@ const getRefreshSummaryRebuildAccumulatorCountsStatement = (input: {
   `
 }
 
+const getResetSummaryRebuildAccumulatorStatement = (input: {
+  accumulatorChunkId: string
+  projectId: string
+  requestId: string
+  reviewConfigHash: string
+  snapshotId: string
+}) => {
+  return `
+    UPDATE mart.review_article_summary_rebuild_partial_v4
+    SET
+      count_value = CASE WHEN availability = 'ready' THEN 0 ELSE NULL END,
+      partial_updated_at = now()
+    WHERE ${getSummaryRebuildPartialScopePredicate(input)}
+      AND chunk_id = ${getSqlLiteral(input.accumulatorChunkId)}
+  `
+}
+
 const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
   input: {
     accumulatorChunkId: string
@@ -954,11 +965,6 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
         partial_updated_at = now()
     `)
   await database.run(getRefreshSummaryRebuildAccumulatorCountsStatement(input))
-  await database.run(`
-      DELETE FROM mart.review_article_summary_rebuild_partial_v4
-      WHERE ${getSummaryRebuildPartialScopePredicate(input)}
-        AND ${chunkIdPredicate}
-    `)
 }
 
 const reduceSummaryRebuildPartialBatchesIntoAccumulator = async (
@@ -971,17 +977,12 @@ const reduceSummaryRebuildPartialBatchesIntoAccumulator = async (
   },
   database: ReviewServingSummaryProjectorDatabase,
 ): Promise<void> => {
-  const chunkRows = await getNextSummaryRebuildPartialReductionChunkIds(input, database)
-  const chunkIds = chunkRows.map((row) => {
-    return row.chunkId
-  })
-
-  if (chunkIds.length === 0) {
-    return
+  for (let offset = 0; offset < input.chunkIds.length; offset += summaryRebuildPartialReductionBatchSize) {
+    const chunkIds = getNextSummaryRebuildPartialReductionChunkIds(input, offset)
+    if (chunkIds.length > 0) {
+      await reduceSummaryRebuildPartialChunkBatchIntoAccumulator({...input, chunkIds}, database)
+    }
   }
-
-  await reduceSummaryRebuildPartialChunkBatchIntoAccumulator({...input, chunkIds}, database)
-  await reduceSummaryRebuildPartialBatchesIntoAccumulator(input, database)
 }
 
 const reduceSummaryRebuildPartialsForRequestSnapshot = async (
@@ -994,9 +995,10 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
   },
   database: ReviewServingSummaryProjectorDatabase,
 ) => {
-  const {accumulatorChunkId} = await getSummaryRebuildPartialAccumulatorState(input, database)
-  const scopedInput = {...input, accumulatorChunkId}
+  const {accumulatorChunkId, chunkIds} = await getSummaryRebuildPartialAccumulatorState(input, database)
+  const scopedInput = {...input, accumulatorChunkId, chunkIds}
 
+  await database.run(getResetSummaryRebuildAccumulatorStatement(scopedInput))
   await reduceSummaryRebuildPartialBatchesIntoAccumulator(scopedInput, database)
 
   const accumulatorPartialCount = await getSummaryRebuildAccumulatorPartialCount(scopedInput, database)

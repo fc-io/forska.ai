@@ -370,6 +370,9 @@ const defaultTerminalizeMinimumAgeMinutes = 60
 const staleZeroChunkTerminalizationLastError =
   'Operator terminalized stale malformed V4 review rebuild request: admitted/running request has no rebuild chunks; no cleanup authorized.'
 const requestlessRebuildRequestPrefixes = ['requestless-bootstrap:', 'requestless-summary:'] as const
+const isRequestlessRebuildRequestId = (requestId: string) => {
+  return requestlessRebuildRequestPrefixes.some((prefix) => requestId.startsWith(prefix))
+}
 const requestlessRebuildChunkReleaseStatuses = [
   'pending',
   'completed',
@@ -1460,8 +1463,18 @@ export const createReviewServingRebuildRequestEffect = (
           )
         }
 
-        await tx.run(`
-        INSERT INTO app.review_rebuild_request (
+        const requestlessRequest = isRequestlessRebuildRequestId(requestId)
+        const existingRequestRows = requestlessRequest
+          ? await tx.queryJson<{requestId: string}>(`
+              SELECT request.request_id AS requestId
+              FROM app.review_rebuild_request request
+            `)
+          : []
+        const requestRowExists = existingRequestRows.some((row) => row.requestId === requestId)
+
+        if (!requestRowExists) {
+          const requestInsertSql = `
+          INSERT INTO app.review_rebuild_request (
           request_id,
           project_id,
           reason,
@@ -1502,6 +1515,10 @@ export const createReviewServingRebuildRequestEffect = (
           ${status === 'admitted' ? nowSql : 'NULL'},
           ${nowSql}
         )
+        `
+          const requestConflictSql = requestlessRequest
+            ? ''
+            : `
         ON CONFLICT(request_id) DO UPDATE SET
           priority = CASE
             WHEN excluded.priority > app.review_rebuild_request.priority THEN excluded.priority
@@ -1524,7 +1541,9 @@ export const createReviewServingRebuildRequestEffect = (
           failed_at = NULL,
           last_error = NULL,
           updated_at = ${nowSql}
-      `)
+      `
+          await tx.run(`${requestInsertSql}${requestConflictSql}`)
+        }
 
         if (input.chunks !== undefined) {
           await deleteObsoleteReviewServingRebuildChunks({chunks, requestId}, tx)

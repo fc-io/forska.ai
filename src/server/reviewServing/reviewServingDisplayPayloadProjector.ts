@@ -661,24 +661,6 @@ const getPayloadRecord = (
   }
 }
 
-const getDeletePayloadRowsStatement = (input: ProjectReviewServingPayloadInput) => {
-  const articleIds = getClaimArticleIds(input.claims)
-  const hasClaimedWork = (input.claims?.length ?? 0) > 0
-
-  return !hasClaimedWork
-    ? null
-    : getDeleteReviewServingProjectorRowsStatement({
-        predicates: {
-          ...(articleIds.length > 0 ? {article_id: articleIds} : {}),
-          display_identity: input.displayIdentity,
-          payload_identity: input.payloadIdentity,
-          project_id: input.projectId,
-          snapshot_id: input.snapshotId,
-        },
-        table: 'mart.review_article_serving_payload_v4',
-      })
-}
-
 const getPayloadRebuildRowsStatements = (input: ProjectReviewServingPayloadInput) => {
   return [
     `
@@ -980,9 +962,7 @@ export const projectReviewServingPayloadRows = async (
         component: 'payload',
         projectionManifests,
         records,
-        statements: [getDeletePayloadRowsStatement(input)].flatMap((statement) => {
-          return statement === null ? [] : [statement]
-        }),
+        statements: [],
         watermark: shouldAcknowledgeClaims
           ? {
               projectId: input.projectId,

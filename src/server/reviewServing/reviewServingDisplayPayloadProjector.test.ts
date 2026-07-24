@@ -307,7 +307,7 @@ test('payload rebuild ranges upsert payload rows with SQL-native range statement
   expect(joined).not.toContain('VALUES (')
 })
 
-test('payload claimed updates delete stale rows for removed articles before inserting replacements', async () => {
+test('payload claimed updates avoid indexed deletes for removed article cleanup', async () => {
   const {database, statements} = createDisplayPayloadDatabase({payloadRows: []})
 
   const result = await projectReviewServingPayloadRows(
@@ -324,21 +324,18 @@ test('payload claimed updates delete stale rows for removed articles before inse
     },
     database,
   )
-  const deleteStatement = statements.find((statement) => {
-    return statement.includes('DELETE FROM mart.review_article_serving_payload_v4')
-  })
   const selectStatement = statements.find((statement) => {
     return statement.includes('ORDER BY article.article_created_at ASC NULLS LAST, scope.article_id ASC')
   })
+  const joined = statements.join('\n')
 
   expect(result).toEqual({payloadRowCount: 0, patchWatermark: 6})
   expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
   expect(selectStatement).not.toContain('selected_patch')
-  expect(deleteStatement).toContain("article_id IN ('article-1')")
-  expect(deleteStatement).toContain('payload_identity')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_serving_payload_v4')
 })
 
-test('project-scoped payload rebuilds read scoped articles and clear snapshot payload rows', async () => {
+test('project-scoped payload rebuilds read scoped articles and avoid indexed payload deletes', async () => {
   const {database, statements} = createDisplayPayloadDatabase({
     payloadRows: [
       {
@@ -377,18 +374,13 @@ test('project-scoped payload rebuilds read scoped articles and clear snapshot pa
   const selectStatement = statements.find((statement) => {
     return statement.includes('ORDER BY article.article_created_at ASC NULLS LAST, scope.article_id ASC')
   })
-  const deleteStatement = statements.find((statement) => {
-    return statement.includes('DELETE FROM mart.review_article_serving_payload_v4')
-  })
+  const joined = statements.join('\n')
 
   expect(result).toEqual({payloadRowCount: 1, patchWatermark: 6})
   expect(selectStatement).toContain('FROM mart.project_scope_article scope')
   expect(selectStatement).not.toContain('WITH dirty_article(article_id)')
   expect(selectStatement).not.toContain('INNER JOIN dirty_article dirty')
-  expect(deleteStatement).toContain("project_id IS NOT DISTINCT FROM 'project-1'")
-  expect(deleteStatement).toContain("snapshot_id IS NOT DISTINCT FROM 'snapshot-1'")
-  expect(deleteStatement).toContain('payload_identity')
-  expect(deleteStatement).not.toContain('article_id IN')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_serving_payload_v4')
 })
 
 test('payload projection defers manifest and watermark when claims are not acknowledged', async () => {

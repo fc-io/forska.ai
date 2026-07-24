@@ -2055,6 +2055,8 @@ test('failed rebuild chunk retry claims tolerate duplicate request policy rows',
   })
 
   expect(claimStatement).toContain('MAX(TRY_CAST(json_extract_string(policy.retry_policy_json')
+  expect(claimStatement).toContain('COALESCE(\n        MAX(TRY_CAST(json_extract_string')
+  expect(claimStatement).toContain('),\n        3')
   expect(claimStatement).not.toContain('WHERE policy.request_id = manifest.request_id\n            LIMIT 1')
 })
 
