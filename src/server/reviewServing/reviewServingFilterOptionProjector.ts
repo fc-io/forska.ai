@@ -315,6 +315,8 @@ export const projectReviewServingFilterOptions = async (
       acknowledgements: shouldPublishManifest ? [] : shouldAcknowledgeClaims ? input.claims : [],
       component: 'summary',
       records,
+      scanGuardedInsertMissingRecordTables:
+        input.deleteExisting === false ? ['mart.review_filter_option_serving_v4'] : [],
       statements: input.deleteExisting === false ? [] : [getDeleteFilterOptionRowsStatement(input)],
       watermark:
         shouldPublishManifest || !shouldAcknowledgeClaims
