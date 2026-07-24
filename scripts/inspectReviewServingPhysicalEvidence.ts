@@ -23,7 +23,9 @@ type CliOptions = {
   projectId: string
 }
 type EvidenceReport = {
+  chunkManifestDiagnosticsReadiness: ChunkManifestDiagnosticsReadinessReport
   generatedAt: string
+  judgmentDetailPayloadReadiness: JudgmentDetailPayloadReadinessReport
   mode: 'readonly-snapshot'
   options: CliOptions
   projectorWatermarkNullableFieldEvidence: ProjectorWatermarkNullableFieldReport
@@ -35,6 +37,62 @@ type EvidenceReport = {
   unassessedQueueServingReadiness: UnassessedQueueServingReadinessReport
 }
 type QueryRuntime = Awaited<ReturnType<typeof getSnapshotQueryRuntime>>
+type ChunkManifestDiagnosticsLifecycleRow = {
+  admissionState: string
+  budgetJsonNonNullRows: number
+  budgetJsonNullRows: number
+  diagnosticsJsonNonNullRows: number
+  diagnosticsJsonNullRows: number
+  rows: number
+  status: string
+  timingDiagnosticsRows: number
+}
+type ChunkManifestDiagnosticsProjectionRow = {
+  budgetJsonNonNullRows: number
+  diagnosticsJsonNonNullRows: number
+  projectionComponent: string
+  rows: number
+  timingDiagnosticsRows: number
+}
+type ChunkManifestDiagnosticsReadinessReport = {
+  budgetJsonNonNullRows: number | null
+  budgetJsonNullRows: number | null
+  currentProjectRows: number | null
+  diagnosticsJsonNonNullRows: number | null
+  diagnosticsJsonNullRows: number | null
+  error: string | null
+  note: string
+  rowsByLifecycle: ChunkManifestDiagnosticsLifecycleRow[]
+  rowsByProjectionComponent: ChunkManifestDiagnosticsProjectionRow[]
+  table: 'app.review_rebuild_chunk_manifest'
+  timingDiagnosticsRows: number | null
+  verdict: 'not-authorized' | 'blocked'
+}
+type JudgmentDetailPayloadKindRow = {
+  answeredArrayNonNullRows: number
+  answeredOriginalNonNullRows: number
+  judgmentPayloadNonNullRows: number
+  modelIdNonNullRows: number
+  payloadKind: string
+  rows: number
+}
+type JudgmentDetailPayloadListModeRow = {judgmentPayloadNonNullRows: number; listModeKey: string; rows: number}
+type JudgmentDetailPayloadReadinessReport = {
+  answeredArrayNonNullRows: number | null
+  answeredOriginalNonNullRows: number | null
+  currentProjectRows: number | null
+  error: string | null
+  globalRowCount: number | null
+  judgmentPayloadNonNullRows: number | null
+  judgmentPayloadNullRows: number | null
+  modelIdNonNullRows: number | null
+  modelIdNullRows: number | null
+  note: string
+  rowsByListMode: JudgmentDetailPayloadListModeRow[]
+  rowsByPayloadKind: JudgmentDetailPayloadKindRow[]
+  table: 'mart.review_article_judgment_detail_serving_v4'
+  verdict: 'not-authorized' | 'blocked'
+}
 type ProjectorWatermarkNullableFieldColumnEvidence = {
   column: (typeof projectorWatermarkNullableColumns)[number]
   currentProjectNonNullCount: number | null
@@ -2416,6 +2474,277 @@ const getUnassessedQueueServingReadinessReport = async (
   }
 }
 
+const getChunkManifestDiagnosticsReadinessReport = async (
+  runtime: QueryRuntime,
+  projectId: string,
+  limit: number,
+): Promise<ChunkManifestDiagnosticsReadinessReport> => {
+  const table = 'app.review_rebuild_chunk_manifest' as const
+  const projectPredicate = `project_id = ${getSqlLiteral(projectId)}`
+
+  try {
+    const totals = await runReadonlyQuery<{
+      budgetJsonNonNullRows: number | string
+      budgetJsonNullRows: number | string
+      currentProjectRows: number | string
+      diagnosticsJsonNonNullRows: number | string
+      diagnosticsJsonNullRows: number | string
+      timingDiagnosticsRows: number | string
+    }>(
+      runtime,
+      `
+        SELECT
+          CAST(COUNT(*) AS BIGINT) AS currentProjectRows,
+          CAST(COUNT(*) FILTER (WHERE budget_json IS NULL) AS BIGINT) AS budgetJsonNullRows,
+          CAST(COUNT(*) FILTER (WHERE budget_json IS NOT NULL) AS BIGINT) AS budgetJsonNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE diagnostics_json IS NULL) AS BIGINT) AS diagnosticsJsonNullRows,
+          CAST(COUNT(*) FILTER (WHERE diagnostics_json IS NOT NULL) AS BIGINT) AS diagnosticsJsonNonNullRows,
+          CAST(COUNT(*) FILTER (
+            WHERE TRY_CAST(json_extract_string(diagnostics_json, '$.phaseTimings.writeOutputMs') AS DOUBLE) IS NOT NULL
+              OR TRY_CAST(json_extract_string(diagnostics_json, '$.phaseTimings.validationMs') AS DOUBLE) IS NOT NULL
+          ) AS BIGINT) AS timingDiagnosticsRows
+        FROM ${table}
+        WHERE ${projectPredicate}
+      `,
+    )
+    const rowsByLifecycle = await runReadonlyQuery<{
+      admissionState: string | null
+      budgetJsonNonNullRows: number | string
+      budgetJsonNullRows: number | string
+      diagnosticsJsonNonNullRows: number | string
+      diagnosticsJsonNullRows: number | string
+      rows: number | string
+      status: string | null
+      timingDiagnosticsRows: number | string
+    }>(
+      runtime,
+      `
+        SELECT
+          COALESCE(status, 'NULL') AS status,
+          COALESCE(admission_state, 'NULL') AS admissionState,
+          CAST(COUNT(*) AS BIGINT) AS rows,
+          CAST(COUNT(*) FILTER (WHERE budget_json IS NULL) AS BIGINT) AS budgetJsonNullRows,
+          CAST(COUNT(*) FILTER (WHERE budget_json IS NOT NULL) AS BIGINT) AS budgetJsonNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE diagnostics_json IS NULL) AS BIGINT) AS diagnosticsJsonNullRows,
+          CAST(COUNT(*) FILTER (WHERE diagnostics_json IS NOT NULL) AS BIGINT) AS diagnosticsJsonNonNullRows,
+          CAST(COUNT(*) FILTER (
+            WHERE TRY_CAST(json_extract_string(diagnostics_json, '$.phaseTimings.writeOutputMs') AS DOUBLE) IS NOT NULL
+              OR TRY_CAST(json_extract_string(diagnostics_json, '$.phaseTimings.validationMs') AS DOUBLE) IS NOT NULL
+          ) AS BIGINT) AS timingDiagnosticsRows
+        FROM ${table}
+        WHERE ${projectPredicate}
+        GROUP BY status, admission_state
+        HAVING COUNT(*) > 0
+        ORDER BY COUNT(*) DESC, status, admission_state
+        LIMIT ${Math.max(1, limit)}
+      `,
+    )
+    const rowsByProjectionComponent = await runReadonlyQuery<{
+      budgetJsonNonNullRows: number | string
+      diagnosticsJsonNonNullRows: number | string
+      projectionComponent: string | null
+      rows: number | string
+      timingDiagnosticsRows: number | string
+    }>(
+      runtime,
+      `
+        SELECT
+          COALESCE(projection_component, 'NULL') AS projectionComponent,
+          CAST(COUNT(*) AS BIGINT) AS rows,
+          CAST(COUNT(*) FILTER (WHERE budget_json IS NOT NULL) AS BIGINT) AS budgetJsonNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE diagnostics_json IS NOT NULL) AS BIGINT) AS diagnosticsJsonNonNullRows,
+          CAST(COUNT(*) FILTER (
+            WHERE TRY_CAST(json_extract_string(diagnostics_json, '$.phaseTimings.writeOutputMs') AS DOUBLE) IS NOT NULL
+              OR TRY_CAST(json_extract_string(diagnostics_json, '$.phaseTimings.validationMs') AS DOUBLE) IS NOT NULL
+          ) AS BIGINT) AS timingDiagnosticsRows
+        FROM ${table}
+        WHERE ${projectPredicate}
+        GROUP BY projection_component
+        HAVING COUNT(*) > 0
+        ORDER BY COUNT(*) DESC, projection_component
+        LIMIT ${Math.max(1, limit)}
+      `,
+    )
+    const row = totals[0]
+
+    return {
+      budgetJsonNonNullRows: getNumberOrNull(row?.budgetJsonNonNullRows),
+      budgetJsonNullRows: getNumberOrNull(row?.budgetJsonNullRows),
+      currentProjectRows: getNumberOrNull(row?.currentProjectRows),
+      diagnosticsJsonNonNullRows: getNumberOrNull(row?.diagnosticsJsonNonNullRows),
+      diagnosticsJsonNullRows: getNumberOrNull(row?.diagnosticsJsonNullRows),
+      error: null,
+      note: 'Read-only current-project evidence for rebuild chunk manifest JSON diagnostics. budget_json and diagnostics_json feed retry, lifecycle, timing, and operator diagnostics; non-null rows are not field-slimming authorization.',
+      rowsByLifecycle: rowsByLifecycle.map((lifecycleRow) => {
+        return {
+          admissionState: String(lifecycleRow.admissionState ?? 'NULL'),
+          budgetJsonNonNullRows: Number(lifecycleRow.budgetJsonNonNullRows ?? 0),
+          budgetJsonNullRows: Number(lifecycleRow.budgetJsonNullRows ?? 0),
+          diagnosticsJsonNonNullRows: Number(lifecycleRow.diagnosticsJsonNonNullRows ?? 0),
+          diagnosticsJsonNullRows: Number(lifecycleRow.diagnosticsJsonNullRows ?? 0),
+          rows: Number(lifecycleRow.rows ?? 0),
+          status: String(lifecycleRow.status ?? 'NULL'),
+          timingDiagnosticsRows: Number(lifecycleRow.timingDiagnosticsRows ?? 0),
+        }
+      }),
+      rowsByProjectionComponent: rowsByProjectionComponent.map((componentRow) => {
+        return {
+          budgetJsonNonNullRows: Number(componentRow.budgetJsonNonNullRows ?? 0),
+          diagnosticsJsonNonNullRows: Number(componentRow.diagnosticsJsonNonNullRows ?? 0),
+          projectionComponent: String(componentRow.projectionComponent ?? 'NULL'),
+          rows: Number(componentRow.rows ?? 0),
+          timingDiagnosticsRows: Number(componentRow.timingDiagnosticsRows ?? 0),
+        }
+      }),
+      table,
+      timingDiagnosticsRows: getNumberOrNull(row?.timingDiagnosticsRows),
+      verdict: 'not-authorized',
+    }
+  } catch (error) {
+    return {
+      budgetJsonNonNullRows: null,
+      budgetJsonNullRows: null,
+      currentProjectRows: null,
+      diagnosticsJsonNonNullRows: null,
+      diagnosticsJsonNullRows: null,
+      error: error instanceof Error ? error.message : String(error),
+      note: 'Read-only rebuild chunk diagnostics evidence collection failed. Failed evidence collection is not field-slimming authorization.',
+      rowsByLifecycle: [],
+      rowsByProjectionComponent: [],
+      table,
+      timingDiagnosticsRows: null,
+      verdict: 'blocked',
+    }
+  }
+}
+
+const getJudgmentDetailPayloadReadinessReport = async (
+  runtime: QueryRuntime,
+  projectId: string,
+  limit: number,
+): Promise<JudgmentDetailPayloadReadinessReport> => {
+  const table = 'mart.review_article_judgment_detail_serving_v4' as const
+
+  try {
+    const totals = await runReadonlyQuery<{
+      answeredArrayNonNullRows: number | string
+      answeredOriginalNonNullRows: number | string
+      currentProjectRows: number | string
+      globalRowCount: number | string
+      judgmentPayloadNonNullRows: number | string
+      judgmentPayloadNullRows: number | string
+      modelIdNonNullRows: number | string
+      modelIdNullRows: number | string
+    }>(
+      runtime,
+      `
+        SELECT
+          CAST(COUNT(*) AS BIGINT) AS globalRowCount,
+          CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows,
+          CAST(COUNT(*) FILTER (WHERE judgment_payload_json IS NULL) AS BIGINT) AS judgmentPayloadNullRows,
+          CAST(COUNT(*) FILTER (WHERE judgment_payload_json IS NOT NULL) AS BIGINT) AS judgmentPayloadNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE model_id IS NULL) AS BIGINT) AS modelIdNullRows,
+          CAST(COUNT(*) FILTER (WHERE model_id IS NOT NULL) AS BIGINT) AS modelIdNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE answered_original IS NOT NULL) AS BIGINT) AS answeredOriginalNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE answered_original_as_array IS NOT NULL) AS BIGINT) AS answeredArrayNonNullRows
+        FROM ${table}
+      `,
+    )
+    const rowsByPayloadKind = await runReadonlyQuery<{
+      answeredArrayNonNullRows: number | string
+      answeredOriginalNonNullRows: number | string
+      judgmentPayloadNonNullRows: number | string
+      modelIdNonNullRows: number | string
+      payloadKind: string | null
+      rows: number | string
+    }>(
+      runtime,
+      `
+        SELECT
+          COALESCE(payload_kind, 'NULL') AS payloadKind,
+          CAST(COUNT(*) AS BIGINT) AS rows,
+          CAST(COUNT(*) FILTER (WHERE judgment_payload_json IS NOT NULL) AS BIGINT) AS judgmentPayloadNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE model_id IS NOT NULL) AS BIGINT) AS modelIdNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE answered_original IS NOT NULL) AS BIGINT) AS answeredOriginalNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE answered_original_as_array IS NOT NULL) AS BIGINT) AS answeredArrayNonNullRows
+        FROM ${table}
+        GROUP BY payload_kind
+        HAVING COUNT(*) > 0
+        ORDER BY COUNT(*) DESC, payload_kind
+        LIMIT ${Math.max(1, limit)}
+      `,
+    )
+    const rowsByListMode = await runReadonlyQuery<{
+      judgmentPayloadNonNullRows: number | string
+      listModeKey: string | null
+      rows: number | string
+    }>(
+      runtime,
+      `
+        SELECT
+          COALESCE(list_mode_key, 'NULL') AS listModeKey,
+          CAST(COUNT(*) AS BIGINT) AS rows,
+          CAST(COUNT(*) FILTER (WHERE judgment_payload_json IS NOT NULL) AS BIGINT) AS judgmentPayloadNonNullRows
+        FROM ${table}
+        GROUP BY list_mode_key
+        HAVING COUNT(*) > 0
+        ORDER BY COUNT(*) DESC, list_mode_key
+        LIMIT ${Math.max(1, limit)}
+      `,
+    )
+    const row = totals[0]
+
+    return {
+      answeredArrayNonNullRows: getNumberOrNull(row?.answeredArrayNonNullRows),
+      answeredOriginalNonNullRows: getNumberOrNull(row?.answeredOriginalNonNullRows),
+      currentProjectRows: getNumberOrNull(row?.currentProjectRows),
+      error: null,
+      globalRowCount: getNumberOrNull(row?.globalRowCount),
+      judgmentPayloadNonNullRows: getNumberOrNull(row?.judgmentPayloadNonNullRows),
+      judgmentPayloadNullRows: getNumberOrNull(row?.judgmentPayloadNullRows),
+      modelIdNonNullRows: getNumberOrNull(row?.modelIdNonNullRows),
+      modelIdNullRows: getNumberOrNull(row?.modelIdNullRows),
+      note: 'Read-only global/current-project evidence for judgment detail payload storage. Detail, list hydration, export, filters, and summaries still consume these columns; this section does not authorize payload, model, or answer-column slimming.',
+      rowsByListMode: rowsByListMode.map((listModeRow) => {
+        return {
+          judgmentPayloadNonNullRows: Number(listModeRow.judgmentPayloadNonNullRows ?? 0),
+          listModeKey: String(listModeRow.listModeKey ?? 'NULL'),
+          rows: Number(listModeRow.rows ?? 0),
+        }
+      }),
+      rowsByPayloadKind: rowsByPayloadKind.map((payloadKindRow) => {
+        return {
+          answeredArrayNonNullRows: Number(payloadKindRow.answeredArrayNonNullRows ?? 0),
+          answeredOriginalNonNullRows: Number(payloadKindRow.answeredOriginalNonNullRows ?? 0),
+          judgmentPayloadNonNullRows: Number(payloadKindRow.judgmentPayloadNonNullRows ?? 0),
+          modelIdNonNullRows: Number(payloadKindRow.modelIdNonNullRows ?? 0),
+          payloadKind: String(payloadKindRow.payloadKind ?? 'NULL'),
+          rows: Number(payloadKindRow.rows ?? 0),
+        }
+      }),
+      table,
+      verdict: 'not-authorized',
+    }
+  } catch (error) {
+    return {
+      answeredArrayNonNullRows: null,
+      answeredOriginalNonNullRows: null,
+      currentProjectRows: null,
+      error: error instanceof Error ? error.message : String(error),
+      globalRowCount: null,
+      judgmentPayloadNonNullRows: null,
+      judgmentPayloadNullRows: null,
+      modelIdNonNullRows: null,
+      modelIdNullRows: null,
+      note: 'Read-only judgment detail payload evidence collection failed. Failed evidence collection is not field-slimming authorization.',
+      rowsByListMode: [],
+      rowsByPayloadKind: [],
+      table,
+      verdict: 'blocked',
+    }
+  }
+}
+
 const getTableEvidence = async (runtime: QueryRuntime, table: string, options: CliOptions): Promise<TableEvidence> => {
   try {
     const columns = await getTableColumns(runtime, table)
@@ -2681,6 +3010,42 @@ const renderMarkdown = (report: EvidenceReport) => {
   })
   const unassessedQueueIndexRows = report.unassessedQueueServingReadiness.indexes.map((index) => {
     return [formatValue(JSON.stringify(index))]
+  })
+  const chunkDiagnosticsLifecycleRows = report.chunkManifestDiagnosticsReadiness.rowsByLifecycle.map((row) => {
+    return [
+      `\`${row.status}\``,
+      `\`${row.admissionState}\``,
+      formatValue(row.rows),
+      formatValue(row.budgetJsonNullRows),
+      formatValue(row.budgetJsonNonNullRows),
+      formatValue(row.diagnosticsJsonNullRows),
+      formatValue(row.diagnosticsJsonNonNullRows),
+      formatValue(row.timingDiagnosticsRows),
+    ]
+  })
+  const chunkDiagnosticsProjectionRows = report.chunkManifestDiagnosticsReadiness.rowsByProjectionComponent.map(
+    (row) => {
+      return [
+        `\`${row.projectionComponent}\``,
+        formatValue(row.rows),
+        formatValue(row.budgetJsonNonNullRows),
+        formatValue(row.diagnosticsJsonNonNullRows),
+        formatValue(row.timingDiagnosticsRows),
+      ]
+    },
+  )
+  const judgmentDetailPayloadKindRows = report.judgmentDetailPayloadReadiness.rowsByPayloadKind.map((row) => {
+    return [
+      `\`${row.payloadKind}\``,
+      formatValue(row.rows),
+      formatValue(row.judgmentPayloadNonNullRows),
+      formatValue(row.modelIdNonNullRows),
+      formatValue(row.answeredOriginalNonNullRows),
+      formatValue(row.answeredArrayNonNullRows),
+    ]
+  })
+  const judgmentDetailListModeRows = report.judgmentDetailPayloadReadiness.rowsByListMode.map((row) => {
+    return [`\`${row.listModeKey}\``, formatValue(row.rows), formatValue(row.judgmentPayloadNonNullRows)]
   })
   const summaryContributionIndexRows = report.summaryContributionServingReadiness.indexes.map((index) => {
     return [formatValue(JSON.stringify(index))]
@@ -3038,6 +3403,105 @@ const renderMarkdown = (report: EvidenceReport) => {
       ? formatMarkdownTable(['Index metadata'], unassessedQueueIndexRows)
       : '_No unassessed queue indexes were observed._',
     '',
+    '## Rebuild Chunk Manifest Diagnostics Readiness',
+    '',
+    `Verdict: ${report.chunkManifestDiagnosticsReadiness.verdict === 'not-authorized' ? 'not-authorized (not deletion/slimming authorization)' : 'blocked'}`,
+    '',
+    report.chunkManifestDiagnosticsReadiness.note,
+    '',
+    `Table: \`${report.chunkManifestDiagnosticsReadiness.table}\``,
+    '',
+    `Current-project rows: ${formatValue(report.chunkManifestDiagnosticsReadiness.currentProjectRows)}`,
+    '',
+    `budget_json null rows: ${formatValue(report.chunkManifestDiagnosticsReadiness.budgetJsonNullRows)}`,
+    '',
+    `budget_json non-null rows: ${formatValue(report.chunkManifestDiagnosticsReadiness.budgetJsonNonNullRows)}`,
+    '',
+    `diagnostics_json null rows: ${formatValue(report.chunkManifestDiagnosticsReadiness.diagnosticsJsonNullRows)}`,
+    '',
+    `diagnostics_json non-null rows: ${formatValue(report.chunkManifestDiagnosticsReadiness.diagnosticsJsonNonNullRows)}`,
+    '',
+    `Rows with timing diagnostics: ${formatValue(report.chunkManifestDiagnosticsReadiness.timingDiagnosticsRows)}`,
+    '',
+    report.chunkManifestDiagnosticsReadiness.error
+      ? `Status: Blocked: ${report.chunkManifestDiagnosticsReadiness.error}`
+      : 'Status: ok',
+    '',
+    chunkDiagnosticsLifecycleRows.length > 0
+      ? formatMarkdownTable(
+          [
+            'Status',
+            'Admission',
+            'Rows',
+            'budget_json nulls',
+            'budget_json non-nulls',
+            'diagnostics_json nulls',
+            'diagnostics_json non-nulls',
+            'Timing diagnostics rows',
+          ],
+          chunkDiagnosticsLifecycleRows,
+        )
+      : '_No chunk manifest lifecycle diagnostic rows were collected._',
+    '',
+    chunkDiagnosticsProjectionRows.length > 0
+      ? formatMarkdownTable(
+          [
+            'Projection component',
+            'Rows',
+            'budget_json non-nulls',
+            'diagnostics_json non-nulls',
+            'Timing diagnostics rows',
+          ],
+          chunkDiagnosticsProjectionRows,
+        )
+      : '_No chunk manifest projection-component diagnostic rows were collected._',
+    '',
+    '## Judgment Detail Payload Readiness',
+    '',
+    `Verdict: ${report.judgmentDetailPayloadReadiness.verdict === 'not-authorized' ? 'not-authorized (not deletion/slimming authorization)' : 'blocked'}`,
+    '',
+    report.judgmentDetailPayloadReadiness.note,
+    '',
+    `Table: \`${report.judgmentDetailPayloadReadiness.table}\``,
+    '',
+    `Global rows: ${formatValue(report.judgmentDetailPayloadReadiness.globalRowCount)}`,
+    '',
+    `Current-project rows: ${formatValue(report.judgmentDetailPayloadReadiness.currentProjectRows)}`,
+    '',
+    `judgment_payload_json null rows: ${formatValue(report.judgmentDetailPayloadReadiness.judgmentPayloadNullRows)}`,
+    '',
+    `judgment_payload_json non-null rows: ${formatValue(report.judgmentDetailPayloadReadiness.judgmentPayloadNonNullRows)}`,
+    '',
+    `model_id null rows: ${formatValue(report.judgmentDetailPayloadReadiness.modelIdNullRows)}`,
+    '',
+    `model_id non-null rows: ${formatValue(report.judgmentDetailPayloadReadiness.modelIdNonNullRows)}`,
+    '',
+    `answered_original non-null rows: ${formatValue(report.judgmentDetailPayloadReadiness.answeredOriginalNonNullRows)}`,
+    '',
+    `answered_original_as_array non-null rows: ${formatValue(report.judgmentDetailPayloadReadiness.answeredArrayNonNullRows)}`,
+    '',
+    report.judgmentDetailPayloadReadiness.error
+      ? `Status: Blocked: ${report.judgmentDetailPayloadReadiness.error}`
+      : 'Status: ok',
+    '',
+    judgmentDetailPayloadKindRows.length > 0
+      ? formatMarkdownTable(
+          [
+            'Payload kind',
+            'Rows',
+            'Payload non-nulls',
+            'model_id non-nulls',
+            'answered_original non-nulls',
+            'answered_original_as_array non-nulls',
+          ],
+          judgmentDetailPayloadKindRows,
+        )
+      : '_No judgment detail payload-kind rows were collected._',
+    '',
+    judgmentDetailListModeRows.length > 0
+      ? formatMarkdownTable(['List mode', 'Rows', 'Payload non-nulls'], judgmentDetailListModeRows)
+      : '_No judgment detail list-mode rows were collected._',
+    '',
     '## Summary Contribution Serving Readiness',
     '',
     `Verdict: ${report.summaryContributionServingReadiness.verdict === 'not-authorized' ? 'not-authorized (not deletion authorization)' : 'blocked'}`,
@@ -3166,7 +3630,17 @@ const inspectPhysicalEvidence = (options: CliOptions) => {
             }
 
             emitReport({
+              chunkManifestDiagnosticsReadiness: await getChunkManifestDiagnosticsReadinessReport(
+                runtime,
+                options.projectId,
+                options.limit,
+              ),
               generatedAt: new Date().toISOString(),
+              judgmentDetailPayloadReadiness: await getJudgmentDetailPayloadReadinessReport(
+                runtime,
+                options.projectId,
+                options.limit,
+              ),
               mode: 'readonly-snapshot',
               options,
               projectorWatermarkNullableFieldEvidence: await getProjectorWatermarkNullableFieldReport(
