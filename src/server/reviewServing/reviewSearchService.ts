@@ -162,7 +162,7 @@ const createSubstringSearchJob = async (input: {
       ${getSqlLiteral(JSON.stringify({cursor: null, limit: 500}))}::JSON,
       'pending',
       'async'
-    ) ON CONFLICT (job_id) DO UPDATE SET updated_at = current_timestamp
+    ) ON CONFLICT (job_id) DO NOTHING
   `)
 }
 
