@@ -8530,6 +8530,22 @@ const shouldRestartAfterCompletedRebuildChunk = (
   )
 }
 
+export const getReviewServingProjectorWorkerCompletedChunkRunCharge = (input: {
+  chunk: ReviewServingProjectorWorkerChunkResult
+  chunkBatchCount: number
+}) => {
+  if (
+    input.chunk.status === 'completed'
+    && input.chunk.requestId !== null
+    && input.chunk.projectionComponent === 'selectedImport'
+    && input.chunkBatchCount > 1
+  ) {
+    return 1
+  }
+
+  return input.chunkBatchCount
+}
+
 export const runReviewServingProjectorWorker = async (
   options: ReviewServingProjectorWorkerLoopOptions = {},
   dependencies: ReviewServingProjectorWorkerDependencies = defaultReviewServingProjectorWorkerDependencies,
@@ -8541,7 +8557,8 @@ export const runReviewServingProjectorWorker = async (
   const cycleResult = await runReviewServingProjectorWorkerOnce(options, dependencies)
   logReviewServingProjectorWorkerCycle(cycleResult)
   const nowMs = getWorkerNowMs(dependencies, options)
-  const completedRebuildChunksInRun = (options.completedRebuildChunksInRun ?? 0) + cycleResult.chunkBatchCount
+  const completedRebuildChunksInRun =
+    (options.completedRebuildChunksInRun ?? 0) + getReviewServingProjectorWorkerCompletedChunkRunCharge(cycleResult)
   const maxCompletedRebuildChunksPerRun = getMaxCompletedRebuildChunksPerRun(options.maxCompletedRebuildChunksPerRun)
 
   if (options.signal?.aborted) {

@@ -12,6 +12,7 @@ import {
   defaultReviewServingProjectorWorkerErrorBackoffMs,
   defaultReviewServingProjectorWorkerProgressYieldMs,
   getDefaultReviewServingProjectorRunners,
+  getReviewServingProjectorWorkerCompletedChunkRunCharge,
   getReviewServingProjectorWorkerWorkloadContext,
   lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs,
   nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
@@ -1075,6 +1076,44 @@ test('worker writes compatible selected import rebuild chunks through one batch 
   expect(joined).toContain("article_id >= 'article-051'")
   expect(joined).toContain("article_id <= 'article-099'")
   expect(joined).toContain('selectedImportBatchWriter')
+})
+
+test('low-memory worker charges request-associated selected import batch completions as one run unit', () => {
+  expect(
+    getReviewServingProjectorWorkerCompletedChunkRunCharge({
+      chunk: {
+        chunkId: 'chunk-selected-import-batch',
+        projectionComponent: 'selectedImport',
+        requestId: 'rebuild-selected-import',
+        status: 'completed',
+      },
+      chunkBatchCount: 16,
+    }),
+  ).toBe(1)
+
+  expect(
+    getReviewServingProjectorWorkerCompletedChunkRunCharge({
+      chunk: {
+        chunkId: 'chunk-requestless-selected-import-batch',
+        projectionComponent: 'selectedImport',
+        requestId: null,
+        status: 'completed',
+      },
+      chunkBatchCount: 16,
+    }),
+  ).toBe(16)
+
+  expect(
+    getReviewServingProjectorWorkerCompletedChunkRunCharge({
+      chunk: {
+        chunkId: 'chunk-summary-batch',
+        projectionComponent: 'summary',
+        requestId: 'rebuild-summary',
+        status: 'completed',
+      },
+      chunkBatchCount: 16,
+    }),
+  ).toBe(16)
 })
 
 test('worker writes compatible display rebuild chunks through one batch writer', async () => {
