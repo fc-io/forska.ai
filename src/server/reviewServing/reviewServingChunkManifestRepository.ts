@@ -564,6 +564,7 @@ export const getReviewServingRebuildTimingDiagnostics = async (
   database: ReviewServingChunkManifestRepositoryDatabase = getReviewServingChunkManifestDatabase(),
 ): Promise<ReviewServingRebuildTimingDiagnostics> => {
   const limit = getReviewServingRebuildTimingDiagnosticsLimit(input.limit)
+  const claimNow = new Date().toISOString()
   const scopePredicate = getReviewServingRebuildTimingDiagnosticsPredicate(input)
   const phaseTimings = await database.queryJson<ReviewServingRebuildTimingSummaryRow>(`
     SELECT
@@ -612,9 +613,7 @@ export const getReviewServingRebuildTimingDiagnostics = async (
       chunk.updated_at AS updatedAt
     FROM app.review_rebuild_chunk_manifest chunk
     WHERE ${scopePredicate}
-      AND chunk.admission_state = 'admitted'
-      AND chunk.status IN ('pending', 'failed')
-      AND (${getRebuildChunkComponentPrerequisitePredicate('chunk')})
+      AND (${getReviewServingRebuildChunkClaimPredicate({now: claimNow}, 'chunk')})
     ORDER BY
       ${getRebuildChunkClaimRequestPrioritySql('chunk')} DESC NULLS LAST,
       ${getRebuildChunkClaimLaneSql('chunk')} ASC,

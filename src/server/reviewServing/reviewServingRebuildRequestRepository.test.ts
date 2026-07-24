@@ -354,7 +354,10 @@ const createFakeReleaseRequestlessChunksDatabase = (input: {
   }
 
   const getRequestChunks = () => {
-    const requestId = getSqlStrings(statements.at(-1) ?? '')[0] ?? request?.requestId ?? ''
+    const requestId =
+      getSqlStrings(statements.at(-1) ?? '').find((value) => {
+        return value.startsWith('requestless-bootstrap:') || value.startsWith('requestless-summary:')
+      }) ?? request?.requestId ?? ''
 
     return [...chunks.values()].filter((chunk) => {
       return chunk.requestId === requestId

@@ -1732,6 +1732,8 @@ test('rebuild timing diagnostics summarize phase timings and claimable pending c
   expect(statements[0]).toContain("json_extract_string(chunk.diagnostics_json, '$.phaseTimings.writeOutputMs')")
   expect(statements[0]).toContain("json_extract_string(chunk.diagnostics_json, '$.phaseTimings.validationMs')")
   expect(statements[1]).toContain("chunk.admission_state = 'admitted'")
+  expect(statements[1]).toContain("request.status IN ('admitted', 'running')")
+  expect(statements[1]).toContain("request.admission_state = 'admitted'")
   expect(statements[1]).toContain('prerequisite.request_id IS NOT DISTINCT FROM chunk.request_id')
   expect(statements[1]).toContain('LIMIT 7')
 })
