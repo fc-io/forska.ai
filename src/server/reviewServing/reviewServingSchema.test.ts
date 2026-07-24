@@ -60,17 +60,13 @@ const reviewHumanStatusPatchRetirementForwardMigrationSql =
 const reviewLlmStatusPatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0120_dropReviewLlmStatusPatchV4.sql']
 const reviewArticleFilterPostingPatchRetirementForwardMigrationSql =
-  reviewServingPhase1MigrationSqlByPath[
-    '../../db/duckdbMigrations/0121_dropReviewArticleFilterPostingPatchV4.sql'
-  ]
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0121_dropReviewArticleFilterPostingPatchV4.sql']
 const reviewArticleDisplayPatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0122_dropReviewArticleDisplayPatchV4.sql']
 const reviewTitleSearchActivitySortAtDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0123_dropReviewTitleSearchActivitySortAt.sql']
 const reviewSelectedImportDisplayCopyColumnDropForwardMigrationSql =
-  reviewServingPhase1MigrationSqlByPath[
-    '../../db/duckdbMigrations/0124_dropReviewSelectedImportDisplayCopyColumns.sql'
-  ]
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0124_dropReviewSelectedImportDisplayCopyColumns.sql']
 const selectedImportPatchDisplayFieldsForwardMigrationSql = readFileSync(
   resolve(import.meta.dir, '../../db/duckdbMigrations/0108_reviewSelectedImportPatchDisplayFields.sql'),
   'utf8',
@@ -307,6 +303,22 @@ test('selected import schema drops retired display-copy columns only', () => {
     'tombstone',
     'selected_import_updated_at',
   ])
+})
+
+test('projector watermark schema keeps lifecycle recovery fields nullable', () => {
+  const projectorWatermarkSql = getTableSql('app.review_serving_projector_watermark')
+
+  expect(projectorWatermarkSql).toContain('import_route_id VARCHAR')
+  expect(projectorWatermarkSql).toContain('snapshot_id VARCHAR')
+  expect(projectorWatermarkSql).toContain('lease_owner VARCHAR')
+  expect(projectorWatermarkSql).toContain('lease_expires_at TIMESTAMPTZ')
+  expect(projectorWatermarkSql).toContain('cursor_json JSON')
+  expect(projectorWatermarkSql).toContain('last_error VARCHAR')
+  expect(projectorWatermarkSql).not.toContain('snapshot_id VARCHAR NOT NULL')
+  expect(projectorWatermarkSql).not.toContain('lease_owner VARCHAR NOT NULL')
+  expect(projectorWatermarkSql).not.toContain('lease_expires_at TIMESTAMPTZ NOT NULL')
+  expect(projectorWatermarkSql).not.toContain('cursor_json JSON NOT NULL')
+  expect(projectorWatermarkSql).not.toContain('last_error VARCHAR NOT NULL')
 })
 
 test('Phase 1 schema migration creates every read-contract physical table', () => {

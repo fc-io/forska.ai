@@ -35,9 +35,11 @@ test('projector watermark ids are stable for the V4 foundation identity columns'
     sourcePartition: 'article.display',
   } as const
   const changedPartition = {...input, sourcePartition: 'article.search'}
+  const changedImportRoute = {...input, importRouteId: 'import-route-a'}
 
   expect(getReviewServingProjectorWatermarkId(input)).toBe(getReviewServingProjectorWatermarkId({...input}))
   expect(getReviewServingProjectorWatermarkId(input)).not.toBe(getReviewServingProjectorWatermarkId(changedPartition))
+  expect(getReviewServingProjectorWatermarkId(input)).not.toBe(getReviewServingProjectorWatermarkId(changedImportRoute))
 })
 
 test('dirty work scope uses invalidation registry lookup metadata', () => {

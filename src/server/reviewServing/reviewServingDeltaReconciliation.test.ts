@@ -99,6 +99,38 @@ const createFakeReconciliationTransaction = (
   return {statements, tx}
 }
 
+const getWatermarkAdvanceStatements = (statements: readonly string[]) => {
+  return {
+    insert:
+      statements.find((statement) => {
+        return statement.includes('INSERT INTO app.review_serving_projector_watermark')
+      }) ?? '',
+    update:
+      statements.find((statement) => {
+        return statement.includes('UPDATE app.review_serving_projector_watermark')
+      }) ?? '',
+  }
+}
+
+const getInsertedWatermarkColumns = (statement: string) => {
+  const columnList = statement.match(/INSERT INTO app\.review_serving_projector_watermark\s*\(([\s\S]*?)\)\s*SELECT/u)
+
+  return columnList === null
+    ? []
+    : columnList[1]
+        .split(',')
+        .map((column) => {
+          return column.trim()
+        })
+        .filter((column) => {
+          return column.length > 0
+        })
+}
+
+const getWatermarkUpdateSetClause = (statement: string) => {
+  return statement.match(/SET\s*([\s\S]*?)\s*WHERE watermark_id/u)?.[1] ?? ''
+}
+
 test('reconciles valid outbox rows into deltas with the allocated source high-water mark', async () => {
   const {statements, tx} = createFakeReconciliationTransaction({outboxRow: validReviewOutboxRow})
   const result = await reconcileReviewServingDeltaOutboxRow(tx, {outboxId: 'outbox-1'})
@@ -230,6 +262,55 @@ test('projector watermark advancement proceeds only after reconciliation or oper
   expect(statements.join('\n')).not.toContain('ON CONFLICT(watermark_id) DO UPDATE SET')
   expect(statements.join('\n')).toContain('UPDATE app.review_serving_projector_watermark')
   expect(statements.join('\n')).toContain('GREATEST(')
+})
+
+test('projector watermark advancement inserts import route as part of watermark identity', async () => {
+  const {statements, tx} = createFakeReconciliationTransaction({barrier: null, currentWatermark: null})
+
+  await advanceReviewServingProjectorWatermark(tx, {
+    importRouteId: 'import-route-1',
+    projectionComponent: 'selectedImport',
+    projectorName: 'review-serving-v4-selected-import',
+    sourceHighWaterMark: 10,
+    sourcePartition: 'importRoute:project-1',
+  })
+
+  const {insert} = getWatermarkAdvanceStatements(statements)
+
+  expect(getInsertedWatermarkColumns(insert)).toEqual([
+    'watermark_id',
+    'projector_name',
+    'project_id',
+    'import_route_id',
+    'projection_component',
+    'source_partition',
+    'source_high_water_mark',
+  ])
+  expect(insert).toContain("'import-route-1'")
+  expect(insert).toContain('WHERE watermark_id =')
+})
+
+test('projector watermark advancement leaves dormant lifecycle fields nullable and unwritten', async () => {
+  const {statements, tx} = createFakeReconciliationTransaction({barrier: null, currentWatermark: 7})
+
+  await advanceReviewServingProjectorWatermark(tx, {
+    importRouteId: 'import-route-1',
+    projectionComponent: 'selectedImport',
+    projectorName: 'review-serving-v4-selected-import',
+    sourceHighWaterMark: 10,
+    sourcePartition: 'importRoute:project-1',
+  })
+
+  const {insert, update} = getWatermarkAdvanceStatements(statements)
+  const updateSetClause = getWatermarkUpdateSetClause(update)
+  const dormantFields = ['snapshot_id', 'lease_owner', 'lease_expires_at', 'cursor_json', 'last_error']
+
+  expect(getInsertedWatermarkColumns(insert)).not.toEqual(expect.arrayContaining(dormantFields))
+  expect(updateSetClause).toContain('source_high_water_mark =')
+  expect(updateSetClause).toContain('updated_at =')
+  for (const dormantField of dormantFields) {
+    expect(updateSetClause).not.toContain(dormantField)
+  }
 })
 
 test('projector watermark advancement keeps no-op advances idempotent without conflict upserts', async () => {

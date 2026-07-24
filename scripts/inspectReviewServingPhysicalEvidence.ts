@@ -32,6 +32,7 @@ type EvidenceReport = {
   summaryContributionServingReadiness: SummaryContributionServingReadinessReport
   snapshotPath: string
   tables: TableEvidence[]
+  unassessedQueueServingReadiness: UnassessedQueueServingReadinessReport
 }
 type QueryRuntime = Awaited<ReturnType<typeof getSnapshotQueryRuntime>>
 type ProjectorWatermarkNullableFieldColumnEvidence = {
@@ -211,6 +212,51 @@ type SummaryContributionServingReadinessReport = {
   topContributionKeys: SummaryContributionServingRowCount[]
   topProjects: {projectId: string; rowCount: number}[]
   verdict: 'not-authorized' | 'blocked'
+}
+type UnassessedQueueServingConsumerCount = {
+  currentProjectRows: number | null
+  globalRows: number | null
+  label: string
+  note: string
+}
+type UnassessedQueueServingDuplicateProbe = {duplicateCount: number | null; keyColumns: string[]; label: string}
+type UnassessedQueueServingPromptNullness = {
+  currentProjectNonNullPromptRows: number | null
+  currentProjectNullPromptRows: number | null
+  globalNonNullPromptRows: number | null
+  globalNullPromptRows: number | null
+}
+type UnassessedQueueServingReadinessReport = {
+  activeOrLastKnownGoodSnapshotProtectedRows: number | null
+  candidateRows: number | null
+  columns: TableColumn[]
+  consumerCounts: UnassessedQueueServingConsumerCount[]
+  currentProjectRows: number | null
+  distinctArticles: number | null
+  distinctPromptPairs: number | null
+  duplicateProbes: UnassessedQueueServingDuplicateProbe[]
+  error: string | null
+  globalRowCount: number | null
+  indexes: unknown[]
+  missingSnapshotManifestRows: number | null
+  note: string
+  otherRows: number | null
+  pinnedSnapshotRows: number | null
+  promptNullness: UnassessedQueueServingPromptNullness
+  rowsByProject: SummaryContributionServingProjectRowCount[]
+  rowsByProtectionAndStatus: UnassessedQueueServingStatusRow[]
+  rowsByQueueKind: SummaryContributionServingRowCount[]
+  table: 'mart.review_unassessed_queue_serving_v4'
+  verdict: 'not-authorized' | 'blocked'
+}
+type UnassessedQueueServingStatusRow = {
+  activeOrLastKnownGoodProtected: boolean
+  candidateRows: number
+  currentProjectRows: number
+  otherRows: number
+  pinnedProtected: boolean
+  rowCount: number
+  snapshotStatus: string
 }
 type TableColumn = {column_name: string; data_type: string}
 type TableEvidence = {
@@ -2097,6 +2143,279 @@ const getSummaryContributionServingReadinessReport = async (
   }
 }
 
+const getUnassessedQueueServingReadinessReport = async (
+  runtime: QueryRuntime,
+  projectId: string,
+  limit: number,
+): Promise<UnassessedQueueServingReadinessReport> => {
+  const table = 'mart.review_unassessed_queue_serving_v4' as const
+  const declaredServingKeyColumns = [
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'queue_kind',
+    'priority_bucket',
+    'activity_sort_at',
+    'article_id',
+    'prompt_id',
+    'queue_identity',
+  ]
+  const orderKeyWithoutQueueIdentityColumns = [
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'queue_kind',
+    'priority_bucket',
+    'activity_sort_at',
+    'article_id',
+    'prompt_id',
+  ]
+  const currentProjectWhereClause = `project_id = ${getSqlLiteral(projectId)}`
+
+  try {
+    const columns = await getTableColumns(runtime, table)
+    const manifestColumns = await getTableColumns(runtime, 'app.review_serving_snapshot_manifest')
+    const hasSnapshotStatus = hasColumn(manifestColumns, 'snapshot_status')
+    const countRows = await runReadonlyQuery<{
+      activeOrLastKnownGoodSnapshotProtectedRows: number | string
+      candidateRows: number | string
+      currentProjectRows: number | string
+      distinctArticles: number | string
+      distinctPromptPairs: number | string
+      globalNonNullPromptRows: number | string
+      globalNullPromptRows: number | string
+      globalRowCount: number | string
+      missingSnapshotManifestRows: number | string
+      otherRows: number | string
+      pinnedSnapshotRows: number | string
+    }>(
+      runtime,
+      `
+        WITH classified AS (
+          SELECT
+            candidate.*,
+            ${getActiveSnapshotManifestGuardPredicate('snapshot_id')} AS active_or_last_known_good_protected,
+            ${getActiveSnapshotPinGuardPredicate('snapshot_id')} AS pinned_protected,
+            ${hasSnapshotStatus ? "COALESCE(manifest.snapshot_status, 'missing-manifest')" : "'unknown'"} AS snapshot_status
+          FROM ${table} candidate
+          LEFT JOIN app.review_serving_snapshot_manifest manifest
+            ON manifest.project_id = candidate.project_id
+            AND manifest.snapshot_id = candidate.snapshot_id
+        )
+        SELECT
+          CAST(COUNT(*) AS BIGINT) AS globalRowCount,
+          CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows,
+          CAST(COUNT(*) FILTER (WHERE active_or_last_known_good_protected) AS BIGINT) AS activeOrLastKnownGoodSnapshotProtectedRows,
+          CAST(COUNT(*) FILTER (WHERE pinned_protected) AS BIGINT) AS pinnedSnapshotRows,
+          CAST(COUNT(*) FILTER (WHERE snapshot_status = 'candidate') AS BIGINT) AS candidateRows,
+          CAST(COUNT(*) FILTER (WHERE NOT active_or_last_known_good_protected AND snapshot_status <> 'candidate') AS BIGINT) AS otherRows,
+          CAST(COUNT(*) FILTER (WHERE snapshot_status = 'missing-manifest') AS BIGINT) AS missingSnapshotManifestRows,
+          CAST(COUNT(*) FILTER (WHERE prompt_id IS NULL) AS BIGINT) AS globalNullPromptRows,
+          CAST(COUNT(*) FILTER (WHERE prompt_id IS NOT NULL) AS BIGINT) AS globalNonNullPromptRows,
+          CAST(COUNT(DISTINCT article_id) AS BIGINT) AS distinctArticles,
+          CAST(COUNT(DISTINCT article_id || ':' || COALESCE(prompt_id, '<NULL>')) AS BIGINT) AS distinctPromptPairs
+        FROM classified
+      `,
+    )
+    const promptRows = await runReadonlyQuery<{
+      currentProjectNonNullPromptRows: number | string
+      currentProjectNullPromptRows: number | string
+    }>(
+      runtime,
+      `
+        SELECT
+          CAST(COUNT(*) FILTER (WHERE prompt_id IS NULL) AS BIGINT) AS currentProjectNullPromptRows,
+          CAST(COUNT(*) FILTER (WHERE prompt_id IS NOT NULL) AS BIGINT) AS currentProjectNonNullPromptRows
+        FROM ${table}
+        WHERE ${currentProjectWhereClause}
+      `,
+    )
+    const rowsByProtectionAndStatus = await runReadonlyQuery<{
+      activeOrLastKnownGoodProtected: boolean
+      candidateRows: number | string
+      currentProjectRows: number | string
+      otherRows: number | string
+      pinnedProtected: boolean
+      rowCount: number | string
+      snapshotStatus: string | null
+    }>(
+      runtime,
+      `
+        WITH classified AS (
+          SELECT
+            candidate.*,
+            ${getActiveSnapshotManifestGuardPredicate('snapshot_id')} AS active_or_last_known_good_protected,
+            ${getActiveSnapshotPinGuardPredicate('snapshot_id')} AS pinned_protected,
+            ${hasSnapshotStatus ? "COALESCE(manifest.snapshot_status, 'missing-manifest')" : "'unknown'"} AS snapshot_status
+          FROM ${table} candidate
+          LEFT JOIN app.review_serving_snapshot_manifest manifest
+            ON manifest.project_id = candidate.project_id
+            AND manifest.snapshot_id = candidate.snapshot_id
+        )
+        SELECT
+          snapshot_status AS snapshotStatus,
+          active_or_last_known_good_protected AS activeOrLastKnownGoodProtected,
+          pinned_protected AS pinnedProtected,
+          CAST(COUNT(*) AS BIGINT) AS rowCount,
+          CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows,
+          CAST(COUNT(*) FILTER (WHERE snapshot_status = 'candidate') AS BIGINT) AS candidateRows,
+          CAST(COUNT(*) FILTER (WHERE NOT active_or_last_known_good_protected AND snapshot_status <> 'candidate') AS BIGINT) AS otherRows
+        FROM classified
+        GROUP BY snapshot_status, active_or_last_known_good_protected, pinned_protected
+        HAVING COUNT(*) > 0
+        ORDER BY COUNT(*) DESC, snapshot_status, active_or_last_known_good_protected DESC, pinned_protected DESC
+      `,
+    )
+    const consumerRows = await runReadonlyQuery<Record<string, number | string>>(
+      runtime,
+      `
+        SELECT
+          CAST(COUNT(*) FILTER (WHERE queue_kind = 'unassessed') AS BIGINT) AS routeRows,
+          CAST(COUNT(*) FILTER (WHERE queue_kind = 'unassessed' AND prompt_id IS NOT NULL) AS BIGINT) AS judgmentJobPromptRows,
+          CAST(COUNT(DISTINCT article_id) FILTER (WHERE queue_kind = 'unassessed') AS BIGINT) AS bulkDistinctArticleRows,
+          CAST(COUNT(*) FILTER (WHERE queue_kind = 'unassessed' AND prompt_id IS NOT NULL) AS BIGINT) AS summaryPromptRows
+        FROM ${table}
+      `,
+    )
+    const currentProjectConsumerRows = await runReadonlyQuery<Record<string, number | string>>(
+      runtime,
+      `
+        SELECT
+          CAST(COUNT(*) FILTER (WHERE queue_kind = 'unassessed') AS BIGINT) AS routeRows,
+          CAST(COUNT(*) FILTER (WHERE queue_kind = 'unassessed' AND prompt_id IS NOT NULL) AS BIGINT) AS judgmentJobPromptRows,
+          CAST(COUNT(DISTINCT article_id) FILTER (WHERE queue_kind = 'unassessed') AS BIGINT) AS bulkDistinctArticleRows,
+          CAST(COUNT(*) FILTER (WHERE queue_kind = 'unassessed' AND prompt_id IS NOT NULL) AS BIGINT) AS summaryPromptRows
+        FROM ${table}
+        WHERE ${currentProjectWhereClause}
+      `,
+    )
+    const consumerCountSpecs = [
+      {
+        key: 'routeRows',
+        label: 'foreground unassessed route rows',
+        note: "Rows matching queue_kind='unassessed' used by foreground queue ordering/filter decisions.",
+      },
+      {
+        key: 'judgmentJobPromptRows',
+        label: 'judgment-job prompt rows',
+        note: "Rows matching queue_kind='unassessed' with prompt_id present for prompt fanout scheduling.",
+      },
+      {
+        key: 'bulkDistinctArticleRows',
+        label: 'bulk distinct article rows',
+        note: "Distinct articles matching queue_kind='unassessed' for bulk operation source selection.",
+      },
+      {
+        key: 'summaryPromptRows',
+        label: 'summary unassessed prompt rows',
+        note: "Rows matching queue_kind='unassessed' with prompt_id present for summary unassessed metrics.",
+      },
+    ]
+
+    const topProjects = await runReadonlyQuery<{projectId: string; rowCount: number | string}>(
+      runtime,
+      `
+        SELECT project_id AS projectId, CAST(COUNT(*) AS BIGINT) AS rowCount
+        FROM ${table}
+        GROUP BY project_id
+        HAVING COUNT(*) > 0
+        ORDER BY COUNT(*) DESC, project_id
+        LIMIT ${Math.max(1, limit)}
+      `,
+    )
+
+    return {
+      activeOrLastKnownGoodSnapshotProtectedRows: getNumberOrNull(
+        countRows[0]?.activeOrLastKnownGoodSnapshotProtectedRows,
+      ),
+      candidateRows: getNumberOrNull(countRows[0]?.candidateRows),
+      columns,
+      consumerCounts: consumerCountSpecs.map((spec) => {
+        return {
+          currentProjectRows: getNumberOrNull(currentProjectConsumerRows[0]?.[spec.key]),
+          globalRows: getNumberOrNull(consumerRows[0]?.[spec.key]),
+          label: spec.label,
+          note: spec.note,
+        }
+      }),
+      currentProjectRows: getNumberOrNull(countRows[0]?.currentProjectRows),
+      distinctArticles: getNumberOrNull(countRows[0]?.distinctArticles),
+      distinctPromptPairs: getNumberOrNull(countRows[0]?.distinctPromptPairs),
+      duplicateProbes: [
+        {
+          duplicateCount: await getDuplicateCountForColumns(runtime, table, declaredServingKeyColumns, null),
+          keyColumns: declaredServingKeyColumns,
+          label: 'declared serving primary/order key',
+        },
+        {
+          duplicateCount: await getDuplicateCountForColumns(runtime, table, orderKeyWithoutQueueIdentityColumns, null),
+          keyColumns: orderKeyWithoutQueueIdentityColumns,
+          label: 'consumer order key without queue_identity',
+        },
+      ],
+      error: null,
+      globalRowCount: getNumberOrNull(countRows[0]?.globalRowCount),
+      indexes: await getIndexes(runtime, table),
+      missingSnapshotManifestRows: getNumberOrNull(countRows[0]?.missingSnapshotManifestRows),
+      note: 'Read-only global/current-project evidence for the unassessed queue serving table. Nonzero active/LKG and candidate rows are protected route/job/summary state; this section does not authorize deletion, slimming, schema changes, migrations, or runtime cleanup.',
+      otherRows: getNumberOrNull(countRows[0]?.otherRows),
+      pinnedSnapshotRows: getNumberOrNull(countRows[0]?.pinnedSnapshotRows),
+      promptNullness: {
+        currentProjectNonNullPromptRows: getNumberOrNull(promptRows[0]?.currentProjectNonNullPromptRows),
+        currentProjectNullPromptRows: getNumberOrNull(promptRows[0]?.currentProjectNullPromptRows),
+        globalNonNullPromptRows: getNumberOrNull(countRows[0]?.globalNonNullPromptRows),
+        globalNullPromptRows: getNumberOrNull(countRows[0]?.globalNullPromptRows),
+      },
+      rowsByProject: topProjects.map((row) => {
+        return {label: row.projectId, projectId: row.projectId, rowCount: Number(row.rowCount)}
+      }),
+      rowsByProtectionAndStatus: rowsByProtectionAndStatus.map((row) => {
+        return {
+          activeOrLastKnownGoodProtected: Boolean(row.activeOrLastKnownGoodProtected),
+          candidateRows: Number(row.candidateRows ?? 0),
+          currentProjectRows: Number(row.currentProjectRows ?? 0),
+          otherRows: Number(row.otherRows ?? 0),
+          pinnedProtected: Boolean(row.pinnedProtected),
+          rowCount: Number(row.rowCount ?? 0),
+          snapshotStatus: String(row.snapshotStatus ?? 'NULL'),
+        }
+      }),
+      rowsByQueueKind: await getSummaryContributionServingGroupedRows(runtime, table, 'queue_kind', 'queueKind', null),
+      table,
+      verdict: 'not-authorized',
+    }
+  } catch (error) {
+    return {
+      activeOrLastKnownGoodSnapshotProtectedRows: null,
+      candidateRows: null,
+      columns: [],
+      consumerCounts: [],
+      currentProjectRows: null,
+      distinctArticles: null,
+      distinctPromptPairs: null,
+      duplicateProbes: [],
+      error: error instanceof Error ? error.message : String(error),
+      globalRowCount: null,
+      indexes: [],
+      missingSnapshotManifestRows: null,
+      note: 'Read-only unassessed queue evidence collection failed. Failed evidence collection is not deletion/slimming authorization.',
+      otherRows: null,
+      pinnedSnapshotRows: null,
+      promptNullness: {
+        currentProjectNonNullPromptRows: null,
+        currentProjectNullPromptRows: null,
+        globalNonNullPromptRows: null,
+        globalNullPromptRows: null,
+      },
+      rowsByProject: [],
+      rowsByProtectionAndStatus: [],
+      rowsByQueueKind: [],
+      table,
+      verdict: 'blocked',
+    }
+  }
+}
+
 const getTableEvidence = async (runtime: QueryRuntime, table: string, options: CliOptions): Promise<TableEvidence> => {
   try {
     const columns = await getTableColumns(runtime, table)
@@ -2324,6 +2643,45 @@ const renderMarkdown = (report: EvidenceReport) => {
         comparison.error ? `Blocked: ${comparison.error}` : 'ok',
       ]
     })
+  const unassessedQueueProtectionStatusRows = report.unassessedQueueServingReadiness.rowsByProtectionAndStatus.map(
+    (row) => {
+      return [
+        `\`${row.snapshotStatus}\``,
+        row.activeOrLastKnownGoodProtected ? 'yes' : 'no',
+        row.pinnedProtected ? 'yes' : 'no',
+        formatValue(row.rowCount),
+        formatValue(row.currentProjectRows),
+        formatValue(row.candidateRows),
+        formatValue(row.otherRows),
+      ]
+    },
+  )
+  const unassessedQueueKindRows = report.unassessedQueueServingReadiness.rowsByQueueKind.map((row) => {
+    return [`\`${row.label}\``, formatValue(row.rowCount)]
+  })
+  const unassessedQueueProjectRows = report.unassessedQueueServingReadiness.rowsByProject.map((project) => {
+    return [`\`${project.projectId}\``, formatValue(project.rowCount)]
+  })
+  const unassessedQueueDuplicateRows = report.unassessedQueueServingReadiness.duplicateProbes.map((probe) => {
+    return [
+      probe.label,
+      probe.keyColumns
+        .map((column) => {
+          return `\`${column}\``
+        })
+        .join(', '),
+      formatValue(probe.duplicateCount),
+    ]
+  })
+  const unassessedQueueConsumerRows = report.unassessedQueueServingReadiness.consumerCounts.map((consumer) => {
+    return [consumer.label, formatValue(consumer.globalRows), formatValue(consumer.currentProjectRows), consumer.note]
+  })
+  const unassessedQueueColumnRows = report.unassessedQueueServingReadiness.columns.map((column) => {
+    return [`\`${column.column_name}\``, `\`${column.data_type}\``]
+  })
+  const unassessedQueueIndexRows = report.unassessedQueueServingReadiness.indexes.map((index) => {
+    return [formatValue(JSON.stringify(index))]
+  })
   const summaryContributionIndexRows = report.summaryContributionServingReadiness.indexes.map((index) => {
     return [formatValue(JSON.stringify(index))]
   })
@@ -2596,6 +2954,90 @@ const renderMarkdown = (report: EvidenceReport) => {
       ? formatMarkdownTable(['Source partition', 'Rows'], projectorWatermarkSourcePartitionRows)
       : '_No projector watermark source-partition rows were collected._',
     '',
+    '## Unassessed Queue Serving Readiness',
+    '',
+    `Verdict: ${report.unassessedQueueServingReadiness.verdict === 'not-authorized' ? 'not-authorized (not deletion/slimming authorization)' : 'blocked'}`,
+    '',
+    report.unassessedQueueServingReadiness.note,
+    '',
+    `Table: \`${report.unassessedQueueServingReadiness.table}\``,
+    '',
+    `Global rows: ${formatValue(report.unassessedQueueServingReadiness.globalRowCount)}`,
+    '',
+    `Current-project rows: ${formatValue(report.unassessedQueueServingReadiness.currentProjectRows)}`,
+    '',
+    `Active/LKG snapshot protected rows: ${formatValue(report.unassessedQueueServingReadiness.activeOrLastKnownGoodSnapshotProtectedRows)}`,
+    '',
+    `Pinned snapshot rows: ${formatValue(report.unassessedQueueServingReadiness.pinnedSnapshotRows)}`,
+    '',
+    `Candidate rows: ${formatValue(report.unassessedQueueServingReadiness.candidateRows)}`,
+    '',
+    `Other rows: ${formatValue(report.unassessedQueueServingReadiness.otherRows)}`,
+    '',
+    `Rows with missing snapshot manifest: ${formatValue(report.unassessedQueueServingReadiness.missingSnapshotManifestRows)}`,
+    '',
+    `Global prompt_id null rows: ${formatValue(report.unassessedQueueServingReadiness.promptNullness.globalNullPromptRows)}`,
+    '',
+    `Global prompt_id non-null rows: ${formatValue(report.unassessedQueueServingReadiness.promptNullness.globalNonNullPromptRows)}`,
+    '',
+    `Current-project prompt_id null rows: ${formatValue(report.unassessedQueueServingReadiness.promptNullness.currentProjectNullPromptRows)}`,
+    '',
+    `Current-project prompt_id non-null rows: ${formatValue(report.unassessedQueueServingReadiness.promptNullness.currentProjectNonNullPromptRows)}`,
+    '',
+    `Distinct articles: ${formatValue(report.unassessedQueueServingReadiness.distinctArticles)}`,
+    '',
+    `Distinct article/prompt pairs: ${formatValue(report.unassessedQueueServingReadiness.distinctPromptPairs)}`,
+    '',
+    `Column count: ${formatValue(report.unassessedQueueServingReadiness.columns.length)}`,
+    '',
+    `Index count: ${formatValue(report.unassessedQueueServingReadiness.indexes.length)}`,
+    '',
+    report.unassessedQueueServingReadiness.error
+      ? `Status: Blocked: ${report.unassessedQueueServingReadiness.error}`
+      : 'Status: ok',
+    '',
+    unassessedQueueProtectionStatusRows.length > 0
+      ? formatMarkdownTable(
+          [
+            'Snapshot status',
+            'Active/LKG protected',
+            'Pinned protected',
+            'Rows',
+            'Current-project rows',
+            'Candidate rows',
+            'Other rows',
+          ],
+          unassessedQueueProtectionStatusRows,
+        )
+      : '_No unassessed queue snapshot protection/status rows were collected._',
+    '',
+    unassessedQueueKindRows.length > 0
+      ? formatMarkdownTable(['Queue kind', 'Rows'], unassessedQueueKindRows)
+      : '_No unassessed queue kind rows were collected._',
+    '',
+    unassessedQueueConsumerRows.length > 0
+      ? formatMarkdownTable(
+          ['Consumer shape', 'Global rows', 'Current-project rows', 'Read shape'],
+          unassessedQueueConsumerRows,
+        )
+      : '_No unassessed queue consumer-shaped counts were collected._',
+    '',
+    unassessedQueueProjectRows.length > 0
+      ? formatMarkdownTable(['Project', 'Rows'], unassessedQueueProjectRows)
+      : '_No projects with nonzero unassessed queue serving rows were observed._',
+    '',
+    unassessedQueueDuplicateRows.length > 0
+      ? formatMarkdownTable(['Probe', 'Key columns', 'Duplicate keys'], unassessedQueueDuplicateRows)
+      : '_No unassessed queue duplicate probes were collected._',
+    '',
+    unassessedQueueColumnRows.length > 0
+      ? formatMarkdownTable(['Column', 'Type'], unassessedQueueColumnRows)
+      : '_No unassessed queue column shape was collected._',
+    '',
+    unassessedQueueIndexRows.length > 0
+      ? formatMarkdownTable(['Index metadata'], unassessedQueueIndexRows)
+      : '_No unassessed queue indexes were observed._',
+    '',
     '## Summary Contribution Serving Readiness',
     '',
     `Verdict: ${report.summaryContributionServingReadiness.verdict === 'not-authorized' ? 'not-authorized (not deletion authorization)' : 'blocked'}`,
@@ -2743,6 +3185,11 @@ const inspectPhysicalEvidence = (options: CliOptions) => {
               ),
               snapshotPath: snapshot.snapshotPath,
               tables,
+              unassessedQueueServingReadiness: await getUnassessedQueueServingReadinessReport(
+                runtime,
+                options.projectId,
+                options.limit,
+              ),
             })
           })
         }),
