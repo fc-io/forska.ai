@@ -71,12 +71,20 @@ type ChunkManifestDiagnosticsReadinessReport = {
 type JudgmentDetailPayloadKindRow = {
   answeredArrayNonNullRows: number
   answeredOriginalNonNullRows: number
+  judgmentIdNonNullRows: number
   judgmentPayloadNonNullRows: number
   modelIdNonNullRows: number
+  payloadModelIdNonNullRows: number
   payloadKind: string
+  placeholderRows: number
   rows: number
 }
 type JudgmentDetailPayloadListModeRow = {judgmentPayloadNonNullRows: number; listModeKey: string; rows: number}
+type JudgmentDetailPayloadSourceJudgmentMatch = {
+  currentConfigMatchingJudgmentRows: number | null
+  currentProjectSourceJudgmentRows: number | null
+  note: string
+}
 type JudgmentDetailPayloadTopLevelKeyRow = {
   currentProjectRows: number
   globalRows: number
@@ -97,6 +105,7 @@ type JudgmentDetailPayloadReadinessReport = {
   rowsByListMode: JudgmentDetailPayloadListModeRow[]
   rowsByPayloadKind: JudgmentDetailPayloadKindRow[]
   rowsByPayloadTopLevelKey: JudgmentDetailPayloadTopLevelKeyRow[]
+  sourceJudgmentMatch: JudgmentDetailPayloadSourceJudgmentMatch
   table: 'mart.review_article_judgment_detail_serving_v4'
   verdict: 'not-authorized' | 'blocked'
 }
@@ -2660,9 +2669,12 @@ const getJudgmentDetailPayloadReadinessReport = async (
     const rowsByPayloadKind = await runReadonlyQuery<{
       answeredArrayNonNullRows: number | string
       answeredOriginalNonNullRows: number | string
+      judgmentIdNonNullRows: number | string
       judgmentPayloadNonNullRows: number | string
       modelIdNonNullRows: number | string
+      payloadModelIdNonNullRows: number | string
       payloadKind: string | null
+      placeholderRows: number | string
       rows: number | string
     }>(
       runtime,
@@ -2671,7 +2683,12 @@ const getJudgmentDetailPayloadReadinessReport = async (
           COALESCE(payload_kind, 'NULL') AS payloadKind,
           CAST(COUNT(*) AS BIGINT) AS rows,
           CAST(COUNT(*) FILTER (WHERE judgment_payload_json IS NOT NULL) AS BIGINT) AS judgmentPayloadNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE judgment_id IS NOT NULL) AS BIGINT) AS judgmentIdNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE placeholder_kind IS NOT NULL) AS BIGINT) AS placeholderRows,
           CAST(COUNT(*) FILTER (WHERE model_id IS NOT NULL) AS BIGINT) AS modelIdNonNullRows,
+          CAST(COUNT(*) FILTER (
+            WHERE json_extract_string(judgment_payload_json, '$.model.id') IS NOT NULL
+          ) AS BIGINT) AS payloadModelIdNonNullRows,
           CAST(COUNT(*) FILTER (WHERE answered_original IS NOT NULL) AS BIGINT) AS answeredOriginalNonNullRows,
           CAST(COUNT(*) FILTER (WHERE answered_original_as_array IS NOT NULL) AS BIGINT) AS answeredArrayNonNullRows
         FROM ${table}
@@ -2679,6 +2696,49 @@ const getJudgmentDetailPayloadReadinessReport = async (
         HAVING COUNT(*) > 0
         ORDER BY COUNT(*) DESC, payload_kind
         LIMIT ${Math.max(1, limit)}
+      `,
+    )
+    const sourceJudgmentRows = await runReadonlyQuery<{
+      currentConfigMatchingJudgmentRows: number | string
+      currentProjectSourceJudgmentRows: number | string
+    }>(
+      runtime,
+      `
+        WITH current_project_config AS (
+          SELECT
+            model_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images
+          FROM app.project
+          WHERE id = ${getSqlLiteral(projectId)}
+        ),
+        project_scope_article AS (
+          SELECT DISTINCT air.article_id
+          FROM app.project_import_route project_route
+          INNER JOIN app.article_import_route air
+            ON air.import_route_id = project_route.import_route_id
+          WHERE project_route.project_id = ${getSqlLiteral(projectId)}
+          UNION
+          SELECT DISTINCT project_article.article_id
+          FROM app.project_article project_article
+          WHERE project_article.project_id = ${getSqlLiteral(projectId)}
+        )
+        SELECT
+          CAST(COUNT(*) AS BIGINT) AS currentProjectSourceJudgmentRows,
+          CAST(COUNT(*) FILTER (
+            WHERE judgment.model_id IS NOT DISTINCT FROM current_project_config.model_id
+              AND judgment.use_title IS NOT DISTINCT FROM current_project_config.use_title
+              AND judgment.use_abstract IS NOT DISTINCT FROM current_project_config.use_abstract
+              AND judgment.use_fulltext IS NOT DISTINCT FROM current_project_config.use_fulltext
+              AND judgment.use_fulltext_no_images IS NOT DISTINCT FROM current_project_config.use_fulltext_no_images
+          ) AS BIGINT) AS currentConfigMatchingJudgmentRows
+        FROM app."judgment" judgment
+        INNER JOIN project_scope_article
+          ON project_scope_article.article_id = judgment.article_id
+        CROSS JOIN current_project_config
+        WHERE judgment.deleted_at IS NULL
       `,
     )
     const rowsByListMode = await runReadonlyQuery<{
@@ -2779,9 +2839,12 @@ const getJudgmentDetailPayloadReadinessReport = async (
         return {
           answeredArrayNonNullRows: Number(payloadKindRow.answeredArrayNonNullRows ?? 0),
           answeredOriginalNonNullRows: Number(payloadKindRow.answeredOriginalNonNullRows ?? 0),
+          judgmentIdNonNullRows: Number(payloadKindRow.judgmentIdNonNullRows ?? 0),
           judgmentPayloadNonNullRows: Number(payloadKindRow.judgmentPayloadNonNullRows ?? 0),
           modelIdNonNullRows: Number(payloadKindRow.modelIdNonNullRows ?? 0),
+          payloadModelIdNonNullRows: Number(payloadKindRow.payloadModelIdNonNullRows ?? 0),
           payloadKind: String(payloadKindRow.payloadKind ?? 'NULL'),
+          placeholderRows: Number(payloadKindRow.placeholderRows ?? 0),
           rows: Number(payloadKindRow.rows ?? 0),
         }
       }),
@@ -2793,6 +2856,11 @@ const getJudgmentDetailPayloadReadinessReport = async (
           payloadKind: String(keyRow.payloadKind ?? 'NULL'),
         }
       }),
+      sourceJudgmentMatch: {
+        currentConfigMatchingJudgmentRows: getNumberOrNull(sourceJudgmentRows[0]?.currentConfigMatchingJudgmentRows),
+        currentProjectSourceJudgmentRows: getNumberOrNull(sourceJudgmentRows[0]?.currentProjectSourceJudgmentRows),
+        note: 'Current-project source judgments only prove model_id absence when they match the active project model/content flags. Nonmatching source judgments do not authorize serving model_id removal.',
+      },
       table,
       verdict: 'not-authorized',
     }
@@ -2811,6 +2879,11 @@ const getJudgmentDetailPayloadReadinessReport = async (
       rowsByListMode: [],
       rowsByPayloadKind: [],
       rowsByPayloadTopLevelKey: [],
+      sourceJudgmentMatch: {
+        currentConfigMatchingJudgmentRows: null,
+        currentProjectSourceJudgmentRows: null,
+        note: 'Not collected because judgment detail payload readiness collection failed.',
+      },
       table,
       verdict: 'blocked',
     }
@@ -3111,7 +3184,10 @@ const renderMarkdown = (report: EvidenceReport) => {
       `\`${row.payloadKind}\``,
       formatValue(row.rows),
       formatValue(row.judgmentPayloadNonNullRows),
+      formatValue(row.judgmentIdNonNullRows),
+      formatValue(row.placeholderRows),
       formatValue(row.modelIdNonNullRows),
+      formatValue(row.payloadModelIdNonNullRows),
       formatValue(row.answeredOriginalNonNullRows),
       formatValue(row.answeredArrayNonNullRows),
     ]
@@ -3572,13 +3648,22 @@ const renderMarkdown = (report: EvidenceReport) => {
             'Payload kind',
             'Rows',
             'Payload non-nulls',
+            'Judgment ID non-nulls',
+            'Placeholder rows',
             'model_id non-nulls',
+            'Payload model.id non-nulls',
             'answered_original non-nulls',
             'answered_original_as_array non-nulls',
           ],
           judgmentDetailPayloadKindRows,
         )
       : '_No judgment detail payload-kind rows were collected._',
+    '',
+    report.judgmentDetailPayloadReadiness.sourceJudgmentMatch.note,
+    '',
+    `Current-project source judgment rows: ${formatValue(report.judgmentDetailPayloadReadiness.sourceJudgmentMatch.currentProjectSourceJudgmentRows)}`,
+    '',
+    `Current-project source judgment rows matching active model/config: ${formatValue(report.judgmentDetailPayloadReadiness.sourceJudgmentMatch.currentConfigMatchingJudgmentRows)}`,
     '',
     judgmentDetailListModeRows.length > 0
       ? formatMarkdownTable(['List mode', 'Rows', 'Payload non-nulls'], judgmentDetailListModeRows)
