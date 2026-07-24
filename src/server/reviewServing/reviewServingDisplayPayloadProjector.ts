@@ -251,33 +251,6 @@ const getArticleRangePredicate = (input: {chunkEndArticleId?: string | null; chu
       ${endPredicate}`
 }
 
-const getServingArticleRangePredicate = (
-  input: {chunkEndArticleId?: string | null; chunkStartArticleId?: string | null},
-  column = 'article_id',
-) => {
-  const startPredicate =
-    input.chunkStartArticleId === null || input.chunkStartArticleId === undefined
-      ? ''
-      : `AND ${column} >= ${getSqlLiteral(input.chunkStartArticleId)}`
-  const endPredicate =
-    input.chunkEndArticleId === null || input.chunkEndArticleId === undefined
-      ? ''
-      : `AND ${column} <= ${getSqlLiteral(input.chunkEndArticleId)}`
-
-  return `${startPredicate}
-      ${endPredicate}`
-}
-
-const getListModeKeyPredicate = (listModeKeys: readonly string[]) => {
-  return listModeKeys.length === 0
-    ? 'FALSE'
-    : `list_mode_key IN (${listModeKeys
-        .map((listModeKey) => {
-          return getSqlLiteral(listModeKey)
-        })
-        .join(', ')})`
-}
-
 const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, options: {orderBy?: boolean} = {}) => {
   const orderBy = options.orderBy === false ? '' : 'ORDER BY scope.article_id ASC'
   const selectedImportRouteIdSql = `CASE
@@ -412,8 +385,10 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
       full_text_pdf,
       human_answered_prompt_count,
       human_status_identity,
+      human_status_key,
       journal_title,
       list_mode_key,
+      llm_status_key,
       llm_judged_prompt_count,
       llm_status_identity,
       medrxiv_id,
@@ -462,8 +437,10 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
       display_base.fullTextPdf AS full_text_pdf,
       0 AS human_answered_prompt_count,
       ${getSqlLiteral(input.humanStatusIdentity)} AS human_status_identity,
+      NULL AS human_status_key,
       display_base.journalTitle AS journal_title,
       list_mode.list_mode_key,
+      NULL AS llm_status_key,
       0 AS llm_judged_prompt_count,
       ${getSqlLiteral(input.llmStatusIdentity)} AS llm_status_identity,
       display_base.medrxivId AS medrxiv_id,
@@ -488,6 +465,46 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
     FROM display_base
     CROSS JOIN list_mode
     ORDER BY display_base.articleId ASC, list_mode.list_mode_key ASC
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO UPDATE SET
+      activity_sort_at = excluded.activity_sort_at,
+      article_created_at = excluded.article_created_at,
+      article_external_id = excluded.article_external_id,
+      article_title = excluded.article_title,
+      article_updated_at = excluded.article_updated_at,
+      arxiv_id = excluded.arxiv_id,
+      base_generation = excluded.base_generation,
+      biorxiv_id = excluded.biorxiv_id,
+      conflict_flag = excluded.conflict_flag,
+      display_identity = excluded.display_identity,
+      doi = excluded.doi,
+      duplicate_flag = excluded.duplicate_flag,
+      enabled_prompt_count = excluded.enabled_prompt_count,
+      full_text_conversion_status = excluded.full_text_conversion_status,
+      full_text_fetched_at = excluded.full_text_fetched_at,
+      full_text_pdf = excluded.full_text_pdf,
+      human_answered_prompt_count = excluded.human_answered_prompt_count,
+      human_status_identity = excluded.human_status_identity,
+      human_status_key = excluded.human_status_key,
+      journal_title = excluded.journal_title,
+      llm_judged_prompt_count = excluded.llm_judged_prompt_count,
+      llm_status_identity = excluded.llm_status_identity,
+      llm_status_key = excluded.llm_status_key,
+      medrxiv_id = excluded.medrxiv_id,
+      patch_watermark = excluded.patch_watermark,
+      payload_identity = excluded.payload_identity,
+      pmid = excluded.pmid,
+      posting_identity = excluded.posting_identity,
+      project_scope_identity = excluded.project_scope_identity,
+      publication_year = excluded.publication_year,
+      review_opened = excluded.review_opened,
+      review_sections_completed = excluded.review_sections_completed,
+      selected_import_identity = excluded.selected_import_identity,
+      selected_import_route_id = excluded.selected_import_route_id,
+      selected_rank_key = excluded.selected_rank_key,
+      serving_updated_at = excluded.serving_updated_at,
+      sort_key = excluded.sort_key,
+      summary_identity = excluded.summary_identity,
+      url = excluded.url
   `
 }
 
@@ -835,12 +852,6 @@ export const projectReviewServingDisplayBaseRows = async (
 
 const getDisplayBaseRowsStatements = (input: ProjectReviewServingDisplayBaseInput) => {
   return [
-    `DELETE FROM mart.review_article_serving_v4
-      WHERE project_id = ${getSqlLiteral(input.projectId)}
-        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-        AND ${getListModeKeyPredicate(input.listModeKeys)}
-        ${getServingArticleRangePredicate(input)}`,
     input.listModeKeys.length === 0 ? null : getInsertDisplayBaseRowsStatement(input),
   ].flatMap((statement) => {
     return statement === null ? [] : [statement]
