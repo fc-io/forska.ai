@@ -238,9 +238,9 @@ const getFullRebuildPostingContributionRowsStatement = (input: ProjectReviewServ
             scoped.sort_key,
             selected.import_route_id,
             selected.selected_rank_key,
-            selected.publication_year,
-            COALESCE(selected.duplicate_flag, FALSE) AS duplicate_flag,
-            COALESCE(selected.conflict_flag, FALSE) AS conflict_flag,
+            COALESCE(selected_hot.publication_year, selected.publication_year) AS publication_year,
+            COALESCE(selected_hot.duplicate_flag, selected.duplicate_flag, FALSE) AS duplicate_flag,
+            COALESCE(selected_hot.conflict_flag, selected.conflict_flag, FALSE) AS conflict_flag,
             scoped.scope_tombstone AS tombstone
           FROM scoped_article scoped
           LEFT JOIN app.review_selected_article_import_v4 selected
@@ -248,6 +248,11 @@ const getFullRebuildPostingContributionRowsStatement = (input: ProjectReviewServ
             AND selected.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
             AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
             AND selected.article_id = scoped.article_id
+          LEFT JOIN app.review_import_article_hot_field selected_hot
+            ON selected_hot.import_route_id = selected.import_route_id
+            AND selected_hot.article_id = selected.article_id
+            AND selected_hot.source_record_key = selected.source_record_key
+            AND NOT selected_hot.tombstone
         ),
         selected_postings AS (
           SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.sort_key AS sortKey, selected.tombstone AS tombstone, 'importRoute' AS filterKind, selected.import_route_id AS filterValue

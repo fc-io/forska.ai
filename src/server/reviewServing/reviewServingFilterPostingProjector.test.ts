@@ -432,6 +432,33 @@ test('selected-import rank changes move filter contribution between selected imp
   expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
 })
 
+test('selected-import filter postings prefer hot fields for payload filters while keeping selected-base identity', async () => {
+  const {database, statements} = createPostingDatabase({
+    newRows: [postingRow({filterKind: 'publicationYear', filterValue: '2026'})],
+  })
+
+  await projectReviewServingFilterPostings(projectInput([postingClaim({dirtyKind: 'importRoute.article.hotFields.updated'})]), database)
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('FROM posting_union')
+  })
+
+  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
+  expect(selectStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
+  expect(selectStatement).toContain('selected.import_route_id')
+  expect(selectStatement).toContain('selected.selected_rank_key')
+  expect(selectStatement).toContain('selected_hot.import_route_id = selected.import_route_id')
+  expect(selectStatement).toContain('selected_hot.article_id = selected.article_id')
+  expect(selectStatement).toContain('selected_hot.source_record_key = selected.source_record_key')
+  expect(selectStatement).toContain('AND NOT selected_hot.tombstone')
+  expect(selectStatement).toContain('COALESCE(selected_hot.publication_year, selected.publication_year) AS publication_year')
+  expect(selectStatement).toContain(
+    'COALESCE(selected_hot.duplicate_flag, selected.duplicate_flag, FALSE) AS duplicate_flag',
+  )
+  expect(selectStatement).toContain('COALESCE(selected_hot.conflict_flag, selected.conflict_flag, FALSE) AS conflict_flag')
+  expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
+  expect(selectStatement).not.toContain('selected_patch')
+})
+
 test('human postings read only the current status patch per logical prompt key', async () => {
   const {database, statements} = createPostingDatabase({newRows: []})
 
