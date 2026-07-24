@@ -8,11 +8,6 @@ type ConflictUpdateInventoryEntry = {path: string; reason: string; snippet: stri
 
 const allowedConflictUpdates: ConflictUpdateInventoryEntry[] = [
   {
-    path: 'src/server/reviewServing/reviewServingDirtyWorkService.ts',
-    reason: 'dirty work merges high-water ranges, status, and retry state',
-    snippet: 'ON CONFLICT(dirty_work_id) DO UPDATE SET',
-  },
-  {
     path: 'src/server/reviewServing/reviewServingChunkManifestRepository.ts',
     reason: 'chunk manifest upserts preserve leases, attempts, diagnostics, and active chunk state',
     snippet: 'ON CONFLICT(chunk_id) DO UPDATE SET',
