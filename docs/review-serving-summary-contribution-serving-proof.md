@@ -18,12 +18,27 @@ summary. The section records:
 - rows by summary definition version
 - top contribution keys by row count
 - rows by snapshot manifest status when `snapshot_status` exists
+- bounded recoverability classification for aggregate count/facet serving rows
+- count/facet contribution-key aggregate groups that match, miss, or mismatch
+  final serving rows where `contribution_key` JSON has `summaryKind=count` or
+  `summaryKind=facet`
+- exact logical common-column overlap, excluding request/chunk ownership and
+  timestamps, with
+  `mart.review_article_summary_contribution_rebuild_partial_v4`
 - duplicate key counts for the declared primary key and lookup-index key
 - column and index shape
 
 The generated evidence is for deletion decisions only in the sense of
 classification: it can identify which rows are active, pinned, status-grouped,
-or missing manifest coverage. The verdict remains `not-authorized`.
+missing manifest coverage, aggregate-serving comparable, or present in rebuild
+partial evidence. The verdict remains `not-authorized`.
+
+The recoverability classification is intentionally conservative. Final
+aggregate count/facet serving rows can be compared to contribution-key aggregate
+groups, but they cannot reconstruct exact per-article contribution ledger rows
+because the final rows do not carry `article_id`, `component_kind`, or the full
+`contribution_key` ledger identity. Exact per-article recovery would still need
+the contribution ledger itself or matching rebuild partial rows.
 
 Prior generated evidence showed:
 
@@ -33,6 +48,14 @@ Prior generated evidence showed:
 - active pin protected rows: `0`
 - rows with no matching snapshot manifest: `0`
 - snapshot manifest status rows: `candidate=831,796`, `active=177,498`
+- recoverability classification: `bounded-readonly-aggregate-only`
+- rebuild partial contribution rows: `19,092,538`
+- contribution rows with logical rebuild-partial overlap: `131,982`
+- rebuild partial rows with logical contribution overlap: `157,685`
+- count aggregate comparison: `70` contribution groups, `332` final rows,
+  `0` matches
+- facet aggregate comparison: `11` contribution groups, `54` final rows,
+  `0` matches
 - declared primary-key duplicate keys: `0`
 - lookup-index duplicate keys without `article_id`: `282`
 - table shape: `9` columns and `1` index
