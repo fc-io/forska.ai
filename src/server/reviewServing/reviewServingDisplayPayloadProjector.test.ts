@@ -496,12 +496,14 @@ test('display base rows flow through writer with display fields and selected imp
   expect(deletes).toHaveLength(0)
   expect(inserts).toHaveLength(1)
   expect(inserts[0]).toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id)')
-  expect(inserts[0]).toContain('base_generation = excluded.base_generation')
-  expect(inserts[0]).toContain('patch_watermark = excluded.patch_watermark')
-  expect(inserts[0]).toContain('llm_status_key = excluded.llm_status_key')
-  expect(inserts[0]).toContain('human_status_key = excluded.human_status_key')
-  expect(inserts[0]).toContain('review_opened = excluded.review_opened')
-  expect(inserts[0]).toContain('review_sections_completed = excluded.review_sections_completed')
+  expect(inserts[0]).toContain('DO NOTHING')
+  expect(inserts[0]).not.toContain('DO UPDATE SET')
+  expect(inserts[0]).not.toContain('base_generation = excluded.base_generation')
+  expect(inserts[0]).not.toContain('patch_watermark = excluded.patch_watermark')
+  expect(inserts[0]).not.toContain('llm_status_key = excluded.llm_status_key')
+  expect(inserts[0]).not.toContain('human_status_key = excluded.human_status_key')
+  expect(inserts[0]).not.toContain('review_opened = excluded.review_opened')
+  expect(inserts[0]).not.toContain('review_sections_completed = excluded.review_sections_completed')
   expect(inserts[0]).not.toContain('mart.review_selected_import_patch_v4')
   expect(inserts[0]).not.toContain('selected_patch')
   expect(inserts[0]).toContain('WITH display_base AS')
@@ -514,7 +516,7 @@ test('display base rows flow through writer with display fields and selected imp
   expect(inserts.join('\n')).toContain('full_text_fetched_at')
 })
 
-test('display base range rebuilds upsert candidate rows without scoped serving deletes', async () => {
+test('display base range rebuilds insert candidate rows without indexed serving updates', async () => {
   const {database, statements} = createDisplayPayloadDatabase()
 
   const result = await projectReviewServingDisplayBaseRanges(
@@ -571,11 +573,12 @@ test('display base range rebuilds upsert candidate rows without scoped serving d
   expect(joined).toContain("scope.article_id >= 'article-051'")
   expect(joined).toContain("scope.article_id <= 'article-099'")
   expect(joined).toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id)')
-  expect(joined).toContain('DO UPDATE SET')
-  expect(joined).toContain('article_title = excluded.article_title')
-  expect(joined).toContain('selected_import_route_id = excluded.selected_import_route_id')
-  expect(joined).toContain('llm_status_key = excluded.llm_status_key')
-  expect(joined).toContain('human_status_key = excluded.human_status_key')
+  expect(joined).toContain('DO NOTHING')
+  expect(joined).not.toContain('DO UPDATE SET')
+  expect(joined).not.toContain('article_title = excluded.article_title')
+  expect(joined).not.toContain('selected_import_route_id = excluded.selected_import_route_id')
+  expect(joined).not.toContain('llm_status_key = excluded.llm_status_key')
+  expect(joined).not.toContain('human_status_key = excluded.human_status_key')
   expect(joined).not.toContain('mart.review_selected_import_patch_v4')
   expect(joined).not.toContain('selected_patch')
 })
@@ -611,8 +614,10 @@ test('display base rebuilds emit no stale row deletion statement', async () => {
   const joined = statements.join('\n')
 
   // This hardening slice is statement-shape only: stale row cleanup remains a
-  // future semantic cleanup path, separate from avoiding the indexed scoped DELETE.
+  // future semantic cleanup path, separate from avoiding indexed scoped mutation.
   expect(joined).toContain('ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id)')
+  expect(joined).toContain('DO NOTHING')
+  expect(joined).not.toContain('DO UPDATE SET')
   expect(joined).not.toContain('DELETE FROM mart.review_article_serving_v4')
   expect(joined).not.toContain('NOT EXISTS')
   expect(joined).not.toContain('stale')
