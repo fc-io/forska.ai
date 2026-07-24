@@ -28,6 +28,7 @@ type EvidenceReport = {
   options: CliOptions
   retentionCleanupEligibility: RetentionCleanupEligibilityReport
   selectedImportPayloadSlimmingReadiness: SelectedImportPayloadSlimmingReadinessReport
+  summaryContributionServingReadiness: SummaryContributionServingReadinessReport
   snapshotPath: string
   tables: TableEvidence[]
 }
@@ -66,6 +67,24 @@ type SelectedImportPayloadSlimmingReadinessReport = {
   selectedBaseScopedRows: number | null
   verdict: 'not-authorized' | 'blocked'
   columns: SelectedImportPayloadColumnEvidence[]
+}
+type SummaryContributionServingDuplicateProbe = {
+  duplicateCount: number | null
+  keyColumns: string[]
+  label: string
+}
+type SummaryContributionServingReadinessReport = {
+  columnCount: number | null
+  columns: TableColumn[]
+  duplicateProbes: SummaryContributionServingDuplicateProbe[]
+  error: string | null
+  globalRowCount: number | null
+  indexes: unknown[]
+  nonzeroProjectCount: number | null
+  note: string
+  table: 'mart.review_article_summary_contribution_v4'
+  topProjects: {projectId: string; rowCount: number}[]
+  verdict: 'not-authorized' | 'blocked'
 }
 type TableColumn = {column_name: string; data_type: string}
 type TableEvidence = {
@@ -179,6 +198,15 @@ const duplicateKeyCandidates: Record<string, string[]> = {
     'article_id',
     'payload_kind',
     'prompt_id',
+  ],
+  'mart.review_article_summary_contribution_v4': [
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'article_id',
+    'component_kind',
+    'summary_definition_version',
+    'contribution_key',
   ],
   'mart.review_article_serving_v4': [
     'project_id',
@@ -858,6 +886,127 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
   }
 }
 
+const getDuplicateCountForColumns = async (
+  runtime: QueryRuntime,
+  table: string,
+  keyColumns: string[],
+  whereClause: string | null,
+) => {
+  const keySql = keyColumns
+    .map((columnName) => {
+      return `"${columnName}"`
+    })
+    .join(', ')
+  const rows = await runReadonlyQuery<{duplicateCount: number | string}>(
+    runtime,
+    `
+      WITH duplicate_keys AS (
+        SELECT ${keySql}
+        FROM ${table}
+        ${whereClause ? `WHERE ${whereClause}` : ''}
+        GROUP BY ${keySql}
+        HAVING COUNT(*) > 1
+      )
+      SELECT CAST(COUNT(*) AS BIGINT) AS duplicateCount
+      FROM duplicate_keys
+    `,
+  )
+
+  return Number(rows[0]?.duplicateCount ?? 0)
+}
+
+const getSummaryContributionServingReadinessReport = async (
+  runtime: QueryRuntime,
+  limit: number,
+): Promise<SummaryContributionServingReadinessReport> => {
+  const table = 'mart.review_article_summary_contribution_v4' as const
+  const primaryKeyColumns = [
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'article_id',
+    'component_kind',
+    'summary_definition_version',
+    'contribution_key',
+  ]
+  const lookupIndexColumns = [
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'component_kind',
+    'summary_definition_version',
+    'contribution_key',
+  ]
+
+  try {
+    const columns = await getTableColumns(runtime, table)
+    const countRows = await runReadonlyQuery<{
+      globalRowCount: number | string
+      nonzeroProjectCount: number | string
+    }>(
+      runtime,
+      `
+        SELECT
+          CAST(COUNT(*) AS BIGINT) AS globalRowCount,
+          CAST(COUNT(DISTINCT project_id) AS BIGINT) AS nonzeroProjectCount
+        FROM ${table}
+      `,
+    )
+    const topProjects = await runReadonlyQuery<{projectId: string; rowCount: number | string}>(
+      runtime,
+      `
+        SELECT project_id AS projectId, CAST(COUNT(*) AS BIGINT) AS rowCount
+        FROM ${table}
+        GROUP BY project_id
+        HAVING COUNT(*) > 0
+        ORDER BY COUNT(*) DESC, project_id
+        LIMIT ${Math.max(1, limit)}
+      `,
+    )
+
+    return {
+      columnCount: columns.length,
+      columns,
+      duplicateProbes: [
+        {
+          duplicateCount: await getDuplicateCountForColumns(runtime, table, primaryKeyColumns, null),
+          keyColumns: primaryKeyColumns,
+          label: 'declared primary key',
+        },
+        {
+          duplicateCount: await getDuplicateCountForColumns(runtime, table, lookupIndexColumns, null),
+          keyColumns: lookupIndexColumns,
+          label: 'lookup index key without article_id',
+        },
+      ],
+      error: null,
+      globalRowCount: getNumberOrNull(countRows[0]?.globalRowCount),
+      indexes: await getIndexes(runtime, table),
+      nonzeroProjectCount: getNumberOrNull(countRows[0]?.nonzeroProjectCount),
+      note: 'Read-only current-DB snapshot evidence for the summary contribution serving ledger beyond the default scoped project. This section is not deletion authorization; table removal still requires route parity, benchmark, recovery, and live progress proof.',
+      table,
+      topProjects: topProjects.map((row) => {
+        return {projectId: row.projectId, rowCount: Number(row.rowCount)}
+      }),
+      verdict: 'not-authorized',
+    }
+  } catch (error) {
+    return {
+      columnCount: null,
+      columns: [],
+      duplicateProbes: [],
+      error: error instanceof Error ? error.message : String(error),
+      globalRowCount: null,
+      indexes: [],
+      nonzeroProjectCount: null,
+      note: 'Read-only current-DB snapshot evidence collection failed. Failed evidence collection is not deletion authorization.',
+      table,
+      topProjects: [],
+      verdict: 'blocked',
+    }
+  }
+}
+
 const getTableEvidence = async (runtime: QueryRuntime, table: string, options: CliOptions): Promise<TableEvidence> => {
   try {
     const columns = await getTableColumns(runtime, table)
@@ -944,6 +1093,22 @@ const renderMarkdown = (report: EvidenceReport) => {
       formatValue(column.hotFieldNullCount),
       formatValue(column.hotFieldNonNullCount),
     ]
+  })
+  const summaryContributionDuplicateRows = report.summaryContributionServingReadiness.duplicateProbes.map((probe) => {
+    return [
+      probe.label,
+      probe.keyColumns.map((column) => `\`${column}\``).join(', '),
+      formatValue(probe.duplicateCount),
+    ]
+  })
+  const summaryContributionColumnRows = report.summaryContributionServingReadiness.columns.map((column) => {
+    return [`\`${column.column_name}\``, `\`${column.data_type}\``]
+  })
+  const summaryContributionTopProjectRows = report.summaryContributionServingReadiness.topProjects.map((project) => {
+    return [`\`${project.projectId}\``, formatValue(project.rowCount)]
+  })
+  const summaryContributionIndexRows = report.summaryContributionServingReadiness.indexes.map((index) => {
+    return [formatValue(JSON.stringify(index))]
   })
 
   const sections = report.tables.map((table) => {
@@ -1052,6 +1217,42 @@ const renderMarkdown = (report: EvidenceReport) => {
         )
       : '_No selected-import payload evidence rows were collected._',
     '',
+    '## Summary Contribution Serving Readiness',
+    '',
+    `Verdict: ${report.summaryContributionServingReadiness.verdict === 'not-authorized' ? 'not deletion authorization' : 'blocked'}`,
+    '',
+    report.summaryContributionServingReadiness.note,
+    '',
+    `Table: \`${report.summaryContributionServingReadiness.table}\``,
+    '',
+    `Global rows: ${formatValue(report.summaryContributionServingReadiness.globalRowCount)}`,
+    '',
+    `Projects with nonzero rows: ${formatValue(report.summaryContributionServingReadiness.nonzeroProjectCount)}`,
+    '',
+    `Column count: ${formatValue(report.summaryContributionServingReadiness.columnCount)}`,
+    '',
+    `Index count: ${formatValue(report.summaryContributionServingReadiness.indexes.length)}`,
+    '',
+    report.summaryContributionServingReadiness.error
+      ? `Status: Blocked: ${report.summaryContributionServingReadiness.error}`
+      : 'Status: ok',
+    '',
+    summaryContributionTopProjectRows.length > 0
+      ? formatMarkdownTable(['Project', 'Rows'], summaryContributionTopProjectRows)
+      : '_No projects with nonzero summary contribution serving rows were observed._',
+    '',
+    summaryContributionDuplicateRows.length > 0
+      ? formatMarkdownTable(['Probe', 'Key columns', 'Duplicate keys'], summaryContributionDuplicateRows)
+      : '_No summary contribution duplicate probes were collected._',
+    '',
+    summaryContributionColumnRows.length > 0
+      ? formatMarkdownTable(['Column', 'Type'], summaryContributionColumnRows)
+      : '_No summary contribution column shape was collected._',
+    '',
+    summaryContributionIndexRows.length > 0
+      ? formatMarkdownTable(['Index metadata'], summaryContributionIndexRows)
+      : '_No summary contribution indexes were observed._',
+    '',
     ...sections,
     '',
   ].join('\n')
@@ -1093,6 +1294,10 @@ const inspectPhysicalEvidence = (options: CliOptions) => {
               selectedImportPayloadSlimmingReadiness: await getSelectedImportPayloadSlimmingReadinessReport(
                 runtime,
                 options.projectId,
+              ),
+              summaryContributionServingReadiness: await getSummaryContributionServingReadinessReport(
+                runtime,
+                options.limit,
               ),
               snapshotPath: snapshot.snapshotPath,
               tables,

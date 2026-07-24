@@ -65,13 +65,15 @@ Use these focused commands for the storage-shape evidence-unblocker slice:
 ```bash
 bun test scripts/operatorScriptDuckdbAccess.test.ts
 bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-current-db-physical-with-selected-import-evidence.md
+bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-summary-contribution-serving-proof.md
 bun test src/server/reviewServing/reviewServingRouteParityCoverage.test.ts src/server/reviewServing/reviewServingRouteParityEvidence.test.ts src/server/reviewServing/reviewServingRouteParityRunner.test.ts
 bun run bench:review-serving-release-gate
 ```
 
 These commands produce evidence and benchmark-contract artifacts, including the
-selected-import payload slimming readiness section in the physical evidence
-report. They do not replace `bun run test:network-smoke:current-db` for
+selected-import payload slimming readiness and global summary contribution
+serving readiness sections in the physical evidence report. They do not replace
+`bun run test:network-smoke:current-db` for
 review-serving/DuckDB lifecycle changes.
 
 Quality gates: run the narrow test for your change first, then `bun run lint` or `bun run build` when the changed layer needs it.
