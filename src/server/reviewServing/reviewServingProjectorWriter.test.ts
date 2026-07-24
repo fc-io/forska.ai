@@ -649,7 +649,7 @@ test('projector writer keeps count serving replacement writes idempotent after s
   )
 })
 
-test('projector writer uses larger insert-only batches for delete-scoped summary contribution partials', async () => {
+test('projector writer uses larger scan-guarded insert-missing batches for summary contribution partials', async () => {
   const {database, statements} = createWriterDatabase()
   const records = Array.from({length: 1_001}, (_, index) => {
     return {
@@ -685,16 +685,7 @@ test('projector writer uses larger insert-only batches for delete-scoped summary
     {
       component: 'summary',
       records,
-      statements: [
-        `
-          DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4
-          WHERE request_id = 'rebuild-summary-1'
-            AND chunk_id = 'chunk-summary-1'
-            AND project_id = 'project-1'
-            AND review_config_hash = 'review-config-1'
-            AND snapshot_id = 'snapshot-1'
-        `,
-      ],
+      statements: [],
     },
     database,
   )
@@ -705,6 +696,9 @@ test('projector writer uses larger insert-only batches for delete-scoped summary
 
   expect(insertStatements).toHaveLength(2)
   expect(insertStatements.join('\n')).not.toContain('ON CONFLICT')
+  expect(insertStatements.join('\n')).toContain('WHERE NOT EXISTS')
+  expect(insertStatements.join('\n')).toContain("(existing.request_id || '') = (incoming.request_id || '')")
+  expect(insertStatements.join('\n')).toContain("(existing.contribution_key || '') = (incoming.contribution_key || '')")
   expect(result.diagnostics.records.batchCount).toBe(2)
   expect(result.diagnostics.records.batchesByTable).toMatchObject({
     'mart.review_article_summary_contribution_rebuild_partial_v4': 2,

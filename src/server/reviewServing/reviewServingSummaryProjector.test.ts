@@ -492,11 +492,14 @@ test('chunked full summary rebuild stages request partials and contribution part
     'mart.review_article_summary_contribution_rebuild_partial_v4': 2,
     'mart.review_article_summary_rebuild_partial_v4': 2,
   })
-  expect(joined).toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
-  expect(joined).toContain('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_summary_rebuild_partial_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4')
   expect(partialInsertStatements.join('\n')).not.toContain('ON CONFLICT')
+  expect(partialInsertStatements.join('\n')).toContain('WHERE NOT EXISTS')
+  expect(partialInsertStatements.join('\n')).toContain("(existing.request_id || '') = (incoming.request_id || '')")
+  expect(partialInsertStatements.join('\n')).toContain("(existing.chunk_id || '') = (incoming.chunk_id || '')")
   expect(joined).toContain('INNER JOIN mart.review_article_serving_v4 serving')
   expect(joined).toContain('INNER JOIN mart.review_article_judgment_detail_serving_v4 detail')
   expect(joined).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
@@ -561,7 +564,14 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
     'ON CONFLICT(request_id, chunk_id, project_id, review_config_hash, snapshot_id, serving_key) DO UPDATE SET',
   )
   expect(joined).toContain("AND chunk_id = '__summary_rebuild_partial_accumulator__:")
-  expect(joined).toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_count_serving_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_filter_facet_serving_v4')
+  expect(joined).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, count_kind, summary_definition_version, filter_key) DO UPDATE SET',
+  )
+  expect(joined).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version) DO UPDATE SET',
+  )
   expect(joined).toContain('FROM mart.review_article_summary_contribution_rebuild_partial_v4')
   expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
   expect(
@@ -1091,7 +1101,7 @@ test('summary rebuild request finalization leaves serving summaries unchanged wh
   }
 })
 
-test('summary rebuild request finalization deletes stale serving rows when summary chunks produced no partials', async () => {
+test('summary rebuild request finalization preserves stale serving rows when no replacement partials exist', async () => {
   const duckdbPath = `/tmp/forska-summary-partial-empty-summary-${Date.now()}.duckdb`
 
   try {
@@ -1169,8 +1179,8 @@ test('summary rebuild request finalization deletes stale serving rows when summa
         FROM mart.review_filter_facet_serving_v4
       `)
 
-      expect(countRows).toEqual([{total: '0'}])
-      expect(facetRows).toEqual([{total: '0'}])
+      expect(countRows).toEqual([{total: '1'}])
+      expect(facetRows).toEqual([{total: '1'}])
     } finally {
       close()
     }
@@ -1195,7 +1205,7 @@ test('summary rebuild request finalization skips null-hash snapshots without sum
   expect(statements).toEqual([])
 })
 
-test('summary rebuild request finalization deletes stale facets when no facet partials remain', async () => {
+test('summary rebuild request finalization preserves stale facets when no replacement facet partials exist', async () => {
   const duckdbPath = `/tmp/forska-summary-partial-empty-facet-${Date.now()}.duckdb`
 
   try {
@@ -1271,7 +1281,7 @@ test('summary rebuild request finalization deletes stale facets when no facet pa
         FROM mart.review_filter_facet_serving_v4
       `)
 
-      expect(facetRows).toEqual([{total: '0'}])
+      expect(facetRows).toEqual([{total: '1'}])
     } finally {
       close()
     }

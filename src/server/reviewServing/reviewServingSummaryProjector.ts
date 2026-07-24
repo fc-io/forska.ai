@@ -666,28 +666,10 @@ const getDirectFullSummaryContributionPartialRecords = (input: {
 }
 
 const getDirectFullSummaryPartialDeleteStatements = (input: ProjectReviewServingSummariesInput) => {
-  return [
-    getDeleteReviewServingProjectorRowsStatement({
-      predicates: {
-        chunk_id: getRequiredSummaryRebuildChunkId(input),
-        project_id: input.projectId,
-        request_id: getRequiredSummaryRebuildRequestId(input),
-        review_config_hash: input.reviewConfigHash,
-        snapshot_id: input.snapshotId,
-      },
-      table: 'mart.review_article_summary_rebuild_partial_v4',
-    }),
-    getDeleteReviewServingProjectorRowsStatement({
-      predicates: {
-        chunk_id: getRequiredSummaryRebuildChunkId(input),
-        project_id: input.projectId,
-        request_id: getRequiredSummaryRebuildRequestId(input),
-        review_config_hash: input.reviewConfigHash,
-        snapshot_id: input.snapshotId,
-      },
-      table: 'mart.review_article_summary_contribution_rebuild_partial_v4',
-    }),
-  ]
+  getRequiredSummaryRebuildChunkId(input)
+  getRequiredSummaryRebuildRequestId(input)
+
+  return []
 }
 
 const summaryRebuildPartialAccumulatorChunkIdPrefix = '__summary_rebuild_partial_accumulator__:'
@@ -1027,18 +1009,6 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
     const scopePredicate = getSummaryRebuildPartialScopePredicate(input)
     await tx.run(getRefreshSummaryRebuildAccumulatorCountsStatement(scopedInput))
     await tx.run(`
-      DELETE FROM mart.review_article_count_serving_v4
-      WHERE project_id = ${getSqlLiteral(input.projectId)}
-        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-    `)
-    await tx.run(`
-      DELETE FROM mart.review_filter_facet_serving_v4
-      WHERE project_id = ${getSqlLiteral(input.projectId)}
-        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-    `)
-    await tx.run(`
       INSERT INTO mart.review_article_count_serving_v4 (
         project_id,
         review_config_hash,
@@ -1071,6 +1041,12 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         AND chunk_id = ${getSqlLiteral(accumulatorChunkId)}
         AND summary_kind = 'count'
       GROUP BY project_id, review_config_hash, snapshot_id, COALESCE(list_mode_key, 'global'), count_kind, summary_definition_version, filter_key
+      ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, count_kind, summary_definition_version, filter_key) DO UPDATE SET
+        summary_identity = excluded.summary_identity,
+        count_value = excluded.count_value,
+        availability = excluded.availability,
+        stale_reason = excluded.stale_reason,
+        count_updated_at = excluded.count_updated_at
     `)
     await tx.run(`
       INSERT INTO mart.review_filter_facet_serving_v4 (
@@ -1109,6 +1085,13 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         AND chunk_id = ${getSqlLiteral(accumulatorChunkId)}
         AND summary_kind = 'facet'
       GROUP BY project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version
+      ON CONFLICT(project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version) DO UPDATE SET
+        prompt_id = excluded.prompt_id,
+        answer_id = excluded.answer_id,
+        answer_value = excluded.answer_value,
+        count_value = excluded.count_value,
+        availability = excluded.availability,
+        facet_updated_at = excluded.facet_updated_at
     `)
   })
 }
