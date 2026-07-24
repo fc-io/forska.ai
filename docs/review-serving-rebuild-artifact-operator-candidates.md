@@ -76,3 +76,16 @@ operator explicitly chooses to apply it with the acknowledgement token. It is
 not an apply recommendation by itself: applying would mutate the live current
 DB, detach the chunks from the failed requestless-bootstrap rows, and require
 the current-DB progress gates afterward.
+
+The admitted zero-chunk request from the same evidence was also checked with an
+explicit primary DB environment:
+
+```bash
+FORSKA_RUNTIME_PROFILE=primary DUCKDB_PATH="$HOME/Library/Application Support/Forska/runtime/primary/forska.duckdb" bun run db:duck:terminalize-review-serving-rebuild-request -- --project-id=7dfb4dd5-d2fe-4b21-b626-7ab26953f6ac --request-id=rebuild:91ea7f9f30bd9404e9b6db01a0b7d6f4
+```
+
+It returned `status: "dry_run"`, `chunkCount: 0`, and no refusal reasons. This
+means the guarded terminalization operator can mark that stale zero-chunk
+request terminal if an operator explicitly applies it with the acknowledgement
+token. It is not cleanup authorization and does not touch chunk or partial
+artifact rows.
