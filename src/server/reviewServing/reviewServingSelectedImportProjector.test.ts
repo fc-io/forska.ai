@@ -251,8 +251,12 @@ test('selected-import article range rebuild writes selected rows directly in SQL
   expect(insertStatement).not.toContain('journal_title = excluded.journal_title')
   expect(insertStatement).not.toContain('external_id = excluded.external_id')
   expect(insertStatement).toContain(
-    'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO UPDATE SET',
+    'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO NOTHING',
   )
+  expect(insertStatement).not.toContain('DO UPDATE SET')
+  expect(insertStatement).not.toContain('import_route_id = excluded.import_route_id')
+  expect(insertStatement).not.toContain('source_record_key = excluded.source_record_key')
+  expect(insertStatement).not.toContain('selected_import_updated_at = excluded.selected_import_updated_at')
   expect(sourceQueries).toHaveLength(0)
 })
 
