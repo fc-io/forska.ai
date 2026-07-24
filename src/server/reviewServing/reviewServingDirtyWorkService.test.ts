@@ -122,25 +122,27 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       updatedAt: row.updatedAt,
     }
   }
-  const upsertDirtyWork = (statement: string) => {
+  const insertMissingDirtyWork = (statement: string) => {
     const strings = getSqlStrings(statement)
     const numbers = getNumbers(statement)
     const dirtyWorkId = strings[0] ?? ''
     const existing = dirtyWork.get(dirtyWorkId)
+
+    if (existing !== undefined) {
+      return
+    }
+
     const now = getClock(statements)
     const row = {
       articleId: strings[4] ?? null,
-      createdAt: existing?.createdAt ?? now,
+      createdAt: now,
       dirtyKind: strings[6] ?? 'article.display.updated',
       dirtyRangeEnd: strings[10] ?? null,
       dirtyRangeStart: strings[9] ?? null,
       dirtyWorkId,
-      firstSourceHighWaterMark: Math.min(
-        existing?.firstSourceHighWaterMark ?? Number.POSITIVE_INFINITY,
-        numbers[0] ?? 0,
-      ),
+      firstSourceHighWaterMark: numbers[0] ?? 0,
       latestDeltaId: strings[8] ?? null,
-      latestSourceHighWaterMark: Math.max(existing?.latestSourceHighWaterMark ?? 0, numbers[1] ?? 0),
+      latestSourceHighWaterMark: numbers[1] ?? 0,
       projectId: strings[1] ?? null,
       projectionComponent: 'display' as const,
       projectionIdentity: 'display:identity-1',
@@ -151,12 +153,27 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       status: 'pending' as const,
       updatedAt: now,
     }
-    const dirtyRangeStart = [existing?.dirtyRangeStart ?? null, row.dirtyRangeStart]
+
+    dirtyWork.set(dirtyWorkId, row)
+  }
+  const updateDirtyWork = (statement: string) => {
+    const dirtyWorkId = getWhereLiteral(statement, 'dirty_work_id') ?? ''
+    const existing = dirtyWork.get(dirtyWorkId)
+
+    if (existing === undefined) {
+      return
+    }
+
+    const strings = getSqlStrings(statement)
+    const numbers = getNumbers(statement)
+    const dirtyRangeStartCandidate = strings[1] ?? null
+    const dirtyRangeEndCandidate = strings[4] ?? null
+    const dirtyRangeStart = [existing.dirtyRangeStart, dirtyRangeStartCandidate]
       .filter((value): value is string => {
         return value !== null
       })
       .sort()[0]
-    const dirtyRangeEnd = [existing?.dirtyRangeEnd ?? null, row.dirtyRangeEnd]
+    const dirtyRangeEnd = [existing.dirtyRangeEnd, dirtyRangeEndCandidate]
       .filter((value): value is string => {
         return value !== null
       })
@@ -165,9 +182,13 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
 
     dirtyWork.set(dirtyWorkId, {
       ...existing,
-      ...row,
       dirtyRangeEnd: dirtyRangeEnd ?? null,
       dirtyRangeStart: dirtyRangeStart ?? null,
+      firstSourceHighWaterMark: Math.min(existing.firstSourceHighWaterMark, numbers[0] ?? 0),
+      latestDeltaId: strings[0] ?? null,
+      latestSourceHighWaterMark: Math.max(existing.latestSourceHighWaterMark, numbers[1] ?? 0),
+      status: 'pending',
+      updatedAt: getClock(statements),
     })
   }
   const updateStatus = (
@@ -332,8 +353,12 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
   const run = async (statement: string) => {
     statements.push(statement)
 
+    if (statement.includes('UPDATE app.review_serving_dirty_work') && !statement.includes('RETURNING')) {
+      updateDirtyWork(statement)
+    }
+
     if (statement.includes('INSERT INTO app.review_serving_dirty_work (')) {
-      upsertDirtyWork(statement)
+      insertMissingDirtyWork(statement)
     }
 
     if (statement.includes("SET status = 'running'")) {
@@ -392,13 +417,20 @@ test('dirty-work creation coalesces by project component identity and scope', as
   const first = await upsertDisplayWork(database, getBaseScope(5))
   const second = await upsertDisplayWork(database, getBaseScope(5), 'delta-1-replay')
   const row = await getReviewServingDirtyWork(first.dirtyWorkId, database)
-  const dirtyWorkUpsert = statements.find((statement) => {
-    return statement.includes('ON CONFLICT(dirty_work_id) DO UPDATE SET')
+  const dirtyWorkUpdate = statements.find((statement) => {
+    return statement.includes('UPDATE app.review_serving_dirty_work')
+  })
+  const dirtyWorkInsert = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_serving_dirty_work')
   })
 
   expect(second.dirtyWorkId).toBe(first.dirtyWorkId)
   expect(dirtyWork.size).toBe(1)
-  expect(dirtyWorkUpsert).toContain('updated_at = excluded.updated_at')
+  expect(dirtyWorkUpdate).toContain('latest_source_high_water_mark = GREATEST')
+  expect(dirtyWorkUpdate).toContain("status = 'pending'")
+  expect(dirtyWorkInsert).toContain('WHERE NOT EXISTS')
+  expect(dirtyWorkInsert).toContain("(existing.dirty_work_id || '')")
+  expect(statements.join('\n')).not.toContain('ON CONFLICT(dirty_work_id) DO UPDATE SET')
   expect(row).toMatchObject({
     dirtyRangeEnd: '1',
     dirtyRangeStart: '1',

@@ -338,6 +338,33 @@ export const upsertReviewServingDirtyWork = async (
   })
 
   await database.run(`
+    UPDATE app.review_serving_dirty_work
+    SET
+      first_source_high_water_mark = LEAST(
+        first_source_high_water_mark,
+        ${getSqlLiteral(input.scope.sourceHighWaterMark)}
+      ),
+      latest_source_high_water_mark = GREATEST(
+        latest_source_high_water_mark,
+        ${getSqlLiteral(input.scope.sourceHighWaterMark)}
+      ),
+      latest_delta_id = ${getSqlLiteral(input.latestDeltaId ?? null)},
+      dirty_range_start = CASE
+        WHEN dirty_range_start IS NULL THEN ${getSqlLiteral(input.scope.dirtyRangeStart)}
+        WHEN ${getSqlLiteral(input.scope.dirtyRangeStart)} IS NULL THEN dirty_range_start
+        ELSE LEAST(dirty_range_start, ${getSqlLiteral(input.scope.dirtyRangeStart)})
+      END,
+      dirty_range_end = CASE
+        WHEN dirty_range_end IS NULL THEN ${getSqlLiteral(input.scope.dirtyRangeEnd)}
+        WHEN ${getSqlLiteral(input.scope.dirtyRangeEnd)} IS NULL THEN dirty_range_end
+        ELSE GREATEST(dirty_range_end, ${getSqlLiteral(input.scope.dirtyRangeEnd)})
+      END,
+      status = 'pending',
+      updated_at = current_timestamp
+    WHERE dirty_work_id = ${getSqlLiteral(dirtyWorkId)}
+  `)
+
+  await database.run(`
     INSERT INTO app.review_serving_dirty_work (
       dirty_work_id,
       project_id,
@@ -354,7 +381,8 @@ export const upsertReviewServingDirtyWork = async (
       dirty_range_end,
       status,
       updated_at
-    ) VALUES (
+    )
+    SELECT
       ${getSqlLiteral(dirtyWorkId)},
       ${getSqlLiteral(input.scope.projectId)},
       ${getSqlLiteral(input.scope.scopeKind)},
@@ -370,29 +398,11 @@ export const upsertReviewServingDirtyWork = async (
       ${getSqlLiteral(input.scope.dirtyRangeEnd)},
       'pending',
       current_timestamp
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_serving_dirty_work existing
+      WHERE (existing.dirty_work_id || '') = (${getSqlLiteral(dirtyWorkId)} || '')
     )
-    ON CONFLICT(dirty_work_id) DO UPDATE SET
-      first_source_high_water_mark = LEAST(
-        app.review_serving_dirty_work.first_source_high_water_mark,
-        excluded.first_source_high_water_mark
-      ),
-      latest_source_high_water_mark = GREATEST(
-        app.review_serving_dirty_work.latest_source_high_water_mark,
-        excluded.latest_source_high_water_mark
-      ),
-      latest_delta_id = excluded.latest_delta_id,
-      dirty_range_start = CASE
-        WHEN app.review_serving_dirty_work.dirty_range_start IS NULL THEN excluded.dirty_range_start
-        WHEN excluded.dirty_range_start IS NULL THEN app.review_serving_dirty_work.dirty_range_start
-        ELSE LEAST(app.review_serving_dirty_work.dirty_range_start, excluded.dirty_range_start)
-      END,
-      dirty_range_end = CASE
-        WHEN app.review_serving_dirty_work.dirty_range_end IS NULL THEN excluded.dirty_range_end
-        WHEN excluded.dirty_range_end IS NULL THEN app.review_serving_dirty_work.dirty_range_end
-        ELSE GREATEST(app.review_serving_dirty_work.dirty_range_end, excluded.dirty_range_end)
-      END,
-      status = 'pending',
-      updated_at = excluded.updated_at
   `)
 
   return {dirtyWorkId, skipped}
