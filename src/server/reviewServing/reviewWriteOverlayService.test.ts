@@ -53,16 +53,23 @@ const getStatement = (statements: string[], fragment: string) => {
 test('review write overlay appends small pending rows with TTL and no serving projection writes', async () => {
   const {statements, tx} = createFakeOverlayTransaction()
   const result = await appendReviewWriteOverlay(tx, baseOverlayInput)
+  const updateStatement = getStatement(statements, 'UPDATE app.review_write_overlay')
   const insertStatement = getStatement(statements, 'INSERT INTO app.review_write_overlay')
 
   expect(result.overlayId).toStartWith('review-overlay:')
   expect(result.reconcileStatus).toBe('pending')
+  expect(updateStatement).toContain('overlay_value_json')
+  expect(updateStatement).toContain("reconcile_status = 'pending'")
+  expect(updateStatement).toContain('reconciled_at = NULL')
+  expect(updateStatement).toContain('WHERE overlay_id =')
   expect(insertStatement).toContain('review_config_hash')
   expect(insertStatement).toContain('read_surface')
   expect(insertStatement).toContain('source_high_water_mark')
   expect(insertStatement).toContain("'pending'")
   expect(insertStatement).toContain("'2026-06-16T10:01:00.000Z'::TIMESTAMPTZ")
-  expect(insertStatement).toContain('ON CONFLICT(overlay_id) DO UPDATE')
+  expect(insertStatement).toContain('WHERE NOT EXISTS')
+  expect(insertStatement).toContain("(existing.overlay_id || '')")
+  expect(statements.join('\n')).not.toContain('ON CONFLICT(overlay_id) DO UPDATE')
   expect(
     statements.some((statement) => {
       return statement.includes('mart.review_') || statement.includes('app.review_serving_snapshot_manifest')
