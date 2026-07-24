@@ -3988,6 +3988,22 @@ test('worker fails inconsistent and superseded foreground rebuild requests befor
   expect(readmissionStatementIndex).toBeGreaterThan(supersededStatementIndex)
 })
 
+test('worker repairs requestless bootstrap chunk links without mutating request rows', async () => {
+  const harness = createWorkerHarness({chunkComplete: true})
+
+  await runReviewServingProjectorWorkerOnce({rebuildProjectId: 'project-1', workerId: 'worker-1'}, harness.dependencies)
+
+  const joined = harness.runStatements.join('\n')
+
+  expect(joined).toContain(`request.request_id LIKE 'requestless-bootstrap:%'`)
+  expect(joined).toContain('UPDATE app.review_rebuild_chunk_manifest AS chunk')
+  expect(joined).toContain('chunk.request_id IS NULL')
+  expect(joined).toContain("chunk.status NOT IN ('blocked_over_budget', 'quarantined')")
+  expect(joined).not.toContain('repairedRequestlessBootstrapAdoption')
+  expect(joined).not.toContain('request_components AS')
+  expect(joined).not.toContain('requested_components_json = request_components.requested_components_json')
+})
+
 test('worker refreshes request candidate snapshot state before promotion', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const requestChunk = {
@@ -5803,7 +5819,7 @@ test('worker adopts requestless summary chunks into request finalization before 
   expect(harness.failedChunks).toEqual([])
   expect(joined).toContain('INSERT INTO app.review_rebuild_request')
   expect(joined).toContain('requestless_summary_range_rebuild')
-  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain('FROM app.review_rebuild_request existing_request')
   expect(joined).toContain(`(existing_request.request_id || '') = '${requestId}'`)
   expect(joined).not.toContain(`existing_request.request_id = '${requestId}'`)
   expect(joined).not.toContain('ON CONFLICT(request_id)')
@@ -5898,7 +5914,7 @@ test('worker adopts requestless bootstrap chunks into one rebuild request before
   expect(joined).toContain('INSERT INTO app.review_rebuild_request')
   expect(joined).toContain('requestless_bootstrap_rebuild')
   expect(joined).toContain('adoptedRequestlessBootstrapChunks')
-  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain('FROM app.review_rebuild_request existing_request')
   expect(joined).toContain(`(existing_request.request_id || '') = '${requestId}'`)
   expect(joined).not.toContain(`existing_request.request_id = '${requestId}'`)
   expect(joined).not.toContain('ON CONFLICT(request_id)')
@@ -5965,6 +5981,10 @@ test('worker adopts requestless bootstrap chunks through existing request withou
       return [{pendingChunkCount: 1}] as T[]
     }
 
+    if (statement.includes('FROM app.review_rebuild_request existing_request')) {
+      return [{requestId}] as T[]
+    }
+
     if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
       return [adopted ? adoptedProjectScopeChunk : projectScopeChunk] as T[]
     }
@@ -5973,6 +5993,9 @@ test('worker adopts requestless bootstrap chunks through existing request withou
   }
   harness.database.run = async (statement: string) => {
     statements.push(statement)
+    if (statement.includes('INSERT INTO app.review_rebuild_request')) {
+      throw new Error('requestless bootstrap adoption should not insert an existing request')
+    }
     if (statement.includes('UPDATE app.review_rebuild_request\n      SET')) {
       throw new Error('requestless bootstrap adoption should not use standalone request update')
     }
@@ -5998,8 +6021,8 @@ test('worker adopts requestless bootstrap chunks through existing request withou
   expect(harness.runChunkInputs).toHaveLength(1)
   expect(harness.runChunkInputs[0]).toMatchObject(adoptedProjectScopeChunk)
   expect(harness.failedChunks).toEqual([])
-  expect(joined).toContain('INSERT INTO app.review_rebuild_request')
-  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).not.toContain('INSERT INTO app.review_rebuild_request')
+  expect(joined).toContain('FROM app.review_rebuild_request existing_request')
   expect(joined).toContain(`(existing_request.request_id || '') = '${requestId}'`)
   expect(joined).not.toContain(`existing_request.request_id = '${requestId}'`)
   expect(joined).not.toContain('ON CONFLICT(request_id)')
@@ -6009,6 +6032,254 @@ test('worker adopts requestless bootstrap chunks through existing request withou
   expect(joined).toContain(`request_id = '${requestId}'`)
   expect(setIntervalMock).toHaveBeenCalledTimes(1)
   expect(clearIntervalMock).toHaveBeenCalledWith(intervalToken)
+})
+
+test('requestless bootstrap adoption skips duplicate insert for existing request row in DuckDB', () => {
+  const duckdbPath = `/tmp/forska-requestless-bootstrap-existing-adoption-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`
+  const script = `
+    import {createHash} from 'node:crypto'
+
+    const [
+      {migrateDuckdb},
+      {getAppDatabaseService},
+      {resetDuckdbServiceForTests},
+      {resetServerRuntimeRoleForTests},
+      {runReviewServingProjectorWorkerOnce},
+    ] = await Promise.all([
+      import('./src/db/migrateDuckdb.ts'),
+      import('./src/server/services/appDatabaseService.ts'),
+      import('./src/server/utils/duckdbService.ts'),
+      import('./src/server/utils/serverRuntimeRole.ts'),
+      import('./src/server/workers/reviewServingProjectorWorker.ts'),
+    ])
+
+    resetDuckdbServiceForTests()
+    resetServerRuntimeRoleForTests()
+    await migrateDuckdb()
+
+    const database = getAppDatabaseService()
+    const chunkInput = {
+      chunkEndKey: 'article-099',
+      chunkStartKey: 'article-001',
+      inputDigest: 'digest-bootstrap-existing',
+      inputWatermark: 42,
+      outputBaseGeneration: 11,
+      projectId: 'project-1',
+      projectionComponent: 'projectScope',
+      projectionIdentity: 'projectScope:project-1',
+      requestId: null,
+      snapshotId: 'snapshot-bootstrap-existing',
+    }
+    const requestDigest = createHash('sha256')
+      .update([
+        chunkInput.projectId,
+        chunkInput.snapshotId,
+        chunkInput.outputBaseGeneration,
+        chunkInput.inputWatermark,
+        chunkInput.inputDigest,
+      ].join('\\0'))
+      .digest('hex')
+      .slice(0, 24)
+    const requestId = 'requestless-bootstrap:' + requestDigest
+    const chunk = {
+      ...chunkInput,
+      actualInputRows: null,
+      actualOutputBytes: null,
+      actualOutputRows: null,
+      actualPayloadBytes: null,
+      actualPromptCount: null,
+      actualTempBytes: null,
+      admissionState: 'admitted',
+      budgetJson: {},
+      checksum: null,
+      chunkId: 'chunk-bootstrap-requestless-existing-duckdb',
+      completedAt: null,
+      createdAt: '2026-06-16T10:00:00.000Z',
+      diagnosticsJson: {},
+      durationMs: null,
+      estimatedInputRows: null,
+      estimatedOutputBytes: null,
+      estimatedOutputRows: null,
+      estimatedPayloadBytes: null,
+      estimatedPromptCount: null,
+      estimatedTempBytes: null,
+      lastError: null,
+      leaseExpiresAt: '2026-06-16T10:01:00.000Z',
+      leaseOwner: 'worker-1',
+      maxInputRows: null,
+      maxOutputBytes: null,
+      maxOutputRows: null,
+      maxPayloadBytes: null,
+      maxPromptCount: null,
+      maxTempBytes: null,
+      oomCategory: null,
+      overBudgetReason: null,
+      parentChunkId: null,
+      retryAfter: null,
+      retryCount: 0,
+      snapshotCount: 1,
+      splitDepth: 0,
+      startedAt: '2026-06-16T10:00:00.000Z',
+      status: 'running',
+      updatedAt: '2026-06-16T10:00:00.000Z',
+      workloadClass: null,
+    }
+
+    await database.run(\`
+      INSERT INTO app.review_rebuild_request (
+        request_id,
+        project_id,
+        reason,
+        requested_components_json,
+        source_watermarks_json,
+        identity_json,
+        priority,
+        status,
+        admission_state,
+        retry_policy_json,
+        diagnostics_json,
+        admitted_at
+      )
+      VALUES (
+        '\${requestId}',
+        '\${chunk.projectId}',
+        'requestless_bootstrap_rebuild',
+        '[]'::JSON,
+        '{}'::JSON,
+        '{}'::JSON,
+        100,
+        'running',
+        'admitted',
+        '{}'::JSON,
+        '{"seeded":true}'::JSON,
+        current_timestamp
+      )
+    \`)
+    await database.run(\`
+      INSERT INTO app.review_rebuild_chunk_manifest (
+        chunk_id,
+        project_id,
+        projection_component,
+        projection_identity,
+        input_digest,
+        input_watermark,
+        chunk_start_key,
+        chunk_end_key,
+        output_base_generation,
+        status,
+        lease_owner,
+        lease_expires_at,
+        started_at,
+        request_id,
+        snapshot_id
+      )
+      VALUES (
+        '\${chunk.chunkId}',
+        '\${chunk.projectId}',
+        '\${chunk.projectionComponent}',
+        '\${chunk.projectionIdentity}',
+        '\${chunk.inputDigest}',
+        \${chunk.inputWatermark},
+        '\${chunk.chunkStartKey}',
+        '\${chunk.chunkEndKey}',
+        \${chunk.outputBaseGeneration},
+        'running',
+        'worker-1',
+        TIMESTAMPTZ '\${chunk.leaseExpiresAt}',
+        TIMESTAMPTZ '\${chunk.startedAt}',
+        NULL,
+        '\${chunk.snapshotId}'
+      )
+    \`)
+
+    let nextReturned = false
+    const result = await runReviewServingProjectorWorkerOnce(
+      {workerId: 'worker-1'},
+      {
+        getDatabase: () => database,
+        nowMs: () => 1_000,
+        rebuildChunkService: {
+          claimChunk: async () => chunk,
+          failChunk: async (failure) => {
+            throw new Error('unexpected failure: ' + failure.error)
+          },
+          getNextChunk: async () => {
+            if (nextReturned) {
+              return null
+            }
+            nextReturned = true
+
+            return chunkInput
+          },
+          heartbeatChunk: async () => chunk,
+          isChunkComplete: async () => false,
+          runClaimedChunk: async ({chunk: claimedChunk}) => {
+            if (claimedChunk.requestId !== requestId) {
+              throw new Error('bootstrap chunk was not adopted before execution')
+            }
+
+            return {status: 'completed'}
+          },
+        },
+        sleep: async () => {},
+        wakeProjectors: async () => {
+          return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
+        },
+      },
+    )
+
+    const requestRows = await database.queryJson(\`
+      SELECT
+        request_id AS requestId,
+        reason,
+        status,
+        CAST(requested_components_json AS VARCHAR) AS requestedComponentsJson,
+        CAST(diagnostics_json AS VARCHAR) AS diagnosticsJson
+      FROM app.review_rebuild_request
+      WHERE request_id = '\${requestId}'
+    \`)
+    const chunkRows = await database.queryJson(\`
+      SELECT chunk_id AS chunkId, request_id AS requestId
+      FROM app.review_rebuild_chunk_manifest
+      WHERE chunk_id = '\${chunk.chunkId}'
+    \`)
+
+    if (result.chunk.requestId !== requestId || result.chunk.status !== 'completed') {
+      throw new Error('worker did not complete the adopted bootstrap chunk')
+    }
+    if (requestRows.length !== 1 || requestRows[0].reason !== 'requestless_bootstrap_rebuild') {
+      throw new Error('requestless bootstrap adoption changed request row cardinality or reason')
+    }
+    if (
+      String(requestRows[0].requestedComponentsJson).includes('projectScope')
+      || !String(requestRows[0].diagnosticsJson).includes('seeded')
+    ) {
+      throw new Error('requestless bootstrap adoption mutated the existing rebuild request')
+    }
+    if (chunkRows.length !== 1 || chunkRows[0].requestId !== requestId) {
+      throw new Error('requestless bootstrap adoption did not persist the chunk request id')
+    }
+  `
+  const run = globalThis.Bun.spawnSync(['bun', '-e', script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      DUCKDB_MEMORY_LIMIT: '6400MiB',
+      DUCKDB_PATH: duckdbPath,
+      SERVER_DUCKDB_OWNER_URL: '',
+      SERVER_ROLE: 'maintenance-worker',
+    },
+  })
+
+  try {
+    expect(run.stderr.toString()).toBe('')
+    expect(run.exitCode).toBe(0)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
 })
 
 test('requestless summary adoption persists request linkage in DuckDB', () => {

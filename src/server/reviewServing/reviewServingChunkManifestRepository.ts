@@ -228,7 +228,7 @@ const getReviewServingRebuildChunkRetryMaxAttemptsSql = (requestIdExpression: st
       MAX(TRY_CAST(json_extract_string(policy.retry_policy_json, '$.maxAttempts') AS INTEGER))
     )
     FROM app.review_rebuild_request policy
-    WHERE policy.request_id = ${requestIdExpression}
+    WHERE (policy.request_id || '') = ${requestIdExpression}
   ), ${getSqlLiteral(defaultReviewServingRebuildChunkRetryPolicy.maxAttempts)})`
 }
 
@@ -407,7 +407,7 @@ const getRebuildChunkClaimRequestPrioritySql = (tableAlias: string) => {
   return `(
     SELECT MAX(request.priority)
     FROM app.review_rebuild_request request
-    WHERE request.request_id = ${tableAlias}.request_id
+    WHERE (request.request_id || '') = ${tableAlias}.request_id
   )`
 }
 
@@ -415,7 +415,7 @@ const getRebuildChunkClaimRequestUpdatedAtSql = (tableAlias: string) => {
   return `(
     SELECT MAX(request.updated_at)
     FROM app.review_rebuild_request request
-    WHERE request.request_id = ${tableAlias}.request_id
+    WHERE (request.request_id || '') = ${tableAlias}.request_id
   )`
 }
 
@@ -438,12 +438,12 @@ export const releaseInactiveRequestRebuildChunkManifests = async (
       ? `NOT EXISTS (
         SELECT 1
         FROM app.review_rebuild_request request
-        WHERE request.request_id = app.review_rebuild_chunk_manifest.request_id
+        WHERE (request.request_id || '') = app.review_rebuild_chunk_manifest.request_id
       )`
       : `NOT EXISTS (
         SELECT 1
         FROM app.review_rebuild_request request
-        WHERE request.request_id = app.review_rebuild_chunk_manifest.request_id
+        WHERE (request.request_id || '') = app.review_rebuild_chunk_manifest.request_id
           AND request.status IN ('admitted', 'running')
       )`
 
@@ -830,7 +830,7 @@ export const getReviewServingRebuildChunkClaimPredicate = (
       OR EXISTS (
         SELECT 1
         FROM app.review_rebuild_request request
-        WHERE request.request_id = ${source}request_id
+        WHERE (request.request_id || '') = ${source}request_id
           AND request.status IN ('admitted', 'running')
           AND request.admission_state = 'admitted'
           AND (
@@ -904,7 +904,7 @@ const getReviewServingRebuildChunkLeaseClaimPredicate = (
       OR EXISTS (
         SELECT 1
         FROM app.review_rebuild_request request
-        WHERE request.request_id = ${source}request_id
+        WHERE (request.request_id || '') = ${source}request_id
           AND request.status IN ('admitted', 'running')
           AND request.admission_state = 'admitted'
           AND (
