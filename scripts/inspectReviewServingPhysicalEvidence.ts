@@ -45,11 +45,7 @@ type RetentionCleanupEligibilityTable = {
   table: string
   totalScopedRows: number | null
 }
-type RetentionCleanupEligibilityReport = {
-  note: string
-  projectId: string
-  tables: RetentionCleanupEligibilityTable[]
-}
+type RetentionCleanupEligibilityReport = {note: string; projectId: string; tables: RetentionCleanupEligibilityTable[]}
 type SelectedImportPayloadColumnEvidence = {
   column: (typeof selectedImportPayloadColumns)[number]
   hotFieldNonNullCount: number | null
@@ -87,6 +83,45 @@ type SelectedImportDisplayCopyGlobalStatusRow = {
   rowCount: number
   snapshotStatus: string
 }
+type SelectedImportDuplicateConflictGlobalEvidence = {
+  activeOrLastKnownGoodRows: number | null
+  candidateRows: number | null
+  hotConflictTrueRows: number | null
+  hotDuplicateTrueRows: number | null
+  hotResolvedRows: number | null
+  missingHotRows: number | null
+  note: string
+  otherRows: number | null
+  rows: SelectedImportDuplicateConflictGlobalStatusRow[]
+  selectedBaseConflictTrueRows: number | null
+  selectedBaseDuplicateTrueRows: number | null
+  selectedBaseFalseOrDefaultConflictRowsWithoutHot: number | null
+  selectedBaseFalseOrDefaultDuplicateRowsWithoutHot: number | null
+  selectedBaseTrueConflictRowsWithoutHot: number | null
+  selectedBaseTrueDuplicateRowsWithoutHot: number | null
+  totalRows: number | null
+  conflictMismatchRows: number | null
+  duplicateMismatchRows: number | null
+}
+type SelectedImportDuplicateConflictGlobalStatusRow = {
+  activeOrLastKnownGoodProtected: boolean
+  candidateRows: number
+  conflictMismatchRows: number
+  duplicateMismatchRows: number
+  hotConflictTrueRows: number
+  hotDuplicateTrueRows: number
+  hotResolvedRows: number
+  missingHotRows: number
+  otherRows: number
+  rowCount: number
+  selectedBaseConflictTrueRows: number
+  selectedBaseDuplicateTrueRows: number
+  selectedBaseFalseOrDefaultConflictRowsWithoutHot: number
+  selectedBaseFalseOrDefaultDuplicateRowsWithoutHot: number
+  selectedBaseTrueConflictRowsWithoutHot: number
+  selectedBaseTrueDuplicateRowsWithoutHot: number
+  snapshotStatus: string
+}
 type SelectedImportPayloadSnapshotStatusRow = {label: string; rowCount: number}
 type SelectedImportPayloadSlimmingReadinessReport = {
   activeOrLastKnownGoodSelectedImportRows: number | null
@@ -99,16 +134,13 @@ type SelectedImportPayloadSlimmingReadinessReport = {
   otherSelectedImportRows: number | null
   projectId: string
   selectedBaseScopedRows: number | null
+  selectedImportDuplicateConflictGlobalEvidence: SelectedImportDuplicateConflictGlobalEvidence
   selectedImportDisplayCopyGlobalEvidence: SelectedImportDisplayCopyGlobalEvidence
   rowsBySelectedImportSnapshotStatus: SelectedImportPayloadSnapshotStatusRow[]
   verdict: 'not-authorized' | 'blocked'
   columns: SelectedImportPayloadColumnEvidence[]
 }
-type SummaryContributionServingDuplicateProbe = {
-  duplicateCount: number | null
-  keyColumns: string[]
-  label: string
-}
+type SummaryContributionServingDuplicateProbe = {duplicateCount: number | null; keyColumns: string[]; label: string}
 type SummaryContributionServingAggregateRecoverability = {
   contributionGroups: number | null
   error: string | null
@@ -128,13 +160,8 @@ type SummaryContributionServingPartialOverlap = {
   partialRows: number | null
   partialRowsWithExactCommonContribution: number | null
 }
-type SummaryContributionServingRowCount = {
-  label: string
-  rowCount: number
-}
-type SummaryContributionServingProjectRowCount = SummaryContributionServingRowCount & {
-  projectId: string
-}
+type SummaryContributionServingRowCount = {label: string; rowCount: number}
+type SummaryContributionServingProjectRowCount = SummaryContributionServingRowCount & {projectId: string}
 type SummaryContributionServingReadinessReport = {
   activeOrLastKnownGoodSnapshotProtectedRows: number | null
   columnCount: number | null
@@ -281,13 +308,7 @@ const duplicateKeyCandidates: Record<string, string[]> = {
     'summary_definition_version',
     'contribution_key',
   ],
-  'mart.review_article_serving_v4': [
-    'project_id',
-    'review_config_hash',
-    'snapshot_id',
-    'list_mode_key',
-    'article_id',
-  ],
+  'mart.review_article_serving_v4': ['project_id', 'review_config_hash', 'snapshot_id', 'list_mode_key', 'article_id'],
   'mart.review_filter_facet_serving_v4': [
     'project_id',
     'review_config_hash',
@@ -352,12 +373,7 @@ const selectedImportPayloadColumns = [
   'external_id',
 ] as const
 
-const selectedImportDisplayCopyColumns = [
-  'publication_year',
-  'article_title',
-  'journal_title',
-  'external_id',
-] as const
+const selectedImportDisplayCopyColumns = ['publication_year', 'article_title', 'journal_title', 'external_id'] as const
 
 const getNullSelectedBaseColumnExpressions = (column: string) => {
   return `NULL::BIGINT AS selectedBase_${column}_nullCount,
@@ -559,7 +575,12 @@ const getColumnProfile = async (
   }
 }
 
-const getOldestNewest = async (runtime: QueryRuntime, table: string, columns: TableColumn[], whereClause: string | null) => {
+const getOldestNewest = async (
+  runtime: QueryRuntime,
+  table: string,
+  columns: TableColumn[],
+  whereClause: string | null,
+) => {
   const timestampColumns = timestampColumnCandidates.filter((columnName) => {
     return hasColumn(columns, columnName)
   })
@@ -599,10 +620,19 @@ const getIndexes = async (runtime: QueryRuntime, table: string) => {
   }
 }
 
-const getSizeProxies = async (runtime: QueryRuntime, table: string, columns: TableColumn[], whereClause: string | null) => {
+const getSizeProxies = async (
+  runtime: QueryRuntime,
+  table: string,
+  columns: TableColumn[],
+  whereClause: string | null,
+) => {
   const expressions = columns
     .filter((column) => {
-      return column.column_name.endsWith('_json') || column.column_name.endsWith('_payload') || column.column_name === 'payload'
+      return (
+        column.column_name.endsWith('_json')
+        || column.column_name.endsWith('_payload')
+        || column.column_name === 'payload'
+      )
     })
     .slice(0, 8)
     .map((column) => {
@@ -630,7 +660,12 @@ const getSizeProxies = async (runtime: QueryRuntime, table: string, columns: Tab
   )
 }
 
-const getDuplicateProbe = async (runtime: QueryRuntime, table: string, columns: TableColumn[], whereClause: string | null) => {
+const getDuplicateProbe = async (
+  runtime: QueryRuntime,
+  table: string,
+  columns: TableColumn[],
+  whereClause: string | null,
+) => {
   const keyColumns = (duplicateKeyCandidates[table] ?? []).filter((columnName) => {
     return hasColumn(columns, columnName)
   })
@@ -784,7 +819,10 @@ const getChunkManifestPartialRowsGonePredicate = () => {
           )`
 }
 
-const getRetentionCleanupEligibilitySql = (table: (typeof retentionCleanupEligibilityTables)[number], projectId: string) => {
+const getRetentionCleanupEligibilitySql = (
+  table: (typeof retentionCleanupEligibilityTables)[number],
+  projectId: string,
+) => {
   const projectPredicate = `candidate.project_id = ${getSqlLiteral(projectId)}`
   const activeSnapshotPredicate = getActiveSnapshotManifestGuardPredicate('snapshot_id')
   const activePinPredicate = getActiveSnapshotPinGuardPredicate('snapshot_id')
@@ -877,12 +915,8 @@ const getRetentionCleanupEligibilityTable = async (
     const row = rows[0]
 
     return {
-      activeOrLastKnownGoodSnapshotProtectedRows: getNumberOrNull(
-        row?.activeOrLastKnownGoodSnapshotProtectedRows,
-      ),
-      completedRequestAndSummaryChunkCandidateRows: getNumberOrNull(
-        row?.completedRequestAndSummaryChunkCandidateRows,
-      ),
+      activeOrLastKnownGoodSnapshotProtectedRows: getNumberOrNull(row?.activeOrLastKnownGoodSnapshotProtectedRows),
+      completedRequestAndSummaryChunkCandidateRows: getNumberOrNull(row?.completedRequestAndSummaryChunkCandidateRows),
       dependentPartialBlockedRows: getNumberOrNull(row?.dependentPartialBlockedRows),
       eligibleRows: getNumberOrNull(row?.eligibleRows),
       error: null,
@@ -941,6 +975,26 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
     columns: [],
     otherRows: null,
     rows: [],
+    totalRows: null,
+  }
+  const emptyDuplicateConflictEvidence: SelectedImportDuplicateConflictGlobalEvidence = {
+    activeOrLastKnownGoodRows: null,
+    candidateRows: null,
+    conflictMismatchRows: null,
+    duplicateMismatchRows: null,
+    hotConflictTrueRows: null,
+    hotDuplicateTrueRows: null,
+    hotResolvedRows: null,
+    missingHotRows: null,
+    note: 'Duplicate/conflict fallback evidence was not collected.',
+    otherRows: null,
+    rows: [],
+    selectedBaseConflictTrueRows: null,
+    selectedBaseDuplicateTrueRows: null,
+    selectedBaseFalseOrDefaultConflictRowsWithoutHot: null,
+    selectedBaseFalseOrDefaultDuplicateRowsWithoutHot: null,
+    selectedBaseTrueConflictRowsWithoutHot: null,
+    selectedBaseTrueDuplicateRowsWithoutHot: null,
     totalRows: null,
   }
 
@@ -1103,6 +1157,83 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
         ORDER BY COUNT(*) DESC, snapshot_status, active_or_last_known_good_protected DESC
       `,
     )
+    const duplicateConflictRows = await runReadonlyQuery<Record<string, number | string | boolean | null>>(
+      runtime,
+      `
+        WITH active_manifest AS (
+          SELECT
+            manifest.project_id,
+            manifest.selected_import_snapshot_id,
+            manifest.last_known_good_snapshot_id
+          FROM app.review_serving_snapshot_manifest manifest
+          WHERE manifest.snapshot_status = 'active'
+        ),
+        protected_selected_import_snapshot AS (
+          SELECT
+            project_id,
+            selected_import_snapshot_id
+          FROM active_manifest
+          WHERE selected_import_snapshot_id IS NOT NULL
+          UNION
+          SELECT
+            active_manifest.project_id,
+            last_known_good_manifest.selected_import_snapshot_id
+          FROM active_manifest
+          INNER JOIN app.review_serving_snapshot_manifest last_known_good_manifest
+            ON last_known_good_manifest.project_id = active_manifest.project_id
+            AND last_known_good_manifest.snapshot_id = active_manifest.last_known_good_snapshot_id
+          WHERE last_known_good_manifest.selected_import_snapshot_id IS NOT NULL
+        ),
+        selected_base AS (
+          SELECT
+            raw_selected_base.*,
+            COALESCE(selected_import_snapshot.status, 'missing-selected-import-snapshot') AS snapshot_status,
+            protected_selected_import_snapshot.selected_import_snapshot_id IS NOT NULL AS active_or_last_known_good_protected
+          FROM app.review_selected_article_import_v4 raw_selected_base
+          LEFT JOIN app.review_selected_import_snapshot selected_import_snapshot
+            ON selected_import_snapshot.project_id = raw_selected_base.project_id
+            AND selected_import_snapshot.project_scope_identity = raw_selected_base.project_scope_identity
+            AND selected_import_snapshot.selected_import_snapshot_id = raw_selected_base.selected_import_snapshot_id
+          LEFT JOIN protected_selected_import_snapshot
+            ON protected_selected_import_snapshot.project_id = raw_selected_base.project_id
+            AND protected_selected_import_snapshot.selected_import_snapshot_id = raw_selected_base.selected_import_snapshot_id
+        ),
+        selected_with_hot AS (
+          SELECT
+            selected_base.*,
+            hot_field.source_record_key IS NOT NULL AS hot_resolved,
+            hot_field.duplicate_flag AS hot_duplicate_flag,
+            hot_field.conflict_flag AS hot_conflict_flag
+          FROM selected_base
+          LEFT JOIN app.review_import_article_hot_field hot_field
+            ON hot_field.import_route_id = selected_base.import_route_id
+            AND hot_field.article_id = selected_base.article_id
+            AND hot_field.source_record_key = selected_base.source_record_key
+        )
+        SELECT
+          snapshot_status AS snapshotStatus,
+          active_or_last_known_good_protected AS activeOrLastKnownGoodProtected,
+          CAST(COUNT(*) AS BIGINT) AS rowCount,
+          CAST(COUNT(*) FILTER (WHERE active_or_last_known_good_protected) AS BIGINT) AS activeOrLastKnownGoodRows,
+          CAST(COUNT(*) FILTER (WHERE snapshot_status = 'candidate') AS BIGINT) AS candidateRows,
+          CAST(COUNT(*) FILTER (WHERE NOT active_or_last_known_good_protected AND snapshot_status <> 'candidate') AS BIGINT) AS otherRows,
+          CAST(COUNT(*) FILTER (WHERE hot_resolved) AS BIGINT) AS hotResolvedRows,
+          CAST(COUNT(*) FILTER (WHERE NOT hot_resolved) AS BIGINT) AS missingHotRows,
+          CAST(COUNT(*) FILTER (WHERE duplicate_flag = TRUE) AS BIGINT) AS selectedBaseDuplicateTrueRows,
+          CAST(COUNT(*) FILTER (WHERE conflict_flag = TRUE) AS BIGINT) AS selectedBaseConflictTrueRows,
+          CAST(COUNT(*) FILTER (WHERE hot_duplicate_flag = TRUE) AS BIGINT) AS hotDuplicateTrueRows,
+          CAST(COUNT(*) FILTER (WHERE hot_conflict_flag = TRUE) AS BIGINT) AS hotConflictTrueRows,
+          CAST(COUNT(*) FILTER (WHERE duplicate_flag IS DISTINCT FROM hot_duplicate_flag) AS BIGINT) AS duplicateMismatchRows,
+          CAST(COUNT(*) FILTER (WHERE conflict_flag IS DISTINCT FROM hot_conflict_flag) AS BIGINT) AS conflictMismatchRows,
+          CAST(COUNT(*) FILTER (WHERE NOT hot_resolved AND duplicate_flag = TRUE) AS BIGINT) AS selectedBaseTrueDuplicateRowsWithoutHot,
+          CAST(COUNT(*) FILTER (WHERE NOT hot_resolved AND conflict_flag = TRUE) AS BIGINT) AS selectedBaseTrueConflictRowsWithoutHot,
+          CAST(COUNT(*) FILTER (WHERE NOT hot_resolved AND COALESCE(duplicate_flag, FALSE) = FALSE) AS BIGINT) AS selectedBaseFalseOrDefaultDuplicateRowsWithoutHot,
+          CAST(COUNT(*) FILTER (WHERE NOT hot_resolved AND COALESCE(conflict_flag, FALSE) = FALSE) AS BIGINT) AS selectedBaseFalseOrDefaultConflictRowsWithoutHot
+        FROM selected_with_hot
+        GROUP BY 1, 2
+        ORDER BY COUNT(*) DESC, snapshot_status, active_or_last_known_good_protected DESC
+      `,
+    )
     const selectedBaseRow = selectedBaseRows[0] ?? {}
     const hotFieldRow = hotFieldRows[0] ?? {}
     const globalDisplayCopyTotals = globalDisplayCopyRows.reduce(
@@ -1156,18 +1287,12 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
           candidateRows: Number(row.candidateRows ?? 0),
           nonNullCounts: Object.fromEntries(
             selectedImportDisplayCopyColumns.map((column) => {
-              return [
-                column,
-                selectedBaseColumnNames.has(column) ? Number(row[`${column}_nonNullCount`] ?? 0) : null,
-              ]
+              return [column, selectedBaseColumnNames.has(column) ? Number(row[`${column}_nonNullCount`] ?? 0) : null]
             }),
           ) as Record<(typeof selectedImportDisplayCopyColumns)[number], number | null>,
           nullCounts: Object.fromEntries(
             selectedImportDisplayCopyColumns.map((column) => {
-              return [
-                column,
-                selectedBaseColumnNames.has(column) ? Number(row[`${column}_nullCount`] ?? 0) : null,
-              ]
+              return [column, selectedBaseColumnNames.has(column) ? Number(row[`${column}_nullCount`] ?? 0) : null]
             }),
           ) as Record<(typeof selectedImportDisplayCopyColumns)[number], number | null>,
           otherRows: Number(row.otherRows ?? 0),
@@ -1176,6 +1301,79 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
         }
       }),
       totalRows: globalDisplayCopyTotals.totalRows,
+    }
+    const duplicateConflictTotals = duplicateConflictRows.reduce(
+      (totals, row) => {
+        totals.totalRows += Number(row.rowCount ?? 0)
+        totals.activeOrLastKnownGoodRows += Number(row.activeOrLastKnownGoodRows ?? 0)
+        totals.candidateRows += Number(row.candidateRows ?? 0)
+        totals.otherRows += Number(row.otherRows ?? 0)
+        totals.hotResolvedRows += Number(row.hotResolvedRows ?? 0)
+        totals.missingHotRows += Number(row.missingHotRows ?? 0)
+        totals.selectedBaseDuplicateTrueRows += Number(row.selectedBaseDuplicateTrueRows ?? 0)
+        totals.selectedBaseConflictTrueRows += Number(row.selectedBaseConflictTrueRows ?? 0)
+        totals.hotDuplicateTrueRows += Number(row.hotDuplicateTrueRows ?? 0)
+        totals.hotConflictTrueRows += Number(row.hotConflictTrueRows ?? 0)
+        totals.duplicateMismatchRows += Number(row.duplicateMismatchRows ?? 0)
+        totals.conflictMismatchRows += Number(row.conflictMismatchRows ?? 0)
+        totals.selectedBaseTrueDuplicateRowsWithoutHot += Number(row.selectedBaseTrueDuplicateRowsWithoutHot ?? 0)
+        totals.selectedBaseTrueConflictRowsWithoutHot += Number(row.selectedBaseTrueConflictRowsWithoutHot ?? 0)
+        totals.selectedBaseFalseOrDefaultDuplicateRowsWithoutHot += Number(
+          row.selectedBaseFalseOrDefaultDuplicateRowsWithoutHot ?? 0,
+        )
+        totals.selectedBaseFalseOrDefaultConflictRowsWithoutHot += Number(
+          row.selectedBaseFalseOrDefaultConflictRowsWithoutHot ?? 0,
+        )
+
+        return totals
+      },
+      {
+        activeOrLastKnownGoodRows: 0,
+        candidateRows: 0,
+        conflictMismatchRows: 0,
+        duplicateMismatchRows: 0,
+        hotConflictTrueRows: 0,
+        hotDuplicateTrueRows: 0,
+        hotResolvedRows: 0,
+        missingHotRows: 0,
+        otherRows: 0,
+        selectedBaseConflictTrueRows: 0,
+        selectedBaseDuplicateTrueRows: 0,
+        selectedBaseFalseOrDefaultConflictRowsWithoutHot: 0,
+        selectedBaseFalseOrDefaultDuplicateRowsWithoutHot: 0,
+        selectedBaseTrueConflictRowsWithoutHot: 0,
+        selectedBaseTrueDuplicateRowsWithoutHot: 0,
+        totalRows: 0,
+      },
+    )
+    const selectedImportDuplicateConflictGlobalEvidence: SelectedImportDuplicateConflictGlobalEvidence = {
+      ...duplicateConflictTotals,
+      note: 'Duplicate/conflict evidence is read-only fallback readiness only. Hot rows are resolved from selected-base identity `(import_route_id, article_id, source_record_key)`. `IS DISTINCT FROM` mismatches include unresolved hot rows where hot flags are NULL while selected-base flags provide TRUE/FALSE or default FALSE fallback values. Selected-base flag writers and selected-base fallback/default semantics remain required when hot rows do not resolve; this is not schema removal authorization.',
+      rows: duplicateConflictRows.map((row) => {
+        return {
+          activeOrLastKnownGoodProtected: Boolean(row.activeOrLastKnownGoodProtected),
+          candidateRows: Number(row.candidateRows ?? 0),
+          conflictMismatchRows: Number(row.conflictMismatchRows ?? 0),
+          duplicateMismatchRows: Number(row.duplicateMismatchRows ?? 0),
+          hotConflictTrueRows: Number(row.hotConflictTrueRows ?? 0),
+          hotDuplicateTrueRows: Number(row.hotDuplicateTrueRows ?? 0),
+          hotResolvedRows: Number(row.hotResolvedRows ?? 0),
+          missingHotRows: Number(row.missingHotRows ?? 0),
+          otherRows: Number(row.otherRows ?? 0),
+          rowCount: Number(row.rowCount ?? 0),
+          selectedBaseConflictTrueRows: Number(row.selectedBaseConflictTrueRows ?? 0),
+          selectedBaseDuplicateTrueRows: Number(row.selectedBaseDuplicateTrueRows ?? 0),
+          selectedBaseFalseOrDefaultConflictRowsWithoutHot: Number(
+            row.selectedBaseFalseOrDefaultConflictRowsWithoutHot ?? 0,
+          ),
+          selectedBaseFalseOrDefaultDuplicateRowsWithoutHot: Number(
+            row.selectedBaseFalseOrDefaultDuplicateRowsWithoutHot ?? 0,
+          ),
+          selectedBaseTrueConflictRowsWithoutHot: Number(row.selectedBaseTrueConflictRowsWithoutHot ?? 0),
+          selectedBaseTrueDuplicateRowsWithoutHot: Number(row.selectedBaseTrueDuplicateRowsWithoutHot ?? 0),
+          snapshotStatus: String(row.snapshotStatus ?? 'NULL'),
+        }
+      }),
     }
 
     return {
@@ -1216,6 +1414,7 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
         return {label: String(row.snapshotStatus ?? 'NULL'), rowCount: Number(row.rowCount ?? 0)}
       }),
       selectedBaseScopedRows: getNumberOrNull(selectedBaseRow.selectedBaseScopedRows),
+      selectedImportDuplicateConflictGlobalEvidence,
       selectedImportDisplayCopyGlobalEvidence,
       verdict: 'not-authorized',
     }
@@ -1234,6 +1433,7 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
       projectId,
       rowsBySelectedImportSnapshotStatus: [],
       selectedBaseScopedRows: null,
+      selectedImportDuplicateConflictGlobalEvidence: emptyDuplicateConflictEvidence,
       selectedImportDisplayCopyGlobalEvidence: emptyGlobalDisplayCopyEvidence,
       verdict: 'blocked',
     }
@@ -1736,7 +1936,11 @@ const getTableEvidence = async (runtime: QueryRuntime, table: string, options: C
 const formatMarkdownTable = (headers: string[], rows: string[][]) => {
   return [
     `| ${headers.join(' | ')} |`,
-    `| ${headers.map(() => '---').join(' | ')} |`,
+    `| ${headers
+      .map(() => {
+        return '---'
+      })
+      .join(' | ')} |`,
     ...rows.map((row) => {
       return `| ${row.join(' | ')} |`
     }),
@@ -1744,7 +1948,16 @@ const formatMarkdownTable = (headers: string[], rows: string[][]) => {
 }
 
 const formatValue = (value: unknown) => {
-  return value === null || value === undefined ? '' : String(value).replaceAll('\n', ' ').replaceAll('|', '\\|')
+  if (value === null || value === undefined) {
+    return ''
+  }
+
+  const stringValue =
+    typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint'
+      ? `${value}`
+      : JSON.stringify(value)
+
+  return (stringValue ?? '').replaceAll('\n', ' ').replaceAll('|', '\\|')
 }
 
 const renderMarkdown = (report: EvidenceReport) => {
@@ -1811,10 +2024,37 @@ const renderMarkdown = (report: EvidenceReport) => {
         }),
       ]
     })
+  const selectedImportDuplicateConflictStatusRows =
+    report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.rows.map((row) => {
+      return [
+        `\`${row.snapshotStatus}\``,
+        row.activeOrLastKnownGoodProtected ? 'yes' : 'no',
+        formatValue(row.rowCount),
+        formatValue(row.activeOrLastKnownGoodProtected ? row.rowCount : 0),
+        formatValue(row.candidateRows),
+        formatValue(row.otherRows),
+        formatValue(row.hotResolvedRows),
+        formatValue(row.missingHotRows),
+        formatValue(row.selectedBaseDuplicateTrueRows),
+        formatValue(row.hotDuplicateTrueRows),
+        formatValue(row.duplicateMismatchRows),
+        formatValue(row.selectedBaseFalseOrDefaultDuplicateRowsWithoutHot),
+        formatValue(row.selectedBaseTrueDuplicateRowsWithoutHot),
+        formatValue(row.selectedBaseConflictTrueRows),
+        formatValue(row.hotConflictTrueRows),
+        formatValue(row.conflictMismatchRows),
+        formatValue(row.selectedBaseFalseOrDefaultConflictRowsWithoutHot),
+        formatValue(row.selectedBaseTrueConflictRowsWithoutHot),
+      ]
+    })
   const summaryContributionDuplicateRows = report.summaryContributionServingReadiness.duplicateProbes.map((probe) => {
     return [
       probe.label,
-      probe.keyColumns.map((column) => `\`${column}\``).join(', '),
+      probe.keyColumns
+        .map((column) => {
+          return `\`${column}\``
+        })
+        .join(', '),
       formatValue(probe.duplicateCount),
     ]
   })
@@ -1827,19 +2067,25 @@ const renderMarkdown = (report: EvidenceReport) => {
   const summaryContributionProjectRows = report.summaryContributionServingReadiness.rowsByProject.map((project) => {
     return [`\`${project.projectId}\``, formatValue(project.rowCount)]
   })
-  const summaryContributionComponentKindRows = report.summaryContributionServingReadiness.rowsByComponentKind.map((row) => {
-    return [`\`${row.label}\``, formatValue(row.rowCount)]
-  })
+  const summaryContributionComponentKindRows = report.summaryContributionServingReadiness.rowsByComponentKind.map(
+    (row) => {
+      return [`\`${row.label}\``, formatValue(row.rowCount)]
+    },
+  )
   const summaryContributionDefinitionVersionRows =
     report.summaryContributionServingReadiness.rowsBySummaryDefinitionVersion.map((row) => {
       return [`\`${row.label}\``, formatValue(row.rowCount)]
     })
-  const summaryContributionContributionKeyRows = report.summaryContributionServingReadiness.topContributionKeys.map((row) => {
-    return [`\`${row.label}\``, formatValue(row.rowCount)]
-  })
-  const summaryContributionSnapshotStatusRows = report.summaryContributionServingReadiness.rowsBySnapshotStatus.map((row) => {
-    return [`\`${row.label}\``, formatValue(row.rowCount)]
-  })
+  const summaryContributionContributionKeyRows = report.summaryContributionServingReadiness.topContributionKeys.map(
+    (row) => {
+      return [`\`${row.label}\``, formatValue(row.rowCount)]
+    },
+  )
+  const summaryContributionSnapshotStatusRows = report.summaryContributionServingReadiness.rowsBySnapshotStatus.map(
+    (row) => {
+      return [`\`${row.label}\``, formatValue(row.rowCount)]
+    },
+  )
   const summaryContributionRecoverabilityRows =
     report.summaryContributionServingReadiness.recoverabilityComparisons.map((comparison) => {
       return [
@@ -1881,7 +2127,13 @@ const renderMarkdown = (report: EvidenceReport) => {
       `- Rows: ${formatValue(table.rowCount)}`,
       `- Columns: ${table.columnCount}`,
       `- Indexes observed: ${table.indexes.length}`,
-      `- Duplicate key columns: ${table.duplicateProbe.keyColumns.map((column) => `\`${column}\``).join(', ') || 'not probed'}`,
+      `- Duplicate key columns: ${
+        table.duplicateProbe.keyColumns
+          .map((column) => {
+            return `\`${column}\``
+          })
+          .join(', ') || 'not probed'
+      }`,
       `- Duplicate key count: ${formatValue(table.duplicateProbe.duplicateCount)}`,
       table.error ? `- Error: ${table.error}` : null,
       '',
@@ -1893,7 +2145,9 @@ const renderMarkdown = (report: EvidenceReport) => {
         ? formatMarkdownTable(['Column', 'Type', 'Nulls', 'Non-nulls', 'Approx distinct'], profileRows)
         : '_No column profile rows were collected._',
       '',
-      sizeRows.length > 0 ? formatMarkdownTable(['Size proxy', 'Value'], sizeRows) : '_No JSON/payload size proxies collected._',
+      sizeRows.length > 0
+        ? formatMarkdownTable(['Size proxy', 'Value'], sizeRows)
+        : '_No JSON/payload size proxies collected._',
     ]
       .filter((entry): entry is string => {
         return entry !== null
@@ -1991,6 +2245,68 @@ const renderMarkdown = (report: EvidenceReport) => {
           selectedImportDisplayCopyGlobalStatusRows,
         )
       : '_No global selected-import display-copy status/protection rows were collected._',
+    '',
+    'Global/current-DB duplicate/conflict flag fallback evidence is read-only and uses retained selected-base identity `(import_route_id, article_id, source_record_key)` to resolve hot-field rows. It does not authorize removing selected-base flag writers or columns.',
+    '',
+    report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.note,
+    '',
+    `Duplicate/conflict selected-base rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.totalRows)}`,
+    '',
+    `Duplicate/conflict active/LKG protected selected-import rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.activeOrLastKnownGoodRows)}`,
+    '',
+    `Duplicate/conflict candidate selected-import rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.candidateRows)}`,
+    '',
+    `Duplicate/conflict other selected-import rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.otherRows)}`,
+    '',
+    `Hot rows resolved by selected-base identity: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.hotResolvedRows)}`,
+    '',
+    `Selected-base rows without resolved hot rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.missingHotRows)}`,
+    '',
+    `Selected-base duplicate TRUE rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseDuplicateTrueRows)}`,
+    '',
+    `Hot duplicate TRUE rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.hotDuplicateTrueRows)}`,
+    '',
+    `Duplicate flag mismatches by IS DISTINCT FROM: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.duplicateMismatchRows)}`,
+    '',
+    `Selected-base duplicate false/default rows without hot fallback source: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseFalseOrDefaultDuplicateRowsWithoutHot)}`,
+    '',
+    `Selected-base duplicate TRUE rows without hot fallback source: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseTrueDuplicateRowsWithoutHot)}`,
+    '',
+    `Selected-base conflict TRUE rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseConflictTrueRows)}`,
+    '',
+    `Hot conflict TRUE rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.hotConflictTrueRows)}`,
+    '',
+    `Conflict flag mismatches by IS DISTINCT FROM: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.conflictMismatchRows)}`,
+    '',
+    `Selected-base conflict false/default rows without hot fallback source: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseFalseOrDefaultConflictRowsWithoutHot)}`,
+    '',
+    `Selected-base conflict TRUE rows without hot fallback source: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDuplicateConflictGlobalEvidence.selectedBaseTrueConflictRowsWithoutHot)}`,
+    '',
+    selectedImportDuplicateConflictStatusRows.length > 0
+      ? formatMarkdownTable(
+          [
+            'Snapshot status',
+            'Active/LKG protected',
+            'Rows',
+            'Protected rows',
+            'Candidate rows',
+            'Other rows',
+            'Hot resolved',
+            'Hot missing',
+            'Selected dup TRUE',
+            'Hot dup TRUE',
+            'Dup mismatches',
+            'Missing-hot dup false/default',
+            'Missing-hot dup TRUE',
+            'Selected conflict TRUE',
+            'Hot conflict TRUE',
+            'Conflict mismatches',
+            'Missing-hot conflict false/default',
+            'Missing-hot conflict TRUE',
+          ],
+          selectedImportDuplicateConflictStatusRows,
+        )
+      : '_No global duplicate/conflict status/protection rows were collected._',
     '',
     report.selectedImportPayloadSlimmingReadiness.error
       ? `Status: Blocked: ${report.selectedImportPayloadSlimmingReadiness.error}`
