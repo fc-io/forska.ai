@@ -744,7 +744,110 @@ const getApplyLlmStatusServingStatement = (input: {
         )`
 }
 
-const getResetEmptyLlmStatusServingStatement = (input: {
+const getApplyLlmStatusServingReplacementStatements = (input: {
+  baseGeneration: number
+  patchWatermark: number
+  projectId: string
+  projectionIdentity: string
+  recordRows: readonly {
+    articleId: string
+    listModeKey: string
+    llmStatusKey: string | null
+    promptConfigHash: string
+    promptId: string
+    reviewConfigHash: string
+    tombstone: boolean
+  }[]
+}) => {
+  const values = input.recordRows
+    .map((row) => {
+      return `(${getSqlLiteral(row.reviewConfigHash)}, ${getSqlLiteral(row.listModeKey)}, ${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.promptConfigHash)}, ${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.llmStatusKey)}, ${getSqlLiteral(row.tombstone)})`
+    })
+    .join(', ')
+
+  return input.recordRows.length === 0
+    ? []
+    : [
+        `CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS
+         WITH changed(review_config_hash, list_mode_key, article_id, prompt_config_hash, prompt_id, llm_status_key, tombstone) AS (
+          SELECT * FROM (VALUES ${values})
+        ), candidate_prompt AS (
+          SELECT
+            changed.review_config_hash,
+            changed.list_mode_key,
+            changed.article_id,
+            changed.prompt_config_hash,
+            changed.prompt_id,
+            changed.llm_status_key,
+            changed.tombstone,
+            ${getSqlLiteral(input.patchWatermark)} AS patch_watermark
+          FROM changed
+          GROUP BY changed.review_config_hash, changed.list_mode_key, changed.article_id, changed.prompt_config_hash, changed.prompt_id, changed.llm_status_key, changed.tombstone
+        ), latest_prompt AS (
+          SELECT candidate.*
+          FROM candidate_prompt candidate
+          WHERE candidate.patch_watermark = (
+            SELECT MAX(newer.patch_watermark)
+            FROM candidate_prompt newer
+            WHERE newer.review_config_hash = candidate.review_config_hash
+              AND newer.list_mode_key = candidate.list_mode_key
+              AND newer.article_id = candidate.article_id
+              AND newer.prompt_id = candidate.prompt_id
+          )
+        ), article_status AS (
+          SELECT
+            review_config_hash,
+            list_mode_key,
+            article_id,
+            COUNT(*) FILTER (WHERE NOT tombstone) AS enabled_prompt_count,
+            COUNT(*) FILTER (WHERE NOT tombstone AND llm_status_key = 'answered') AS llm_judged_prompt_count
+          FROM latest_prompt
+          GROUP BY review_config_hash, list_mode_key, article_id
+        )
+        SELECT serving.* REPLACE (
+          CAST(article_status.enabled_prompt_count AS INTEGER) AS enabled_prompt_count,
+          CAST(article_status.llm_judged_prompt_count AS INTEGER) AS llm_judged_prompt_count,
+          CASE
+            WHEN article_status.enabled_prompt_count = 0 THEN NULL
+            WHEN article_status.enabled_prompt_count = article_status.llm_judged_prompt_count THEN 'answered'
+            ELSE 'unanswered'
+          END AS llm_status_key,
+          GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}) AS patch_watermark,
+          current_timestamp AS serving_updated_at
+        )
+        FROM mart.review_article_serving_v4 serving
+        INNER JOIN article_status
+          ON serving.review_config_hash = article_status.review_config_hash
+          AND serving.list_mode_key = article_status.list_mode_key
+          AND serving.article_id = article_status.article_id
+        WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+          AND serving.llm_status_identity = ${getSqlLiteral(input.projectionIdentity)}
+          AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+          AND EXISTS (
+            SELECT 1
+            FROM app.review_serving_snapshot_manifest snapshot
+            WHERE snapshot.project_id = serving.project_id
+              AND snapshot.snapshot_id = serving.snapshot_id
+              AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+              AND snapshot.snapshot_status IN ('candidate', 'active')
+          )`,
+        `DELETE FROM mart.review_article_serving_v4 serving
+         WHERE EXISTS (
+           SELECT 1
+           FROM review_llm_status_serving_rebuild_v4 replacement
+           WHERE replacement.project_id = serving.project_id
+             AND replacement.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+             AND replacement.snapshot_id = serving.snapshot_id
+             AND replacement.list_mode_key = serving.list_mode_key
+             AND replacement.article_id = serving.article_id
+         )`,
+        `INSERT INTO mart.review_article_serving_v4 BY NAME
+         SELECT *
+         FROM review_llm_status_serving_rebuild_v4`,
+      ]
+}
+
+const getResetEmptyLlmStatusServingReplacementStatements = (input: {
   baseGeneration: number
   chunkEndArticleId?: string | null
   chunkStartArticleId?: string | null
@@ -758,26 +861,43 @@ const getResetEmptyLlmStatusServingStatement = (input: {
       ? ''
       : `AND serving.list_mode_key IN (${input.listModeKeys.map(getSqlLiteral).join(', ')})`
 
-  return `UPDATE mart.review_article_serving_v4 serving
-    SET
-      enabled_prompt_count = 0,
-      llm_judged_prompt_count = 0,
-      llm_status_key = NULL,
-      patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}),
-      serving_updated_at = current_timestamp
-    WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-      AND serving.llm_status_identity = ${getSqlLiteral(input.projectionIdentity)}
-      AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
-      ${listModePredicate}
-      ${getArticleRangePredicate({alias: 'serving', ...input})}
-      AND EXISTS (
-        SELECT 1
-        FROM app.review_serving_snapshot_manifest snapshot
-        WHERE snapshot.project_id = serving.project_id
-          AND snapshot.snapshot_id = serving.snapshot_id
-          AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
-          AND snapshot.snapshot_status IN ('candidate', 'active')
-      )`
+  return [
+    `CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS
+     SELECT serving.* REPLACE (
+       0 AS enabled_prompt_count,
+       0 AS llm_judged_prompt_count,
+       NULL AS llm_status_key,
+       GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}) AS patch_watermark,
+       current_timestamp AS serving_updated_at
+     )
+     FROM mart.review_article_serving_v4 serving
+     WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+       AND serving.llm_status_identity = ${getSqlLiteral(input.projectionIdentity)}
+       AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+       ${listModePredicate}
+       ${getArticleRangePredicate({alias: 'serving', ...input})}
+       AND EXISTS (
+         SELECT 1
+         FROM app.review_serving_snapshot_manifest snapshot
+         WHERE snapshot.project_id = serving.project_id
+           AND snapshot.snapshot_id = serving.snapshot_id
+           AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+           AND snapshot.snapshot_status IN ('candidate', 'active')
+       )`,
+    `DELETE FROM mart.review_article_serving_v4 serving
+     WHERE EXISTS (
+       SELECT 1
+       FROM review_llm_status_serving_rebuild_v4 replacement
+       WHERE replacement.project_id = serving.project_id
+         AND replacement.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+         AND replacement.snapshot_id = serving.snapshot_id
+         AND replacement.list_mode_key = serving.list_mode_key
+         AND replacement.article_id = serving.article_id
+     )`,
+    `INSERT INTO mart.review_article_serving_v4 BY NAME
+     SELECT *
+     FROM review_llm_status_serving_rebuild_v4`,
+  ]
 }
 
 export const projectReviewServingLlmStatusPatches = async (
@@ -817,35 +937,48 @@ export const projectReviewServingLlmStatusPatches = async (
     })
   })
   const writer = await measure('writerMs', async () => {
+    const servingStatements =
+      input.claims.length === 0
+        ? [
+            ...getApplyLlmStatusServingReplacementStatements({
+              baseGeneration: input.baseGeneration,
+              patchWatermark,
+              projectId: input.projectId,
+              projectionIdentity: input.projectionIdentity,
+              recordRows,
+            }),
+            ...(recordRows.length === 0 && promptConfigRows.length === 0
+              ? getResetEmptyLlmStatusServingReplacementStatements({
+                  baseGeneration: input.baseGeneration,
+                  chunkEndArticleId: input.chunkEndArticleId,
+                  chunkStartArticleId: input.chunkStartArticleId,
+                  listModeKeys: input.listModeKeys,
+                  patchWatermark,
+                  projectId: input.projectId,
+                  projectionIdentity: input.projectionIdentity,
+                })
+              : []),
+          ]
+        : [
+            getApplyLlmStatusServingStatement({
+              baseGeneration: input.baseGeneration,
+              includeExistingPatchRows: false,
+              patchWatermark,
+              projectId: input.projectId,
+              projectionIdentity: input.projectionIdentity,
+              recordRows,
+            }),
+          ].flatMap((statement) => {
+            return statement === null ? [] : [statement]
+          })
+
     return writeReviewServingProjectorComponent(
       {
         acknowledgements: input.claims,
         component: 'llmStatus',
         projectionManifests: input.claims.length === 0 ? [] : [getLlmStatusPatchManifest(input)],
         records: [],
-        statements: [
-          getApplyLlmStatusServingStatement({
-            baseGeneration: input.baseGeneration,
-            includeExistingPatchRows: false,
-            patchWatermark,
-            projectId: input.projectId,
-            projectionIdentity: input.projectionIdentity,
-            recordRows,
-          }),
-          input.claims.length === 0 && recordRows.length === 0 && promptConfigRows.length === 0
-            ? getResetEmptyLlmStatusServingStatement({
-                baseGeneration: input.baseGeneration,
-                chunkEndArticleId: input.chunkEndArticleId,
-                chunkStartArticleId: input.chunkStartArticleId,
-                listModeKeys: input.listModeKeys,
-                patchWatermark,
-                projectId: input.projectId,
-                projectionIdentity: input.projectionIdentity,
-              })
-            : null,
-        ].flatMap((statement) => {
-          return statement === null ? [] : [statement]
-        }),
+        statements: servingStatements,
         watermark:
           input.claims.length === 0
             ? undefined

@@ -308,7 +308,7 @@ test('prompt config claims rebuild only prompt-scoped human status rows', async 
   expect(deltaSelect).toBeUndefined()
 })
 
-test('human rebuild chunks update serving directly without scoped patch rows', async () => {
+test('human rebuild chunks copy-replace serving without scoped patch rows', async () => {
   const {database, statements} = createHumanStatusDatabase({projectRows: [humanStatusRow({articleId: 'article-3'})]})
 
   const result = await projectReviewServingHumanStatusPatches(
@@ -319,10 +319,14 @@ test('human rebuild chunks update serving directly without scoped patch rows', a
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
   expect(joined).not.toContain('mart.review_human_status_patch_v4')
-  expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined).not.toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_human_status_serving_rebuild_v4 AS')
+  expect(joined).toContain('SELECT serving.* REPLACE')
+  expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
 })
 
-test('human direct full rebuild chunks update serving without patch rows', async () => {
+test('human direct full rebuild chunks copy-replace serving without patch rows', async () => {
   const {database, statements} = createHumanStatusDatabase({projectRows: [humanStatusRow({articleId: 'article-3'})]})
 
   const result = await projectReviewServingHumanStatusPatches(
@@ -335,7 +339,10 @@ test('human direct full rebuild chunks update serving without patch rows', async
   expect(joined).not.toContain('DELETE FROM mart.review_human_status_patch_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_human_status_patch_v4')
   expect(joined).not.toContain('FROM mart.review_human_status_patch_v4')
-  expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined).not.toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_human_status_serving_rebuild_v4 AS')
+  expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
 })
 
 test('human rebuild chunks avoid patch delete and insert batches', async () => {

@@ -280,7 +280,7 @@ test('LLM full rebuild chunks fan out only over current enabled prompts', async 
     return statement.includes('WITH prompt_id_filter(prompt_id) AS') && statement.includes('scoped_article AS')
   })
   const applyStatement = statements.find((statement) => {
-    return statement.includes('UPDATE mart.review_article_serving_v4 serving')
+    return statement.includes('CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS')
   })
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
@@ -294,7 +294,7 @@ test('LLM full rebuild chunks fan out only over current enabled prompts', async 
   expect(applyStatement).not.toContain('FROM mart.review_llm_status_patch_v4 llm')
 })
 
-test('LLM direct full rebuild chunks update serving without patch rows', async () => {
+test('LLM direct full rebuild chunks copy-replace serving without patch rows', async () => {
   const {database, statements} = createLlmStatusDatabase({projectRows: [llmStatusRow({articleId: 'article-3'})]})
 
   const result = await projectReviewServingLlmStatusPatches(
@@ -306,7 +306,11 @@ test('LLM direct full rebuild chunks update serving without patch rows', async (
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
   expect(joined).not.toContain('DELETE FROM mart.review_llm_status_patch_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_llm_status_patch_v4')
-  expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined).not.toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS')
+  expect(joined).toContain('SELECT serving.* REPLACE')
+  expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
 })
 
 test('LLM full rebuild chunks reset serving status when the project has no enabled prompts', async () => {
@@ -317,7 +321,7 @@ test('LLM full rebuild chunks reset serving status when the project has no enabl
     database,
   )
   const resetStatement = statements.find((statement) => {
-    return statement.includes('SET\n      enabled_prompt_count = 0')
+    return statement.includes('CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS')
   })
   const insertStatement = statements.find((statement) => {
     return statement.includes('INSERT INTO mart.review_llm_status_patch_v4')
@@ -326,17 +330,19 @@ test('LLM full rebuild chunks reset serving status when the project has no enabl
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
   expect(insertStatement).toBeUndefined()
-  expect(resetStatement).toContain('UPDATE mart.review_article_serving_v4 serving')
-  expect(resetStatement).toContain('llm_judged_prompt_count = 0')
-  expect(resetStatement).toContain('llm_status_key = NULL')
+  expect(resetStatement).toContain('SELECT serving.* REPLACE')
+  expect(resetStatement).toContain('0 AS llm_judged_prompt_count')
+  expect(resetStatement).toContain('NULL AS llm_status_key')
   expect(resetStatement).toContain("serving.list_mode_key IN ('global')")
   expect(resetStatement).toContain("AND serving.article_id >= 'article-1'")
   expect(resetStatement).toContain("AND serving.article_id <= 'article-9'")
   expect(resetStatement).toContain("snapshot.snapshot_status IN ('candidate', 'active')")
+  expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
   expect(joined).not.toContain('mart.review_llm_status_patch_v4')
 })
 
-test('LLM rebuild chunks update serving directly without scoped patch rows', async () => {
+test('LLM rebuild chunks copy-replace serving without scoped patch rows', async () => {
   const {database, statements} = createLlmStatusDatabase({projectRows: [llmStatusRow({articleId: 'article-3'})]})
 
   const result = await projectReviewServingLlmStatusPatches(
@@ -347,7 +353,10 @@ test('LLM rebuild chunks update serving directly without scoped patch rows', asy
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 0})
   expect(joined).not.toContain('mart.review_llm_status_patch_v4')
-  expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined).not.toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined).toContain('CREATE OR REPLACE TEMP TABLE review_llm_status_serving_rebuild_v4 AS')
+  expect(joined).toContain('DELETE FROM mart.review_article_serving_v4 serving')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4 BY NAME')
 })
 
 test('LLM rebuild chunks avoid patch delete and insert batches', async () => {
