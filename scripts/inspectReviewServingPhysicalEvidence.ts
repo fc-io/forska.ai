@@ -73,6 +73,25 @@ type SummaryContributionServingDuplicateProbe = {
   keyColumns: string[]
   label: string
 }
+type SummaryContributionServingAggregateRecoverability = {
+  contributionGroups: number | null
+  error: string | null
+  finalRows: number | null
+  finalRowsMissingContributionGroup: number | null
+  matchedFinalRows: number | null
+  missingFinalRows: number | null
+  mismatchedFinalRows: number | null
+  note: string
+  summaryKind: 'count' | 'facet'
+}
+type SummaryContributionServingPartialOverlap = {
+  contributionRows: number | null
+  error: string | null
+  exactCommonColumnOverlapRows: number | null
+  note: string
+  partialRows: number | null
+  partialRowsWithExactCommonContribution: number | null
+}
 type SummaryContributionServingRowCount = {
   label: string
   rowCount: number
@@ -91,7 +110,10 @@ type SummaryContributionServingReadinessReport = {
   missingSnapshotManifestRows: number | null
   nonzeroProjectCount: number | null
   note: string
+  partialRebuildOverlap: SummaryContributionServingPartialOverlap
   pinnedSnapshotRows: number | null
+  recoverabilityClassification: string
+  recoverabilityComparisons: SummaryContributionServingAggregateRecoverability[]
   rowsByComponentKind: SummaryContributionServingRowCount[]
   rowsByProject: SummaryContributionServingProjectRowCount[]
   rowsBySnapshotStatus: SummaryContributionServingRowCount[]
@@ -954,6 +976,231 @@ const getSummaryContributionServingGroupedRows = async (
   })
 }
 
+const getSummaryContributionServingAggregateRecoverability = async (
+  runtime: QueryRuntime,
+  summaryKind: 'count' | 'facet',
+): Promise<SummaryContributionServingAggregateRecoverability> => {
+  const finalRowsCte =
+    summaryKind === 'count'
+      ? `
+        SELECT
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          summary_identity,
+          COALESCE(list_mode_key, 'global') AS list_mode_key,
+          count_kind,
+          summary_definition_version,
+          filter_key,
+          NULL::VARCHAR AS facet_kind,
+          NULL::VARCHAR AS facet_key,
+          NULL::VARCHAR AS facet_value,
+          count_value
+        FROM mart.review_article_count_serving_v4
+      `
+      : `
+        SELECT
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          summary_identity,
+          NULL::VARCHAR AS list_mode_key,
+          NULL::VARCHAR AS count_kind,
+          summary_definition_version,
+          NULL::VARCHAR AS filter_key,
+          facet_kind,
+          facet_key,
+          facet_value,
+          count_value
+        FROM mart.review_filter_facet_serving_v4
+      `
+  const joinPredicate =
+    summaryKind === 'count'
+      ? `contribution_groups.project_id = final_rows.project_id
+        AND contribution_groups.review_config_hash = final_rows.review_config_hash
+        AND contribution_groups.snapshot_id = final_rows.snapshot_id
+        AND contribution_groups.summary_identity = final_rows.summary_identity
+        AND contribution_groups.list_mode_key = final_rows.list_mode_key
+        AND contribution_groups.count_kind = final_rows.count_kind
+        AND contribution_groups.summary_definition_version = final_rows.summary_definition_version
+        AND contribution_groups.filter_key = final_rows.filter_key`
+      : `contribution_groups.project_id = final_rows.project_id
+        AND contribution_groups.review_config_hash = final_rows.review_config_hash
+        AND contribution_groups.snapshot_id = final_rows.snapshot_id
+        AND contribution_groups.summary_identity = final_rows.summary_identity
+        AND contribution_groups.summary_definition_version = final_rows.summary_definition_version
+        AND contribution_groups.facet_kind = final_rows.facet_kind
+        AND contribution_groups.facet_key = final_rows.facet_key
+        AND contribution_groups.facet_value = final_rows.facet_value`
+
+  try {
+    const rows = await runReadonlyQuery<{
+      contributionGroups: number | string
+      finalRows: number | string
+      finalRowsMissingContributionGroup: number | string
+      matchedFinalRows: number | string
+      missingFinalRows: number | string
+      mismatchedFinalRows: number | string
+    }>(
+      runtime,
+      `
+        WITH contribution_groups AS (
+          SELECT
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            json_extract_string(contribution_key, '$.summaryIdentity') AS summary_identity,
+            COALESCE(json_extract_string(contribution_key, '$.listModeKey'), 'global') AS list_mode_key,
+            json_extract_string(contribution_key, '$.countKind') AS count_kind,
+            summary_definition_version,
+            json_extract_string(contribution_key, '$.filterKey') AS filter_key,
+            json_extract_string(contribution_key, '$.facetKind') AS facet_kind,
+            json_extract_string(contribution_key, '$.facetKey') AS facet_key,
+            json_extract_string(contribution_key, '$.facetValue') AS facet_value,
+            SUM(COALESCE(contribution_value, 0)) AS contribution_count_value
+          FROM mart.review_article_summary_contribution_v4
+          WHERE json_extract_string(contribution_key, '$.summaryKind') = ${getSqlLiteral(summaryKind)}
+          GROUP BY
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            json_extract_string(contribution_key, '$.summaryIdentity'),
+            COALESCE(json_extract_string(contribution_key, '$.listModeKey'), 'global'),
+            json_extract_string(contribution_key, '$.countKind'),
+            summary_definition_version,
+            json_extract_string(contribution_key, '$.filterKey'),
+            json_extract_string(contribution_key, '$.facetKind'),
+            json_extract_string(contribution_key, '$.facetKey'),
+            json_extract_string(contribution_key, '$.facetValue')
+        ),
+        final_rows AS (${finalRowsCte}),
+        joined AS (
+          SELECT
+            contribution_groups.contribution_count_value,
+            final_rows.count_value,
+            contribution_groups.project_id IS NOT NULL AS has_contribution_group,
+            final_rows.project_id IS NOT NULL AS has_final_row
+          FROM contribution_groups
+          FULL OUTER JOIN final_rows
+            ON ${joinPredicate}
+        )
+        SELECT
+          CAST(COUNT(*) FILTER (WHERE has_contribution_group) AS BIGINT) AS contributionGroups,
+          CAST(COUNT(*) FILTER (WHERE has_final_row) AS BIGINT) AS finalRows,
+          CAST(COUNT(*) FILTER (
+            WHERE has_contribution_group
+              AND has_final_row
+              AND contribution_count_value IS NOT DISTINCT FROM count_value
+          ) AS BIGINT) AS matchedFinalRows,
+          CAST(COUNT(*) FILTER (WHERE has_contribution_group AND NOT has_final_row) AS BIGINT) AS missingFinalRows,
+          CAST(COUNT(*) FILTER (
+            WHERE has_contribution_group
+              AND has_final_row
+              AND NOT (contribution_count_value IS NOT DISTINCT FROM count_value)
+          ) AS BIGINT) AS mismatchedFinalRows,
+          CAST(COUNT(*) FILTER (WHERE has_final_row AND NOT has_contribution_group) AS BIGINT) AS finalRowsMissingContributionGroup
+        FROM joined
+      `,
+    )
+    const row = rows[0]
+
+    return {
+      contributionGroups: getNumberOrNull(row?.contributionGroups),
+      error: null,
+      finalRows: getNumberOrNull(row?.finalRows),
+      finalRowsMissingContributionGroup: getNumberOrNull(row?.finalRowsMissingContributionGroup),
+      matchedFinalRows: getNumberOrNull(row?.matchedFinalRows),
+      missingFinalRows: getNumberOrNull(row?.missingFinalRows),
+      mismatchedFinalRows: getNumberOrNull(row?.mismatchedFinalRows),
+      note: 'Read-only aggregate comparison between contribution_key groups and final serving rows. Matches prove only aggregate count parity for this snapshot, not recoverability of exact per-article ledger rows.',
+      summaryKind,
+    }
+  } catch (error) {
+    return {
+      contributionGroups: null,
+      error: error instanceof Error ? error.message : String(error),
+      finalRows: null,
+      finalRowsMissingContributionGroup: null,
+      matchedFinalRows: null,
+      missingFinalRows: null,
+      mismatchedFinalRows: null,
+      note: 'Aggregate serving comparison failed; failed evidence collection is not deletion authorization.',
+      summaryKind,
+    }
+  }
+}
+
+const getSummaryContributionPartialOverlap = async (
+  runtime: QueryRuntime,
+): Promise<SummaryContributionServingPartialOverlap> => {
+  try {
+    const rows = await runReadonlyQuery<{
+      contributionRows: number | string
+      exactCommonColumnOverlapRows: number | string
+      partialRows: number | string
+      partialRowsWithExactCommonContribution: number | string
+    }>(
+      runtime,
+      `
+        SELECT
+          CAST((SELECT COUNT(*) FROM mart.review_article_summary_contribution_v4) AS BIGINT) AS contributionRows,
+          CAST((SELECT COUNT(*) FROM mart.review_article_summary_contribution_rebuild_partial_v4) AS BIGINT) AS partialRows,
+          CAST((
+            SELECT COUNT(*)
+            FROM mart.review_article_summary_contribution_v4 contribution
+            WHERE EXISTS (
+              SELECT 1
+              FROM mart.review_article_summary_contribution_rebuild_partial_v4 partial
+              WHERE partial.project_id = contribution.project_id
+                AND partial.review_config_hash = contribution.review_config_hash
+                AND partial.snapshot_id = contribution.snapshot_id
+                AND partial.article_id = contribution.article_id
+                AND partial.component_kind = contribution.component_kind
+                AND partial.summary_definition_version = contribution.summary_definition_version
+                AND partial.contribution_key = contribution.contribution_key
+                AND partial.contribution_value = contribution.contribution_value
+            )
+          ) AS BIGINT) AS exactCommonColumnOverlapRows,
+          CAST((
+            SELECT COUNT(*)
+            FROM mart.review_article_summary_contribution_rebuild_partial_v4 partial
+            WHERE EXISTS (
+              SELECT 1
+              FROM mart.review_article_summary_contribution_v4 contribution
+              WHERE contribution.project_id = partial.project_id
+                AND contribution.review_config_hash = partial.review_config_hash
+                AND contribution.snapshot_id = partial.snapshot_id
+                AND contribution.article_id = partial.article_id
+                AND contribution.component_kind = partial.component_kind
+                AND contribution.summary_definition_version = partial.summary_definition_version
+                AND contribution.contribution_key = partial.contribution_key
+                AND contribution.contribution_value = partial.contribution_value
+            )
+          ) AS BIGINT) AS partialRowsWithExactCommonContribution
+      `,
+    )
+    const row = rows[0]
+
+    return {
+      contributionRows: getNumberOrNull(row?.contributionRows),
+      error: null,
+      exactCommonColumnOverlapRows: getNumberOrNull(row?.exactCommonColumnOverlapRows),
+      note: 'Exact overlap compares the shared logical contribution identity and value columns, excluding request/chunk ownership and timestamps. The final aggregate count/facet rows do not contain article_id/component_kind/contribution_key rows and cannot reconstruct exact per-article contribution ledger rows.',
+      partialRows: getNumberOrNull(row?.partialRows),
+      partialRowsWithExactCommonContribution: getNumberOrNull(row?.partialRowsWithExactCommonContribution),
+    }
+  } catch (error) {
+    return {
+      contributionRows: null,
+      error: error instanceof Error ? error.message : String(error),
+      exactCommonColumnOverlapRows: null,
+      note: 'Exact rebuild-partial overlap collection failed; failed evidence collection is not deletion authorization.',
+      partialRows: null,
+      partialRowsWithExactCommonContribution: null,
+    }
+  }
+}
+
 const getSummaryContributionServingReadinessReport = async (
   runtime: QueryRuntime,
   limit: number,
@@ -1056,7 +1303,14 @@ const getSummaryContributionServingReadinessReport = async (
       missingSnapshotManifestRows: getNumberOrNull(countRows[0]?.missingSnapshotManifestRows),
       nonzeroProjectCount: getNumberOrNull(countRows[0]?.nonzeroProjectCount),
       note: 'Read-only current-DB snapshot evidence for the summary contribution serving ledger beyond the default scoped project. This section is not deletion authorization; table removal still requires route parity, benchmark, recovery, and live progress proof.',
+      partialRebuildOverlap: await getSummaryContributionPartialOverlap(runtime),
       pinnedSnapshotRows: getNumberOrNull(countRows[0]?.pinnedSnapshotRows),
+      recoverabilityClassification:
+        'bounded-readonly-aggregate-only: final count/facet serving rows can be compared to contribution_key aggregate groups, but final aggregate rows cannot reconstruct exact per-article contribution ledger rows and this report does not authorize deletion.',
+      recoverabilityComparisons: [
+        await getSummaryContributionServingAggregateRecoverability(runtime, 'count'),
+        await getSummaryContributionServingAggregateRecoverability(runtime, 'facet'),
+      ],
       rowsByComponentKind: await getSummaryContributionServingGroupedRows(
         runtime,
         table,
@@ -1100,7 +1354,18 @@ const getSummaryContributionServingReadinessReport = async (
       missingSnapshotManifestRows: null,
       nonzeroProjectCount: null,
       note: 'Read-only current-DB snapshot evidence collection failed. Failed evidence collection is not deletion authorization.',
+      partialRebuildOverlap: {
+        contributionRows: null,
+        error: null,
+        exactCommonColumnOverlapRows: null,
+        note: 'Not collected because summary contribution serving readiness collection failed.',
+        partialRows: null,
+        partialRowsWithExactCommonContribution: null,
+      },
       pinnedSnapshotRows: null,
+      recoverabilityClassification:
+        'blocked: failed evidence collection cannot classify recoverability or authorize deletion.',
+      recoverabilityComparisons: [],
       rowsByComponentKind: [],
       rowsByProject: [],
       rowsBySnapshotStatus: [],
@@ -1229,6 +1494,19 @@ const renderMarkdown = (report: EvidenceReport) => {
   const summaryContributionSnapshotStatusRows = report.summaryContributionServingReadiness.rowsBySnapshotStatus.map((row) => {
     return [`\`${row.label}\``, formatValue(row.rowCount)]
   })
+  const summaryContributionRecoverabilityRows =
+    report.summaryContributionServingReadiness.recoverabilityComparisons.map((comparison) => {
+      return [
+        comparison.summaryKind,
+        formatValue(comparison.contributionGroups),
+        formatValue(comparison.finalRows),
+        formatValue(comparison.matchedFinalRows),
+        formatValue(comparison.missingFinalRows),
+        formatValue(comparison.mismatchedFinalRows),
+        formatValue(comparison.finalRowsMissingContributionGroup),
+        comparison.error ? `Blocked: ${comparison.error}` : 'ok',
+      ]
+    })
   const summaryContributionIndexRows = report.summaryContributionServingReadiness.indexes.map((index) => {
     return [formatValue(JSON.stringify(index))]
   })
@@ -1357,6 +1635,22 @@ const renderMarkdown = (report: EvidenceReport) => {
     '',
     `Rows with missing snapshot manifest: ${formatValue(report.summaryContributionServingReadiness.missingSnapshotManifestRows)}`,
     '',
+    `Recoverability classification: ${report.summaryContributionServingReadiness.recoverabilityClassification}`,
+    '',
+    report.summaryContributionServingReadiness.partialRebuildOverlap.note,
+    '',
+    `Contribution ledger rows: ${formatValue(report.summaryContributionServingReadiness.partialRebuildOverlap.contributionRows)}`,
+    '',
+    `Rebuild partial contribution rows: ${formatValue(report.summaryContributionServingReadiness.partialRebuildOverlap.partialRows)}`,
+    '',
+    `Contribution rows with exact common-column rebuild-partial overlap: ${formatValue(report.summaryContributionServingReadiness.partialRebuildOverlap.exactCommonColumnOverlapRows)}`,
+    '',
+    `Rebuild partial rows with exact common-column contribution overlap: ${formatValue(report.summaryContributionServingReadiness.partialRebuildOverlap.partialRowsWithExactCommonContribution)}`,
+    '',
+    report.summaryContributionServingReadiness.partialRebuildOverlap.error
+      ? `Partial overlap status: Blocked: ${report.summaryContributionServingReadiness.partialRebuildOverlap.error}`
+      : 'Partial overlap status: ok',
+    '',
     `Column count: ${formatValue(report.summaryContributionServingReadiness.columnCount)}`,
     '',
     `Index count: ${formatValue(report.summaryContributionServingReadiness.indexes.length)}`,
@@ -1388,6 +1682,22 @@ const renderMarkdown = (report: EvidenceReport) => {
     summaryContributionSnapshotStatusRows.length > 0
       ? formatMarkdownTable(['Snapshot status', 'Rows'], summaryContributionSnapshotStatusRows)
       : '_No summary contribution snapshot-status classification rows were collected._',
+    '',
+    summaryContributionRecoverabilityRows.length > 0
+      ? formatMarkdownTable(
+          [
+            'Summary kind',
+            'Contribution groups',
+            'Final rows',
+            'Matched final rows',
+            'Missing final rows',
+            'Mismatched final rows',
+            'Final rows missing contribution group',
+            'Status',
+          ],
+          summaryContributionRecoverabilityRows,
+        )
+      : '_No summary contribution recoverability comparisons were collected._',
     '',
     summaryContributionDuplicateRows.length > 0
       ? formatMarkdownTable(['Probe', 'Key columns', 'Duplicate keys'], summaryContributionDuplicateRows)

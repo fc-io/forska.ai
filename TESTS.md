@@ -66,6 +66,7 @@ Use these focused commands for the storage-shape evidence-unblocker slice:
 bun test scripts/operatorScriptDuckdbAccess.test.ts
 bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-current-db-physical-with-selected-import-evidence.md
 bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-summary-contribution-serving-proof.md
+bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-summary-contribution-recoverability.md
 bun test src/server/reviewServing/reviewServingRouteParityCoverage.test.ts src/server/reviewServing/reviewServingRouteParityEvidence.test.ts src/server/reviewServing/reviewServingRouteParityRunner.test.ts
 bun run bench:review-serving-release-gate
 ```
@@ -76,7 +77,12 @@ serving readiness sections in the physical evidence report. The summary
 contribution evidence classifies active/LKG snapshot protected rows, pinned
 snapshot rows, missing-manifest rows, rows by project/component
 kind/definition version/snapshot status, and top contribution-key counts while
-keeping the verdict not-authorized. These commands do not replace
+keeping the verdict not-authorized. The recoverability artifact also classifies
+count/facet contribution-key aggregate groups that match, miss, or mismatch
+final aggregate serving rows, plus logical common-column overlap with the
+rebuild partial contribution table; it does not prove final aggregate rows can
+reconstruct exact per-article contribution ledger rows. These commands do not
+replace
 `bun run test:network-smoke:current-db` for
 review-serving/DuckDB lifecycle changes.
 
