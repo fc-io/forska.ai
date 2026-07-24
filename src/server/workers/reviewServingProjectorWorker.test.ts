@@ -1322,35 +1322,46 @@ test('worker writes compatible search rebuild chunks through one range batch wri
   const statements: string[] = []
   const firstChunkInput = {
     ...chunkInput,
-    chunkEndKey: 'article-050',
+    chunkEndKey: 'article-008',
     chunkStartKey: 'article-001',
     projectionComponent: 'search' as const,
     projectionIdentity: 'search:project-1',
   }
-  const secondChunkInput = {...firstChunkInput, chunkEndKey: 'article-099', chunkStartKey: 'article-051'}
-  const firstChunk = {
-    ...chunkManifest,
-    ...firstChunkInput,
-    chunkId: 'chunk-search-batch-1',
-    parentChunkId: 'chunk-search-parent',
-    splitDepth: 1,
+  const chunkInputs = Array.from({length: 9}, (_, index) => {
+    const start = index * 8 + 1
+    const end = start + 7
+
+    return {
+      ...firstChunkInput,
+      chunkEndKey: `article-${end.toString().padStart(3, '0')}`,
+      chunkStartKey: `article-${start.toString().padStart(3, '0')}`,
+    }
+  })
+  const chunks = chunkInputs.map((input, index) => {
+    return {
+      ...chunkManifest,
+      ...input,
+      chunkId: `chunk-search-batch-${index + 1}`,
+      parentChunkId: 'chunk-search-parent',
+      splitDepth: 1,
+    } satisfies ReviewServingRebuildChunkManifest
+  })
+  const firstChunk = chunks[0]
+
+  if (firstChunk === undefined) {
+    throw new Error('expected search batch test chunk')
   }
-  const secondChunk = {
-    ...chunkManifest,
-    ...secondChunkInput,
-    chunkId: 'chunk-search-batch-2',
-    parentChunkId: 'chunk-search-parent',
-    splitDepth: 1,
-  }
-  const chunkInputs = [firstChunkInput, secondChunkInput]
-  const chunksByStartKey = new Map<string, ReviewServingRebuildChunkManifest>([
-    [firstChunkInput.chunkStartKey, firstChunk],
-    [secondChunkInput.chunkStartKey, secondChunk],
-  ])
-  const chunksById = new Map<string, ReviewServingRebuildChunkManifest>([
-    [firstChunk.chunkId, firstChunk],
-    [secondChunk.chunkId, secondChunk],
-  ])
+
+  const chunksByStartKey = new Map<string, ReviewServingRebuildChunkManifest>(
+    chunks.map((chunk) => {
+      return [chunk.chunkStartKey, chunk]
+    }),
+  )
+  const chunksById = new Map<string, ReviewServingRebuildChunkManifest>(
+    chunks.map((chunk) => {
+      return [chunk.chunkId, chunk]
+    }),
+  )
   const componentState = {
     optional: [{baseGeneration: '2', component: 'search', projectionIdentity: 'search:project-1'}],
     required: [
@@ -1416,19 +1427,19 @@ test('worker writes compatible search rebuild chunks through one range batch wri
   } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
 
   const result = await runReviewServingProjectorWorkerOnce(
-    {rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+    {rebuildChunkBatchSize: 64, workerId: 'worker-1'},
     harness.dependencies,
   )
   const joined = statements.join('\n')
 
-  expect(result.chunk).toMatchObject({chunkId: secondChunk.chunkId, status: 'completed'})
-  expect(result.chunkBatchCount).toBe(2)
-  expect(harness.claimInputs).toHaveLength(2)
+  expect(result.chunk).toMatchObject({chunkId: 'chunk-search-batch-9', status: 'completed'})
+  expect(result.chunkBatchCount).toBe(9)
+  expect(harness.claimInputs).toHaveLength(9)
   expect(harness.runChunkInputs).toEqual([])
   expect(joined).toContain("scope.article_id >= 'article-001'")
-  expect(joined).toContain("scope.article_id <= 'article-050'")
-  expect(joined).toContain("scope.article_id >= 'article-051'")
-  expect(joined).toContain("scope.article_id <= 'article-099'")
+  expect(joined).toContain("scope.article_id <= 'article-008'")
+  expect(joined).toContain("scope.article_id >= 'article-065'")
+  expect(joined).toContain("scope.article_id <= 'article-072'")
   expect(joined).toContain('CROSS JOIN unnest(regexp_split_to_array')
   expect(joined).toContain('searchBatchWriter')
 })
@@ -2097,12 +2108,20 @@ test('worker writes compatible status and posting rebuild chunks through compone
     expect(result.chunk).toMatchObject({chunkId: secondChunk.chunkId, status: 'completed'})
     expect(result.chunkBatchCount).toBe(2)
     expect(harness.claimInputs).toHaveLength(2)
-    expect(harness.runChunkInputs).toEqual([])
+    if (batchCase.preclaimTailLimit === 0) {
+      expect(harness.runChunkInputs).toEqual([firstChunk])
+    } else {
+      expect(harness.runChunkInputs).toEqual([])
+    }
     expect(joined).toContain("article_id >= 'article-001'")
     expect(joined).toContain("article_id <= 'article-050'")
     expect(joined).toContain("article_id >= 'article-051'")
     expect(joined).toContain("article_id <= 'article-099'")
-    expect(joined).toContain(batchCase.writerName)
+    if (batchCase.preclaimTailLimit === 0) {
+      expect(joined).not.toContain(batchCase.writerName)
+    } else {
+      expect(joined).toContain(batchCase.writerName)
+    }
   }
 })
 
@@ -2139,7 +2158,7 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
       component: 'search',
       endKeys: ['article-033', 'article-066', 'article-099'],
       identity: 'search:project-1',
-      preclaimTailLimit: 63,
+      preclaimTailLimit: 0,
       startKeys: ['article-001', 'article-034', 'article-067'],
       validationTable: 'FROM mart.review_title_search_serving_v4 search',
       writerName: 'searchBatchWriter',
@@ -2335,10 +2354,18 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
     expect(result.chunkBatchCount).toBe(expectedBatchSize)
     expect(harness.claimInputs).toHaveLength(expectedBatchSize)
     expect(harness.getNextChunkInputs).toHaveLength(1)
-    expect(compatibleStatusBatchInputs).toEqual([
-      {excludeChunkIds: [firstChunk.chunkId], firstChunk, limit: expectedPreclaimTailLimit},
-    ])
-    expect(harness.runChunkInputs).toEqual([])
+    if (batchCase.preclaimTailLimit === 0) {
+      expect(compatibleStatusBatchInputs).toEqual([])
+    } else {
+      expect(compatibleStatusBatchInputs).toEqual([
+        {excludeChunkIds: [firstChunk.chunkId], firstChunk, limit: expectedPreclaimTailLimit},
+      ])
+    }
+    if (batchCase.preclaimTailLimit === 0) {
+      expect(harness.runChunkInputs).toEqual([firstChunk])
+    } else {
+      expect(harness.runChunkInputs).toEqual([])
+    }
     expect(harness.wakeInputs).toEqual([])
     const completionChecks = statements.filter((statement) => {
       return statement.includes('pendingChunkCount')
@@ -2348,11 +2375,16 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
     } else {
       expect(completionChecks.length).toBeGreaterThanOrEqual(1)
     }
-    expect(joined).toContain("article_id >= 'article-001'")
-    expect(joined).toContain("article_id <= 'article-033'")
-    expect(joined).toContain(`article_id >= '${batchCase.startKeys[expectedBatchSize - 1]}'`)
-    expect(joined).toContain(`article_id <= '${batchCase.endKeys[expectedBatchSize - 1]}'`)
-    expect(joined).toContain(batchCase.writerName)
+    if (batchCase.preclaimTailLimit === 0) {
+      expect(joined).not.toContain("article_id >= 'article-001'")
+      expect(joined).not.toContain(batchCase.writerName)
+    } else {
+      expect(joined).toContain("article_id >= 'article-001'")
+      expect(joined).toContain("article_id <= 'article-033'")
+      expect(joined).toContain(`article_id >= '${batchCase.startKeys[expectedBatchSize - 1]}'`)
+      expect(joined).toContain(`article_id <= '${batchCase.endKeys[expectedBatchSize - 1]}'`)
+      expect(joined).toContain(batchCase.writerName)
+    }
   }
 })
 
@@ -5673,7 +5705,7 @@ test('worker finalizes completed rebuild requests left admitted after no chunks 
       return [{chunkId: completedChunk.chunkId}] as T[]
     }
 
-    if (statement.includes('WHERE chunk_id =')) {
+    if (statement.includes('WHERE chunk_id =') || statement.includes("(chunk_id || '') =")) {
       return [completedChunk] as T[]
     }
 

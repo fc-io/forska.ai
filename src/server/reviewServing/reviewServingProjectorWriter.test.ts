@@ -184,7 +184,7 @@ test('queue rebuild rows upsert overlapping split chunk boundary rows', async ()
   expect(insertStatement).toContain('queue_updated_at = excluded.queue_updated_at')
 })
 
-test('title search rebuild ranges commit scoped deletes before same-key inserts', async () => {
+test('title search rebuild ranges insert rows with conflict-ignore and no scoped indexed deletes', async () => {
   const {database, getTransactionCount, statements, workloadContexts} = createWriterDatabase()
   const baseRange = {
     articleRangePredicateSql: "AND scope.article_id >= 'article-1' AND scope.article_id <= 'article-2'",
@@ -219,6 +219,13 @@ test('title search rebuild ranges commit scoped deletes before same-key inserts'
       return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
     }),
   ).toHaveLength(2)
+  expect(statements.join('\n')).not.toContain('DELETE FROM mart.review_title_search_serving_v4')
+  expect(statements.join('\n')).not.toContain('WHERE NOT EXISTS')
+  expect(statements.join('\n')).toContain(
+    'ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token, article_id) DO NOTHING',
+  )
+  expect(statements.join('\n')).not.toContain("existing.project_id || ''")
+  expect(statements.join('\n')).not.toContain("existing.token || ''")
 })
 
 test('projector writer updates rows, manifests, acknowledgements, watermarks, and promotion in one transaction', async () => {

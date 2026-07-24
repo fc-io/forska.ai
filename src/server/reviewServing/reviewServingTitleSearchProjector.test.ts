@@ -223,7 +223,7 @@ test('project-scoped title search rebuilds scoped articles and clears snapshot s
   expect(deleteStatement).not.toContain('article_id IN')
 })
 
-test('sql-native title search rebuild clears stale chunk tokens before inserting current tokens', async () => {
+test('sql-native title search rebuild inserts chunk tokens with conflict-ignore and no indexed deletes', async () => {
   const {database, statements} = createTitleSearchDatabase()
 
   await projectReviewServingTitleSearchRebuildRows(
@@ -246,13 +246,7 @@ test('sql-native title search rebuild clears stale chunk tokens before inserting
     return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
   })
 
-  expect(statements.indexOf(deleteStatement ?? '')).toBeLessThan(statements.indexOf(insertStatement ?? ''))
-  expect(deleteStatement).toContain("search.project_id = 'project-1'")
-  expect(deleteStatement).toContain("search.search_identity = 'search:identity-1'")
-  expect(deleteStatement).toContain("search.project_scope_identity = 'projectScope:identity-1'")
-  expect(deleteStatement).toContain("search.snapshot_id = 'snapshot-1'")
-  expect(deleteStatement).toContain("search.article_id >= 'article-001'")
-  expect(deleteStatement).toContain("search.article_id <= 'article-099'")
+  expect(deleteStatement).toBeUndefined()
   expect(insertStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
   expect(insertStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
   expect(insertStatement).toContain('COALESCE(selected_hot.article_title, article.article_title)')
@@ -269,7 +263,11 @@ test('sql-native title search rebuild clears stale chunk tokens before inserting
     'GROUP BY project_id, search_identity, project_scope_identity, snapshot_id, tokenized.token, tokenized.article_id',
   )
   expect(insertStatement).not.toContain('activity_sort_at')
-  expect(insertStatement).not.toContain('ON CONFLICT')
+  expect(insertStatement).toContain(
+    'ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token, article_id) DO NOTHING',
+  )
+  expect(insertStatement).not.toContain('WHERE NOT EXISTS')
+  expect(insertStatement).not.toContain("existing.project_id || ''")
 })
 
 test('search availability distinguishes ready indexing unavailable and async states', () => {

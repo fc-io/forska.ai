@@ -575,14 +575,6 @@ export const promoteReviewServingProjectorSnapshot = async (
 const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServingTitleSearchRebuildRowsInput) => {
   return [
     `
-    DELETE FROM mart.review_title_search_serving_v4 search
-    WHERE search.project_id = ${getSqlLiteral(input.projectId)}
-      AND search.search_identity = ${getSqlLiteral(input.searchIdentity)}
-      AND search.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
-      AND search.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      ${input.targetArticleRangePredicateSql}
-  `,
-    `
     INSERT INTO mart.review_title_search_serving_v4 (
       project_id,
       search_identity,
@@ -648,6 +640,7 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
       final_rows.title_prefix,
       current_timestamp AS search_updated_at
     FROM final_rows
+    ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token, article_id) DO NOTHING
   `,
   ]
 }
