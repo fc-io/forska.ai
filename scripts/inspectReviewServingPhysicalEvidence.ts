@@ -63,6 +63,28 @@ type SelectedImportPayloadColumnEvidence = {
   selectedBaseOtherNullCount: number | null
   selectedBaseNullCount: number | null
 }
+type SelectedImportDisplayCopyGlobalEvidence = {
+  activeOrLastKnownGoodRows: number | null
+  candidateRows: number | null
+  columns: SelectedImportDisplayCopyGlobalColumnEvidence[]
+  otherRows: number | null
+  rows: SelectedImportDisplayCopyGlobalStatusRow[]
+  totalRows: number | null
+}
+type SelectedImportDisplayCopyGlobalColumnEvidence = {
+  column: (typeof selectedImportDisplayCopyColumns)[number]
+  nonNullCount: number | null
+  nullCount: number | null
+}
+type SelectedImportDisplayCopyGlobalStatusRow = {
+  activeOrLastKnownGoodProtected: boolean
+  candidateRows: number
+  nonNullCounts: Record<(typeof selectedImportDisplayCopyColumns)[number], number>
+  nullCounts: Record<(typeof selectedImportDisplayCopyColumns)[number], number>
+  otherRows: number
+  rowCount: number
+  snapshotStatus: string
+}
 type SelectedImportPayloadSnapshotStatusRow = {label: string; rowCount: number}
 type SelectedImportPayloadSlimmingReadinessReport = {
   activeOrLastKnownGoodSelectedImportRows: number | null
@@ -75,6 +97,7 @@ type SelectedImportPayloadSlimmingReadinessReport = {
   otherSelectedImportRows: number | null
   projectId: string
   selectedBaseScopedRows: number | null
+  selectedImportDisplayCopyGlobalEvidence: SelectedImportDisplayCopyGlobalEvidence
   rowsBySelectedImportSnapshotStatus: SelectedImportPayloadSnapshotStatusRow[]
   verdict: 'not-authorized' | 'blocked'
   columns: SelectedImportPayloadColumnEvidence[]
@@ -321,6 +344,13 @@ const selectedImportPayloadColumns = [
   'source_record_key',
   'selected_rank_key',
   'selected_rank_numeric',
+  'publication_year',
+  'article_title',
+  'journal_title',
+  'external_id',
+] as const
+
+const selectedImportDisplayCopyColumns = [
   'publication_year',
   'article_title',
   'journal_title',
@@ -876,6 +906,20 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
         CAST(COUNT(*) FILTER (WHERE hot_field.${column} IS NOT NULL) AS BIGINT) AS hotField_${column}_nonNullCount`
     })
     .join(',\n        ')
+  const globalDisplayCopyExpressions = selectedImportDisplayCopyColumns
+    .map((column) => {
+      return `CAST(COUNT(*) FILTER (WHERE selected_base.${column} IS NULL) AS BIGINT) AS ${column}_nullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.${column} IS NOT NULL) AS BIGINT) AS ${column}_nonNullCount`
+    })
+    .join(',\n        ')
+  const emptyGlobalDisplayCopyEvidence: SelectedImportDisplayCopyGlobalEvidence = {
+    activeOrLastKnownGoodRows: null,
+    candidateRows: null,
+    columns: [],
+    otherRows: null,
+    rows: [],
+    totalRows: null,
+  }
 
   try {
     const selectedBaseRows = await runReadonlyQuery<Record<string, number | string | null>>(
@@ -958,8 +1002,125 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
           AND project_route.project_id = ${getSqlLiteral(projectId)}
       `,
     )
+    const globalDisplayCopyRows = await runReadonlyQuery<Record<string, number | string | boolean | null>>(
+      runtime,
+      `
+        WITH active_manifest AS (
+          SELECT
+            manifest.project_id,
+            manifest.selected_import_snapshot_id,
+            manifest.last_known_good_snapshot_id
+          FROM app.review_serving_snapshot_manifest manifest
+          WHERE manifest.snapshot_status = 'active'
+        ),
+        protected_selected_import_snapshot AS (
+          SELECT
+            project_id,
+            selected_import_snapshot_id
+          FROM active_manifest
+          WHERE selected_import_snapshot_id IS NOT NULL
+          UNION
+          SELECT
+            active_manifest.project_id,
+            last_known_good_manifest.selected_import_snapshot_id
+          FROM active_manifest
+          INNER JOIN app.review_serving_snapshot_manifest last_known_good_manifest
+            ON last_known_good_manifest.project_id = active_manifest.project_id
+            AND last_known_good_manifest.snapshot_id = active_manifest.last_known_good_snapshot_id
+          WHERE last_known_good_manifest.selected_import_snapshot_id IS NOT NULL
+        ),
+        selected_base AS (
+          SELECT
+            raw_selected_base.*,
+            COALESCE(selected_import_snapshot.status, 'missing-selected-import-snapshot') AS snapshot_status,
+            protected_selected_import_snapshot.selected_import_snapshot_id IS NOT NULL AS active_or_last_known_good_protected
+          FROM app.review_selected_article_import_v4 raw_selected_base
+          LEFT JOIN app.review_selected_import_snapshot selected_import_snapshot
+            ON selected_import_snapshot.project_id = raw_selected_base.project_id
+            AND selected_import_snapshot.project_scope_identity = raw_selected_base.project_scope_identity
+            AND selected_import_snapshot.selected_import_snapshot_id = raw_selected_base.selected_import_snapshot_id
+          LEFT JOIN protected_selected_import_snapshot
+            ON protected_selected_import_snapshot.project_id = raw_selected_base.project_id
+            AND protected_selected_import_snapshot.selected_import_snapshot_id = raw_selected_base.selected_import_snapshot_id
+        )
+        SELECT
+          snapshot_status AS snapshotStatus,
+          active_or_last_known_good_protected AS activeOrLastKnownGoodProtected,
+          CAST(COUNT(*) AS BIGINT) AS rowCount,
+          CAST(COUNT(*) FILTER (WHERE active_or_last_known_good_protected) AS BIGINT) AS activeOrLastKnownGoodRows,
+          CAST(COUNT(*) FILTER (WHERE snapshot_status = 'candidate') AS BIGINT) AS candidateRows,
+          CAST(COUNT(*) FILTER (WHERE NOT active_or_last_known_good_protected AND snapshot_status <> 'candidate') AS BIGINT) AS otherRows,
+          ${globalDisplayCopyExpressions}
+        FROM selected_base
+        GROUP BY 1, 2
+        ORDER BY COUNT(*) DESC, snapshot_status, active_or_last_known_good_protected DESC
+      `,
+    )
     const selectedBaseRow = selectedBaseRows[0] ?? {}
     const hotFieldRow = hotFieldRows[0] ?? {}
+    const globalDisplayCopyTotals = globalDisplayCopyRows.reduce(
+      (totals, row) => {
+        totals.totalRows += Number(row.rowCount ?? 0)
+        totals.activeOrLastKnownGoodRows += Number(row.activeOrLastKnownGoodRows ?? 0)
+        totals.candidateRows += Number(row.candidateRows ?? 0)
+        totals.otherRows += Number(row.otherRows ?? 0)
+
+        for (const column of selectedImportDisplayCopyColumns) {
+          totals.nullCounts[column] += Number(row[`${column}_nullCount`] ?? 0)
+          totals.nonNullCounts[column] += Number(row[`${column}_nonNullCount`] ?? 0)
+        }
+
+        return totals
+      },
+      {
+        activeOrLastKnownGoodRows: 0,
+        candidateRows: 0,
+        nonNullCounts: Object.fromEntries(
+          selectedImportDisplayCopyColumns.map((column) => {
+            return [column, 0]
+          }),
+        ) as Record<(typeof selectedImportDisplayCopyColumns)[number], number>,
+        nullCounts: Object.fromEntries(
+          selectedImportDisplayCopyColumns.map((column) => {
+            return [column, 0]
+          }),
+        ) as Record<(typeof selectedImportDisplayCopyColumns)[number], number>,
+        otherRows: 0,
+        totalRows: 0,
+      },
+    )
+    const selectedImportDisplayCopyGlobalEvidence: SelectedImportDisplayCopyGlobalEvidence = {
+      activeOrLastKnownGoodRows: globalDisplayCopyTotals.activeOrLastKnownGoodRows,
+      candidateRows: globalDisplayCopyTotals.candidateRows,
+      columns: selectedImportDisplayCopyColumns.map((column) => {
+        return {
+          column,
+          nonNullCount: globalDisplayCopyTotals.nonNullCounts[column],
+          nullCount: globalDisplayCopyTotals.nullCounts[column],
+        }
+      }),
+      otherRows: globalDisplayCopyTotals.otherRows,
+      rows: globalDisplayCopyRows.map((row) => {
+        return {
+          activeOrLastKnownGoodProtected: Boolean(row.activeOrLastKnownGoodProtected),
+          candidateRows: Number(row.candidateRows ?? 0),
+          nonNullCounts: Object.fromEntries(
+            selectedImportDisplayCopyColumns.map((column) => {
+              return [column, Number(row[`${column}_nonNullCount`] ?? 0)]
+            }),
+          ) as Record<(typeof selectedImportDisplayCopyColumns)[number], number>,
+          nullCounts: Object.fromEntries(
+            selectedImportDisplayCopyColumns.map((column) => {
+              return [column, Number(row[`${column}_nullCount`] ?? 0)]
+            }),
+          ) as Record<(typeof selectedImportDisplayCopyColumns)[number], number>,
+          otherRows: Number(row.otherRows ?? 0),
+          rowCount: Number(row.rowCount ?? 0),
+          snapshotStatus: String(row.snapshotStatus ?? 'NULL'),
+        }
+      }),
+      totalRows: globalDisplayCopyTotals.totalRows,
+    }
 
     return {
       activeOrLastKnownGoodSelectedImportRows: getNumberOrNull(selectedBaseRow.activeOrLastKnownGoodSelectedImportRows),
@@ -988,7 +1149,7 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
       comparisonStatus:
         'Selected-base counts are split into active/LKG protected selected-import rows, candidate selected-import rows, and other rows. Hot-field counts are scoped through app.project_import_route for the same project. Non-null hot-field values with null selected-base values mean source data exists but the selected-base projection did not carry it for this scoped snapshot.',
       consumerWriterStatus:
-        'Current code no longer writes or consumes selected-base display-copy values for publication_year, article_title, journal_title, and external_id. Selected-base identity/rank fields remain active runtime state, and the nullable schema columns still exist. Treat this as write-suppression and consumer-migration evidence only.',
+        'Current code no longer writes or consumes selected-base display-copy values for publication_year, article_title, journal_title, and external_id. Selected-base identity/rank/source fields remain active runtime state, and the nullable schema columns still exist. Treat this as write-suppression and consumer-migration evidence only.',
       error: null,
       hotFieldScopedRows: getNumberOrNull(hotFieldRow.hotFieldScopedRows),
       note: 'This section is not deletion/slimming authorization. It is a regression/readiness check for selected-base display-copy write suppression; schema slimming still needs separate migration, recovery, route parity, benchmark, and live progress proof.',
@@ -998,6 +1159,7 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
         return {label: String(row.snapshotStatus ?? 'NULL'), rowCount: Number(row.rowCount ?? 0)}
       }),
       selectedBaseScopedRows: getNumberOrNull(selectedBaseRow.selectedBaseScopedRows),
+      selectedImportDisplayCopyGlobalEvidence,
       verdict: 'not-authorized',
     }
   } catch (error) {
@@ -1015,6 +1177,7 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
       projectId,
       rowsBySelectedImportSnapshotStatus: [],
       selectedBaseScopedRows: null,
+      selectedImportDisplayCopyGlobalEvidence: emptyGlobalDisplayCopyEvidence,
       verdict: 'blocked',
     }
   }
@@ -1572,6 +1735,24 @@ const renderMarkdown = (report: EvidenceReport) => {
     report.selectedImportPayloadSlimmingReadiness.rowsBySelectedImportSnapshotStatus.map((row) => {
       return [`\`${row.label}\``, formatValue(row.rowCount)]
     })
+  const selectedImportDisplayCopyGlobalColumnRows =
+    report.selectedImportPayloadSlimmingReadiness.selectedImportDisplayCopyGlobalEvidence.columns.map((column) => {
+      return [`\`${column.column}\``, formatValue(column.nullCount), formatValue(column.nonNullCount)]
+    })
+  const selectedImportDisplayCopyGlobalStatusRows =
+    report.selectedImportPayloadSlimmingReadiness.selectedImportDisplayCopyGlobalEvidence.rows.map((row) => {
+      return [
+        `\`${row.snapshotStatus}\``,
+        row.activeOrLastKnownGoodProtected ? 'yes' : 'no',
+        formatValue(row.rowCount),
+        formatValue(row.activeOrLastKnownGoodProtected ? row.rowCount : 0),
+        formatValue(row.candidateRows),
+        formatValue(row.otherRows),
+        ...selectedImportDisplayCopyColumns.flatMap((column) => {
+          return [formatValue(row.nullCounts[column]), formatValue(row.nonNullCounts[column])]
+        }),
+      ]
+    })
   const summaryContributionDuplicateRows = report.summaryContributionServingReadiness.duplicateProbes.map((probe) => {
     return [
       probe.label,
@@ -1718,6 +1899,40 @@ const renderMarkdown = (report: EvidenceReport) => {
     report.selectedImportPayloadSlimmingReadiness.comparisonStatus,
     '',
     report.selectedImportPayloadSlimmingReadiness.consumerWriterStatus,
+    '',
+    'Global/current-DB display-copy evidence is limited to `publication_year`, `article_title`, `journal_title`, and `external_id`. This is no schema-slimming authorization; display-copy writer/consumer suppression is implemented; schema drop still needs separate migration/recovery proof. `import_route_id`, `source_record_key`, `selected_rank_key`, and `selected_rank_numeric` stay out of this write-suppression claim and remain active identity/rank/source state.',
+    '',
+    `Global/current-DB selected-base rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDisplayCopyGlobalEvidence.totalRows)}`,
+    '',
+    `Global active/LKG protected selected-import rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDisplayCopyGlobalEvidence.activeOrLastKnownGoodRows)}`,
+    '',
+    `Global candidate selected-import rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDisplayCopyGlobalEvidence.candidateRows)}`,
+    '',
+    `Global other selected-import rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedImportDisplayCopyGlobalEvidence.otherRows)}`,
+    '',
+    selectedImportDisplayCopyGlobalColumnRows.length > 0
+      ? formatMarkdownTable(
+          ['Global display-copy column', 'Selected-base nulls', 'Selected-base non-nulls'],
+          selectedImportDisplayCopyGlobalColumnRows,
+        )
+      : '_No global display-copy column evidence rows were collected._',
+    '',
+    selectedImportDisplayCopyGlobalStatusRows.length > 0
+      ? formatMarkdownTable(
+          [
+            'Snapshot status',
+            'Active/LKG protected',
+            'Rows',
+            'Protected rows',
+            'Candidate rows',
+            'Other rows',
+            ...selectedImportDisplayCopyColumns.flatMap((column) => {
+              return [`${column} nulls`, `${column} non-nulls`]
+            }),
+          ],
+          selectedImportDisplayCopyGlobalStatusRows,
+        )
+      : '_No global selected-import display-copy status/protection rows were collected._',
     '',
     report.selectedImportPayloadSlimmingReadiness.error
       ? `Status: Blocked: ${report.selectedImportPayloadSlimmingReadiness.error}`

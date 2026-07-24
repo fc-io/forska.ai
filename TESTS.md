@@ -66,6 +66,7 @@ Use these focused commands for the storage-shape evidence-unblocker slice:
 bun test scripts/operatorScriptDuckdbAccess.test.ts
 bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-current-db-physical-with-selected-import-evidence.md
 bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-selected-import-payload-consumer-proof.md
+bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-selected-import-display-copy-global-evidence.md
 bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-summary-contribution-serving-proof.md
 bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-summary-contribution-recoverability.md
 bun test src/server/reviewServing/reviewServingRouteParityCoverage.test.ts src/server/reviewServing/reviewServingRouteParityEvidence.test.ts src/server/reviewServing/reviewServingRouteParityRunner.test.ts
@@ -80,6 +81,14 @@ selected-import snapshot rows; per-column selected-base null/non-null counts;
 and same-project hot-field availability through `app.project_import_route`.
 It now acts as a regression/readiness check for selected-base display-copy
 write suppression, but still does not authorize deletion or schema slimming.
+The display-copy global evidence artifact extends that check to current-DB
+selected-base counts for only `publication_year`, `article_title`,
+`journal_title`, and `external_id`, split by selected-import snapshot status
+and active/LKG protection. `import_route_id`, `source_record_key`,
+`selected_rank_key`, and `selected_rank_numeric` stay out of the
+write-suppression claim. This is no schema-slimming authorization; display-copy
+writer/consumer suppression is implemented; schema drop still needs separate
+migration/recovery proof.
 The summary
 contribution evidence classifies active/LKG snapshot protected rows, pinned
 snapshot rows, missing-manifest rows, rows by project/component
