@@ -48,15 +48,21 @@ Use these focused commands for the duplicate requestless-bootstrap request-id
 fix before the full current-DB gate:
 
 ```bash
-bun test src/server/workers/reviewServingProjectorWorker.test.ts src/server/reviewServing/reviewServingV4RebuildRequestService.test.ts src/server/reviewServing/reviewServingRebuildRequestRepository.test.ts src/server/reviewServing/reviewServingChunkManifestRepository.test.ts
+bun test src/server/workers/reviewServingProjectorWorker.test.ts src/server/reviewServing/reviewServingRebuildRequestRepository.test.ts src/server/reviewServing/reviewServingV4RebuildRequestService.test.ts src/server/reviewServing/reviewServingChunkManifestRepository.test.ts src/server/reviewServing/reviewServingDisplayPayloadProjector.test.ts src/server/reviewServing/reviewServingSummaryProjector.test.ts src/server/reviewServing/reviewServingJudgmentPayloadProjector.test.ts src/server/reviewServing/reviewServingDiagnosticsRepository.test.ts src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts
 bun test src/server/utils/duckdbServiceReload.test.ts
+bun test src/server/reviewServing/reviewServingRouteParityEvidence.test.ts src/server/reviewServing/reviewServingRouteParityCoverage.test.ts
+bun run bench:review-serving-release-gate
+git diff --check
 bun run test:dev-server:current-db
+bun run test:network-smoke:current-db:readonly
 bun run test:network-smoke:current-db
 ```
 
-The fix is not proven until the main orchestrator reruns the mutation-enabled
-current-DB phase and the complete current-DB smoke gate without forbidden
-DuckDB fatal restart logs or stalled review-serving progress.
+The fix is not proven until the main orchestrator reruns the route/benchmark
+contract checks, the mutation-enabled current-DB phase, the read-only current-DB
+route smoke, and the complete current-DB smoke gate without forbidden DuckDB
+fatal restart logs, poisoned warning diagnostics, or stalled review-serving
+progress.
 
 ## Review Storage Evidence Commands
 
