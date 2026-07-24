@@ -10,13 +10,29 @@ summary. The section records:
 - global row count
 - number of projects with nonzero rows
 - top projects by row count
+- active/last-known-good snapshot protected row count
+- active pin protected row count
+- rows with no matching snapshot manifest
+- rows by project
+- rows by component kind
+- rows by summary definition version
+- top contribution keys by row count
+- rows by snapshot manifest status when `snapshot_status` exists
 - duplicate key counts for the declared primary key and lookup-index key
 - column and index shape
 
-Current generated evidence shows:
+The generated evidence is for deletion decisions only in the sense of
+classification: it can identify which rows are active, pinned, status-grouped,
+or missing manifest coverage. The verdict remains `not-authorized`.
+
+Prior generated evidence showed:
 
 - global rows: `1,009,294`
 - projects with nonzero rows: `4`
+- active/LKG snapshot protected rows: `177,498`
+- active pin protected rows: `0`
+- rows with no matching snapshot manifest: `0`
+- snapshot manifest status rows: `candidate=831,796`, `active=177,498`
 - declared primary-key duplicate keys: `0`
 - lookup-index duplicate keys without `article_id`: `282`
 - table shape: `9` columns and `1` index

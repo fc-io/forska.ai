@@ -72,7 +72,11 @@ bun run bench:review-serving-release-gate
 
 These commands produce evidence and benchmark-contract artifacts, including the
 selected-import payload slimming readiness and global summary contribution
-serving readiness sections in the physical evidence report. They do not replace
+serving readiness sections in the physical evidence report. The summary
+contribution evidence classifies active/LKG snapshot protected rows, pinned
+snapshot rows, missing-manifest rows, rows by project/component
+kind/definition version/snapshot status, and top contribution-key counts while
+keeping the verdict not-authorized. These commands do not replace
 `bun run test:network-smoke:current-db` for
 review-serving/DuckDB lifecycle changes.
 

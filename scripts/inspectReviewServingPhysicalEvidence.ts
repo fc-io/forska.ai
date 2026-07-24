@@ -73,16 +73,31 @@ type SummaryContributionServingDuplicateProbe = {
   keyColumns: string[]
   label: string
 }
+type SummaryContributionServingRowCount = {
+  label: string
+  rowCount: number
+}
+type SummaryContributionServingProjectRowCount = SummaryContributionServingRowCount & {
+  projectId: string
+}
 type SummaryContributionServingReadinessReport = {
+  activeOrLastKnownGoodSnapshotProtectedRows: number | null
   columnCount: number | null
   columns: TableColumn[]
   duplicateProbes: SummaryContributionServingDuplicateProbe[]
   error: string | null
   globalRowCount: number | null
   indexes: unknown[]
+  missingSnapshotManifestRows: number | null
   nonzeroProjectCount: number | null
   note: string
+  pinnedSnapshotRows: number | null
+  rowsByComponentKind: SummaryContributionServingRowCount[]
+  rowsByProject: SummaryContributionServingProjectRowCount[]
+  rowsBySnapshotStatus: SummaryContributionServingRowCount[]
+  rowsBySummaryDefinitionVersion: SummaryContributionServingRowCount[]
   table: 'mart.review_article_summary_contribution_v4'
+  topContributionKeys: SummaryContributionServingRowCount[]
   topProjects: {projectId: string; rowCount: number}[]
   verdict: 'not-authorized' | 'blocked'
 }
@@ -915,6 +930,30 @@ const getDuplicateCountForColumns = async (
   return Number(rows[0]?.duplicateCount ?? 0)
 }
 
+const getSummaryContributionServingGroupedRows = async (
+  runtime: QueryRuntime,
+  table: string,
+  expression: string,
+  alias: string,
+  limit: number | null,
+) => {
+  const rows = await runReadonlyQuery<Record<string, number | string | null>>(
+    runtime,
+    `
+      SELECT ${expression} AS "${alias}", CAST(COUNT(*) AS BIGINT) AS rowCount
+      FROM ${table}
+      GROUP BY 1
+      HAVING COUNT(*) > 0
+      ORDER BY COUNT(*) DESC, "${alias}"
+      ${limit === null ? '' : `LIMIT ${Math.max(1, limit)}`}
+    `,
+  )
+
+  return rows.map((row) => {
+    return {label: String(row[alias] ?? 'NULL'), rowCount: Number(row.rowCount ?? 0)}
+  })
+}
+
 const getSummaryContributionServingReadinessReport = async (
   runtime: QueryRuntime,
   limit: number,
@@ -940,16 +979,31 @@ const getSummaryContributionServingReadinessReport = async (
 
   try {
     const columns = await getTableColumns(runtime, table)
+    const manifestColumns = await getTableColumns(runtime, 'app.review_serving_snapshot_manifest')
+    const hasSnapshotStatus = hasColumn(manifestColumns, 'snapshot_status')
     const countRows = await runReadonlyQuery<{
+      activeOrLastKnownGoodSnapshotProtectedRows: number | string
       globalRowCount: number | string
+      missingSnapshotManifestRows: number | string
       nonzeroProjectCount: number | string
+      pinnedSnapshotRows: number | string
     }>(
       runtime,
       `
         SELECT
+          CAST(COUNT(*) FILTER (WHERE ${getActiveSnapshotManifestGuardPredicate('snapshot_id')}) AS BIGINT) AS activeOrLastKnownGoodSnapshotProtectedRows,
+          CAST(COUNT(*) FILTER (WHERE ${getActiveSnapshotPinGuardPredicate('snapshot_id')}) AS BIGINT) AS pinnedSnapshotRows,
+          CAST(COUNT(*) FILTER (
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM app.review_serving_snapshot_manifest manifest
+              WHERE manifest.project_id = candidate.project_id
+                AND manifest.snapshot_id = candidate.snapshot_id
+            )
+          ) AS BIGINT) AS missingSnapshotManifestRows,
           CAST(COUNT(*) AS BIGINT) AS globalRowCount,
           CAST(COUNT(DISTINCT project_id) AS BIGINT) AS nonzeroProjectCount
-        FROM ${table}
+        FROM ${table} candidate
       `,
     )
     const topProjects = await runReadonlyQuery<{projectId: string; rowCount: number | string}>(
@@ -963,8 +1017,25 @@ const getSummaryContributionServingReadinessReport = async (
         LIMIT ${Math.max(1, limit)}
       `,
     )
+    const rowsBySnapshotStatus = hasSnapshotStatus
+      ? await getSummaryContributionServingGroupedRows(
+          runtime,
+          `
+            ${table} contribution
+            LEFT JOIN app.review_serving_snapshot_manifest manifest
+              ON manifest.project_id = contribution.project_id
+              AND manifest.snapshot_id = contribution.snapshot_id
+          `,
+          "COALESCE(manifest.snapshot_status, 'missing-manifest')",
+          'snapshotStatus',
+          null,
+        )
+      : []
 
     return {
+      activeOrLastKnownGoodSnapshotProtectedRows: getNumberOrNull(
+        countRows[0]?.activeOrLastKnownGoodSnapshotProtectedRows,
+      ),
       columnCount: columns.length,
       columns,
       duplicateProbes: [
@@ -982,9 +1053,36 @@ const getSummaryContributionServingReadinessReport = async (
       error: null,
       globalRowCount: getNumberOrNull(countRows[0]?.globalRowCount),
       indexes: await getIndexes(runtime, table),
+      missingSnapshotManifestRows: getNumberOrNull(countRows[0]?.missingSnapshotManifestRows),
       nonzeroProjectCount: getNumberOrNull(countRows[0]?.nonzeroProjectCount),
       note: 'Read-only current-DB snapshot evidence for the summary contribution serving ledger beyond the default scoped project. This section is not deletion authorization; table removal still requires route parity, benchmark, recovery, and live progress proof.',
+      pinnedSnapshotRows: getNumberOrNull(countRows[0]?.pinnedSnapshotRows),
+      rowsByComponentKind: await getSummaryContributionServingGroupedRows(
+        runtime,
+        table,
+        'component_kind',
+        'componentKind',
+        null,
+      ),
+      rowsByProject: topProjects.map((row) => {
+        return {label: row.projectId, projectId: row.projectId, rowCount: Number(row.rowCount)}
+      }),
+      rowsBySnapshotStatus,
+      rowsBySummaryDefinitionVersion: await getSummaryContributionServingGroupedRows(
+        runtime,
+        table,
+        'summary_definition_version',
+        'summaryDefinitionVersion',
+        null,
+      ),
       table,
+      topContributionKeys: await getSummaryContributionServingGroupedRows(
+        runtime,
+        table,
+        'contribution_key',
+        'contributionKey',
+        limit,
+      ),
       topProjects: topProjects.map((row) => {
         return {projectId: row.projectId, rowCount: Number(row.rowCount)}
       }),
@@ -992,15 +1090,23 @@ const getSummaryContributionServingReadinessReport = async (
     }
   } catch (error) {
     return {
+      activeOrLastKnownGoodSnapshotProtectedRows: null,
       columnCount: null,
       columns: [],
       duplicateProbes: [],
       error: error instanceof Error ? error.message : String(error),
       globalRowCount: null,
       indexes: [],
+      missingSnapshotManifestRows: null,
       nonzeroProjectCount: null,
       note: 'Read-only current-DB snapshot evidence collection failed. Failed evidence collection is not deletion authorization.',
+      pinnedSnapshotRows: null,
+      rowsByComponentKind: [],
+      rowsByProject: [],
+      rowsBySnapshotStatus: [],
+      rowsBySummaryDefinitionVersion: [],
       table,
+      topContributionKeys: [],
       topProjects: [],
       verdict: 'blocked',
     }
@@ -1106,6 +1212,22 @@ const renderMarkdown = (report: EvidenceReport) => {
   })
   const summaryContributionTopProjectRows = report.summaryContributionServingReadiness.topProjects.map((project) => {
     return [`\`${project.projectId}\``, formatValue(project.rowCount)]
+  })
+  const summaryContributionProjectRows = report.summaryContributionServingReadiness.rowsByProject.map((project) => {
+    return [`\`${project.projectId}\``, formatValue(project.rowCount)]
+  })
+  const summaryContributionComponentKindRows = report.summaryContributionServingReadiness.rowsByComponentKind.map((row) => {
+    return [`\`${row.label}\``, formatValue(row.rowCount)]
+  })
+  const summaryContributionDefinitionVersionRows =
+    report.summaryContributionServingReadiness.rowsBySummaryDefinitionVersion.map((row) => {
+      return [`\`${row.label}\``, formatValue(row.rowCount)]
+    })
+  const summaryContributionContributionKeyRows = report.summaryContributionServingReadiness.topContributionKeys.map((row) => {
+    return [`\`${row.label}\``, formatValue(row.rowCount)]
+  })
+  const summaryContributionSnapshotStatusRows = report.summaryContributionServingReadiness.rowsBySnapshotStatus.map((row) => {
+    return [`\`${row.label}\``, formatValue(row.rowCount)]
   })
   const summaryContributionIndexRows = report.summaryContributionServingReadiness.indexes.map((index) => {
     return [formatValue(JSON.stringify(index))]
@@ -1219,7 +1341,7 @@ const renderMarkdown = (report: EvidenceReport) => {
     '',
     '## Summary Contribution Serving Readiness',
     '',
-    `Verdict: ${report.summaryContributionServingReadiness.verdict === 'not-authorized' ? 'not deletion authorization' : 'blocked'}`,
+    `Verdict: ${report.summaryContributionServingReadiness.verdict === 'not-authorized' ? 'not-authorized (not deletion authorization)' : 'blocked'}`,
     '',
     report.summaryContributionServingReadiness.note,
     '',
@@ -1228,6 +1350,12 @@ const renderMarkdown = (report: EvidenceReport) => {
     `Global rows: ${formatValue(report.summaryContributionServingReadiness.globalRowCount)}`,
     '',
     `Projects with nonzero rows: ${formatValue(report.summaryContributionServingReadiness.nonzeroProjectCount)}`,
+    '',
+    `Active/LKG snapshot protected rows: ${formatValue(report.summaryContributionServingReadiness.activeOrLastKnownGoodSnapshotProtectedRows)}`,
+    '',
+    `Pinned snapshot rows: ${formatValue(report.summaryContributionServingReadiness.pinnedSnapshotRows)}`,
+    '',
+    `Rows with missing snapshot manifest: ${formatValue(report.summaryContributionServingReadiness.missingSnapshotManifestRows)}`,
     '',
     `Column count: ${formatValue(report.summaryContributionServingReadiness.columnCount)}`,
     '',
@@ -1240,6 +1368,26 @@ const renderMarkdown = (report: EvidenceReport) => {
     summaryContributionTopProjectRows.length > 0
       ? formatMarkdownTable(['Project', 'Rows'], summaryContributionTopProjectRows)
       : '_No projects with nonzero summary contribution serving rows were observed._',
+    '',
+    summaryContributionProjectRows.length > 0
+      ? formatMarkdownTable(['Rows by project', 'Rows'], summaryContributionProjectRows)
+      : '_No summary contribution project classification rows were collected._',
+    '',
+    summaryContributionComponentKindRows.length > 0
+      ? formatMarkdownTable(['Component kind', 'Rows'], summaryContributionComponentKindRows)
+      : '_No summary contribution component-kind classification rows were collected._',
+    '',
+    summaryContributionDefinitionVersionRows.length > 0
+      ? formatMarkdownTable(['Summary definition version', 'Rows'], summaryContributionDefinitionVersionRows)
+      : '_No summary contribution definition-version classification rows were collected._',
+    '',
+    summaryContributionContributionKeyRows.length > 0
+      ? formatMarkdownTable(['Contribution key', 'Rows'], summaryContributionContributionKeyRows)
+      : '_No summary contribution key classification rows were collected._',
+    '',
+    summaryContributionSnapshotStatusRows.length > 0
+      ? formatMarkdownTable(['Snapshot status', 'Rows'], summaryContributionSnapshotStatusRows)
+      : '_No summary contribution snapshot-status classification rows were collected._',
     '',
     summaryContributionDuplicateRows.length > 0
       ? formatMarkdownTable(['Probe', 'Key columns', 'Duplicate keys'], summaryContributionDuplicateRows)
