@@ -1,4 +1,4 @@
-import {readFileSync} from 'node:fs'
+import {readdirSync, readFileSync} from 'node:fs'
 import {resolve} from 'node:path'
 
 import {expect, test} from 'bun:test'
@@ -19,6 +19,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0109_reviewServingJudgmentDetailPayloadKindForwardMigration.sql',
   '../../db/duckdbMigrations/0112_reviewServingSummaryRebuildPartial.sql',
   '../../db/duckdbMigrations/0113_reviewServingSummaryContributionRebuildPartial.sql',
+  '../../db/duckdbMigrations/0118_dropReviewQueuePatchV4.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -46,6 +47,8 @@ const judgmentDetailPayloadKindForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath[
     '../../db/duckdbMigrations/0109_reviewServingJudgmentDetailPayloadKindForwardMigration.sql'
   ]
+const reviewQueuePatchRetirementForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0118_dropReviewQueuePatchV4.sql']
 const selectedImportPatchDisplayFieldsForwardMigrationSql = readFileSync(
   resolve(import.meta.dir, '../../db/duckdbMigrations/0108_reviewSelectedImportPatchDisplayFields.sql'),
   'utf8',
@@ -87,7 +90,6 @@ const reviewServingPhase1Tables = [
   'mart.review_selected_import_patch_v4',
   'mart.review_llm_status_patch_v4',
   'mart.review_human_status_patch_v4',
-  'mart.review_queue_patch_v4',
   'mart.review_article_filter_posting_patch_v4',
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_filter_posting_stats_v4',
@@ -101,6 +103,7 @@ const reviewServingPhase1Tables = [
   'mart.review_filter_option_serving_v4',
   'mart.review_unassessed_queue_serving_v4',
 ] as const
+const retiredReviewServingTables = new Set<string>(['mart.review_queue_patch_v4'])
 
 const deltaEnvelopeColumns = [
   'delta_id',
@@ -122,6 +125,14 @@ const escapeRegex = (value: string) => {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+const getLastDropTableIndex = (tableName: string) => {
+  const dropMatches = [
+    ...schemaMigrationSql.matchAll(new RegExp(`DROP TABLE(?: IF EXISTS)? ${escapeRegex(tableName)};`, 'g')),
+  ]
+
+  return dropMatches.at(-1)?.index ?? -1
+}
+
 const getTableSql = (tableName: string) => {
   const matches = [
     ...schemaMigrationSql.matchAll(
@@ -130,7 +141,13 @@ const getTableSql = (tableName: string) => {
   ]
   const lastMatch = matches.at(-1)
 
-  return lastMatch?.[0] ?? ''
+  if (lastMatch === undefined) {
+    return ''
+  }
+
+  const lastDropIndex = retiredReviewServingTables.has(tableName) ? getLastDropTableIndex(tableName) : -1
+
+  return lastDropIndex > (lastMatch.index ?? -1) ? '' : lastMatch[0]
 }
 
 const getTableColumnSql = (tableName: string) => {
@@ -190,6 +207,11 @@ test('Phase 1 schema migration creates every review-serving table', () => {
   expect(missingTables).toEqual([])
 })
 
+test('review queue patch table is retired from the active review-serving schema', () => {
+  expect(getTableSql('mart.review_queue_patch_v4')).toBe('')
+  expect(reviewQueuePatchRetirementForwardMigrationSql.trim()).toBe('DROP TABLE IF EXISTS mart.review_queue_patch_v4;')
+})
+
 test('Phase 1 schema migration creates every read-contract physical table', () => {
   const contractTables = [
     ...new Set(
@@ -203,6 +225,32 @@ test('Phase 1 schema migration creates every read-contract physical table', () =
   })
 
   expect(missingTables).toEqual([])
+})
+
+const getRuntimeSourceFiles = (directoryPath: string): string[] => {
+  return readdirSync(directoryPath, {withFileTypes: true}).flatMap((entry) => {
+    const entryPath = resolve(directoryPath, entry.name)
+
+    if (entry.isDirectory()) {
+      return getRuntimeSourceFiles(entryPath)
+    }
+
+    return entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts') ? [entryPath] : []
+  })
+}
+
+test('runtime review-serving code does not reference retired queue patch storage', () => {
+  const runtimeSourceFiles = [
+    ...getRuntimeSourceFiles(resolve(import.meta.dir, '.')),
+    ...getRuntimeSourceFiles(resolve(import.meta.dir, '../workers')),
+  ]
+  const runtimeReferences = runtimeSourceFiles.flatMap((sourcePath) => {
+    const source = readFileSync(sourcePath, 'utf8')
+
+    return source.includes('mart.review_queue_patch_v4') ? [sourcePath] : []
+  })
+
+  expect(runtimeReferences).toEqual([])
 })
 
 test('Phase 1 schema migration includes the common delta envelope', () => {
