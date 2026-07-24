@@ -495,6 +495,22 @@ test('projection identity manifest skips unchanged writes', async () => {
   expect(manifestWrites[0]).toContain('INSERT INTO app.review_projection_identity_manifest')
 })
 
+test('candidate snapshot manifest avoids DuckDB primary-key ON CONFLICT writes', async () => {
+  const {database, statements} = createFakeManifestDatabase()
+
+  await createCandidateReviewServingSnapshotManifest(baseSnapshotInput, database)
+
+  const manifestWrites = statements.filter((statement) => {
+    return statement.includes('app.review_serving_snapshot_manifest')
+  })
+  const joined = manifestWrites.join('\n')
+
+  expect(joined).toContain('UPDATE app.review_serving_snapshot_manifest')
+  expect(joined).toContain('INSERT INTO app.review_serving_snapshot_manifest')
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).not.toContain('ON CONFLICT(project_id, snapshot_id)')
+})
+
 test('failed candidate snapshot preserves active and last-known-good manifests', async () => {
   const activeSnapshot: FakeSnapshotRow = {
     ...baseSnapshotInput,

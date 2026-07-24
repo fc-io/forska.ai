@@ -355,6 +355,12 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
       return statement.includes('INSERT INTO mart.review_article_serving_v4')
     }),
   ).toBe(true)
+  const snapshotManifestStatements = statements.filter((statement) => {
+    return statement.includes('app.review_serving_snapshot_manifest')
+  })
+  expect(snapshotManifestStatements.join('\n')).toContain('INSERT INTO app.review_serving_snapshot_manifest')
+  expect(snapshotManifestStatements.join('\n')).toContain('WHERE NOT EXISTS')
+  expect(snapshotManifestStatements.join('\n')).not.toContain('ON CONFLICT(project_id, snapshot_id)')
   expect(
     statements.some((statement) => {
       return statement.includes('INSERT INTO app.review_serving_dirty_work_ack')

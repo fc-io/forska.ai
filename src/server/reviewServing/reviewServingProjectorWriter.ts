@@ -423,6 +423,26 @@ const createCandidateReviewServingSnapshotManifestFromWriter = async (
   tx: ReviewServingProjectorWriterTransaction,
 ) => {
   await tx.run(`
+    UPDATE app.review_serving_snapshot_manifest
+    SET
+      snapshot_status = 'candidate',
+      review_config_hash = ${getSqlLiteral(input.reviewConfigHash ?? null)},
+      composed_identity_json = ${getReviewServingJsonLiteral(input.composedIdentity)},
+      component_state_json = ${getReviewServingJsonLiteral(input.componentState as unknown as ReviewServingIdentityValue)},
+      required_components_json = ${getReviewServingJsonLiteral(input.componentRequirements.requiredComponents)},
+      optional_components_json = ${getReviewServingJsonLiteral(input.componentRequirements.optionalComponents)},
+      source_watermarks_json = ${getReviewServingJsonLiteral(input.sourceWatermarks)},
+      validation_result_json = ${getReviewServingNullableJsonLiteral(input.validationResult)},
+      selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId ?? null)},
+      last_known_good_snapshot_id = ${getSqlLiteral(input.lastKnownGoodSnapshotId ?? null)},
+      failed_at = NULL,
+      last_error = NULL,
+      updated_at = current_timestamp
+    WHERE (project_id || '') = (${getSqlLiteral(input.projectId)} || '')
+      AND (snapshot_id || '') = (${getSqlLiteral(input.snapshotId)} || '')
+  `)
+
+  await tx.run(`
     INSERT INTO app.review_serving_snapshot_manifest (
       project_id,
       snapshot_id,
@@ -437,7 +457,8 @@ const createCandidateReviewServingSnapshotManifestFromWriter = async (
       selected_import_snapshot_id,
       last_known_good_snapshot_id,
       updated_at
-    ) VALUES (
+    )
+    SELECT
       ${getSqlLiteral(input.projectId)},
       ${getSqlLiteral(input.snapshotId)},
       'candidate',
@@ -451,21 +472,12 @@ const createCandidateReviewServingSnapshotManifestFromWriter = async (
       ${getSqlLiteral(input.selectedImportSnapshotId ?? null)},
       ${getSqlLiteral(input.lastKnownGoodSnapshotId ?? null)},
       current_timestamp
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_serving_snapshot_manifest existing
+      WHERE (existing.project_id || '') = (${getSqlLiteral(input.projectId)} || '')
+        AND (existing.snapshot_id || '') = (${getSqlLiteral(input.snapshotId)} || '')
     )
-    ON CONFLICT(project_id, snapshot_id) DO UPDATE SET
-      snapshot_status = 'candidate',
-      review_config_hash = excluded.review_config_hash,
-      composed_identity_json = excluded.composed_identity_json,
-      component_state_json = excluded.component_state_json,
-      required_components_json = excluded.required_components_json,
-      optional_components_json = excluded.optional_components_json,
-      source_watermarks_json = excluded.source_watermarks_json,
-      validation_result_json = excluded.validation_result_json,
-      selected_import_snapshot_id = excluded.selected_import_snapshot_id,
-      last_known_good_snapshot_id = excluded.last_known_good_snapshot_id,
-      failed_at = NULL,
-      last_error = NULL,
-      updated_at = excluded.updated_at
   `)
 }
 
