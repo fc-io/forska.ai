@@ -52,8 +52,14 @@ test('retention cleanup advances a bounded cursor and protects active, last-know
   expect(joined).toContain('FROM app.review_serving_snapshot_pin pin')
   expect(joined).toContain('released_at IS NULL AND ref_count > 0 AND expires_at > TIMESTAMPTZ')
   expect(joined).toContain('LIMIT 25')
+  expect(joined).toContain('UPDATE app.review_serving_retention_mark')
+  expect(joined.indexOf('UPDATE app.review_serving_retention_mark')).toBeLessThan(
+    joined.indexOf('INSERT INTO app.review_serving_retention_mark'),
+  )
   expect(joined).toContain('INSERT INTO app.review_serving_retention_mark')
-  expect(joined).toContain('updated_at = excluded.updated_at')
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain("(retention_scope || '') = ('reviewServing:project-1:review-config-1' || '')")
+  expect(joined).not.toContain('ON CONFLICT(retention_scope) DO UPDATE SET')
   expect(joined).toContain('"tableIndex":1')
 })
 
