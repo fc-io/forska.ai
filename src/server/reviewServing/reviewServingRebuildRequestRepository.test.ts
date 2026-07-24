@@ -8,6 +8,7 @@ import {
   boostActiveReviewServingRebuildRequestForProject,
   boostReviewServingRebuildRequestPriority,
   createReviewServingRebuildRequest,
+  releaseFailedRequestlessReviewServingRebuildChunks,
   terminalizeStaleZeroChunkReviewServingRebuildRequest,
   type ReviewServingRebuildRequestStatus,
 } from './reviewServingRebuildRequestRepository.ts'
@@ -45,6 +46,27 @@ type FakeProjectionManifestRow = {
   projectionComponent: string
   projectionIdentity: string
 }
+
+type FakeReleaseChunkRow = {
+  actualInputRows: number | null
+  admissionState: 'admitted' | 'blocked_over_budget' | 'pending'
+  chunkId: string
+  completedAt: string | null
+  diagnosticsJson: unknown
+  lastError: string | null
+  leaseExpiresAt: string | null
+  leaseOwner: string | null
+  projectId: string
+  projectionComponent: string
+  requestId: string | null
+  retryAfter: string | null
+  retryCount: number
+  startedAt: string | null
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'blocked_over_budget' | 'quarantined'
+  updatedAt: string
+}
+
+const safeFailedRequestlessReleaseStatuses = new Set(['pending', 'running', 'completed', 'failed'])
 
 type FakeRequestDatabaseOptions = {
   activeComponentStateJson?: unknown
@@ -264,7 +286,9 @@ const createFakeTerminalizationDatabase = (input: {chunkCount?: number; request?
     }
 
     if (statement.includes('FROM app.review_rebuild_request')) {
-      return (request === null ? [] : [request]) as T[]
+      const requestId = getSqlStrings(statement)[0] ?? ''
+
+      return (request === null || request.requestId !== requestId ? [] : [request]) as T[]
     }
 
     return [] as T[]
@@ -304,6 +328,194 @@ const createFakeTerminalizationDatabase = (input: {chunkCount?: number; request?
   } satisfies ReviewServingChunkManifestRepositoryDatabase
 
   return {database, getRequest: () => request, statements}
+}
+
+const createFakeReleaseRequestlessChunksDatabase = (input: {
+  chunks?: readonly FakeReleaseChunkRow[]
+  request?: FakeRequestRow | null
+}) => {
+  const statements: string[] = []
+  const chunks = new Map<string, FakeReleaseChunkRow>()
+  let request =
+    input.request === undefined
+      ? createFakeTerminalizationRequest({
+          failedAt: '2026-06-23T15:00:00.000Z',
+          requestId: 'requestless-bootstrap:release-safe',
+          status: 'failed',
+        })
+      : input.request
+
+  for (const chunk of input.chunks ?? []) {
+    chunks.set(chunk.chunkId, chunk)
+  }
+
+  const getRequestChunks = () => {
+    const requestId = getSqlStrings(statements.at(-1) ?? '')[0] ?? request?.requestId ?? ''
+
+    return [...chunks.values()].filter((chunk) => {
+      return chunk.requestId === requestId
+    })
+  }
+
+  const queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('RETURNING')) {
+      const strings = getSqlStrings(statement)
+      const requestId =
+        strings.find((value) => {
+          return value.startsWith('requestless-bootstrap:') || value.startsWith('requestless-summary:')
+        }) ?? ''
+      const projectId =
+        strings.find((value) => {
+          return value.startsWith('project-')
+        }) ?? ''
+      const canReleaseRequest =
+        request !== null
+        && request.requestId === requestId
+        && request.projectId === projectId
+        && request.status === 'failed'
+        && request.admissionState === 'admitted'
+        && request.leaseOwner === null
+        && request.leaseExpiresAt === null
+        && (request.requestId.startsWith('requestless-bootstrap:')
+          || request.requestId.startsWith('requestless-summary:'))
+      const released = canReleaseRequest
+        ? [...chunks.values()].filter((chunk) => {
+            return (
+              chunk.requestId === requestId
+              && chunk.projectId === projectId
+              && chunk.leaseOwner === null
+              && chunk.leaseExpiresAt === null
+            )
+          })
+        : []
+
+      for (const chunk of released) {
+        chunks.set(chunk.chunkId, {
+          ...chunk,
+          actualInputRows: null,
+          admissionState: 'admitted',
+          completedAt: null,
+          diagnosticsJson: null,
+          lastError: null,
+          leaseExpiresAt: null,
+          leaseOwner: null,
+          requestId: null,
+          retryAfter: null,
+          retryCount: 0,
+          startedAt: null,
+          status: 'pending',
+          updatedAt: '2026-06-23T16:00:00.000Z',
+        })
+      }
+
+      return released.map((chunk) => {
+        return {chunkId: chunk.chunkId}
+      }) as T[]
+    }
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest') && statement.includes('GROUP BY')) {
+      const grouped = new Map<
+        string,
+        {admissionState: string; chunkCount: number; projectionComponent: string; status: string}
+      >()
+
+      for (const chunk of getRequestChunks()) {
+        const key = `${chunk.status}\0${chunk.projectionComponent}\0${chunk.admissionState}`
+        const existing = grouped.get(key)
+
+        grouped.set(key, {
+          admissionState: chunk.admissionState,
+          chunkCount: (existing?.chunkCount ?? 0) + 1,
+          projectionComponent: chunk.projectionComponent,
+          status: chunk.status,
+        })
+      }
+
+      return [...grouped.values()] as T[]
+    }
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest') && statement.includes('LIMIT 20')) {
+      return getRequestChunks()
+        .toSorted((left, right) => {
+          return left.updatedAt.localeCompare(right.updatedAt) || left.chunkId.localeCompare(right.chunkId)
+        })
+        .slice(0, 20)
+        .map((chunk) => {
+          return {chunkId: chunk.chunkId}
+        }) as T[]
+    }
+
+    if (
+      statement.includes('FROM app.review_rebuild_chunk_manifest')
+      && statement.includes('affectedCount')
+      && statement.includes('liveLeaseCount')
+    ) {
+      const projectId = getSqlStrings(statement)[0] ?? ''
+      const requestId = getSqlStrings(statement).at(-1) ?? ''
+      const requestChunks = [...chunks.values()].filter((chunk) => {
+        return chunk.requestId === requestId
+      })
+
+      return [
+        {
+          affectedCount: requestChunks.length,
+          liveLeaseCount: requestChunks.filter((chunk) => {
+            return chunk.leaseOwner !== null || chunk.leaseExpiresAt !== null
+          }).length,
+          otherProjectCount: requestChunks.filter((chunk) => {
+            return chunk.projectId !== projectId
+          }).length,
+          unsafeStatusCount: requestChunks.filter((chunk) => {
+            return !safeFailedRequestlessReleaseStatuses.has(chunk.status)
+          }).length,
+        },
+      ] as T[]
+    }
+
+    if (statement.includes('FROM app.review_rebuild_request')) {
+      return (request === null ? [] : [request]) as T[]
+    }
+
+    return [] as T[]
+  }
+
+  const run = async (statement: string) => {
+    statements.push(statement)
+  }
+
+  const database = {
+    queryJson,
+    run,
+    transaction: async <T>(operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>) => {
+      return operation({queryJson, run})
+    },
+  } satisfies ReviewServingChunkManifestRepositoryDatabase
+
+  return {chunks, database, getRequest: () => request, statements}
+}
+
+const createFakeReleaseChunk = (overrides: Partial<FakeReleaseChunkRow> = {}): FakeReleaseChunkRow => {
+  return {
+    actualInputRows: 10,
+    admissionState: 'admitted',
+    chunkId: 'chunk:release-1',
+    completedAt: null,
+    diagnosticsJson: {old: true},
+    lastError: 'old failed request',
+    leaseExpiresAt: null,
+    leaseOwner: null,
+    projectId: 'project-v4',
+    projectionComponent: 'summary',
+    requestId: 'requestless-bootstrap:release-safe',
+    retryAfter: '2026-06-23T17:00:00.000Z',
+    retryCount: 2,
+    startedAt: '2026-06-23T15:00:00.000Z',
+    status: 'failed',
+    updatedAt: '2026-06-23T15:00:00.000Z',
+    ...overrides,
+  }
 }
 
 test('V4 rebuild requests admit budgeted component chunks above the chunk manifest table', async () => {
@@ -621,6 +833,190 @@ for (const refusalCase of terminalizationRefusalCases) {
     expect(result.refusalReasons).toContain(refusalCase.expectedReason)
     expect(getRequest()?.status).not.toBe('failed')
     expect(statements.join('\n')).not.toContain('UPDATE app.review_rebuild_request')
+  })
+}
+
+test('failed requestless rebuild chunk release is dry-run by default with operator evidence', async () => {
+  const chunkA = createFakeReleaseChunk({chunkId: 'chunk:release-a', status: 'failed'})
+  const chunkB = createFakeReleaseChunk({
+    chunkId: 'chunk:release-b',
+    projectionComponent: 'posting',
+    status: 'completed',
+    updatedAt: '2026-06-23T15:01:00.000Z',
+  })
+  const {chunks, database, getRequest, statements} = createFakeReleaseRequestlessChunksDatabase({
+    chunks: [chunkA, chunkB],
+  })
+
+  const result = await releaseFailedRequestlessReviewServingRebuildChunks(
+    {projectId: 'project-v4', requestId: 'requestless-bootstrap:release-safe'},
+    database,
+  )
+
+  expect(result).toMatchObject({
+    affectedCount: 2,
+    applied: false,
+    refusalReasons: [],
+    sampleChunkIds: ['chunk:release-a', 'chunk:release-b'],
+    status: 'dry_run',
+  })
+  expect(result.currentRequest).toMatchObject({
+    admissionState: 'admitted',
+    projectId: 'project-v4',
+    requestId: 'requestless-bootstrap:release-safe',
+    status: 'failed',
+  })
+  expect(result.chunkCounts).toEqual([
+    {admissionState: 'admitted', chunkCount: 1, projectionComponent: 'summary', status: 'failed'},
+    {admissionState: 'admitted', chunkCount: 1, projectionComponent: 'posting', status: 'completed'},
+  ])
+  expect(chunks.get('chunk:release-a')).toMatchObject({
+    requestId: 'requestless-bootstrap:release-safe',
+    status: 'failed',
+  })
+  expect(getRequest()?.status).toBe('failed')
+  expect(statements.join('\n')).not.toContain('UPDATE app.review_rebuild_chunk_manifest')
+})
+
+test('failed requestless rebuild chunk release apply clears only chunk ownership and execution metadata', async () => {
+  const {chunks, database, getRequest, statements} = createFakeReleaseRequestlessChunksDatabase({
+    chunks: [createFakeReleaseChunk()],
+  })
+
+  const result = await releaseFailedRequestlessReviewServingRebuildChunks(
+    {apply: true, projectId: 'project-v4', requestId: 'requestless-bootstrap:release-safe'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result.status).toBe('released')
+  expect(result.applied).toBe(true)
+  expect(result.affectedCount).toBe(1)
+  expect(chunks.get('chunk:release-1')).toMatchObject({
+    actualInputRows: null,
+    admissionState: 'admitted',
+    completedAt: null,
+    diagnosticsJson: null,
+    lastError: null,
+    leaseExpiresAt: null,
+    leaseOwner: null,
+    requestId: null,
+    retryAfter: null,
+    retryCount: 0,
+    startedAt: null,
+    status: 'pending',
+  })
+  expect(getRequest()).toMatchObject({requestId: 'requestless-bootstrap:release-safe', status: 'failed'})
+  expect(joined).toContain('UPDATE app.review_rebuild_chunk_manifest')
+  expect(joined).toContain('request_id = NULL')
+  expect(joined).toContain("status = 'pending'")
+  expect(joined).toContain("request.status = 'failed'")
+  expect(joined).toContain("request.admission_state = 'admitted'")
+  expect(joined).toContain("request.request_id LIKE 'requestless-bootstrap:%'")
+  expect(joined).toContain("request.request_id LIKE 'requestless-summary:%'")
+  expect(joined).toContain('lease_owner IS NULL')
+  expect(joined).toContain('lease_expires_at IS NULL')
+  expect(joined).toContain('RETURNING chunk_id AS chunkId')
+  expect(joined).not.toContain('DELETE FROM app.review_rebuild_chunk_manifest')
+  expect(joined).not.toContain('UPDATE app.review_rebuild_request')
+})
+
+const failedRequestlessReleaseRefusalCases: Array<{
+  chunk?: FakeReleaseChunkRow
+  expectedReason: string
+  inputRequestId?: string
+  inputProjectId?: string
+  request: FakeRequestRow | null
+}> = [
+  {expectedReason: 'request_not_found', request: null},
+  {
+    expectedReason: 'wrong_project',
+    inputProjectId: 'project-other',
+    request: createFakeTerminalizationRequest({
+      failedAt: '2026-06-23T15:00:00.000Z',
+      requestId: 'requestless-bootstrap:release-safe',
+      status: 'failed',
+    }),
+  },
+  {
+    chunk: createFakeReleaseChunk({requestId: 'rebuild:zero-chunk'}),
+    expectedReason: 'non_requestless_request_id',
+    inputRequestId: 'rebuild:zero-chunk',
+    request: createFakeTerminalizationRequest({failedAt: '2026-06-23T15:00:00.000Z', status: 'failed'}),
+  },
+  {
+    expectedReason: 'non_failed_request_status',
+    request: createFakeTerminalizationRequest({requestId: 'requestless-bootstrap:release-safe', status: 'admitted'}),
+  },
+  {
+    expectedReason: 'non_admitted_admission_state',
+    request: createFakeTerminalizationRequest({
+      admissionState: 'pending',
+      failedAt: '2026-06-23T15:00:00.000Z',
+      requestId: 'requestless-bootstrap:release-safe',
+      status: 'failed',
+    }),
+  },
+  {
+    expectedReason: 'request_has_lease',
+    request: createFakeTerminalizationRequest({
+      failedAt: '2026-06-23T15:00:00.000Z',
+      leaseOwner: 'worker-1',
+      requestId: 'requestless-bootstrap:release-safe',
+      status: 'failed',
+    }),
+  },
+  {
+    chunk: createFakeReleaseChunk({leaseOwner: 'worker-1'}),
+    expectedReason: 'chunk_has_lease',
+    request: createFakeTerminalizationRequest({
+      failedAt: '2026-06-23T15:00:00.000Z',
+      requestId: 'requestless-bootstrap:release-safe',
+      status: 'failed',
+    }),
+  },
+  {
+    chunk: createFakeReleaseChunk({projectId: 'project-other'}),
+    expectedReason: 'chunk_project_mismatch',
+    request: createFakeTerminalizationRequest({
+      failedAt: '2026-06-23T15:00:00.000Z',
+      requestId: 'requestless-bootstrap:release-safe',
+      status: 'failed',
+    }),
+  },
+  {
+    chunk: createFakeReleaseChunk({status: 'blocked_over_budget'}),
+    expectedReason: 'unsafe_chunk_status',
+    request: createFakeTerminalizationRequest({
+      failedAt: '2026-06-23T15:00:00.000Z',
+      requestId: 'requestless-bootstrap:release-safe',
+      status: 'failed',
+    }),
+  },
+]
+
+for (const refusalCase of failedRequestlessReleaseRefusalCases) {
+  test(`failed requestless rebuild chunk release refuses ${refusalCase.expectedReason}`, async () => {
+    const {chunks, database, statements} = createFakeReleaseRequestlessChunksDatabase({
+      chunks: refusalCase.request === null ? [] : [refusalCase.chunk ?? createFakeReleaseChunk()],
+      request: refusalCase.request,
+    })
+
+    const result = await releaseFailedRequestlessReviewServingRebuildChunks(
+      {
+        apply: true,
+        projectId: refusalCase.inputProjectId ?? 'project-v4',
+        requestId: refusalCase.inputRequestId ?? 'requestless-bootstrap:release-safe',
+      },
+      database,
+    )
+
+    expect(result.applied).toBe(false)
+    expect(result.refusalReasons).toContain(refusalCase.expectedReason)
+    expect(chunks.get(refusalCase.chunk?.chunkId ?? 'chunk:release-1')?.requestId).toBe(
+      refusalCase.request === null ? undefined : (refusalCase.inputRequestId ?? 'requestless-bootstrap:release-safe'),
+    )
+    expect(statements.join('\n')).not.toContain('UPDATE app.review_rebuild_chunk_manifest')
   })
 }
 

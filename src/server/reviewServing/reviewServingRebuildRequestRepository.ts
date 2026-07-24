@@ -10,6 +10,7 @@ import {
   releaseInactiveRequestRebuildChunkManifestsForUpsert,
   type ReviewServingChunkManifestRepositoryDatabase,
   type ReviewServingChunkManifestRepositoryTransaction,
+  type ReviewServingRebuildChunkStatus,
   type ReviewServingRebuildChunkBudgetFields,
   type ReviewServingRebuildChunkManifestInput,
   upsertReviewServingRebuildChunkManifests,
@@ -159,6 +160,29 @@ export type TerminalizeStaleZeroChunkReviewServingRebuildRequestResult = {
   minimumAgeMinutes: number
   refusalReasons: string[]
   status: 'not_found' | 'refused' | 'dry_run' | 'terminalized'
+}
+
+export type ReleaseFailedRequestlessReviewServingRebuildChunksInput = {
+  apply?: boolean
+  projectId: string
+  requestId: string
+}
+
+export type ReleaseFailedRequestlessReviewServingRebuildChunkCount = {
+  admissionState: string
+  chunkCount: number
+  projectionComponent: string
+  status: string
+}
+
+export type ReleaseFailedRequestlessReviewServingRebuildChunksResult = {
+  affectedCount: number
+  applied: boolean
+  chunkCounts: ReleaseFailedRequestlessReviewServingRebuildChunkCount[]
+  currentRequest: ReviewServingRebuildRequest | null
+  refusalReasons: string[]
+  sampleChunkIds: string[]
+  status: 'not_found' | 'refused' | 'dry_run' | 'released'
 }
 
 const requestBudgetPairs = [
@@ -345,6 +369,14 @@ const defaultRebuildPresplitInputRowLimits = {
 const defaultTerminalizeMinimumAgeMinutes = 60
 const staleZeroChunkTerminalizationLastError =
   'Operator terminalized stale malformed V4 review rebuild request: admitted/running request has no rebuild chunks; no cleanup authorized.'
+const requestlessRebuildRequestPrefixes = ['requestless-bootstrap:', 'requestless-summary:'] as const
+const requestlessRebuildChunkReleaseStatuses = [
+  'pending',
+  'completed',
+  'running',
+  'failed',
+] as const satisfies readonly ReviewServingRebuildChunkStatus[]
+const requestlessRebuildChunkReleaseStatusSql = `(${requestlessRebuildChunkReleaseStatuses.map(getSqlLiteral).join(', ')})`
 
 const getMinimumAgeMinutes = (value: number | undefined) => {
   return Number.isFinite(value) && value !== undefined && value >= 0
@@ -925,6 +957,252 @@ export const getReviewServingRebuildRequest = async (
   `)
 
   return row === undefined ? null : getRequestFromRow(row)
+}
+
+const getFailedRequestlessRebuildChunkCounts = async (
+  input: {requestId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const rows = await database.queryJson<{
+    admissionState: string
+    chunkCount: number | string
+    projectionComponent: string
+    status: string
+  }>(`
+    SELECT
+      status,
+      projection_component AS projectionComponent,
+      admission_state AS admissionState,
+      CAST(COUNT(*) AS INTEGER) AS chunkCount
+    FROM app.review_rebuild_chunk_manifest
+    WHERE request_id = ${getSqlLiteral(input.requestId)}
+    GROUP BY status, projection_component, admission_state
+    ORDER BY status, projection_component, admission_state
+  `)
+
+  return rows.map((row) => {
+    return {
+      admissionState: row.admissionState,
+      chunkCount: Number(row.chunkCount),
+      projectionComponent: row.projectionComponent,
+      status: row.status,
+    }
+  })
+}
+
+const getFailedRequestlessRebuildChunkSampleIds = async (
+  input: {requestId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const rows = await database.queryJson<{chunkId: string}>(`
+    SELECT chunk_id AS chunkId
+    FROM app.review_rebuild_chunk_manifest
+    WHERE request_id = ${getSqlLiteral(input.requestId)}
+    ORDER BY updated_at ASC, chunk_id ASC
+    LIMIT 20
+  `)
+
+  return rows.map((row) => {
+    return row.chunkId
+  })
+}
+
+const getFailedRequestlessRebuildChunkGuardCounts = async (
+  input: {projectId: string; requestId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const [row] = await database.queryJson<{
+    affectedCount: number | string
+    liveLeaseCount: number | string
+    otherProjectCount: number | string
+    unsafeStatusCount: number | string
+  }>(`
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS affectedCount,
+      CAST(COUNT(*) FILTER (WHERE project_id IS DISTINCT FROM ${getSqlLiteral(input.projectId)}) AS INTEGER) AS otherProjectCount,
+      CAST(COUNT(*) FILTER (WHERE status NOT IN ${requestlessRebuildChunkReleaseStatusSql}) AS INTEGER) AS unsafeStatusCount,
+      CAST(COUNT(*) FILTER (WHERE lease_owner IS NOT NULL OR lease_expires_at IS NOT NULL) AS INTEGER) AS liveLeaseCount
+    FROM app.review_rebuild_chunk_manifest
+    WHERE request_id = ${getSqlLiteral(input.requestId)}
+  `)
+
+  return {
+    affectedCount: Number(row?.affectedCount ?? 0),
+    liveLeaseCount: Number(row?.liveLeaseCount ?? 0),
+    otherProjectCount: Number(row?.otherProjectCount ?? 0),
+    unsafeStatusCount: Number(row?.unsafeStatusCount ?? 0),
+  }
+}
+
+const getFailedRequestlessRebuildChunkReleaseRefusalReasons = (input: {
+  guardCounts: Awaited<ReturnType<typeof getFailedRequestlessRebuildChunkGuardCounts>>
+  projectId: string
+  request: ReviewServingRebuildRequest
+}) => {
+  const reasons: string[] = []
+
+  if (input.request.projectId !== input.projectId) {
+    reasons.push('wrong_project')
+  }
+
+  if (!requestlessRebuildRequestPrefixes.some((prefix) => input.request.requestId.startsWith(prefix))) {
+    reasons.push('non_requestless_request_id')
+  }
+
+  if (input.request.status !== 'failed') {
+    reasons.push('non_failed_request_status')
+  }
+
+  if (input.request.admissionState !== 'admitted') {
+    reasons.push('non_admitted_admission_state')
+  }
+
+  if (input.request.leaseOwner !== null || input.request.leaseExpiresAt !== null) {
+    reasons.push('request_has_lease')
+  }
+
+  if (input.guardCounts.affectedCount === 0) {
+    reasons.push('request_has_no_chunks')
+  }
+
+  if (input.guardCounts.otherProjectCount > 0) {
+    reasons.push('chunk_project_mismatch')
+  }
+
+  if (input.guardCounts.liveLeaseCount > 0) {
+    reasons.push('chunk_has_lease')
+  }
+
+  if (input.guardCounts.unsafeStatusCount > 0) {
+    reasons.push('unsafe_chunk_status')
+  }
+
+  return reasons
+}
+
+const releaseFailedRequestlessRebuildChunks = async (
+  input: {projectId: string; requestId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const rows = await database.queryJson<{chunkId: string}>(`
+    UPDATE app.review_rebuild_chunk_manifest
+    SET status = 'pending',
+        request_id = NULL,
+        admission_state = 'admitted',
+        retry_after = NULL,
+        retry_count = 0,
+        actual_input_rows = NULL,
+        actual_output_bytes = NULL,
+        actual_output_rows = NULL,
+        actual_payload_bytes = NULL,
+        actual_prompt_count = NULL,
+        actual_temp_bytes = NULL,
+        duration_ms = NULL,
+        oom_category = NULL,
+        over_budget_reason = NULL,
+        budget_json = NULL,
+        diagnostics_json = NULL,
+        checksum = NULL,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        last_error = NULL,
+        started_at = NULL,
+        completed_at = NULL,
+        updated_at = current_timestamp
+    WHERE request_id = ${getSqlLiteral(input.requestId)}
+      AND project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
+      AND status IN ${requestlessRebuildChunkReleaseStatusSql}
+      AND lease_owner IS NULL
+      AND lease_expires_at IS NULL
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_request request
+        WHERE (request.request_id || '') = app.review_rebuild_chunk_manifest.request_id
+          AND request.project_id = ${getSqlLiteral(input.projectId)}
+          AND request.status = 'failed'
+          AND request.admission_state = 'admitted'
+          AND request.lease_owner IS NULL
+          AND request.lease_expires_at IS NULL
+          AND (
+            request.request_id LIKE 'requestless-bootstrap:%'
+            OR request.request_id LIKE 'requestless-summary:%'
+          )
+      )
+    RETURNING chunk_id AS chunkId
+  `)
+
+  return rows.length
+}
+
+export const releaseFailedRequestlessReviewServingRebuildChunks = async (
+  input: ReleaseFailedRequestlessReviewServingRebuildChunksInput,
+  database: ReviewServingChunkManifestRepositoryDatabase = getReviewServingRebuildRequestDatabase(),
+): Promise<ReleaseFailedRequestlessReviewServingRebuildChunksResult> => {
+  return database.transaction(async (tx) => {
+    const request = await getReviewServingRebuildRequest({requestId: input.requestId}, tx)
+
+    if (request === null) {
+      return {
+        affectedCount: 0,
+        applied: false,
+        chunkCounts: [],
+        currentRequest: null,
+        refusalReasons: ['request_not_found'],
+        sampleChunkIds: [],
+        status: 'not_found',
+      }
+    }
+
+    const [chunkCounts, sampleChunkIds, guardCounts] = await Promise.all([
+      getFailedRequestlessRebuildChunkCounts({requestId: input.requestId}, tx),
+      getFailedRequestlessRebuildChunkSampleIds({requestId: input.requestId}, tx),
+      getFailedRequestlessRebuildChunkGuardCounts({projectId: input.projectId, requestId: input.requestId}, tx),
+    ])
+    const refusalReasons = getFailedRequestlessRebuildChunkReleaseRefusalReasons({
+      guardCounts,
+      projectId: input.projectId,
+      request,
+    })
+
+    if (refusalReasons.length > 0) {
+      return {
+        affectedCount: guardCounts.affectedCount,
+        applied: false,
+        chunkCounts,
+        currentRequest: request,
+        refusalReasons,
+        sampleChunkIds,
+        status: 'refused',
+      }
+    }
+
+    if (input.apply !== true) {
+      return {
+        affectedCount: guardCounts.affectedCount,
+        applied: false,
+        chunkCounts,
+        currentRequest: request,
+        refusalReasons: [],
+        sampleChunkIds,
+        status: 'dry_run',
+      }
+    }
+
+    const affectedCount = await releaseFailedRequestlessRebuildChunks(
+      {projectId: input.projectId, requestId: input.requestId},
+      tx,
+    )
+
+    return {
+      affectedCount,
+      applied: true,
+      chunkCounts,
+      currentRequest: request,
+      refusalReasons: [],
+      sampleChunkIds,
+      status: 'released',
+    }
+  })
 }
 
 export const getActiveReviewServingRebuildRequestForProject = async (

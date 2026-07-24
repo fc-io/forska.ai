@@ -126,6 +126,27 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     ],
     path: 'scripts/requestReviewServingAllProjectsRebuild.ts',
   },
+  'db:duck:release-failed-requestless-review-serving-rebuild-chunks': {
+    commandIncludes: [
+      'FORSKA_RUNTIME_PROFILE=primary',
+      'DUCKDB_PATH="$HOME/Library/Application Support/Forska/runtime/primary/forska.duckdb"',
+      'SERVER_ROLE=maintenance-worker',
+      'SERVER_DUCKDB_OWNER_URL=',
+    ],
+    description: 'V4 failed requestless rebuild chunk release',
+    mustContain: [
+      'withDuckdbMaintenanceAccess',
+      "getMaintenanceDuckdbWorkloadContext('releaseFailedRequestlessReviewServingRebuildChunks')",
+      'releaseFailedRequestlessReviewServingRebuildChunks',
+      'requiredApplyAcknowledgement',
+      '--apply',
+      '--project-id',
+      '--request-id',
+      'release-failed-requestless-review-rebuild-chunks-preserve-request-row',
+      "mode: 'failed_requestless_chunk_release'",
+    ],
+    path: 'scripts/releaseFailedRequestlessReviewServingRebuildChunks.ts',
+  },
   'db:duck:terminalize-review-serving-rebuild-request': {
     commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
     description: 'V4 rebuild request terminalization',
@@ -243,6 +264,20 @@ test('review-serving rebuild request terminalization CLI is opt-in and dry-run f
   expect(source).toContain('acknowledgementRequiredForApply')
   expect(source).toContain("mode: 'zero_chunks'")
   expect(source).toContain('minimumAgeMinutes')
+  expect(source).toContain('Missing required --project-id=<project-id>')
+  expect(source).toContain('Missing required --request-id=<request-id>')
+})
+
+test('failed requestless review-serving rebuild chunk release CLI is opt-in and dry-run first', () => {
+  const source = readSource('scripts/releaseFailedRequestlessReviewServingRebuildChunks.ts')
+
+  expect(source).toContain("apply: hasFlag('--apply')")
+  expect(source).toContain('if (options.apply && options.acknowledgement !== requiredApplyAcknowledgement)')
+  expect(source).toContain('Refusing --apply without --ack=')
+  expect(source).toContain('acknowledgementRequiredForApply')
+  expect(source).toContain("mode: 'failed_requestless_chunk_release'")
+  expect(source).toContain('Missing required --project-id=<project-id> for --apply')
+  expect(source).toContain('Missing required --request-id=<request-id> for --apply')
   expect(source).toContain('Missing required --project-id=<project-id>')
   expect(source).toContain('Missing required --request-id=<request-id>')
 })
