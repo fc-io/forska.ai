@@ -623,6 +623,111 @@ const getApplyHumanStatusServingStatement = (input: {
       )`
 }
 
+const getApplyHumanStatusServingReplacementStatements = (input: {
+  baseGeneration: number
+  currentSummaryReviewConfigHash: string | null
+  currentReviewConfigHash: string | null
+  patchWatermark: number
+  projectId: string
+  projectionIdentity: string
+  recordRows: readonly {
+    articleId: string
+    humanStatusKey: string | null
+    listModeKey: string
+    promptConfigHash: string
+    promptId: string | null
+    reviewConfigHash: string | null
+    tombstone: boolean
+  }[]
+}) => {
+  const values = input.recordRows
+    .map((row) => {
+      return `(${getSqlLiteral(row.listModeKey)}, ${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.reviewConfigHash)}, ${getSqlLiteral(row.promptConfigHash)}, ${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.humanStatusKey)}, ${getSqlLiteral(row.tombstone)})`
+    })
+    .join(', ')
+
+  return values.length === 0
+    ? []
+    : [
+        `CREATE OR REPLACE TEMP TABLE review_human_status_serving_rebuild_v4 AS
+         WITH changed(list_mode_key, article_id, review_config_hash, prompt_config_hash, prompt_id, human_status_key, tombstone) AS (
+          SELECT * FROM (VALUES ${values})
+        ), candidate_prompt AS (
+          SELECT
+            changed.list_mode_key,
+            changed.article_id,
+            changed.review_config_hash,
+            changed.prompt_config_hash,
+            changed.prompt_id,
+            changed.human_status_key,
+            changed.tombstone,
+            ${getSqlLiteral(input.patchWatermark)} AS patch_watermark
+          FROM changed
+          GROUP BY changed.list_mode_key, changed.article_id, changed.review_config_hash, changed.prompt_config_hash, changed.prompt_id, changed.human_status_key, changed.tombstone
+        ), latest_prompt AS (
+          SELECT candidate.*
+          FROM candidate_prompt candidate
+          WHERE candidate.patch_watermark = (
+            SELECT MAX(newer.patch_watermark)
+            FROM candidate_prompt newer
+            WHERE newer.list_mode_key = candidate.list_mode_key
+              AND newer.article_id = candidate.article_id
+              AND newer.review_config_hash IS NOT DISTINCT FROM candidate.review_config_hash
+              AND newer.prompt_id IS NOT DISTINCT FROM candidate.prompt_id
+          )
+        ), article_status AS (
+          SELECT
+            list_mode_key,
+            article_id,
+            review_config_hash,
+            COUNT(*) FILTER (WHERE NOT tombstone AND prompt_id IS NOT NULL AND prompt_id <> 'summary' AND human_status_key = 'answered') AS human_answered_prompt_count,
+            COUNT(*) FILTER (WHERE NOT tombstone AND prompt_id = 'summary' AND human_status_key = 'answered') AS human_answered_summary_count
+          FROM latest_prompt
+          GROUP BY list_mode_key, article_id, review_config_hash
+        )
+        SELECT serving.* REPLACE (
+          CAST(article_status.human_answered_prompt_count AS INTEGER) AS human_answered_prompt_count,
+          CASE
+            WHEN serving.review_config_hash = ${getSqlLiteral(input.currentSummaryReviewConfigHash)} AND article_status.human_answered_summary_count > 0 THEN 'answered'
+            WHEN serving.review_config_hash = ${getSqlLiteral(input.currentSummaryReviewConfigHash)} THEN 'unanswered'
+            WHEN serving.enabled_prompt_count = 0 THEN NULL
+            WHEN serving.review_config_hash IS DISTINCT FROM ${getSqlLiteral(input.currentSummaryReviewConfigHash)} AND serving.enabled_prompt_count = article_status.human_answered_prompt_count THEN 'answered'
+            ELSE 'unanswered'
+          END AS human_status_key,
+          GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}) AS patch_watermark,
+          current_timestamp AS serving_updated_at
+        )
+        FROM mart.review_article_serving_v4 serving
+        INNER JOIN article_status
+          ON serving.review_config_hash IS NOT DISTINCT FROM article_status.review_config_hash
+          AND serving.list_mode_key = article_status.list_mode_key
+          AND serving.article_id = article_status.article_id
+        WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+          AND serving.human_status_identity = ${getSqlLiteral(input.projectionIdentity)}
+          AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+          AND EXISTS (
+            SELECT 1
+            FROM app.review_serving_snapshot_manifest snapshot
+            WHERE snapshot.project_id = serving.project_id
+              AND snapshot.snapshot_id = serving.snapshot_id
+              AND snapshot.snapshot_status IN ('candidate', 'active')
+          )`,
+        `DELETE FROM mart.review_article_serving_v4 serving
+         WHERE EXISTS (
+           SELECT 1
+           FROM review_human_status_serving_rebuild_v4 replacement
+           WHERE replacement.project_id = serving.project_id
+             AND replacement.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+             AND replacement.snapshot_id = serving.snapshot_id
+             AND replacement.list_mode_key = serving.list_mode_key
+             AND replacement.article_id = serving.article_id
+         )`,
+        `INSERT INTO mart.review_article_serving_v4 BY NAME
+         SELECT *
+         FROM review_human_status_serving_rebuild_v4`,
+      ]
+}
+
 const getHumanStatusPatchManifest = (
   input: ProjectReviewServingHumanStatusInput,
 ): ReviewServingProjectionIdentityManifestInput => {
@@ -691,6 +796,31 @@ export const projectReviewServingHumanStatusPatches = async (
   })
   const writer = await measure('writerMs', async () => {
     const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
+    const servingStatements =
+      input.claims.length === 0
+        ? getApplyHumanStatusServingReplacementStatements({
+            baseGeneration: input.baseGeneration,
+            currentSummaryReviewConfigHash,
+            currentReviewConfigHash,
+            patchWatermark,
+            projectId: input.projectId,
+            projectionIdentity: input.projectionIdentity,
+            recordRows,
+          })
+        : [
+            getApplyHumanStatusServingStatement({
+              baseGeneration: input.baseGeneration,
+              currentSummaryReviewConfigHash,
+              currentReviewConfigHash,
+              includeExistingPatchRows: false,
+              patchWatermark,
+              projectId: input.projectId,
+              projectionIdentity: input.projectionIdentity,
+              recordRows,
+            }),
+          ].flatMap((statement) => {
+            return statement === null ? [] : [statement]
+          })
 
     return writeReviewServingProjectorComponent(
       {
@@ -698,20 +828,7 @@ export const projectReviewServingHumanStatusPatches = async (
         component: 'humanStatus',
         projectionManifests: shouldAcknowledgeClaims ? [getHumanStatusPatchManifest(input)] : [],
         records: [],
-        statements: [
-          getApplyHumanStatusServingStatement({
-            baseGeneration: input.baseGeneration,
-            currentSummaryReviewConfigHash,
-            currentReviewConfigHash,
-            includeExistingPatchRows: false,
-            patchWatermark,
-            projectId: input.projectId,
-            projectionIdentity: input.projectionIdentity,
-            recordRows,
-          }),
-        ].flatMap((statement) => {
-          return statement === null ? [] : [statement]
-        }),
+        statements: servingStatements,
         watermark: !shouldAcknowledgeClaims
           ? undefined
           : {
