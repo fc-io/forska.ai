@@ -225,7 +225,10 @@ const getReviewServingRebuildChunkRetryMaxAttemptsSql = (requestIdExpression: st
   return `COALESCE((
     SELECT GREATEST(
       1,
-      MAX(TRY_CAST(json_extract_string(policy.retry_policy_json, '$.maxAttempts') AS INTEGER))
+      COALESCE(
+        MAX(TRY_CAST(json_extract_string(policy.retry_policy_json, '$.maxAttempts') AS INTEGER)),
+        ${getSqlLiteral(defaultReviewServingRebuildChunkRetryPolicy.maxAttempts)}
+      )
     )
     FROM app.review_rebuild_request policy
     WHERE (policy.request_id || '') = ${requestIdExpression}

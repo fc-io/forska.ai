@@ -4026,11 +4026,21 @@ test('worker repairs requestless bootstrap chunk links without mutating request 
   await runReviewServingProjectorWorkerOnce({rebuildProjectId: 'project-1', workerId: 'worker-1'}, harness.dependencies)
 
   const joined = harness.runStatements.join('\n')
+  const requestlessBootstrapQuarantineStatement = harness.runStatements.find((statement) => {
+    return (
+      statement.includes("last_error = 'superseded requestless bootstrap snapshot'")
+      && statement.includes('UPDATE app.review_rebuild_chunk_manifest AS chunk')
+    )
+  })
 
   expect(joined).toContain(`request.request_id LIKE 'requestless-bootstrap:%'`)
   expect(joined).toContain('UPDATE app.review_rebuild_chunk_manifest AS chunk')
   expect(joined).toContain('chunk.request_id IS NULL')
   expect(joined).toContain("chunk.status NOT IN ('blocked_over_budget', 'quarantined')")
+  expect(requestlessBootstrapQuarantineStatement).toContain("status = 'quarantined'")
+  expect(requestlessBootstrapQuarantineStatement).toContain("chunk.status IN ('pending', 'running', 'failed')")
+  expect(requestlessBootstrapQuarantineStatement).not.toContain('UPDATE app.review_rebuild_request AS request')
+  expect(joined).toContain("request.reason <> 'requestless_bootstrap_rebuild'")
   expect(joined).not.toContain('repairedRequestlessBootstrapAdoption')
   expect(joined).not.toContain('request_components AS')
   expect(joined).not.toContain('requested_components_json = request_components.requested_components_json')
@@ -5328,15 +5338,18 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   )
   expect(joined).toContain('llm_status_identity')
   expect(joined).toContain('human_status_identity')
-  expect(joined).toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
   expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)',
   )
   expect(filterOptionDeletes).toHaveLength(0)
   expect(joined).toContain('"summaryProjectorSnapshots"')
-  expect(joined).toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4')
+  expect(joined).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO UPDATE SET',
+  )
   expect(joined).toContain('"judgmentPayloadProjectorSnapshots"')
   expect(joined).toContain("article_id >= 'article-001'")
   expect(joined).toContain("article_id <= 'article-099'")
@@ -5823,6 +5836,14 @@ test('worker adopts requestless summary chunks into request finalization before 
       return [{pendingChunkCount: 1}] as T[]
     }
 
+    if (
+      statement.includes('SELECT chunk.request_id AS requestId')
+      && statement.includes('FROM app.review_rebuild_chunk_manifest chunk')
+      && statement.includes('chunk.request_id IS NOT NULL')
+    ) {
+      return [] as T[]
+    }
+
     if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
       return [adopted ? adoptedSummaryChunk : summaryChunk] as T[]
     }
@@ -5852,12 +5873,11 @@ test('worker adopts requestless summary chunks into request finalization before 
   expect(joined).toContain('INSERT INTO app.review_rebuild_request')
   expect(joined).toContain('requestless_summary_range_rebuild')
   expect(joined).toContain('FROM app.review_rebuild_request existing_request')
-  expect(joined).toContain(`(existing_request.request_id || '') = '${requestId}'`)
+  expect(joined).not.toContain(`(existing_request.request_id || '') = '${requestId}'`)
   expect(joined).not.toContain(`existing_request.request_id = '${requestId}'`)
   expect(joined).not.toContain('ON CONFLICT(request_id)')
   expect(joined).not.toContain('UPDATE app.review_rebuild_request\n      SET')
   expect(joined).toContain(`request_id = '${requestId}'`)
-  expect(joined).not.toContain("status = 'quarantined'")
   expect(setIntervalMock).toHaveBeenCalledTimes(1)
   expect(clearIntervalMock).toHaveBeenCalledWith(intervalToken)
 })
@@ -5917,6 +5937,14 @@ test('worker adopts requestless bootstrap chunks into one rebuild request before
       return [{pendingChunkCount: 1}] as T[]
     }
 
+    if (
+      statement.includes('SELECT chunk.request_id AS requestId')
+      && statement.includes('FROM app.review_rebuild_chunk_manifest chunk')
+      && statement.includes('chunk.request_id IS NOT NULL')
+    ) {
+      return [] as T[]
+    }
+
     if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
       return [adopted ? adoptedProjectScopeChunk : projectScopeChunk] as T[]
     }
@@ -5947,7 +5975,7 @@ test('worker adopts requestless bootstrap chunks into one rebuild request before
   expect(joined).toContain('requestless_bootstrap_rebuild')
   expect(joined).toContain('adoptedRequestlessBootstrapChunks')
   expect(joined).toContain('FROM app.review_rebuild_request existing_request')
-  expect(joined).toContain(`(existing_request.request_id || '') = '${requestId}'`)
+  expect(joined).not.toContain(`(existing_request.request_id || '') = '${requestId}'`)
   expect(joined).not.toContain(`existing_request.request_id = '${requestId}'`)
   expect(joined).not.toContain('ON CONFLICT(request_id)')
   expect(joined).not.toContain('UPDATE app.review_rebuild_request\n      SET')
@@ -6017,6 +6045,14 @@ test('worker adopts requestless bootstrap chunks through existing request withou
       return [{requestId}] as T[]
     }
 
+    if (
+      statement.includes('SELECT chunk.request_id AS requestId')
+      && statement.includes('FROM app.review_rebuild_chunk_manifest chunk')
+      && statement.includes('chunk.request_id IS NOT NULL')
+    ) {
+      return [] as T[]
+    }
+
     if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
       return [adopted ? adoptedProjectScopeChunk : projectScopeChunk] as T[]
     }
@@ -6055,7 +6091,7 @@ test('worker adopts requestless bootstrap chunks through existing request withou
   expect(harness.failedChunks).toEqual([])
   expect(joined).not.toContain('INSERT INTO app.review_rebuild_request')
   expect(joined).toContain('FROM app.review_rebuild_request existing_request')
-  expect(joined).toContain(`(existing_request.request_id || '') = '${requestId}'`)
+  expect(joined).not.toContain(`(existing_request.request_id || '') = '${requestId}'`)
   expect(joined).not.toContain(`existing_request.request_id = '${requestId}'`)
   expect(joined).not.toContain('ON CONFLICT(request_id)')
   expect(joined).not.toContain('requested_components_json = excluded.requested_components_json')
@@ -6584,6 +6620,14 @@ test('claimed requestless summary chunks stage partials through an adopted reque
         return [{projectionComponent: 'summary'}] as T[]
       }
 
+      if (
+        statement.includes('SELECT chunk.request_id AS requestId')
+        && statement.includes('FROM app.review_rebuild_chunk_manifest chunk')
+        && statement.includes('chunk.request_id IS NOT NULL')
+      ) {
+        return [] as T[]
+      }
+
       if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
         return [adopted ? adoptedSummaryChunk : summaryChunk] as T[]
       }
@@ -7036,8 +7080,11 @@ test('judgment input content rebuild chunk splits only after DuckDB OOM', async 
   expect(result).toEqual({status: 'completed'})
   expect(joined).toContain('NTILE(48)')
   expect(joined).not.toContain('scope.project_scope_identity')
-  expect(joined).toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4')
+  expect(joined).toContain(
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO UPDATE SET',
+  )
   expect(joined).toContain('lease_expires_at > current_timestamp')
   expect(joined).toContain('RETURNING chunk_id AS chunkId')
   expect(childInserts).toHaveLength(2)
@@ -7113,7 +7160,7 @@ test('queue rebuild chunk writes serving rows with SQL-native article range stat
   const joined = statements.join('\n')
 
   expect(result).toEqual({status: 'completed'})
-  expect(joined).toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_unassessed_queue_serving_v4')
   expect(joined).toContain('WITH scoped_article AS')
   expect(joined).toContain('LEFT JOIN latest_judgment judgment')

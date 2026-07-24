@@ -694,13 +694,6 @@ export const writeReviewServingTitleSearchRebuildRanges = async (
 const getReviewServingQueueRebuildRowsStatements = (input: WriteReviewServingQueueRebuildRowsInput) => {
   return [
     `
-    DELETE FROM mart.review_unassessed_queue_serving_v4
-    WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      ${input.rangePredicateSql}
-  `,
-    `
     INSERT INTO mart.review_unassessed_queue_serving_v4 (
       project_id,
       review_config_hash,

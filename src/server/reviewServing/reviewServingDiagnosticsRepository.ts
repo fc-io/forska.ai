@@ -528,7 +528,7 @@ const getDiagnosticsSummaryRowsEffect = (
         FROM app.review_serving_dirty_work
         WHERE project_id = ${getSqlLiteral(input.projectId)}
       ), latest_request AS (
-        SELECT request_id, admission_state, status
+        SELECT request_id, admission_state, reason, status
         FROM app.review_rebuild_request
         WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
         ORDER BY
@@ -557,6 +557,7 @@ const getDiagnosticsSummaryRowsEffect = (
         SELECT CAST(COUNT(*) AS INTEGER) AS failed_count
         FROM latest_request
         WHERE latest_request.status IN ('failed', 'quarantined')
+          AND latest_request.reason <> 'requestless_bootstrap_rebuild'
           AND NOT EXISTS (
             SELECT 1
             FROM classified_chunk

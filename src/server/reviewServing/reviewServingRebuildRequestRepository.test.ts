@@ -222,6 +222,10 @@ const createFakeRequestDatabase = (options: FakeRequestDatabaseOptions = {}) => 
     }
 
     if (statement.includes('FROM app.review_rebuild_request')) {
+      if (statement.includes('SELECT request.request_id AS requestId') && getSqlStrings(statement).length === 0) {
+        return [...requests.values()].map((request) => ({requestId: request.requestId})) as T[]
+      }
+
       const requestId = getSqlStrings(statement)[0] ?? ''
       const request = requests.get(requestId)
 
@@ -559,6 +563,45 @@ test('V4 rebuild requests admit budgeted component chunks above the chunk manife
   expect(statements.join('\n')).toContain('INSERT INTO app.review_rebuild_chunk_manifest')
   expect(statements.join('\n')).toContain("'rebuild:admitted'")
   expect(statements.join('\n')).toContain("'admitted'")
+})
+
+test('requestless V4 rebuild request re-admission does not mutate the request row', async () => {
+  const {database, statements} = createFakeRequestDatabase()
+  const input = {
+    chunks: [
+      {
+        chunkEndKey: 'article:010',
+        chunkStartKey: 'article:001',
+        inputDigest: 'digest-v1',
+        inputWatermark: 5,
+        outputBaseGeneration: 1,
+        projectId: 'project-v4',
+        projectionComponent: 'projectScope' as const,
+        projectionIdentity: 'projectScope:project-v4',
+      },
+    ],
+    projectId: 'project-v4',
+    reason: 'requestless_bootstrap_rebuild' as const,
+    requestedComponents: ['projectScope' as const],
+    requestId: 'requestless-bootstrap:release-safe',
+  }
+
+  await createReviewServingRebuildRequest(input, database)
+  const firstInsertCount = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_request')
+  }).length
+
+  await createReviewServingRebuildRequest(input, database)
+  const joined = statements.join('\n')
+  const secondInsertCount = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_request')
+  }).length
+
+  expect(firstInsertCount).toBe(1)
+  expect(secondInsertCount).toBe(1)
+  expect(joined).toContain('SELECT request.request_id AS requestId')
+  expect(joined).toContain('FROM app.review_rebuild_request request')
+  expect(joined).not.toContain('ON CONFLICT(request_id) DO UPDATE SET')
 })
 
 test('V4 rebuild request re-admission does not delete obsolete running chunks', async () => {

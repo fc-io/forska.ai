@@ -985,6 +985,52 @@ test('reviews warnings preserve failed latest terminal rebuild request behind se
   expect(body.data.indexing.status).toBe('failed')
 })
 
+test('reviews warnings ignore failed requestless bootstrap bookkeeping behind serving rows', async () => {
+  const projectId = 'project-requestless-bootstrap-terminal-with-serving-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-requestless-bootstrap-terminal-with-serving-warning',
+  })
+  await insertReviewRebuildRequest({
+    createdAt: '2026-04-02T12:00:00.000Z',
+    failedAt: '2026-04-02T12:01:00.000Z',
+    lastError: 'superseded requestless bootstrap snapshot',
+    projectId,
+    reason: 'requestless_bootstrap_rebuild',
+    requestId: 'requestless-bootstrap:terminal-with-serving-warning',
+    status: 'failed',
+    updatedAt: '2026-04-02T12:01:00.000Z',
+  })
+  await insertReviewRebuildChunk({
+    chunkId: 'chunk-requestless-bootstrap-quarantined-with-serving-warning',
+    createdAt: '2026-04-02T12:00:00.000Z',
+    lastError: 'superseded requestless bootstrap snapshot',
+    projectId,
+    requestId: 'requestless-bootstrap:terminal-with-serving-warning',
+    status: 'quarantined',
+    updatedAt: '2026-04-02T12:01:00.000Z',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.serving.diagnostics.rebuildChunks).toMatchObject({
+    failedCount: 0,
+    pendingCount: 0,
+    quarantinedCount: 1,
+  })
+  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
+  expect(body.data.indexing.status).toBe('ready')
+})
+
 test('reviews warnings do not expose candidate snapshots as readable review pages', async () => {
   const projectId = 'project-candidate-serving-snapshot-warning'
 

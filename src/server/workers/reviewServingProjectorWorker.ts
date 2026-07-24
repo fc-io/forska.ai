@@ -620,6 +620,27 @@ const statusArticleRangeRebuildComponents: ReadonlySet<ReviewServingProjectionCo
 ])
 const requestlessSummaryRangeRebuildRequestPrefix = 'requestless-summary'
 const requestlessBootstrapRebuildRequestPrefix = 'requestless-bootstrap'
+const requestlessAdoptionLocks = new Map<string, Promise<void>>()
+
+const withRequestlessAdoptionLock = async <T>(requestId: string, run: () => Promise<T>) => {
+  const previous = requestlessAdoptionLocks.get(requestId) ?? Promise.resolve()
+  let releaseLock: () => void = () => {}
+  const current = new Promise<void>((resolve) => {
+    releaseLock = resolve
+  })
+  const chained = previous.then(() => current, () => current)
+  requestlessAdoptionLocks.set(requestId, chained)
+
+  await previous.catch(() => {})
+  try {
+    return await run()
+  } finally {
+    releaseLock()
+    if (requestlessAdoptionLocks.get(requestId) === chained) {
+      requestlessAdoptionLocks.delete(requestId)
+    }
+  }
+}
 
 const isRequestlessSummaryRangeRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
   return chunk.projectionComponent === 'summary' && chunk.requestId === null
@@ -5204,19 +5225,22 @@ const failSupersededRequestlessBootstrapRebuildRequests = async (input: {
 
   await input.database.run(`
     WITH request_scope AS (${requestScope})
-    UPDATE app.review_rebuild_request AS request
+    UPDATE app.review_rebuild_chunk_manifest AS chunk
     SET
-      status = 'failed',
-      failed_at = current_timestamp,
+      status = 'quarantined',
       last_error = 'superseded requestless bootstrap snapshot',
+      lease_owner = NULL,
+      lease_expires_at = NULL,
       updated_at = current_timestamp
-    WHERE request.request_id LIKE ${getSqlLiteral(`${requestlessBootstrapRebuildRequestPrefix}:%`)}
-      AND request.status IN ('admitted', 'running')
-      AND request.admission_state = 'admitted'
+    FROM request_scope
+    WHERE chunk.request_id = request_scope.request_id
+      AND chunk.status IN ('pending', 'running', 'failed')
       AND EXISTS (
         SELECT 1
-        FROM request_scope
-        WHERE request_scope.request_id = request.request_id
+        FROM app.review_rebuild_request request
+        WHERE request.request_id = request_scope.request_id
+          AND request.status IN ('admitted', 'running')
+          AND request.admission_state = 'admitted'
       )
   `)
 }
@@ -5283,6 +5307,7 @@ const getNextCompletedUnfinalizedRebuildRequestChunk = async (input: {
       FROM app.review_rebuild_request request
       WHERE request.status IN ('admitted', 'running')
         AND request.admission_state = 'admitted'
+        AND request.reason <> 'requestless_bootstrap_rebuild'
         ${projectCondition}
     ),
     request_chunk_state AS (
@@ -6706,11 +6731,12 @@ const adoptRequestlessRebuildChunk = async (
 
   const projectId = requireRebuildChunkProjectId(input.chunk)
 
-  return database.transaction(async (tx) => {
-    const adoption = await getRequestlessRebuildChunkAdoption(input, tx)
-    if (adoption === null) {
-      return input.chunk
-    }
+  const adoption = await getRequestlessRebuildChunkAdoption(input, database)
+  if (adoption === null) {
+    return input.chunk
+  }
+
+  return withRequestlessAdoptionLock(adoption.requestId, () => database.transaction(async (tx) => {
     const adoptionInputWatermarkPredicate =
       adoption.reason === 'requestless_summary_range_rebuild'
         ? `AND input_watermark = ${getSqlLiteral(input.chunk.inputWatermark)}`
@@ -6719,11 +6745,18 @@ const adoptRequestlessRebuildChunk = async (
     const existingRequests = await tx.queryJson<{requestId: string}>(`
       SELECT existing_request.request_id AS requestId
       FROM app.review_rebuild_request existing_request
-      WHERE (existing_request.request_id || '') = ${getSqlLiteral(adoption.requestId)}
-      LIMIT 1
+    `)
+    const existingChunkLinks = await tx.queryJson<{requestId: string | null}>(`
+      SELECT chunk.request_id AS requestId
+      FROM app.review_rebuild_chunk_manifest chunk
+      WHERE chunk.request_id IS NOT NULL
     `)
 
-    if (existingRequests.length === 0) {
+    const adoptionRequestExists =
+      existingRequests.some((request) => request.requestId === adoption.requestId)
+      || existingChunkLinks.some((chunk) => chunk.requestId === adoption.requestId)
+
+    if (!adoptionRequestExists) {
       await tx.run(`
         INSERT INTO app.review_rebuild_request (
           request_id,
@@ -6786,7 +6819,7 @@ const adoptRequestlessRebuildChunk = async (
     }
 
     return adoptedChunk
-  })
+  }))
 }
 
 const claimReviewServingProjectorWorkerRebuildChunkInput = async ({

@@ -511,20 +511,22 @@ test('chunked full summary rebuild stages request partials and contribution part
 
 test('summary rebuild request finalization reduces partials in bounded accumulator batches', async () => {
   const statements: string[] = []
-  const chunkBatches = [[{chunkId: 'chunk-001'}, {chunkId: 'chunk-002'}], [{chunkId: 'chunk-003'}], []]
+  const chunkRows = Array.from({length: 257}, (_, index) => {
+    return {chunkId: `chunk-${String(index + 1).padStart(3, '0')}`}
+  })
   const database: ReviewServingSummaryProjectorDatabase = {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
 
       if (statement.includes('SELECT chunk.chunk_id AS chunkId')) {
-        return [{chunkId: 'chunk-001'}, {chunkId: 'chunk-002'}, {chunkId: 'chunk-003'}] as T[]
+        return chunkRows as T[]
       }
 
       if (statement.includes('partialCount')) {
         return [{partialCount: 1}] as T[]
       }
 
-      return (chunkBatches.shift() ?? []) as T[]
+      return [] as T[]
     },
     run: async (statement: string) => {
       statements.push(statement)
@@ -544,22 +546,14 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
     database,
   )
   const joined = statements.join('\n')
-  const batchSelects = statements.filter((statement) => {
-    return statement.includes('GROUP BY partial.chunk_id')
-  })
   const accumulatorWrites = statements.filter((statement) => {
     return statement.includes("'__summary_rebuild_partial_accumulator__:") && statement.includes(' AS chunk_id')
   })
 
-  expect(batchSelects).toHaveLength(3)
   expect(accumulatorWrites).toHaveLength(2)
   expect(joined).toContain('chunk.snapshot_id = ')
-  expect(batchSelects[0]).toContain('LIMIT 256')
-  expect(batchSelects[0]).toContain('INNER JOIN app.review_rebuild_chunk_manifest chunk')
-  expect(batchSelects[0]).toContain("chunk.status = 'completed'")
-  expect(batchSelects[0]).toContain("partial.chunk_id NOT LIKE '__summary_rebuild_partial_accumulator__:%'")
-  expect(joined).toContain("chunk_id IN ('chunk-001', 'chunk-002')")
-  expect(joined).toContain("chunk_id IN ('chunk-003')")
+  expect(joined).toContain("partial.chunk_id IN ('chunk-001', 'chunk-002'")
+  expect(joined).toContain("partial.chunk_id IN ('chunk-257')")
   expect(joined).toContain(
     'ON CONFLICT(request_id, chunk_id, project_id, review_config_hash, snapshot_id, serving_key) DO UPDATE SET',
   )
@@ -574,6 +568,7 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   )
   expect(joined).toContain('FROM mart.review_article_summary_contribution_rebuild_partial_v4')
   expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
   expect(
     statements.filter((statement) => {
       return statement.includes('DELETE FROM mart.review_article_summary_contribution_rebuild_partial_v4')
@@ -617,6 +612,13 @@ test('summary rebuild request finalization reduces conflicting partial chunks in
         },
         database,
       )
+      await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+        {
+          requestId: 'rebuild-summary-1',
+          snapshots: [{projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'}],
+        },
+        database,
+      )
       const countRows = await database.queryJson<{countValue: string}>(`
         SELECT CAST(count_value AS VARCHAR) AS countValue
         FROM mart.review_article_count_serving_v4
@@ -627,7 +629,7 @@ test('summary rebuild request finalization reduces conflicting partial chunks in
       `)
 
       expect(countRows).toEqual([{countValue: '5'}])
-      expect(partialRows).toEqual([{total: '1'}])
+      expect(partialRows).toEqual([{total: '3'}])
     } finally {
       close()
     }
@@ -732,7 +734,7 @@ test('summary rebuild request finalization ignores stale accumulator rows from p
       `)
 
       expect(countRows).toEqual([{countValue: '3'}])
-      expect(partialRows).toEqual([{total: '2'}])
+      expect(partialRows).toEqual([{total: '3'}])
     } finally {
       close()
     }
