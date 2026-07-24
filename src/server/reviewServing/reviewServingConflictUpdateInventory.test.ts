@@ -8,11 +8,6 @@ type ConflictUpdateInventoryEntry = {path: string; reason: string; snippet: stri
 
 const allowedConflictUpdates: ConflictUpdateInventoryEntry[] = [
   {
-    path: 'src/server/reviewServing/reviewServingChunkManifestRepository.ts',
-    reason: 'chunk manifest upserts preserve leases, attempts, diagnostics, and active chunk state',
-    snippet: 'ON CONFLICT(chunk_id) DO UPDATE SET',
-  },
-  {
     path: 'src/server/reviewServing/reviewServingProjectorWriter.ts',
     reason: 'generic writer fallback remains for non-allowlisted tables without a scoped replacement proof',
     snippet: 'DO UPDATE SET ${assignments.join',

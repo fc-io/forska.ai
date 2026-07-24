@@ -39,10 +39,11 @@ const getSqlStrings = (statement: string) => {
 
 const getWhereLiteral = (statement: string, columnName: string) => {
   const value =
-    statement
-      .match(new RegExp(`(?<![A-Za-z0-9_])${columnName}\\s*=\\s*'((?:''|[^'])*)'`, 'u'))?.[1]
+    statement.match(new RegExp(`(?<![A-Za-z0-9_])${columnName}\\s*=\\s*'((?:''|[^'])*)'`, 'u'))?.[1]
     ?? statement.match(new RegExp(`\\(${columnName}\\s*\\|\\|\\s*''\\)\\s*=\\s*'((?:''|[^'])*)'`, 'u'))?.[1]
-    ?? statement.match(new RegExp(`\\([A-Za-z0-9_]+\\.${columnName}\\s*\\|\\|\\s*''\\)\\s*=\\s*'((?:''|[^'])*)'`, 'u'))?.[1]
+    ?? statement.match(
+      new RegExp(`\\([A-Za-z0-9_]+\\.${columnName}\\s*\\|\\|\\s*''\\)\\s*=\\s*'((?:''|[^'])*)'`, 'u'),
+    )?.[1]
 
   return value?.replaceAll("''", "'") ?? null
 }
@@ -609,6 +610,10 @@ test('rebuild chunk workload classes mark durable critical and bulk lanes', asyn
   expect(joined).toContain("'critical'")
   expect(joined).toContain("'bulk'")
   expect(joined).toContain('workload_class')
+  expect(joined).toContain('UPDATE app.review_rebuild_chunk_manifest')
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain("(existing.chunk_id || '')")
+  expect(joined).not.toContain('ON CONFLICT(chunk_id) DO UPDATE SET')
 })
 
 test('completed chunks resume after restart and are skipped for the same maintained input digest', async () => {

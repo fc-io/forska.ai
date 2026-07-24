@@ -1051,6 +1051,101 @@ export const upsertReviewServingRebuildChunkManifests = async (
     const nowSql = getSqlLiteral(new Date())
 
     await database.run(`
+        UPDATE app.review_rebuild_chunk_manifest
+        SET
+          request_id = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.request_id
+            ELSE ${getSqlLiteral(getChunkRequestId(input))}
+          END,
+          status = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.status
+            ELSE ${getSqlLiteral(input.status ?? 'pending')}
+          END,
+          admission_state = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.admission_state
+            ELSE ${getSqlLiteral(input.admissionState ?? 'admitted')}
+          END,
+          retry_after = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.retry_after
+            ELSE ${getNullableReviewServingChunkTimestampLiteral(input.retryAfter)}
+          END,
+          retry_count = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.retry_count
+            ELSE ${getSqlLiteral(input.retryCount ?? 0)}
+          END,
+          actual_input_rows = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_input_rows
+            ELSE ${getOptionalNumberLiteral(input.actualInputRows)}
+          END,
+          actual_output_bytes = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_output_bytes
+            ELSE ${getOptionalNumberLiteral(input.actualOutputBytes)}
+          END,
+          actual_output_rows = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_output_rows
+            ELSE ${getOptionalNumberLiteral(input.actualOutputRows)}
+          END,
+          actual_payload_bytes = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_payload_bytes
+            ELSE ${getOptionalNumberLiteral(input.actualPayloadBytes)}
+          END,
+          actual_prompt_count = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_prompt_count
+            ELSE ${getOptionalNumberLiteral(input.actualPromptCount)}
+          END,
+          actual_temp_bytes = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_temp_bytes
+            ELSE ${getOptionalNumberLiteral(input.actualTempBytes)}
+          END,
+          duration_ms = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.duration_ms
+            ELSE ${getOptionalNumberLiteral(input.durationMs)}
+          END,
+          oom_category = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.oom_category
+            ELSE ${getSqlLiteral(input.oomCategory ?? null)}
+          END,
+          over_budget_reason = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.over_budget_reason
+            ELSE ${getSqlLiteral(input.overBudgetReason ?? null)}
+          END,
+          budget_json = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.budget_json
+            ELSE ${getJsonSqlLiteral(input.budgetJson)}
+          END,
+          diagnostics_json = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.diagnostics_json
+            ELSE ${getJsonSqlLiteral(input.diagnosticsJson)}
+          END,
+          checksum = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.checksum
+            ELSE ${getSqlLiteral(input.checksum ?? null)}
+          END,
+          lease_owner = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN lease_owner
+            ELSE NULL
+          END,
+          lease_expires_at = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN lease_expires_at
+            ELSE NULL
+          END,
+          last_error = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN last_error
+            ELSE NULL
+          END,
+          started_at = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN started_at
+            ELSE NULL
+          END,
+          completed_at = CASE
+            WHEN ${activeRebuildChunkPreservePredicate} THEN completed_at
+            ELSE NULL
+          END,
+          updated_at = ${nowSql}
+        WHERE chunk_id = ${getSqlLiteral(chunkId)}
+      `)
+
+    await database.run(`
         INSERT INTO app.review_rebuild_chunk_manifest (
           chunk_id,
           request_id,
@@ -1096,7 +1191,8 @@ export const upsertReviewServingRebuildChunkManifests = async (
           diagnostics_json,
           checksum,
           updated_at
-        ) VALUES (
+        )
+        SELECT
           ${getSqlLiteral(chunkId)},
           ${getSqlLiteral(getChunkRequestId(input))},
           ${getSqlLiteral(input.projectId)},
@@ -1141,97 +1237,11 @@ export const upsertReviewServingRebuildChunkManifests = async (
           ${getJsonSqlLiteral(input.diagnosticsJson)},
           ${getSqlLiteral(input.checksum ?? null)},
           ${nowSql}
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM app.review_rebuild_chunk_manifest existing
+          WHERE (existing.chunk_id || '') = (${getSqlLiteral(chunkId)} || '')
         )
-        ON CONFLICT(chunk_id) DO UPDATE SET
-          request_id = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.request_id
-            ELSE excluded.request_id
-          END,
-          status = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.status
-            ELSE excluded.status
-          END,
-          admission_state = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.admission_state
-            ELSE excluded.admission_state
-          END,
-          retry_after = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.retry_after
-            ELSE excluded.retry_after
-          END,
-          retry_count = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.retry_count
-            ELSE excluded.retry_count
-          END,
-          actual_input_rows = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_input_rows
-            ELSE excluded.actual_input_rows
-          END,
-          actual_output_bytes = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_output_bytes
-            ELSE excluded.actual_output_bytes
-          END,
-          actual_output_rows = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_output_rows
-            ELSE excluded.actual_output_rows
-          END,
-          actual_payload_bytes = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_payload_bytes
-            ELSE excluded.actual_payload_bytes
-          END,
-          actual_prompt_count = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_prompt_count
-            ELSE excluded.actual_prompt_count
-          END,
-          actual_temp_bytes = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.actual_temp_bytes
-            ELSE excluded.actual_temp_bytes
-          END,
-          duration_ms = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.duration_ms
-            ELSE excluded.duration_ms
-          END,
-          oom_category = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.oom_category
-            ELSE excluded.oom_category
-          END,
-          over_budget_reason = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.over_budget_reason
-            ELSE excluded.over_budget_reason
-          END,
-          budget_json = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.budget_json
-            ELSE excluded.budget_json
-          END,
-          diagnostics_json = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.diagnostics_json
-            ELSE excluded.diagnostics_json
-          END,
-          checksum = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN app.review_rebuild_chunk_manifest.checksum
-            ELSE excluded.checksum
-          END,
-          lease_owner = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN lease_owner
-            ELSE NULL
-          END,
-          lease_expires_at = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN lease_expires_at
-            ELSE NULL
-          END,
-          last_error = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN last_error
-            ELSE NULL
-          END,
-          started_at = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN started_at
-            ELSE NULL
-          END,
-          completed_at = CASE
-            WHEN ${activeRebuildChunkPreservePredicate} THEN completed_at
-            ELSE NULL
-          END,
-          updated_at = ${nowSql}
       `)
   }
 }
