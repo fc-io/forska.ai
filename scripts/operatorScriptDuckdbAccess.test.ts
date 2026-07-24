@@ -126,6 +126,21 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     ],
     path: 'scripts/requestReviewServingAllProjectsRebuild.ts',
   },
+  'db:duck:terminalize-review-serving-rebuild-request': {
+    commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
+    description: 'V4 rebuild request terminalization',
+    mustContain: [
+      'withDuckdbMaintenanceAccess',
+      "getMaintenanceDuckdbWorkloadContext('terminalizeReviewServingRebuildRequest')",
+      'terminalizeStaleZeroChunkReviewServingRebuildRequest',
+      'requiredApplyAcknowledgement',
+      '--apply',
+      '--project-id',
+      '--request-id',
+      'no-cleanup-authorized',
+    ],
+    path: 'scripts/terminalizeReviewServingRebuildRequest.ts',
+  },
   'db:duck:run-archived-project-bounded-cleanup': {
     commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
     description: 'bounded archived-project cleanup',
@@ -217,6 +232,19 @@ test('package no longer exposes legacy mart refresh or large-rebuild worker scri
   expect(packageJson.scripts['db:duck:quarantine-dirty-refresh-article']).toBeUndefined()
   expect(packageJson.scripts['db:duck:unquarantine-dirty-refresh-article']).toBeUndefined()
   expect(packageJson.scripts['db:duck:recover-dirty-refresh-claims']).toBeUndefined()
+})
+
+test('review-serving rebuild request terminalization CLI is opt-in and dry-run first', () => {
+  const source = readSource('scripts/terminalizeReviewServingRebuildRequest.ts')
+
+  expect(source).toContain("apply: hasFlag('--apply')")
+  expect(source).toContain('if (options.apply && options.acknowledgement !== requiredApplyAcknowledgement)')
+  expect(source).toContain('Refusing --apply without --ack=')
+  expect(source).toContain('acknowledgementRequiredForApply')
+  expect(source).toContain("mode: 'zero_chunks'")
+  expect(source).toContain('minimumAgeMinutes')
+  expect(source).toContain('Missing required --project-id=<project-id>')
+  expect(source).toContain('Missing required --request-id=<request-id>')
 })
 
 test('direct non-test DB scripts are explicitly isolated', () => {

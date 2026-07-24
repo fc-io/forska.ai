@@ -144,6 +144,23 @@ type DefaultRebuildProjectionManifestRow = {
   projectionIdentity: string
 }
 
+export type TerminalizeStaleZeroChunkReviewServingRebuildRequestInput = {
+  apply?: boolean
+  minimumAgeMinutes?: number
+  now?: Date
+  projectId: string
+  requestId: string
+}
+
+export type TerminalizeStaleZeroChunkReviewServingRebuildRequestResult = {
+  applied: boolean
+  chunkCount: number | null
+  currentRequest: ReviewServingRebuildRequest | null
+  minimumAgeMinutes: number
+  refusalReasons: string[]
+  status: 'not_found' | 'refused' | 'dry_run' | 'terminalized'
+}
+
 const requestBudgetPairs = [
   ['estimatedInputRows', 'maxInputRows', 'input rows'],
   ['estimatedOutputRows', 'maxOutputRows', 'output rows'],
@@ -324,6 +341,78 @@ const defaultRebuildPresplitInputRowLimits = {
   selectedImport: 25_000,
   summary: 512,
 } as const satisfies Record<ReviewServingProjectionComponent, number>
+
+const defaultTerminalizeMinimumAgeMinutes = 60
+const staleZeroChunkTerminalizationLastError =
+  'Operator terminalized stale malformed V4 review rebuild request: admitted/running request has no rebuild chunks; no cleanup authorized.'
+
+const getMinimumAgeMinutes = (value: number | undefined) => {
+  return Number.isFinite(value) && value !== undefined && value >= 0
+    ? Math.trunc(value)
+    : defaultTerminalizeMinimumAgeMinutes
+}
+
+const getTimestampMillis = (value: string | null) => {
+  if (value === null) {
+    return Number.NaN
+  }
+
+  const timestamp = Date.parse(value)
+
+  return Number.isFinite(timestamp) ? timestamp : Number.NaN
+}
+
+const getReviewServingRebuildRequestChunkCount = async (
+  input: {requestId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const [row] = await database.queryJson<{chunkCount: number | string}>(`
+    SELECT CAST(COUNT(*) AS INTEGER) AS chunkCount
+    FROM app.review_rebuild_chunk_manifest
+    WHERE request_id = ${getSqlLiteral(input.requestId)}
+  `)
+
+  return Number(row?.chunkCount ?? 0)
+}
+
+const getStaleZeroChunkTerminalizationRefusalReasons = (input: {
+  chunkCount: number
+  minimumAgeMinutes: number
+  now: Date
+  projectId: string
+  request: ReviewServingRebuildRequest
+}) => {
+  const reasons: string[] = []
+
+  if (input.request.projectId !== input.projectId) {
+    reasons.push('wrong_project')
+  }
+
+  if (input.request.admissionState !== 'admitted') {
+    reasons.push('non_admitted_admission_state')
+  }
+
+  if (input.request.status !== 'admitted' && input.request.status !== 'running') {
+    reasons.push('non_active_request_status')
+  }
+
+  if (input.request.leaseOwner !== null || input.request.leaseExpiresAt !== null) {
+    reasons.push('request_has_lease')
+  }
+
+  if (input.chunkCount > 0) {
+    reasons.push('request_has_chunks')
+  }
+
+  const createdAtMillis = getTimestampMillis(input.request.createdAt)
+  const minimumAgeMillis = input.minimumAgeMinutes * 60 * 1000
+
+  if (!Number.isFinite(createdAtMillis) || input.now.getTime() - createdAtMillis < minimumAgeMillis) {
+    reasons.push('request_too_new')
+  }
+
+  return reasons
+}
 
 const getDefaultRebuildPresplitBucketCount = (input: {
   component: ReviewServingProjectionComponent
@@ -945,6 +1034,88 @@ export const boostActiveReviewServingRebuildRequestForProject = async (
   `)
 
   return true
+}
+
+export const terminalizeStaleZeroChunkReviewServingRebuildRequest = async (
+  input: TerminalizeStaleZeroChunkReviewServingRebuildRequestInput,
+  database: ReviewServingChunkManifestRepositoryDatabase = getReviewServingRebuildRequestDatabase(),
+): Promise<TerminalizeStaleZeroChunkReviewServingRebuildRequestResult> => {
+  const minimumAgeMinutes = getMinimumAgeMinutes(input.minimumAgeMinutes)
+  const now = input.now ?? new Date()
+
+  return database.transaction(async (tx) => {
+    const request = await getReviewServingRebuildRequest({requestId: input.requestId}, tx)
+
+    if (request === null) {
+      return {
+        applied: false,
+        chunkCount: null,
+        currentRequest: null,
+        minimumAgeMinutes,
+        refusalReasons: ['request_not_found'],
+        status: 'not_found',
+      }
+    }
+
+    const chunkCount = await getReviewServingRebuildRequestChunkCount({requestId: input.requestId}, tx)
+    const refusalReasons = getStaleZeroChunkTerminalizationRefusalReasons({
+      chunkCount,
+      minimumAgeMinutes,
+      now,
+      projectId: input.projectId,
+      request,
+    })
+
+    if (refusalReasons.length > 0) {
+      return {applied: false, chunkCount, currentRequest: request, minimumAgeMinutes, refusalReasons, status: 'refused'}
+    }
+
+    if (input.apply !== true) {
+      return {
+        applied: false,
+        chunkCount,
+        currentRequest: request,
+        minimumAgeMinutes,
+        refusalReasons: [],
+        status: 'dry_run',
+      }
+    }
+
+    await tx.run(`
+      UPDATE app.review_rebuild_request
+      SET status = 'failed',
+          failed_at = current_timestamp,
+          lease_owner = NULL,
+          lease_expires_at = NULL,
+          updated_at = current_timestamp,
+          last_error = ${getSqlLiteral(staleZeroChunkTerminalizationLastError)}
+      WHERE request_id = ${getSqlLiteral(input.requestId)}
+        AND project_id = ${getSqlLiteral(input.projectId)}
+        AND admission_state = 'admitted'
+        AND status IN ('admitted', 'running')
+        AND lease_owner IS NULL
+        AND lease_expires_at IS NULL
+        AND created_at <= ${getSqlLiteral(now)} - INTERVAL ${minimumAgeMinutes} MINUTE
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.review_rebuild_chunk_manifest chunk
+          WHERE chunk.request_id = app.review_rebuild_request.request_id
+        )
+    `)
+
+    const currentRequest = await getReviewServingRebuildRequest({requestId: input.requestId}, tx)
+    const applied =
+      currentRequest?.status === 'failed' && currentRequest.lastError === staleZeroChunkTerminalizationLastError
+
+    return {
+      applied,
+      chunkCount,
+      currentRequest,
+      minimumAgeMinutes,
+      refusalReasons: applied ? [] : ['terminalization_update_not_applied'],
+      status: applied ? 'terminalized' : 'refused',
+    }
+  })
 }
 
 const deleteObsoleteReviewServingRebuildChunks = async (

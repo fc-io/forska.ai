@@ -8,6 +8,7 @@ import {
   boostActiveReviewServingRebuildRequestForProject,
   boostReviewServingRebuildRequestPriority,
   createReviewServingRebuildRequest,
+  terminalizeStaleZeroChunkReviewServingRebuildRequest,
   type ReviewServingRebuildRequestStatus,
 } from './reviewServingRebuildRequestRepository.ts'
 
@@ -219,6 +220,92 @@ const createFakeRequestDatabase = (options: FakeRequestDatabaseOptions = {}) => 
   return {database, statements}
 }
 
+const createFakeTerminalizationRequest = (overrides: Partial<FakeRequestRow> = {}): FakeRequestRow => {
+  return {
+    admissionState: 'admitted',
+    admittedAt: '2026-06-23T14:00:00.000Z',
+    completedAt: null,
+    createdAt: '2026-06-23T14:00:00.000Z',
+    diagnosticsJson: '{}',
+    failedAt: null,
+    identityJson: '{}',
+    lastError: null,
+    leaseExpiresAt: null,
+    leaseOwner: null,
+    oomCategory: null,
+    overBudgetReason: null,
+    priority: 100,
+    projectId: 'project-v4',
+    reason: 'requestReviewServingLargeRebuild',
+    requestedComponentsJson: '["summary"]',
+    requestId: 'rebuild:zero-chunk',
+    retryAfter: null,
+    retryCount: 0,
+    retryPolicyJson: '{}',
+    sourceWatermarksJson: '{}',
+    status: 'admitted',
+    updatedAt: '2026-06-23T14:00:00.000Z',
+    ...overrides,
+  }
+}
+
+const createFakeTerminalizationDatabase = (input: {chunkCount?: number; request?: FakeRequestRow | null}) => {
+  const statements: string[] = []
+  let request = input.request === undefined ? createFakeTerminalizationRequest() : input.request
+  const chunkCount = input.chunkCount ?? 0
+  const terminalizationLastError =
+    'Operator terminalized stale malformed V4 review rebuild request: admitted/running request has no rebuild chunks; no cleanup authorized.'
+
+  const queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest') && statement.includes('COUNT(*)')) {
+      return [{chunkCount}] as T[]
+    }
+
+    if (statement.includes('FROM app.review_rebuild_request')) {
+      return (request === null ? [] : [request]) as T[]
+    }
+
+    return [] as T[]
+  }
+
+  const run = async (statement: string) => {
+    statements.push(statement)
+
+    if (
+      request !== null
+      && statement.includes('UPDATE app.review_rebuild_request')
+      && request.projectId === 'project-v4'
+      && request.admissionState === 'admitted'
+      && (request.status === 'admitted' || request.status === 'running')
+      && request.leaseOwner === null
+      && request.leaseExpiresAt === null
+      && chunkCount === 0
+    ) {
+      request = {
+        ...request,
+        failedAt: '2026-06-23T16:00:00.000Z',
+        lastError: terminalizationLastError,
+        leaseExpiresAt: null,
+        leaseOwner: null,
+        status: 'failed',
+        updatedAt: '2026-06-23T16:00:00.000Z',
+      }
+    }
+  }
+
+  const database = {
+    queryJson,
+    run,
+    transaction: async <T>(operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>) => {
+      return operation({queryJson, run})
+    },
+  } satisfies ReviewServingChunkManifestRepositoryDatabase
+
+  return {database, getRequest: () => request, statements}
+}
+
 test('V4 rebuild requests admit budgeted component chunks above the chunk manifest table', async () => {
   const {database, statements} = createFakeRequestDatabase()
 
@@ -424,6 +511,118 @@ test('boosting an active project rebuild request ignores completed-only admitted
   expect(statements).toHaveLength(2)
   expect(statements.join('\n')).not.toContain('UPDATE app.review_rebuild_request')
 })
+
+test('terminalizing a stale zero-chunk rebuild request fails only the request row', async () => {
+  const {database, getRequest, statements} = createFakeTerminalizationDatabase({
+    request: createFakeTerminalizationRequest({status: 'running'}),
+  })
+
+  const result = await terminalizeStaleZeroChunkReviewServingRebuildRequest(
+    {apply: true, now: new Date('2026-06-23T16:00:00.000Z'), projectId: 'project-v4', requestId: 'rebuild:zero-chunk'},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result.status).toBe('terminalized')
+  expect(result.applied).toBe(true)
+  expect(result.refusalReasons).toEqual([])
+  expect(result.chunkCount).toBe(0)
+  expect(getRequest()).toMatchObject({
+    admissionState: 'admitted',
+    completedAt: null,
+    lastError:
+      'Operator terminalized stale malformed V4 review rebuild request: admitted/running request has no rebuild chunks; no cleanup authorized.',
+    leaseExpiresAt: null,
+    leaseOwner: null,
+    status: 'failed',
+  })
+  expect(joined).toContain('UPDATE app.review_rebuild_request')
+  expect(joined).toContain("SET status = 'failed'")
+  expect(joined).toContain('failed_at = current_timestamp')
+  expect(joined).toContain('lease_owner = NULL')
+  expect(joined).toContain('lease_expires_at = NULL')
+  expect(joined).toContain('updated_at = current_timestamp')
+  expect(joined).toContain('no cleanup authorized')
+  expect(joined).toContain("AND project_id = 'project-v4'")
+  expect(joined).toContain("AND admission_state = 'admitted'")
+  expect(joined).toContain("AND status IN ('admitted', 'running')")
+  expect(joined).toContain('AND lease_owner IS NULL')
+  expect(joined).toContain('AND lease_expires_at IS NULL')
+  expect(joined).toContain('AND created_at <=')
+  expect(joined).toContain('INTERVAL 60 MINUTE')
+  expect(joined).toContain('NOT EXISTS')
+  expect(joined).not.toContain('DELETE FROM app.review_rebuild_chunk_manifest')
+  expect(joined).not.toContain("status = 'completed'")
+})
+
+test('terminalizing a stale zero-chunk rebuild request is dry-run by default', async () => {
+  const {database, getRequest, statements} = createFakeTerminalizationDatabase({
+    request: createFakeTerminalizationRequest(),
+  })
+
+  const result = await terminalizeStaleZeroChunkReviewServingRebuildRequest(
+    {now: new Date('2026-06-23T16:00:00.000Z'), projectId: 'project-v4', requestId: 'rebuild:zero-chunk'},
+    database,
+  )
+
+  expect(result.status).toBe('dry_run')
+  expect(result.applied).toBe(false)
+  expect(result.refusalReasons).toEqual([])
+  expect(getRequest()?.status).toBe('admitted')
+  expect(statements.join('\n')).not.toContain('UPDATE app.review_rebuild_request')
+})
+
+const terminalizationRefusalCases: Array<{
+  chunkCount?: number
+  expectedReason: string
+  inputProjectId?: string
+  minimumAgeMinutes?: number
+  request: FakeRequestRow | null
+}> = [
+  {expectedReason: 'request_not_found', request: null},
+  {expectedReason: 'wrong_project', inputProjectId: 'wrong-project', request: createFakeTerminalizationRequest()},
+  {
+    expectedReason: 'non_admitted_admission_state',
+    request: createFakeTerminalizationRequest({admissionState: 'pending'}),
+  },
+  {expectedReason: 'non_active_request_status', request: createFakeTerminalizationRequest({status: 'completed'})},
+  {expectedReason: 'request_has_lease', request: createFakeTerminalizationRequest({leaseOwner: 'worker-1'})},
+  {
+    expectedReason: 'request_has_lease',
+    request: createFakeTerminalizationRequest({leaseExpiresAt: '2026-06-23T17:00:00.000Z'}),
+  },
+  {chunkCount: 1, expectedReason: 'request_has_chunks', request: createFakeTerminalizationRequest()},
+  {
+    expectedReason: 'request_too_new',
+    minimumAgeMinutes: 180,
+    request: createFakeTerminalizationRequest({createdAt: '2026-06-23T14:30:00.000Z'}),
+  },
+]
+
+for (const refusalCase of terminalizationRefusalCases) {
+  test(`terminalizing a zero-chunk rebuild request refuses ${refusalCase.expectedReason}`, async () => {
+    const {database, getRequest, statements} = createFakeTerminalizationDatabase({
+      chunkCount: refusalCase.chunkCount,
+      request: refusalCase.request,
+    })
+
+    const result = await terminalizeStaleZeroChunkReviewServingRebuildRequest(
+      {
+        apply: true,
+        minimumAgeMinutes: refusalCase.minimumAgeMinutes,
+        now: new Date('2026-06-23T16:00:00.000Z'),
+        projectId: refusalCase.inputProjectId ?? 'project-v4',
+        requestId: 'rebuild:zero-chunk',
+      },
+      database,
+    )
+
+    expect(result.applied).toBe(false)
+    expect(result.refusalReasons).toContain(refusalCase.expectedReason)
+    expect(getRequest()?.status).not.toBe('failed')
+    expect(statements.join('\n')).not.toContain('UPDATE app.review_rebuild_request')
+  })
+}
 
 test('over-budget V4 rebuild requests park before their chunks can be claimable', async () => {
   const {database, statements} = createFakeRequestDatabase()

@@ -61,6 +61,7 @@
     "db:duck:inspect-review-serving-physical-evidence": "FORSKA_RUNTIME_PROFILE=primary DUCKDB_PATH=\"$HOME/Library/Application Support/Forska/runtime/primary/forska.duckdb\" bun scripts/inspectReviewServingPhysicalEvidence.ts",
     "db:duck:request-review-serving-project-rebuild": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestReviewServingProjectRebuild.ts",
     "db:duck:request-review-serving-all-projects-rebuild": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestReviewServingAllProjectsRebuild.ts",
+    "db:duck:terminalize-review-serving-rebuild-request": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/terminalizeReviewServingRebuildRequest.ts",
     "db:duck:legacy-quarantine-dirty-refresh-article": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/quarantineDirtyRefreshArticle.ts",
     "db:duck:legacy-unquarantine-dirty-refresh-article": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/unquarantineDirtyRefreshArticle.ts",
     "db:duck:legacy-recover-dirty-refresh-claims": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/recoverDirtyRefreshClaims.ts",
