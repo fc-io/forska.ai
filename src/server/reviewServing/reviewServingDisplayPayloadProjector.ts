@@ -280,6 +280,14 @@ const getListModeKeyPredicate = (listModeKeys: readonly string[]) => {
 
 const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, options: {orderBy?: boolean} = {}) => {
   const orderBy = options.orderBy === false ? '' : 'ORDER BY scope.article_id ASC'
+  const selectedImportRouteIdSql = `CASE
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+        ELSE selected_base.import_route_id
+      END`
+  const selectedSourceRecordKeySql = `CASE
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+        ELSE selected_base.source_record_key
+      END`
 
   return `
     SELECT
@@ -291,14 +299,14 @@ const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, opti
       COALESCE(
         CASE
           WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-          ELSE selected_base.article_title
+          ELSE COALESCE(selected_hot.article_title, selected_base.article_title)
         END,
         article.article_title
       ) AS articleTitle,
       COALESCE(
         CASE
           WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-          ELSE selected_base.external_id
+          ELSE COALESCE(selected_hot.external_id, selected_base.external_id)
         END,
         article.article_id
       ) AS articleExternalId,
@@ -316,7 +324,7 @@ const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, opti
       END AS sourceMetadata,
       CASE
         WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-        ELSE selected_base.journal_title
+        ELSE COALESCE(selected_hot.journal_title, selected_base.journal_title)
       END AS journalTitle,
       COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
       article.full_text_pdf AS fullTextPdf,
@@ -332,7 +340,7 @@ const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, opti
       END AS selectedRankKey,
       CASE
         WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-        ELSE selected_base.publication_year
+        ELSE COALESCE(selected_hot.publication_year, selected_base.publication_year)
       END AS publicationYear,
       CASE
         WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
@@ -350,16 +358,15 @@ const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, opti
       AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
       AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
       AND selected_base.article_id = scope.article_id
+    LEFT JOIN app.review_import_article_hot_field selected_hot
+      ON selected_hot.import_route_id = ${selectedImportRouteIdSql}
+      AND selected_hot.article_id = scope.article_id
+      AND selected_hot.source_record_key = ${selectedSourceRecordKeySql}
+      AND NOT selected_hot.tombstone
     LEFT JOIN app.article_import_route_source_record selected_source
-      ON selected_source.import_route_id = CASE
-        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-        ELSE selected_base.import_route_id
-      END
+      ON selected_source.import_route_id = ${selectedImportRouteIdSql}
       AND selected_source.article_id = scope.article_id
-      AND selected_source.source_record_key = CASE
-        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-        ELSE selected_base.source_record_key
-      END
+      AND selected_source.source_record_key = ${selectedSourceRecordKeySql}
       AND selected_source.quarantined_at IS NULL
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope)
@@ -500,8 +507,8 @@ const getDisplayPatchRows = async (
           article.article_updated_at AS articleUpdatedAt,
           COALESCE(article.article_created_at, scope.article_created_at, current_timestamp) AS sortKey,
           COALESCE(article.article_updated_at, scope.article_updated_at, article.article_created_at, scope.article_created_at, current_timestamp) AS activitySortAt,
-          COALESCE(CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_base.article_title END, article.article_title) AS articleTitle,
-          COALESCE(CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_base.external_id END, article.article_id) AS articleExternalId,
+          COALESCE(CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_hot.article_title, selected_base.article_title) END, article.article_title) AS articleTitle,
+          COALESCE(CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_hot.external_id, selected_base.external_id) END, article.article_id) AS articleExternalId,
           article.arxiv_id AS arxivId,
           article.biorxiv_id AS biorxivId,
           article.medrxiv_id AS medrxivId,
@@ -517,9 +524,9 @@ const getDisplayPatchRows = async (
           article.full_text_pdf AS fullTextPdf,
           article.full_text_fetched_at AS fullTextFetchedAt,
           article.full_text_conversion_status AS fullTextConversionStatus,
-          CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_base.journal_title END AS journalTitle,
+          CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_hot.journal_title, selected_base.journal_title) END AS journalTitle,
           COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
-          CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_base.publication_year END AS publicationYear,
+          CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_hot.publication_year, selected_base.publication_year) END AS publicationYear,
           article.id IS NULL AS tombstone
         FROM dirty_article dirty
         LEFT JOIN app."article" article
@@ -533,6 +540,11 @@ const getDisplayPatchRows = async (
           AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
           AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
           AND selected_base.article_id = dirty.article_id
+        LEFT JOIN app.review_import_article_hot_field selected_hot
+          ON selected_hot.import_route_id = CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_base.import_route_id END
+          AND selected_hot.article_id = dirty.article_id
+          AND selected_hot.source_record_key = CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_base.source_record_key END
+          AND NOT selected_hot.tombstone
         LEFT JOIN app.article_import_route_source_record selected_source
           ON selected_source.import_route_id = CASE WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL ELSE selected_base.import_route_id END
           AND selected_source.article_id = dirty.article_id

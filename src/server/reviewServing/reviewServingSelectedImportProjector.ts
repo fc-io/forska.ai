@@ -545,14 +545,14 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        scoped.article_id,
        COALESCE(serving.sort_key, scoped.sort_key) AS sort_key,
        COALESCE(serving.activity_sort_at, scoped.activity_sort_at) AS activity_sort_at,
-       COALESCE(selected.article_title, article.article_title) AS article_title,
-       COALESCE(selected.external_id, article.article_id) AS article_external_id,
-       selected.journal_title,
+       COALESCE(selected_hot.article_title, selected.article_title, article.article_title) AS article_title,
+       COALESCE(selected_hot.external_id, selected.external_id, article.article_id) AS article_external_id,
+       COALESCE(selected_hot.journal_title, selected.journal_title) AS journal_title,
        COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
        article.full_text_pdf,
        selected.import_route_id AS selected_import_route_id,
        selected.selected_rank_key,
-       selected.publication_year,
+       COALESCE(selected_hot.publication_year, selected.publication_year) AS publication_year,
        COALESCE(selected.duplicate_flag, FALSE) AS duplicate_flag,
        COALESCE(selected.conflict_flag, FALSE) AS conflict_flag,
        COALESCE(serving.llm_status_key, 'unanswered') AS llm_status_key,
@@ -583,6 +583,11 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
        AND selected.article_id = scoped.article_id
        AND NOT selected.tombstone
+     LEFT JOIN app.review_import_article_hot_field selected_hot
+       ON selected_hot.import_route_id = selected.import_route_id
+       AND selected_hot.article_id = selected.article_id
+       AND selected_hot.source_record_key = selected.source_record_key
+       AND NOT selected_hot.tombstone
      LEFT JOIN app.article_import_route_source_record selected_source
        ON selected_source.import_route_id = selected.import_route_id
        AND selected_source.article_id = selected.article_id

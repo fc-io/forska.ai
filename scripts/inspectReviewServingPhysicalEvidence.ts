@@ -54,17 +54,28 @@ type SelectedImportPayloadColumnEvidence = {
   column: (typeof selectedImportPayloadColumns)[number]
   hotFieldNonNullCount: number | null
   hotFieldNullCount: number | null
+  selectedBaseActiveOrLastKnownGoodNonNullCount: number | null
+  selectedBaseActiveOrLastKnownGoodNullCount: number | null
+  selectedBaseCandidateNonNullCount: number | null
+  selectedBaseCandidateNullCount: number | null
   selectedBaseNonNullCount: number | null
+  selectedBaseOtherNonNullCount: number | null
+  selectedBaseOtherNullCount: number | null
   selectedBaseNullCount: number | null
 }
+type SelectedImportPayloadSnapshotStatusRow = {label: string; rowCount: number}
 type SelectedImportPayloadSlimmingReadinessReport = {
+  activeOrLastKnownGoodSelectedImportRows: number | null
+  candidateSelectedImportRows: number | null
   comparisonStatus: string
   consumerWriterStatus: string
   error: string | null
   hotFieldScopedRows: number | null
   note: string
+  otherSelectedImportRows: number | null
   projectId: string
   selectedBaseScopedRows: number | null
+  rowsBySelectedImportSnapshotStatus: SelectedImportPayloadSnapshotStatusRow[]
   verdict: 'not-authorized' | 'blocked'
   columns: SelectedImportPayloadColumnEvidence[]
 }
@@ -850,7 +861,13 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
   const selectedBaseExpressions = selectedImportPayloadColumns
     .map((column) => {
       return `CAST(COUNT(*) FILTER (WHERE selected_base.${column} IS NULL) AS BIGINT) AS selectedBase_${column}_nullCount,
-        CAST(COUNT(*) FILTER (WHERE selected_base.${column} IS NOT NULL) AS BIGINT) AS selectedBase_${column}_nonNullCount`
+        CAST(COUNT(*) FILTER (WHERE selected_base.${column} IS NOT NULL) AS BIGINT) AS selectedBase_${column}_nonNullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'active-or-last-known-good' AND selected_base.${column} IS NULL) AS BIGINT) AS selectedBase_${column}_activeOrLastKnownGoodNullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'active-or-last-known-good' AND selected_base.${column} IS NOT NULL) AS BIGINT) AS selectedBase_${column}_activeOrLastKnownGoodNonNullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'candidate' AND selected_base.${column} IS NULL) AS BIGINT) AS selectedBase_${column}_candidateNullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'candidate' AND selected_base.${column} IS NOT NULL) AS BIGINT) AS selectedBase_${column}_candidateNonNullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'other' AND selected_base.${column} IS NULL) AS BIGINT) AS selectedBase_${column}_otherNullCount,
+        CAST(COUNT(*) FILTER (WHERE selected_base.protection_bucket = 'other' AND selected_base.${column} IS NOT NULL) AS BIGINT) AS selectedBase_${column}_otherNonNullCount`
     })
     .join(',\n        ')
   const hotFieldExpressions = selectedImportPayloadColumns
@@ -864,11 +881,69 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
     const selectedBaseRows = await runReadonlyQuery<Record<string, number | string | null>>(
       runtime,
       `
+        WITH active_manifest AS (
+          SELECT
+            manifest.project_id,
+            manifest.selected_import_snapshot_id,
+            manifest.last_known_good_snapshot_id
+          FROM app.review_serving_snapshot_manifest manifest
+          WHERE manifest.project_id = ${getSqlLiteral(projectId)}
+            AND manifest.snapshot_status = 'active'
+        ),
+        protected_selected_import_snapshot AS (
+          SELECT selected_import_snapshot_id
+          FROM active_manifest
+          WHERE selected_import_snapshot_id IS NOT NULL
+          UNION
+          SELECT last_known_good_manifest.selected_import_snapshot_id
+          FROM active_manifest
+          INNER JOIN app.review_serving_snapshot_manifest last_known_good_manifest
+            ON last_known_good_manifest.project_id = active_manifest.project_id
+            AND last_known_good_manifest.snapshot_id = active_manifest.last_known_good_snapshot_id
+          WHERE last_known_good_manifest.selected_import_snapshot_id IS NOT NULL
+        ),
+        selected_base AS (
+          SELECT
+            raw_selected_base.*,
+            CASE
+              WHEN protected_selected_import_snapshot.selected_import_snapshot_id IS NOT NULL
+                THEN 'active-or-last-known-good'
+              WHEN COALESCE(selected_import_snapshot.status, 'missing-selected-import-snapshot') = 'candidate'
+                THEN 'candidate'
+              ELSE 'other'
+            END AS protection_bucket
+          FROM app.review_selected_article_import_v4 raw_selected_base
+          LEFT JOIN app.review_selected_import_snapshot selected_import_snapshot
+            ON selected_import_snapshot.project_id = raw_selected_base.project_id
+            AND selected_import_snapshot.project_scope_identity = raw_selected_base.project_scope_identity
+            AND selected_import_snapshot.selected_import_snapshot_id = raw_selected_base.selected_import_snapshot_id
+          LEFT JOIN protected_selected_import_snapshot
+            ON protected_selected_import_snapshot.selected_import_snapshot_id = raw_selected_base.selected_import_snapshot_id
+          WHERE raw_selected_base.project_id = ${getSqlLiteral(projectId)}
+        )
         SELECT
           CAST(COUNT(*) AS BIGINT) AS selectedBaseScopedRows,
+          CAST(COUNT(*) FILTER (WHERE protection_bucket = 'active-or-last-known-good') AS BIGINT) AS activeOrLastKnownGoodSelectedImportRows,
+          CAST(COUNT(*) FILTER (WHERE protection_bucket = 'candidate') AS BIGINT) AS candidateSelectedImportRows,
+          CAST(COUNT(*) FILTER (WHERE protection_bucket = 'other') AS BIGINT) AS otherSelectedImportRows,
           ${selectedBaseExpressions}
+        FROM selected_base
+      `,
+    )
+    const snapshotStatusRows = await runReadonlyQuery<{rowCount: number | string; snapshotStatus: string | null}>(
+      runtime,
+      `
+        SELECT
+          COALESCE(selected_import_snapshot.status, 'missing-selected-import-snapshot') AS snapshotStatus,
+          CAST(COUNT(*) AS BIGINT) AS rowCount
         FROM app.review_selected_article_import_v4 selected_base
+        LEFT JOIN app.review_selected_import_snapshot selected_import_snapshot
+          ON selected_import_snapshot.project_id = selected_base.project_id
+          AND selected_import_snapshot.project_scope_identity = selected_base.project_scope_identity
+          AND selected_import_snapshot.selected_import_snapshot_id = selected_base.selected_import_snapshot_id
         WHERE selected_base.project_id = ${getSqlLiteral(projectId)}
+        GROUP BY 1
+        ORDER BY COUNT(*) DESC, snapshotStatus
       `,
     )
     const hotFieldRows = await runReadonlyQuery<Record<string, number | string | null>>(
@@ -887,28 +962,48 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
     const hotFieldRow = hotFieldRows[0] ?? {}
 
     return {
+      activeOrLastKnownGoodSelectedImportRows: getNumberOrNull(selectedBaseRow.activeOrLastKnownGoodSelectedImportRows),
+      candidateSelectedImportRows: getNumberOrNull(selectedBaseRow.candidateSelectedImportRows),
       columns: selectedImportPayloadColumns.map((column) => {
         return {
           column,
           hotFieldNonNullCount: getNumberOrNull(hotFieldRow[`hotField_${column}_nonNullCount`]),
           hotFieldNullCount: getNumberOrNull(hotFieldRow[`hotField_${column}_nullCount`]),
+          selectedBaseActiveOrLastKnownGoodNonNullCount: getNumberOrNull(
+            selectedBaseRow[`selectedBase_${column}_activeOrLastKnownGoodNonNullCount`],
+          ),
+          selectedBaseActiveOrLastKnownGoodNullCount: getNumberOrNull(
+            selectedBaseRow[`selectedBase_${column}_activeOrLastKnownGoodNullCount`],
+          ),
+          selectedBaseCandidateNonNullCount: getNumberOrNull(
+            selectedBaseRow[`selectedBase_${column}_candidateNonNullCount`],
+          ),
+          selectedBaseCandidateNullCount: getNumberOrNull(selectedBaseRow[`selectedBase_${column}_candidateNullCount`]),
           selectedBaseNonNullCount: getNumberOrNull(selectedBaseRow[`selectedBase_${column}_nonNullCount`]),
+          selectedBaseOtherNonNullCount: getNumberOrNull(selectedBaseRow[`selectedBase_${column}_otherNonNullCount`]),
+          selectedBaseOtherNullCount: getNumberOrNull(selectedBaseRow[`selectedBase_${column}_otherNullCount`]),
           selectedBaseNullCount: getNumberOrNull(selectedBaseRow[`selectedBase_${column}_nullCount`]),
         }
       }),
       comparisonStatus:
-        'Hot-field counts are scoped through app.project_import_route for the same project. Non-null hot-field values with null selected-base values mean source data exists but the selected-base projection did not carry it for this scoped snapshot.',
+        'Selected-base counts are split into active/LKG protected selected-import rows, candidate selected-import rows, and other rows. Hot-field counts are scoped through app.project_import_route for the same project. Non-null hot-field values with null selected-base values mean source data exists but the selected-base projection did not carry it for this scoped snapshot.',
       consumerWriterStatus:
         'Current code still writes these fields from app.review_import_article_hot_field into selected-import base rows and reads selected-base values in downstream review-serving projection paths. Treat this as evidence for investigation only.',
       error: null,
       hotFieldScopedRows: getNumberOrNull(hotFieldRow.hotFieldScopedRows),
       note: 'This section is not deletion/slimming authorization. Slimming is only safe after runtime non-population is proven across the intended scope and writer/reader/recovery consumers are changed or proven irrelevant.',
+      otherSelectedImportRows: getNumberOrNull(selectedBaseRow.otherSelectedImportRows),
       projectId,
+      rowsBySelectedImportSnapshotStatus: snapshotStatusRows.map((row) => {
+        return {label: String(row.snapshotStatus ?? 'NULL'), rowCount: Number(row.rowCount ?? 0)}
+      }),
       selectedBaseScopedRows: getNumberOrNull(selectedBaseRow.selectedBaseScopedRows),
       verdict: 'not-authorized',
     }
   } catch (error) {
     return {
+      activeOrLastKnownGoodSelectedImportRows: null,
+      candidateSelectedImportRows: null,
       columns: [],
       comparisonStatus: 'Blocked before source/hot-field comparison could be collected.',
       consumerWriterStatus:
@@ -916,7 +1011,9 @@ const getSelectedImportPayloadSlimmingReadinessReport = async (
       error: error instanceof Error ? error.message : String(error),
       hotFieldScopedRows: null,
       note: 'This section is not deletion/slimming authorization.',
+      otherSelectedImportRows: null,
       projectId,
+      rowsBySelectedImportSnapshotStatus: [],
       selectedBaseScopedRows: null,
       verdict: 'blocked',
     }
@@ -1461,10 +1558,20 @@ const renderMarkdown = (report: EvidenceReport) => {
       `\`${column.column}\``,
       formatValue(column.selectedBaseNullCount),
       formatValue(column.selectedBaseNonNullCount),
+      formatValue(column.selectedBaseActiveOrLastKnownGoodNullCount),
+      formatValue(column.selectedBaseActiveOrLastKnownGoodNonNullCount),
+      formatValue(column.selectedBaseCandidateNullCount),
+      formatValue(column.selectedBaseCandidateNonNullCount),
+      formatValue(column.selectedBaseOtherNullCount),
+      formatValue(column.selectedBaseOtherNonNullCount),
       formatValue(column.hotFieldNullCount),
       formatValue(column.hotFieldNonNullCount),
     ]
   })
+  const selectedImportSnapshotStatusRows =
+    report.selectedImportPayloadSlimmingReadiness.rowsBySelectedImportSnapshotStatus.map((row) => {
+      return [`\`${row.label}\``, formatValue(row.rowCount)]
+    })
   const summaryContributionDuplicateRows = report.summaryContributionServingReadiness.duplicateProbes.map((probe) => {
     return [
       probe.label,
@@ -1600,6 +1707,12 @@ const renderMarkdown = (report: EvidenceReport) => {
     '',
     `Selected-base scoped rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.selectedBaseScopedRows)}`,
     '',
+    `Active/LKG selected-import rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.activeOrLastKnownGoodSelectedImportRows)}`,
+    '',
+    `Candidate selected-import rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.candidateSelectedImportRows)}`,
+    '',
+    `Other selected-import rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.otherSelectedImportRows)}`,
+    '',
     `Hot-field scoped rows: ${formatValue(report.selectedImportPayloadSlimmingReadiness.hotFieldScopedRows)}`,
     '',
     report.selectedImportPayloadSlimmingReadiness.comparisonStatus,
@@ -1612,10 +1725,26 @@ const renderMarkdown = (report: EvidenceReport) => {
     '',
     selectedImportPayloadRows.length > 0
       ? formatMarkdownTable(
-          ['Column', 'Selected-base nulls', 'Selected-base non-nulls', 'Hot-field nulls', 'Hot-field non-nulls'],
+          [
+            'Column',
+            'Selected-base nulls',
+            'Selected-base non-nulls',
+            'Active/LKG nulls',
+            'Active/LKG non-nulls',
+            'Candidate nulls',
+            'Candidate non-nulls',
+            'Other nulls',
+            'Other non-nulls',
+            'Hot-field nulls',
+            'Hot-field non-nulls',
+          ],
           selectedImportPayloadRows,
         )
       : '_No selected-import payload evidence rows were collected._',
+    '',
+    selectedImportSnapshotStatusRows.length > 0
+      ? formatMarkdownTable(['Selected-import snapshot status', 'Rows'], selectedImportSnapshotStatusRows)
+      : '_No selected-import snapshot status rows were collected._',
     '',
     '## Summary Contribution Serving Readiness',
     '',
