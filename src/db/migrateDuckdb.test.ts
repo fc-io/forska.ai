@@ -87,9 +87,14 @@ test('DuckDB migrations retire bounded review-serving patch tables with forward 
     resolve(migrationsFolder, '0119_dropReviewHumanStatusPatchV4.sql'),
     'utf8',
   ).trim()
+  const reviewLlmStatusPatchDropSql = readFileSync(
+    resolve(migrationsFolder, '0120_dropReviewLlmStatusPatchV4.sql'),
+    'utf8',
+  ).trim()
 
   expect(reviewQueuePatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_queue_patch_v4;')
   expect(reviewHumanStatusPatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_human_status_patch_v4;')
+  expect(reviewLlmStatusPatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_llm_status_patch_v4;')
 })
 
 test('DuckDB migrations repair legacy review serving judgment detail payload-kind schema drift', async () => {

@@ -21,6 +21,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0113_reviewServingSummaryContributionRebuildPartial.sql',
   '../../db/duckdbMigrations/0118_dropReviewQueuePatchV4.sql',
   '../../db/duckdbMigrations/0119_dropReviewHumanStatusPatchV4.sql',
+  '../../db/duckdbMigrations/0120_dropReviewLlmStatusPatchV4.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -52,6 +53,8 @@ const reviewQueuePatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0118_dropReviewQueuePatchV4.sql']
 const reviewHumanStatusPatchRetirementForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0119_dropReviewHumanStatusPatchV4.sql']
+const reviewLlmStatusPatchRetirementForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0120_dropReviewLlmStatusPatchV4.sql']
 const selectedImportPatchDisplayFieldsForwardMigrationSql = readFileSync(
   resolve(import.meta.dir, '../../db/duckdbMigrations/0108_reviewSelectedImportPatchDisplayFields.sql'),
   'utf8',
@@ -91,7 +94,6 @@ const reviewServingPhase1Tables = [
   'mart.review_article_serving_v4',
   'mart.review_article_display_patch_v4',
   'mart.review_selected_import_patch_v4',
-  'mart.review_llm_status_patch_v4',
   'mart.review_article_filter_posting_patch_v4',
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_filter_posting_stats_v4',
@@ -108,6 +110,7 @@ const reviewServingPhase1Tables = [
 const retiredReviewServingTables = new Set<string>([
   'mart.review_queue_patch_v4',
   'mart.review_human_status_patch_v4',
+  'mart.review_llm_status_patch_v4',
 ])
 
 const deltaEnvelopeColumns = [
@@ -219,6 +222,10 @@ test('retired patch tables are absent from the active review-serving schema', ()
   expect(reviewHumanStatusPatchRetirementForwardMigrationSql.trim()).toBe(
     'DROP TABLE IF EXISTS mart.review_human_status_patch_v4;',
   )
+  expect(getTableSql('mart.review_llm_status_patch_v4')).toBe('')
+  expect(reviewLlmStatusPatchRetirementForwardMigrationSql.trim()).toBe(
+    'DROP TABLE IF EXISTS mart.review_llm_status_patch_v4;',
+  )
 })
 
 test('Phase 1 schema migration creates every read-contract physical table', () => {
@@ -273,9 +280,6 @@ test('Phase 1 schema migration includes the common delta envelope', () => {
 test('Phase 1 schema migration separates logical snapshots from component bases and patches', () => {
   expect(
     getMissingColumns('mart.review_article_serving_v4', ['snapshot_id', 'base_generation', 'patch_watermark']),
-  ).toEqual([])
-  expect(
-    getMissingColumns('mart.review_llm_status_patch_v4', ['base_generation', 'patch_watermark', 'tombstone']),
   ).toEqual([])
   expect(getMissingColumns('app.review_serving_snapshot_manifest', ['required_components_json'])).toEqual([])
   expect(getMissingColumns('app.review_serving_snapshot_manifest', ['optional_components_json'])).toEqual([])
