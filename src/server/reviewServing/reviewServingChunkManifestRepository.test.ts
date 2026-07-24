@@ -38,11 +38,13 @@ const getSqlStrings = (statement: string) => {
 }
 
 const getWhereLiteral = (statement: string, columnName: string) => {
-  return (
+  const value =
     statement
       .match(new RegExp(`(?<![A-Za-z0-9_])${columnName}\\s*=\\s*'((?:''|[^'])*)'`, 'u'))?.[1]
-      ?.replaceAll("''", "'") ?? null
-  )
+    ?? statement.match(new RegExp(`\\(${columnName}\\s*\\|\\|\\s*''\\)\\s*=\\s*'((?:''|[^'])*)'`, 'u'))?.[1]
+    ?? statement.match(new RegExp(`\\([A-Za-z0-9_]+\\.${columnName}\\s*\\|\\|\\s*''\\)\\s*=\\s*'((?:''|[^'])*)'`, 'u'))?.[1]
+
+  return value?.replaceAll("''", "'") ?? null
 }
 
 const getAssignmentLiteral = (statement: string, columnName: string) => {
@@ -54,7 +56,11 @@ const getAssignmentLiteral = (statement: string, columnName: string) => {
 }
 
 const hasChunkIdLiteralPredicate = (statement: string) => {
-  return statement.match(/chunk_id\s*=\s*'/u) !== null
+  return (
+    statement.match(/chunk_id\s*=\s*'/u) !== null
+    || statement.match(/\(chunk_id\s*\|\|\s*''\)\s*=\s*'/u) !== null
+    || statement.match(/\([A-Za-z0-9_]+\.chunk_id\s*\|\|\s*''\)\s*=\s*'/u) !== null
+  )
 }
 
 const getChunkIdLiteral = (statement: string) => {
@@ -1540,7 +1546,7 @@ test('failed chunks can be claimed again and completed transactionally with outp
     lastError: 'previous worker crashed',
     status: 'failed' as const,
   }
-  const {database, outputWrites, rows} = createFakeChunkManifestDatabase([failed])
+  const {database, outputWrites, rows, statements} = createFakeChunkManifestDatabase([failed])
 
   const claimed = await claimReviewServingRebuildChunk(
     {
@@ -1568,6 +1574,8 @@ test('failed chunks can be claimed again and completed transactionally with outp
   expect(claimed).toMatchObject({leaseOwner: 'worker-2', status: 'running'})
   expect(outputWrites).toHaveLength(1)
   expect(completed).toMatchObject({checksum: 'checksum-v2', status: 'completed'})
+  expect(statements.join('\n')).toContain("(chunk_id || '') =")
+  expect(statements.join('\n')).toContain("(manifest.chunk_id || '') =")
   expect(rows.get(getReviewServingRebuildChunkId(baseChunkIdentity))?.lastError).toBeNull()
 })
 

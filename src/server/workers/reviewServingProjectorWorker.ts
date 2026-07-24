@@ -6461,7 +6461,7 @@ const getForegroundRebuildChunkBatchSize = (chunk: {
   }
 
   if (chunk.projectionComponent === 'search') {
-    return 64
+    return 1
   }
 
   return 16

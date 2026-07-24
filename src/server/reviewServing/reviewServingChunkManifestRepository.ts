@@ -794,6 +794,12 @@ const getReviewServingRebuildChunkIdentityPredicate = (input: ReviewServingRebui
   `
 }
 
+const getReviewServingRebuildChunkIdPredicate = (chunkId: string, tableAlias?: string) => {
+  const source = tableAlias ? `${tableAlias}.` : ''
+
+  return `(${source}chunk_id || '') = ${getSqlLiteral(chunkId)}`
+}
+
 export const getReviewServingRebuildChunkClaimPredicate = (
   input: {now: Date | string; projectionComponent?: ReviewServingProjectionComponent},
   tableAlias?: string,
@@ -950,7 +956,7 @@ export const getReviewServingRebuildChunkManifest = async (
 ) => {
   const rows = await database.queryJson<ReviewServingRebuildChunkManifestRow>(`
     ${getReviewServingRebuildChunkSelect()}
-    WHERE chunk_id = ${getSqlLiteral(input.chunkId)}
+    WHERE ${getReviewServingRebuildChunkIdPredicate(input.chunkId)}
     LIMIT 1
   `)
 
@@ -1237,7 +1243,7 @@ export const isReviewServingRebuildChunkComplete = async (
   const identityPredicate =
     input.chunkId === undefined
       ? getReviewServingRebuildChunkIdentityPredicate(input)
-      : `chunk_id = ${getSqlLiteral(input.chunkId)}`
+      : getReviewServingRebuildChunkIdPredicate(input.chunkId)
   const rows = await database.queryJson<{chunkId: string}>(`
     SELECT chunk_id AS chunkId
     FROM app.review_rebuild_chunk_manifest
@@ -1266,7 +1272,7 @@ export const claimReviewServingRebuildChunk = async (
       last_error = NULL,
       started_at = COALESCE(started_at, current_timestamp),
       updated_at = current_timestamp
-    WHERE manifest.chunk_id = ${getSqlLiteral(chunkId)}
+    WHERE ${getReviewServingRebuildChunkIdPredicate(chunkId, 'manifest')}
       AND (${getReviewServingRebuildChunkLeaseClaimPredicate(input, 'manifest')})
   `)
   const claimed = await getReviewServingRebuildChunkManifest({chunkId}, database)
@@ -1283,7 +1289,7 @@ export const heartbeatReviewServingRebuildChunkLease = async (
     SET
       lease_expires_at = ${getReviewServingChunkTimestampLiteral(input.leaseExpiresAt)},
       updated_at = current_timestamp
-    WHERE chunk_id = ${getSqlLiteral(input.chunkId)}
+    WHERE ${getReviewServingRebuildChunkIdPredicate(input.chunkId)}
       AND status = 'running'
       AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
   `)
@@ -1376,7 +1382,7 @@ export const markReviewServingRebuildChunkFailed = async (
       lease_owner = NULL,
       lease_expires_at = NULL,
       updated_at = current_timestamp
-    WHERE chunk_id = ${getSqlLiteral(input.chunkId)}
+    WHERE ${getReviewServingRebuildChunkIdPredicate(input.chunkId)}
       ${leasePredicate}
       AND status <> 'completed'
   `)
@@ -1442,7 +1448,7 @@ export const writeReviewServingRebuildChunkOutput = async (
         last_error = NULL,
         completed_at = current_timestamp,
         updated_at = current_timestamp
-      WHERE chunk_id = ${getSqlLiteral(chunkId)}
+      WHERE ${getReviewServingRebuildChunkIdPredicate(chunkId)}
         AND status = 'running'
         AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
     `)
