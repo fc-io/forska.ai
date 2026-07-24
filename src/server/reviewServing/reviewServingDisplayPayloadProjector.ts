@@ -465,46 +465,7 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
     FROM display_base
     CROSS JOIN list_mode
     ORDER BY display_base.articleId ASC, list_mode.list_mode_key ASC
-    ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO UPDATE SET
-      activity_sort_at = excluded.activity_sort_at,
-      article_created_at = excluded.article_created_at,
-      article_external_id = excluded.article_external_id,
-      article_title = excluded.article_title,
-      article_updated_at = excluded.article_updated_at,
-      arxiv_id = excluded.arxiv_id,
-      base_generation = excluded.base_generation,
-      biorxiv_id = excluded.biorxiv_id,
-      conflict_flag = excluded.conflict_flag,
-      display_identity = excluded.display_identity,
-      doi = excluded.doi,
-      duplicate_flag = excluded.duplicate_flag,
-      enabled_prompt_count = excluded.enabled_prompt_count,
-      full_text_conversion_status = excluded.full_text_conversion_status,
-      full_text_fetched_at = excluded.full_text_fetched_at,
-      full_text_pdf = excluded.full_text_pdf,
-      human_answered_prompt_count = excluded.human_answered_prompt_count,
-      human_status_identity = excluded.human_status_identity,
-      human_status_key = excluded.human_status_key,
-      journal_title = excluded.journal_title,
-      llm_judged_prompt_count = excluded.llm_judged_prompt_count,
-      llm_status_identity = excluded.llm_status_identity,
-      llm_status_key = excluded.llm_status_key,
-      medrxiv_id = excluded.medrxiv_id,
-      patch_watermark = excluded.patch_watermark,
-      payload_identity = excluded.payload_identity,
-      pmid = excluded.pmid,
-      posting_identity = excluded.posting_identity,
-      project_scope_identity = excluded.project_scope_identity,
-      publication_year = excluded.publication_year,
-      review_opened = excluded.review_opened,
-      review_sections_completed = excluded.review_sections_completed,
-      selected_import_identity = excluded.selected_import_identity,
-      selected_import_route_id = excluded.selected_import_route_id,
-      selected_rank_key = excluded.selected_rank_key,
-      serving_updated_at = excluded.serving_updated_at,
-      sort_key = excluded.sort_key,
-      summary_identity = excluded.summary_identity,
-      url = excluded.url
+    ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING
   `
 }
 
