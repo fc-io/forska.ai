@@ -35,6 +35,14 @@ from `app.review_import_article_hot_field` when the retained
 resolve a hot row, but selected-base fallback/default behavior and selected-base
 flag writers remain required.
 
+The physical evidence inspector now reports duplicate/conflict readiness as
+read-only current-DB evidence in the same selected-import section. It counts
+selected-base rows, hot rows resolved by retained identity, selected-base and
+hot TRUE counts, `IS DISTINCT FROM` mismatch counts, and missing-hot rows where
+selected-base TRUE or false/default fallback values still carry the result. This
+evidence is intentionally post-drop-safe for the display-copy columns and does
+not imply schema-removal authorization for the flag columns.
+
 ## Latest Evidence
 
 Generated with:
@@ -64,7 +72,8 @@ The global/current-DB display-copy evidence found:
 - For `publication_year`, `article_title`, `journal_title`, and `external_id`: selected-base nulls 620,792, selected-base non-nulls 0
 
 Additional current primary DB duplicate/conflict evidence after the
-display-copy migration found:
+display-copy migration is now reported by
+`scripts/inspectReviewServingPhysicalEvidence.ts`. The latest run found:
 
 - Selected-base rows: 620,792
 - Hot-field rows resolved by `(import_route_id, article_id, source_record_key)` from those selected-base rows: 0
@@ -73,6 +82,7 @@ display-copy migration found:
 - Hot `duplicate_flag = TRUE` rows: 0
 - Hot `conflict_flag = TRUE` rows: 0
 - `IS DISTINCT FROM` mismatches for both flags: 620,792, because hot columns are null while selected-base flags default false
+- Missing-hot selected-base false/default fallback rows for both flags: 620,792
 
 ## Verdict
 

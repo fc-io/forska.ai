@@ -81,6 +81,12 @@ selected-import snapshot rows; per-column selected-base null/non-null counts;
 and same-project hot-field availability through `app.project_import_route`.
 It now acts as a regression/readiness check for selected-base display-copy
 write suppression and the bounded `0124` display-copy schema drop.
+The same selected-import artifact also reports read-only duplicate/conflict
+fallback readiness: selected-base flag counts, hot rows resolved by retained
+`(import_route_id, article_id, source_record_key)` identity, hot flag counts,
+`IS DISTINCT FROM` mismatches, and missing-hot selected-base fallback/default
+rows split by selected-import snapshot status and active/LKG protection. This
+does not authorize removing selected-base flag writers or columns.
 The display-copy global evidence artifact extends that check to current-DB
 selected-base counts for only `publication_year`, `article_title`,
 `journal_title`, and `external_id`, split by selected-import snapshot status
