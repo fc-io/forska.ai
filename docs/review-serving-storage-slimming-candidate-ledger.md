@@ -29,7 +29,9 @@ Terminal rebuild artifact cleanup remains conservative. The physical inspector
 now classifies project-wide first-blocker categories for the existing
 first-slice retention predicates, and now adds proof-only artifact disposition
 evidence for requestless chunk-manifest rows plus chunk/partial artifacts by
-request disposition. Current-DB evidence for project
+request disposition, including sample request ids per disposition so operators
+can dry-run targeted recovery scripts without guessing ids. Current-DB evidence
+for project
 `7dfb4dd5-d2fe-4b21-b626-7ab26953f6ac` still reports zero terminal candidates
 and zero eligible cleanup rows across the contribution partial, summary partial,
 and chunk-manifest tables. The observed blockers are non-completed/admitted
