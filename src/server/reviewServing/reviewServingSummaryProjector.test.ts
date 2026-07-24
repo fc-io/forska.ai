@@ -558,12 +558,16 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
     'ON CONFLICT(request_id, chunk_id, project_id, review_config_hash, snapshot_id, serving_key) DO UPDATE SET',
   )
   expect(joined).toContain("AND chunk_id = '__summary_rebuild_partial_accumulator__:")
-  expect(joined).not.toContain('DELETE FROM mart.review_article_count_serving_v4')
-  expect(joined).not.toContain('DELETE FROM mart.review_filter_facet_serving_v4')
-  expect(joined).toContain(
+  expect(joined).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_count_publication AS')
+  expect(joined).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_facet_publication AS')
+  expect(joined).toContain('DELETE FROM mart.review_article_count_serving_v4 serving')
+  expect(joined).toContain('USING temp_summary_rebuild_count_publication replacement')
+  expect(joined).toContain('DELETE FROM mart.review_filter_facet_serving_v4 serving')
+  expect(joined).toContain('USING temp_summary_rebuild_facet_publication replacement')
+  expect(joined).not.toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, count_kind, summary_definition_version, filter_key) DO UPDATE SET',
   )
-  expect(joined).toContain(
+  expect(joined).not.toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version) DO UPDATE SET',
   )
   expect(joined).toContain('FROM mart.review_article_summary_contribution_rebuild_partial_v4')

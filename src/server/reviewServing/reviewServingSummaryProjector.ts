@@ -970,6 +970,7 @@ const reduceSummaryRebuildPartialChunkBatchIntoAccumulator = async (
 const reduceSummaryRebuildPartialBatchesIntoAccumulator = async (
   input: {
     accumulatorChunkId: string
+    chunkIds: readonly string[]
     projectId: string
     requestId: string
     reviewConfigHash: string
@@ -1011,20 +1012,10 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
     const scopePredicate = getSummaryRebuildPartialScopePredicate(input)
     await tx.run(getRefreshSummaryRebuildAccumulatorCountsStatement(scopedInput))
     await tx.run(`
-      INSERT INTO mart.review_article_count_serving_v4 (
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        summary_identity,
-        list_mode_key,
-        count_kind,
-        summary_definition_version,
-        filter_key,
-        count_value,
-        availability,
-        stale_reason,
-        count_updated_at
-      )
+      DROP TABLE IF EXISTS temp_summary_rebuild_count_publication
+    `)
+    await tx.run(`
+      CREATE TEMPORARY TABLE temp_summary_rebuild_count_publication AS
       SELECT
         project_id,
         review_config_hash,
@@ -1043,12 +1034,85 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         AND chunk_id = ${getSqlLiteral(accumulatorChunkId)}
         AND summary_kind = 'count'
       GROUP BY project_id, review_config_hash, snapshot_id, COALESCE(list_mode_key, 'global'), count_kind, summary_definition_version, filter_key
-      ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, count_kind, summary_definition_version, filter_key) DO UPDATE SET
-        summary_identity = excluded.summary_identity,
-        count_value = excluded.count_value,
-        availability = excluded.availability,
-        stale_reason = excluded.stale_reason,
-        count_updated_at = excluded.count_updated_at
+    `)
+    await tx.run(`
+      DELETE FROM mart.review_article_count_serving_v4 serving
+      USING temp_summary_rebuild_count_publication replacement
+      WHERE serving.project_id = replacement.project_id
+        AND serving.review_config_hash = replacement.review_config_hash
+        AND serving.snapshot_id = replacement.snapshot_id
+        AND serving.list_mode_key = replacement.list_mode_key
+        AND serving.count_kind = replacement.count_kind
+        AND serving.summary_definition_version = replacement.summary_definition_version
+        AND serving.filter_key IS NOT DISTINCT FROM replacement.filter_key
+    `)
+    await tx.run(`
+      INSERT INTO mart.review_article_count_serving_v4 (
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        summary_identity,
+        list_mode_key,
+        count_kind,
+        summary_definition_version,
+        filter_key,
+        count_value,
+        availability,
+        stale_reason,
+        count_updated_at
+      )
+      SELECT
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        summary_identity,
+        list_mode_key,
+        count_kind,
+        summary_definition_version,
+        filter_key,
+        count_value,
+        availability,
+        stale_reason,
+        count_updated_at
+      FROM temp_summary_rebuild_count_publication
+    `)
+    await tx.run(`
+      DROP TABLE IF EXISTS temp_summary_rebuild_facet_publication
+    `)
+    await tx.run(`
+      CREATE TEMPORARY TABLE temp_summary_rebuild_facet_publication AS
+      SELECT
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        summary_identity,
+        facet_kind,
+        facet_key,
+        facet_value,
+        ANY_VALUE(prompt_id) AS prompt_id,
+        ANY_VALUE(answer_id) AS answer_id,
+        ANY_VALUE(answer_value) AS answer_value,
+        summary_definition_version,
+        CASE WHEN ANY_VALUE(availability) = 'ready' THEN SUM(COALESCE(count_value, 0)) ELSE NULL END AS count_value,
+        ANY_VALUE(availability) AS availability,
+        current_timestamp AS facet_updated_at
+      FROM mart.review_article_summary_rebuild_partial_v4
+      WHERE ${scopePredicate}
+        AND chunk_id = ${getSqlLiteral(accumulatorChunkId)}
+        AND summary_kind = 'facet'
+      GROUP BY project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version
+    `)
+    await tx.run(`
+      DELETE FROM mart.review_filter_facet_serving_v4 serving
+      USING temp_summary_rebuild_facet_publication replacement
+      WHERE serving.project_id = replacement.project_id
+        AND serving.review_config_hash = replacement.review_config_hash
+        AND serving.snapshot_id = replacement.snapshot_id
+        AND serving.summary_identity = replacement.summary_identity
+        AND serving.facet_kind = replacement.facet_kind
+        AND serving.facet_key = replacement.facet_key
+        AND serving.facet_value = replacement.facet_value
+        AND serving.summary_definition_version = replacement.summary_definition_version
     `)
     await tx.run(`
       INSERT INTO mart.review_filter_facet_serving_v4 (
@@ -1075,25 +1139,20 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
         facet_kind,
         facet_key,
         facet_value,
-        ANY_VALUE(prompt_id) AS prompt_id,
-        ANY_VALUE(answer_id) AS answer_id,
-        ANY_VALUE(answer_value) AS answer_value,
+        prompt_id,
+        answer_id,
+        answer_value,
         summary_definition_version,
-        CASE WHEN ANY_VALUE(availability) = 'ready' THEN SUM(COALESCE(count_value, 0)) ELSE NULL END AS count_value,
-        ANY_VALUE(availability) AS availability,
-        current_timestamp AS facet_updated_at
-      FROM mart.review_article_summary_rebuild_partial_v4
-      WHERE ${scopePredicate}
-        AND chunk_id = ${getSqlLiteral(accumulatorChunkId)}
-        AND summary_kind = 'facet'
-      GROUP BY project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version
-      ON CONFLICT(project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version) DO UPDATE SET
-        prompt_id = excluded.prompt_id,
-        answer_id = excluded.answer_id,
-        answer_value = excluded.answer_value,
-        count_value = excluded.count_value,
-        availability = excluded.availability,
-        facet_updated_at = excluded.facet_updated_at
+        count_value,
+        availability,
+        facet_updated_at
+      FROM temp_summary_rebuild_facet_publication
+    `)
+    await tx.run(`
+      DROP TABLE IF EXISTS temp_summary_rebuild_count_publication
+    `)
+    await tx.run(`
+      DROP TABLE IF EXISTS temp_summary_rebuild_facet_publication
     `)
   })
 }
