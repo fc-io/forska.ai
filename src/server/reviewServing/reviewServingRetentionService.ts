@@ -26,7 +26,13 @@ type RetentionStateRow = {
   snapshotId: string | null
 }
 
-type CleanupTableSpec = {keyColumn: string; protectedPredicate: string; table: string}
+type CleanupTableSpec = {
+  kind?: 'snapshot' | 'terminalRebuildChunkManifest' | 'terminalRebuildPartial'
+  keyColumn: string
+  orderBy?: string
+  protectedPredicate: string
+  table: string
+}
 
 const defaultRetentionCleanupBatchSize = 512
 const defaultRetentionCleanupTargetLimit = 16
@@ -50,6 +56,27 @@ const cleanupTableSpecs: readonly CleanupTableSpec[] = [
     keyColumn: 'selected_import_snapshot_id',
     protectedPredicate: 'selected_import_snapshot_id',
     table: 'app.review_selected_article_import_v4',
+  },
+  {
+    kind: 'terminalRebuildPartial',
+    keyColumn: 'request_id, chunk_id, snapshot_id',
+    orderBy: 'candidate.request_id, candidate.chunk_id, candidate.snapshot_id',
+    protectedPredicate: 'snapshot_id',
+    table: 'mart.review_article_summary_contribution_rebuild_partial_v4',
+  },
+  {
+    kind: 'terminalRebuildPartial',
+    keyColumn: 'request_id, chunk_id, snapshot_id',
+    orderBy: 'candidate.request_id, candidate.chunk_id, candidate.snapshot_id',
+    protectedPredicate: 'snapshot_id',
+    table: 'mart.review_article_summary_rebuild_partial_v4',
+  },
+  {
+    kind: 'terminalRebuildChunkManifest',
+    keyColumn: 'request_id, chunk_id',
+    orderBy: 'candidate.request_id, candidate.chunk_id',
+    protectedPredicate: 'snapshot_id',
+    table: 'app.review_rebuild_chunk_manifest',
   },
 ]
 
@@ -155,10 +182,213 @@ const getRetentionCursorIndex = (row: RetentionStateRow | null) => {
   return Math.max(0, Number(cursor?.tableIndex ?? 0))
 }
 
+const getCleanupOrderBy = (spec: CleanupTableSpec) => {
+  return spec.orderBy ?? `candidate.${spec.keyColumn}`
+}
+
+const getReviewConfigHashPredicate = (input: ReviewServingRetentionCleanupInput, source = 'candidate') => {
+  return `${source}.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(input.reviewConfigHash ?? null)}`
+}
+
+const getActiveSnapshotManifestGuardPredicate = (snapshotColumn: string) => {
+  return `EXISTS (
+            SELECT 1
+            FROM app.review_serving_snapshot_manifest active_manifest
+            WHERE active_manifest.project_id = candidate.project_id
+              AND active_manifest.snapshot_status = 'active'
+              AND (
+                active_manifest.snapshot_id = candidate.${snapshotColumn}
+                OR active_manifest.last_known_good_snapshot_id = candidate.${snapshotColumn}
+                OR active_manifest.selected_import_snapshot_id = candidate.${snapshotColumn}
+              )
+          )`
+}
+
+const getActiveSnapshotPinGuardPredicate = (snapshotColumn: string, now: Date | string) => {
+  return `EXISTS (
+            SELECT 1
+            FROM app.review_serving_snapshot_pin pin
+            WHERE pin.project_id = candidate.project_id
+              AND pin.snapshot_id = candidate.${snapshotColumn}
+              AND ${getActivePinPredicate(now)}
+          )`
+}
+
+const getProtectedRebuildRequestPredicate = (requestSource: string, now: Date | string) => {
+  return `EXISTS (
+            SELECT 1
+            FROM app.review_rebuild_request protected_request
+            WHERE protected_request.request_id = ${requestSource}.request_id
+              AND protected_request.project_id = ${requestSource}.project_id
+              AND (
+                protected_request.status IN (
+                  'pending_admission',
+                  'admitted',
+                  'running',
+                  'blocked_over_budget',
+                  'quarantined'
+                )
+                OR protected_request.admission_state IN ('pending', 'blocked_over_budget')
+                OR (
+                  protected_request.status = 'failed'
+                  AND protected_request.admission_state = 'admitted'
+                  AND (
+                    protected_request.retry_after IS NULL
+                    OR protected_request.retry_after <= ${getTimestampLiteral(now)}
+                  )
+                  AND EXISTS (
+                    SELECT 1
+                    FROM app.review_rebuild_chunk_manifest retryable_chunk
+                    WHERE retryable_chunk.request_id = protected_request.request_id
+                      AND retryable_chunk.status = 'failed'
+                      AND COALESCE(retryable_chunk.retry_count, 0) < COALESCE(
+                        GREATEST(
+                          1,
+                          TRY_CAST(json_extract_string(protected_request.retry_policy_json, '$.maxAttempts') AS INTEGER)
+                        ),
+                        3
+                      )
+                  )
+                )
+              )
+          )`
+}
+
+const getNewestDiagnosticRebuildRequestPredicate = (requestSource: string) => {
+  return `EXISTS (
+            SELECT 1
+            FROM app.review_rebuild_request diagnostic_request
+            WHERE diagnostic_request.request_id = ${requestSource}.request_id
+              AND diagnostic_request.project_id = ${requestSource}.project_id
+              AND diagnostic_request.status IN ('failed', 'blocked_over_budget', 'quarantined')
+              AND NOT EXISTS (
+                SELECT 1
+                FROM app.review_rebuild_request newer_diagnostic_request
+                WHERE newer_diagnostic_request.project_id = diagnostic_request.project_id
+                  AND newer_diagnostic_request.status IN ('failed', 'blocked_over_budget', 'quarantined')
+                  AND (
+                    newer_diagnostic_request.updated_at > diagnostic_request.updated_at
+                    OR (
+                      newer_diagnostic_request.updated_at = diagnostic_request.updated_at
+                      AND newer_diagnostic_request.request_id > diagnostic_request.request_id
+                    )
+                  )
+              )
+          )`
+}
+
+const getTerminalRebuildChunkPredicate = (chunkSource: string) => {
+  return `${chunkSource}.status = 'completed'
+          AND ${chunkSource}.admission_state = 'admitted'`
+}
+
+const deleteTerminalRebuildPartialCleanupBatch = async (
+  input: ReviewServingRetentionCleanupInput & {spec: CleanupTableSpec},
+  database: ReviewServingRetentionServiceTransaction,
+) => {
+  await database.run(`
+    DELETE FROM ${input.spec.table}
+    WHERE rowid IN (
+        SELECT candidate.rowid
+        FROM ${input.spec.table} candidate
+        INNER JOIN app.review_rebuild_request request
+          ON request.request_id = candidate.request_id
+          AND request.project_id = candidate.project_id
+        INNER JOIN app.review_rebuild_chunk_manifest chunk
+          ON chunk.request_id = candidate.request_id
+          AND chunk.chunk_id = candidate.chunk_id
+          AND chunk.project_id = candidate.project_id
+          AND chunk.snapshot_id = candidate.snapshot_id
+          AND chunk.projection_component = 'summary'
+        WHERE candidate.project_id = ${getSqlLiteral(input.projectId)}
+          AND ${getReviewConfigHashPredicate(input)}
+          AND request.status = 'completed'
+          AND request.admission_state = 'admitted'
+          AND ${getTerminalRebuildChunkPredicate('chunk')}
+          AND NOT (${getActiveSnapshotManifestGuardPredicate(input.spec.protectedPredicate)})
+          AND NOT (${getActiveSnapshotPinGuardPredicate(input.spec.protectedPredicate, input.now)})
+          AND NOT (${getProtectedRebuildRequestPredicate('request', input.now)})
+          AND NOT (${getNewestDiagnosticRebuildRequestPredicate('request')})
+        ORDER BY ${getCleanupOrderBy(input.spec)}
+        LIMIT ${getSqlLiteral(input.batchSize)}
+      )
+  `)
+}
+
+const getManifestReviewConfigHashPredicate = (input: ReviewServingRetentionCleanupInput) => {
+  return `EXISTS (
+            SELECT 1
+            FROM app.review_serving_snapshot_manifest cleanup_snapshot
+            WHERE cleanup_snapshot.project_id = candidate.project_id
+              AND cleanup_snapshot.snapshot_id = candidate.snapshot_id
+              AND cleanup_snapshot.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(input.reviewConfigHash ?? null)}
+          )`
+}
+
+const getChunkManifestPartialRowsGonePredicate = () => {
+  return `NOT EXISTS (
+            SELECT 1
+            FROM mart.review_article_summary_contribution_rebuild_partial_v4 contribution_partial
+            WHERE contribution_partial.project_id = candidate.project_id
+              AND contribution_partial.request_id = candidate.request_id
+              AND contribution_partial.chunk_id = candidate.chunk_id
+              AND contribution_partial.snapshot_id = candidate.snapshot_id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM mart.review_article_summary_rebuild_partial_v4 summary_partial
+            WHERE summary_partial.project_id = candidate.project_id
+              AND summary_partial.request_id = candidate.request_id
+              AND summary_partial.chunk_id = candidate.chunk_id
+              AND summary_partial.snapshot_id = candidate.snapshot_id
+          )`
+}
+
+const deleteTerminalRebuildChunkManifestCleanupBatch = async (
+  input: ReviewServingRetentionCleanupInput & {spec: CleanupTableSpec},
+  database: ReviewServingRetentionServiceTransaction,
+) => {
+  await database.run(`
+    DELETE FROM ${input.spec.table}
+    WHERE rowid IN (
+        SELECT candidate.rowid
+        FROM ${input.spec.table} candidate
+        INNER JOIN app.review_rebuild_request request
+          ON request.request_id = candidate.request_id
+          AND request.project_id = candidate.project_id
+        WHERE candidate.project_id = ${getSqlLiteral(input.projectId)}
+          AND candidate.request_id IS NOT NULL
+          AND candidate.snapshot_id IS NOT NULL
+          AND candidate.projection_component = 'summary'
+          AND ${getManifestReviewConfigHashPredicate(input)}
+          AND request.status = 'completed'
+          AND request.admission_state = 'admitted'
+          AND ${getTerminalRebuildChunkPredicate('candidate')}
+          AND NOT (${getActiveSnapshotManifestGuardPredicate(input.spec.protectedPredicate)})
+          AND NOT (${getActiveSnapshotPinGuardPredicate(input.spec.protectedPredicate, input.now)})
+          AND NOT (${getProtectedRebuildRequestPredicate('request', input.now)})
+          AND NOT (${getNewestDiagnosticRebuildRequestPredicate('request')})
+          AND ${getChunkManifestPartialRowsGonePredicate()}
+        ORDER BY ${getCleanupOrderBy(input.spec)}
+        LIMIT ${getSqlLiteral(input.batchSize)}
+      )
+  `)
+}
+
 const deleteCleanupBatch = async (
   input: ReviewServingRetentionCleanupInput & {spec: CleanupTableSpec},
   database: ReviewServingRetentionServiceTransaction,
 ) => {
+  if (input.spec.kind === 'terminalRebuildPartial') {
+    await deleteTerminalRebuildPartialCleanupBatch(input, database)
+    return
+  }
+
+  if (input.spec.kind === 'terminalRebuildChunkManifest') {
+    await deleteTerminalRebuildChunkManifestCleanupBatch(input, database)
+    return
+  }
+
   await database.run(`
     DELETE FROM ${input.spec.table}
     WHERE rowid IN (
@@ -184,7 +414,7 @@ const deleteCleanupBatch = async (
               AND pin.snapshot_id = candidate.${input.spec.protectedPredicate}
               AND ${getActivePinPredicate(input.now)}
           )
-        ORDER BY candidate.${input.spec.keyColumn}
+        ORDER BY ${getCleanupOrderBy(input.spec)}
         LIMIT ${getSqlLiteral(input.batchSize)}
       )
   `)
