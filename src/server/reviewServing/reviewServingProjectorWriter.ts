@@ -108,10 +108,12 @@ const reviewServingProjectorRecordBatchSizeByTable = new Map<string, number>([
 ])
 const reviewServingProjectorDeleteScopedInsertOnlyTables = new Set<string>([
   'app.review_selected_article_import_v4',
-  'mart.review_article_summary_contribution_rebuild_partial_v4',
-  'mart.review_article_summary_rebuild_partial_v4',
   'mart.review_filter_posting_stats_v4',
   'mart.review_title_search_serving_v4',
+])
+const reviewServingProjectorScanGuardedInsertMissingTables = new Set<string>([
+  'mart.review_article_summary_contribution_rebuild_partial_v4',
+  'mart.review_article_summary_rebuild_partial_v4',
 ])
 
 export type WriteReviewServingQueueRebuildRowsInput = {
@@ -249,7 +251,10 @@ export const getReviewServingProjectorReplayKey = (input: {
 const writeReviewServingProjectorRecordBatch = async (
   records: readonly ReviewServingProjectorRecord[],
   tx: ReviewServingProjectorWriterTransaction,
-  options: {insertOnly: boolean} = {insertOnly: false},
+  options: {insertOnly: boolean; scanGuardedInsertMissing: boolean} = {
+    insertOnly: false,
+    scanGuardedInsertMissing: false,
+  },
 ) => {
   const firstRecord = records[0]
   if (firstRecord === undefined) {
@@ -267,24 +272,53 @@ const writeReviewServingProjectorRecordBatch = async (
       return `${column} = excluded.${column}`
     })
   const conflictUpdate = assignments.length === 0 ? 'DO NOTHING' : `DO UPDATE SET ${assignments.join(', ')}`
-  const conflictClause = options.insertOnly
+  const conflictClause = options.insertOnly || options.scanGuardedInsertMissing
     ? ''
     : `
     ON CONFLICT(${keyColumns.join(', ')}) ${conflictUpdate}`
+  const valuesSql = records
+    .map((record) => {
+      return columns
+        .map((column) => {
+          return getSqlRecordValue(record.values[column] ?? null)
+        })
+        .join(',\n      ')
+    })
+    .join('\n    ),\n    (')
+
+  if (options.scanGuardedInsertMissing) {
+    const incomingAlias = 'incoming'
+    const existingAlias = 'existing'
+    const scanPredicate = keyColumns
+      .map((column) => {
+        return `(${existingAlias}.${column} || '') = (${incomingAlias}.${column} || '')`
+      })
+      .join('\n        AND ')
+
+    await tx.run(`
+    INSERT INTO ${table} (
+      ${columns.join(',\n      ')}
+    )
+    SELECT ${columns.join(', ')}
+    FROM (
+      VALUES (
+      ${valuesSql}
+    )
+    ) AS ${incomingAlias}(${columns.join(', ')})
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM ${table} ${existingAlias}
+      WHERE ${scanPredicate}
+    )
+  `)
+    return
+  }
 
   await tx.run(`
     INSERT INTO ${table} (
       ${columns.join(',\n      ')}
     ) VALUES (
-      ${records
-        .map((record) => {
-          return columns
-            .map((column) => {
-              return getSqlRecordValue(record.values[column] ?? null)
-            })
-            .join(',\n      ')
-        })
-        .join('\n    ),\n    (')}
+      ${valuesSql}
     )
     ${conflictClause}
   `)
@@ -346,6 +380,7 @@ const writeReviewServingProjectorRecords = async (
     const dedupedGroup = getDedupedReviewServingProjectorRecords(group)
     const table = group[0]?.table ?? 'unknown'
     const insertOnly = options.insertOnlyTables?.has(table) ?? false
+    const scanGuardedInsertMissing = reviewServingProjectorScanGuardedInsertMissingTables.has(table)
 
     diagnostics.dedupedRecordCount += dedupedGroup.length
     incrementDiagnosticsCounter(diagnostics.dedupedRecordsByTable, table, dedupedGroup.length)
@@ -354,7 +389,10 @@ const writeReviewServingProjectorRecords = async (
 
     for (let index = 0; index < dedupedGroup.length; index += batchSize) {
       const batchStartedAtMs = Date.now()
-      await writeReviewServingProjectorRecordBatch(dedupedGroup.slice(index, index + batchSize), tx, {insertOnly})
+      await writeReviewServingProjectorRecordBatch(dedupedGroup.slice(index, index + batchSize), tx, {
+        insertOnly,
+        scanGuardedInsertMissing,
+      })
       diagnostics.batchCount += 1
       incrementDiagnosticsCounter(diagnostics.batchesByTable, table, 1)
       incrementDiagnosticsCounter(diagnostics.writeMsByTable, table, getNonNegativeElapsedMs(batchStartedAtMs))
