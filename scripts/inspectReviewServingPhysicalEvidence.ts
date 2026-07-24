@@ -26,10 +26,28 @@ type EvidenceReport = {
   generatedAt: string
   mode: 'readonly-snapshot'
   options: CliOptions
+  retentionCleanupEligibility: RetentionCleanupEligibilityReport
   snapshotPath: string
   tables: TableEvidence[]
 }
 type QueryRuntime = Awaited<ReturnType<typeof getSnapshotQueryRuntime>>
+type RetentionCleanupEligibilityTable = {
+  activeOrLastKnownGoodSnapshotProtectedRows: number | null
+  completedRequestAndSummaryChunkCandidateRows: number | null
+  dependentPartialBlockedRows: number | null
+  eligibleRows: number | null
+  error: string | null
+  newestDiagnosticRequestProtectedRows: number | null
+  pinnedSnapshotProtectedRows: number | null
+  protectedRebuildRequestRows: number | null
+  table: string
+  totalScopedRows: number | null
+}
+type RetentionCleanupEligibilityReport = {
+  note: string
+  projectId: string
+  tables: RetentionCleanupEligibilityTable[]
+}
 type TableColumn = {column_name: string; data_type: string}
 type TableEvidence = {
   columnCount: number
@@ -201,6 +219,12 @@ const duplicateKeyCandidates: Record<string, string[]> = {
     'queue_identity',
   ],
 }
+
+const retentionCleanupEligibilityTables = [
+  'mart.review_article_summary_contribution_rebuild_partial_v4',
+  'mart.review_article_summary_rebuild_partial_v4',
+  'app.review_rebuild_chunk_manifest',
+] as const
 
 const getArgValue = (names: string[]) => {
   const matchedArgument = process.argv.slice(2).find((argument) => {
@@ -464,6 +488,271 @@ const getDuplicateProbe = async (runtime: QueryRuntime, table: string, columns: 
   return {duplicateCount: Number(rows[0]?.duplicateCount ?? 0), keyColumns, sql}
 }
 
+const getActivePinPredicate = () => {
+  return 'pin.released_at IS NULL AND pin.ref_count > 0 AND pin.expires_at > current_timestamp'
+}
+
+const getActiveSnapshotManifestGuardPredicate = (snapshotColumn: string) => {
+  return `EXISTS (
+            SELECT 1
+            FROM app.review_serving_snapshot_manifest active_manifest
+            WHERE active_manifest.project_id = candidate.project_id
+              AND active_manifest.snapshot_status = 'active'
+              AND (
+                active_manifest.snapshot_id = candidate.${snapshotColumn}
+                OR active_manifest.last_known_good_snapshot_id = candidate.${snapshotColumn}
+                OR active_manifest.selected_import_snapshot_id = candidate.${snapshotColumn}
+              )
+          )`
+}
+
+const getActiveSnapshotPinGuardPredicate = (snapshotColumn: string) => {
+  return `EXISTS (
+            SELECT 1
+            FROM app.review_serving_snapshot_pin pin
+            WHERE pin.project_id = candidate.project_id
+              AND pin.snapshot_id = candidate.${snapshotColumn}
+              AND ${getActivePinPredicate()}
+          )`
+}
+
+const getProtectedRebuildRequestPredicate = (requestSource: string) => {
+  return `EXISTS (
+            SELECT 1
+            FROM app.review_rebuild_request protected_request
+            WHERE protected_request.request_id = ${requestSource}.request_id
+              AND protected_request.project_id = ${requestSource}.project_id
+              AND (
+                protected_request.status IN (
+                  'pending_admission',
+                  'admitted',
+                  'running',
+                  'blocked_over_budget',
+                  'quarantined'
+                )
+                OR protected_request.admission_state IN ('pending', 'blocked_over_budget')
+                OR (
+                  protected_request.status = 'failed'
+                  AND protected_request.admission_state = 'admitted'
+                  AND (
+                    protected_request.retry_after IS NULL
+                    OR protected_request.retry_after <= current_timestamp
+                  )
+                  AND EXISTS (
+                    SELECT 1
+                    FROM app.review_rebuild_chunk_manifest retryable_chunk
+                    WHERE retryable_chunk.request_id = protected_request.request_id
+                      AND retryable_chunk.status = 'failed'
+                      AND COALESCE(retryable_chunk.retry_count, 0) < COALESCE(
+                        GREATEST(
+                          1,
+                          TRY_CAST(json_extract_string(protected_request.retry_policy_json, '$.maxAttempts') AS INTEGER)
+                        ),
+                        3
+                      )
+                  )
+                )
+              )
+          )`
+}
+
+const getNewestDiagnosticRebuildRequestPredicate = (requestSource: string) => {
+  return `EXISTS (
+            SELECT 1
+            FROM app.review_rebuild_request diagnostic_request
+            WHERE diagnostic_request.request_id = ${requestSource}.request_id
+              AND diagnostic_request.project_id = ${requestSource}.project_id
+              AND diagnostic_request.status IN ('failed', 'blocked_over_budget', 'quarantined')
+              AND NOT EXISTS (
+                SELECT 1
+                FROM app.review_rebuild_request newer_diagnostic_request
+                WHERE newer_diagnostic_request.project_id = diagnostic_request.project_id
+                  AND newer_diagnostic_request.status IN ('failed', 'blocked_over_budget', 'quarantined')
+                  AND (
+                    newer_diagnostic_request.updated_at > diagnostic_request.updated_at
+                    OR (
+                      newer_diagnostic_request.updated_at = diagnostic_request.updated_at
+                      AND newer_diagnostic_request.request_id > diagnostic_request.request_id
+                    )
+                  )
+              )
+          )`
+}
+
+const getTerminalRebuildChunkPredicate = (chunkSource: string) => {
+  return `${chunkSource}.status = 'completed'
+          AND ${chunkSource}.admission_state = 'admitted'`
+}
+
+const getManifestReviewConfigHashPredicate = () => {
+  return `EXISTS (
+            SELECT 1
+            FROM app.review_serving_snapshot_manifest cleanup_snapshot
+            WHERE cleanup_snapshot.project_id = candidate.project_id
+              AND cleanup_snapshot.snapshot_id = candidate.snapshot_id
+          )`
+}
+
+const getChunkManifestPartialRowsGonePredicate = () => {
+  return `NOT EXISTS (
+            SELECT 1
+            FROM mart.review_article_summary_contribution_rebuild_partial_v4 contribution_partial
+            WHERE contribution_partial.project_id = candidate.project_id
+              AND contribution_partial.request_id = candidate.request_id
+              AND contribution_partial.chunk_id = candidate.chunk_id
+              AND contribution_partial.snapshot_id = candidate.snapshot_id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM mart.review_article_summary_rebuild_partial_v4 summary_partial
+            WHERE summary_partial.project_id = candidate.project_id
+              AND summary_partial.request_id = candidate.request_id
+              AND summary_partial.chunk_id = candidate.chunk_id
+              AND summary_partial.snapshot_id = candidate.snapshot_id
+          )`
+}
+
+const getRetentionCleanupEligibilitySql = (table: (typeof retentionCleanupEligibilityTables)[number], projectId: string) => {
+  const projectPredicate = `candidate.project_id = ${getSqlLiteral(projectId)}`
+  const activeSnapshotPredicate = getActiveSnapshotManifestGuardPredicate('snapshot_id')
+  const activePinPredicate = getActiveSnapshotPinGuardPredicate('snapshot_id')
+  const protectedRequestPredicate = getProtectedRebuildRequestPredicate('request')
+  const newestDiagnosticPredicate = getNewestDiagnosticRebuildRequestPredicate('request')
+
+  if (table === 'app.review_rebuild_chunk_manifest') {
+    const terminalCandidatePredicate = `candidate.request_id IS NOT NULL
+          AND candidate.snapshot_id IS NOT NULL
+          AND candidate.projection_component = 'summary'
+          AND ${getManifestReviewConfigHashPredicate()}
+          AND request.status = 'completed'
+          AND request.admission_state = 'admitted'
+          AND ${getTerminalRebuildChunkPredicate('candidate')}`
+    const dependentPartialsGonePredicate = getChunkManifestPartialRowsGonePredicate()
+
+    return `
+      SELECT
+        CAST(COUNT(*) AS BIGINT) AS totalScopedRows,
+        CAST(COUNT(*) FILTER (WHERE ${activeSnapshotPredicate}) AS BIGINT) AS activeOrLastKnownGoodSnapshotProtectedRows,
+        CAST(COUNT(*) FILTER (WHERE ${activePinPredicate}) AS BIGINT) AS pinnedSnapshotProtectedRows,
+        CAST(COUNT(*) FILTER (WHERE ${terminalCandidatePredicate}) AS BIGINT) AS completedRequestAndSummaryChunkCandidateRows,
+        CAST(COUNT(*) FILTER (WHERE ${protectedRequestPredicate}) AS BIGINT) AS protectedRebuildRequestRows,
+        CAST(COUNT(*) FILTER (WHERE ${newestDiagnosticPredicate}) AS BIGINT) AS newestDiagnosticRequestProtectedRows,
+        CAST(COUNT(*) FILTER (WHERE ${terminalCandidatePredicate} AND NOT (${dependentPartialsGonePredicate})) AS BIGINT) AS dependentPartialBlockedRows,
+        CAST(COUNT(*) FILTER (
+          WHERE ${terminalCandidatePredicate}
+            AND NOT (${activeSnapshotPredicate})
+            AND NOT (${activePinPredicate})
+            AND NOT (${protectedRequestPredicate})
+            AND NOT (${newestDiagnosticPredicate})
+            AND ${dependentPartialsGonePredicate}
+        ) AS BIGINT) AS eligibleRows
+      FROM ${table} candidate
+      LEFT JOIN app.review_rebuild_request request
+        ON request.request_id = candidate.request_id
+        AND request.project_id = candidate.project_id
+      WHERE ${projectPredicate}
+    `
+  }
+
+  const terminalCandidatePredicate = `request.status = 'completed'
+          AND request.admission_state = 'admitted'
+          AND ${getTerminalRebuildChunkPredicate('chunk')}`
+
+  return `
+    SELECT
+      CAST(COUNT(*) AS BIGINT) AS totalScopedRows,
+      CAST(COUNT(*) FILTER (WHERE ${activeSnapshotPredicate}) AS BIGINT) AS activeOrLastKnownGoodSnapshotProtectedRows,
+      CAST(COUNT(*) FILTER (WHERE ${activePinPredicate}) AS BIGINT) AS pinnedSnapshotProtectedRows,
+      CAST(COUNT(*) FILTER (WHERE ${terminalCandidatePredicate}) AS BIGINT) AS completedRequestAndSummaryChunkCandidateRows,
+      CAST(COUNT(*) FILTER (WHERE ${protectedRequestPredicate}) AS BIGINT) AS protectedRebuildRequestRows,
+      CAST(COUNT(*) FILTER (WHERE ${newestDiagnosticPredicate}) AS BIGINT) AS newestDiagnosticRequestProtectedRows,
+      NULL::BIGINT AS dependentPartialBlockedRows,
+      CAST(COUNT(*) FILTER (
+        WHERE ${terminalCandidatePredicate}
+          AND NOT (${activeSnapshotPredicate})
+          AND NOT (${activePinPredicate})
+          AND NOT (${protectedRequestPredicate})
+          AND NOT (${newestDiagnosticPredicate})
+      ) AS BIGINT) AS eligibleRows
+    FROM ${table} candidate
+    LEFT JOIN app.review_rebuild_request request
+      ON request.request_id = candidate.request_id
+      AND request.project_id = candidate.project_id
+    LEFT JOIN app.review_rebuild_chunk_manifest chunk
+      ON chunk.request_id = candidate.request_id
+      AND chunk.chunk_id = candidate.chunk_id
+      AND chunk.project_id = candidate.project_id
+      AND chunk.snapshot_id = candidate.snapshot_id
+      AND chunk.projection_component = 'summary'
+    WHERE ${projectPredicate}
+  `
+}
+
+const getNumberOrNull = (value: number | string | null | undefined) => {
+  return value === null || value === undefined ? null : Number(value)
+}
+
+const getRetentionCleanupEligibilityTable = async (
+  runtime: QueryRuntime,
+  table: (typeof retentionCleanupEligibilityTables)[number],
+  projectId: string,
+): Promise<RetentionCleanupEligibilityTable> => {
+  try {
+    const rows = await runReadonlyQuery<Omit<RetentionCleanupEligibilityTable, 'error' | 'table'>>(
+      runtime,
+      getRetentionCleanupEligibilitySql(table, projectId),
+    )
+    const row = rows[0]
+
+    return {
+      activeOrLastKnownGoodSnapshotProtectedRows: getNumberOrNull(
+        row?.activeOrLastKnownGoodSnapshotProtectedRows,
+      ),
+      completedRequestAndSummaryChunkCandidateRows: getNumberOrNull(
+        row?.completedRequestAndSummaryChunkCandidateRows,
+      ),
+      dependentPartialBlockedRows: getNumberOrNull(row?.dependentPartialBlockedRows),
+      eligibleRows: getNumberOrNull(row?.eligibleRows),
+      error: null,
+      newestDiagnosticRequestProtectedRows: getNumberOrNull(row?.newestDiagnosticRequestProtectedRows),
+      pinnedSnapshotProtectedRows: getNumberOrNull(row?.pinnedSnapshotProtectedRows),
+      protectedRebuildRequestRows: getNumberOrNull(row?.protectedRebuildRequestRows),
+      table,
+      totalScopedRows: getNumberOrNull(row?.totalScopedRows),
+    }
+  } catch (error) {
+    return {
+      activeOrLastKnownGoodSnapshotProtectedRows: null,
+      completedRequestAndSummaryChunkCandidateRows: null,
+      dependentPartialBlockedRows: null,
+      eligibleRows: null,
+      error: error instanceof Error ? error.message : String(error),
+      newestDiagnosticRequestProtectedRows: null,
+      pinnedSnapshotProtectedRows: null,
+      protectedRebuildRequestRows: null,
+      table,
+      totalScopedRows: null,
+    }
+  }
+}
+
+const getRetentionCleanupEligibilityReport = async (
+  runtime: QueryRuntime,
+  projectId: string,
+): Promise<RetentionCleanupEligibilityReport> => {
+  const tables: RetentionCleanupEligibilityTable[] = []
+
+  for (const table of retentionCleanupEligibilityTables) {
+    tables.push(await getRetentionCleanupEligibilityTable(runtime, table, projectId))
+  }
+
+  return {
+    note: 'Read-only aggregate eligibility evidence for the first storage-slimming cleanup slice. Counts are project-wide aggregates, while runtime cleanup still runs through per-project/per-config retention targets and guardrails; this section does not authorize deletion.',
+    projectId,
+    tables,
+  }
+}
+
 const getTableEvidence = async (runtime: QueryRuntime, table: string, options: CliOptions): Promise<TableEvidence> => {
   try {
     const columns = await getTableColumns(runtime, table)
@@ -525,6 +814,20 @@ const renderMarkdown = (report: EvidenceReport) => {
       table.whereClause ? `\`${table.whereClause}\`` : 'global',
       formatValue(table.indexes.length),
       formatValue(table.duplicateProbe.duplicateCount),
+      table.error ? `Blocked: ${table.error}` : 'ok',
+    ]
+  })
+  const retentionCleanupEligibilityRows = report.retentionCleanupEligibility.tables.map((table) => {
+    return [
+      `\`${table.table}\``,
+      formatValue(table.totalScopedRows),
+      formatValue(table.activeOrLastKnownGoodSnapshotProtectedRows),
+      formatValue(table.pinnedSnapshotProtectedRows),
+      formatValue(table.completedRequestAndSummaryChunkCandidateRows),
+      formatValue(table.protectedRebuildRequestRows),
+      formatValue(table.newestDiagnosticRequestProtectedRows),
+      formatValue(table.dependentPartialBlockedRows),
+      formatValue(table.eligibleRows),
       table.error ? `Blocked: ${table.error}` : 'ok',
     ]
   })
@@ -590,6 +893,26 @@ const renderMarkdown = (report: EvidenceReport) => {
     '',
     formatMarkdownTable(['Table', 'Rows', 'Columns', 'Scope', 'Indexes', 'Duplicate keys', 'Status'], summaryRows),
     '',
+    '## Retention Cleanup Eligibility',
+    '',
+    report.retentionCleanupEligibility.note,
+    '',
+    formatMarkdownTable(
+      [
+        'Table',
+        'Scoped rows',
+        'Active/LKG protected',
+        'Pinned protected',
+        'Completed request+chunk candidates',
+        'Protected request',
+        'Newest diagnostic',
+        'Dependent partial blocker',
+        'Eligible',
+        'Status',
+      ],
+      retentionCleanupEligibilityRows,
+    ),
+    '',
     ...sections,
     '',
   ].join('\n')
@@ -627,6 +950,7 @@ const inspectPhysicalEvidence = (options: CliOptions) => {
               generatedAt: new Date().toISOString(),
               mode: 'readonly-snapshot',
               options,
+              retentionCleanupEligibility: await getRetentionCleanupEligibilityReport(runtime, options.projectId),
               snapshotPath: snapshot.snapshotPath,
               tables,
             })
