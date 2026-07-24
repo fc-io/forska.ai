@@ -42,6 +42,22 @@ Stop any existing primary `dev:server` stack before running the complete gate be
 
 If that marker is active, preserve and inspect its contents before recovery. With all primary processes stopped, move it to a timestamped backup path, run `bun run test:dev-server:current-db`, and then run `bun run test:network-smoke`. Restore the marker if the mutation-enabled phase reports a DuckDB crash, owner failure, or stalled review-serving progress; remove the backup only after both phases pass.
 
+## Current DB DuckDB Fatal Restart Fix
+
+Use these focused commands for the duplicate requestless-bootstrap request-id
+fix before the full current-DB gate:
+
+```bash
+bun test src/server/workers/reviewServingProjectorWorker.test.ts src/server/reviewServing/reviewServingV4RebuildRequestService.test.ts src/server/reviewServing/reviewServingRebuildRequestRepository.test.ts src/server/reviewServing/reviewServingChunkManifestRepository.test.ts
+bun test src/server/utils/duckdbServiceReload.test.ts
+bun run test:dev-server:current-db
+bun run test:network-smoke:current-db
+```
+
+The fix is not proven until the main orchestrator reruns the mutation-enabled
+current-DB phase and the complete current-DB smoke gate without forbidden
+DuckDB fatal restart logs or stalled review-serving progress.
+
 ## Review Storage Evidence Commands
 
 Use these focused commands for the storage-shape evidence-unblocker slice:

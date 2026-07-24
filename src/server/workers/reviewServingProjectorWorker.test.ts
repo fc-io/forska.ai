@@ -5783,6 +5783,11 @@ test('worker adopts requestless summary chunks into request finalization before 
   expect(harness.failedChunks).toEqual([])
   expect(joined).toContain('INSERT INTO app.review_rebuild_request')
   expect(joined).toContain('requestless_summary_range_rebuild')
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain(`(existing_request.request_id || '') = '${requestId}'`)
+  expect(joined).not.toContain(`existing_request.request_id = '${requestId}'`)
+  expect(joined).not.toContain('ON CONFLICT(request_id)')
+  expect(joined).not.toContain('UPDATE app.review_rebuild_request\n      SET')
   expect(joined).toContain(`request_id = '${requestId}'`)
   expect(joined).not.toContain("status = 'quarantined'")
   expect(setIntervalMock).toHaveBeenCalledTimes(1)
@@ -5873,9 +5878,11 @@ test('worker adopts requestless bootstrap chunks into one rebuild request before
   expect(joined).toContain('INSERT INTO app.review_rebuild_request')
   expect(joined).toContain('requestless_bootstrap_rebuild')
   expect(joined).toContain('adoptedRequestlessBootstrapChunks')
-  expect(joined).toContain('UPDATE app.review_rebuild_request')
   expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain(`(existing_request.request_id || '') = '${requestId}'`)
+  expect(joined).not.toContain(`existing_request.request_id = '${requestId}'`)
   expect(joined).not.toContain('ON CONFLICT(request_id)')
+  expect(joined).not.toContain('UPDATE app.review_rebuild_request\n      SET')
   expect(joined).toContain("status NOT IN ('blocked_over_budget', 'quarantined')")
   expect(joined).toContain('"display"')
   expect(joined).toContain('"projectScope"')
@@ -5883,6 +5890,103 @@ test('worker adopts requestless bootstrap chunks into one rebuild request before
   expect(joined).toContain(`request_id = '${requestId}'`)
   expect(joined).not.toContain("projection_component = 'summary'")
   expect(joined).not.toContain("status NOT IN ('completed', 'blocked_over_budget', 'quarantined')")
+  expect(setIntervalMock).toHaveBeenCalledTimes(1)
+  expect(clearIntervalMock).toHaveBeenCalledWith(intervalToken)
+})
+
+test('worker adopts requestless bootstrap chunks through existing request without request row mutation', async () => {
+  const harness = createWorkerHarness()
+  const statements: string[] = []
+  const originalSetInterval = globalThis.setInterval
+  const originalClearInterval = globalThis.clearInterval
+  const intervalToken = {unref: mock(() => {})}
+  const setIntervalMock = mock(() => {
+    return intervalToken
+  })
+  const clearIntervalMock = mock((_token: unknown) => {})
+  const projectScopeChunkInput = {
+    ...chunkInput,
+    outputBaseGeneration: 12,
+    projectionComponent: 'projectScope' as const,
+    projectionIdentity: 'projectScope:project-1',
+    requestId: null,
+    snapshotId: 'snapshot-bootstrap-existing',
+  }
+  const projectScopeChunk = {
+    ...chunkManifest,
+    ...projectScopeChunkInput,
+    chunkId: 'chunk-project-scope-requestless-existing',
+    requestId: null,
+  } satisfies ReviewServingRebuildChunkManifest
+  const requestId = getRequestlessBootstrapRebuildRequestId(projectScopeChunk)
+  const adoptedProjectScopeChunk = {...projectScopeChunk, requestId}
+  let adopted = false
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return projectScopeChunk
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return projectScopeChunkInput
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('SELECT DISTINCT projection_component')) {
+      return [{projectionComponent: 'display'}, {projectionComponent: 'projectScope'}] as T[]
+    }
+
+    if (statement.includes('pendingChunkCount')) {
+      return [{pendingChunkCount: 1}] as T[]
+    }
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+      return [adopted ? adoptedProjectScopeChunk : projectScopeChunk] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+    if (statement.includes('UPDATE app.review_rebuild_request\n      SET')) {
+      throw new Error('requestless bootstrap adoption should not use standalone request update')
+    }
+    if (statement.includes('ON CONFLICT(request_id)')) {
+      throw new Error('requestless bootstrap adoption should not upsert an existing request')
+    }
+
+    if (statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes('request_id =')) {
+      adopted = true
+    }
+  }
+
+  globalThis.setInterval = setIntervalMock as unknown as typeof setInterval
+  globalThis.clearInterval = clearIntervalMock as unknown as typeof clearInterval
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies).finally(() => {
+    globalThis.setInterval = originalSetInterval
+    globalThis.clearInterval = originalClearInterval
+  })
+  const joined = statements.join('\n')
+
+  expect(result.chunk).toMatchObject({chunkId: projectScopeChunk.chunkId, requestId, status: 'completed'})
+  expect(harness.runChunkInputs).toHaveLength(1)
+  expect(harness.runChunkInputs[0]).toMatchObject(adoptedProjectScopeChunk)
+  expect(harness.failedChunks).toEqual([])
+  expect(joined).toContain('INSERT INTO app.review_rebuild_request')
+  expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain(`(existing_request.request_id || '') = '${requestId}'`)
+  expect(joined).not.toContain(`existing_request.request_id = '${requestId}'`)
+  expect(joined).not.toContain('ON CONFLICT(request_id)')
+  expect(joined).not.toContain('requested_components_json = excluded.requested_components_json')
+  expect(joined).not.toContain('diagnostics_json = excluded.diagnostics_json')
+  expect(joined).not.toContain('UPDATE app.review_rebuild_request\n      SET')
+  expect(joined).toContain(`request_id = '${requestId}'`)
   expect(setIntervalMock).toHaveBeenCalledTimes(1)
   expect(clearIntervalMock).toHaveBeenCalledWith(intervalToken)
 })
@@ -6099,8 +6203,8 @@ test('requestless summary adoption persists request linkage in DuckDB', () => {
     if (requestRows.length !== 1 || requestRows[0].reason !== 'requestless_summary_range_rebuild') {
       throw new Error('requestless summary adoption did not persist a rebuild request')
     }
-    if (requestRows[0].status !== 'admitted' || !String(requestRows[0].requestedComponentsJson).includes('summary')) {
-      throw new Error('requestless summary adoption did not update the existing rebuild request')
+    if (requestRows[0].status !== 'running' || String(requestRows[0].requestedComponentsJson).includes('summary')) {
+      throw new Error('requestless summary adoption mutated the existing rebuild request')
     }
     if (chunkRows.length !== 1 || chunkRows[0].requestId !== requestId) {
       throw new Error('requestless summary adoption did not persist the chunk request id')
