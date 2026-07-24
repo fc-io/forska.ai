@@ -5387,8 +5387,9 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
   expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO UPDATE SET',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO NOTHING',
   )
+  expect(joined).not.toContain('judgment_payload_json = excluded.judgment_payload_json')
   expect(joined).toContain('"judgmentPayloadProjectorSnapshots"')
   expect(joined).toContain("article_id >= 'article-001'")
   expect(joined).toContain("article_id <= 'article-099'")
@@ -7122,8 +7123,9 @@ test('judgment input content rebuild chunk splits only after DuckDB OOM', async 
   expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO UPDATE SET',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO NOTHING',
   )
+  expect(joined).not.toContain('judgment_payload_json = excluded.judgment_payload_json')
   expect(joined).toContain('lease_expires_at > current_timestamp')
   expect(joined).toContain('RETURNING chunk_id AS chunkId')
   expect(childInserts).toHaveLength(2)

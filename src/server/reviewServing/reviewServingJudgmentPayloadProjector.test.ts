@@ -110,8 +110,10 @@ test('judgment payload projection writes llm and human payload kinds with SQL-na
   expect(result.diagnosticsJson.judgmentPayloadProjector.writer.records.inputRecordCount).toBe(0)
   expect(inserts).toHaveLength(2)
   expect(inserts.join('\n')).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO UPDATE SET',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO NOTHING',
   )
+  expect(inserts.join('\n')).not.toContain('DO UPDATE SET')
+  expect(inserts.join('\n')).not.toContain('judgment_payload_json = excluded.judgment_payload_json')
   expect(joined).toContain("'llm'")
   expect(joined).toContain("'human'")
   expect(joined).toContain("'both'")
@@ -249,8 +251,10 @@ test('claimless article-range judgment payload rebuild writes detail rows with S
   expect(joined).toContain('json_object(')
   expect(joined).not.toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4 detail')
   expect(joined).toContain(
-    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO UPDATE SET',
+    'ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO NOTHING',
   )
+  expect(joined).not.toContain('DO UPDATE SET')
+  expect(joined).not.toContain('judgment_payload_json = excluded.judgment_payload_json')
 })
 
 test('article-set judgment hydration reads bounded payload rows with stable ordering', () => {
