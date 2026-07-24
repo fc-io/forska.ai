@@ -186,7 +186,7 @@ const getSelectedImportTitleSql = (
 
   return `CASE
         WHEN COALESCE(selected_base.tombstone, FALSE) THEN article.article_title
-        ELSE COALESCE(selected_base.article_title, article.article_title)
+        ELSE COALESCE(selected_hot.article_title, selected_base.article_title, article.article_title)
       END`
 }
 
@@ -203,7 +203,18 @@ const getSelectedImportTitleJoinSql = (
       ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
       AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
       AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
-      AND selected_base.article_id = scope.article_id`
+      AND selected_base.article_id = scope.article_id
+    LEFT JOIN app.review_import_article_hot_field selected_hot
+      ON selected_hot.import_route_id = CASE
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+        ELSE selected_base.import_route_id
+      END
+      AND selected_hot.article_id = scope.article_id
+      AND selected_hot.source_record_key = CASE
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+        ELSE selected_base.source_record_key
+      END
+      AND NOT selected_hot.tombstone`
 
   return selectedBaseJoinSql
 }

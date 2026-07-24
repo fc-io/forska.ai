@@ -65,6 +65,7 @@ Use these focused commands for the storage-shape evidence-unblocker slice:
 ```bash
 bun test scripts/operatorScriptDuckdbAccess.test.ts
 bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-current-db-physical-with-selected-import-evidence.md
+bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-selected-import-payload-consumer-proof.md
 bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-summary-contribution-serving-proof.md
 bun run db:duck:inspect-review-serving-physical-evidence -- --format=markdown --output=.tmp/evidence/review-serving-summary-contribution-recoverability.md
 bun test src/server/reviewServing/reviewServingRouteParityCoverage.test.ts src/server/reviewServing/reviewServingRouteParityEvidence.test.ts src/server/reviewServing/reviewServingRouteParityRunner.test.ts
@@ -73,7 +74,12 @@ bun run bench:review-serving-release-gate
 
 These commands produce evidence and benchmark-contract artifacts, including the
 selected-import payload slimming readiness and global summary contribution
-serving readiness sections in the physical evidence report. The summary
+serving readiness sections in the physical evidence report. The selected-import
+payload proof classifies active/LKG protected, candidate, and other
+selected-import snapshot rows; per-column selected-base null/non-null counts;
+and same-project hot-field availability through `app.project_import_route`.
+It remains investigation evidence only and does not authorize deletion or
+schema slimming. The summary
 contribution evidence classifies active/LKG snapshot protected rows, pinned
 snapshot rows, missing-manifest rows, rows by project/component
 kind/definition version/snapshot status, and top contribution-key counts while
