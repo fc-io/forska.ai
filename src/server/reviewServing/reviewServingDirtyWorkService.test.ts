@@ -687,7 +687,7 @@ test('dirty-work acknowledgements and watermark advance in one transaction', asy
 })
 
 test('ack compaction creates a component high-water row and removes covered point acks', async () => {
-  const {acks, database} = createFakeDirtyWorkDatabase({barrier: null})
+  const {acks, database, statements} = createFakeDirtyWorkDatabase({barrier: null})
 
   await upsertDisplayWork(database, getBaseScope(3), 'delta-1')
   const claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
@@ -711,6 +711,56 @@ test('ack compaction creates a component high-water row and removes covered poin
   expect(remainingAcks).toHaveLength(1)
   expect(remainingAcks[0]).toMatchObject({
     completedSourceHighWaterMark: 5,
+    dirtyWorkId: null,
+    projectionComponent: 'display',
+  })
+
+  const compactedAckInsert = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_serving_dirty_work_ack') && statement.includes('dirty_work_id')
+  })
+  expect(compactedAckInsert).toContain('ON CONFLICT(dirty_ack_id) DO NOTHING')
+  expect(compactedAckInsert).not.toContain('DO UPDATE SET')
+})
+
+test('ack compaction replays the same high-water row without updating it', async () => {
+  const {acks, database, statements} = createFakeDirtyWorkDatabase({barrier: null})
+
+  await upsertDisplayWork(database, getBaseScope(3), 'delta-1')
+  const claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+  await completeReviewServingDirtyWorkClaims(claims, database)
+
+  const firstResult = await compactReviewServingDirtyWorkAcknowledgements(
+    {
+      completedSourceHighWaterMark: 5,
+      projectionComponent: 'display',
+      projectionIdentity: 'display:identity-1',
+      sourcePartition: 'article:display',
+    },
+    database,
+  )
+  const secondResult = await compactReviewServingDirtyWorkAcknowledgements(
+    {
+      completedSourceHighWaterMark: 5,
+      projectionComponent: 'display',
+      projectionIdentity: 'display:identity-1',
+      sourcePartition: 'article:display',
+    },
+    database,
+  )
+
+  const compactedAckInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_serving_dirty_work_ack') && statement.includes('NULL,')
+  })
+  const remainingAcks = [...acks.values()]
+
+  expect(secondResult.dirtyAckId).toBe(firstResult.dirtyAckId)
+  expect(compactedAckInserts).toHaveLength(2)
+  expect(compactedAckInserts.join('\n')).toContain('ON CONFLICT(dirty_ack_id) DO NOTHING')
+  expect(compactedAckInserts.join('\n')).not.toContain('DO UPDATE SET')
+  expect(remainingAcks).toHaveLength(1)
+  expect(remainingAcks[0]).toMatchObject({
+    completedSourceHighWaterMark: 5,
+    dirtyAckId: firstResult.dirtyAckId,
     dirtyWorkId: null,
     projectionComponent: 'display',
   })

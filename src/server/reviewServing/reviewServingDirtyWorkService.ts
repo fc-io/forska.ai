@@ -589,12 +589,7 @@ export const compactReviewServingDirtyWorkAcknowledgements = async (
       'completed',
       current_timestamp
     )
-    ON CONFLICT(dirty_ack_id) DO UPDATE SET
-      completed_source_high_water_mark = GREATEST(
-        app.review_serving_dirty_work_ack.completed_source_high_water_mark,
-        excluded.completed_source_high_water_mark
-      ),
-      completed_at = excluded.completed_at
+    ON CONFLICT(dirty_ack_id) DO NOTHING
   `)
 
   await database.run(`
