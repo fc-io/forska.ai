@@ -143,6 +143,23 @@ const isSearchScopedFilterOptionProjection = (input: ProjectReviewServingFilterO
   return (input.searchTitle?.trim() ?? '').length > 0
 }
 
+const getStatusPostingOptionSql = (input: ProjectReviewServingFilterOptionsInput) => {
+  return `
+          SELECT 'review' AS filterKind, 'llmStatus' AS facetKey, posting.filter_value AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:llmStatus:', posting.filter_value) AS optionValueKey, COUNT(DISTINCT posting.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM mart.review_article_filter_posting_serving_v4 posting
+          INNER JOIN active_article active ON active.article_id = posting.article_id
+          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = posting.list_mode_key
+          WHERE ${getSqlLiteral(input.optionMode)} = 'review' AND posting.project_id = ${getSqlLiteral(input.projectId)} AND posting.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND posting.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND posting.filter_kind = 'llmStatus'
+          ${aggregateBySql} posting.filter_value
+          UNION ALL
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'humanStatus' AS facetKey, posting.filter_value AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':humanStatus:', posting.filter_value) AS optionValueKey, COUNT(DISTINCT posting.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM mart.review_article_filter_posting_serving_v4 posting
+          INNER JOIN active_article active ON active.article_id = posting.article_id
+          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = posting.list_mode_key
+          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND posting.project_id = ${getSqlLiteral(input.projectId)} AND posting.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND posting.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND posting.filter_kind = 'humanStatus'
+          ${aggregateBySql} posting.filter_value`
+}
+
 const getFinalizedFacetOptionSourceRows = async (
   input: ProjectReviewServingFilterOptionsInput,
   database: ReviewServingFilterOptionProjectorDatabase,
@@ -295,19 +312,7 @@ const getNoSearchFallbackOptionSourceRows = async (
           WHERE ${getSqlLiteral(input.optionMode)} = 'human' AND selected.publication_year IS NOT NULL
           ${aggregateBySql} selected.publication_year
           UNION ALL
-          SELECT 'review' AS filterKind, 'llmStatus' AS facetKey, serving.llm_status_key AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:llmStatus:', serving.llm_status_key) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
-          FROM mart.review_article_serving_v4 serving
-          INNER JOIN active_article active ON active.article_id = serving.article_id
-          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
-          WHERE ${getSqlLiteral(input.optionMode)} = 'review' AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.llm_status_key IS NOT NULL
-          ${aggregateBySql} serving.llm_status_key
-          UNION ALL
-          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'humanStatus' AS facetKey, serving.human_status_key AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':humanStatus:', serving.human_status_key) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
-          FROM mart.review_article_serving_v4 serving
-          INNER JOIN active_article active ON active.article_id = serving.article_id
-          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
-          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.human_status_key IS NOT NULL
-          ${aggregateBySql} serving.human_status_key
+          ${getStatusPostingOptionSql(input)}
         )
         SELECT * FROM option_specific_options WHERE facetValue IS NOT NULL
       `)
@@ -401,19 +406,7 @@ const getReconstructedFilterOptionSourceRows = async (
           WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND selected.publication_year IS NOT NULL
           ${aggregateBySql} selected.publication_year
           UNION ALL
-          SELECT 'review' AS filterKind, 'llmStatus' AS facetKey, serving.llm_status_key AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:llmStatus:', serving.llm_status_key) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
-          FROM mart.review_article_serving_v4 serving
-          INNER JOIN active_article active ON active.article_id = serving.article_id
-          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
-          WHERE ${getSqlLiteral(input.optionMode)} = 'review' AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.llm_status_key IS NOT NULL
-          ${aggregateBySql} serving.llm_status_key
-          UNION ALL
-          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'humanStatus' AS facetKey, serving.human_status_key AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':humanStatus:', serving.human_status_key) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
-          FROM mart.review_article_serving_v4 serving
-          INNER JOIN active_article active ON active.article_id = serving.article_id
-          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
-          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.human_status_key IS NOT NULL
-          ${aggregateBySql} serving.human_status_key
+          ${getStatusPostingOptionSql(input)}
         ),
         answer_values AS (
           SELECT detail.article_id, detail.prompt_id, detail.answered_original AS answerValue
