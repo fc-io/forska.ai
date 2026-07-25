@@ -96,8 +96,17 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
   expect(sql).toContain('payload.url AS url')
   expect(sql).toContain('article.full_text_pdf AS full_text_pdf')
   expect(sql).toContain('article.full_text_conversion_status AS full_text_conversion_status')
+  expect(sql).toContain('selected_import.import_route_id AS selected_import_route_id')
+  expect(sql).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_import')
+  expect(sql).toContain('selected_import.project_id = $projectId')
+  expect(sql).toContain('selected_import.project_id = mart.review_article_serving_v4.project_id')
+  expect(sql).toContain('selected_import.project_scope_identity = $projectScopeIdentity')
+  expect(sql).toContain('selected_import.selected_import_snapshot_id = $selectedImportSnapshotId')
+  expect(sql).toContain('selected_import.article_id = mart.review_article_serving_v4.article_id')
+  expect(sql).toContain('AND NOT selected_import.tombstone')
   expect(sql).toContain('LEFT JOIN app.article article ON article.id = mart.review_article_serving_v4.article_id')
   expect(sql).not.toContain('mart.review_article_serving_v4.article_title AS article_title')
+  expect(sql).not.toContain('mart.review_article_serving_v4.selected_import_route_id')
   expect(sql).not.toContain('payload.display_identity = mart.review_article_serving_v4.display_identity')
   expect(sql).not.toContain('payload.payload_identity = mart.review_article_serving_v4.payload_identity')
   expect(sql).toContain(
@@ -922,6 +931,51 @@ test('buildReviewServingRowsSql supports article-set row hydration lookups', () 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain("AND list_mode_key = 'human'")
   expect(sql).toContain('AND mart.review_article_serving_v4.article_id IN (SELECT unnest($articleIds))')
+})
+
+test('buildReviewServingRowsSql sources article-row selected import route ids from selected-import snapshots', () => {
+  const articleRowContractKeys = [
+    'review.llm.rows',
+    'review.llm.rowsByArticleSet',
+    'review.human.rows',
+    'review.human.rowsByArticleSet',
+    'review.both.rows',
+    'review.both.rowsByArticleSet',
+    'review.unassessed.rows',
+    'review.unassessed.rowsByArticleSet',
+    'review.detail.row',
+    'review.prompt.preview',
+  ]
+
+  for (const contractKey of articleRowContractKeys) {
+    const contract = getRequiredReviewServingReadContract(contractKey)
+    const sql = buildReviewServingRowsSql({
+      articleIdParameter: contract.physicalAccessStrategy === 'keyedLookup' ? '$articleId' : null,
+      articleIdsParameter: contract.physicalAccessStrategy === 'articleSetLookup' ? '$articleIds' : null,
+      contract,
+      displayIdentityParameter: '$displayIdentity',
+      limitParameter: '$limit',
+      listModeParameter: '$listMode',
+      payloadIdentityParameter: '$payloadIdentity',
+      projectIdParameter: '$projectId',
+      projectScopeIdentityParameter: '$projectScopeIdentity',
+      reviewConfigHashParameter: '$reviewConfigHash',
+      searchIdentityParameter: '$searchIdentity',
+      selectedImportSnapshotIdParameter: '$selectedImportSnapshotId',
+      snapshotIdParameter: '$snapshotId',
+    })
+
+    expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+    expect(sql).toContain('selected_import.import_route_id AS selected_import_route_id')
+    expect(sql).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_import')
+    expect(sql).toContain('selected_import.project_id = $projectId')
+    expect(sql).toContain('selected_import.project_id = mart.review_article_serving_v4.project_id')
+    expect(sql).toContain('selected_import.project_scope_identity = $projectScopeIdentity')
+    expect(sql).toContain('selected_import.selected_import_snapshot_id = $selectedImportSnapshotId')
+    expect(sql).toContain('selected_import.article_id = mart.review_article_serving_v4.article_id')
+    expect(sql).toContain('AND NOT selected_import.tombstone')
+    expect(sql).not.toContain('mart.review_article_serving_v4.selected_import_route_id')
+  }
 })
 
 test('assertReviewServingSqlShape reads table references from SQL', () => {

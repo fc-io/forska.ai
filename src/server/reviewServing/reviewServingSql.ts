@@ -147,6 +147,26 @@ const isBoundedArticleLookupReference = (sql: string, tableReference: ReviewServ
   )
 }
 
+const hasBoundedSelectedImportLookupJoin = (sql: string) => {
+  return (
+    /\bleft\s+join\s+app\.review_selected_article_import_v4\s+selected_import\b/iu.test(sql)
+    && /\bselected_import\.project_id\s*=\s*[$:@?a-z_][\w.$:]*/iu.test(sql)
+    && /\bselected_import\.project_id\s*=\s*mart\.review_article_serving_v4\.project_id\b/iu.test(sql)
+    && /\bselected_import\.project_scope_identity\s*=\s*[$:@?a-z_][\w.$:]*/iu.test(sql)
+    && /\bselected_import\.selected_import_snapshot_id\s*=\s*[$:@?a-z_][\w.$:]*/iu.test(sql)
+    && /\bselected_import\.article_id\s*=\s*mart\.review_article_serving_v4\.article_id\b/iu.test(sql)
+    && /\bnot\s+selected_import\.tombstone\b/iu.test(sql)
+  )
+}
+
+const isBoundedSelectedImportLookupReference = (sql: string, tableReference: ReviewServingSqlTableReference) => {
+  return (
+    tableReference.table === 'app.review_selected_article_import_v4'
+    && tableReference.alias === 'selected_import'
+    && hasBoundedSelectedImportLookupJoin(sql)
+  )
+}
+
 const isBoundedJudgmentPromptMetadataReference = (sql: string, tableReference: ReviewServingSqlTableReference) => {
   return (
     ((tableReference.table === 'app.project_prompt' && tableReference.alias === 'project_prompt')
@@ -173,6 +193,9 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
   const unregisteredTableViolations = tableReferences
     .filter((tableReference) => {
       return tableReference !== 'app.article' || !hasBoundedArticleLookupJoin(sql)
+    })
+    .filter((tableReference) => {
+      return tableReference !== 'app.review_selected_article_import_v4' || !hasBoundedSelectedImportLookupJoin(sql)
     })
     .filter((tableReference) => {
       return (
@@ -221,6 +244,7 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
           .filter((tableReference, tableReferenceIndex) => {
             if (
               isBoundedArticleLookupReference(sql, tableReference)
+              || isBoundedSelectedImportLookupReference(sql, tableReference)
               || isBoundedJudgmentPromptMetadataReference(sql, tableReference)
             ) {
               return false
@@ -275,6 +299,7 @@ const reviewServingSnapshotManifestTable = 'app.review_serving_snapshot_manifest
 const reviewServingBulkOperationJobTable = 'app.review_bulk_operation_job'
 const reviewServingSearchJobTable = 'app.review_search_job'
 const reviewServingArticleTable = 'mart.review_article_serving_v4'
+const reviewServingSelectedImportTable = 'app.review_selected_article_import_v4'
 const reviewServingPayloadTable = 'mart.review_article_serving_payload_v4'
 const reviewServingFilterPostingTable = 'mart.review_article_filter_posting_serving_v4'
 const reviewServingFilterFacetTable = 'mart.review_filter_facet_serving_v4'
@@ -296,7 +321,6 @@ const reviewServingArticlePhysicalSelectColumns = [
   'article_created_at',
   'sort_key',
   'activity_sort_at',
-  'selected_import_route_id',
   'llm_status_key',
   'human_status_key',
   'llm_judged_prompt_count',
@@ -306,6 +330,7 @@ const reviewServingArticlePhysicalSelectColumns = [
 ].map((column) => {
   return `${reviewServingArticleTable}.${column}`
 })
+const reviewServingArticleSelectedImportColumns = ['selected_import.import_route_id AS selected_import_route_id']
 const reviewServingArticlePayloadDisplayColumns = [
   `payload.article_title AS article_title`,
   `payload.article_external_id AS article_external_id`,
@@ -835,6 +860,7 @@ const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
   if (contract.servingTable === reviewServingArticleTable) {
     const articleSelectColumns = [
       ...reviewServingArticlePhysicalSelectColumns,
+      ...reviewServingArticleSelectedImportColumns,
       ...reviewServingArticlePayloadDisplayColumns,
       ...(contract.key === 'review.prompt.preview' ? ['LEFT(article.article_summary, 2000) AS article_summary'] : []),
     ].join(', ')
@@ -928,11 +954,16 @@ export const buildReviewServingRowsSql = (params: {
   queueKindParameter?: string | null
   reviewConfigHashParameter: string
   searchIdentityParameter: string
+  selectedImportSnapshotIdParameter?: string | null
   searchTextParameter?: string | null
   searchTokenPrefixParameter?: string | null
   searchTokenPrefixesParameter?: string | null
   snapshotIdParameter: string
 }) => {
+  const selectedImportSnapshotIdParameter =
+    params.contract.servingTable === reviewServingArticleTable
+      ? (params.selectedImportSnapshotIdParameter ?? '$selectedImportSnapshotId')
+      : null
   const articlePayloadJoin =
     params.contract.servingTable === reviewServingArticleTable
       ? [
@@ -944,6 +975,13 @@ export const buildReviewServingRowsSql = (params: {
           ` AND payload.snapshot_id = ${params.snapshotIdParameter}`,
           ` AND payload.snapshot_id = ${reviewServingArticleTable}.snapshot_id`,
           ` AND payload.article_id = ${reviewServingArticleTable}.article_id`,
+          ` LEFT JOIN ${reviewServingSelectedImportTable} selected_import`,
+          ` ON selected_import.project_id = ${params.projectIdParameter}`,
+          ` AND selected_import.project_id = ${reviewServingArticleTable}.project_id`,
+          ` AND selected_import.project_scope_identity = ${params.projectScopeIdentityParameter}`,
+          ` AND selected_import.selected_import_snapshot_id = ${selectedImportSnapshotIdParameter}`,
+          ` AND selected_import.article_id = ${reviewServingArticleTable}.article_id`,
+          ` AND NOT selected_import.tombstone`,
           ` LEFT JOIN app.article article`,
           ` ON article.id = ${reviewServingArticleTable}.article_id`,
         ].join('')

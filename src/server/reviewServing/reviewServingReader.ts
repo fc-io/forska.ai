@@ -699,6 +699,7 @@ const getSql = (input: {
     searchIdentityParameter: input.request.searchIdentity
       ? '$searchIdentity'
       : getRequiredIdentityParameter(input.manifest, 'search'),
+    selectedImportSnapshotIdParameter: '$selectedImportSnapshotId',
     searchTextParameter: input.request.searchText ? '$searchText' : null,
     searchTokenPrefixParameter: input.request.searchTokenPrefix ? '$searchTokenPrefix' : null,
     searchTokenPrefixesParameter: input.request.searchTokenPrefix ? '$searchTokenPrefixes' : null,
@@ -759,6 +760,7 @@ const bindReviewServingRowsSql = (
     queueKind: request.queueKind ?? null,
     reviewConfigHash: manifest.reviewConfigHash,
     searchIdentity: request.searchIdentity ?? componentStates.search?.projectionIdentity,
+    selectedImportSnapshotId: manifest.selectedImportSnapshotId,
     searchText: request.searchText ?? null,
     searchTokenPrefix: request.searchTokenPrefix ?? null,
     searchTokenPrefixes: request.searchTokenPrefixes ?? (request.searchTokenPrefix ? [request.searchTokenPrefix] : []),
