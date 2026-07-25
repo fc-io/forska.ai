@@ -17,7 +17,6 @@ CREATE TABLE mart.review_article_serving_v4_publication_year_repair (
   article_created_at TIMESTAMPTZ,
   sort_key TIMESTAMPTZ NOT NULL,
   activity_sort_at TIMESTAMPTZ NOT NULL,
-  selected_import_route_id VARCHAR,
   llm_status_key VARCHAR,
   human_status_key VARCHAR,
   llm_judged_prompt_count INTEGER NOT NULL DEFAULT 0,
@@ -32,7 +31,7 @@ CREATE TABLE mart.review_article_serving_v4_publication_year_repair (
 );
 
 INSERT INTO mart.review_article_serving_v4_publication_year_repair BY NAME
-SELECT COLUMNS(column_name -> column_name IN ('project_id', 'review_config_hash', 'snapshot_id', 'base_generation', 'patch_watermark', 'list_mode_key', 'article_id', 'article_created_at', 'sort_key', 'activity_sort_at', 'selected_import_route_id', 'llm_status_key', 'human_status_key', 'llm_judged_prompt_count', 'enabled_prompt_count', 'human_answered_prompt_count', 'serving_updated_at'))
+SELECT COLUMNS(column_name -> column_name IN ('project_id', 'review_config_hash', 'snapshot_id', 'base_generation', 'patch_watermark', 'list_mode_key', 'article_id', 'article_created_at', 'sort_key', 'activity_sort_at', 'llm_status_key', 'human_status_key', 'llm_judged_prompt_count', 'enabled_prompt_count', 'human_answered_prompt_count', 'serving_updated_at'))
 FROM mart.review_article_serving_v4;
 
 DROP TABLE mart.review_article_serving_v4;

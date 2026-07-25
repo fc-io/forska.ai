@@ -68,6 +68,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0165_dropReviewPayloadAbstractText.sql',
   '../../db/duckdbMigrations/0166_dropReviewArticleServingPublicationYear.sql',
   '../../db/duckdbMigrations/0167_dropReviewArticleServingSelectedFlagCopies.sql',
+  '../../db/duckdbMigrations/0168_dropReviewArticleServingSelectedImportRouteId.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -141,6 +142,10 @@ const reviewArticleServingPublicationYearDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0166_dropReviewArticleServingPublicationYear.sql']
 const reviewArticleServingSelectedFlagCopyDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0167_dropReviewArticleServingSelectedFlagCopies.sql']
+const reviewArticleServingSelectedImportRouteIdDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath[
+    '../../db/duckdbMigrations/0168_dropReviewArticleServingSelectedImportRouteId.sql'
+  ]
 const reviewQueueServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql']
 const reviewFilterPostingServingUpdatedAtDropForwardMigrationSql =
@@ -818,7 +823,6 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
       'article_created_at',
       'sort_key',
       'activity_sort_at',
-      'selected_import_route_id',
       'llm_status_key',
       'human_status_key',
       'llm_judged_prompt_count',
@@ -872,6 +876,7 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
     'publication_year',
     'duplicate_flag',
     'conflict_flag',
+    'selected_import_route_id',
   ]
   expect(
     [...getTableColumns('mart.review_article_serving_v4')].filter((columnName) => {
@@ -927,12 +932,26 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
   )
   expect(reviewArticleServingSelectedFlagCopyDropForwardMigrationSql).not.toContain('duplicate_flag')
   expect(reviewArticleServingSelectedFlagCopyDropForwardMigrationSql).not.toContain('conflict_flag')
+  expect(reviewArticleServingSelectedFlagCopyDropForwardMigrationSql).not.toContain('selected_import_route_id')
+  expect(reviewArticleServingSelectedImportRouteIdDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_v4_selected_import_route_repair',
+  )
+  expect(reviewArticleServingSelectedImportRouteIdDropForwardMigrationSql).toContain(
+    'DROP TABLE mart.review_article_serving_v4;',
+  )
+  expect(reviewArticleServingSelectedImportRouteIdDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_serving_v4_selected_import_route_repair RENAME TO review_article_serving_v4;',
+  )
+  expect(reviewArticleServingSelectedImportRouteIdDropForwardMigrationSql).not.toContain(
+    'selected_import_route_id VARCHAR',
+  )
   const articleServingFoundationSchemaSql = reviewServingFoundationSchemaSql.slice(
     reviewServingFoundationSchemaSql.indexOf('CREATE TABLE IF NOT EXISTS mart.review_article_serving_v4'),
     reviewServingFoundationSchemaSql.indexOf('CREATE TABLE IF NOT EXISTS mart.review_article_display_patch_v4'),
   )
   expect(articleServingFoundationSchemaSql).not.toContain('duplicate_flag BOOLEAN')
   expect(articleServingFoundationSchemaSql).not.toContain('conflict_flag BOOLEAN')
+  expect(articleServingFoundationSchemaSql).not.toContain('selected_import_route_id')
   expect(reviewServingFoundationSchemaSql).not.toContain('idx_review_article_serving_v4_publication_year')
   expect(reviewArticleServingReviewProgressCopyDropForwardMigrationSql).not.toContain('review_opened')
   expect(reviewArticleServingReviewProgressCopyDropForwardMigrationSql).not.toContain('review_sections_completed')

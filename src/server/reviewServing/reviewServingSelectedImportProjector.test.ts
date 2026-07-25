@@ -374,7 +374,7 @@ test('selected-import article range rebuild can refresh final serving rows from 
   expect(joined).toContain('FROM mart.project_scope_article scope')
   expect(joined).toContain('INNER JOIN scoped_article scoped')
   expect(joined).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
-  expect(joined).toContain('selected.import_route_id AS selected_import_route_id')
+  expect(joined).not.toContain('selected.import_route_id AS selected_import_route_id')
   expect(joined).not.toContain('selected.selected_rank_key,')
   expect(joined).toContain('AND NOT selected.tombstone')
   expect(joined).toContain("selected.selected_import_snapshot_id = 'selected-import-snapshot-1'")

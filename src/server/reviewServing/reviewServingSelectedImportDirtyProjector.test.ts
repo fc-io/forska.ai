@@ -160,7 +160,8 @@ test('selected-import dirty routine updates only claimed articles', async () => 
   expect(joined).toContain('PARTITION BY raw.project_id, raw.review_config_hash, raw.snapshot_id, raw.list_mode_key')
   expect(joined).toContain('FROM mart.review_article_serving_v4 existing')
   expect(joined).toContain('existing.article_id = changed.article_id')
-  expect(joined).toContain('changed.import_route_id AS selected_import_route_id')
+  expect(joined).not.toContain('changed.import_route_id AS selected_import_route_id')
+  expect(joined).not.toContain('serving.selected_import_route_id')
   expect(joined).toContain('changed.selected_rank_key')
   expect(joined).not.toContain('serving.duplicate_flag')
   expect(joined).not.toContain('serving.conflict_flag')
@@ -324,7 +325,7 @@ test('selected-import tombstones clear selected columns without deleting curated
 
   expect(joined).toContain('changed.scope_tombstone = TRUE')
   expect(joined).toContain('changed.scope_tombstone = FALSE')
-  expect(joined).toContain('changed.import_route_id AS selected_import_route_id')
+  expect(joined).not.toContain('changed.import_route_id AS selected_import_route_id')
 })
 
 test('project-scoped selected-import rebuilds include previous serving articles for scope tombstones', async () => {

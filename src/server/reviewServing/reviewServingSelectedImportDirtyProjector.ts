@@ -308,7 +308,6 @@ const selectedImportServingColumns = [
   'article_id',
   'sort_key',
   'activity_sort_at',
-  'selected_import_route_id',
   'llm_status_key',
   'human_status_key',
   'llm_judged_prompt_count',
@@ -554,7 +553,6 @@ const getApplySelectedImportServingStatements = (input: {
             article_created_at,
             sort_key,
             activity_sort_at,
-            selected_import_route_id,
             selected_rank_key,
             llm_judged_prompt_count,
             enabled_prompt_count,
@@ -572,7 +570,6 @@ const getApplySelectedImportServingStatements = (input: {
             article.article_created_at,
             COALESCE(article.article_created_at, current_timestamp) AS sort_key,
             COALESCE(article.article_updated_at, article.article_created_at, current_timestamp) AS activity_sort_at,
-            changed.import_route_id,
             changed.selected_rank_key,
             0 AS llm_judged_prompt_count,
             0 AS enabled_prompt_count,
@@ -605,7 +602,6 @@ const getApplySelectedImportServingStatements = (input: {
             serving.article_id,
             serving.sort_key,
             serving.activity_sort_at,
-            changed.import_route_id AS selected_import_route_id,
             serving.llm_status_key,
             serving.human_status_key,
             serving.llm_judged_prompt_count,
@@ -629,8 +625,7 @@ const getApplySelectedImportServingStatements = (input: {
                 AND snapshot.snapshot_status IN ('candidate', 'active')
             )
             AND (
-              serving.selected_import_route_id IS DISTINCT FROM changed.import_route_id
-              OR serving.patch_watermark < ${getSqlLiteral(input.patchWatermark)}
+              serving.patch_watermark < ${getSqlLiteral(input.patchWatermark)}
             )`,
         `DELETE FROM mart.review_article_serving_v4 serving
          WHERE EXISTS (
