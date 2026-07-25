@@ -27,6 +27,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0123_dropReviewTitleSearchActivitySortAt.sql',
   '../../db/duckdbMigrations/0124_dropReviewSelectedImportDisplayCopyColumns.sql',
   '../../db/duckdbMigrations/0125_reviewServingJudgmentDetailIsAnswered.sql',
+  '../../db/duckdbMigrations/0126_dropReviewSelectedImportPatchV4.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -70,10 +71,8 @@ const reviewSelectedImportDisplayCopyColumnDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0124_dropReviewSelectedImportDisplayCopyColumns.sql']
 const reviewJudgmentDetailIsAnsweredForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0125_reviewServingJudgmentDetailIsAnswered.sql']
-const selectedImportPatchDisplayFieldsForwardMigrationSql = readFileSync(
-  resolve(import.meta.dir, '../../db/duckdbMigrations/0108_reviewSelectedImportPatchDisplayFields.sql'),
-  'utf8',
-)
+const reviewSelectedImportPatchRetirementForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0126_dropReviewSelectedImportPatchV4.sql']
 const hotServingTables = [
   'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
@@ -106,7 +105,6 @@ const reviewServingPhase1Tables = [
   'app.review_serving_retention_mark',
   'mart.review_title_search_serving_v4',
   'mart.review_article_serving_v4',
-  'mart.review_selected_import_patch_v4',
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_filter_posting_stats_v4',
   'mart.review_article_serving_payload_v4',
@@ -125,6 +123,7 @@ const retiredReviewServingTables = new Set<string>([
   'mart.review_llm_status_patch_v4',
   'mart.review_article_filter_posting_patch_v4',
   'mart.review_article_display_patch_v4',
+  'mart.review_selected_import_patch_v4',
 ])
 
 const deltaEnvelopeColumns = [
@@ -463,20 +462,14 @@ test('Phase 1 article serving schema preserves review table display metadata', (
   )
 })
 
-test('selected import patch display migration rebuilds legacy patch rows', () => {
-  expect(selectedImportPatchDisplayFieldsForwardMigrationSql).toContain('WITH legacy_patch AS')
-  expect(selectedImportPatchDisplayFieldsForwardMigrationSql).toContain(
-    'UPDATE mart.review_selected_import_patch_v4 AS patch',
+test('selected import patch mart is retired from the review-serving schema', () => {
+  expect(reviewSelectedImportPatchRetirementForwardMigrationSql).toContain(
+    'DROP TABLE IF EXISTS mart.review_selected_import_patch_v4',
   )
-  expect(selectedImportPatchDisplayFieldsForwardMigrationSql).toContain('WHERE NOT patch.tombstone')
-  expect(selectedImportPatchDisplayFieldsForwardMigrationSql).toContain('AND patch.source_record_key IS NULL')
-  expect(selectedImportPatchDisplayFieldsForwardMigrationSql).toContain(
-    'INNER JOIN app.review_import_article_hot_field hot',
-  )
-  expect(selectedImportPatchDisplayFieldsForwardMigrationSql).toContain(
-    'source_record_key = CASE WHEN rebuild.tombstone THEN NULL ELSE rebuild.source_record_key END',
-  )
-  expect(selectedImportPatchDisplayFieldsForwardMigrationSql).toContain('tombstone = rebuild.tombstone')
+  expect(schemaMigrationSql).not.toContain('CREATE TABLE IF NOT EXISTS mart.review_selected_import_patch_v4')
+  expect(schemaMigrationSql).not.toContain('idx_review_selected_import_patch_v4_lookup')
+  expect(reviewServingPhase1Tables).not.toContain('mart.review_selected_import_patch_v4')
+  expect(retiredReviewServingTables.has('mart.review_selected_import_patch_v4')).toBe(true)
 })
 
 test('Phase 1 schema migration creates contract cursor and sort columns on non-job serving tables', () => {

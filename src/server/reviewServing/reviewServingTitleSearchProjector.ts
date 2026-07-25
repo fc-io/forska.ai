@@ -51,11 +51,7 @@ export type ProjectReviewServingTitleSearchRebuildRangesInput = {
   ranges: readonly ProjectReviewServingTitleSearchRebuildInput[]
 }
 
-type TitleSearchSourceRow = {
-  articleId: string
-  articleTitle: string | null
-  tombstone: boolean
-}
+type TitleSearchSourceRow = {articleId: string; articleTitle: string | null; tombstone: boolean}
 
 type SelectedImportTitleSqlInput = {
   projectId: string
@@ -176,10 +172,7 @@ const getArticleRangePredicate = (
       ${endPredicate}`
 }
 
-const getSelectedImportTitleSql = (
-  input: SelectedImportTitleSqlInput,
-  _options: {includeSelectedPatchOverlay?: boolean} = {},
-) => {
+const getSelectedImportTitleSql = (input: SelectedImportTitleSqlInput) => {
   if (input.selectedImportSnapshotId === null || input.selectedImportSnapshotId === undefined) {
     return 'article.article_title'
   }
@@ -190,10 +183,7 @@ const getSelectedImportTitleSql = (
       END`
 }
 
-const getSelectedImportTitleJoinSql = (
-  input: SelectedImportTitleSqlInput,
-  _options: {includeSelectedPatchOverlay?: boolean} = {},
-) => {
+const getSelectedImportTitleJoinSql = (input: SelectedImportTitleSqlInput) => {
   if (input.selectedImportSnapshotId === null || input.selectedImportSnapshotId === undefined) {
     return ''
   }
@@ -251,19 +241,17 @@ const getTitleSearchRows = async (
   const dirtyJoinSql =
     articleIds.length === 0 ? '' : 'INNER JOIN dirty_article dirty ON dirty.article_id = scope.article_id'
   const withSql = dirtyArticleCte.length === 0 ? '' : `WITH ${dirtyArticleCte}`
-  const includeSelectedPatchOverlay = false
-
   return database.queryJson<TitleSearchSourceRow>(`
     ${withSql}
     SELECT
       scope.article_id AS articleId,
-      ${getSelectedImportTitleSql(input, {includeSelectedPatchOverlay})} AS articleTitle,
+      ${getSelectedImportTitleSql(input)} AS articleTitle,
       article.id IS NULL OR NOT (scope.in_curated_scope OR scope.in_route_scope) AS tombstone
     FROM mart.project_scope_article scope
     ${dirtyJoinSql}
     LEFT JOIN app."article" article
       ON article.id = scope.article_id
-    ${getSelectedImportTitleJoinSql(input, {includeSelectedPatchOverlay})}
+    ${getSelectedImportTitleJoinSql(input)}
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope OR ${articleIds.length > 0 ? 'TRUE' : 'FALSE'})
       ${getArticleRangePredicate(input)}
@@ -420,11 +408,11 @@ export const projectReviewServingTitleSearchRebuildRows = async (
 const getReviewServingTitleSearchRebuildWriterInput = (input: ProjectReviewServingTitleSearchRebuildInput) => {
   return {
     articleRangePredicateSql: getArticleRangePredicate(input),
-    articleTitleSql: getSelectedImportTitleSql(input, {includeSelectedPatchOverlay: false}),
+    articleTitleSql: getSelectedImportTitleSql(input),
     projectId: input.projectId,
     projectScopeIdentity: input.projectScopeIdentity,
     searchIdentity: input.searchIdentity,
-    selectedImportJoinSql: getSelectedImportTitleJoinSql(input, {includeSelectedPatchOverlay: false}),
+    selectedImportJoinSql: getSelectedImportTitleJoinSql(input),
     snapshotId: input.snapshotId,
     targetArticleRangePredicateSql: getArticleRangePredicate(input, 'search'),
     titlePrefixLength,

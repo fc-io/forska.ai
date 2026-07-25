@@ -107,6 +107,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0124_dropReviewSelectedImportDisplayCopyColumns.sql'),
     'utf8',
   ).trim()
+  const reviewSelectedImportPatchDropSql = readFileSync(
+    resolve(migrationsFolder, '0126_dropReviewSelectedImportPatchV4.sql'),
+    'utf8',
+  ).trim()
 
   expect(reviewQueuePatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_queue_patch_v4;')
   expect(reviewHumanStatusPatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_human_status_patch_v4;')
@@ -115,9 +119,7 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     'DROP TABLE IF EXISTS mart.review_article_filter_posting_patch_v4;',
   )
   expect(reviewArticleDisplayPatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_article_display_patch_v4;')
-  expect(reviewTitleSearchActivitySortAtDropSql).toContain(
-    'CREATE TABLE mart.review_title_search_serving_v4_repair',
-  )
+  expect(reviewTitleSearchActivitySortAtDropSql).toContain('CREATE TABLE mart.review_title_search_serving_v4_repair')
   expect(reviewTitleSearchActivitySortAtDropSql).toContain('DROP TABLE mart.review_title_search_serving_v4;')
   expect(reviewTitleSearchActivitySortAtDropSql).toContain(
     'ALTER TABLE mart.review_title_search_serving_v4_repair RENAME TO review_title_search_serving_v4;',
@@ -127,7 +129,9 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   )
   expect(reviewTitleSearchActivitySortAtDropSql).not.toContain('PRIMARY KEY')
   expect(reviewTitleSearchActivitySortAtDropSql).not.toContain('activity_sort_at')
-  expect(reviewTitleSearchActivitySortAtDropSql).toContain('CREATE INDEX IF NOT EXISTS idx_review_title_search_serving_v4_token')
+  expect(reviewTitleSearchActivitySortAtDropSql).toContain(
+    'CREATE INDEX IF NOT EXISTS idx_review_title_search_serving_v4_token',
+  )
   expect(reviewSelectedImportDisplayCopyColumnDropSql).toContain(
     'CREATE TABLE app.review_selected_article_import_v4_repair',
   )
@@ -149,6 +153,7 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewSelectedImportDisplayCopyColumnDropSql).not.toContain('article_title')
   expect(reviewSelectedImportDisplayCopyColumnDropSql).not.toContain('journal_title')
   expect(reviewSelectedImportDisplayCopyColumnDropSql).not.toContain('external_id')
+  expect(reviewSelectedImportPatchDropSql).toBe('DROP TABLE IF EXISTS mart.review_selected_import_patch_v4;')
 })
 
 test('DuckDB migration drops selected-import display-copy columns while preserving retained rows and upserts', async () => {
@@ -379,7 +384,7 @@ test('DuckDB migration drops selected-import display-copy columns while preservi
         conflictFlag: true,
         duplicateFlag: false,
         importRouteId: 'route-b',
-        selectedImportUpdatedAt: expect.stringContaining('2026-07-24'),
+        selectedImportUpdatedAt: expect.stringContaining('2026-07-24') as string,
         selectedRankKey: 'rank-b',
         selectedRankNumeric: 99.5,
         sourceRecordKey: 'source-b',

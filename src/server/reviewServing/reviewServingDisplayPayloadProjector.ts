@@ -527,11 +527,7 @@ const getDisplayPatchRows = async (
 
 const getPayloadRowsSql = (
   input: ProjectReviewServingPayloadInput,
-  options: {
-    includeSelectedPatchOverlay?: boolean
-    orderBy?: boolean
-    ranges?: readonly ProjectReviewServingPayloadInput[]
-  } = {},
+  options: {orderBy?: boolean; ranges?: readonly ProjectReviewServingPayloadInput[]} = {},
 ) => {
   const articleIds = getClaimArticleIds(input.claims)
   const dirtyJoinSql =
@@ -600,7 +596,7 @@ const getPayloadRows = async (
   input: ProjectReviewServingPayloadInput,
   database: ReviewServingDisplayPayloadProjectorDatabase,
 ) => {
-  return database.queryJson<PayloadProjectionRow>(getPayloadRowsSql(input, {includeSelectedPatchOverlay: false}))
+  return database.queryJson<PayloadProjectionRow>(getPayloadRowsSql(input))
 }
 
 const getPayloadRecord = (
@@ -651,7 +647,7 @@ const getPayloadRebuildRowsStatements = (
         : `${getArticleRangeFilterCte(ranges)},
     payload_source AS`
     } (
-      ${getPayloadRowsSql(input, {includeSelectedPatchOverlay: false, orderBy: false, ranges})}
+      ${getPayloadRowsSql(input, {orderBy: false, ranges})}
     ),
     payload_rows AS (
       SELECT
