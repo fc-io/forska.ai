@@ -306,6 +306,15 @@ test('selected-import batched article ranges keep no-replace rows insert-only', 
           selectedImportSnapshotId: 'selected-import-snapshot-1',
           sourceDeltaHighWater: 9,
         },
+        {
+          chunkEndArticleId: 'article-19',
+          chunkStartArticleId: 'article-10',
+          projectId: 'project-1',
+          projectScopeIdentity: 'projectScope:identity-1',
+          replaceExistingRows: false,
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          sourceDeltaHighWater: 9,
+        },
       ],
     },
     database,
@@ -315,8 +324,14 @@ test('selected-import batched article ranges keep no-replace rows insert-only', 
   const insertStatement = statements.find((statement) => {
     return statement.includes('INSERT INTO app.review_selected_article_import_v4')
   })
+  const insertStatements = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_selected_article_import_v4')
+  })
 
   expect(joined).not.toContain('DELETE FROM app.review_selected_article_import_v4')
+  expect(insertStatements).toHaveLength(1)
+  expect(insertStatement).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
+  expect(insertStatement).toContain("('article-1', 'article-9'), ('article-10', 'article-19')")
   expect(insertStatement).toContain(
     'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO NOTHING',
   )

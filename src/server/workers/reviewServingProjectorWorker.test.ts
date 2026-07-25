@@ -960,6 +960,7 @@ test('worker writes compatible selected import rebuild chunks through one batch 
     ...chunkInput,
     chunkEndKey: 'article-050',
     chunkStartKey: 'article-001',
+    inputDigest: 'freshReviewServingSnapshot',
     projectionComponent: 'selectedImport' as const,
     projectionIdentity: 'selectedImport:project-1',
   }
@@ -1082,10 +1083,8 @@ test('worker writes compatible selected import rebuild chunks through one batch 
     ),
   ).toEqual(new Set([firstChunk.chunkId, secondChunk.chunkId]))
   expect(harness.runChunkInputs).toEqual([])
-  expect(joined).toContain("article_id >= 'article-001'")
-  expect(joined).toContain("article_id <= 'article-050'")
-  expect(joined).toContain("article_id >= 'article-051'")
-  expect(joined).toContain("article_id <= 'article-099'")
+  expect(joined).toContain('article_range_filter(chunk_start_article_id, chunk_end_article_id)')
+  expect(joined).toContain("('article-001', 'article-050'), ('article-051', 'article-099')")
   expect(joined).toContain('selectedImportBatchWriter')
 })
 
