@@ -283,6 +283,8 @@ test('full posting rebuilds write serving without contribution or incremental pa
   expect(joined).toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO NOTHING',
   )
+  expect(joined).not.toContain('posting_identity,')
+  expect(joined).not.toContain('AS posting_identity')
   expect(joined).not.toContain('posting_updated_at = excluded.posting_updated_at')
   expect(joined).not.toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
   expect(joined).not.toContain('INSERT INTO mart.review_article_summary_contribution_v4')
@@ -290,7 +292,8 @@ test('full posting rebuilds write serving without contribution or incremental pa
   expect(joined).toContain('WITH posting_source AS')
   expect(joined).toContain('serving_source AS')
   expect(joined).toContain('GROUP BY\n        CAST(posting.filterKind AS VARCHAR)')
-  expect(joined).toContain('CAST(to_json(posting.filterKind) AS VARCHAR)')
+  expect(joined).toContain('CAST(posting.filterValue AS VARCHAR) AS filterValue')
+  expect(joined).toContain('CAST(posting.listModeKey AS VARCHAR) AS listModeKey')
   expect(joined).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
   expect(joined).toContain('INNER JOIN mart.review_article_serving_v4 serving')
   expect(joined).toContain('INNER JOIN mart.review_article_judgment_detail_serving_v4 detail')
@@ -319,6 +322,8 @@ test('full posting rebuilds scope set-based serving upserts to article ranges', 
   expect(joined).toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO NOTHING',
   )
+  expect(joined).not.toContain('posting_identity,')
+  expect(joined).not.toContain('AS posting_identity')
   expect(joined).not.toContain('sort_key = excluded.sort_key')
   expect(joined).not.toContain('DELETE FROM mart.review_article_summary_contribution_v4 contribution')
 })
@@ -346,7 +351,7 @@ test('chunked full posting rebuilds can defer stats refresh outside chunk writes
   expect(joined).toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO NOTHING',
   )
-  expect(joined).not.toContain('posting_identity = excluded.posting_identity')
+  expect(joined).not.toContain('posting_identity')
   expect(joined).not.toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
   expect(joined).not.toContain('INSERT INTO mart.review_filter_posting_stats_v4')
 })
@@ -390,6 +395,7 @@ test('posting range rebuilds write compatible chunks through one range-aware ser
   expect(servingInserts[0]).toContain(
     'range.chunk_end_article_id IS NULL OR scope.article_id <= range.chunk_end_article_id',
   )
+  expect(servingInserts[0]).not.toContain('posting_identity')
   expect(joined).not.toContain('DELETE FROM mart.review_filter_posting_stats_v4 stats')
   expect(joined).not.toContain('INSERT INTO mart.review_filter_posting_stats_v4')
   expectNoLegacyPostingSourcePatchTables(joined)

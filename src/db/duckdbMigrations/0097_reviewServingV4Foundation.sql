@@ -635,7 +635,6 @@ CREATE TABLE IF NOT EXISTS mart.review_article_filter_posting_serving_v4 (
   project_id VARCHAR NOT NULL,
   review_config_hash VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
-  posting_identity VARCHAR NOT NULL,
   filter_kind VARCHAR NOT NULL,
   filter_value VARCHAR NOT NULL,
   list_mode_key VARCHAR NOT NULL,

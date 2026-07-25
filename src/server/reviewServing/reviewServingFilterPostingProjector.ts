@@ -156,18 +156,6 @@ const getListModeCte = (listModeKeys: readonly string[]) => {
   return getValuesCte('list_mode_key', listModeKeys)
 }
 
-const getPostingIdentity = (row: Pick<PostingContributionRow, 'filterKind' | 'filterValue' | 'listModeKey'>) => {
-  return getStableReviewServingJson({
-    filterKind: row.filterKind,
-    filterValue: row.filterValue,
-    listModeKey: row.listModeKey,
-  })
-}
-
-const getPostingIdentitySql = (alias: string) => {
-  return `'{"filterKind":' || CAST(to_json(${alias}.filterKind) AS VARCHAR) || ',"filterValue":' || CAST(to_json(${alias}.filterValue) AS VARCHAR) || ',"listModeKey":' || CAST(to_json(${alias}.listModeKey) AS VARCHAR) || '}'`
-}
-
 const getContributionKey = (
   row: Pick<PostingContributionRow, 'articleId' | 'filterKind' | 'filterValue' | 'listModeKey'>,
 ) => {
@@ -532,7 +520,6 @@ const getPostingServingRecord = (input: {
       filter_kind: input.row.filterKind,
       filter_value: input.row.filterValue,
       list_mode_key: input.row.listModeKey,
-      posting_identity: getPostingIdentity(input.row),
       posting_updated_at: new Date(),
       project_id: input.projectId,
       review_config_hash: input.reviewConfigHash,
@@ -618,7 +605,6 @@ const getInsertFullRebuildServingRowsStatement = (
       project_id,
       review_config_hash,
       snapshot_id,
-      posting_identity,
       filter_kind,
       filter_value,
       list_mode_key,
@@ -646,7 +632,6 @@ const getInsertFullRebuildServingRowsStatement = (
       ${getSqlLiteral(input.projectId)} AS project_id,
       ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
       ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-      ${getPostingIdentitySql('posting')} AS posting_identity,
       posting.filterKind AS filter_kind,
       posting.filterValue AS filter_value,
       posting.listModeKey AS list_mode_key,
