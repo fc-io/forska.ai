@@ -20,7 +20,6 @@ CREATE TABLE mart.review_article_serving_payload_v4_display_repair (
   pmid VARCHAR,
   journal_title VARCHAR,
   url VARCHAR,
-  source_metadata JSON,
   abstract_text VARCHAR
 );
 
@@ -32,7 +31,6 @@ WITH payload_rows AS (
     payload.payload_identity,
     payload.snapshot_id,
     payload.article_id,
-    payload.source_metadata,
     payload.abstract_text,
     snapshot.selected_import_snapshot_id
   FROM mart.review_article_serving_payload_v4 payload
@@ -72,7 +70,6 @@ hydrated_rows AS (
       ELSE selected_hot.journal_title
     END AS journal_title,
     COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
-    payload.source_metadata,
     payload.abstract_text,
     ROW_NUMBER() OVER (
       PARTITION BY payload.project_id, payload.display_identity, payload.payload_identity, payload.snapshot_id, payload.article_id
@@ -124,7 +121,6 @@ SELECT
   pmid,
   journal_title,
   url,
-  source_metadata,
   abstract_text
 FROM hydrated_rows
 WHERE row_number = 1;

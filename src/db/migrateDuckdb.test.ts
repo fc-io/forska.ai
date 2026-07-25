@@ -1001,7 +1001,6 @@ test('DuckDB migration drops payload display-copy columns while preserving paylo
         const rows = await database.queryJson(\`
           SELECT
             article_id AS articleId,
-            source_metadata AS sourceMetadata,
             abstract_text AS abstractText,
             full_text_preview AS fullTextPreview
           FROM mart.review_article_serving_payload_v4
@@ -1047,7 +1046,7 @@ test('DuckDB migration drops payload display-copy columns while preserving paylo
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
       columns: {columnName: string}[]
       migrationRows: {name: string}[]
-      rows: {abstractText: string; articleId: string; fullTextPreview: string; sourceMetadata: string}[]
+      rows: {abstractText: string; articleId: string; fullTextPreview: string}[]
     }
     const columnNames = new Set(
       parsed.columns.map((column) => {
@@ -1056,20 +1055,13 @@ test('DuckDB migration drops payload display-copy columns while preserving paylo
     )
 
     expect(columnNames.has('article_created_at')).toBe(false)
-    expect(columnNames.has('source_metadata')).toBe(true)
+    expect(columnNames.has('source_metadata')).toBe(false)
     expect(columnNames.has('abstract_text')).toBe(true)
     expect(columnNames.has('full_text_preview')).toBe(true)
     expect(columnNames.has('article_title')).toBe(true)
     expect(columnNames.has('article_external_id')).toBe(true)
     expect(columnNames.has('full_text_pdf')).toBe(false)
-    expect(parsed.rows).toEqual([
-      {
-        abstractText: 'abstract',
-        articleId: 'article-1',
-        fullTextPreview: 'preview',
-        sourceMetadata: '{"source":"fixture"}',
-      },
-    ])
+    expect(parsed.rows).toEqual([{abstractText: 'abstract', articleId: 'article-1', fullTextPreview: 'preview'}])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
   } finally {
     removeFileIfExists(duckdbPath)
@@ -1077,7 +1069,7 @@ test('DuckDB migration drops payload display-copy columns while preserving paylo
   }
 })
 
-test('DuckDB migration drops payload abstract text while preserving source metadata', async () => {
+test('DuckDB migration drops payload abstract text and source metadata', async () => {
   const duckdbPath = `/tmp/forska-review-payload-abstract-text-drop-${Date.now()}.duckdb`
   const targetMigrationFile = '0165_dropReviewPayloadAbstractText.sql'
   const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
@@ -1159,8 +1151,7 @@ test('DuckDB migration drops payload abstract text while preserving source metad
         const rows = await database.queryJson(\`
           SELECT
             article_id AS articleId,
-            article_title AS articleTitle,
-            source_metadata AS sourceMetadata
+            article_title AS articleTitle
           FROM mart.review_article_serving_payload_v4
         \`)
         const columns = await database.queryJson(\`
@@ -1204,7 +1195,7 @@ test('DuckDB migration drops payload abstract text while preserving source metad
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
       columns: {columnName: string}[]
       migrationRows: {name: string}[]
-      rows: {articleId: string; articleTitle: string; sourceMetadata: string}[]
+      rows: {articleId: string; articleTitle: string}[]
     }
     const columnNames = new Set(
       parsed.columns.map((column) => {
@@ -1212,11 +1203,9 @@ test('DuckDB migration drops payload abstract text while preserving source metad
       }),
     )
 
-    expect(columnNames.has('source_metadata')).toBe(true)
+    expect(columnNames.has('source_metadata')).toBe(false)
     expect(columnNames.has('abstract_text')).toBe(false)
-    expect(parsed.rows).toEqual([
-      {articleId: 'article-1', articleTitle: 'Display title', sourceMetadata: '{"source":"fixture"}'},
-    ])
+    expect(parsed.rows).toEqual([{articleId: 'article-1', articleTitle: 'Display title'}])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
   } finally {
     removeFileIfExists(duckdbPath)
@@ -1928,7 +1917,6 @@ test('DuckDB migration rehydrates payload display columns after article serving 
             pmid,
             journal_title AS journalTitle,
             url,
-            source_metadata AS sourceMetadata,
             abstract_text AS abstractText
           FROM mart.review_article_serving_payload_v4
         \`)
@@ -1982,7 +1970,6 @@ test('DuckDB migration rehydrates payload display columns after article serving 
         doi: string
         journalTitle: string
         pmid: string
-        sourceMetadata: string
         url: string
       }[]
     }
@@ -1997,6 +1984,7 @@ test('DuckDB migration rehydrates payload display columns after article serving 
     expect(columnNames.has('article_updated_at')).toBe(true)
     expect(columnNames.has('journal_title')).toBe(true)
     expect(columnNames.has('url')).toBe(true)
+    expect(columnNames.has('source_metadata')).toBe(false)
     expect(parsed.rows).toEqual([
       {
         abstractText: 'abstract',
@@ -2007,7 +1995,6 @@ test('DuckDB migration rehydrates payload display columns after article serving 
         doi: '10.1000/example',
         journalTitle: 'Selected Journal',
         pmid: '12345',
-        sourceMetadata: '{"source":"kept"}',
         url: 'https://selected.example/article-1',
       },
     ])
@@ -2097,7 +2084,6 @@ test('DuckDB migration drops payload updated-at copy while preserving payload co
         const rows = await database.queryJson(\`
           SELECT
             article_id AS articleId,
-            source_metadata AS sourceMetadata,
             abstract_text AS abstractText,
             full_text_preview AS fullTextPreview
           FROM mart.review_article_serving_payload_v4
@@ -2143,7 +2129,7 @@ test('DuckDB migration drops payload updated-at copy while preserving payload co
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
       columns: {columnName: string}[]
       migrationRows: {name: string}[]
-      rows: {abstractText: string; articleId: string; fullTextPreview: string; sourceMetadata: string}[]
+      rows: {abstractText: string; articleId: string; fullTextPreview: string}[]
     }
     const columnNames = new Set(
       parsed.columns.map((column) => {
@@ -2152,18 +2138,11 @@ test('DuckDB migration drops payload updated-at copy while preserving payload co
     )
 
     expect(columnNames.has('article_created_at')).toBe(false)
-    expect(columnNames.has('source_metadata')).toBe(true)
+    expect(columnNames.has('source_metadata')).toBe(false)
     expect(columnNames.has('abstract_text')).toBe(true)
     expect(columnNames.has('full_text_preview')).toBe(true)
     expect(columnNames.has('payload_updated_at')).toBe(false)
-    expect(parsed.rows).toEqual([
-      {
-        abstractText: 'abstract',
-        articleId: 'article-1',
-        fullTextPreview: 'preview',
-        sourceMetadata: '{"source":"fixture"}',
-      },
-    ])
+    expect(parsed.rows).toEqual([{abstractText: 'abstract', articleId: 'article-1', fullTextPreview: 'preview'}])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
   } finally {
     removeFileIfExists(duckdbPath)
@@ -2485,7 +2464,6 @@ test('DuckDB migration backfills missing payload rows for every serving snapshot
             article_id AS articleId,
             display_identity AS displayIdentity,
             payload_identity AS payloadIdentity,
-            source_metadata AS sourceMetadata,
             abstract_text AS abstractText,
             full_text_preview AS fullTextPreview
           FROM mart.review_article_serving_payload_v4
@@ -2537,7 +2515,6 @@ test('DuckDB migration backfills missing payload rows for every serving snapshot
         displayIdentity: string
         fullTextPreview: string | null
         payloadIdentity: string
-        sourceMetadata: string | null
       }[]
     }
 
@@ -2548,7 +2525,6 @@ test('DuckDB migration backfills missing payload rows for every serving snapshot
         displayIdentity: 'display-1',
         fullTextPreview: 'kept preview',
         payloadIdentity: 'payload-1',
-        sourceMetadata: '{"source":"kept"}',
       },
       {
         abstractText: null,
@@ -2556,7 +2532,6 @@ test('DuckDB migration backfills missing payload rows for every serving snapshot
         displayIdentity: 'display-1',
         fullTextPreview: null,
         payloadIdentity: 'payload-1',
-        sourceMetadata: null,
       },
     ])
     expect(parsed.duplicateGroups).toEqual([])

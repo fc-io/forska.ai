@@ -167,6 +167,25 @@ const isBoundedSelectedImportLookupReference = (sql: string, tableReference: Rev
   )
 }
 
+const hasBoundedSelectedSourceRecordLookupJoin = (sql: string) => {
+  return (
+    /\bleft\s+join\s+app\.article_import_route_source_record\s+selected_source\b/iu.test(sql)
+    && /\bselected_source\.import_route_id\s*=\s*selected_import\.import_route_id\b/iu.test(sql)
+    && /\bselected_source\.article_id\s*=\s*mart\.review_article_serving_v4\.article_id\b/iu.test(sql)
+    && /\bselected_source\.source_record_key\s*=\s*selected_import\.source_record_key\b/iu.test(sql)
+    && /\bselected_source\.quarantined_at\s+is\s+null\b/iu.test(sql)
+    && hasBoundedSelectedImportLookupJoin(sql)
+  )
+}
+
+const isBoundedSelectedSourceRecordLookupReference = (sql: string, tableReference: ReviewServingSqlTableReference) => {
+  return (
+    tableReference.table === 'app.article_import_route_source_record'
+    && tableReference.alias === 'selected_source'
+    && hasBoundedSelectedSourceRecordLookupJoin(sql)
+  )
+}
+
 const isBoundedJudgmentPromptMetadataReference = (sql: string, tableReference: ReviewServingSqlTableReference) => {
   return (
     ((tableReference.table === 'app.project_prompt' && tableReference.alias === 'project_prompt')
@@ -196,6 +215,11 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
     })
     .filter((tableReference) => {
       return tableReference !== 'app.review_selected_article_import_v4' || !hasBoundedSelectedImportLookupJoin(sql)
+    })
+    .filter((tableReference) => {
+      return (
+        tableReference !== 'app.article_import_route_source_record' || !hasBoundedSelectedSourceRecordLookupJoin(sql)
+      )
     })
     .filter((tableReference) => {
       return (
@@ -245,6 +269,7 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
             if (
               isBoundedArticleLookupReference(sql, tableReference)
               || isBoundedSelectedImportLookupReference(sql, tableReference)
+              || isBoundedSelectedSourceRecordLookupReference(sql, tableReference)
               || isBoundedJudgmentPromptMetadataReference(sql, tableReference)
             ) {
               return false
@@ -331,6 +356,13 @@ const reviewServingArticlePhysicalSelectColumns = [
   return `${reviewServingArticleTable}.${column}`
 })
 const reviewServingArticleSelectedImportColumns = ['selected_import.import_route_id AS selected_import_route_id']
+const reviewServingArticleSourceMetadataSql = `CASE
+    WHEN article.source_metadata IS NULL AND selected_source.import_metadata IS NULL THEN NULL
+    ELSE json_merge_patch(
+      COALESCE(article.source_metadata, CAST('{}' AS JSON)),
+      COALESCE(selected_source.import_metadata, CAST('{}' AS JSON))
+    )
+  END`
 const reviewServingArticlePayloadDisplayColumns = [
   `payload.article_title AS article_title`,
   `payload.article_external_id AS article_external_id`,
@@ -345,6 +377,7 @@ const reviewServingArticlePayloadDisplayColumns = [
   `article.full_text_pdf AS full_text_pdf`,
   `article.full_text_fetched_at AS full_text_fetched_at`,
   `article.full_text_conversion_status AS full_text_conversion_status`,
+  `${reviewServingArticleSourceMetadataSql} AS source_metadata`,
 ].map((column) => {
   return column
 })
@@ -871,8 +904,8 @@ const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
         || field.includes(reviewServingJudgmentDetailListModePrioritySql)
       )
     })
-      ? `SELECT ${articleSelectColumns}, payload.source_metadata AS source_metadata, ${reviewServingListModePrioritySql} AS ${reviewServingListModePriorityAlias}`
-      : `SELECT ${articleSelectColumns}, payload.source_metadata AS source_metadata`
+      ? `SELECT ${articleSelectColumns}, ${reviewServingListModePrioritySql} AS ${reviewServingListModePriorityAlias}`
+      : `SELECT ${articleSelectColumns}`
   }
 
   if (contract.servingTable === reviewServingJudgmentDetailTable) {
@@ -984,6 +1017,11 @@ export const buildReviewServingRowsSql = (params: {
           ` AND NOT selected_import.tombstone`,
           ` LEFT JOIN app.article article`,
           ` ON article.id = ${reviewServingArticleTable}.article_id`,
+          ` LEFT JOIN app.article_import_route_source_record selected_source`,
+          ` ON selected_source.import_route_id = selected_import.import_route_id`,
+          ` AND selected_source.article_id = ${reviewServingArticleTable}.article_id`,
+          ` AND selected_source.source_record_key = selected_import.source_record_key`,
+          ` AND selected_source.quarantined_at IS NULL`,
         ].join('')
       : ''
   const judgmentDetailHydrationJoin =

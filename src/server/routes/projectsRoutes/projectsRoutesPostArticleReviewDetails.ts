@@ -184,7 +184,7 @@ type ServingArticleDetailRow = {
   url?: string | null
 }
 
-type ServingArticlePayloadRow = {article_created_at?: unknown; article_id?: string; source_metadata?: unknown}
+type ServingArticlePayloadRow = {article_id?: string}
 
 type ArticleFullTextRow = {
   articleSummary: string | null
@@ -744,11 +744,11 @@ const getArticleRecordFromServing = (input: {
   fullText: ArticleFullTextRow | null
   payload: ServingArticlePayloadRow | null
 }): ArticleRecord => {
-  const sourceMetadata = getJsonValue(input.payload?.source_metadata ?? input.detail.source_metadata)
+  const sourceMetadata = getJsonValue(input.detail.source_metadata)
 
   return {
     articleAuthors: null,
-    articleCreatedAt: getDateValue(input.detail.article_created_at ?? input.payload?.article_created_at),
+    articleCreatedAt: getDateValue(input.detail.article_created_at),
     articleId: input.detail.article_external_id ?? null,
     articleSummary: input.fullText?.articleSummary ?? null,
     articleTitle: input.detail.article_title ?? '',

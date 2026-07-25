@@ -1,6 +1,5 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
@@ -121,7 +120,6 @@ type PayloadProjectionRow = {
   journalTitle: string | null
   medrxivId: string | null
   pmid: string | null
-  sourceMetadata: ReviewServingIdentityValue | null
   url: string | null
 }
 
@@ -516,13 +514,6 @@ const getPayloadRowsSql = (
         ELSE selected_hot.journal_title
       END AS journalTitle,
       COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
-      CASE
-        WHEN article.source_metadata IS NULL AND selected_source.import_metadata IS NULL THEN NULL
-        ELSE json_merge_patch(
-          COALESCE(article.source_metadata, CAST('{}' AS JSON)),
-          COALESCE(selected_source.import_metadata, CAST('{}' AS JSON))
-        )
-      END AS sourceMetadata,
       LEFT(COALESCE(article.full_text, regexp_replace(COALESCE(article.full_text_html, ''), '<[^>]+>', '', 'g')), 2000) AS fullTextPreview
     FROM mart.project_scope_article scope
     ${dirtyJoinSql}
@@ -579,7 +570,6 @@ const getPayloadRecord = (
       pmid: row.pmid,
       project_id: input.projectId,
       snapshot_id: input.snapshotId,
-      source_metadata: row.sourceMetadata,
       url: row.url,
     },
   }
@@ -606,7 +596,6 @@ const getPayloadRebuildRowsStatements = (
       pmid,
       project_id,
       snapshot_id,
-      source_metadata,
       url
     )
     WITH ${
@@ -633,7 +622,6 @@ const getPayloadRebuildRowsStatements = (
         payload_source.pmid,
         ${getSqlLiteral(input.projectId)} AS project_id,
         ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-        payload_source.sourceMetadata AS source_metadata,
         payload_source.url
       FROM payload_source
     )
@@ -652,7 +640,6 @@ const getPayloadRebuildRowsStatements = (
       pmid,
       project_id,
       snapshot_id,
-      source_metadata,
       url
     FROM payload_rows
     QUALIFY ROW_NUMBER() OVER (

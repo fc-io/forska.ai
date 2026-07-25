@@ -610,7 +610,6 @@ CREATE TABLE IF NOT EXISTS mart.review_article_serving_payload_v4 (
   full_text_pdf VARCHAR,
   full_text_fetched_at TIMESTAMPTZ,
   full_text_conversion_status VARCHAR,
-  source_metadata JSON,
   abstract_text VARCHAR,
   full_text_preview VARCHAR,
   PRIMARY KEY(project_id, display_identity, payload_identity, snapshot_id, article_id)
