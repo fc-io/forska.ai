@@ -308,7 +308,10 @@ const getContractSqlMatch = (
 ) => {
   const tableMatch =
     contract.servingTable === 'mart.review_article_serving_v4'
-      ? containsSql(statement, `FROM ${contract.servingTable} LEFT JOIN mart.review_article_serving_payload_v4 payload`)
+      ? containsSql(
+          statement,
+          `FROM ${contract.servingTable} INNER JOIN mart.review_article_serving_payload_v4 payload`,
+        )
       : containsSql(statement, `FROM ${contract.servingTable} WHERE`)
   const checks = [
     tableMatch,
