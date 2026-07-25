@@ -139,6 +139,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0143_dropReviewSelectedImportBaseFlags.sql'),
     'utf8',
   ).trim()
+  const reviewProjectImportDeltaCursorDropSql = readFileSync(
+    resolve(migrationsFolder, '0144_dropReviewProjectImportDeltaCursor.sql'),
+    'utf8',
+  ).trim()
   const reviewArticleServingReviewProgressCopyDropSql = readFileSync(
     resolve(migrationsFolder, '0134_dropReviewArticleServingReviewProgressCopy.sql'),
     'utf8',
@@ -317,6 +321,124 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewSelectedImportBaseFlagDropSql).not.toContain('PRIMARY KEY')
   expect(reviewSelectedImportBaseFlagDropSql).not.toContain('duplicate_flag')
   expect(reviewSelectedImportBaseFlagDropSql).not.toContain('conflict_flag')
+  expect(reviewProjectImportDeltaCursorDropSql).toBe(
+    [
+      'DROP INDEX IF EXISTS app.idx_review_project_import_delta_cursor_route;',
+      'DROP INDEX IF EXISTS idx_review_project_import_delta_cursor_route;',
+      'DROP TABLE IF EXISTS app.review_project_import_delta_cursor;',
+    ].join('\n'),
+  )
+})
+
+test('DuckDB migration drops retired project import delta cursor and route index', async () => {
+  const duckdbPath = `/tmp/forska-review-project-import-delta-cursor-drop-${Date.now()}.duckdb`
+  const targetMigrationFile = '0144_dropReviewProjectImportDeltaCursor.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE app.review_project_import_delta_cursor (
+            project_id VARCHAR NOT NULL,
+            import_route_id VARCHAR NOT NULL,
+            source_delta_high_water BIGINT NOT NULL DEFAULT 0,
+            cursor_json JSON,
+            status VARCHAR NOT NULL DEFAULT 'ready',
+            lease_owner VARCHAR,
+            lease_expires_at TIMESTAMPTZ,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            last_error VARCHAR,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            PRIMARY KEY(project_id, import_route_id)
+          )
+        \`)
+        await database.run(\`
+          CREATE INDEX idx_review_project_import_delta_cursor_route
+          ON app.review_project_import_delta_cursor(import_route_id, source_delta_high_water)
+        \`)
+
+        await migrateDuckdb()
+
+        const tableRows = await database.queryJson(\`
+          SELECT table_name AS tableName
+          FROM information_schema.tables
+          WHERE table_schema = 'app'
+            AND table_name = 'review_project_import_delta_cursor'
+        \`)
+        const indexRows = await database.queryJson(
+          "SELECT index_name AS indexName FROM duckdb_indexes() WHERE index_name = 'idx_review_project_import_delta_cursor_route'"
+        )
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0144_dropReviewProjectImportDeltaCursor.sql'"
+        )
+
+        console.log(JSON.stringify({indexRows, migrationRows, tableRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      indexRows: {indexName: string}[]
+      migrationRows: {name: string}[]
+      tableRows: {tableName: string}[]
+    }
+
+    expect(parsed.tableRows).toEqual([])
+    expect(parsed.indexRows).toEqual([])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
 })
 
 test('DuckDB migration drops selected-import base flags while preserving selected rows', async () => {
