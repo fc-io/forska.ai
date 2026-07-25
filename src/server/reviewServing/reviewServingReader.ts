@@ -453,11 +453,12 @@ const getPostingFilterPredicates = (input: {
     {filterKind: 'duplicateFlag', filterValues: getFlagPostingFilterValue(filters.duplicateFlag) ? ['true'] : []},
     {filterKind: 'conflictFlag', filterValues: getFlagPostingFilterValue(filters.conflictFlag) ? ['true'] : []},
   ]
+  const importRouteGroup = {filterKind: 'importRoute', filterValues: getFilterValues(filters.importRoute)}
   const promptGroups = getPromptAnswerValueGroups(input.request).map((filterValues) => {
     return {filterKind: 'promptAnswer', filterValues}
   })
 
-  return [...flagGroups, ...promptGroups]
+  return [...flagGroups, importRouteGroup, ...promptGroups]
     .map((filterValues, index) => {
       return getPostingFilterPredicate({
         contract: input.contract,

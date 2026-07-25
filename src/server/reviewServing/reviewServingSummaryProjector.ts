@@ -232,8 +232,14 @@ const getFullRebuildSummaryContributionRows = async (
             serving.article_id,
             CASE WHEN selected_base.tombstone THEN NULL ELSE selected_base.import_route_id END AS import_route_id,
             selected_hot.publication_year,
-            serving.duplicate_flag,
-            serving.conflict_flag
+            CASE
+              WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+              ELSE COALESCE(selected_hot.duplicate_flag, FALSE)
+            END AS duplicate_flag,
+            CASE
+              WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+              ELSE COALESCE(selected_hot.conflict_flag, FALSE)
+            END AS conflict_flag
           FROM scoped_serving serving
           LEFT JOIN app.review_selected_article_import_v4 selected_base
             ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
