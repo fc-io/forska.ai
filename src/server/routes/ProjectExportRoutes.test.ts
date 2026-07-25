@@ -547,7 +547,7 @@ test('project export download hydrates completed durable job selection as CSV', 
     }
 
     if (statement.includes(judgmentDetailServingFixtureTable)) {
-      if (statement.includes('detail.prompt_heading AS promptHeading')) {
+      if (statement.includes('prompt.prompt_heading AS promptHeading')) {
         return [
           {
             id: 'prompt-1',
@@ -592,7 +592,7 @@ test('project export download hydrates completed durable job selection as CSV', 
   expect(queryStatements.join('\n')).toContain('WHERE exportJudgmentRank = 1')
   expect(queryStatements.join('\n')).not.toContain('FROM app.article')
   expect(queryStatements.join('\n')).not.toContain('FROM app.judgment')
-  expect(queryStatements.join('\n')).not.toContain('FROM app.prompt')
+  expect(queryStatements.join('\n')).toContain('JOIN app.prompt prompt')
   expect(queryStatements.join('\n')).not.toContain('OFFSET')
   expect(queryStatements.join('\n')).not.toContain('model_id AS modelId')
   expect(queryStatements.join('\n')).toContain(
@@ -611,9 +611,10 @@ test('project export serving queries read prompt and judgment scalars', () => {
     routeText.indexOf('const getAnswerValue'),
   )
 
-  expect(promptMetadataQuery).toContain('detail.prompt_heading AS promptHeading')
-  expect(promptMetadataQuery).toContain('detail.prompt_original_text AS originalText')
-  expect(promptMetadataQuery).toContain('detail.prompt_type AS type')
+  expect(promptMetadataQuery).toContain('prompt.prompt_heading AS promptHeading')
+  expect(promptMetadataQuery).toContain('prompt.original_text AS originalText')
+  expect(promptMetadataQuery).toContain('prompt.type')
+  expect(promptMetadataQuery).toContain('INNER JOIN app.prompt prompt')
   expect(promptMetadataQuery).not.toContain("'$.prompt.promptHeading'")
   expect(promptMetadataQuery).not.toContain("'$.prompt.originalText'")
   expect(promptMetadataQuery).not.toContain("'$.prompt.type'")

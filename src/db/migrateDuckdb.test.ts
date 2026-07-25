@@ -2625,6 +2625,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
     '0158_reviewJudgmentDetailListScalars.sql',
     '0159_reviewJudgmentDetailDetailHydrationScalars.sql',
     '0160_reviewJudgmentDetailHydrationSplit.sql',
+    '0161_dropReviewJudgmentHydrationPromptMetadata.sql',
   ])
   const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
     return !targetMigrationFiles.has(fileName)
@@ -2805,7 +2806,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
           "SELECT admission_state AS admissionState, last_error AS lastError, retry_after AS retryAfter, retry_count AS retryCount, status FROM app.review_rebuild_chunk_manifest ORDER BY chunk_id"
         )
         const rows = await database.queryJson(
-          "SELECT detail.project_id AS projectId, detail.payload_kind AS payloadKind, detail.judgment_id AS judgmentId, detail.judgment_model_id AS judgmentModelId, detail.judgment_created_at AS judgmentCreatedAt, hydration.judgment_updated_at AS judgmentUpdatedAt, detail.human_comment AS humanComment, detail.explanation, detail.quotes, hydration.chunking_strategy AS chunkingStrategy, hydration.confidence_original AS confidenceOriginal, hydration.snapshot_project_id AS snapshotProjectId, hydration.snapshot_project_model_name AS snapshotProjectModelName, hydration.model_name AS modelName, hydration.model_provider AS modelProvider, hydration.model_thinking AS modelThinking, hydration.model_version AS modelVersion, hydration.assessment_id AS assessmentId, hydration.assessment_judgment_id AS assessmentJudgmentId, hydration.assessment_is_correct AS assessmentIsCorrect, hydration.assessment_comment AS assessmentComment, hydration.assessment_created_at AS assessmentCreatedAt, hydration.assessment_updated_at AS assessmentUpdatedAt, hydration.prompt_original_text AS promptOriginalText, hydration.prompt_heading AS promptHeading, CAST(hydration.prompt_criteria_disposition AS VARCHAR) AS promptCriteriaDisposition, detail.placeholder_kind AS placeholderKind FROM mart.review_article_judgment_detail_serving_v4 detail INNER JOIN mart.review_article_judgment_detail_hydration_serving_v4 hydration ON hydration.project_id = detail.project_id AND hydration.review_config_hash = detail.review_config_hash AND hydration.snapshot_id = detail.snapshot_id AND hydration.list_mode_key = detail.list_mode_key AND hydration.payload_kind = detail.payload_kind AND hydration.article_id = detail.article_id AND hydration.prompt_id = detail.prompt_id ORDER BY detail.article_id"
+          "SELECT detail.project_id AS projectId, detail.payload_kind AS payloadKind, detail.judgment_id AS judgmentId, detail.judgment_model_id AS judgmentModelId, detail.judgment_created_at AS judgmentCreatedAt, hydration.judgment_updated_at AS judgmentUpdatedAt, detail.human_comment AS humanComment, detail.explanation, detail.quotes, hydration.chunking_strategy AS chunkingStrategy, hydration.confidence_original AS confidenceOriginal, hydration.snapshot_project_id AS snapshotProjectId, hydration.snapshot_project_model_name AS snapshotProjectModelName, hydration.model_name AS modelName, hydration.model_provider AS modelProvider, hydration.model_thinking AS modelThinking, hydration.model_version AS modelVersion, hydration.assessment_id AS assessmentId, hydration.assessment_judgment_id AS assessmentJudgmentId, hydration.assessment_is_correct AS assessmentIsCorrect, hydration.assessment_comment AS assessmentComment, hydration.assessment_created_at AS assessmentCreatedAt, hydration.assessment_updated_at AS assessmentUpdatedAt, detail.placeholder_kind AS placeholderKind FROM mart.review_article_judgment_detail_serving_v4 detail INNER JOIN mart.review_article_judgment_detail_hydration_serving_v4 hydration ON hydration.project_id = detail.project_id AND hydration.review_config_hash = detail.review_config_hash AND hydration.snapshot_id = detail.snapshot_id AND hydration.list_mode_key = detail.list_mode_key AND hydration.payload_kind = detail.payload_kind AND hydration.article_id = detail.article_id AND hydration.prompt_id = detail.prompt_id ORDER BY detail.article_id"
         )
         const requestRows = await database.queryJson(
           "SELECT admission_state AS admissionState, failed_at AS failedAt, last_error AS lastError, retry_after AS retryAfter, status FROM app.review_rebuild_request ORDER BY request_id"
@@ -2910,9 +2911,6 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
         payloadKind: string
         placeholderKind: string | null
         projectId: string
-        promptCriteriaDisposition: string | null
-        promptHeading: string | null
-        promptOriginalText: string | null
         snapshotProjectId: string | null
         snapshotProjectModelName: string | null
       }>
@@ -2962,10 +2960,6 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
       'payload_kind',
       'article_id',
       'prompt_id',
-      'prompt_original_text',
-      'prompt_heading',
-      'prompt_type',
-      'prompt_criteria_disposition',
       'judgment_updated_at',
       'chunking_strategy',
       'confidence_original',
@@ -3017,9 +3011,6 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
         payloadKind: 'llm',
         placeholderKind: null,
         projectId: 'project-a',
-        promptCriteriaDisposition: 'include',
-        promptHeading: 'Prompt A',
-        promptOriginalText: 'Prompt A text',
         snapshotProjectId: 'project-source',
         snapshotProjectModelName: 'Snapshot Model',
       },
@@ -3046,9 +3037,6 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
         payloadKind: 'llm',
         placeholderKind: 'llm.unanswered',
         projectId: 'project-a',
-        promptCriteriaDisposition: 'exclude',
-        promptHeading: 'Prompt B',
-        promptOriginalText: 'Prompt B text',
         snapshotProjectId: null,
         snapshotProjectModelName: null,
       },

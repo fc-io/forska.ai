@@ -296,9 +296,9 @@ const getExportPromptDetails = async (input: {
       export_prompt(prompt_id) AS (VALUES ${promptRows})
     SELECT
       detail.prompt_id AS id,
-      detail.prompt_heading AS promptHeading,
-      detail.prompt_original_text AS originalText,
-      detail.prompt_type AS type,
+      prompt.prompt_heading AS promptHeading,
+      prompt.original_text AS originalText,
+      prompt.type,
       export_scope.source_project_order AS sourceProjectOrder
     FROM export_scope
     INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
@@ -310,6 +310,8 @@ const getExportPromptDetails = async (input: {
       ON export_article.article_id = detail.article_id
     INNER JOIN export_prompt
       ON export_prompt.prompt_id = detail.prompt_id
+    INNER JOIN app.prompt prompt
+      ON prompt.id = detail.prompt_id
     ORDER BY detail.prompt_order ASC NULLS LAST, detail.prompt_id ASC, export_scope.source_project_order ASC
     LIMIT ${getSqlLiteral(maxResultRows)}
   `,
