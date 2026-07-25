@@ -111,6 +111,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0129_dropReviewFilterPostingStatsDerivedColumns.sql'),
     'utf8',
   ).trim()
+  const reviewFilterPostingStatsDropSql = readFileSync(
+    resolve(migrationsFolder, '0147_dropReviewFilterPostingStats.sql'),
+    'utf8',
+  ).trim()
   const reviewFilterOptionPayloadJsonDropSql = readFileSync(
     resolve(migrationsFolder, '0130_dropReviewFilterOptionPayloadJson.sql'),
     'utf8',
@@ -191,19 +195,25 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewTitleSearchUnusedColumnDropSql).toContain(
     'CREATE INDEX IF NOT EXISTS idx_review_title_search_serving_v4_token',
   )
-  expect(reviewFilterPostingStatsDerivedColumnDropSql).toContain(
-    'CREATE TABLE mart.review_filter_posting_stats_v4_repair',
-  )
-  expect(reviewFilterPostingStatsDerivedColumnDropSql).toContain('DROP TABLE mart.review_filter_posting_stats_v4;')
-  expect(reviewFilterPostingStatsDerivedColumnDropSql).toContain(
-    'ALTER TABLE mart.review_filter_posting_stats_v4_repair RENAME TO review_filter_posting_stats_v4;',
-  )
-  expect(reviewFilterPostingStatsDerivedColumnDropSql).toContain(
-    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_filter_posting_stats_v4_repaired_pk',
+  expect(reviewFilterPostingStatsDerivedColumnDropSql).toBe(
+    [
+      '-- Retired by 0147_dropReviewFilterPostingStats.sql.',
+      '-- Filter-posting stats are no longer materialized, so the old derived-column',
+      '-- repair is intentionally skipped for fresh databases.',
+    ].join('\n'),
   )
   expect(reviewFilterPostingStatsDerivedColumnDropSql).not.toContain('PRIMARY KEY')
   expect(reviewFilterPostingStatsDerivedColumnDropSql).not.toContain('selectivity')
   expect(reviewFilterPostingStatsDerivedColumnDropSql).not.toContain('posting_identity')
+  expect(reviewFilterPostingStatsDropSql).toBe(
+    [
+      'DROP INDEX IF EXISTS mart.idx_review_filter_posting_stats_v4_lookup;',
+      'DROP INDEX IF EXISTS idx_review_filter_posting_stats_v4_lookup;',
+      'DROP INDEX IF EXISTS mart.idx_review_filter_posting_stats_v4_repaired_pk;',
+      'DROP INDEX IF EXISTS idx_review_filter_posting_stats_v4_repaired_pk;',
+      'DROP TABLE IF EXISTS mart.review_filter_posting_stats_v4;',
+    ].join('\n'),
+  )
   expect(reviewFilterOptionPayloadJsonDropSql).toContain('CREATE TABLE mart.review_filter_option_serving_v4_repair')
   expect(reviewFilterOptionPayloadJsonDropSql).toContain('DROP TABLE mart.review_filter_option_serving_v4;')
   expect(reviewFilterOptionPayloadJsonDropSql).toContain(
@@ -996,6 +1006,111 @@ test('DuckDB migration drops retired summary contribution serving table and look
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
   } finally {
     removeFileIfExists(duckdbPath)
+  }
+})
+
+test('DuckDB migration drops retired filter posting stats mart and lookup indexes', async () => {
+  const duckdbPath = `/tmp/forska-review-filter-posting-stats-drop-${Date.now()}.duckdb`
+  const targetMigrationFile = '0147_dropReviewFilterPostingStats.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_filter_posting_stats_v4 (
+            project_id VARCHAR NOT NULL,
+            review_config_hash VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            filter_kind VARCHAR NOT NULL,
+            filter_value VARCHAR NOT NULL,
+            list_mode_key VARCHAR NOT NULL,
+            cardinality BIGINT NOT NULL,
+            stats_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          CREATE INDEX idx_review_filter_posting_stats_v4_lookup
+          ON mart.review_filter_posting_stats_v4(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)
+        \`)
+        await database.run(\`
+          CREATE UNIQUE INDEX idx_review_filter_posting_stats_v4_repaired_pk
+          ON mart.review_filter_posting_stats_v4(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)
+        \`)
+
+        await migrateDuckdb()
+
+        const tableRows = await database.queryJson(
+          "SELECT table_name AS tableName FROM information_schema.tables WHERE table_schema = 'mart' AND table_name = 'review_filter_posting_stats_v4'"
+        )
+        const indexRows = await database.queryJson(
+          "SELECT index_name AS indexName FROM duckdb_indexes() WHERE index_name IN ('idx_review_filter_posting_stats_v4_lookup', 'idx_review_filter_posting_stats_v4_repaired_pk') ORDER BY index_name"
+        )
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0147_dropReviewFilterPostingStats.sql'"
+        )
+
+        console.log(JSON.stringify({indexRows, migrationRows, tableRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to verify filter posting stats drop migration',
+      )
+    }
+
+    const parsed = JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as {
+      indexRows: unknown[]
+      migrationRows: Array<{name: string}>
+      tableRows: unknown[]
+    }
+
+    expect(parsed.tableRows).toEqual([])
+    expect(parsed.indexRows).toEqual([])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
   }
 })
 

@@ -50,7 +50,6 @@ export type ReviewServingProjectorWritableTable =
   | 'mart.review_article_summary_rebuild_partial_v4'
   | 'mart.review_filter_facet_serving_v4'
   | 'mart.review_filter_option_serving_v4'
-  | 'mart.review_filter_posting_stats_v4'
   | 'mart.review_title_search_serving_v4'
   | 'mart.review_unassessed_queue_serving_v4'
 
@@ -111,7 +110,6 @@ const reviewServingProjectorDeleteScopedInsertOnlyTables = new Set<string>([
   'mart.review_article_judgment_detail_serving_v4',
   'mart.review_filter_facet_serving_v4',
   'mart.review_filter_option_serving_v4',
-  'mart.review_filter_posting_stats_v4',
   'mart.review_title_search_serving_v4',
 ])
 const reviewServingProjectorScanGuardedInsertMissingTables = new Set<string>([

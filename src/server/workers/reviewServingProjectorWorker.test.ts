@@ -4396,7 +4396,7 @@ test('posting rebuild batches use the range projector while preserving per-chunk
 
   expect(batchSource).toContain('projectReviewServingFilterPostingRanges')
   expect(batchSource).toContain('ranges: input.chunks.map')
-  expect(batchSource).toContain('refreshReviewServingFilterPostingStats')
+  expect(batchSource).not.toContain('refreshReviewServingFilterPostingStats')
   expect(batchSource).toContain('completePostingRebuildChunkAfterBatchWrite')
   expect(batchSource).toContain('const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)')
   expect(batchSource).toContain('batchWriteMs, chunk')
@@ -5027,7 +5027,7 @@ test('strict posting rebuild validation rescans output instead of reusing projec
     expect(result).toEqual({status: 'completed'})
     expect(postingChunk.requestId).toBeNull()
     expect(joined).toContain('string_agg(')
-    expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
+    expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
     expect(joined).not.toContain(
       'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
     )
@@ -5611,7 +5611,7 @@ test('worker deduplicates request finalization in foreground search and queue ba
   expect(queueSource).toContain('await finalizeCompletedReviewServingRebuildRequestOnceForBatch({')
 })
 
-test('worker refreshes posting stats once when a posting rebuild request is finalized', async () => {
+test('worker finalizes posting rebuild requests without refreshing retired posting stats', async () => {
   const harness = createWorkerHarness()
   const statements: string[] = []
   const requestId = 'rebuild-posting-finalize'
@@ -5700,12 +5700,11 @@ test('worker refreshes posting stats once when a posting rebuild request is fina
   const joined = statements.join('\n')
 
   expect(result.chunk).toMatchObject({chunkId: postingChunk.chunkId, status: 'completed'})
-  expect(joined).toContain('DELETE FROM mart.review_filter_posting_stats_v4')
-  expect(joined).toContain('INSERT INTO mart.review_filter_posting_stats_v4')
+  expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
   expect(joined).not.toContain(
     'ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key)',
   )
-  expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 serving')
+  expect(joined).not.toContain('FROM mart.review_article_filter_posting_serving_v4 serving')
   expect(joined).not.toContain('snapshot-non-posting-null-config')
 })
 

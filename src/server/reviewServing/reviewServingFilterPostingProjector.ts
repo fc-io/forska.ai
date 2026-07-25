@@ -3,10 +3,6 @@ import {createHash} from 'node:crypto'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
-import {
-  getReviewServingContributionDiffs,
-  type ReviewServingContributionRow,
-} from './reviewServingContributionService.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
@@ -37,7 +33,6 @@ export type ProjectReviewServingFilterPostingsInput = {
   selectedImportSnapshotId: string
   snapshotId: string
   status?: ReviewServingProjectionManifestStatus
-  refreshFullRebuildStats?: boolean
 }
 
 export type ProjectReviewServingFilterPostingRangesInput = {ranges: readonly ProjectReviewServingFilterPostingsInput[]}
@@ -50,17 +45,6 @@ type PostingContributionRow = {
   sortKey: Date | string
   tombstone: boolean
 }
-
-type PostingStatsRow = {
-  cardinality: number | string | null
-  filterKind: string
-  filterValue: string
-  listModeKey: string
-}
-
-type PostingServingTotalRow = {contributionKey: string; contributionValue: number | string | null}
-
-type PostingTotalRow = {listModeKey: string; totalArticleCount: number | string | null}
 
 type PostingValidationCountRow = {actualChecksum: string | null; actualCount: number | string | null}
 
@@ -165,31 +149,6 @@ const getContributionKey = (
     filterValue: row.filterValue,
     listModeKey: row.listModeKey,
   })
-}
-
-const getContributionStatsKey = (row: Pick<PostingContributionRow, 'filterKind' | 'filterValue' | 'listModeKey'>) => {
-  return getStableReviewServingJson({
-    filterKind: row.filterKind,
-    filterValue: row.filterValue,
-    listModeKey: row.listModeKey,
-  })
-}
-
-const getPostingRowsAsContributionRows = (rows: readonly PostingContributionRow[]) => {
-  const liveRowsByArticleAndStatsKey = rows
-    .filter((row) => {
-      return !row.tombstone
-    })
-    .reduce<Map<string, ReviewServingContributionRow>>((result, row) => {
-      const contributionKey = getContributionStatsKey(row)
-      const articleStatsKey = getStableReviewServingJson({articleId: row.articleId, contributionKey})
-
-      result.set(articleStatsKey, {articleId: row.articleId, contributionKey, contributionValue: 1})
-
-      return result
-    }, new Map())
-
-  return [...liveRowsByArticleAndStatsKey.values()]
 }
 
 const getRangeValuesCte = (ranges: readonly ProjectReviewServingFilterPostingsInput[]) => {
@@ -424,80 +383,6 @@ const getExistingPostingRows = async (
       `)
 }
 
-const getExistingStatsRows = async (
-  input: ProjectReviewServingFilterPostingsInput,
-  database: ReviewServingFilterPostingProjectorDatabase,
-  statsKeys: readonly string[],
-) => {
-  return statsKeys.length === 0
-    ? []
-    : database.queryJson<PostingStatsRow>(`
-        SELECT filter_kind AS filterKind, filter_value AS filterValue, list_mode_key AS listModeKey, cardinality
-        FROM mart.review_filter_posting_stats_v4
-        WHERE project_id = ${getSqlLiteral(input.projectId)}
-          AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      `)
-}
-
-const getExistingServingTotalRows = async (
-  input: ProjectReviewServingFilterPostingsInput,
-  database: ReviewServingFilterPostingProjectorDatabase,
-  rows: readonly PostingContributionRow[],
-) => {
-  const statsKeys = [
-    ...new Map(
-      rows.map((row) => {
-        return [getContributionStatsKey(row), row]
-      }),
-    ).values(),
-  ]
-
-  return statsKeys.length === 0
-    ? []
-    : database.queryJson<PostingServingTotalRow>(`
-        WITH stats_key_filter(filter_kind, filter_value, list_mode_key) AS (
-          SELECT * FROM (VALUES ${statsKeys
-            .map((row) => {
-              return `(${getSqlLiteral(row.filterKind)}, ${getSqlLiteral(row.filterValue)}, ${getSqlLiteral(row.listModeKey)})`
-            })
-            .join(', ')})
-        )
-        SELECT
-          ${getPostingIdentityFromStatsSql('filter')} AS contributionKey,
-          COUNT(serving.article_id) AS contributionValue
-        FROM stats_key_filter filter
-        LEFT JOIN mart.review_article_filter_posting_serving_v4 serving
-          ON serving.project_id = ${getSqlLiteral(input.projectId)}
-          AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-          AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          AND serving.filter_kind = filter.filter_kind
-          AND serving.filter_value = filter.filter_value
-          AND serving.list_mode_key = filter.list_mode_key
-        GROUP BY filter.filter_kind, filter.filter_value, filter.list_mode_key
-      `)
-}
-
-const getPostingTotalRows = async (
-  input: ProjectReviewServingFilterPostingsInput,
-  database: ReviewServingFilterPostingProjectorDatabase,
-) => {
-  return input.listModeKeys.length === 0
-    ? []
-    : database.queryJson<PostingTotalRow>(`
-        WITH ${getListModeCte(input.listModeKeys)}
-        SELECT
-          list_mode_key.list_mode_key AS listModeKey,
-          (
-            SELECT COUNT(*)
-            FROM mart.project_scope_article scope
-            WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
-              AND (scope.in_curated_scope OR scope.in_route_scope)
-          ) AS totalArticleCount
-        FROM list_mode_key_filter list_mode_key
-      `)
-}
-
 const getPostingServingRecord = (input: {
   projectId: string
   reviewConfigHash: string
@@ -524,31 +409,6 @@ const getPostingServingRecord = (input: {
       review_config_hash: input.reviewConfigHash,
       snapshot_id: input.snapshotId,
       sort_key: input.row.sortKey,
-    },
-  }
-}
-
-const getStatsRecord = (input: {
-  cardinality: number
-  filterKind: string
-  filterValue: string
-  listModeKey: string
-  projectId: string
-  reviewConfigHash: string
-  snapshotId: string
-}): ReviewServingProjectorRecord => {
-  return {
-    keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'filter_kind', 'filter_value', 'list_mode_key'],
-    table: 'mart.review_filter_posting_stats_v4',
-    values: {
-      cardinality: input.cardinality,
-      filter_kind: input.filterKind,
-      filter_value: input.filterValue,
-      list_mode_key: input.listModeKey,
-      project_id: input.projectId,
-      review_config_hash: input.reviewConfigHash,
-      snapshot_id: input.snapshotId,
-      stats_updated_at: new Date(),
     },
   }
 }
@@ -639,78 +499,8 @@ const getInsertFullRebuildServingRowsStatement = (
     ON CONFLICT(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id) DO NOTHING`
 }
 
-const getDeleteFullRebuildStatsRowsStatement = (
-  input: Pick<ProjectReviewServingFilterPostingsInput, 'projectId' | 'reviewConfigHash' | 'snapshotId'>,
-) => {
-  return `DELETE FROM mart.review_filter_posting_stats_v4 stats
-    WHERE stats.project_id = ${getSqlLiteral(input.projectId)}
-      AND stats.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-      AND stats.snapshot_id = ${getSqlLiteral(input.snapshotId)}`
-}
-
-const getPostingIdentityFromStatsSql = (alias: string) => {
-  return `'{"filterKind":' || CAST(to_json(${alias}.filter_kind) AS VARCHAR) || ',"filterValue":' || CAST(to_json(${alias}.filter_value) AS VARCHAR) || ',"listModeKey":' || CAST(to_json(${alias}.list_mode_key) AS VARCHAR) || '}'`
-}
-
-const getInsertFullRebuildStatsRowsStatement = (
-  input: Pick<ProjectReviewServingFilterPostingsInput, 'projectId' | 'reviewConfigHash' | 'snapshotId'>,
-) => {
-  return `INSERT INTO mart.review_filter_posting_stats_v4 (
-      project_id,
-      review_config_hash,
-      snapshot_id,
-      filter_kind,
-      filter_value,
-      list_mode_key,
-      cardinality,
-      stats_updated_at
-    )
-    WITH stats_source AS (
-      SELECT
-        serving.filter_kind,
-        serving.filter_value,
-        serving.list_mode_key,
-        COUNT(*) AS cardinality
-      FROM mart.review_article_filter_posting_serving_v4 serving
-      WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-        AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-        AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      GROUP BY serving.filter_kind, serving.filter_value, serving.list_mode_key
-    )
-    SELECT
-      ${getSqlLiteral(input.projectId)} AS project_id,
-      ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
-      ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-      stats.filter_kind,
-      stats.filter_value,
-      stats.list_mode_key,
-      stats.cardinality,
-      current_timestamp AS stats_updated_at
-    FROM stats_source stats`
-}
-
-export const refreshReviewServingFilterPostingStats = async (
-  input: Pick<ProjectReviewServingFilterPostingsInput, 'projectId' | 'reviewConfigHash' | 'snapshotId'>,
-  database: ReviewServingFilterPostingProjectorDatabase = getAppDatabaseService() as ReviewServingFilterPostingProjectorDatabase,
-) => {
-  await writeReviewServingProjectorComponent(
-    {
-      acknowledgements: [],
-      component: 'posting',
-      projectionManifests: [],
-      records: [],
-      repairDirtyWork: [],
-      statements: [getDeleteFullRebuildStatsRowsStatement(input), getInsertFullRebuildStatsRowsStatement(input)],
-    },
-    database,
-  )
-}
-
 const getFullRebuildWriteStatements = (input: ProjectReviewServingFilterPostingsInput) => {
-  const insertStatements = input.listModeKeys.length === 0 ? [] : [getInsertFullRebuildServingRowsStatement(input)]
-  const statsStatements = input.refreshFullRebuildStats === false ? [] : [getInsertFullRebuildStatsRowsStatement(input)]
-
-  return [...insertStatements, ...statsStatements]
+  return input.listModeKeys.length === 0 ? [] : [getInsertFullRebuildServingRowsStatement(input)]
 }
 
 const getFullRebuildRangeWriteStatements = (input: ProjectReviewServingFilterPostingRangesInput) => {
@@ -720,43 +510,9 @@ const getFullRebuildRangeWriteStatements = (input: ProjectReviewServingFilterPos
     return []
   }
 
-  const insertStatements =
-    firstRange.listModeKeys.length === 0 ? [] : [getInsertFullRebuildServingRowsStatement(firstRange, input.ranges)]
-  const statsStatements =
-    firstRange.refreshFullRebuildStats === false ? [] : [getInsertFullRebuildStatsRowsStatement(firstRange)]
-
-  return [...insertStatements, ...statsStatements]
-}
-
-const getDeleteStatsRowsStatement = (
-  input: ProjectReviewServingFilterPostingsInput,
-  statsRecords: readonly ReviewServingProjectorRecord[],
-) => {
-  const statsValues = [
-    ...new Set(
-      statsRecords.map((record) => {
-        return [
-          getSqlLiteral(record.values.filter_kind ?? null),
-          getSqlLiteral(record.values.filter_value ?? null),
-          getSqlLiteral(record.values.list_mode_key ?? null),
-        ].join(', ')
-      }),
-    ),
-  ]
-
-  return statsValues.length === 0
-    ? null
-    : `WITH deleted(filter_kind, filter_value, list_mode_key) AS (
-      SELECT * FROM (VALUES (${statsValues.join('), (')}))
-    )
-    DELETE FROM mart.review_filter_posting_stats_v4 stats
-    USING deleted
-    WHERE stats.project_id = ${getSqlLiteral(input.projectId)}
-      AND stats.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-      AND stats.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      AND stats.filter_kind = deleted.filter_kind
-      AND stats.filter_value = deleted.filter_value
-      AND stats.list_mode_key = deleted.list_mode_key`
+  return firstRange.listModeKeys.length === 0
+    ? []
+    : [getInsertFullRebuildServingRowsStatement(firstRange, input.ranges)]
 }
 
 const getPostingManifest = (
@@ -782,118 +538,13 @@ const getPostingManifest = (
   }
 }
 
-const getFiniteNumber = (value: number | string | null | undefined) => {
+const getNonNegativeFiniteNumber = (value: number | string | null | undefined) => {
   const numberValue = typeof value === 'string' ? Number(value) : value
 
-  return numberValue === null || numberValue === undefined || !Number.isFinite(numberValue) ? 0 : numberValue
-}
-
-const getNonNegativeFiniteNumber = (value: number | string | null | undefined) => {
-  return Math.max(0, getFiniteNumber(value))
-}
-
-const getUniqueStatsKeys = (rows: readonly PostingContributionRow[]) => {
-  return [
-    ...new Set(
-      rows.map((row) => {
-        return getContributionStatsKey(row)
-      }),
-    ),
-  ]
-}
-
-const getStatsRowIsInvalid = (row: PostingStatsRow | undefined, totalArticleCount: number) => {
-  if (row === undefined) {
-    return false
-  }
-
-  const cardinality = getFiniteNumber(row.cardinality)
-
-  return cardinality < 0 || !Number.isSafeInteger(cardinality) || cardinality > totalArticleCount
-}
-
-const getStatsRecords = async (input: {
-  database: ReviewServingFilterPostingProjectorDatabase
-  diffs: readonly {contributionKey: string; delta: number}[]
-  rows: readonly PostingContributionRow[]
-  projectorInput: ProjectReviewServingFilterPostingsInput
-}) => {
-  const changedDiffs = input.diffs.filter((diff) => {
-    return diff.delta !== 0
-  })
-  const rowKeys = getUniqueStatsKeys(input.rows)
-  const [existingStatsRows, totalRows] = await Promise.all([
-    getExistingStatsRows(input.projectorInput, input.database, rowKeys),
-    getPostingTotalRows(input.projectorInput, input.database),
-  ])
-  const statsRowsByKey = new Map(
-    existingStatsRows.map((row) => {
-      return [getContributionStatsKey(row), row]
-    }),
+  return Math.max(
+    0,
+    numberValue === null || numberValue === undefined || !Number.isFinite(numberValue) ? 0 : numberValue,
   )
-  const totalRowsByListMode = new Map(
-    totalRows.map((row) => {
-      return [row.listModeKey, getNonNegativeFiniteNumber(row.totalArticleCount)]
-    }),
-  )
-  const rowsByKey = new Map(
-    input.rows.map((row) => {
-      return [getContributionStatsKey(row), row]
-    }),
-  )
-  const invalidStatsKeys = rowKeys.filter((key) => {
-    const row = rowsByKey.get(key)
-
-    return row === undefined
-      ? false
-      : getStatsRowIsInvalid(statsRowsByKey.get(key), totalRowsByListMode.get(row.listModeKey) ?? 0)
-  })
-  const statsKeysToWrite = [
-    ...new Set([
-      ...changedDiffs.map((diff) => {
-        return diff.contributionKey
-      }),
-      ...invalidStatsKeys,
-    ]),
-  ]
-  const statsRowsToWrite = input.rows.filter((row) => {
-    return statsKeysToWrite.includes(getContributionStatsKey(row))
-  })
-  const contributionTotals = await getExistingServingTotalRows(input.projectorInput, input.database, statsRowsToWrite)
-  const contributionTotalsByKey = new Map(
-    contributionTotals.map((row) => {
-      return [row.contributionKey, getNonNegativeFiniteNumber(row.contributionValue)]
-    }),
-  )
-  const diffsByKey = new Map(
-    changedDiffs.map((diff) => {
-      return [diff.contributionKey, diff.delta]
-    }),
-  )
-
-  return statsKeysToWrite.flatMap((statsKey) => {
-    const row = rowsByKey.get(statsKey)
-    const existingCardinality = contributionTotalsByKey.get(statsKey) ?? 0
-    const cardinality = Math.max(0, existingCardinality + (diffsByKey.get(statsKey) ?? 0))
-
-    return row === undefined
-      ? []
-      : [
-          getStatsRecord({
-            cardinality,
-            filterKind: row.filterKind,
-            filterValue: row.filterValue,
-            listModeKey: row.listModeKey,
-            projectId: input.projectorInput.projectId,
-            reviewConfigHash: input.projectorInput.reviewConfigHash,
-            snapshotId: input.projectorInput.snapshotId,
-          }),
-        ]
-  })
-}
-
-const getRecordValue = (record: ReviewServingProjectorRecord, column: string) => {
-  return record.values[column]
 }
 
 const getCheapCountChecksum = (count: number) => {
@@ -999,8 +650,6 @@ export const projectReviewServingFilterPostings = async (
       patchWatermark,
       repairRequired: false,
       servingRowCount: validationResult.actualCount,
-      statsRowCount: 0,
-      statsValues: [],
       validationResult,
     }
   }
@@ -1016,12 +665,6 @@ export const projectReviewServingFilterPostings = async (
 
     return {contributionRows: transformedContributionRows, liveRows: transformedLiveRows}
   })
-  const contributionDiffs = measureSync('contributionDiffMs', () => {
-    return getReviewServingContributionDiffs({
-      newRows: getPostingRowsAsContributionRows(liveRows),
-      oldRows: getPostingRowsAsContributionRows(existingRows),
-    })
-  })
   const {servingRecords} = measureSync('recordTransformMs', () => {
     const nextServingRecords = liveRows.map((row) => {
       return getPostingServingRecord({
@@ -1035,22 +678,15 @@ export const projectReviewServingFilterPostings = async (
     return {servingRecords: nextServingRecords}
   })
   const servingRowCount = servingRecords.length
-  const statsRecords = await measure('statsQueryAndTransformMs', async () => {
-    return getStatsRecords({database, diffs: contributionDiffs, projectorInput: input, rows: contributionRows})
-  })
-  const {deleteServingRowsStatement, deleteStatsRowsStatement} = measureSync('deleteStatementBuildMs', () => {
+  const {deleteServingRowsStatement} = measureSync('deleteStatementBuildMs', () => {
     const nextDeleteServingRowsStatement = getDeleteServingRowsStatement(
       input,
       contributionRows.filter((row) => {
         return row.tombstone
       }),
     )
-    const nextDeleteStatsRowsStatement = getDeleteStatsRowsStatement(input, statsRecords)
 
-    return {
-      deleteServingRowsStatement: nextDeleteServingRowsStatement,
-      deleteStatsRowsStatement: nextDeleteStatsRowsStatement,
-    }
+    return {deleteServingRowsStatement: nextDeleteServingRowsStatement}
   })
   const writerResult = await measure('writerMs', async () => {
     const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
@@ -1060,9 +696,9 @@ export const projectReviewServingFilterPostings = async (
         acknowledgements: shouldAcknowledgeClaims ? input.claims : [],
         component: 'posting',
         projectionManifests: shouldAcknowledgeClaims ? [getPostingManifest(input)] : [],
-        records: [...servingRecords, ...statsRecords],
+        records: servingRecords,
         repairDirtyWork: [],
-        statements: [deleteServingRowsStatement, deleteStatsRowsStatement].flatMap((statement) => {
+        statements: [deleteServingRowsStatement].flatMap((statement) => {
           return statement === null ? [] : [statement]
         }),
         watermark: !shouldAcknowledgeClaims
@@ -1083,7 +719,6 @@ export const projectReviewServingFilterPostings = async (
     diagnosticsJson: {
       phaseTimings,
       postingProjector: {
-        contributionDiffCount: contributionDiffs.length,
         contributionRecordCount: 0,
         contributionRowCount: contributionRows.length,
         existingRowCount: existingRows.length,
@@ -1096,15 +731,6 @@ export const projectReviewServingFilterPostings = async (
     patchWatermark,
     repairRequired: false,
     servingRowCount,
-    statsRowCount: statsRecords.length,
-    statsValues: statsRecords.map((record) => {
-      return {
-        cardinality: getRecordValue(record, 'cardinality'),
-        filterKind: getRecordValue(record, 'filter_kind'),
-        filterValue: getRecordValue(record, 'filter_value'),
-        listModeKey: getRecordValue(record, 'list_mode_key'),
-      }
-    }),
     validationResult: undefined,
   }
 }
@@ -1127,7 +753,6 @@ export const projectReviewServingFilterPostingRanges = async (
       diagnosticsJson: {phaseTimings, postingProjector: {fullRebuildMode: 'range-set-based', rangeCount: 0}},
       patchRowCount: 0,
       servingRowCount: 0,
-      statsValues: [],
       validationResult: undefined,
     }
   }
@@ -1157,7 +782,6 @@ export const projectReviewServingFilterPostingRanges = async (
     },
     patchRowCount: 0,
     servingRowCount: 0,
-    statsValues: [],
     validationResult: undefined,
   }
 }

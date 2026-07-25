@@ -620,19 +620,6 @@ CREATE TABLE IF NOT EXISTS mart.review_article_filter_posting_serving_v4 (
   PRIMARY KEY(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id)
 );
 
-CREATE TABLE IF NOT EXISTS mart.review_filter_posting_stats_v4 (
-  project_id VARCHAR NOT NULL,
-  review_config_hash VARCHAR NOT NULL,
-  snapshot_id VARCHAR NOT NULL,
-  filter_kind VARCHAR NOT NULL,
-  filter_value VARCHAR NOT NULL,
-  list_mode_key VARCHAR NOT NULL,
-  cardinality BIGINT NOT NULL,
-  stats_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-  PRIMARY KEY(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key),
-  CHECK (cardinality >= 0)
-);
-
 CREATE TABLE IF NOT EXISTS mart.review_article_serving_payload_v4 (
   project_id VARCHAR NOT NULL,
   display_identity VARCHAR NOT NULL,
@@ -838,9 +825,6 @@ ON mart.review_article_filter_posting_patch_v4(project_id, posting_identity, bas
 
 CREATE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_lookup
 ON mart.review_article_filter_posting_serving_v4(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, sort_key, article_id);
-
-CREATE INDEX IF NOT EXISTS idx_review_filter_posting_stats_v4_lookup
-ON mart.review_filter_posting_stats_v4(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key);
 
 CREATE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_lookup
 ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_id);
