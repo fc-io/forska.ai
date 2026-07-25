@@ -10,10 +10,38 @@ const getHumanAssessmentListMode = (contractKey: 'review.both.count' | 'review.h
 }
 
 const getHumanAssessmentCompletedCountPredicate = (contractKey: 'review.both.count' | 'review.human.count') => {
+  const humanStatusPredicate = `
+      AND EXISTS (
+        SELECT 1
+        FROM mart.review_article_filter_posting_serving_v4 human_status_posting
+        WHERE human_status_posting.project_id = serving.project_id
+          AND human_status_posting.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+          AND human_status_posting.snapshot_id = serving.snapshot_id
+          AND human_status_posting.article_id = serving.article_id
+          AND human_status_posting.list_mode_key = serving.list_mode_key
+          AND human_status_posting.filter_kind = 'humanStatus'
+          AND human_status_posting.filter_value = 'answered'
+      )`
+  const llmStatusPredicate =
+    contractKey === 'review.both.count'
+      ? `
+      AND EXISTS (
+        SELECT 1
+        FROM mart.review_article_filter_posting_serving_v4 llm_status_posting
+        WHERE llm_status_posting.project_id = serving.project_id
+          AND llm_status_posting.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+          AND llm_status_posting.snapshot_id = serving.snapshot_id
+          AND llm_status_posting.article_id = serving.article_id
+          AND llm_status_posting.list_mode_key = serving.list_mode_key
+          AND llm_status_posting.filter_kind = 'llmStatus'
+          AND llm_status_posting.filter_value = 'answered'
+      )`
+      : ''
+
   return `
       AND serving.list_mode_key = ${getSqlLiteral(getHumanAssessmentListMode(contractKey))}
-      AND serving.human_status_key = 'answered'
-      ${contractKey === 'review.both.count' ? "AND serving.llm_status_key = 'answered'" : ''}`
+      ${humanStatusPredicate}
+      ${llmStatusPredicate}`
 }
 
 export const getReviewServingHumanAssessmentCompletedCount = async (input: {
