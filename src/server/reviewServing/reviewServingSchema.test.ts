@@ -30,6 +30,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0126_dropReviewSelectedImportPatchV4.sql',
   '../../db/duckdbMigrations/0127_dropReviewTitleSearchUnusedColumns.sql',
   '../../db/duckdbMigrations/0128_dropReviewArticleServingIdentityCopyColumns.sql',
+  '../../db/duckdbMigrations/0129_dropReviewFilterPostingStatsDerivedColumns.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -81,6 +82,8 @@ const reviewArticleServingIdentityCopyColumnDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath[
     '../../db/duckdbMigrations/0128_dropReviewArticleServingIdentityCopyColumns.sql'
   ]
+const reviewFilterPostingStatsDerivedColumnDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0129_dropReviewFilterPostingStatsDerivedColumns.sql']
 const hotServingTables = [
   'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
@@ -497,6 +500,26 @@ test('selected import patch mart is retired from the review-serving schema', () 
   expect(schemaMigrationSql).not.toContain('idx_review_selected_import_patch_v4_lookup')
   expect(reviewServingPhase1Tables).not.toContain('mart.review_selected_import_patch_v4')
   expect(retiredReviewServingTables.has('mart.review_selected_import_patch_v4')).toBe(true)
+})
+
+test('filter posting stats schema drops derived identity and selectivity columns', () => {
+  expect(reviewFilterPostingStatsDerivedColumnDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_filter_posting_stats_v4_repair',
+  )
+  expect(reviewFilterPostingStatsDerivedColumnDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_filter_posting_stats_v4_repair RENAME TO review_filter_posting_stats_v4;',
+  )
+  expect([...getTableColumns('mart.review_filter_posting_stats_v4')]).toEqual([
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'filter_kind',
+    'filter_value',
+    'list_mode_key',
+    'cardinality',
+    'stats_updated_at',
+  ])
+  expect(schemaMigrationSql).not.toContain('selectivity DOUBLE')
 })
 
 test('Phase 1 schema migration creates contract cursor and sort columns on non-job serving tables', () => {
