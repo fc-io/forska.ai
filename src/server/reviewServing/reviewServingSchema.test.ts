@@ -34,6 +34,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql',
   '../../db/duckdbMigrations/0131_dropReviewArticleServingSelectedRankCopy.sql',
   '../../db/duckdbMigrations/0132_dropReviewPayloadBytes.sql',
+  '../../db/duckdbMigrations/0133_dropReviewFilterPostingServingIdentity.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -93,6 +94,8 @@ const reviewArticleServingSelectedRankCopyDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0131_dropReviewArticleServingSelectedRankCopy.sql']
 const reviewPayloadBytesDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0132_dropReviewPayloadBytes.sql']
+const reviewFilterPostingServingIdentityDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0133_dropReviewFilterPostingServingIdentity.sql']
 const hotServingTables = [
   'mart.review_article_serving_v4',
   'mart.review_article_filter_posting_serving_v4',
@@ -543,6 +546,13 @@ test('filter posting stats schema drops derived identity and selectivity columns
     'stats_updated_at',
   ])
   expect(schemaMigrationSql).not.toContain('selectivity DOUBLE')
+  expect(getTableColumns('mart.review_article_filter_posting_serving_v4').has('posting_identity')).toBe(false)
+  expect(reviewFilterPostingServingIdentityDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_filter_posting_serving_v4_repair',
+  )
+  expect(reviewFilterPostingServingIdentityDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_filter_posting_serving_v4_repair RENAME TO review_article_filter_posting_serving_v4;',
+  )
 })
 
 test('filter option schema drops reconstructable payload JSON column', () => {
