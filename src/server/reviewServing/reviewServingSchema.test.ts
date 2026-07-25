@@ -72,6 +72,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0169_dropReviewPayloadSourceMetadata.sql',
   '../../db/duckdbMigrations/0170_dropReviewArticleServingUpdatedAt.sql',
   '../../db/duckdbMigrations/0171_normalizeReviewJudgmentDetailListModeStorage.sql',
+  '../../db/duckdbMigrations/0172_dropReviewJudgmentDetailHydrationStorage.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -157,6 +158,8 @@ const reviewJudgmentDetailListModeStorageNormalizationForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath[
     '../../db/duckdbMigrations/0171_normalizeReviewJudgmentDetailListModeStorage.sql'
   ]
+const reviewJudgmentDetailHydrationStorageDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0172_dropReviewJudgmentDetailHydrationStorage.sql']
 const reviewQueueServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql']
 const reviewFilterPostingServingUpdatedAtDropForwardMigrationSql =
@@ -249,7 +252,6 @@ const reviewServingPhase1Tables = [
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_article_serving_payload_v4',
   'mart.review_article_judgment_detail_serving_v4',
-  'mart.review_article_judgment_detail_hydration_serving_v4',
   'mart.review_article_summary_contribution_rebuild_partial_v4',
   'mart.review_article_summary_rebuild_partial_v4',
   'mart.review_article_count_serving_v4',
@@ -266,6 +268,7 @@ const retiredReviewServingTables = new Set<string>([
   'mart.review_selected_import_patch_v4',
   'mart.review_article_summary_contribution_v4',
   'mart.review_filter_posting_stats_v4',
+  'mart.review_article_judgment_detail_hydration_serving_v4',
 ])
 
 const deltaEnvelopeColumns = [
@@ -1203,46 +1206,17 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
       'is_answered',
       'judgment_created_at',
       'human_comment',
-      'judgment_model_id',
-      'explanation',
-      'quotes',
       'placeholder_kind',
-    ]),
-  ).toEqual([])
-  expect(
-    getMissingColumns('mart.review_article_judgment_detail_hydration_serving_v4', [
-      'article_id',
-      'prompt_id',
-      'payload_kind',
-      'judgment_updated_at',
-      'chunking_strategy',
-      'confidence_original',
-      'snapshot_project_id',
-      'snapshot_project_model_name',
-      'model_name',
-      'model_provider',
-      'model_thinking',
-      'model_version',
-      'assessment_id',
-      'assessment_judgment_id',
-      'assessment_is_correct',
-      'assessment_comment',
-      'assessment_created_at',
-      'assessment_updated_at',
     ]),
   ).toEqual([])
   expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('model_id')).toBe(false)
   expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('judgment_payload_json')).toBe(false)
   expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('prompt_original_text')).toBe(false)
   expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('judgment_updated_at')).toBe(false)
-  expect(getTableColumns('mart.review_article_judgment_detail_hydration_serving_v4').has('prompt_original_text')).toBe(
-    false,
-  )
-  expect(getTableColumns('mart.review_article_judgment_detail_hydration_serving_v4').has('prompt_heading')).toBe(false)
-  expect(getTableColumns('mart.review_article_judgment_detail_hydration_serving_v4').has('prompt_type')).toBe(false)
-  expect(
-    getTableColumns('mart.review_article_judgment_detail_hydration_serving_v4').has('prompt_criteria_disposition'),
-  ).toBe(false)
+  expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('judgment_model_id')).toBe(false)
+  expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('explanation')).toBe(false)
+  expect(getTableColumns('mart.review_article_judgment_detail_serving_v4').has('quotes')).toBe(false)
+  expect(getTableSql('mart.review_article_judgment_detail_hydration_serving_v4')).toBe('')
   expect(
     getMissingColumns('mart.review_filter_option_serving_v4', [
       'filter_kind',
@@ -1369,6 +1343,15 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
   expect(reviewJudgmentDetailHydrationSplitForwardMigrationSql).toContain(
     'CREATE INDEX IF NOT EXISTS idx_review_article_judgment_detail_hydration_serving_v4_article',
   )
+  expect(reviewJudgmentDetailHydrationStorageDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_judgment_detail_serving_v4_repair',
+  )
+  expect(reviewJudgmentDetailHydrationStorageDropForwardMigrationSql).toContain(
+    'DROP TABLE IF EXISTS mart.review_article_judgment_detail_hydration_serving_v4;',
+  )
+  expect(reviewJudgmentDetailHydrationStorageDropForwardMigrationSql).not.toContain('judgment_model_id VARCHAR')
+  expect(reviewJudgmentDetailHydrationStorageDropForwardMigrationSql).not.toContain('explanation VARCHAR')
+  expect(reviewJudgmentDetailHydrationStorageDropForwardMigrationSql).not.toContain('quotes JSON')
   expect(countScopeForwardMigrationSql).toContain(
     'PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id)',
   )

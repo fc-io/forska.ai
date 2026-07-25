@@ -45,7 +45,6 @@ export const reviewServingRegisteredSqlTables = [
     ...reviewServingReadContractList.map((contract) => {
       return contract.servingTable
     }),
-    'mart.review_article_judgment_detail_hydration_serving_v4',
   ]),
 ].sort()
 
@@ -86,6 +85,18 @@ export const getReviewServingSqlForbiddenPatternViolations = (sql: string) => {
   return reviewServingSqlForbiddenPatterns
     .filter((forbiddenPattern) => {
       if (forbiddenPattern.label === 'raw article table scan' && hasBoundedArticleLookupJoin(sql)) {
+        return false
+      }
+
+      if (forbiddenPattern.label === 'raw judgment table scan' && hasBoundedJudgmentAuthoritativeHydrationJoin(sql)) {
+        return false
+      }
+
+      if (
+        forbiddenPattern.label === 'json extraction'
+        && hasBoundedJudgmentAuthoritativeHydrationJoin(sql)
+        && hasOnlyBoundedJudgmentModelThinkingExtraction(sql)
+      ) {
         return false
       }
 
@@ -138,6 +149,29 @@ const hasBoundedJudgmentPromptMetadataJoin = (sql: string) => {
     && /\bleft\s+join\s+app\.prompt\s+prompt\s+on\s+prompt\.id\s*=\s*mart\.review_article_judgment_detail_serving_v4\.prompt_id\b/iu.test(
       sql,
     )
+  )
+}
+
+const hasBoundedJudgmentAuthoritativeHydrationJoin = (sql: string) => {
+  return (
+    /\bleft\s+join\s+app\."?judgment"?\s+llm_judgment\b/iu.test(sql)
+    && /\bllm_judgment\.id\s*=\s*mart\.review_article_judgment_detail_serving_v4\.judgment_id\b/iu.test(sql)
+    && /\bllm_judgment\.article_id\s*=\s*mart\.review_article_judgment_detail_serving_v4\.article_id\b/iu.test(sql)
+    && /\bllm_judgment\.prompt_id\s*=\s*mart\.review_article_judgment_detail_serving_v4\.prompt_id\b/iu.test(sql)
+    && /\bllm_judgment\.deleted_at\s+is\s+null\b/iu.test(sql)
+  )
+}
+
+const hasOnlyBoundedJudgmentModelThinkingExtraction = (sql: string) => {
+  const extractionCalls = [...sql.matchAll(/\bjson_extract(?:_string)?\s*\([^)]*\)/giu)].map((match) => {
+    return match[0]
+  })
+
+  return (
+    extractionCalls.length > 0
+    && extractionCalls.every((call) => {
+      return /json_extract_string\s*\(\s*model\.metadata_json\s*,\s*'\$\.options\.thinking'\s*\)/iu.test(call)
+    })
   )
 }
 
@@ -194,6 +228,25 @@ const isBoundedJudgmentPromptMetadataReference = (sql: string, tableReference: R
   )
 }
 
+const isBoundedJudgmentAuthoritativeHydrationReference = (
+  sql: string,
+  tableReference: ReviewServingSqlTableReference,
+) => {
+  return (
+    [
+      ['app.judgment', 'llm_judgment'],
+      ['app.judgment_assessment', 'assessment'],
+      ['app.judgment_assessment', 'latest_assessment'],
+      ['app.model', 'model'],
+      ['app.provider_connection', 'provider_connection'],
+      ['app.judgment_human', 'human_judgment'],
+      ['app.judgment_human_summary', 'human_summary'],
+    ].some(([table, alias]) => {
+      return tableReference.table === table && tableReference.alias === alias
+    }) && hasBoundedJudgmentAuthoritativeHydrationJoin(sql)
+  )
+}
+
 const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Required<ReviewServingSqlShapeOptions>) => {
   if (!options.requireRegisteredTable) {
     return []
@@ -227,6 +280,18 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
       )
     })
     .filter((tableReference) => {
+      return (
+        ![
+          'app.judgment',
+          'app.judgment_assessment',
+          'app.model',
+          'app.provider_connection',
+          'app.judgment_human',
+          'app.judgment_human_summary',
+        ].includes(tableReference) || !hasBoundedJudgmentAuthoritativeHydrationJoin(sql)
+      )
+    })
+    .filter((tableReference) => {
       return !allowedTables.has(tableReference)
     })
     .map((tableReference) => {
@@ -241,8 +306,13 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
   const hasMultipleReferences = tableReferences.length > 1
   const scopedPredicateClause =
     sql.match(/\bfrom\b([\s\S]*?)(?:\bqualify\b|\border\s+by\b|\blimit\b|\bgroup\s+by\b|\bhaving\b|$)/iu)?.[1] ?? ''
-  const wherePredicateClause =
-    sql.match(/\bwhere\b([\s\S]*?)(?:\bqualify\b|\border\s+by\b|\blimit\b|\bgroup\s+by\b|\bhaving\b|$)/iu)?.[1] ?? ''
+  const wherePredicateClause = [
+    ...sql.matchAll(/\bwhere\b([\s\S]*?)(?:\bqualify\b|\border\s+by\b|\blimit\b|\bgroup\s+by\b|\bhaving\b|$)/giu),
+  ]
+    .map((match) => {
+      return match[1] ?? ''
+    })
+    .join('\n')
   const bindOperandPattern = '(?:\\?|[$:@](?:[a-z_][\\w.]*|[0-9]+))'
   const getQualifierPattern = (tableReference: ReviewServingSqlTableReference) => {
     if (tableReference.alias) {
@@ -271,6 +341,7 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
               || isBoundedSelectedImportLookupReference(sql, tableReference)
               || isBoundedSelectedSourceRecordLookupReference(sql, tableReference)
               || isBoundedJudgmentPromptMetadataReference(sql, tableReference)
+              || isBoundedJudgmentAuthoritativeHydrationReference(sql, tableReference)
             ) {
               return false
             }
@@ -330,7 +401,6 @@ const reviewServingFilterPostingTable = 'mart.review_article_filter_posting_serv
 const reviewServingFilterFacetTable = 'mart.review_filter_facet_serving_v4'
 const reviewServingFilterOptionTable = 'mart.review_filter_option_serving_v4'
 const reviewServingJudgmentDetailTable = 'mart.review_article_judgment_detail_serving_v4'
-const reviewServingJudgmentDetailHydrationTable = 'mart.review_article_judgment_detail_hydration_serving_v4'
 const reviewServingListModePrioritySql =
   "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
 const reviewServingJudgmentDetailListModePrioritySql = `CASE ${reviewServingJudgmentDetailTable}.list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END`
@@ -390,64 +460,62 @@ const reviewServingJudgmentDetailFullColumns = [
     'prompt_id',
     'prompt_order',
     'judgment_id',
-    'judgment_model_id',
     'is_answered',
     'answered_original',
     'answered_original_as_array',
     'judgment_created_at',
     'human_comment',
-    'explanation',
-    'quotes',
     'placeholder_kind',
     'detail_updated_at',
   ].map((column) => {
     return `${reviewServingJudgmentDetailTable}.${column}`
   }),
+  `llm_judgment.model_id AS judgment_model_id`,
+  `llm_judgment.explanation AS explanation`,
+  `llm_judgment.quotes AS quotes`,
   `CASE WHEN ${reviewServingJudgmentDetailTable}.prompt_id = 'summary' THEN 'Overall human screening decision' ELSE prompt.original_text END AS prompt_original_text`,
   `CASE WHEN ${reviewServingJudgmentDetailTable}.prompt_id = 'summary' THEN NULL ELSE prompt.prompt_heading END AS prompt_heading`,
   `CASE WHEN ${reviewServingJudgmentDetailTable}.prompt_id = 'summary' THEN 'summary' ELSE prompt.type END AS prompt_type`,
   `CASE WHEN ${reviewServingJudgmentDetailTable}.prompt_id = 'summary' THEN NULL ELSE project_prompt.criteria_disposition END AS prompt_criteria_disposition`,
-  ...[
-    'judgment_updated_at',
-    'chunking_strategy',
-    'confidence_original',
-    'snapshot_project_id',
-    'snapshot_project_model_name',
-    'model_name',
-    'model_provider',
-    'model_thinking',
-    'model_version',
-    'assessment_id',
-    'assessment_judgment_id',
-    'assessment_is_correct',
-    'assessment_comment',
-    'assessment_created_at',
-    'assessment_updated_at',
-  ].map((column) => {
-    return `${reviewServingJudgmentDetailHydrationTable}.${column}`
-  }),
+  `COALESCE(llm_judgment.updated_at, human_judgment.updated_at, human_summary.updated_at) AS judgment_updated_at`,
+  `llm_judgment.chunking_strategy AS chunking_strategy`,
+  `llm_judgment.confidence_original AS confidence_original`,
+  `llm_judgment.snapshot_project_id AS snapshot_project_id`,
+  `llm_judgment.snapshot_project_model_name AS snapshot_project_model_name`,
+  `COALESCE(model.display_name, model.name, llm_judgment.snapshot_project_model_name) AS model_name`,
+  `provider_connection.provider_kind AS model_provider`,
+  `json_extract_string(model.metadata_json, '$.options.thinking') AS model_thinking`,
+  `model.variant AS model_version`,
+  `assessment.id AS assessment_id`,
+  `assessment.judgment_id AS assessment_judgment_id`,
+  `assessment.assessment_is_correct AS assessment_is_correct`,
+  `assessment.assessment_comment AS assessment_comment`,
+  `assessment.created_at AS assessment_created_at`,
+  `assessment.updated_at AS assessment_updated_at`,
 ]
 const reviewServingJudgmentDetailRouteListColumns = [
-  'project_id',
-  'review_config_hash',
-  'snapshot_id',
-  'payload_kind',
-  'article_id',
-  'prompt_id',
-  'prompt_order',
-  'judgment_id',
-  'judgment_model_id',
-  'answered_original',
-  'answered_original_as_array',
-  'judgment_created_at',
-  'human_comment',
-  'explanation',
-  'quotes',
-  'placeholder_kind',
-  'detail_updated_at',
-].map((column) => {
-  return `${reviewServingJudgmentDetailTable}.${column}`
-})
+  ...[
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'payload_kind',
+    'article_id',
+    'prompt_id',
+    'prompt_order',
+    'judgment_id',
+    'answered_original',
+    'answered_original_as_array',
+    'judgment_created_at',
+    'human_comment',
+    'placeholder_kind',
+    'detail_updated_at',
+  ].map((column) => {
+    return `${reviewServingJudgmentDetailTable}.${column}`
+  }),
+  `llm_judgment.model_id AS judgment_model_id`,
+  `llm_judgment.explanation AS explanation`,
+  `llm_judgment.quotes AS quotes`,
+]
 const reviewServingJudgmentDetailFullColumnContractKeys = new Set<ReviewServingReadContract['key']>([
   'review.detail.judgments',
   'review.detail.humanJudgments',
@@ -463,32 +531,56 @@ const getReviewServingJudgmentDetailSelectColumns = (contract: ReviewServingRead
   return [...columns.slice(0, 3), listModeColumn, ...columns.slice(3)]
 }
 
-const getReviewServingJudgmentDetailHydrationJoin = (params: {
+const getReviewServingJudgmentDetailAuthoritativeHydrationJoin = (params: {
   contract: ReviewServingReadContract
   projectIdParameter: string
   reviewConfigHashParameter: string
   snapshotIdParameter: string
 }) => {
+  const llmJudgmentJoin = [
+    ` LEFT JOIN app."judgment" llm_judgment`,
+    ` ON ${reviewServingJudgmentDetailTable}.payload_kind = 'llm'`,
+    ` AND llm_judgment.id = ${reviewServingJudgmentDetailTable}.judgment_id`,
+    ` AND llm_judgment.article_id = ${reviewServingJudgmentDetailTable}.article_id`,
+    ` AND llm_judgment.prompt_id = ${reviewServingJudgmentDetailTable}.prompt_id`,
+    ` AND llm_judgment.deleted_at IS NULL`,
+  ].join('')
+
   return reviewServingJudgmentDetailFullColumnContractKeys.has(params.contract.key)
     ? [
-        ` INNER JOIN ${reviewServingJudgmentDetailHydrationTable}`,
-        ` ON ${reviewServingJudgmentDetailHydrationTable}.project_id = ${params.projectIdParameter}`,
-        ` AND ${reviewServingJudgmentDetailHydrationTable}.project_id = ${reviewServingJudgmentDetailTable}.project_id`,
-        ` AND ${reviewServingJudgmentDetailHydrationTable}.review_config_hash = ${params.reviewConfigHashParameter}`,
-        ` AND ${reviewServingJudgmentDetailHydrationTable}.review_config_hash = ${reviewServingJudgmentDetailTable}.review_config_hash`,
-        ` AND ${reviewServingJudgmentDetailHydrationTable}.snapshot_id = ${params.snapshotIdParameter}`,
-        ` AND ${reviewServingJudgmentDetailHydrationTable}.snapshot_id = ${reviewServingJudgmentDetailTable}.snapshot_id`,
-        ` AND ${reviewServingJudgmentDetailHydrationTable}.list_mode_key = ${reviewServingJudgmentDetailTable}.list_mode_key`,
-        ` AND ${reviewServingJudgmentDetailHydrationTable}.payload_kind = ${reviewServingJudgmentDetailTable}.payload_kind`,
-        ` AND ${reviewServingJudgmentDetailHydrationTable}.article_id = ${reviewServingJudgmentDetailTable}.article_id`,
-        ` AND ${reviewServingJudgmentDetailHydrationTable}.prompt_id = ${reviewServingJudgmentDetailTable}.prompt_id`,
+        llmJudgmentJoin,
+        ` LEFT JOIN app.judgment_assessment assessment`,
+        ` ON assessment.id = (`,
+        ` SELECT latest_assessment.id`,
+        ` FROM app.judgment_assessment latest_assessment`,
+        ` WHERE latest_assessment.judgment_id = llm_judgment.id`,
+        ` ORDER BY latest_assessment.updated_at DESC NULLS LAST, latest_assessment.created_at DESC NULLS LAST, latest_assessment.id DESC`,
+        ` LIMIT 1`,
+        ` )`,
+        ` LEFT JOIN app.model model`,
+        ` ON model.id = llm_judgment.model_id`,
+        ` LEFT JOIN app.provider_connection provider_connection`,
+        ` ON provider_connection.id = model.provider_connection_id`,
+        ` LEFT JOIN app."judgment_human" human_judgment`,
+        ` ON ${reviewServingJudgmentDetailTable}.payload_kind = 'human'`,
+        ` AND ${reviewServingJudgmentDetailTable}.prompt_id <> 'summary'`,
+        ` AND human_judgment.project_id = ${params.projectIdParameter}`,
+        ` AND human_judgment.id = ${reviewServingJudgmentDetailTable}.judgment_id`,
+        ` AND human_judgment.article_id = ${reviewServingJudgmentDetailTable}.article_id`,
+        ` AND human_judgment.prompt_id = ${reviewServingJudgmentDetailTable}.prompt_id`,
+        ` LEFT JOIN app."judgment_human_summary" human_summary`,
+        ` ON ${reviewServingJudgmentDetailTable}.payload_kind = 'human'`,
+        ` AND ${reviewServingJudgmentDetailTable}.prompt_id = 'summary'`,
+        ` AND human_summary.project_id = ${params.projectIdParameter}`,
+        ` AND human_summary.id = ${reviewServingJudgmentDetailTable}.judgment_id`,
+        ` AND human_summary.article_id = ${reviewServingJudgmentDetailTable}.article_id`,
         ` LEFT JOIN app.project_prompt project_prompt`,
         ` ON project_prompt.project_id = ${params.projectIdParameter}`,
         ` AND project_prompt.prompt_id = ${reviewServingJudgmentDetailTable}.prompt_id`,
         ` LEFT JOIN app.prompt prompt`,
         ` ON prompt.id = ${reviewServingJudgmentDetailTable}.prompt_id`,
       ].join('')
-    : ''
+    : llmJudgmentJoin
 }
 
 const getReviewServingRowsSqlIdentityPredicates = (params: {
@@ -1045,7 +1137,7 @@ export const buildReviewServingRowsSql = (params: {
       : ''
   const judgmentDetailHydrationJoin =
     params.contract.servingTable === reviewServingJudgmentDetailTable
-      ? getReviewServingJudgmentDetailHydrationJoin(params)
+      ? getReviewServingJudgmentDetailAuthoritativeHydrationJoin(params)
       : ''
   const postingArticleSortJoin =
     params.contract.servingTable === reviewServingFilterPostingTable

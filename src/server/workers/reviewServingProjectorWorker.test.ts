@@ -4504,7 +4504,7 @@ test('selected import rebuild checksum excludes retired display-copy columns whi
   expect(checksumSource).not.toContain('external_id')
 })
 
-test('judgment input content rebuild checksum joins hydration scalars for strict validation', () => {
+test('judgment input content rebuild checksum joins authoritative app scalars for strict validation', () => {
   const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
   const start = source.indexOf('const getJudgmentInputContentRebuildChunkOutputChecksum = async')
   const end = source.indexOf('\nconst getJudgmentInputContentRebuildChunkOutputCount', start)
@@ -4513,12 +4513,24 @@ test('judgment input content rebuild checksum joins hydration scalars for strict
 
   const checksumSource = source.slice(start, end)
 
-  expect(checksumSource).toContain('INNER JOIN mart.review_article_judgment_detail_hydration_serving_v4 hydration')
-  expect(checksumSource).toContain('hydration.snapshot_id = detail.snapshot_id')
-  expect(checksumSource).toContain('hydration.prompt_id = detail.prompt_id')
-  expect(checksumSource).toContain('COALESCE(CAST(hydration.judgment_updated_at AS VARCHAR)')
-  expect(checksumSource).toContain('COALESCE(CAST(hydration.model_name AS VARCHAR)')
-  expect(checksumSource).toContain('COALESCE(CAST(hydration.assessment_id AS VARCHAR)')
+  expect(checksumSource).not.toContain('mart.review_article_judgment_detail_hydration_serving_v4')
+  expect(checksumSource).toContain('LEFT JOIN app."judgment" llm_judgment')
+  expect(checksumSource).toContain('llm_judgment.id = detail.judgment_id')
+  expect(checksumSource).toContain('llm_judgment.article_id = detail.article_id')
+  expect(checksumSource).toContain('llm_judgment.prompt_id = detail.prompt_id')
+  expect(checksumSource).toContain('llm_judgment.deleted_at IS NULL')
+  expect(checksumSource).toContain('LEFT JOIN app.judgment_assessment assessment')
+  expect(checksumSource).toContain('LEFT JOIN app.model model')
+  expect(checksumSource).toContain('LEFT JOIN app.provider_connection provider_connection')
+  expect(checksumSource).toContain('LEFT JOIN app."judgment_human" human_judgment')
+  expect(checksumSource).toContain('LEFT JOIN app."judgment_human_summary" human_summary')
+  expect(checksumSource).toContain(
+    'COALESCE(CAST(COALESCE(llm_judgment.updated_at, human_judgment.updated_at, human_summary.updated_at) AS VARCHAR)',
+  )
+  expect(checksumSource).toContain(
+    'COALESCE(CAST(COALESCE(model.display_name, model.name, llm_judgment.snapshot_project_model_name) AS VARCHAR)',
+  )
+  expect(checksumSource).toContain('COALESCE(CAST(assessment.id AS VARCHAR)')
   expect(checksumSource).toContain('COALESCE(CAST(detail.judgment_created_at AS VARCHAR)')
   expect(checksumSource).not.toContain('COALESCE(CAST(detail.judgment_updated_at AS VARCHAR)')
   expect(checksumSource).not.toContain('COALESCE(CAST(detail.model_name AS VARCHAR)')

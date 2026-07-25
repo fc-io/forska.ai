@@ -235,10 +235,7 @@ const getReplacementDeleteStatements = (
     return claim.scopeKind === 'project' || claim.scopeKind === 'prompt'
   })
 
-  const tables = [
-    'mart.review_article_judgment_detail_serving_v4',
-    'mart.review_article_judgment_detail_hydration_serving_v4',
-  ] as const
+  const tables = ['mart.review_article_judgment_detail_serving_v4'] as const
 
   return articleIds.length === 0 && !shouldReplaceBroadScope
     ? payloadKinds.flatMap((payloadKind) => {
@@ -301,14 +298,11 @@ const getLlmJudgmentDirectInsertStatement = (
         prompt_id,
         prompt_order,
         judgment_id,
-        judgment_model_id,
         is_answered,
         answered_original,
         answered_original_as_array,
         judgment_created_at,
         human_comment,
-        explanation,
-        quotes,
         placeholder_kind,
         detail_updated_at
       )
@@ -344,46 +338,21 @@ const getLlmJudgmentDirectInsertStatement = (
           AND judgment.use_fulltext_no_images = ${getSqlLiteral(input.useFulltextNoImages)}
           AND judgment.deleted_at IS NULL
       ),
-      latest_assessment AS (
-        SELECT
-          assessment.*,
-          ${rowNumberSql}() OVER (PARTITION BY assessment.judgment_id ORDER BY assessment.updated_at DESC NULLS LAST, assessment.created_at DESC NULLS LAST, assessment.id DESC) AS assessment_rank
-        FROM app."judgment_assessment" assessment
-        INNER JOIN latest_judgment judgment
-          ON judgment.id = assessment.judgment_id
-      ),
       payload AS (
         SELECT
           active.article_id,
           prompt.prompt_id,
           prompt.prompt_order,
           judgment.id AS judgment_id,
-          judgment.model_id,
           judgment.created_at AS judgment_created_at,
           judgment.updated_at AS judgment_updated_at,
-          judgment.chunking_strategy,
           judgment.is_answered,
           judgment.answered_original,
           judgment.answered_original_as_array,
-          judgment.confidence_original,
-          judgment.explanation,
-          judgment.quotes,
-          judgment.snapshot_project_id,
-          judgment.snapshot_project_model_name,
-          COALESCE(model.display_name, model.name, judgment.snapshot_project_model_name) AS model_display_name,
-          provider_connection.provider_kind AS model_provider,
-          json_extract_string(model.metadata_json, '$.options.thinking') AS model_thinking,
-          model.variant AS model_version,
           prompt.prompt_original_text,
           prompt.prompt_heading,
           prompt.prompt_type,
           prompt.prompt_criteria_disposition,
-          assessment.id AS assessment_id,
-          assessment.judgment_id AS assessment_judgment_id,
-          assessment.assessment_is_correct,
-          assessment.assessment_comment,
-          assessment.created_at AS assessment_created_at,
-          assessment.updated_at AS assessment_updated_at,
           CASE WHEN judgment.id IS NULL THEN 'llm.unanswered' ELSE NULL END AS placeholder_kind
         FROM active_article active
         CROSS JOIN enabled_prompt prompt
@@ -391,13 +360,6 @@ const getLlmJudgmentDirectInsertStatement = (
           ON judgment.article_id = active.article_id
           AND judgment.prompt_id = prompt.prompt_id
           AND judgment.judgment_rank = 1
-        LEFT JOIN app.model model
-          ON model.id = COALESCE(judgment.model_id, ${getSqlLiteral(input.modelId)})
-        LEFT JOIN app.provider_connection provider_connection
-          ON provider_connection.id = model.provider_connection_id
-        LEFT JOIN latest_assessment assessment
-          ON assessment.judgment_id = judgment.id
-          AND assessment.assessment_rank = 1
       )
       SELECT
         ${getSqlLiteral(input.projectId)} AS project_id,
@@ -409,14 +371,11 @@ const getLlmJudgmentDirectInsertStatement = (
         payload.prompt_id,
         payload.prompt_order,
         payload.judgment_id,
-        payload.model_id AS judgment_model_id,
         payload.is_answered,
         payload.answered_original,
         payload.answered_original_as_array,
         payload.judgment_created_at,
         NULL AS human_comment,
-        payload.explanation,
-        payload.quotes,
         payload.placeholder_kind,
         COALESCE(payload.judgment_updated_at, current_timestamp) AS detail_updated_at
       FROM payload
@@ -444,14 +403,11 @@ const getHumanJudgmentDirectInsertStatement = (
         prompt_id,
         prompt_order,
         judgment_id,
-        judgment_model_id,
         is_answered,
         answered_original,
         answered_original_as_array,
         judgment_created_at,
         human_comment,
-        explanation,
-        quotes,
         placeholder_kind,
         detail_updated_at
       )
@@ -532,202 +488,15 @@ const getHumanJudgmentDirectInsertStatement = (
         payload.prompt_id,
         payload.prompt_order,
         payload.human_judgment_id AS judgment_id,
-        NULL AS judgment_model_id,
         payload.is_answered,
         payload.answer AS answered_original,
         CASE WHEN payload.answer IS NULL THEN NULL ELSE [payload.answer] END AS answered_original_as_array,
         payload.human_judgment_created_at AS judgment_created_at,
         payload.comment AS human_comment,
-        NULL AS explanation,
-        NULL AS quotes,
         NULL AS placeholder_kind,
         COALESCE(payload.human_judgment_updated_at, current_timestamp) AS detail_updated_at
       FROM payload
       CROSS JOIN list_mode
-      ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO NOTHING
-    `
-}
-
-const getHydrationArticlePredicate = (input: ProjectReviewServingJudgmentPayloadInput, alias: string) => {
-  const articleIds = getClaimArticleIds(input.claims)
-  const articleIdPredicate =
-    articleIds.length === 0
-      ? ''
-      : `AND ${alias}.article_id IN (${articleIds
-          .map((articleId) => {
-            return getSqlLiteral(articleId)
-          })
-          .join(', ')})`
-
-  return `${articleIdPredicate}
-          ${getArticleRangePredicate({alias, ...input})}`
-}
-
-const getLlmJudgmentHydrationInsertStatement = (input: ProjectReviewServingJudgmentPayloadInput) => {
-  const listModeKeys = getLlmListModeKeys(input.listModeKeys)
-
-  return listModeKeys.length === 0
-    ? null
-    : `
-      INSERT INTO mart.review_article_judgment_detail_hydration_serving_v4 (
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        list_mode_key,
-        payload_kind,
-        article_id,
-        prompt_id,
-        judgment_updated_at,
-        chunking_strategy,
-        confidence_original,
-        snapshot_project_id,
-        snapshot_project_model_name,
-        model_name,
-        model_provider,
-        model_thinking,
-        model_version,
-        assessment_id,
-        assessment_judgment_id,
-        assessment_is_correct,
-        assessment_comment,
-        assessment_created_at,
-        assessment_updated_at,
-        detail_updated_at
-      )
-      WITH detail AS (
-        SELECT *
-        FROM mart.review_article_judgment_detail_serving_v4 detail
-        WHERE detail.project_id = ${getSqlLiteral(input.projectId)}
-          AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-          AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          AND detail.payload_kind = 'llm'
-          AND detail.list_mode_key IN (${listModeKeys
-            .map((listModeKey) => {
-              return getSqlLiteral(listModeKey)
-            })
-            .join(', ')})
-          ${getHydrationArticlePredicate(input, 'detail')}
-      ),
-      latest_assessment AS (
-        SELECT
-          assessment.*,
-          ${rowNumberSql}() OVER (PARTITION BY assessment.judgment_id ORDER BY assessment.updated_at DESC NULLS LAST, assessment.created_at DESC NULLS LAST, assessment.id DESC) AS assessment_rank
-        FROM app."judgment_assessment" assessment
-        INNER JOIN detail
-          ON detail.judgment_id = assessment.judgment_id
-      )
-      SELECT
-        detail.project_id,
-        detail.review_config_hash,
-        detail.snapshot_id,
-        detail.list_mode_key,
-        detail.payload_kind,
-        detail.article_id,
-        detail.prompt_id,
-        judgment.updated_at AS judgment_updated_at,
-        judgment.chunking_strategy,
-        judgment.confidence_original,
-        judgment.snapshot_project_id,
-        judgment.snapshot_project_model_name,
-        COALESCE(model.display_name, model.name, judgment.snapshot_project_model_name) AS model_name,
-        provider_connection.provider_kind AS model_provider,
-        json_extract_string(model.metadata_json, '$.options.thinking') AS model_thinking,
-        model.variant AS model_version,
-        assessment.id AS assessment_id,
-        assessment.judgment_id AS assessment_judgment_id,
-        assessment.assessment_is_correct,
-        assessment.assessment_comment,
-        assessment.created_at AS assessment_created_at,
-        assessment.updated_at AS assessment_updated_at,
-        detail.detail_updated_at
-      FROM detail
-      LEFT JOIN app."judgment" judgment
-        ON judgment.id = detail.judgment_id
-      LEFT JOIN app.model model
-        ON model.id = judgment.model_id
-      LEFT JOIN app.provider_connection provider_connection
-        ON provider_connection.id = model.provider_connection_id
-      LEFT JOIN latest_assessment assessment
-        ON assessment.judgment_id = judgment.id
-        AND assessment.assessment_rank = 1
-      ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO NOTHING
-    `
-}
-
-const getHumanJudgmentHydrationInsertStatement = (input: ProjectReviewServingJudgmentPayloadInput) => {
-  const listModeKeys = getHumanListModeKeys(input.listModeKeys)
-
-  return listModeKeys.length === 0
-    ? null
-    : `
-      INSERT INTO mart.review_article_judgment_detail_hydration_serving_v4 (
-        project_id,
-        review_config_hash,
-        snapshot_id,
-        list_mode_key,
-        payload_kind,
-        article_id,
-        prompt_id,
-        judgment_updated_at,
-        chunking_strategy,
-        confidence_original,
-        snapshot_project_id,
-        snapshot_project_model_name,
-        model_name,
-        model_provider,
-        model_thinking,
-        model_version,
-        assessment_id,
-        assessment_judgment_id,
-        assessment_is_correct,
-        assessment_comment,
-        assessment_created_at,
-        assessment_updated_at,
-        detail_updated_at
-      )
-      WITH detail AS (
-        SELECT *
-        FROM mart.review_article_judgment_detail_serving_v4 detail
-        WHERE detail.project_id = ${getSqlLiteral(input.projectId)}
-          AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-          AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          AND detail.payload_kind = 'human'
-          AND detail.list_mode_key IN (${listModeKeys
-            .map((listModeKey) => {
-              return getSqlLiteral(listModeKey)
-            })
-            .join(', ')})
-          ${getHydrationArticlePredicate(input, 'detail')}
-      )
-      SELECT
-        detail.project_id,
-        detail.review_config_hash,
-        detail.snapshot_id,
-        detail.list_mode_key,
-        detail.payload_kind,
-        detail.article_id,
-        detail.prompt_id,
-        COALESCE(judgment_human.updated_at, judgment_human_summary.updated_at) AS judgment_updated_at,
-        NULL AS chunking_strategy,
-        NULL AS confidence_original,
-        NULL AS snapshot_project_id,
-        NULL AS snapshot_project_model_name,
-        NULL AS model_name,
-        NULL AS model_provider,
-        NULL AS model_thinking,
-        NULL AS model_version,
-        NULL AS assessment_id,
-        NULL AS assessment_judgment_id,
-        NULL AS assessment_is_correct,
-        NULL AS assessment_comment,
-        NULL AS assessment_created_at,
-        NULL AS assessment_updated_at,
-        detail.detail_updated_at
-      FROM detail
-      LEFT JOIN app."judgment_human" judgment_human
-        ON judgment_human.id = detail.judgment_id
-      LEFT JOIN app."judgment_human_summary" judgment_human_summary
-        ON judgment_human_summary.id = detail.judgment_id
       ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id) DO NOTHING
     `
 }
@@ -796,8 +565,6 @@ const projectReviewServingJudgmentPayloadRowsDirect = async (
   const insertStatements = [
     getLlmJudgmentDirectInsertStatement(input),
     getHumanJudgmentDirectInsertStatement(input),
-    getLlmJudgmentHydrationInsertStatement(input),
-    getHumanJudgmentHydrationInsertStatement(input),
   ].filter((statement): statement is string => {
     return statement !== null
   })
@@ -915,9 +682,6 @@ export const projectReviewServingJudgmentPayloadArticleRanges = async (
     ? [
         getLlmJudgmentDirectInsertStatement(firstRange, {ranges: params.ranges}),
         getHumanJudgmentDirectInsertStatement(firstRange, {ranges: params.ranges}),
-        ...params.ranges.flatMap((range) => {
-          return [getLlmJudgmentHydrationInsertStatement(range), getHumanJudgmentHydrationInsertStatement(range)]
-        }),
       ].filter((statement): statement is string => {
         return statement !== null
       })
@@ -926,8 +690,6 @@ export const projectReviewServingJudgmentPayloadArticleRanges = async (
         const insertStatements = [
           getLlmJudgmentDirectInsertStatement(range),
           getHumanJudgmentDirectInsertStatement(range),
-          getLlmJudgmentHydrationInsertStatement(range),
-          getHumanJudgmentHydrationInsertStatement(range),
         ].filter((statement): statement is string => {
           return statement !== null
         })

@@ -402,8 +402,8 @@ const getExportJudgments = async (input: {
           detail.prompt_id AS promptId,
           detail.answered_original AS answeredOriginal,
           TO_JSON(detail.answered_original_as_array) AS answeredOriginalAsArray,
-          detail.explanation AS explanation,
-          detail.quotes AS quotes,
+          judgment.explanation AS explanation,
+          judgment.quotes AS quotes,
           export_scope.source_project_order AS sourceProjectOrder,
           ROW_NUMBER() OVER (
             PARTITION BY detail.article_id, detail.prompt_id
@@ -420,6 +420,11 @@ const getExportJudgments = async (input: {
           ON export_article.article_id = detail.article_id
         INNER JOIN export_prompt
           ON export_prompt.prompt_id = detail.prompt_id
+        LEFT JOIN app."judgment" judgment
+          ON judgment.id = detail.judgment_id
+         AND judgment.article_id = detail.article_id
+         AND judgment.prompt_id = detail.prompt_id
+         AND judgment.deleted_at IS NULL
       )
     SELECT * EXCLUDE (exportJudgmentRank)
     FROM ranked_export_judgment
