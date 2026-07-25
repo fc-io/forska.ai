@@ -125,6 +125,18 @@ test('buildReviewServingRowsSql uses article ordering and payload hydration for 
   expect(sql).toContain('payload.display_identity = $displayIdentity')
   expect(sql).toContain('payload.payload_identity = $payloadIdentity')
   expect(sql).toContain('payload.abstract_text AS abstract_text')
+  expect(sql).toContain('mart.review_article_serving_v4.article_title AS article_title')
+  expect(sql).toContain('mart.review_article_serving_v4.article_external_id AS article_external_id')
+  expect(sql).toContain('mart.review_article_serving_v4.article_updated_at AS article_updated_at')
+  expect(sql).toContain('mart.review_article_serving_v4.arxiv_id AS arxiv_id')
+  expect(sql).toContain('mart.review_article_serving_v4.biorxiv_id AS biorxiv_id')
+  expect(sql).toContain('mart.review_article_serving_v4.medrxiv_id AS medrxiv_id')
+  expect(sql).toContain('mart.review_article_serving_v4.doi AS doi')
+  expect(sql).toContain('mart.review_article_serving_v4.pmid AS pmid')
+  expect(sql).toContain('mart.review_article_serving_v4.url AS url')
+  expect(sql).toContain('article.full_text_pdf AS full_text_pdf')
+  expect(sql).toContain('article.full_text_fetched_at AS full_text_fetched_at')
+  expect(sql).toContain('article.full_text_conversion_status AS full_text_conversion_status')
   expect(sql).not.toContain('payload.full_text_preview')
   expect(sql).toContain(
     'WHERE mart.review_article_serving_v4.project_id = $projectId AND review_config_hash = $reviewConfigHash AND mart.review_article_serving_v4.snapshot_id = $snapshotId',

@@ -1,3 +1,5 @@
+import {readFileSync} from 'node:fs'
+
 import {afterAll, beforeAll, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
@@ -10,6 +12,10 @@ const tempDbPath = tempRuntimeRoot.duckdbPath
 const articleServingFixtureTable = ['mart', 'review_article_serving_v4'].join('.')
 const appReadOnlyDatabaseServiceModulePath = new URL('../services/appReadOnlyDatabaseService.ts', import.meta.url)
   .pathname
+const promptPreviewRoutePath = new URL(
+  './projectsRoutes/projectsRoutesGetPromptPreview.ts',
+  import.meta.url,
+).pathname
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -721,6 +727,13 @@ test('project prompt preview uses the first project article and shared prompt bu
   expect(payload.data.userPrompt).not.toContain('First article title')
   expect(payload.data.previewText).toContain('## System Prompt')
   expect(payload.data.previewText).toContain('## User Prompt')
+})
+
+test('project prompt preview builds article records from the prompt preview serving read', () => {
+  const routeText = readFileSync(promptPreviewRoutePath, 'utf8')
+
+  expect(routeText).toContain("contractKey: 'review.prompt.preview'")
+  expect(routeText).not.toContain("contractKey: 'review.detail.row'")
 })
 
 test('project prompt preview fails closed while serving scope rebuilds', async () => {
