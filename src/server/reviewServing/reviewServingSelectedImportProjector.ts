@@ -196,6 +196,16 @@ const getArticleRangePredicateSql = (input: {chunkEndArticleId?: string; chunkSt
     `
 }
 
+const getArticleRangeFilterCte = (ranges: readonly ProjectReviewServingSelectedImportArticleRangeInput[]) => {
+  return `article_range_filter(chunk_start_article_id, chunk_end_article_id) AS (
+        SELECT * FROM (VALUES ${ranges
+          .map((range) => {
+            return `(${getSqlLiteral(range.chunkStartArticleId)}, ${getSqlLiteral(range.chunkEndArticleId)})`
+          })
+          .join(', ')})
+      )`
+}
+
 const getSelectedImportProjectionRows = async (
   database: ReviewServingSelectedImportProjectorDatabase,
   input: ProjectReviewServingSelectedImportBatchInput & {
@@ -303,6 +313,7 @@ const getDeleteSelectedImportArticleRangeRowsStatement = (
 
 const getInsertSelectedImportArticleRangeRowsStatement = (
   input: ProjectReviewServingSelectedImportArticleRangeInput,
+  ranges?: readonly ProjectReviewServingSelectedImportArticleRangeInput[],
 ) => {
   return `
     INSERT INTO app.review_selected_article_import_v4 (
@@ -319,7 +330,12 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
       tombstone,
       selected_import_updated_at
     )
-    WITH selected_import_candidates AS (
+    WITH ${
+      ranges === undefined
+        ? 'selected_import_candidates AS'
+        : `${getArticleRangeFilterCte(ranges)},
+    selected_import_candidates AS`
+    } (
       SELECT DISTINCT
         scope.article_id,
         hot.import_route_id,
@@ -340,6 +356,13 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
           ELSE concat('1:', hot.selected_rank_key)
         END AS rank_key_sort
       FROM mart.project_scope_article scope
+      ${
+        ranges === undefined
+          ? ''
+          : `INNER JOIN article_range_filter range
+        ON scope.article_id >= range.chunk_start_article_id
+        AND scope.article_id <= range.chunk_end_article_id`
+      }
       INNER JOIN app.project_import_route project_route
         ON project_route.project_id = scope.project_id
       INNER JOIN app.review_import_article_hot_field hot
@@ -352,7 +375,7 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
       WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
         AND (scope.in_curated_scope OR scope.in_route_scope)
         AND NOT hot.tombstone
-        ${getArticleRangePredicateSql(input)}
+        ${ranges === undefined ? getArticleRangePredicateSql(input) : ''}
     ),
     selected_import_winner AS (
       SELECT
@@ -390,6 +413,29 @@ const getInsertSelectedImportArticleRangeRowsStatement = (
     FROM selected_import_winner candidate
     ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, article_id) DO NOTHING
   `
+}
+
+const canUseSetBasedSelectedImportArticleRangeInsert = (
+  ranges: readonly ProjectReviewServingSelectedImportArticleRangeInput[],
+) => {
+  const [firstRange] = ranges
+
+  return (
+    firstRange !== undefined
+    && ranges.every((range) => {
+      return (
+        range.projectId === firstRange.projectId
+        && range.projectScopeIdentity === firstRange.projectScopeIdentity
+        && range.refreshServingRows !== true
+        && range.replaceExistingRows === false
+        && range.selectedImportSnapshotId === firstRange.selectedImportSnapshotId
+        && range.servingBaseGeneration === firstRange.servingBaseGeneration
+        && range.servingProjectionIdentity === firstRange.servingProjectionIdentity
+        && range.sourceDeltaHighWater === firstRange.sourceDeltaHighWater
+        && range.writeProjectionState === firstRange.writeProjectionState
+      )
+    })
+  )
 }
 
 const getSelectedImportArticleRangeInsertedRowCount = async (
@@ -782,13 +828,9 @@ export const projectReviewServingSelectedImportArticleRanges = async (
 
   const {measure, phaseTimings} = getTimedProjector()
   const writer = await measure('writerMs', async () => {
-    return writeReviewServingProjectorComponent(
-      {
-        component: 'selectedImport',
-        projectionManifests:
-          firstRange.writeProjectionState === false ? [] : [getSelectedImportProjectionManifest(firstRange)],
-        records: [],
-        statements: params.ranges.flatMap((range) => {
+    const statements = canUseSetBasedSelectedImportArticleRangeInsert(params.ranges)
+      ? [getInsertSelectedImportArticleRangeRowsStatement(firstRange, params.ranges)]
+      : params.ranges.flatMap((range) => {
           return range.replaceExistingRows === false
             ? [
                 getInsertSelectedImportArticleRangeRowsStatement(range),
@@ -799,7 +841,15 @@ export const projectReviewServingSelectedImportArticleRanges = async (
                 getInsertSelectedImportArticleRangeRowsStatement(range),
                 ...getRefreshSelectedImportServingArticleRangeStatements(range),
               ]
-        }),
+        })
+
+    return writeReviewServingProjectorComponent(
+      {
+        component: 'selectedImport',
+        projectionManifests:
+          firstRange.writeProjectionState === false ? [] : [getSelectedImportProjectionManifest(firstRange)],
+        records: [],
+        statements,
         selectedImportSnapshotCursor:
           firstRange.writeProjectionState === false
             ? undefined
