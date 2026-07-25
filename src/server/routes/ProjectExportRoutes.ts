@@ -305,6 +305,7 @@ const getExportPromptDetails = async (input: {
       ON detail.project_id = export_scope.project_id
      AND detail.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash
      AND detail.snapshot_id = export_scope.snapshot_id
+     AND detail.list_mode_key = 'llm'
      AND detail.payload_kind = 'llm'
     INNER JOIN export_article
       ON export_article.article_id = detail.article_id
@@ -410,9 +411,10 @@ const getExportJudgments = async (input: {
           ) AS exportJudgmentRank
         FROM export_scope
         INNER JOIN mart.review_article_judgment_detail_serving_v4 detail
-          ON detail.project_id = export_scope.project_id
+         ON detail.project_id = export_scope.project_id
          AND detail.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash
          AND detail.snapshot_id = export_scope.snapshot_id
+         AND detail.list_mode_key = 'llm'
          AND detail.payload_kind = 'llm'
         INNER JOIN export_article
           ON export_article.article_id = detail.article_id

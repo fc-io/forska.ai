@@ -602,6 +602,7 @@ test('project export download hydrates completed durable job selection as CSV', 
   expect(queryStatements.join('\n')).toContain(
     'detail.review_config_hash IS NOT DISTINCT FROM export_scope.review_config_hash',
   )
+  expect(queryStatements.join('\n')).toContain("AND detail.list_mode_key = 'llm'")
 })
 
 test('project export serving queries read prompt and judgment scalars', () => {
@@ -625,6 +626,8 @@ test('project export serving queries read prompt and judgment scalars', () => {
 
   expect(judgmentExportQuery).toContain('detail.explanation AS explanation')
   expect(judgmentExportQuery).toContain('detail.quotes AS quotes')
+  expect(promptMetadataQuery).toContain("AND detail.list_mode_key = 'llm'")
+  expect(judgmentExportQuery).toContain("AND detail.list_mode_key = 'llm'")
   expect(judgmentExportQuery).not.toContain('detail.judgment_payload_json')
   expect(judgmentExportQuery).not.toContain('json_extract')
   expect(judgmentExportQuery).toContain('TO_JSON(detail.answered_original_as_array) AS answeredOriginalAsArray')

@@ -460,6 +460,7 @@ test('buildReviewServingRowsSql covers judgment detail rows for article details'
   expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.review_config_hash = $reviewConfigHash')
   expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.article_id = $articleId')
   expect(sql).toContain("AND mart.review_article_judgment_detail_serving_v4.payload_kind = 'llm'")
+  expect(sql).not.toContain('mart.review_article_judgment_detail_serving_v4.placeholder_kind IS NULL')
   expect(sql).toContain('QUALIFY CASE mart.review_article_judgment_detail_serving_v4.list_mode_key')
   expect(sql).toContain(
     'OVER (PARTITION BY mart.review_article_judgment_detail_serving_v4.article_id, mart.review_article_judgment_detail_serving_v4.prompt_id)',
@@ -489,8 +490,42 @@ test('buildReviewServingRowsSql pins human detail judgment reads to human payloa
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('AND mart.review_article_judgment_detail_serving_v4.article_id = $articleId')
   expect(sql).toContain("AND mart.review_article_judgment_detail_serving_v4.payload_kind = 'human'")
+  expect(sql).not.toContain('mart.review_article_judgment_detail_serving_v4.placeholder_kind IS NULL')
   expect(sql).not.toContain('AND list_mode_key =')
   expect(sql).not.toContain('judgment_payload_json')
+})
+
+test('buildReviewServingRowsSql excludes placeholder rows only for LLM list judgment reads', () => {
+  const buildSql = (contractKey: string) => {
+    return buildReviewServingRowsSql({
+      articleIdsParameter: '$articleIds',
+      contract: getRequiredReviewServingReadContract(contractKey),
+      displayIdentityParameter: '$displayIdentity',
+      limitParameter: '$limit',
+      listModeParameter: '$listMode',
+      payloadIdentityParameter: '$payloadIdentity',
+      projectIdParameter: '$projectId',
+      projectScopeIdentityParameter: '$projectScopeIdentity',
+      reviewConfigHashParameter: '$reviewConfigHash',
+      searchIdentityParameter: '$searchIdentity',
+      snapshotIdParameter: '$snapshotId',
+    })
+  }
+  const placeholderPredicate = 'AND mart.review_article_judgment_detail_serving_v4.placeholder_kind IS NULL'
+
+  const llmListSql = buildSql('review.llm.list.judgments')
+  const bothListSql = buildSql('review.both.list.judgments')
+  const humanListSql = buildSql('review.human.list.judgments')
+  const bothHumanListSql = buildSql('review.both.list.humanJudgments')
+
+  expect(assertReviewServingSqlShape(llmListSql)).toEqual({ok: true, violations: []})
+  expect(assertReviewServingSqlShape(bothListSql)).toEqual({ok: true, violations: []})
+  expect(assertReviewServingSqlShape(humanListSql)).toEqual({ok: true, violations: []})
+  expect(assertReviewServingSqlShape(bothHumanListSql)).toEqual({ok: true, violations: []})
+  expect(llmListSql).toContain(placeholderPredicate)
+  expect(bothListSql).toContain(placeholderPredicate)
+  expect(humanListSql).not.toContain(placeholderPredicate)
+  expect(bothHumanListSql).not.toContain(placeholderPredicate)
 })
 
 test('buildReviewServingRowsSql pins fixed list-mode judgment payload reads', () => {

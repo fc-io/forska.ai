@@ -592,6 +592,17 @@ const getReviewServingRowsSqlJudgmentPayloadKindPredicate = (contract: ReviewSer
     : ` AND ${payloadKindColumn} = 'llm'`
 }
 
+const reviewServingLlmListJudgmentContractsWithoutPlaceholders = new Set<ReviewServingReadContract['key']>([
+  'review.llm.list.judgments',
+  'review.both.list.judgments',
+])
+
+const getReviewServingRowsSqlJudgmentPlaceholderPredicate = (contract: ReviewServingReadContract) => {
+  return reviewServingLlmListJudgmentContractsWithoutPlaceholders.has(contract.key)
+    ? ` AND ${reviewServingJudgmentDetailTable}.placeholder_kind IS NULL`
+    : ''
+}
+
 const getSqlStringLiteral = (value: string) => {
   return `'${value.replaceAll("'", "''")}'`
 }
@@ -1046,6 +1057,7 @@ export const buildReviewServingRowsSql = (params: {
   const identityPredicates = getReviewServingRowsSqlIdentityPredicates(params)
   const listModePredicate = getReviewServingRowsSqlListModePredicate(params)
   const judgmentPayloadKindPredicate = getReviewServingRowsSqlJudgmentPayloadKindPredicate(params.contract)
+  const judgmentPlaceholderPredicate = getReviewServingRowsSqlJudgmentPlaceholderPredicate(params.contract)
   const countPredicate = getReviewServingRowsSqlCountPredicate(params)
   const facetVersionPredicate = getReviewServingRowsSqlFacetVersionPredicate(params)
   const physicalFilterPredicate = getReviewServingRowsSqlPhysicalFilterPredicate(params)
@@ -1060,6 +1072,7 @@ export const buildReviewServingRowsSql = (params: {
     identityPredicates,
     listModePredicate,
     judgmentPayloadKindPredicate,
+    judgmentPlaceholderPredicate,
     countPredicate,
     facetVersionPredicate,
     physicalFilterPredicate,
