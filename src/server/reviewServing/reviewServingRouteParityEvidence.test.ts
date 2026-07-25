@@ -352,10 +352,7 @@ const getContractSqlMatch = (
     contract.key === 'review.detail.judgments' || contract.key === 'review.detail.humanJudgments'
   const tableMatch =
     contract.servingTable === 'mart.review_article_serving_v4'
-      ? containsSql(
-          statement,
-          `FROM ${contract.servingTable} INNER JOIN mart.review_article_serving_payload_v4 payload`,
-        )
+      ? containsSql(statement, `FROM ${contract.servingTable} LEFT JOIN app.review_selected_article_import_v4`)
       : contract.servingTable === 'mart.review_article_filter_posting_serving_v4'
         ? containsSql(statement, `FROM ${contract.servingTable} INNER JOIN mart.review_article_serving_v4`)
           && containsSql(

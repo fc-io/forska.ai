@@ -1129,17 +1129,9 @@ export const buildReviewServingRowsSql = (params: {
     params.contract.servingTable === reviewServingArticleTable
       ? (params.selectedImportSnapshotIdParameter ?? '$selectedImportSnapshotId')
       : null
-  const articlePayloadJoin =
+  const articleHydrationJoin =
     params.contract.servingTable === reviewServingArticleTable
       ? [
-          ` INNER JOIN ${reviewServingPayloadTable} payload`,
-          ` ON payload.project_id = ${params.projectIdParameter}`,
-          ` AND payload.project_id = ${reviewServingArticleTable}.project_id`,
-          ` AND payload.display_identity = ${params.displayIdentityParameter}`,
-          ` AND payload.payload_identity = ${params.payloadIdentityParameter}`,
-          ` AND payload.snapshot_id = ${params.snapshotIdParameter}`,
-          ` AND payload.snapshot_id = ${reviewServingArticleTable}.snapshot_id`,
-          ` AND payload.article_id = ${reviewServingArticleTable}.article_id`,
           ` LEFT JOIN ${reviewServingSelectedImportTable} selected_import`,
           ` ON selected_import.project_id = ${params.projectIdParameter}`,
           ` AND selected_import.project_id = ${reviewServingArticleTable}.project_id`,
@@ -1194,7 +1186,7 @@ export const buildReviewServingRowsSql = (params: {
   const projectIdColumn = getReviewServingRowsSqlScopeColumn({contract: params.contract, field: 'project_id'})
 
   return [
-    `${selectSql} FROM ${params.contract.servingTable}${articlePayloadJoin}${judgmentDetailHydrationJoin}${postingArticleSortJoin} WHERE ${projectIdColumn} = ${params.projectIdParameter}`,
+    `${selectSql} FROM ${params.contract.servingTable}${articleHydrationJoin}${judgmentDetailHydrationJoin}${postingArticleSortJoin} WHERE ${projectIdColumn} = ${params.projectIdParameter}`,
     identityPredicates,
     listModePredicate,
     judgmentPayloadKindPredicate,
