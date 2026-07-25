@@ -37,8 +37,6 @@ export type ReviewImportHotFieldRow = Required<
   selectedRankKey: string | null
   selectedRankNumeric: number | null
   sourceKind: string | null
-  sourceRecordHash: string | null
-  sourceUpdatedAt: Date | string | null
   tombstone: boolean
 }
 
@@ -97,10 +95,6 @@ const getSelectedRankKey = (selectedRankNumeric: number, input: {articleId: stri
   return [String(selectedRankNumeric).padStart(4, '0'), input.articleId, input.sourceRecordKey].join(':')
 }
 
-const getTimestampSqlLiteral = (value: Date | string | null) => {
-  return value === null ? 'NULL' : `${getSqlLiteral(value)}::TIMESTAMPTZ`
-}
-
 export const getReviewImportHotFieldRow = (input: ReviewImportHotFieldInput): ReviewImportHotFieldRow => {
   const row = {
     articleId: getNullableString(input.articleId),
@@ -115,9 +109,7 @@ export const getReviewImportHotFieldRow = (input: ReviewImportHotFieldInput): Re
     journalTitle: getNullableString(input.journalTitle),
     publicationYear: getNullableInteger(input.publicationYear),
     sourceKind: getNullableString(input.sourceKind),
-    sourceRecordHash: getNullableString(input.sourceRecordHash),
     sourceRecordKey: getNullableString(input.sourceRecordKey),
-    sourceUpdatedAt: input.sourceUpdatedAt ?? null,
     tombstone: input.tombstone ?? false,
   }
 
@@ -160,7 +152,6 @@ export const upsertReviewImportArticleHotFieldEffect = (
         import_route_id,
         article_id,
         source_record_key,
-        source_record_hash,
         source_kind,
         selected_rank_key,
         selected_rank_numeric,
@@ -168,20 +159,15 @@ export const upsertReviewImportArticleHotFieldEffect = (
         article_title,
         journal_title,
         external_id,
-        duplicate_key,
         duplicate_flag,
         conflict_flag,
         filter_bucket_key,
         filter_bucket_value,
-        source_updated_at,
-        tombstone,
-        created_at,
-        updated_at
+        tombstone
       ) VALUES (
         ${getSqlLiteral(row.importRouteId)},
         ${getSqlLiteral(row.articleId)},
         ${getSqlLiteral(row.sourceRecordKey)},
-        ${getSqlLiteral(row.sourceRecordHash)},
         ${getSqlLiteral(row.sourceKind)},
         ${getSqlLiteral(row.selectedRankKey)},
         ${getSqlLiteral(row.selectedRankNumeric)},
@@ -189,15 +175,11 @@ export const upsertReviewImportArticleHotFieldEffect = (
         ${getSqlLiteral(row.articleTitle)},
         ${getSqlLiteral(row.journalTitle)},
         ${getSqlLiteral(row.externalId)},
-        ${getSqlLiteral(row.duplicateKey)},
         ${getSqlLiteral(row.duplicateFlag)},
         ${getSqlLiteral(row.conflictFlag)},
         ${getSqlLiteral(row.filterBucketKey)},
         ${getSqlLiteral(row.filterBucketValue)},
-        ${getTimestampSqlLiteral(row.sourceUpdatedAt)},
-        ${getSqlLiteral(row.tombstone)},
-        now(),
-        now()
+        ${getSqlLiteral(row.tombstone)}
       )
     `)
   })

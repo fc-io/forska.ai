@@ -2385,7 +2385,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       FROM fallback_row;
       BEGIN;
       UPDATE mart.review_article_serving_payload_v4
-      SET payload_updated_at = current_timestamp
+      SET article_created_at = current_timestamp
       WHERE EXISTS (
         SELECT 1
         FROM startup_probe_review_article_serving_payload_v4 probe
@@ -2398,9 +2398,14 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       COMMIT;
       BEGIN;
       UPDATE mart.review_article_serving_payload_v4
-      SET payload_updated_at = (
-        SELECT payload_updated_at
-        FROM startup_probe_review_article_serving_payload_v4
+      SET article_created_at = (
+        SELECT probe.article_created_at
+        FROM startup_probe_review_article_serving_payload_v4 probe
+        WHERE mart.review_article_serving_payload_v4.project_id IS NOT DISTINCT FROM probe.project_id
+          AND mart.review_article_serving_payload_v4.display_identity IS NOT DISTINCT FROM probe.display_identity
+          AND mart.review_article_serving_payload_v4.payload_identity IS NOT DISTINCT FROM probe.payload_identity
+          AND mart.review_article_serving_payload_v4.snapshot_id IS NOT DISTINCT FROM probe.snapshot_id
+          AND mart.review_article_serving_payload_v4.article_id IS NOT DISTINCT FROM probe.article_id
         LIMIT 1
       )
       WHERE EXISTS (

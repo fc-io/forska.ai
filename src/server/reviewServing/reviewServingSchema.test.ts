@@ -52,6 +52,9 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0149_dropReviewPayloadDisplayCopyColumns.sql',
   '../../db/duckdbMigrations/0150_dropReviewServingProjectorWatermarkLifecyclePlaceholders.sql',
   '../../db/duckdbMigrations/0151_backfillReviewPayloadServingCoverage.sql',
+  '../../db/duckdbMigrations/0152_dropReviewArticleServingFullTextCopies.sql',
+  '../../db/duckdbMigrations/0153_dropReviewPayloadServingUpdatedAt.sql',
+  '../../db/duckdbMigrations/0154_dropReviewImportHotFieldProvenanceDebugColumns.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -139,6 +142,12 @@ const reviewServingProjectorWatermarkLifecyclePlaceholderDropForwardMigrationSql
   ]
 const reviewPayloadServingCoverageBackfillForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0151_backfillReviewPayloadServingCoverage.sql']
+const reviewPayloadUpdatedAtDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0153_dropReviewPayloadServingUpdatedAt.sql']
+const reviewImportHotFieldProvenanceDebugColumnDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath[
+    '../../db/duckdbMigrations/0154_dropReviewImportHotFieldProvenanceDebugColumns.sql'
+  ]
 const reviewFilterOptionPayloadJsonDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql']
 const reviewArticleServingSelectedRankCopyDropForwardMigrationSql =
@@ -606,11 +615,24 @@ test('review-serving schema includes audited summary partial cleanup authorizati
 
 test('Phase 1 schema migration keeps raw payloads out of import hot fields', () => {
   const hotFieldSql = getTableSql('app.review_import_article_hot_field')
+  const hotFieldColumns = getTableColumns('app.review_import_article_hot_field')
 
   expect(hotFieldSql).toContain('selected_rank_key')
   expect(hotFieldSql).toContain('publication_year')
   expect(hotFieldSql).not.toContain('payload_json')
   expect(hotFieldSql).not.toContain('source_metadata JSON')
+  expect(
+    ['source_record_hash', 'duplicate_key', 'source_updated_at', 'created_at', 'updated_at'].filter((columnName) => {
+      return hotFieldColumns.has(columnName)
+    }),
+  ).toEqual([])
+  expect(reviewImportHotFieldProvenanceDebugColumnDropForwardMigrationSql).toContain(
+    'CREATE TABLE app.review_import_article_hot_field_repair',
+  )
+  expect(reviewImportHotFieldProvenanceDebugColumnDropForwardMigrationSql).toContain(
+    'ALTER TABLE app.review_import_article_hot_field_repair RENAME TO review_import_article_hot_field;',
+  )
+  expect(reviewImportHotFieldProvenanceDebugColumnDropForwardMigrationSql).not.toContain('DROP COLUMN')
 })
 
 test('Phase 1 schema migration keeps raw payloads out of hot serving tables', () => {
@@ -658,6 +680,7 @@ test('Phase 1 payload serving schema drops display-copy hydration fields after d
         'full_text_pdf',
         'full_text_fetched_at',
         'full_text_conversion_status',
+        'payload_updated_at',
       ].includes(columnName)
     }),
   ).toEqual([])
@@ -693,6 +716,13 @@ test('Phase 1 payload serving schema drops display-copy hydration fields after d
   )
   expect(reviewPayloadServingCoverageBackfillForwardMigrationSql).not.toContain('article_title')
   expect(reviewPayloadServingCoverageBackfillForwardMigrationSql).not.toContain('full_text_pdf')
+  expect(reviewPayloadUpdatedAtDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_payload_v4_updated_at_repair',
+  )
+  expect(reviewPayloadUpdatedAtDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_serving_payload_v4_updated_at_repair RENAME TO review_article_serving_payload_v4;',
+  )
+  expect(reviewPayloadUpdatedAtDropForwardMigrationSql).not.toContain('payload_updated_at')
 })
 
 test('Phase 1 article serving schema preserves review table display metadata', () => {

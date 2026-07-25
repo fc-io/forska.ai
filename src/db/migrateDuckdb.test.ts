@@ -171,6 +171,14 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0152_dropReviewArticleServingFullTextCopies.sql'),
     'utf8',
   ).trim()
+  const reviewPayloadServingUpdatedAtDropSql = readFileSync(
+    resolve(migrationsFolder, '0153_dropReviewPayloadServingUpdatedAt.sql'),
+    'utf8',
+  ).trim()
+  const reviewImportHotFieldProvenanceDebugColumnDropSql = readFileSync(
+    resolve(migrationsFolder, '0154_dropReviewImportHotFieldProvenanceDebugColumns.sql'),
+    'utf8',
+  ).trim()
   const reviewArticleServingReviewProgressCopyDropSql = readFileSync(
     resolve(migrationsFolder, '0134_dropReviewArticleServingReviewProgressCopy.sql'),
     'utf8',
@@ -408,6 +416,25 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewArticleServingFullTextCopyDropSql).not.toContain('full_text_pdf')
   expect(reviewArticleServingFullTextCopyDropSql).not.toContain('full_text_fetched_at')
   expect(reviewArticleServingFullTextCopyDropSql).not.toContain('full_text_conversion_status')
+  expect(reviewPayloadServingUpdatedAtDropSql).toContain(
+    'CREATE TABLE mart.review_article_serving_payload_v4_updated_at_repair',
+  )
+  expect(reviewPayloadServingUpdatedAtDropSql).toContain('DROP TABLE mart.review_article_serving_payload_v4;')
+  expect(reviewPayloadServingUpdatedAtDropSql).toContain(
+    'ALTER TABLE mart.review_article_serving_payload_v4_updated_at_repair RENAME TO review_article_serving_payload_v4;',
+  )
+  expect(reviewPayloadServingUpdatedAtDropSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_repaired_pk',
+  )
+  expect(reviewPayloadServingUpdatedAtDropSql).not.toContain('payload_updated_at')
+  expect(reviewImportHotFieldProvenanceDebugColumnDropSql).toContain(
+    'CREATE TABLE app.review_import_article_hot_field_repair',
+  )
+  expect(reviewImportHotFieldProvenanceDebugColumnDropSql).toContain('DROP TABLE app.review_import_article_hot_field;')
+  expect(reviewImportHotFieldProvenanceDebugColumnDropSql).toContain(
+    'ALTER TABLE app.review_import_article_hot_field_repair RENAME TO review_import_article_hot_field;',
+  )
+  expect(reviewImportHotFieldProvenanceDebugColumnDropSql).not.toContain('DROP COLUMN')
   expect(reviewProjectorWatermarkLifecyclePlaceholderDropSql).toContain(
     'CREATE TABLE app.review_serving_projector_watermark_repair',
   )
@@ -743,6 +770,352 @@ test('DuckDB migration drops payload display-copy columns while preserving paylo
         articleId: 'article-1',
         fullTextPreview: 'preview',
         sourceMetadata: '{"source":"fixture"}',
+      },
+    ])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
+test('DuckDB migration drops payload updated-at copy while preserving payload content', async () => {
+  const duckdbPath = `/tmp/forska-review-payload-updated-at-drop-${Date.now()}.duckdb`
+  const targetMigrationFile = '0153_dropReviewPayloadServingUpdatedAt.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_serving_payload_v4 (
+            project_id VARCHAR NOT NULL,
+            display_identity VARCHAR NOT NULL,
+            payload_identity VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            article_created_at TIMESTAMPTZ,
+            source_metadata JSON,
+            abstract_text VARCHAR,
+            full_text_preview VARCHAR,
+            payload_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_serving_payload_v4 (
+            project_id,
+            display_identity,
+            payload_identity,
+            snapshot_id,
+            article_id,
+            article_created_at,
+            source_metadata,
+            abstract_text,
+            full_text_preview,
+            payload_updated_at
+          )
+          VALUES (
+            'project-1',
+            'display-1',
+            'payload-1',
+            'snapshot-1',
+            'article-1',
+            TIMESTAMPTZ '2026-01-01 00:00:00+00',
+            json('{"source":"fixture"}'),
+            'abstract',
+            'preview',
+            TIMESTAMPTZ '2026-01-02 00:00:00+00'
+          )
+        \`)
+
+        await migrateDuckdb()
+
+        const rows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            source_metadata AS sourceMetadata,
+            abstract_text AS abstractText,
+            full_text_preview AS fullTextPreview
+          FROM mart.review_article_serving_payload_v4
+        \`)
+        const columns = await database.queryJson(\`
+          SELECT column_name AS columnName
+          FROM information_schema.columns
+          WHERE table_schema = 'mart'
+            AND table_name = 'review_article_serving_payload_v4'
+          ORDER BY ordinal_position
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0153_dropReviewPayloadServingUpdatedAt.sql'"
+        )
+
+        console.log(JSON.stringify({columns, migrationRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      columns: {columnName: string}[]
+      migrationRows: {name: string}[]
+      rows: {abstractText: string; articleId: string; fullTextPreview: string; sourceMetadata: string}[]
+    }
+    const columnNames = new Set(
+      parsed.columns.map((column) => {
+        return column.columnName
+      }),
+    )
+
+    expect(columnNames.has('article_created_at')).toBe(true)
+    expect(columnNames.has('source_metadata')).toBe(true)
+    expect(columnNames.has('abstract_text')).toBe(true)
+    expect(columnNames.has('full_text_preview')).toBe(true)
+    expect(columnNames.has('payload_updated_at')).toBe(false)
+    expect(parsed.rows).toEqual([
+      {
+        abstractText: 'abstract',
+        articleId: 'article-1',
+        fullTextPreview: 'preview',
+        sourceMetadata: '{"source":"fixture"}',
+      },
+    ])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
+test('DuckDB migration drops import hot-field provenance debug columns while preserving hot rows', async () => {
+  const duckdbPath = `/tmp/forska-review-import-hot-field-debug-drop-${Date.now()}.duckdb`
+  const targetMigrationFile = '0154_dropReviewImportHotFieldProvenanceDebugColumns.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE app.review_import_article_hot_field (
+            import_route_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            source_record_key VARCHAR NOT NULL,
+            source_record_hash VARCHAR,
+            source_kind VARCHAR,
+            selected_rank_key VARCHAR,
+            selected_rank_numeric DOUBLE,
+            publication_year INTEGER,
+            article_title VARCHAR,
+            journal_title VARCHAR,
+            external_id VARCHAR,
+            duplicate_key VARCHAR,
+            duplicate_flag BOOLEAN,
+            conflict_flag BOOLEAN,
+            filter_bucket_key VARCHAR,
+            filter_bucket_value VARCHAR,
+            source_updated_at TIMESTAMPTZ,
+            tombstone BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.review_import_article_hot_field (
+            import_route_id,
+            article_id,
+            source_record_key,
+            source_record_hash,
+            source_kind,
+            selected_rank_key,
+            selected_rank_numeric,
+            publication_year,
+            article_title,
+            journal_title,
+            external_id,
+            duplicate_key,
+            duplicate_flag,
+            conflict_flag,
+            filter_bucket_key,
+            filter_bucket_value,
+            source_updated_at,
+            tombstone
+          )
+          VALUES (
+            'route-1',
+            'article-1',
+            'source-key-1',
+            'hash-1',
+            'covidence',
+            '000000000001:article-1',
+            1,
+            2026,
+            'Article title',
+            'Journal',
+            'external-1',
+            'duplicate-1',
+            FALSE,
+            TRUE,
+            'bucket',
+            'bucket-value',
+            TIMESTAMPTZ '2026-01-02 00:00:00+00',
+            FALSE
+          )
+        \`)
+
+        await migrateDuckdb()
+
+        const rows = await database.queryJson(\`
+          SELECT
+            import_route_id AS importRouteId,
+            article_id AS articleId,
+            source_record_key AS sourceRecordKey,
+            selected_rank_key AS selectedRankKey,
+            duplicate_flag AS duplicateFlag,
+            conflict_flag AS conflictFlag,
+            tombstone
+          FROM app.review_import_article_hot_field
+        \`)
+        const columns = await database.queryJson(\`
+          SELECT column_name AS columnName
+          FROM information_schema.columns
+          WHERE table_schema = 'app'
+            AND table_name = 'review_import_article_hot_field'
+          ORDER BY ordinal_position
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0154_dropReviewImportHotFieldProvenanceDebugColumns.sql'"
+        )
+
+        console.log(JSON.stringify({columns, migrationRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      columns: {columnName: string}[]
+      migrationRows: {name: string}[]
+      rows: {
+        articleId: string
+        conflictFlag: boolean
+        duplicateFlag: boolean
+        importRouteId: string
+        selectedRankKey: string
+        sourceRecordKey: string
+        tombstone: boolean
+      }[]
+    }
+    const columnNames = new Set(
+      parsed.columns.map((column) => {
+        return column.columnName
+      }),
+    )
+
+    expect(columnNames.has('source_record_hash')).toBe(false)
+    expect(columnNames.has('duplicate_key')).toBe(false)
+    expect(columnNames.has('source_updated_at')).toBe(false)
+    expect(columnNames.has('created_at')).toBe(false)
+    expect(columnNames.has('updated_at')).toBe(false)
+    expect(parsed.rows).toEqual([
+      {
+        articleId: 'article-1',
+        conflictFlag: true,
+        duplicateFlag: false,
+        importRouteId: 'route-1',
+        selectedRankKey: '000000000001:article-1',
+        sourceRecordKey: 'source-key-1',
+        tombstone: false,
       },
     ])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])

@@ -326,7 +326,8 @@ test('payload rebuild ranges insert payload rows idempotently with SQL-native ra
       '      full_text_preview,',
     ].join('\n'),
   )
-  expect(joined).toContain('      payload_identity,\n      payload_updated_at,')
+  expect(joined).toContain('      payload_identity,\n      project_id,')
+  expect(joined).not.toContain('payload_updated_at')
   expect(joined).toContain('      project_id,\n      snapshot_id,\n      source_metadata')
   expect(joined).not.toContain('article_external_id')
   expect(joined).not.toContain('journal_title')

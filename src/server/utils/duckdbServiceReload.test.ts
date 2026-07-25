@@ -3497,6 +3497,8 @@ test('duckdb service retries transient startup indexed-table repair locks', () =
     expect(payloadProbe?.postRepairSql).toContain("status = 'pending'")
     expect(payloadProbe?.postRepairSql).toContain('app.review_rebuild_request')
     expect(payloadProbe?.mutationProbeSql).toContain("projection_component = 'payload'")
+    expect(payloadProbe?.mutationProbeSql).toContain('SET article_created_at = current_timestamp')
+    expect(payloadProbe?.mutationProbeSql).not.toContain('payload_updated_at')
     expect(payloadProbe?.mutationProbeSql).not.toContain('DELETE FROM mart.review_article_serving_payload_v4')
     expect(payloadProbe?.mutationProbeSql).not.toContain('INSERT INTO mart.review_article_serving_payload_v4 BY NAME')
     expect(payloadProbe?.skipGenericDeleteInsertProbe).toBe(true)
