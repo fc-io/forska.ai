@@ -92,11 +92,7 @@ export const getReviewServingSqlForbiddenPatternViolations = (sql: string) => {
         return false
       }
 
-      if (
-        forbiddenPattern.label === 'json extraction'
-        && hasBoundedJudgmentAuthoritativeHydrationJoin(sql)
-        && hasOnlyBoundedJudgmentModelThinkingExtraction(sql)
-      ) {
+      if (forbiddenPattern.label === 'json extraction' && hasOnlyBoundedJsonExtraction(sql)) {
         return false
       }
 
@@ -162,7 +158,7 @@ const hasBoundedJudgmentAuthoritativeHydrationJoin = (sql: string) => {
   )
 }
 
-const hasOnlyBoundedJudgmentModelThinkingExtraction = (sql: string) => {
+const hasOnlyBoundedJsonExtraction = (sql: string) => {
   const extractionCalls = [...sql.matchAll(/\bjson_extract(?:_string)?\s*\([^)]*\)/giu)].map((match) => {
     return match[0]
   })
@@ -170,7 +166,14 @@ const hasOnlyBoundedJudgmentModelThinkingExtraction = (sql: string) => {
   return (
     extractionCalls.length > 0
     && extractionCalls.every((call) => {
-      return /json_extract_string\s*\(\s*model\.metadata_json\s*,\s*'\$\.options\.thinking'\s*\)/iu.test(call)
+      return (
+        (hasBoundedJudgmentAuthoritativeHydrationJoin(sql)
+          && /json_extract_string\s*\(\s*model\.metadata_json\s*,\s*'\$\.options\.thinking'\s*\)/iu.test(call))
+        || (hasBoundedSelectedSourceRecordLookupJoin(sql)
+          && /json_extract_string\s*\(\s*selected_source\.raw_payload\s*,\s*'\$\.covidence\.citation\.url'\s*\)/iu.test(
+            call,
+          ))
+      )
     })
   )
 }
@@ -217,6 +220,25 @@ const isBoundedSelectedSourceRecordLookupReference = (sql: string, tableReferenc
     tableReference.table === 'app.article_import_route_source_record'
     && tableReference.alias === 'selected_source'
     && hasBoundedSelectedSourceRecordLookupJoin(sql)
+  )
+}
+
+const hasBoundedSelectedHotFieldLookupJoin = (sql: string) => {
+  return (
+    /\bleft\s+join\s+app\.review_import_article_hot_field\s+selected_hot\b/iu.test(sql)
+    && /\bselected_hot\.import_route_id\s*=\s*selected_import\.import_route_id\b/iu.test(sql)
+    && /\bselected_hot\.article_id\s*=\s*mart\.review_article_serving_v4\.article_id\b/iu.test(sql)
+    && /\bselected_hot\.source_record_key\s*=\s*selected_import\.source_record_key\b/iu.test(sql)
+    && /\bnot\s+selected_hot\.tombstone\b/iu.test(sql)
+    && hasBoundedSelectedImportLookupJoin(sql)
+  )
+}
+
+const isBoundedSelectedHotFieldLookupReference = (sql: string, tableReference: ReviewServingSqlTableReference) => {
+  return (
+    tableReference.table === 'app.review_import_article_hot_field'
+    && tableReference.alias === 'selected_hot'
+    && hasBoundedSelectedHotFieldLookupJoin(sql)
   )
 }
 
@@ -273,6 +295,9 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
       return (
         tableReference !== 'app.article_import_route_source_record' || !hasBoundedSelectedSourceRecordLookupJoin(sql)
       )
+    })
+    .filter((tableReference) => {
+      return tableReference !== 'app.review_import_article_hot_field' || !hasBoundedSelectedHotFieldLookupJoin(sql)
     })
     .filter((tableReference) => {
       return (
@@ -340,6 +365,7 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
               isBoundedArticleLookupReference(sql, tableReference)
               || isBoundedSelectedImportLookupReference(sql, tableReference)
               || isBoundedSelectedSourceRecordLookupReference(sql, tableReference)
+              || isBoundedSelectedHotFieldLookupReference(sql, tableReference)
               || isBoundedJudgmentPromptMetadataReference(sql, tableReference)
               || isBoundedJudgmentAuthoritativeHydrationReference(sql, tableReference)
             ) {
@@ -433,16 +459,16 @@ const reviewServingArticleSourceMetadataSql = `CASE
     )
   END`
 const reviewServingArticlePayloadDisplayColumns = [
-  `payload.article_title AS article_title`,
-  `payload.article_external_id AS article_external_id`,
-  `payload.article_updated_at AS article_updated_at`,
-  `payload.arxiv_id AS arxiv_id`,
-  `payload.biorxiv_id AS biorxiv_id`,
-  `payload.medrxiv_id AS medrxiv_id`,
-  `payload.doi AS doi`,
-  `payload.pmid AS pmid`,
-  `payload.journal_title AS journal_title`,
-  `payload.url AS url`,
+  `COALESCE(selected_hot.article_title, article.article_title) AS article_title`,
+  `COALESCE(selected_hot.external_id, article.article_id) AS article_external_id`,
+  `article.article_updated_at AS article_updated_at`,
+  `article.arxiv_id AS arxiv_id`,
+  `article.biorxiv_id AS biorxiv_id`,
+  `article.medrxiv_id AS medrxiv_id`,
+  `article.doi AS doi`,
+  `article.pubmed_id AS pmid`,
+  `selected_hot.journal_title AS journal_title`,
+  `COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url`,
   `article.full_text_pdf AS full_text_pdf`,
   `article.full_text_fetched_at AS full_text_fetched_at`,
   `article.full_text_conversion_status AS full_text_conversion_status`,
@@ -1128,6 +1154,11 @@ export const buildReviewServingRowsSql = (params: {
           ` AND NOT selected_import.tombstone`,
           ` LEFT JOIN app.article article`,
           ` ON article.id = ${reviewServingArticleTable}.article_id`,
+          ` LEFT JOIN app.review_import_article_hot_field selected_hot`,
+          ` ON selected_hot.import_route_id = selected_import.import_route_id`,
+          ` AND selected_hot.article_id = ${reviewServingArticleTable}.article_id`,
+          ` AND selected_hot.source_record_key = selected_import.source_record_key`,
+          ` AND NOT selected_hot.tombstone`,
           ` LEFT JOIN app.article_import_route_source_record selected_source`,
           ` ON selected_source.import_route_id = selected_import.import_route_id`,
           ` AND selected_source.article_id = ${reviewServingArticleTable}.article_id`,

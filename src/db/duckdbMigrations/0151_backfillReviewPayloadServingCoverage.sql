@@ -5,19 +5,7 @@ CREATE TABLE mart.review_article_serving_payload_v4_coverage_repair (
   display_identity VARCHAR NOT NULL,
   payload_identity VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
-  article_id VARCHAR NOT NULL,
-  article_title VARCHAR,
-  article_external_id VARCHAR,
-  article_updated_at TIMESTAMPTZ,
-  arxiv_id VARCHAR,
-  biorxiv_id VARCHAR,
-  medrxiv_id VARCHAR,
-  doi VARCHAR,
-  pmid VARCHAR,
-  journal_title VARCHAR,
-  url VARCHAR,
-  abstract_text VARCHAR,
-  full_text_preview VARCHAR
+  article_id VARCHAR NOT NULL
 );
 
 INSERT INTO mart.review_article_serving_payload_v4_coverage_repair
@@ -28,19 +16,7 @@ WITH existing_payload AS (
       'display_identity',
       'payload_identity',
       'snapshot_id',
-      'article_id',
-      'article_title',
-      'article_external_id',
-      'article_updated_at',
-      'arxiv_id',
-      'biorxiv_id',
-      'medrxiv_id',
-      'doi',
-      'pmid',
-      'journal_title',
-      'url',
-      'abstract_text',
-      'full_text_preview'
+      'article_id'
     )),
     0 AS row_precedence
   FROM mart.review_article_serving_payload_v4
@@ -78,18 +54,6 @@ serving_payload_gaps AS (
     snapshot_payload_identity.payload_identity,
     serving.snapshot_id,
     serving.article_id,
-    CAST(NULL AS VARCHAR) AS article_title,
-    CAST(NULL AS VARCHAR) AS article_external_id,
-    CAST(NULL AS TIMESTAMPTZ) AS article_updated_at,
-    CAST(NULL AS VARCHAR) AS arxiv_id,
-    CAST(NULL AS VARCHAR) AS biorxiv_id,
-    CAST(NULL AS VARCHAR) AS medrxiv_id,
-    CAST(NULL AS VARCHAR) AS doi,
-    CAST(NULL AS VARCHAR) AS pmid,
-    CAST(NULL AS VARCHAR) AS journal_title,
-    CAST(NULL AS VARCHAR) AS url,
-    CAST(NULL AS VARCHAR) AS abstract_text,
-    CAST(NULL AS VARCHAR) AS full_text_preview,
     1 AS row_precedence
   FROM mart.review_article_serving_v4 serving
   INNER JOIN snapshot_payload_identity
@@ -114,19 +78,7 @@ SELECT
   display_identity,
   payload_identity,
   snapshot_id,
-  article_id,
-  article_title,
-  article_external_id,
-  article_updated_at,
-  arxiv_id,
-  biorxiv_id,
-  medrxiv_id,
-  doi,
-  pmid,
-  journal_title,
-  url,
-  abstract_text,
-  full_text_preview
+  article_id
 FROM payload_union
 QUALIFY ROW_NUMBER() OVER (
   PARTITION BY project_id, display_identity, payload_identity, snapshot_id, article_id

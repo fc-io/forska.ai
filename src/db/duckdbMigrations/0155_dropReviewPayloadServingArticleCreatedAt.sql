@@ -5,23 +5,11 @@ CREATE TABLE mart.review_article_serving_payload_v4_article_created_at_repair (
   display_identity VARCHAR NOT NULL,
   payload_identity VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
-  article_id VARCHAR NOT NULL,
-  article_title VARCHAR,
-  article_external_id VARCHAR,
-  article_updated_at TIMESTAMPTZ,
-  arxiv_id VARCHAR,
-  biorxiv_id VARCHAR,
-  medrxiv_id VARCHAR,
-  doi VARCHAR,
-  pmid VARCHAR,
-  journal_title VARCHAR,
-  url VARCHAR,
-  abstract_text VARCHAR,
-  full_text_preview VARCHAR
+  article_id VARCHAR NOT NULL
 );
 
 INSERT INTO mart.review_article_serving_payload_v4_article_created_at_repair BY NAME
-SELECT COLUMNS(column_name -> column_name IN ('project_id', 'display_identity', 'payload_identity', 'snapshot_id', 'article_id', 'article_title', 'article_external_id', 'article_updated_at', 'arxiv_id', 'biorxiv_id', 'medrxiv_id', 'doi', 'pmid', 'journal_title', 'url', 'abstract_text', 'full_text_preview'))
+SELECT COLUMNS(column_name -> column_name IN ('project_id', 'display_identity', 'payload_identity', 'snapshot_id', 'article_id'))
 FROM mart.review_article_serving_payload_v4;
 
 DROP TABLE mart.review_article_serving_payload_v4;

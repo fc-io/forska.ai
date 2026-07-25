@@ -147,6 +147,10 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0164_rehydrateReviewPayloadDisplayColumns.sql'),
     'utf8',
   ).trim()
+  const reviewPayloadDisplayStorageDropSql = readFileSync(
+    resolve(migrationsFolder, '0173_dropReviewPayloadDisplayStorage.sql'),
+    'utf8',
+  ).trim()
   const reviewPayloadAbstractTextDropSql = readFileSync(
     resolve(migrationsFolder, '0165_dropReviewPayloadAbstractText.sql'),
     'utf8',
@@ -457,8 +461,8 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_repaired_pk',
   )
   expect(reviewPayloadDisplayCopyColumnDropSql).not.toContain('PRIMARY KEY')
-  expect(reviewPayloadDisplayCopyColumnDropSql).toContain('article_title VARCHAR')
-  expect(reviewPayloadDisplayCopyColumnDropSql).toContain('article_external_id VARCHAR')
+  expect(reviewPayloadDisplayCopyColumnDropSql).not.toContain('article_title VARCHAR')
+  expect(reviewPayloadDisplayCopyColumnDropSql).not.toContain('article_external_id VARCHAR')
   expect(reviewPayloadDisplayCopyColumnDropSql).not.toContain('full_text_pdf')
   expect(reviewPayloadDisplayRehydrationSql).toContain(
     'CREATE TABLE mart.review_article_serving_payload_v4_display_repair',
@@ -467,10 +471,20 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewPayloadDisplayRehydrationSql).toContain(
     'ALTER TABLE mart.review_article_serving_payload_v4_display_repair RENAME TO review_article_serving_payload_v4;',
   )
-  expect(reviewPayloadDisplayRehydrationSql).toContain('selected_import_snapshot_id')
-  expect(reviewPayloadDisplayRehydrationSql).toContain('selected_hot.article_title')
-  expect(reviewPayloadDisplayRehydrationSql).toContain('json_extract_string(selected_source.raw_payload')
+  expect(reviewPayloadDisplayRehydrationSql).not.toContain('selected_import_snapshot_id')
+  expect(reviewPayloadDisplayRehydrationSql).not.toContain('selected_hot.article_title')
+  expect(reviewPayloadDisplayRehydrationSql).not.toContain('json_extract_string(selected_source.raw_payload')
+  expect(reviewPayloadDisplayRehydrationSql).not.toContain('article_title VARCHAR')
   expect(reviewPayloadDisplayRehydrationSql).not.toContain('UPDATE mart.review_article_serving_payload_v4')
+  expect(reviewPayloadDisplayStorageDropSql).toContain(
+    'CREATE TABLE mart.review_article_serving_payload_v4_display_storage_repair',
+  )
+  expect(reviewPayloadDisplayStorageDropSql).toContain('DROP TABLE mart.review_article_serving_payload_v4;')
+  expect(reviewPayloadDisplayStorageDropSql).toContain(
+    'ALTER TABLE mart.review_article_serving_payload_v4_display_storage_repair RENAME TO review_article_serving_payload_v4;',
+  )
+  expect(reviewPayloadDisplayStorageDropSql).not.toContain('article_title VARCHAR')
+  expect(reviewPayloadDisplayStorageDropSql).not.toContain('article_external_id VARCHAR')
   expect(reviewPayloadServingCoverageBackfillSql).toContain(
     'CREATE TABLE mart.review_article_serving_payload_v4_coverage_repair',
   )
@@ -484,7 +498,7 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     'ALTER TABLE mart.review_article_serving_payload_v4_coverage_repair RENAME TO review_article_serving_payload_v4;',
   )
   expect(reviewPayloadServingCoverageBackfillSql).not.toContain('ADD COLUMN')
-  expect(reviewPayloadServingCoverageBackfillSql).toContain('article_title VARCHAR')
+  expect(reviewPayloadServingCoverageBackfillSql).not.toContain('article_title VARCHAR')
   expect(reviewPayloadServingCoverageBackfillSql).not.toContain('full_text_pdf')
   expect(reviewArticleServingFullTextCopyDropSql).toContain('CREATE TABLE mart.review_article_serving_v4_repair')
   expect(reviewArticleServingFullTextCopyDropSql).toContain('DROP TABLE mart.review_article_serving_v4;')
@@ -569,6 +583,8 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
   expect(reviewPayloadServingFullTextPreviewDropSql).toContain(
     'ALTER TABLE mart.review_article_serving_payload_v4_full_text_preview_repair RENAME TO review_article_serving_payload_v4;',
   )
+  expect(reviewPayloadServingFullTextPreviewDropSql).not.toContain('abstract_text VARCHAR')
+  expect(reviewPayloadServingFullTextPreviewDropSql).not.toContain('article_title VARCHAR')
   expect(reviewPayloadServingFullTextPreviewDropSql).toContain(
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_repaired_pk',
   )
@@ -821,8 +837,7 @@ test('DuckDB migration marks retired payload display hydration as applied withou
 
         const rows = await database.queryJson(\`
           SELECT
-            article_id AS articleId,
-            full_text_preview AS fullTextPreview
+            article_id AS articleId
           FROM mart.review_article_serving_payload_v4
         \`)
         const columns = await database.queryJson(\`
@@ -866,7 +881,7 @@ test('DuckDB migration marks retired payload display hydration as applied withou
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
       columns: {columnName: string}[]
       migrationRows: {name: string}[]
-      rows: {articleId: string; fullTextPreview: string}[]
+      rows: {articleId: string}[]
     }
     const columnNames = new Set(
       parsed.columns.map((column) => {
@@ -877,7 +892,9 @@ test('DuckDB migration marks retired payload display hydration as applied withou
     expect(columnNames.has('article_title')).toBe(false)
     expect(columnNames.has('article_external_id')).toBe(false)
     expect(columnNames.has('full_text_conversion_status')).toBe(false)
-    expect(parsed.rows).toEqual([{articleId: 'article-1', fullTextPreview: 'preview'}])
+    expect(columnNames.has('abstract_text')).toBe(true)
+    expect(columnNames.has('full_text_preview')).toBe(true)
+    expect(parsed.rows).toEqual([{articleId: 'article-1'}])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
   } finally {
     removeFileIfExists(duckdbPath)
@@ -1000,9 +1017,7 @@ test('DuckDB migration drops payload display-copy columns while preserving paylo
 
         const rows = await database.queryJson(\`
           SELECT
-            article_id AS articleId,
-            abstract_text AS abstractText,
-            full_text_preview AS fullTextPreview
+            article_id AS articleId
           FROM mart.review_article_serving_payload_v4
         \`)
         const columns = await database.queryJson(\`
@@ -1046,7 +1061,7 @@ test('DuckDB migration drops payload display-copy columns while preserving paylo
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
       columns: {columnName: string}[]
       migrationRows: {name: string}[]
-      rows: {abstractText: string; articleId: string; fullTextPreview: string}[]
+      rows: {articleId: string}[]
     }
     const columnNames = new Set(
       parsed.columns.map((column) => {
@@ -1056,12 +1071,12 @@ test('DuckDB migration drops payload display-copy columns while preserving paylo
 
     expect(columnNames.has('article_created_at')).toBe(false)
     expect(columnNames.has('source_metadata')).toBe(false)
-    expect(columnNames.has('abstract_text')).toBe(true)
-    expect(columnNames.has('full_text_preview')).toBe(true)
-    expect(columnNames.has('article_title')).toBe(true)
-    expect(columnNames.has('article_external_id')).toBe(true)
+    expect(columnNames.has('abstract_text')).toBe(false)
+    expect(columnNames.has('full_text_preview')).toBe(false)
+    expect(columnNames.has('article_title')).toBe(false)
+    expect(columnNames.has('article_external_id')).toBe(false)
     expect(columnNames.has('full_text_pdf')).toBe(false)
-    expect(parsed.rows).toEqual([{abstractText: 'abstract', articleId: 'article-1', fullTextPreview: 'preview'}])
+    expect(parsed.rows).toEqual([{articleId: 'article-1'}])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
   } finally {
     removeFileIfExists(duckdbPath)
@@ -1150,8 +1165,11 @@ test('DuckDB migration drops payload abstract text and source metadata', async (
 
         const rows = await database.queryJson(\`
           SELECT
-            article_id AS articleId,
-            article_title AS articleTitle
+            project_id AS projectId,
+            display_identity AS displayIdentity,
+            payload_identity AS payloadIdentity,
+            snapshot_id AS snapshotId,
+            article_id AS articleId
           FROM mart.review_article_serving_payload_v4
         \`)
         const columns = await database.queryJson(\`
@@ -1195,7 +1213,13 @@ test('DuckDB migration drops payload abstract text and source metadata', async (
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
       columns: {columnName: string}[]
       migrationRows: {name: string}[]
-      rows: {articleId: string; articleTitle: string}[]
+      rows: {
+        articleId: string
+        displayIdentity: string
+        payloadIdentity: string
+        projectId: string
+        snapshotId: string
+      }[]
     }
     const columnNames = new Set(
       parsed.columns.map((column) => {
@@ -1205,7 +1229,16 @@ test('DuckDB migration drops payload abstract text and source metadata', async (
 
     expect(columnNames.has('source_metadata')).toBe(false)
     expect(columnNames.has('abstract_text')).toBe(false)
-    expect(parsed.rows).toEqual([{articleId: 'article-1', articleTitle: 'Display title'}])
+    expect(columnNames.has('article_title')).toBe(false)
+    expect(parsed.rows).toEqual([
+      {
+        articleId: 'article-1',
+        displayIdentity: 'display-1',
+        payloadIdentity: 'payload-1',
+        projectId: 'project-1',
+        snapshotId: 'snapshot-1',
+      },
+    ])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
   } finally {
     removeFileIfExists(duckdbPath)
@@ -2245,7 +2278,7 @@ test('DuckDB migration normalizes judgment detail list-mode storage by payload i
   }
 })
 
-test('DuckDB migration rehydrates payload display columns after article serving display copies are dropped', async () => {
+test('DuckDB migration keeps payload display storage key-only after article serving display copies are dropped', async () => {
   const duckdbPath = `/tmp/forska-review-payload-display-rehydrate-${Date.now()}.duckdb`
   const targetMigrationFile = '0164_rehydrateReviewPayloadDisplayColumns.sql'
   const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
@@ -2396,15 +2429,11 @@ test('DuckDB migration rehydrates payload display columns after article serving 
 
         const rows = await database.queryJson(\`
           SELECT
-            article_title AS articleTitle,
-            article_external_id AS articleExternalId,
-            article_updated_at AS articleUpdatedAt,
-            arxiv_id AS arxivId,
-            doi,
-            pmid,
-            journal_title AS journalTitle,
-            url,
-            abstract_text AS abstractText
+            project_id AS projectId,
+            display_identity AS displayIdentity,
+            payload_identity AS payloadIdentity,
+            snapshot_id AS snapshotId,
+            article_id AS articleId
           FROM mart.review_article_serving_payload_v4
         \`)
         const columns = await database.queryJson(\`
@@ -2449,15 +2478,11 @@ test('DuckDB migration rehydrates payload display columns after article serving 
       columns: {columnName: string}[]
       migrationRows: {name: string}[]
       rows: {
-        abstractText: string
-        articleExternalId: string
-        articleTitle: string
-        articleUpdatedAt: string
-        arxivId: string
-        doi: string
-        journalTitle: string
-        pmid: string
-        url: string
+        articleId: string
+        displayIdentity: string
+        payloadIdentity: string
+        projectId: string
+        snapshotId: string
       }[]
     }
     const columnNames = new Set(
@@ -2466,23 +2491,185 @@ test('DuckDB migration rehydrates payload display columns after article serving 
       }),
     )
 
-    expect(columnNames.has('article_title')).toBe(true)
-    expect(columnNames.has('article_external_id')).toBe(true)
-    expect(columnNames.has('article_updated_at')).toBe(true)
-    expect(columnNames.has('journal_title')).toBe(true)
-    expect(columnNames.has('url')).toBe(true)
+    expect(columnNames.has('article_title')).toBe(false)
+    expect(columnNames.has('article_external_id')).toBe(false)
+    expect(columnNames.has('article_updated_at')).toBe(false)
+    expect(columnNames.has('journal_title')).toBe(false)
+    expect(columnNames.has('url')).toBe(false)
+    expect(columnNames.has('abstract_text')).toBe(false)
     expect(columnNames.has('source_metadata')).toBe(false)
     expect(parsed.rows).toEqual([
       {
-        abstractText: 'abstract',
-        articleExternalId: 'EXT-1',
-        articleTitle: 'Selected title',
-        articleUpdatedAt: '2026-01-02 02:00:00+02',
-        arxivId: '2401.00001',
-        doi: '10.1000/example',
-        journalTitle: 'Selected Journal',
-        pmid: '12345',
-        url: 'https://selected.example/article-1',
+        articleId: 'article-1',
+        displayIdentity: 'display-1',
+        payloadIdentity: 'payload-1',
+        projectId: 'project-1',
+        snapshotId: 'snapshot-1',
+      },
+    ])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
+test('DuckDB migration drops payload display storage while preserving payload coverage rows', async () => {
+  const duckdbPath = `/tmp/forska-review-payload-display-storage-drop-${Date.now()}.duckdb`
+  const targetMigrationFile = '0173_dropReviewPayloadDisplayStorage.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_serving_payload_v4 (
+            project_id VARCHAR NOT NULL,
+            display_identity VARCHAR NOT NULL,
+            payload_identity VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            article_title VARCHAR,
+            article_external_id VARCHAR,
+            article_updated_at TIMESTAMPTZ,
+            arxiv_id VARCHAR,
+            biorxiv_id VARCHAR,
+            medrxiv_id VARCHAR,
+            doi VARCHAR,
+            pmid VARCHAR,
+            journal_title VARCHAR,
+            url VARCHAR
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_serving_payload_v4
+          VALUES (
+            'project-1',
+            'display-1',
+            'payload-1',
+            'snapshot-1',
+            'article-1',
+            'Title',
+            'EXT-1',
+            TIMESTAMPTZ '2026-01-01 00:00:00+00',
+            '2401.00001',
+            NULL,
+            NULL,
+            '10.1000/example',
+            '12345',
+            'Journal',
+            'https://example.test/article-1'
+          )
+        \`)
+
+        await migrateDuckdb()
+
+        const rows = await database.queryJson(\`
+          SELECT
+            project_id AS projectId,
+            display_identity AS displayIdentity,
+            payload_identity AS payloadIdentity,
+            snapshot_id AS snapshotId,
+            article_id AS articleId
+          FROM mart.review_article_serving_payload_v4
+        \`)
+        const columns = await database.queryJson(\`
+          SELECT column_name AS columnName
+          FROM information_schema.columns
+          WHERE table_schema = 'mart'
+            AND table_name = 'review_article_serving_payload_v4'
+          ORDER BY ordinal_position
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0173_dropReviewPayloadDisplayStorage.sql'"
+        )
+
+        console.log(JSON.stringify({columns, migrationRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      columns: {columnName: string}[]
+      migrationRows: {name: string}[]
+      rows: {
+        articleId: string
+        displayIdentity: string
+        payloadIdentity: string
+        projectId: string
+        snapshotId: string
+      }[]
+    }
+    const columnNames = new Set(
+      parsed.columns.map((column) => {
+        return column.columnName
+      }),
+    )
+
+    expect([...columnNames]).toEqual([
+      'project_id',
+      'display_identity',
+      'payload_identity',
+      'snapshot_id',
+      'article_id',
+    ])
+    expect(columnNames.has('article_title')).toBe(false)
+    expect(columnNames.has('article_external_id')).toBe(false)
+    expect(columnNames.has('url')).toBe(false)
+    expect(parsed.rows).toEqual([
+      {
+        articleId: 'article-1',
+        displayIdentity: 'display-1',
+        payloadIdentity: 'payload-1',
+        projectId: 'project-1',
+        snapshotId: 'snapshot-1',
       },
     ])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
@@ -2570,9 +2757,7 @@ test('DuckDB migration drops payload updated-at copy while preserving payload co
 
         const rows = await database.queryJson(\`
           SELECT
-            article_id AS articleId,
-            abstract_text AS abstractText,
-            full_text_preview AS fullTextPreview
+            article_id AS articleId
           FROM mart.review_article_serving_payload_v4
         \`)
         const columns = await database.queryJson(\`
@@ -2616,7 +2801,7 @@ test('DuckDB migration drops payload updated-at copy while preserving payload co
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
       columns: {columnName: string}[]
       migrationRows: {name: string}[]
-      rows: {abstractText: string; articleId: string; fullTextPreview: string}[]
+      rows: {articleId: string}[]
     }
     const columnNames = new Set(
       parsed.columns.map((column) => {
@@ -2626,10 +2811,10 @@ test('DuckDB migration drops payload updated-at copy while preserving payload co
 
     expect(columnNames.has('article_created_at')).toBe(false)
     expect(columnNames.has('source_metadata')).toBe(false)
-    expect(columnNames.has('abstract_text')).toBe(true)
-    expect(columnNames.has('full_text_preview')).toBe(true)
+    expect(columnNames.has('abstract_text')).toBe(false)
+    expect(columnNames.has('full_text_preview')).toBe(false)
     expect(columnNames.has('payload_updated_at')).toBe(false)
-    expect(parsed.rows).toEqual([{abstractText: 'abstract', articleId: 'article-1', fullTextPreview: 'preview'}])
+    expect(parsed.rows).toEqual([{articleId: 'article-1'}])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
   } finally {
     removeFileIfExists(duckdbPath)
@@ -2950,9 +3135,7 @@ test('DuckDB migration backfills missing payload rows for every serving snapshot
           SELECT
             article_id AS articleId,
             display_identity AS displayIdentity,
-            payload_identity AS payloadIdentity,
-            abstract_text AS abstractText,
-            full_text_preview AS fullTextPreview
+            payload_identity AS payloadIdentity
           FROM mart.review_article_serving_payload_v4
           ORDER BY article_id
         \`)
@@ -2996,30 +3179,12 @@ test('DuckDB migration backfills missing payload rows for every serving snapshot
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
       duplicateGroups: {articleId: string; rowCount: number}[]
       migrationRows: {name: string}[]
-      rows: {
-        abstractText: string | null
-        articleId: string
-        displayIdentity: string
-        fullTextPreview: string | null
-        payloadIdentity: string
-      }[]
+      rows: {articleId: string; displayIdentity: string; payloadIdentity: string}[]
     }
 
     expect(parsed.rows).toEqual([
-      {
-        abstractText: 'kept abstract',
-        articleId: 'article-existing',
-        displayIdentity: 'display-1',
-        fullTextPreview: 'kept preview',
-        payloadIdentity: 'payload-1',
-      },
-      {
-        abstractText: null,
-        articleId: 'article-missing',
-        displayIdentity: 'display-1',
-        fullTextPreview: null,
-        payloadIdentity: 'payload-1',
-      },
+      {articleId: 'article-existing', displayIdentity: 'display-1', payloadIdentity: 'payload-1'},
+      {articleId: 'article-missing', displayIdentity: 'display-1', payloadIdentity: 'payload-1'},
     ])
     expect(parsed.duplicateGroups).toEqual([])
     expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])

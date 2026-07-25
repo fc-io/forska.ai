@@ -117,12 +117,12 @@ const getValuesCte = (columnName: string, values: readonly string[]) => {
         .join(', ')}))`
 }
 
-const getSearchPredicate = (searchTitle: string | null | undefined) => {
+const getSearchPredicate = (searchTitle: string | null | undefined, titleSql: string) => {
   const trimmedSearch = searchTitle?.trim() ?? ''
 
   return trimmedSearch.length === 0
     ? ''
-    : `AND LOWER(COALESCE(payload.article_title, '')) LIKE LOWER(${getSqlLiteral(`%${trimmedSearch}%`)})`
+    : `AND LOWER(COALESCE(${titleSql}, '')) LIKE LOWER(${getSqlLiteral(`%${trimmedSearch}%`)})`
 }
 
 const getOptionModePredicate = (input: ProjectReviewServingFilterOptionsInput) => {
@@ -331,10 +331,24 @@ const getReconstructedFilterOptionSourceRows = async (
             AND payload.payload_identity = ${getSqlLiteral(input.payloadIdentity)}
             AND payload.snapshot_id = serving.snapshot_id
             AND payload.article_id = serving.article_id
+          LEFT JOIN app.article article
+            ON article.id = serving.article_id
+          LEFT JOIN app.review_selected_article_import_v4 selected_import
+            ON selected_import.project_id = ${getSqlLiteral(input.projectId)}
+            AND selected_import.project_id = serving.project_id
+            AND selected_import.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+            AND selected_import.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+            AND selected_import.article_id = serving.article_id
+            AND NOT selected_import.tombstone
+          LEFT JOIN app.review_import_article_hot_field selected_hot
+            ON selected_hot.import_route_id = selected_import.import_route_id
+            AND selected_hot.article_id = serving.article_id
+            AND selected_hot.source_record_key = selected_import.source_record_key
+            AND NOT selected_hot.tombstone
           WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
             AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-            ${getSearchPredicate(input.searchTitle)}
+            ${getSearchPredicate(input.searchTitle, 'COALESCE(selected_hot.article_title, article.article_title)')}
         ),
         selected_article AS (
           SELECT DISTINCT
