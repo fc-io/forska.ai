@@ -57,6 +57,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0154_dropReviewImportHotFieldProvenanceDebugColumns.sql',
   '../../db/duckdbMigrations/0155_dropReviewPayloadServingArticleCreatedAt.sql',
   '../../db/duckdbMigrations/0156_dropReviewPayloadFullTextPreview.sql',
+  '../../db/duckdbMigrations/0157_dropReviewSummaryContributionPartialJsonKey.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -154,6 +155,10 @@ const reviewPayloadArticleCreatedAtDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0155_dropReviewPayloadServingArticleCreatedAt.sql']
 const reviewPayloadFullTextPreviewDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0156_dropReviewPayloadFullTextPreview.sql']
+const reviewSummaryContributionPartialJsonKeyDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath[
+    '../../db/duckdbMigrations/0157_dropReviewSummaryContributionPartialJsonKey.sql'
+  ]
 const reviewFilterOptionPayloadJsonDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql']
 const reviewArticleServingSelectedRankCopyDropForwardMigrationSql =
@@ -826,6 +831,37 @@ test('summary contribution serving mart is retired from the review-serving schem
   expect(reviewServingPhase1Tables).not.toContain('mart.review_article_summary_contribution_v4')
   expect(retiredReviewServingTables.has('mart.review_article_summary_contribution_v4')).toBe(true)
   expect(getTableSql('mart.review_article_summary_contribution_rebuild_partial_v4')).not.toBe('')
+})
+
+test('summary contribution partial key JSON is scalarized in the final review-serving schema', () => {
+  const columns = getTableColumns('mart.review_article_summary_contribution_rebuild_partial_v4')
+
+  expect(
+    [
+      'summary_kind',
+      'summary_identity',
+      'list_mode_key',
+      'count_kind',
+      'filter_key',
+      'facet_kind',
+      'facet_key',
+      'facet_value',
+      'contribution_value',
+    ].filter((columnName) => {
+      return !columns.has(columnName)
+    }),
+  ).toEqual([])
+  expect(columns).not.toContain('contribution_key')
+  expect(reviewSummaryContributionPartialJsonKeyDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_summary_contribution_rebuild_partial_v4_key_repair',
+  )
+  expect(reviewSummaryContributionPartialJsonKeyDropForwardMigrationSql).toContain(
+    "json_extract_string(contribution_key, '$.summaryKind') AS summary_kind",
+  )
+  expect(reviewSummaryContributionPartialJsonKeyDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_summary_contribution_rebuild_partial_v4_key_repair',
+  )
+  expect(reviewSummaryContributionPartialJsonKeyDropForwardMigrationSql).not.toContain('contribution_key VARCHAR')
 })
 
 test('filter posting stats mart is retired from the review-serving schema', () => {

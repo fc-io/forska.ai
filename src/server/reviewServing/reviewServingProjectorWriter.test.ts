@@ -733,14 +733,28 @@ test('projector writer uses larger scan-guarded insert-missing batches for summa
         'article_id',
         'component_kind',
         'summary_definition_version',
-        'contribution_key',
+        'summary_kind',
+        'summary_identity',
+        'list_mode_key',
+        'count_kind',
+        'filter_key',
+        'facet_kind',
+        'facet_key',
+        'facet_value',
       ],
       table: 'mart.review_article_summary_contribution_rebuild_partial_v4' as const,
       values: {
         article_id: `article-${index.toString().padStart(4, '0')}`,
         chunk_id: 'chunk-summary-1',
         component_kind: 'count',
-        contribution_key: '{"summaryKind":"count","summaryIdentity":"review.list.total"}',
+        count_kind: 'review.list.total',
+        facet_key: null,
+        facet_kind: null,
+        facet_value: null,
+        filter_key: null,
+        list_mode_key: 'global',
+        summary_identity: 'review.list.total',
+        summary_kind: 'count',
         contribution_updated_at: new Date('2026-04-02T12:00:00.000Z'),
         contribution_value: 1,
         project_id: 'project-1',
@@ -762,7 +776,8 @@ test('projector writer uses larger scan-guarded insert-missing batches for summa
   expect(insertStatements.join('\n')).not.toContain('ON CONFLICT')
   expect(insertStatements.join('\n')).toContain('WHERE NOT EXISTS')
   expect(insertStatements.join('\n')).toContain("(existing.request_id || '') = (incoming.request_id || '')")
-  expect(insertStatements.join('\n')).toContain("(existing.contribution_key || '') = (incoming.contribution_key || '')")
+  expect(insertStatements.join('\n')).toContain("(existing.summary_identity || '') = (incoming.summary_identity || '')")
+  expect(insertStatements.join('\n')).not.toContain('contribution_key')
   expect(result.diagnostics.records.batchCount).toBe(2)
   expect(result.diagnostics.records.batchesByTable).toMatchObject({
     'mart.review_article_summary_contribution_rebuild_partial_v4': 2,

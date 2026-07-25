@@ -49,6 +49,44 @@ const contributionKey = (input: Record<string, unknown>) => {
   return JSON.stringify(input, Object.keys(input).sort())
 }
 
+const sqlLiteral = (value: boolean | number | string | null | undefined) => {
+  if (value === null || value === undefined) {
+    return 'NULL'
+  }
+
+  return `'${String(value).replaceAll("'", "''")}'`
+}
+
+const contributionPartialKeyColumns = [
+  'summary_kind',
+  'summary_identity',
+  'list_mode_key',
+  'count_kind',
+  'filter_key',
+  'facet_kind',
+  'facet_key',
+  'facet_value',
+].join(',\n          ')
+
+const contributionPartialKeyValues = (key: string) => {
+  const parsed = JSON.parse(key) as Record<string, unknown>
+
+  return [
+    parsed.summaryKind,
+    parsed.summaryIdentity,
+    parsed.listModeKey ?? 'global',
+    parsed.countKind,
+    parsed.filterKey,
+    parsed.facetKind,
+    parsed.facetKey,
+    parsed.facetValue,
+  ]
+    .map((value) => {
+      return sqlLiteral(value as boolean | number | string | null | undefined)
+    })
+    .join(', ')
+}
+
 const sourceCountRow = (input?: Record<string, unknown>) => {
   return {
     answerId: null,
@@ -234,10 +272,37 @@ const createSummaryReductionSchema = async (database: ReviewServingSummaryProjec
       article_id VARCHAR NOT NULL,
       component_kind VARCHAR NOT NULL,
       summary_definition_version VARCHAR NOT NULL,
-      contribution_key VARCHAR NOT NULL,
+      summary_kind VARCHAR NOT NULL,
+      summary_identity VARCHAR NOT NULL,
+      list_mode_key VARCHAR NOT NULL DEFAULT 'global',
+      count_kind VARCHAR,
+      filter_key VARCHAR,
+      facet_kind VARCHAR,
+      facet_key VARCHAR,
+      facet_value VARCHAR,
       contribution_value BIGINT NOT NULL,
-      contribution_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-      PRIMARY KEY(request_id, chunk_id, project_id, review_config_hash, snapshot_id, article_id, component_kind, summary_definition_version, contribution_key)
+      contribution_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+    )
+  `)
+  await database.run(`
+    CREATE UNIQUE INDEX idx_review_article_summary_contribution_rebuild_partial_v4_unique
+    ON mart.review_article_summary_contribution_rebuild_partial_v4(
+      request_id,
+      chunk_id,
+      project_id,
+      review_config_hash,
+      snapshot_id,
+      article_id,
+      component_kind,
+      summary_definition_version,
+      summary_kind,
+      summary_identity,
+      COALESCE(list_mode_key, 'global'),
+      COALESCE(count_kind, ''),
+      COALESCE(filter_key, ''),
+      COALESCE(facet_kind, ''),
+      COALESCE(facet_key, ''),
+      COALESCE(facet_value, '')
     )
   `)
   await database.run(`
@@ -522,6 +587,35 @@ test('chunked full summary rebuild stages request partials and contribution part
   expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_filter_facet_serving_v4')
+})
+
+test('chunked full summary rebuild aggregates duplicate scalar contribution partial keys before writing', async () => {
+  const {database, statements} = createSummaryDatabase({
+    sourceRows: [sourceCountRow({answerId: 1}), sourceCountRow({answerId: 2})],
+  })
+
+  const result = await projectReviewServingSummaries(
+    {
+      ...projectInput([]),
+      chunkEndArticleId: 'article-099',
+      chunkId: 'chunk-summary-1',
+      chunkStartArticleId: 'article-001',
+      requestId: 'rebuild-summary-1',
+    },
+    database,
+  )
+  const contributionInsertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_article_summary_contribution_rebuild_partial_v4')
+  })
+
+  expect(result.contributionRowCount).toBe(2)
+  expect(result.diagnosticsJson.summaryProjector.writer.records.inputRecordsByTable).toMatchObject({
+    'mart.review_article_summary_contribution_rebuild_partial_v4': 1,
+  })
+  expect(contributionInsertStatement).toBeDefined()
+  expect(contributionInsertStatement).toContain('contribution_value')
+  expect(contributionInsertStatement).toContain("      2,\n      'review.llm.assessedByPrompt'")
+  expect(contributionInsertStatement).not.toContain('contribution_key')
 })
 
 test('summary rebuild request finalization reduces partials in bounded accumulator batches', async () => {
@@ -843,17 +937,17 @@ test('summary rebuild request finalization deduplicates overlapping contribution
           article_id,
           component_kind,
           summary_definition_version,
-          contribution_key,
+          ${contributionPartialKeyColumns},
           contribution_value
         ) VALUES
-          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-left', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
-          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
-          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
-          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-right', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
-          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-left', 'count', 'review-serving-summary:v1', '${facetContributionKey}', 1),
-          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', '${facetContributionKey}', 1),
-          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', '${facetContributionKey}', 1),
-          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-right', 'count', 'review-serving-summary:v1', '${facetContributionKey}', 1)
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-left', 'count', 'review-serving-summary:v1', ${contributionPartialKeyValues(countContributionKey)}, 1),
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', ${contributionPartialKeyValues(countContributionKey)}, 1),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', ${contributionPartialKeyValues(countContributionKey)}, 1),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-right', 'count', 'review-serving-summary:v1', ${contributionPartialKeyValues(countContributionKey)}, 1),
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-left', 'count', 'review-serving-summary:v1', ${contributionPartialKeyValues(facetContributionKey)}, 1),
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', ${contributionPartialKeyValues(facetContributionKey)}, 1),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', ${contributionPartialKeyValues(facetContributionKey)}, 1),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-right', 'count', 'review-serving-summary:v1', ${contributionPartialKeyValues(facetContributionKey)}, 1)
       `)
 
       await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
@@ -990,13 +1084,13 @@ test('summary rebuild request finalization retries from retained contribution pa
           article_id,
           component_kind,
           summary_definition_version,
-          contribution_key,
+          ${contributionPartialKeyColumns},
           contribution_value
         ) VALUES
-          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-left', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
-          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
-          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1),
-          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-right', 'count', 'review-serving-summary:v1', '${countContributionKey}', 1)
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-left', 'count', 'review-serving-summary:v1', ${contributionPartialKeyValues(countContributionKey)}, 1),
+          ('rebuild-summary-1', 'chunk-left', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', ${contributionPartialKeyValues(countContributionKey)}, 1),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-boundary', 'count', 'review-serving-summary:v1', ${contributionPartialKeyValues(countContributionKey)}, 1),
+          ('rebuild-summary-1', 'chunk-right', 'project-1', 'review-config-1', 'snapshot-1', 'article-right', 'count', 'review-serving-summary:v1', ${contributionPartialKeyValues(countContributionKey)}, 1)
       `)
 
       await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(

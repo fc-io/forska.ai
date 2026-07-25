@@ -2454,12 +2454,31 @@ const getSummaryContributionPartialOverlap = async (
     }>(
       runtime,
       `
+        WITH contribution_rows AS (
+          SELECT
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            article_id,
+            component_kind,
+            summary_definition_version,
+            json_extract_string(contribution_key, '$.summaryKind') AS summary_kind,
+            json_extract_string(contribution_key, '$.summaryIdentity') AS summary_identity,
+            COALESCE(json_extract_string(contribution_key, '$.listModeKey'), 'global') AS list_mode_key,
+            json_extract_string(contribution_key, '$.countKind') AS count_kind,
+            json_extract_string(contribution_key, '$.filterKey') AS filter_key,
+            json_extract_string(contribution_key, '$.facetKind') AS facet_kind,
+            json_extract_string(contribution_key, '$.facetKey') AS facet_key,
+            json_extract_string(contribution_key, '$.facetValue') AS facet_value,
+            contribution_value
+          FROM mart.review_article_summary_contribution_v4
+        )
         SELECT
           CAST((SELECT COUNT(*) FROM mart.review_article_summary_contribution_v4) AS BIGINT) AS contributionRows,
           CAST((SELECT COUNT(*) FROM mart.review_article_summary_contribution_rebuild_partial_v4) AS BIGINT) AS partialRows,
           CAST((
             SELECT COUNT(*)
-            FROM mart.review_article_summary_contribution_v4 contribution
+            FROM contribution_rows contribution
             WHERE EXISTS (
               SELECT 1
               FROM mart.review_article_summary_contribution_rebuild_partial_v4 partial
@@ -2469,7 +2488,14 @@ const getSummaryContributionPartialOverlap = async (
                 AND partial.article_id = contribution.article_id
                 AND partial.component_kind = contribution.component_kind
                 AND partial.summary_definition_version = contribution.summary_definition_version
-                AND partial.contribution_key = contribution.contribution_key
+                AND partial.summary_kind = contribution.summary_kind
+                AND partial.summary_identity = contribution.summary_identity
+                AND COALESCE(partial.list_mode_key, 'global') = contribution.list_mode_key
+                AND partial.count_kind IS NOT DISTINCT FROM contribution.count_kind
+                AND partial.filter_key IS NOT DISTINCT FROM contribution.filter_key
+                AND partial.facet_kind IS NOT DISTINCT FROM contribution.facet_kind
+                AND partial.facet_key IS NOT DISTINCT FROM contribution.facet_key
+                AND partial.facet_value IS NOT DISTINCT FROM contribution.facet_value
                 AND partial.contribution_value = contribution.contribution_value
             )
           ) AS BIGINT) AS exactCommonColumnOverlapRows,
@@ -2478,14 +2504,21 @@ const getSummaryContributionPartialOverlap = async (
             FROM mart.review_article_summary_contribution_rebuild_partial_v4 partial
             WHERE EXISTS (
               SELECT 1
-              FROM mart.review_article_summary_contribution_v4 contribution
+              FROM contribution_rows contribution
               WHERE contribution.project_id = partial.project_id
                 AND contribution.review_config_hash = partial.review_config_hash
                 AND contribution.snapshot_id = partial.snapshot_id
                 AND contribution.article_id = partial.article_id
                 AND contribution.component_kind = partial.component_kind
                 AND contribution.summary_definition_version = partial.summary_definition_version
-                AND contribution.contribution_key = partial.contribution_key
+                AND contribution.summary_kind = partial.summary_kind
+                AND contribution.summary_identity = partial.summary_identity
+                AND contribution.list_mode_key = COALESCE(partial.list_mode_key, 'global')
+                AND contribution.count_kind IS NOT DISTINCT FROM partial.count_kind
+                AND contribution.filter_key IS NOT DISTINCT FROM partial.filter_key
+                AND contribution.facet_kind IS NOT DISTINCT FROM partial.facet_kind
+                AND contribution.facet_key IS NOT DISTINCT FROM partial.facet_key
+                AND contribution.facet_value IS NOT DISTINCT FROM partial.facet_value
                 AND contribution.contribution_value = partial.contribution_value
             )
           ) AS BIGINT) AS partialRowsWithExactCommonContribution

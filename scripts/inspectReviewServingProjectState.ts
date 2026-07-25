@@ -68,6 +68,22 @@ const runReadonlyQuery = async (runtime: Awaited<ReturnType<typeof getSnapshotQu
   return reader.getRowObjectsJson()
 }
 
+const getTableExists = async (runtime: Awaited<ReturnType<typeof getSnapshotQueryRuntime>>, table: string) => {
+  const [schemaName, tableName] = table.split('.')
+  const rows = await runReadonlyQuery(
+    runtime,
+    `
+      SELECT 1 AS tableExists
+      FROM information_schema.tables
+      WHERE table_schema = ${getSqlLiteral(schemaName ?? '')}
+        AND table_name = ${getSqlLiteral(tableName ?? '')}
+      LIMIT 1
+    `,
+  )
+
+  return rows.length > 0
+}
+
 const querySection = async (
   runtime: Awaited<ReturnType<typeof getSnapshotQueryRuntime>>,
   sql: string,
@@ -83,9 +99,7 @@ const getDuplicateQuery = (params: {
   table: string
 }) => {
   const keySql = params.keyColumns.join(', ')
-  const snapshotColumns = params.snapshotColumn
-    ? `, ${params.snapshotColumn} AS snapshotId`
-    : ''
+  const snapshotColumns = params.snapshotColumn ? `, ${params.snapshotColumn} AS snapshotId` : ''
   const snapshotGroup = params.snapshotColumn ? `, ${params.snapshotColumn}` : ''
 
   return `
@@ -297,15 +311,15 @@ const inspectProjectState = async (
       table: 'app.review_selected_article_import_v4',
     }),
   )
-  sections.filterPostingStatsDuplicateKeys = await querySection(
-    runtime,
-    getDuplicateQuery({
-      keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'filter_kind', 'filter_value', 'list_mode_key'],
-      limit,
-      projectId: options.projectId,
-      table: 'mart.review_filter_posting_stats_v4',
-    }),
-  )
+  const filterPostingStatsDuplicateSql = getDuplicateQuery({
+    keyColumns: ['project_id', 'review_config_hash', 'snapshot_id', 'filter_kind', 'filter_value', 'list_mode_key'],
+    limit,
+    projectId: options.projectId,
+    table: 'mart.review_filter_posting_stats_v4',
+  })
+  sections.filterPostingStatsDuplicateKeys = (await getTableExists(runtime, 'mart.review_filter_posting_stats_v4'))
+    ? await querySection(runtime, filterPostingStatsDuplicateSql)
+    : {rows: [], sql: filterPostingStatsDuplicateSql}
   sections.snapshotManifestDuplicateKeys = await querySection(
     runtime,
     getDuplicateQuery({
