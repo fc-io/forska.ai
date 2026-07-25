@@ -256,10 +256,36 @@ test('human review route service uses serving rows, human payload hydration, and
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).toContain("payload_kind = 'human'")
   expect(sql).toContain('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
+  expect(sql).toContain('FROM mart.review_article_filter_posting_serving_v4 prompt_anchor')
+  expect(sql).toContain("prompt_anchor.filter_value IN (SELECT unnest(['human:promptAnswer:prompt-1:yes']::VARCHAR[]))")
   expect(sql).toContain("article_id IN (SELECT unnest(['article-1']::VARCHAR[]))")
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })
+})
+
+test('human review prompt-filtered count starts from posting mart with human prompt answer prefix', async () => {
+  const reader = createReaderDatabase()
+
+  await getHumanReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 100, prompts: {'prompt-1': ['yes', 'maybe']}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+  const countStatement = reader.statements.find((statement) => {
+    return statement.includes('SELECT COUNT(DISTINCT serving.article_id) AS totalCount')
+  })
+
+  expect(countStatement).toContain('FROM mart.review_article_filter_posting_serving_v4 prompt_anchor')
+  expect(countStatement).toContain('JOIN mart.review_article_serving_v4 serving')
+  expect(countStatement).toContain("prompt_anchor.filter_kind = 'promptAnswer'")
+  expect(countStatement).toContain(
+    "prompt_anchor.filter_value IN (SELECT unnest(['human:promptAnswer:prompt-1:maybe', 'human:promptAnswer:prompt-1:yes']::VARCHAR[]))",
+  )
+  expect(countStatement).toContain("serving.human_status_key = 'answered'")
 })
 
 test('human review route service retries transient filtered count read failures', async () => {
