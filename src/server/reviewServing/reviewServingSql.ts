@@ -276,6 +276,7 @@ const reviewServingBulkOperationJobTable = 'app.review_bulk_operation_job'
 const reviewServingSearchJobTable = 'app.review_search_job'
 const reviewServingArticleTable = 'mart.review_article_serving_v4'
 const reviewServingPayloadTable = 'mart.review_article_serving_payload_v4'
+const reviewServingFilterPostingTable = 'mart.review_article_filter_posting_serving_v4'
 const reviewServingFilterFacetTable = 'mart.review_filter_facet_serving_v4'
 const reviewServingFilterOptionTable = 'mart.review_filter_option_serving_v4'
 const reviewServingJudgmentDetailTable = 'mart.review_article_judgment_detail_serving_v4'
@@ -474,7 +475,9 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
   const reviewConfigHashColumn =
     params.contract.servingTable === reviewServingJudgmentDetailTable
       ? `${reviewServingJudgmentDetailTable}.review_config_hash`
-      : 'review_config_hash'
+      : params.contract.servingTable === reviewServingFilterPostingTable
+        ? `${reviewServingFilterPostingTable}.review_config_hash`
+        : 'review_config_hash'
 
   return params.contract.servingTable === 'mart.review_title_search_serving_v4'
     ? ` AND search_identity = ${params.searchIdentityParameter} AND project_scope_identity = ${params.projectScopeIdentityParameter} AND snapshot_id = ${params.snapshotIdParameter}`
@@ -507,7 +510,9 @@ const getReviewServingRowsSqlListModePredicate = (params: {
   const listModeColumn =
     params.contract.servingTable === reviewServingJudgmentDetailTable
       ? `${reviewServingJudgmentDetailTable}.list_mode_key`
-      : 'list_mode_key'
+      : params.contract.servingTable === reviewServingFilterPostingTable
+        ? `${reviewServingFilterPostingTable}.list_mode_key`
+        : 'list_mode_key'
 
   if (params.contract.listMode) {
     return ` AND ${listModeColumn} = ${getSqlStringLiteral(params.contract.listMode)}`
@@ -860,6 +865,10 @@ const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
       : `SELECT ${selectColumns}`
   }
 
+  if (contract.servingTable === reviewServingFilterPostingTable) {
+    return `SELECT ${reviewServingFilterPostingTable}.*, ${reviewServingArticleTable}.sort_key AS sort_key`
+  }
+
   return contract.sort.fields.some((field) => {
     return field.includes(reviewServingListModePrioritySql)
   })
@@ -942,6 +951,20 @@ export const buildReviewServingRowsSql = (params: {
     params.contract.servingTable === reviewServingJudgmentDetailTable
       ? getReviewServingJudgmentDetailHydrationJoin(params)
       : ''
+  const postingArticleSortJoin =
+    params.contract.servingTable === reviewServingFilterPostingTable
+      ? [
+          ` INNER JOIN ${reviewServingArticleTable}`,
+          ` ON ${reviewServingArticleTable}.project_id = ${params.projectIdParameter}`,
+          ` AND ${reviewServingArticleTable}.project_id = ${reviewServingFilterPostingTable}.project_id`,
+          ` AND ${reviewServingArticleTable}.review_config_hash = ${params.reviewConfigHashParameter}`,
+          ` AND ${reviewServingArticleTable}.review_config_hash = ${reviewServingFilterPostingTable}.review_config_hash`,
+          ` AND ${reviewServingArticleTable}.snapshot_id = ${params.snapshotIdParameter}`,
+          ` AND ${reviewServingArticleTable}.snapshot_id = ${reviewServingFilterPostingTable}.snapshot_id`,
+          ` AND ${reviewServingArticleTable}.list_mode_key = ${reviewServingFilterPostingTable}.list_mode_key`,
+          ` AND ${reviewServingArticleTable}.article_id = ${reviewServingFilterPostingTable}.article_id`,
+        ].join('')
+      : ''
   const cursorPredicate = params.cursorPredicate ? ` AND (${params.cursorPredicate})` : ''
   const identityPredicates = getReviewServingRowsSqlIdentityPredicates(params)
   const listModePredicate = getReviewServingRowsSqlListModePredicate(params)
@@ -956,7 +979,7 @@ export const buildReviewServingRowsSql = (params: {
   const projectIdColumn = getReviewServingRowsSqlScopeColumn({contract: params.contract, field: 'project_id'})
 
   return [
-    `${selectSql} FROM ${params.contract.servingTable}${articlePayloadJoin}${judgmentDetailHydrationJoin} WHERE ${projectIdColumn} = ${params.projectIdParameter}`,
+    `${selectSql} FROM ${params.contract.servingTable}${articlePayloadJoin}${judgmentDetailHydrationJoin}${postingArticleSortJoin} WHERE ${projectIdColumn} = ${params.projectIdParameter}`,
     identityPredicates,
     listModePredicate,
     judgmentPayloadKindPredicate,

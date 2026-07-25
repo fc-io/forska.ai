@@ -255,7 +255,10 @@ const getCursorPredicateFieldName = (contract: ReviewServingReadContract, field:
 const getCursorRowFieldName = (field: string) => {
   const fieldName = getCursorFieldName(field)
 
-  if (fieldName.startsWith('CASE list_mode_key ')) {
+  if (
+    fieldName.startsWith('CASE list_mode_key ')
+    || fieldName.startsWith('CASE mart.review_article_judgment_detail_serving_v4.list_mode_key ')
+  ) {
     return 'list_mode_priority'
   }
 

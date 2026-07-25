@@ -2197,8 +2197,7 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         filter_kind,
         filter_value,
         list_mode_key,
-        article_id,
-        sort_key
+        article_id
       FROM mart.review_article_filter_posting_serving_v4
       ORDER BY
         project_id,
@@ -2210,9 +2209,9 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
         article_id
       LIMIT 1;
       BEGIN;
-      UPDATE mart.review_article_filter_posting_serving_v4
-      SET sort_key = current_timestamp
-      WHERE project_id = (
+      DELETE FROM mart.review_article_filter_posting_serving_v4
+      WHERE EXISTS (SELECT 1 FROM startup_probe_review_article_filter_posting_serving_v4)
+        AND project_id = (
           SELECT project_id
           FROM startup_probe_review_article_filter_posting_serving_v4
           LIMIT 1
@@ -2247,49 +2246,24 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
           FROM startup_probe_review_article_filter_posting_serving_v4
           LIMIT 1
         );
-      COMMIT;
-      BEGIN;
-      UPDATE mart.review_article_filter_posting_serving_v4
-      SET sort_key = (
-        SELECT sort_key
-        FROM startup_probe_review_article_filter_posting_serving_v4
-        LIMIT 1
+      INSERT INTO mart.review_article_filter_posting_serving_v4 (
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        filter_kind,
+        filter_value,
+        list_mode_key,
+        article_id
       )
-      WHERE project_id = (
-          SELECT project_id
-          FROM startup_probe_review_article_filter_posting_serving_v4
-          LIMIT 1
-        )
-        AND review_config_hash = (
-          SELECT review_config_hash
-          FROM startup_probe_review_article_filter_posting_serving_v4
-          LIMIT 1
-        )
-        AND snapshot_id = (
-          SELECT snapshot_id
-          FROM startup_probe_review_article_filter_posting_serving_v4
-          LIMIT 1
-        )
-        AND filter_kind = (
-          SELECT filter_kind
-          FROM startup_probe_review_article_filter_posting_serving_v4
-          LIMIT 1
-        )
-        AND filter_value = (
-          SELECT filter_value
-          FROM startup_probe_review_article_filter_posting_serving_v4
-          LIMIT 1
-        )
-        AND list_mode_key = (
-          SELECT list_mode_key
-          FROM startup_probe_review_article_filter_posting_serving_v4
-          LIMIT 1
-        )
-        AND article_id = (
-          SELECT article_id
-          FROM startup_probe_review_article_filter_posting_serving_v4
-          LIMIT 1
-        );
+      SELECT
+        project_id,
+        review_config_hash,
+        snapshot_id,
+        filter_kind,
+        filter_value,
+        list_mode_key,
+        article_id
+      FROM startup_probe_review_article_filter_posting_serving_v4;
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_article_filter_posting_serving_v4;
     `,

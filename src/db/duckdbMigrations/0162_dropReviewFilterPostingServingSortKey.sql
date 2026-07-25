@@ -1,3 +1,7 @@
+DROP INDEX IF EXISTS mart.idx_review_article_filter_posting_serving_v4_lookup;
+DROP INDEX IF EXISTS idx_review_article_filter_posting_serving_v4_lookup;
+DROP INDEX IF EXISTS mart.idx_review_article_filter_posting_serving_v4_repaired_pk;
+DROP INDEX IF EXISTS idx_review_article_filter_posting_serving_v4_repaired_pk;
 DROP TABLE IF EXISTS mart.review_article_filter_posting_serving_v4_repair;
 
 CREATE TABLE mart.review_article_filter_posting_serving_v4_repair (
@@ -26,4 +30,7 @@ DROP TABLE mart.review_article_filter_posting_serving_v4;
 ALTER TABLE mart.review_article_filter_posting_serving_v4_repair RENAME TO review_article_filter_posting_serving_v4;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_repaired_pk
+ON mart.review_article_filter_posting_serving_v4(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id);
+
+CREATE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_lookup
 ON mart.review_article_filter_posting_serving_v4(project_id, review_config_hash, snapshot_id, filter_kind, filter_value, list_mode_key, article_id);

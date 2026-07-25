@@ -62,6 +62,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0159_reviewJudgmentDetailDetailHydrationScalars.sql',
   '../../db/duckdbMigrations/0160_reviewJudgmentDetailHydrationSplit.sql',
   '../../db/duckdbMigrations/0161_dropReviewJudgmentHydrationPromptMetadata.sql',
+  '../../db/duckdbMigrations/0162_dropReviewFilterPostingServingSortKey.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -123,6 +124,8 @@ const reviewJudgmentDetailHydrationSplitForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0160_reviewJudgmentDetailHydrationSplit.sql']
 const reviewJudgmentDetailHydrationPromptMetadataDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0161_dropReviewJudgmentHydrationPromptMetadata.sql']
+const reviewFilterPostingServingSortKeyDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0162_dropReviewFilterPostingServingSortKey.sql']
 const reviewQueueServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql']
 const reviewFilterPostingServingUpdatedAtDropForwardMigrationSql =
@@ -921,7 +924,36 @@ test('filter posting stats mart is retired from the review-serving schema', () =
     'ALTER TABLE mart.review_article_filter_posting_serving_v4_repair RENAME TO review_article_filter_posting_serving_v4;',
   )
   expect(reviewFilterPostingServingUpdatedAtDropForwardMigrationSql).not.toContain('posting_updated_at')
+  expect(reviewFilterPostingServingIdentityDropForwardMigrationSql).not.toContain('sort_key TIMESTAMPTZ')
+  expect(reviewFilterPostingServingUpdatedAtDropForwardMigrationSql).not.toContain('sort_key TIMESTAMPTZ')
   expect(getTableColumns('mart.review_article_filter_posting_serving_v4').has('posting_updated_at')).toBe(false)
+})
+
+test('filter posting serving schema stores membership keys without sort key', () => {
+  expect([...getTableColumns('mart.review_article_filter_posting_serving_v4')]).toEqual([
+    'project_id',
+    'review_config_hash',
+    'snapshot_id',
+    'filter_kind',
+    'filter_value',
+    'list_mode_key',
+    'article_id',
+  ])
+  expect(reviewFilterPostingServingSortKeyDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_filter_posting_serving_v4_repair',
+  )
+  expect(reviewFilterPostingServingSortKeyDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_filter_posting_serving_v4_repair RENAME TO review_article_filter_posting_serving_v4;',
+  )
+  expect(reviewFilterPostingServingSortKeyDropForwardMigrationSql).toContain(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_repaired_pk',
+  )
+  expect(reviewFilterPostingServingSortKeyDropForwardMigrationSql).toContain(
+    'CREATE INDEX IF NOT EXISTS idx_review_article_filter_posting_serving_v4_lookup',
+  )
+  expect(reviewFilterPostingServingSortKeyDropForwardMigrationSql).not.toContain('PRIMARY KEY')
+  expect(reviewFilterPostingServingSortKeyDropForwardMigrationSql).not.toContain('sort_key TIMESTAMPTZ')
+  expect(getTableSql('mart.review_article_filter_posting_serving_v4')).not.toContain('sort_key')
 })
 
 test('filter option schema drops reconstructable payload JSON column', () => {
@@ -961,6 +993,10 @@ test('Phase 1 schema migration creates contract cursor and sort columns on non-j
 
       return getContractPhysicalColumns(contract)
         .filter((columnName) => {
+          if (contract.servingTable === 'mart.review_article_filter_posting_serving_v4' && columnName === 'sort_key') {
+            return false
+          }
+
           return !tableColumns.has(columnName)
         })
         .map((columnName) => {

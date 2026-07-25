@@ -1337,8 +1337,7 @@ const getPostingRebuildChunkOutputChecksum = async (
         CAST(list_mode_key AS VARCHAR) || ':' ||
         CAST(filter_kind AS VARCHAR) || ':' ||
         CAST(filter_value AS VARCHAR) || ':' ||
-        CAST(article_id AS VARCHAR) || ':' ||
-        COALESCE(CAST(sort_key AS VARCHAR), ''),
+        CAST(article_id AS VARCHAR),
         '|' ORDER BY snapshot_id, review_config_hash, list_mode_key, filter_kind, filter_value, article_id
       ), '')) AS actualChecksum
     FROM mart.review_article_filter_posting_serving_v4 serving

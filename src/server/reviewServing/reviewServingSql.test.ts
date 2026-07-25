@@ -533,9 +533,15 @@ test('buildReviewServingRowsSql applies posting filter keys before row ordering'
   })
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
-  expect(sql).toContain('AND list_mode_key = $listMode')
+  expect(sql).toContain('AND mart.review_article_filter_posting_serving_v4.list_mode_key = $listMode')
   expect(sql).toContain('AND filter_kind = $filterKind AND filter_value = $filterValue')
-  expect(sql).toContain('ORDER BY sort_key DESC, article_id ASC')
+  expect(sql).toContain('INNER JOIN mart.review_article_serving_v4')
+  expect(sql).toContain(
+    'mart.review_article_serving_v4.article_id = mart.review_article_filter_posting_serving_v4.article_id',
+  )
+  expect(sql).toContain(
+    'ORDER BY mart.review_article_serving_v4.sort_key DESC, mart.review_article_serving_v4.article_id ASC',
+  )
 })
 
 test('buildReviewServingRowsSql intersects posting filters with token-prefix search when requested', () => {
