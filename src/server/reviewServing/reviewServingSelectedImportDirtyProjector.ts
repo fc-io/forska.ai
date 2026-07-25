@@ -310,10 +310,6 @@ const selectedImportServingColumns = [
   'article_id',
   'sort_key',
   'activity_sort_at',
-  'article_title',
-  'article_external_id',
-  'journal_title',
-  'url',
   'selected_import_route_id',
   'publication_year',
   'duplicate_flag',
@@ -325,12 +321,6 @@ const selectedImportServingColumns = [
   'human_answered_prompt_count',
   'serving_updated_at',
   'article_created_at',
-  'article_updated_at',
-  'arxiv_id',
-  'biorxiv_id',
-  'medrxiv_id',
-  'doi',
-  'pmid',
 ].join(', ')
 
 const getSelectedImportChangedRowsCte = (values: string) => {
@@ -567,18 +557,8 @@ const getApplySelectedImportServingStatements = (input: {
             list_mode_key,
             article_id,
             article_created_at,
-            article_updated_at,
             sort_key,
             activity_sort_at,
-            article_title,
-            article_external_id,
-            arxiv_id,
-            biorxiv_id,
-            medrxiv_id,
-            doi,
-            pmid,
-            journal_title,
-            url,
             selected_import_route_id,
             selected_rank_key,
             publication_year,
@@ -598,18 +578,8 @@ const getApplySelectedImportServingStatements = (input: {
             template.list_mode_key,
             changed.article_id,
             article.article_created_at,
-            article.article_updated_at,
             COALESCE(article.article_created_at, current_timestamp) AS sort_key,
             COALESCE(article.article_updated_at, article.article_created_at, current_timestamp) AS activity_sort_at,
-            COALESCE(changed.article_title, article.article_title) AS article_title,
-            COALESCE(changed.external_id, article.article_id) AS article_external_id,
-            article.arxiv_id,
-            article.biorxiv_id,
-            article.medrxiv_id,
-            article.doi,
-            article.pubmed_id AS pmid,
-            changed.journal_title,
-            COALESCE(changed.selected_source_url, article.url) AS url,
             changed.import_route_id,
             changed.selected_rank_key,
             changed.publication_year,
@@ -646,10 +616,6 @@ const getApplySelectedImportServingStatements = (input: {
             serving.article_id,
             serving.sort_key,
             serving.activity_sort_at,
-            COALESCE(changed.article_title, article.article_title) AS article_title,
-            COALESCE(changed.external_id, article.article_id) AS article_external_id,
-            changed.journal_title,
-            COALESCE(changed.selected_source_url, article.url) AS url,
             changed.import_route_id AS selected_import_route_id,
             changed.publication_year,
             changed.duplicate_flag,
@@ -660,18 +626,10 @@ const getApplySelectedImportServingStatements = (input: {
             serving.enabled_prompt_count,
             serving.human_answered_prompt_count,
             current_timestamp AS serving_updated_at,
-            serving.article_created_at,
-            serving.article_updated_at,
-            serving.arxiv_id,
-            serving.biorxiv_id,
-            serving.medrxiv_id,
-            serving.doi,
-            serving.pmid
+            serving.article_created_at
          FROM mart.review_article_serving_v4 serving
          INNER JOIN changed
            ON changed.article_id = serving.article_id
-         INNER JOIN app."article" article
-           ON article.id = changed.article_id
           WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
             AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND changed.scope_tombstone = FALSE
@@ -685,11 +643,7 @@ const getApplySelectedImportServingStatements = (input: {
                 AND snapshot.snapshot_status IN ('candidate', 'active')
             )
             AND (
-              serving.article_title IS DISTINCT FROM COALESCE(changed.article_title, article.article_title)
-              OR serving.article_external_id IS DISTINCT FROM COALESCE(changed.external_id, article.article_id)
-              OR serving.url IS DISTINCT FROM COALESCE(changed.selected_source_url, article.url)
-              OR serving.selected_import_route_id IS DISTINCT FROM changed.import_route_id
-              OR serving.journal_title IS DISTINCT FROM changed.journal_title
+              serving.selected_import_route_id IS DISTINCT FROM changed.import_route_id
               OR serving.publication_year IS DISTINCT FROM changed.publication_year
               OR serving.duplicate_flag IS DISTINCT FROM changed.duplicate_flag
               OR serving.conflict_flag IS DISTINCT FROM changed.conflict_flag

@@ -1027,8 +1027,7 @@ const getDisplayRebuildChunkOutputChecksum = async (
         CAST(snapshot_id AS VARCHAR) || ':' ||
         CAST(list_mode_key AS VARCHAR) || ':' ||
         CAST(article_id AS VARCHAR) || ':' ||
-        COALESCE(CAST(sort_key AS VARCHAR), '') || ':' ||
-        COALESCE(article_title, ''),
+        COALESCE(CAST(sort_key AS VARCHAR), ''),
         '|' ORDER BY snapshot_id, list_mode_key, article_id
       ), '')) AS actualChecksum
     FROM mart.review_article_serving_v4 serving
@@ -4765,6 +4764,8 @@ export const getDefaultReviewServingProjectorRunners = (
           database,
         )
         const searchIdentity = getSnapshotComponentState(snapshot, 'search')?.projectionIdentity ?? ''
+        const displayIdentity = requireSnapshotComponentIdentity(snapshot, 'display')
+        const payloadIdentity = requireSnapshotComponentIdentity(snapshot, 'payload')
         const reviewFilterOptionsResult = await projectReviewServingFilterOptions(
           {
             acknowledgeClaims: false,
@@ -4772,6 +4773,7 @@ export const getDefaultReviewServingProjectorRunners = (
             claims: context.claims,
             definitionVersion: manifest.definitionVersion,
             deleteExisting: false,
+            displayIdentity,
             filterOptionIdentity: getReviewServingFilterOptionIdentity({
               filterKeys: defaultReviewFilterOptionKeys,
               listModeKeys: reviewServingListModes,
@@ -4780,6 +4782,7 @@ export const getDefaultReviewServingProjectorRunners = (
             }),
             listModeKeys: reviewServingListModes,
             optionMode: 'review',
+            payloadIdentity,
             projectId,
             projectionIdentity: manifest.projectionIdentity,
             reviewConfigHash: requireReviewConfigHash(snapshot),
@@ -4795,6 +4798,7 @@ export const getDefaultReviewServingProjectorRunners = (
             claims: context.claims,
             definitionVersion: manifest.definitionVersion,
             deleteExisting: false,
+            displayIdentity,
             filterOptionIdentity: getReviewServingFilterOptionIdentity({
               filterKeys: defaultHumanFilterOptionKeys,
               listModeKeys: defaultReviewServingHumanListModeKeys,
@@ -4803,6 +4807,7 @@ export const getDefaultReviewServingProjectorRunners = (
             }),
             listModeKeys: defaultReviewServingHumanListModeKeys,
             optionMode: 'human',
+            payloadIdentity,
             projectId,
             projectionIdentity: manifest.projectionIdentity,
             reviewConfigHash: requireReviewConfigHash(snapshot),
@@ -5468,6 +5473,8 @@ const refreshSummaryFilterOptionsForProjections = async (
     await matchingSnapshots.reduce<Promise<void>>(async (previousSnapshot, snapshot) => {
       await previousSnapshot
       const searchIdentity = getSnapshotComponentState(snapshot, 'search')?.projectionIdentity ?? ''
+      const displayIdentity = requireSnapshotComponentIdentity(snapshot, 'display')
+      const payloadIdentity = requireSnapshotComponentIdentity(snapshot, 'payload')
 
       await projectReviewServingFilterOptions(
         {
@@ -5476,6 +5483,7 @@ const refreshSummaryFilterOptionsForProjections = async (
           claims: [],
           definitionVersion: manifest.definitionVersion,
           deleteExisting: options.deleteExisting,
+          displayIdentity,
           filterOptionIdentity: getReviewServingFilterOptionIdentity({
             filterKeys: defaultReviewFilterOptionKeys,
             listModeKeys: reviewServingListModes,
@@ -5484,6 +5492,7 @@ const refreshSummaryFilterOptionsForProjections = async (
           }),
           listModeKeys: reviewServingListModes,
           optionMode: 'review',
+          payloadIdentity,
           projectId: row.projectId,
           projectionIdentity: row.projectionIdentity,
           reviewConfigHash: requireReviewConfigHash(snapshot),
@@ -5499,6 +5508,7 @@ const refreshSummaryFilterOptionsForProjections = async (
           claims: [],
           definitionVersion: manifest.definitionVersion,
           deleteExisting: options.deleteExisting,
+          displayIdentity,
           filterOptionIdentity: getReviewServingFilterOptionIdentity({
             filterKeys: defaultHumanFilterOptionKeys,
             listModeKeys: defaultReviewServingHumanListModeKeys,
@@ -5507,6 +5517,7 @@ const refreshSummaryFilterOptionsForProjections = async (
           }),
           listModeKeys: defaultReviewServingHumanListModeKeys,
           optionMode: 'human',
+          payloadIdentity,
           projectId: row.projectId,
           projectionIdentity: row.projectionIdentity,
           reviewConfigHash: requireReviewConfigHash(snapshot),
