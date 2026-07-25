@@ -325,8 +325,6 @@ CREATE TABLE IF NOT EXISTS app.review_selected_article_import_v4 (
   article_title VARCHAR,
   journal_title VARCHAR,
   external_id VARCHAR,
-  duplicate_flag BOOLEAN,
-  conflict_flag BOOLEAN,
   tombstone BOOLEAN NOT NULL DEFAULT FALSE,
   selected_import_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   PRIMARY KEY(project_id, project_scope_identity, selected_import_snapshot_id, article_id)

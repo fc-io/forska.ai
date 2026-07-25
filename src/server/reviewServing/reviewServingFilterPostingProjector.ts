@@ -259,8 +259,8 @@ const getFullRebuildPostingContributionRowsStatement = (
             selected.import_route_id,
             selected.selected_rank_key,
             selected_hot.publication_year AS publication_year,
-            COALESCE(selected_hot.duplicate_flag, selected.duplicate_flag, FALSE) AS duplicate_flag,
-            COALESCE(selected_hot.conflict_flag, selected.conflict_flag, FALSE) AS conflict_flag,
+            COALESCE(selected_hot.duplicate_flag, FALSE) AS duplicate_flag,
+            COALESCE(selected_hot.conflict_flag, FALSE) AS conflict_flag,
             scoped.scope_tombstone AS tombstone
           FROM scoped_article scoped
           LEFT JOIN app.review_selected_article_import_v4 selected

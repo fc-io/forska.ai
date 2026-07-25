@@ -1,6 +1,6 @@
-DROP TABLE IF EXISTS app.review_selected_article_import_v4_repair;
+DROP TABLE IF EXISTS app.review_selected_article_import_v4_flag_repair;
 
-CREATE TABLE app.review_selected_article_import_v4_repair (
+CREATE TABLE app.review_selected_article_import_v4_flag_repair (
   project_id VARCHAR NOT NULL,
   project_scope_identity VARCHAR NOT NULL,
   selected_import_snapshot_id VARCHAR NOT NULL,
@@ -13,7 +13,7 @@ CREATE TABLE app.review_selected_article_import_v4_repair (
   selected_import_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
 );
 
-INSERT INTO app.review_selected_article_import_v4_repair
+INSERT INTO app.review_selected_article_import_v4_flag_repair
 SELECT
   project_id,
   project_scope_identity,
@@ -29,7 +29,7 @@ FROM app.review_selected_article_import_v4;
 
 DROP TABLE app.review_selected_article_import_v4;
 
-ALTER TABLE app.review_selected_article_import_v4_repair RENAME TO review_selected_article_import_v4;
+ALTER TABLE app.review_selected_article_import_v4_flag_repair RENAME TO review_selected_article_import_v4;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_review_selected_article_import_v4_repaired_pk
 ON app.review_selected_article_import_v4(project_id, project_scope_identity, selected_import_snapshot_id, article_id);

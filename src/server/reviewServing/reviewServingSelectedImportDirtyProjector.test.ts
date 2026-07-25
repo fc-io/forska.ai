@@ -92,6 +92,13 @@ const expectSelectedImportBaseInsertOmitsDisplayCopyColumns = (statement: string
   expect(insertTargetSql).not.toContain('external_id')
 }
 
+const expectSelectedImportBaseInsertOmitsSelectedBaseFlagColumns = (statement: string) => {
+  const insertTargetSql = getInsertTargetSql(statement)
+
+  expect(insertTargetSql).not.toContain('duplicate_flag')
+  expect(insertTargetSql).not.toContain('conflict_flag')
+}
+
 test('selected-import dirty routine updates only claimed articles', async () => {
   const {database, statements} = createSelectedImportDirtyDatabase({
     dirtyRows: [
@@ -144,6 +151,7 @@ test('selected-import dirty routine updates only claimed articles', async () => 
   expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
   expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
   expectSelectedImportBaseInsertOmitsDisplayCopyColumns(baseInsertStatement ?? '')
+  expectSelectedImportBaseInsertOmitsSelectedBaseFlagColumns(baseInsertStatement ?? '')
   expect(joined).toContain('source_record_key')
   expect(joined).toContain('changed_raw(article_id, import_route_id, selected_rank_key')
   expect(joined).toContain('PARTITION BY raw.article_id')

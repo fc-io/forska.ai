@@ -507,12 +507,10 @@ test('selected-import filter postings prefer hot fields for payload filters whil
   expect(selectStatement).toContain('AND NOT selected_hot.tombstone')
   expect(selectStatement).toContain('selected_hot.publication_year AS publication_year')
   expect(selectStatement).not.toContain('COALESCE(selected_hot.publication_year, selected.publication_year)')
-  expect(selectStatement).toContain(
-    'COALESCE(selected_hot.duplicate_flag, selected.duplicate_flag, FALSE) AS duplicate_flag',
-  )
-  expect(selectStatement).toContain(
-    'COALESCE(selected_hot.conflict_flag, selected.conflict_flag, FALSE) AS conflict_flag',
-  )
+  expect(selectStatement).toContain('COALESCE(selected_hot.duplicate_flag, FALSE) AS duplicate_flag')
+  expect(selectStatement).toContain('COALESCE(selected_hot.conflict_flag, FALSE) AS conflict_flag')
+  expect(selectStatement).not.toContain('COALESCE(selected_hot.duplicate_flag, selected.duplicate_flag')
+  expect(selectStatement).not.toContain('COALESCE(selected_hot.conflict_flag, selected.conflict_flag')
   expect(selectStatement).not.toContain('mart.review_selected_import_patch_v4')
   expect(selectStatement).not.toContain('selected_patch')
 })

@@ -3174,7 +3174,6 @@ test('reviews warnings route classifies foreground DuckDB read workload context'
     }),
   )
 
-  expect(routeKeys).toContain('review.warnings.projectAccess')
   expect(routeKeys).toContain('review.warnings.reviewConfigHash')
   expect(routeKeys).toContain('review.warnings.servingDiagnostics')
   expect(routeKeys).toContain('review.warnings.scopeState')

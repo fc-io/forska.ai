@@ -316,11 +316,11 @@ const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, opti
       END AS publicationYear,
       CASE
         WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-        ELSE COALESCE(selected_hot.duplicate_flag, selected_base.duplicate_flag)
+        ELSE COALESCE(selected_hot.duplicate_flag, FALSE)
       END AS duplicateFlag,
       CASE
         WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
-        ELSE COALESCE(selected_hot.conflict_flag, selected_base.conflict_flag)
+        ELSE COALESCE(selected_hot.conflict_flag, FALSE)
       END AS conflictFlag
     FROM mart.project_scope_article scope
     INNER JOIN app."article" article

@@ -738,8 +738,6 @@ const getSelectedImportBaseRecord = (
     table: 'app.review_selected_article_import_v4',
     values: {
       article_id: row.articleId,
-      conflict_flag: tombstone ? false : (row.conflictFlag ?? false),
-      duplicate_flag: tombstone ? false : (row.duplicateFlag ?? false),
       import_route_id: tombstone ? null : row.importRouteId,
       project_id: input.projectId,
       project_scope_identity: input.projectScopeIdentity,
