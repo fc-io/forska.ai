@@ -374,7 +374,6 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
       patch_watermark,
       project_id,
       review_config_hash,
-      serving_updated_at,
       snapshot_id,
       sort_key
     )
@@ -398,7 +397,6 @@ const getInsertDisplayBaseRowsStatement = (input: ProjectReviewServingDisplayBas
       0 AS patch_watermark,
       ${getSqlLiteral(input.projectId)} AS project_id,
       ${getSqlLiteral(input.reviewConfigHash)} AS review_config_hash,
-      current_timestamp AS serving_updated_at,
       ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
       display_base.sortKey AS sort_key
     FROM display_base
@@ -686,8 +684,7 @@ const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplay
         SET
           article_created_at = ${getSqlLiteral(row.articleCreatedAt)},
           activity_sort_at = ${getSqlLiteral(row.activitySortAt)},
-          sort_key = ${getSqlLiteral(row.sortKey)},
-          serving_updated_at = current_timestamp
+          sort_key = ${getSqlLiteral(row.sortKey)}
         WHERE ${rowPredicate}`
 }
 

@@ -99,6 +99,7 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
   expect(sql).toContain('article.full_text_pdf AS full_text_pdf')
   expect(sql).toContain('article.full_text_conversion_status AS full_text_conversion_status')
   expect(sql).toContain('selected_import.import_route_id AS selected_import_route_id')
+  expect(sql).not.toContain('serving_updated_at')
   expect(sql).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_import')
   expect(sql).toContain('selected_import.project_id = $projectId')
   expect(sql).toContain('selected_import.project_id = mart.review_article_serving_v4.project_id')
@@ -114,6 +115,26 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
   expect(sql).toContain(
     "WHERE mart.review_article_serving_v4.project_id = $projectId AND review_config_hash = $reviewConfigHash AND mart.review_article_serving_v4.snapshot_id = $snapshotId AND list_mode_key = 'llm'",
   )
+})
+
+test('article serving read and projector SQL do not reference serving updated-at', () => {
+  const retiredColumn = 'serving_' + 'updated_at'
+  const guardedFiles = [
+    'reviewServingSql.ts',
+    'reviewServingDisplayPayloadProjector.ts',
+    'reviewServingSelectedImportProjector.ts',
+    'reviewServingSelectedImportDirtyProjector.ts',
+    'reviewServingLlmStatusProjector.ts',
+    'reviewServingHumanStatusProjector.ts',
+  ]
+
+  expect(
+    guardedFiles.flatMap((fileName) => {
+      const source = readFileSync(join(reviewServingSourceRoot, fileName), 'utf8')
+
+      return source.includes(retiredColumn) ? [fileName] : []
+    }),
+  ).toEqual([])
 })
 
 test('buildReviewServingRowsSql uses article ordering and payload hydration for prompt preview', () => {

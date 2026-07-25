@@ -16,7 +16,6 @@ CREATE TABLE mart.review_article_serving_v4_repair (
   llm_judged_prompt_count INTEGER NOT NULL DEFAULT 0,
   enabled_prompt_count INTEGER NOT NULL DEFAULT 0,
   human_answered_prompt_count INTEGER NOT NULL DEFAULT 0,
-  serving_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   CHECK (base_generation >= 0),
   CHECK (patch_watermark >= 0),
   CHECK (llm_judged_prompt_count >= 0),
@@ -40,8 +39,7 @@ SELECT
   human_status_key,
   llm_judged_prompt_count,
   enabled_prompt_count,
-  human_answered_prompt_count,
-  serving_updated_at
+  human_answered_prompt_count
 FROM mart.review_article_serving_v4;
 
 DROP TABLE mart.review_article_serving_v4;

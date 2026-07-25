@@ -458,7 +458,6 @@ const selectedImportServingColumns = [
   'llm_judged_prompt_count',
   'enabled_prompt_count',
   'human_answered_prompt_count',
-  'serving_updated_at',
   'article_created_at',
 ].join(', ')
 
@@ -520,7 +519,6 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        COALESCE(serving.llm_judged_prompt_count, 0) AS llm_judged_prompt_count,
        COALESCE(serving.enabled_prompt_count, 0) AS enabled_prompt_count,
        COALESCE(serving.human_answered_prompt_count, 0) AS human_answered_prompt_count,
-       current_timestamp AS serving_updated_at,
        scoped.sort_key AS article_created_at
      FROM serving_template template
      INNER JOIN scoped_article scoped

@@ -70,6 +70,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0167_dropReviewArticleServingSelectedFlagCopies.sql',
   '../../db/duckdbMigrations/0168_dropReviewArticleServingSelectedImportRouteId.sql',
   '../../db/duckdbMigrations/0169_dropReviewPayloadSourceMetadata.sql',
+  '../../db/duckdbMigrations/0170_dropReviewArticleServingUpdatedAt.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -149,6 +150,8 @@ const reviewArticleServingSelectedImportRouteIdDropForwardMigrationSql =
   ]
 const reviewPayloadSourceMetadataDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0169_dropReviewPayloadSourceMetadata.sql']
+const reviewArticleServingUpdatedAtDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0170_dropReviewArticleServingUpdatedAt.sql']
 const reviewQueueServingIdentityDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0139_dropReviewQueueServingIdentity.sql']
 const reviewFilterPostingServingUpdatedAtDropForwardMigrationSql =
@@ -887,6 +890,7 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
     'duplicate_flag',
     'conflict_flag',
     'selected_import_route_id',
+    'serving_updated_at',
   ]
   expect(
     [...getTableColumns('mart.review_article_serving_v4')].filter((columnName) => {
@@ -955,6 +959,14 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
   expect(reviewArticleServingSelectedImportRouteIdDropForwardMigrationSql).not.toContain(
     'selected_import_route_id VARCHAR',
   )
+  expect(reviewArticleServingUpdatedAtDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_v4_updated_at_repair',
+  )
+  expect(reviewArticleServingUpdatedAtDropForwardMigrationSql).toContain('DROP TABLE mart.review_article_serving_v4;')
+  expect(reviewArticleServingUpdatedAtDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_serving_v4_updated_at_repair RENAME TO review_article_serving_v4;',
+  )
+  expect(reviewArticleServingUpdatedAtDropForwardMigrationSql).not.toContain('serving_updated_at')
   const articleServingFoundationSchemaSql = reviewServingFoundationSchemaSql.slice(
     reviewServingFoundationSchemaSql.indexOf('CREATE TABLE IF NOT EXISTS mart.review_article_serving_v4'),
     reviewServingFoundationSchemaSql.indexOf('CREATE TABLE IF NOT EXISTS mart.review_article_display_patch_v4'),
@@ -962,6 +974,7 @@ test('Phase 1 article serving schema drops duplicated display metadata', () => {
   expect(articleServingFoundationSchemaSql).not.toContain('duplicate_flag BOOLEAN')
   expect(articleServingFoundationSchemaSql).not.toContain('conflict_flag BOOLEAN')
   expect(articleServingFoundationSchemaSql).not.toContain('selected_import_route_id')
+  expect(articleServingFoundationSchemaSql).not.toContain('serving_updated_at')
   expect(reviewServingFoundationSchemaSql).not.toContain('idx_review_article_serving_v4_publication_year')
   expect(reviewArticleServingReviewProgressCopyDropForwardMigrationSql).not.toContain('review_opened')
   expect(reviewArticleServingReviewProgressCopyDropForwardMigrationSql).not.toContain('review_sections_completed')
