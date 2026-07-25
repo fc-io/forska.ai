@@ -250,6 +250,16 @@ const getArticleRangePredicate = (input: {chunkEndArticleId?: string | null; chu
       ${endPredicate}`
 }
 
+const getArticleRangeFilterCte = (ranges: readonly ProjectReviewServingPayloadInput[]) => {
+  return `article_range_filter(chunk_start_article_id, chunk_end_article_id) AS (
+        SELECT * FROM (VALUES ${ranges
+          .map((range) => {
+            return `(${getSqlLiteral(range.chunkStartArticleId)}, ${getSqlLiteral(range.chunkEndArticleId)})`
+          })
+          .join(', ')})
+      )`
+}
+
 const getDisplayBaseRowsSql = (input: ProjectReviewServingDisplayBaseInput, options: {orderBy?: boolean} = {}) => {
   const orderBy = options.orderBy === false ? '' : 'ORDER BY scope.article_id ASC'
   const selectedImportRouteIdSql = `CASE
@@ -533,11 +543,21 @@ const getDisplayPatchRows = async (
 
 const getPayloadRowsSql = (
   input: ProjectReviewServingPayloadInput,
-  options: {includeSelectedPatchOverlay?: boolean; orderBy?: boolean} = {},
+  options: {
+    includeSelectedPatchOverlay?: boolean
+    orderBy?: boolean
+    ranges?: readonly ProjectReviewServingPayloadInput[]
+  } = {},
 ) => {
   const articleIds = getClaimArticleIds(input.claims)
   const dirtyJoinSql =
     articleIds.length === 0 ? '' : 'INNER JOIN dirty_article dirty ON dirty.article_id = scope.article_id'
+  const rangeJoinSql =
+    options.ranges === undefined
+      ? ''
+      : `INNER JOIN article_range_filter range
+        ON scope.article_id >= range.chunk_start_article_id
+        AND scope.article_id <= range.chunk_end_article_id`
   const orderBy =
     options.orderBy === false ? '' : 'ORDER BY article.article_created_at ASC NULLS LAST, scope.article_id ASC'
   const selectedImportRouteIdSql = `CASE
@@ -573,6 +593,7 @@ const getPayloadRowsSql = (
       ) AS payloadBytes
     FROM mart.project_scope_article scope
     ${dirtyJoinSql}
+    ${rangeJoinSql}
     INNER JOIN app."article" article
       ON article.id = scope.article_id
     LEFT JOIN app.review_selected_article_import_v4 selected_base
@@ -586,7 +607,7 @@ const getPayloadRowsSql = (
       AND selected_source.quarantined_at IS NULL
     WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
       AND (scope.in_curated_scope OR scope.in_route_scope)
-      ${getArticleRangePredicate(input)}
+      ${options.ranges === undefined ? getArticleRangePredicate(input) : ''}
     ${orderBy}
   `
 }
@@ -621,7 +642,10 @@ const getPayloadRecord = (
   }
 }
 
-const getPayloadRebuildRowsStatements = (input: ProjectReviewServingPayloadInput) => {
+const getPayloadRebuildRowsStatements = (
+  input: ProjectReviewServingPayloadInput,
+  ranges?: readonly ProjectReviewServingPayloadInput[],
+) => {
   return [
     `
     INSERT INTO mart.review_article_serving_payload_v4 (
@@ -637,8 +661,13 @@ const getPayloadRebuildRowsStatements = (input: ProjectReviewServingPayloadInput
       snapshot_id,
       source_metadata
     )
-    WITH payload_source AS (
-      ${getPayloadRowsSql(input, {includeSelectedPatchOverlay: false, orderBy: false})}
+    WITH ${
+      ranges === undefined
+        ? 'payload_source AS'
+        : `${getArticleRangeFilterCte(ranges)},
+    payload_source AS`
+    } (
+      ${getPayloadRowsSql(input, {includeSelectedPatchOverlay: false, orderBy: false, ranges})}
     ),
     payload_rows AS (
       SELECT
@@ -675,6 +704,28 @@ const getPayloadRebuildRowsStatements = (input: ProjectReviewServingPayloadInput
     ON CONFLICT(project_id, display_identity, payload_identity, snapshot_id, article_id) DO NOTHING
   `,
   ]
+}
+
+const canUseSetBasedPayloadRangeInsert = (ranges: readonly ProjectReviewServingPayloadInput[]) => {
+  const [firstRange] = ranges
+
+  return (
+    firstRange !== undefined
+    && ranges.every((range) => {
+      return (
+        (range.claims === undefined || range.claims.length === 0)
+        && range.chunkEndArticleId !== null
+        && range.chunkEndArticleId !== undefined
+        && range.chunkStartArticleId !== null
+        && range.chunkStartArticleId !== undefined
+        && range.displayIdentity === firstRange.displayIdentity
+        && range.payloadIdentity === firstRange.payloadIdentity
+        && range.projectId === firstRange.projectId
+        && range.selectedImportSnapshotId === firstRange.selectedImportSnapshotId
+        && range.snapshotId === firstRange.snapshotId
+      )
+    })
+  )
 }
 
 const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplayPatchInput, row: DisplayPatchRow) => {
@@ -821,15 +872,15 @@ export const projectReviewServingPayloadRanges = async (
 ) => {
   const {measure, phaseTimings} = getTimedProjector()
   const writer = await measure('writerMs', async () => {
-    return writeReviewServingProjectorComponent(
-      {
-        component: 'payload',
-        statements: input.ranges.flatMap((range) => {
-          return getPayloadRebuildRowsStatements(range)
-        }),
-      },
-      database,
-    )
+    const [firstRange] = input.ranges
+    const statements =
+      firstRange !== undefined && canUseSetBasedPayloadRangeInsert(input.ranges)
+        ? getPayloadRebuildRowsStatements(firstRange, input.ranges)
+        : input.ranges.flatMap((range) => {
+            return getPayloadRebuildRowsStatements(range)
+          })
+
+    return writeReviewServingProjectorComponent({component: 'payload', statements}, database)
   })
 
   return withDiagnosticsJson(
