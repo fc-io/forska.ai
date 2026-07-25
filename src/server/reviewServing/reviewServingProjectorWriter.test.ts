@@ -219,14 +219,56 @@ test('title search rebuild ranges insert rows with conflict-ignore and no scoped
     statements.filter((statement) => {
       return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
     }),
-  ).toHaveLength(2)
+  ).toHaveLength(1)
   expect(statements.join('\n')).not.toContain('DELETE FROM mart.review_title_search_serving_v4')
   expect(statements.join('\n')).not.toContain('WHERE NOT EXISTS')
   expect(statements.join('\n')).toContain(
     'ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token, article_id) DO NOTHING',
   )
+  expect(statements.join('\n')).toContain("scope.article_id >= 'article-1' AND scope.article_id <= 'article-2'")
+  expect(statements.join('\n')).toContain("OR (scope.article_id >= 'article-3' AND scope.article_id <= 'article-4')")
   expect(statements.join('\n')).not.toContain("existing.project_id || ''")
   expect(statements.join('\n')).not.toContain("existing.token || ''")
+})
+
+test('title search rebuild ranges keep per-range inserts when source inputs are incompatible', async () => {
+  const {database, statements} = createWriterDatabase()
+  const baseRange = {
+    articleRangePredicateSql: "AND scope.article_id >= 'article-1' AND scope.article_id <= 'article-2'",
+    articleTitleSql: 'article.title',
+    projectId: 'project-1',
+    projectScopeIdentity: 'scope:identity-1',
+    searchIdentity: 'search:identity-1',
+    selectedImportJoinSql: '',
+    snapshotId: 'snapshot-1',
+    targetArticleRangePredicateSql: "AND search.article_id >= 'article-1' AND search.article_id <= 'article-2'",
+    titlePrefixLength: 64,
+  }
+
+  await writeReviewServingTitleSearchRebuildRanges(
+    {
+      ranges: [
+        baseRange,
+        {
+          ...baseRange,
+          articleRangePredicateSql: "AND scope.article_id >= 'article-3' AND scope.article_id <= 'article-4'",
+          articleTitleSql: 'COALESCE(article.title, article.abstract)',
+          targetArticleRangePredicateSql: "AND search.article_id >= 'article-3' AND search.article_id <= 'article-4'",
+        },
+      ],
+    },
+    database,
+  )
+
+  const insertStatements = statements.filter((statement) => {
+    return statement.includes('INSERT INTO mart.review_title_search_serving_v4')
+  })
+
+  expect(insertStatements).toHaveLength(2)
+  expect(insertStatements.join('\n')).toContain(
+    'ON CONFLICT(project_id, search_identity, project_scope_identity, snapshot_id, token, article_id) DO NOTHING',
+  )
+  expect(insertStatements.join('\n')).not.toContain("OR (scope.article_id >= 'article-3'")
 })
 
 test('projector writer updates rows, manifests, acknowledgements, watermarks, and promotion in one transaction', async () => {
