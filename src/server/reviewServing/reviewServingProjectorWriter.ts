@@ -740,6 +740,64 @@ const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServ
   ]
 }
 
+const getReviewServingTitleSearchRebuildRangeExpression = (predicateSql: string) => {
+  const trimmed = predicateSql.trim()
+
+  if (trimmed.length === 0) {
+    return 'TRUE'
+  }
+
+  if (trimmed.match(/^AND\b/i) === null) {
+    return null
+  }
+
+  return `(${trimmed.replace(/^AND\b/i, '').trim()})`
+}
+
+const getReviewServingTitleSearchRebuildCombinedRangeInput = (
+  ranges: readonly WriteReviewServingTitleSearchRebuildRowsInput[],
+) => {
+  const [firstRange] = ranges
+
+  if (firstRange === undefined) {
+    return null
+  }
+
+  const expressions = ranges.map((range) => {
+    return getReviewServingTitleSearchRebuildRangeExpression(range.articleRangePredicateSql)
+  })
+
+  if (
+    expressions.some((expression) => {
+      return expression === null
+    })
+  ) {
+    return null
+  }
+
+  const isCompatible = ranges.every((range) => {
+    return (
+      range.articleTitleSql === firstRange.articleTitleSql
+      && range.projectId === firstRange.projectId
+      && range.projectScopeIdentity === firstRange.projectScopeIdentity
+      && range.searchIdentity === firstRange.searchIdentity
+      && range.selectedImportJoinSql === firstRange.selectedImportJoinSql
+      && range.snapshotId === firstRange.snapshotId
+      && range.titlePrefixLength === firstRange.titlePrefixLength
+    )
+  })
+
+  if (!isCompatible) {
+    return null
+  }
+
+  return {
+    ...firstRange,
+    articleRangePredicateSql: `
+        AND (${expressions.join(' OR ')})`,
+  }
+}
+
 export const writeReviewServingTitleSearchRebuildRows = async (
   input: WriteReviewServingTitleSearchRebuildRowsInput,
   database: Pick<ReviewServingProjectorWriterDatabase, 'run'> = getAppDatabaseService(),
@@ -756,9 +814,13 @@ export const writeReviewServingTitleSearchRebuildRanges = async (
 ) => {
   const phaseTimings: Record<string, number> = {}
   const startedAtMs = Date.now()
-  const statements = input.ranges.flatMap((range) => {
-    return getReviewServingTitleSearchRebuildRowsStatements(range)
-  })
+  const combinedRangeInput = getReviewServingTitleSearchRebuildCombinedRangeInput(input.ranges)
+  const statements =
+    combinedRangeInput === null
+      ? input.ranges.flatMap((range) => {
+          return getReviewServingTitleSearchRebuildRowsStatements(range)
+        })
+      : getReviewServingTitleSearchRebuildRowsStatements(combinedRangeInput)
 
   await statements.reduce<Promise<void>>(async (previous, statement) => {
     await previous
