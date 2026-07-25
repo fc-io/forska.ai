@@ -250,7 +250,6 @@ const reviewServingArticleSelectColumns = [
   'full_text_fetched_at',
   'full_text_conversion_status',
   'selected_import_route_id',
-  'selected_rank_key',
   'publication_year',
   'duplicate_flag',
   'conflict_flag',

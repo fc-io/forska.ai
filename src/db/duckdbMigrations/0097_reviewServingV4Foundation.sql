@@ -514,7 +514,6 @@ CREATE TABLE IF NOT EXISTS mart.review_article_serving_v4 (
   full_text_fetched_at TIMESTAMPTZ,
   full_text_conversion_status VARCHAR,
   selected_import_route_id VARCHAR,
-  selected_rank_key VARCHAR,
   publication_year INTEGER,
   duplicate_flag BOOLEAN NOT NULL DEFAULT FALSE,
   conflict_flag BOOLEAN NOT NULL DEFAULT FALSE,

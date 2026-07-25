@@ -316,7 +316,6 @@ const selectedImportServingColumns = [
   'url',
   'full_text_pdf',
   'selected_import_route_id',
-  'selected_rank_key',
   'publication_year',
   'duplicate_flag',
   'conflict_flag',
@@ -668,7 +667,6 @@ const getApplySelectedImportServingStatements = (input: {
             COALESCE(changed.selected_source_url, article.url) AS url,
             serving.full_text_pdf,
             changed.import_route_id AS selected_import_route_id,
-            changed.selected_rank_key,
             changed.publication_year,
             changed.duplicate_flag,
             changed.conflict_flag,
@@ -711,7 +709,6 @@ const getApplySelectedImportServingStatements = (input: {
               OR serving.article_external_id IS DISTINCT FROM COALESCE(changed.external_id, article.article_id)
               OR serving.url IS DISTINCT FROM COALESCE(changed.selected_source_url, article.url)
               OR serving.selected_import_route_id IS DISTINCT FROM changed.import_route_id
-              OR serving.selected_rank_key IS DISTINCT FROM changed.selected_rank_key
               OR serving.journal_title IS DISTINCT FROM changed.journal_title
               OR serving.publication_year IS DISTINCT FROM changed.publication_year
               OR serving.duplicate_flag IS DISTINCT FROM changed.duplicate_flag
