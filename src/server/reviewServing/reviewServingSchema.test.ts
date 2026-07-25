@@ -48,6 +48,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0144_dropReviewProjectImportDeltaCursor.sql',
   '../../db/duckdbMigrations/0146_reviewServingPayloadDisplayFields.sql',
   '../../db/duckdbMigrations/0147_dropReviewFilterPostingStats.sql',
+  '../../db/duckdbMigrations/0148_backfillReviewPayloadDisplayFields.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -125,6 +126,8 @@ const reviewFilterPostingStatsDerivedColumnDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0129_dropReviewFilterPostingStatsDerivedColumns.sql']
 const reviewFilterPostingStatsDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0147_dropReviewFilterPostingStats.sql']
+const reviewPayloadDisplayFieldBackfillForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0148_backfillReviewPayloadDisplayFields.sql']
 const reviewFilterOptionPayloadJsonDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql']
 const reviewArticleServingSelectedRankCopyDropForwardMigrationSql =
@@ -638,6 +641,11 @@ test('Phase 1 payload serving schema carries active display hydration fields', (
     'ALTER TABLE mart.review_article_serving_payload_v4_display_repair RENAME TO review_article_serving_payload_v4;',
   )
   expect(reviewServingPayloadDisplayFieldsForwardMigrationSql).not.toContain('ADD COLUMN')
+  expect(reviewPayloadDisplayFieldBackfillForwardMigrationSql).toContain(
+    'UPDATE mart.review_article_serving_payload_v4 AS payload',
+  )
+  expect(reviewPayloadDisplayFieldBackfillForwardMigrationSql).toContain('FROM mart.review_article_serving_v4')
+  expect(reviewPayloadDisplayFieldBackfillForwardMigrationSql).toContain('payload.article_title IS NULL')
 })
 
 test('Phase 1 article serving schema preserves review table display metadata', () => {

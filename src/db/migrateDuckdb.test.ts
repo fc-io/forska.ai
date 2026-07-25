@@ -508,6 +508,17 @@ test('DuckDB migration rebuilds payload serving with display hydration columns',
   }
 })
 
+test('DuckDB migration backfills payload display fields from article serving copies', async () => {
+  const migrationSql = readFileSync(resolve(migrationsFolder, '0148_backfillReviewPayloadDisplayFields.sql'), 'utf8')
+
+  expect(migrationSql).toContain('UPDATE mart.review_article_serving_payload_v4 AS payload')
+  expect(migrationSql).toContain('FROM mart.review_article_serving_v4')
+  expect(migrationSql).toContain('article_title = COALESCE(payload.article_title, serving.article_title)')
+  expect(migrationSql).toContain('payload.article_title IS NULL')
+  expect(migrationSql).not.toContain('ALTER TABLE')
+  expect(migrationSql).not.toContain('DROP TABLE')
+})
+
 test('DuckDB migration drops retired manual PR122 chunk manifest artifact', async () => {
   const duckdbPath = `/tmp/forska-review-manual-pr122-chunk-manifest-drop-${Date.now()}.duckdb`
   const targetMigrationFile = '0145_dropManualPr122ChunkManifestArtifact.sql'

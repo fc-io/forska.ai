@@ -718,14 +718,27 @@ const getPayloadRebuildRowsStatements = (
     SELECT
       abstract_text,
       article_created_at,
+      article_external_id,
       article_id,
+      article_title,
+      article_updated_at,
+      arxiv_id,
+      biorxiv_id,
+      doi,
       display_identity,
+      full_text_conversion_status,
+      full_text_fetched_at,
+      full_text_pdf,
       full_text_preview,
+      journal_title,
+      medrxiv_id,
       payload_identity,
       payload_updated_at,
+      pmid,
       project_id,
       snapshot_id,
-      source_metadata
+      source_metadata,
+      url
     FROM payload_rows
     QUALIFY ROW_NUMBER() OVER (
       PARTITION BY project_id, display_identity, payload_identity, snapshot_id, article_id
