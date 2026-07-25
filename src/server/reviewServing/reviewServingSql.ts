@@ -313,9 +313,24 @@ const reviewServingJudgmentDetailListColumns = [
   'prompt_type',
   'prompt_criteria_disposition',
   'judgment_created_at',
+  'judgment_updated_at',
   'human_comment',
   'explanation',
   'quotes',
+  'chunking_strategy',
+  'confidence_original',
+  'snapshot_project_id',
+  'snapshot_project_model_name',
+  'model_name',
+  'model_provider',
+  'model_thinking',
+  'model_version',
+  'assessment_id',
+  'assessment_judgment_id',
+  'assessment_is_correct',
+  'assessment_comment',
+  'assessment_created_at',
+  'assessment_updated_at',
   'placeholder_kind',
   'detail_updated_at',
 ].map((column) => {
@@ -719,11 +734,7 @@ const getReviewServingRowsSqlSelect = (contract: ReviewServingReadContract) => {
   }
 
   if (contract.servingTable === reviewServingJudgmentDetailTable) {
-    const detailSelectColumns =
-      contract.key === 'review.detail.judgments' || contract.key === 'review.detail.humanJudgments'
-        ? [...reviewServingJudgmentDetailListColumns, `${reviewServingJudgmentDetailTable}.judgment_payload_json`]
-        : reviewServingJudgmentDetailListColumns
-    const selectColumns = detailSelectColumns.join(', ')
+    const selectColumns = reviewServingJudgmentDetailListColumns.join(', ')
 
     return contract.sort.fields.some((field) => {
       return field.includes(reviewServingListModePrioritySql)

@@ -3174,16 +3174,16 @@ const getJudgmentDetailPayloadReadinessReport = async (
       answeredOriginalNonNullRows: number | string
       currentProjectRows: number | string
       globalRowCount: number | string
-      judgmentPayloadNonNullRows: number | string
-      judgmentPayloadNullRows: number | string
+      detailScalarNonNullRows: number | string
+      detailScalarNullRows: number | string
     }>(
       runtime,
       `
         SELECT
           CAST(COUNT(*) AS BIGINT) AS globalRowCount,
           CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows,
-          CAST(COUNT(*) FILTER (WHERE judgment_payload_json IS NULL) AS BIGINT) AS judgmentPayloadNullRows,
-          CAST(COUNT(*) FILTER (WHERE judgment_payload_json IS NOT NULL) AS BIGINT) AS judgmentPayloadNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE judgment_model_id IS NULL AND judgment_updated_at IS NULL AND model_name IS NULL AND assessment_id IS NULL) AS BIGINT) AS detailScalarNullRows,
+          CAST(COUNT(*) FILTER (WHERE judgment_model_id IS NOT NULL OR judgment_updated_at IS NOT NULL OR model_name IS NOT NULL OR assessment_id IS NOT NULL) AS BIGINT) AS detailScalarNonNullRows,
           CAST(COUNT(*) FILTER (WHERE answered_original IS NOT NULL) AS BIGINT) AS answeredOriginalNonNullRows,
           CAST(COUNT(*) FILTER (WHERE answered_original_as_array IS NOT NULL) AS BIGINT) AS answeredArrayNonNullRows
         FROM ${table}
@@ -3193,7 +3193,7 @@ const getJudgmentDetailPayloadReadinessReport = async (
       answeredArrayNonNullRows: number | string
       answeredOriginalNonNullRows: number | string
       judgmentIdNonNullRows: number | string
-      judgmentPayloadNonNullRows: number | string
+      detailScalarNonNullRows: number | string
       payloadModelIdNonNullRows: number | string
       payloadKind: string | null
       placeholderRows: number | string
@@ -3204,12 +3204,10 @@ const getJudgmentDetailPayloadReadinessReport = async (
         SELECT
           COALESCE(payload_kind, 'NULL') AS payloadKind,
           CAST(COUNT(*) AS BIGINT) AS rows,
-          CAST(COUNT(*) FILTER (WHERE judgment_payload_json IS NOT NULL) AS BIGINT) AS judgmentPayloadNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE judgment_model_id IS NOT NULL OR judgment_updated_at IS NOT NULL OR model_name IS NOT NULL OR assessment_id IS NOT NULL) AS BIGINT) AS detailScalarNonNullRows,
           CAST(COUNT(*) FILTER (WHERE judgment_id IS NOT NULL) AS BIGINT) AS judgmentIdNonNullRows,
           CAST(COUNT(*) FILTER (WHERE placeholder_kind IS NOT NULL) AS BIGINT) AS placeholderRows,
-          CAST(COUNT(*) FILTER (
-            WHERE json_extract_string(judgment_payload_json, '$.model.id') IS NOT NULL
-          ) AS BIGINT) AS payloadModelIdNonNullRows,
+          CAST(COUNT(*) FILTER (WHERE judgment_model_id IS NOT NULL) AS BIGINT) AS payloadModelIdNonNullRows,
           CAST(COUNT(*) FILTER (WHERE answered_original IS NOT NULL) AS BIGINT) AS answeredOriginalNonNullRows,
           CAST(COUNT(*) FILTER (WHERE answered_original_as_array IS NOT NULL) AS BIGINT) AS answeredArrayNonNullRows
         FROM ${table}
@@ -3242,7 +3240,7 @@ const getJudgmentDetailPayloadReadinessReport = async (
       `,
     )
     const rowsByListMode = await runReadonlyQuery<{
-      judgmentPayloadNonNullRows: number | string
+      detailScalarNonNullRows: number | string
       listModeKey: string | null
       rows: number | string
     }>(
@@ -3251,68 +3249,12 @@ const getJudgmentDetailPayloadReadinessReport = async (
         SELECT
           COALESCE(list_mode_key, 'NULL') AS listModeKey,
           CAST(COUNT(*) AS BIGINT) AS rows,
-          CAST(COUNT(*) FILTER (WHERE judgment_payload_json IS NOT NULL) AS BIGINT) AS judgmentPayloadNonNullRows
+          CAST(COUNT(*) FILTER (WHERE judgment_model_id IS NOT NULL OR judgment_updated_at IS NOT NULL OR model_name IS NOT NULL OR assessment_id IS NOT NULL) AS BIGINT) AS detailScalarNonNullRows
         FROM ${table}
         GROUP BY list_mode_key
         HAVING COUNT(*) > 0
         ORDER BY COUNT(*) DESC, list_mode_key
         LIMIT ${Math.max(1, limit)}
-      `,
-    )
-    const rowsByPayloadTopLevelKey = await runReadonlyQuery<{
-      currentProjectRows: number | string
-      globalRows: number | string
-      key: string | null
-      payloadKind: string | null
-    }>(
-      runtime,
-      `
-        WITH key_rows AS (
-          SELECT
-            detail.project_id,
-            COALESCE(detail.payload_kind, 'NULL') AS payloadKind,
-            payload_key.key AS key
-          FROM ${table} detail, json_each(detail.judgment_payload_json) payload_key
-          WHERE detail.judgment_payload_json IS NOT NULL
-        ),
-        aggregate_rows AS (
-          SELECT
-            'ALL' AS payloadKind,
-            key,
-            CAST(COUNT(*) AS BIGINT) AS globalRows,
-            CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows
-          FROM key_rows
-          GROUP BY key
-          UNION ALL
-          SELECT
-            payloadKind,
-            key,
-            CAST(COUNT(*) AS BIGINT) AS globalRows,
-            CAST(COUNT(*) FILTER (WHERE project_id = ${getSqlLiteral(projectId)}) AS BIGINT) AS currentProjectRows
-          FROM key_rows
-          GROUP BY payloadKind, key
-        ),
-        ranked_rows AS (
-          SELECT
-            payloadKind,
-            key,
-            globalRows,
-            currentProjectRows,
-            ROW_NUMBER() OVER (PARTITION BY payloadKind ORDER BY globalRows DESC, key) AS payloadKindRank
-          FROM aggregate_rows
-        )
-        SELECT
-          payloadKind,
-          key,
-          globalRows,
-          currentProjectRows
-        FROM ranked_rows
-        WHERE payloadKindRank <= ${Math.max(1, limit)}
-        ORDER BY
-          CASE WHEN payloadKind = 'ALL' THEN 0 ELSE 1 END,
-          payloadKind,
-          globalRows DESC,
-          key
       `,
     )
     const row = totals[0]
@@ -3323,12 +3265,12 @@ const getJudgmentDetailPayloadReadinessReport = async (
       currentProjectRows: getNumberOrNull(row?.currentProjectRows),
       error: null,
       globalRowCount: getNumberOrNull(row?.globalRowCount),
-      judgmentPayloadNonNullRows: getNumberOrNull(row?.judgmentPayloadNonNullRows),
-      judgmentPayloadNullRows: getNumberOrNull(row?.judgmentPayloadNullRows),
-      note: 'Read-only global/current-project evidence for judgment detail payload storage. Detail, list hydration, export, filters, and summaries still consume these columns; this section does not authorize payload or answer-column slimming.',
+      judgmentPayloadNonNullRows: getNumberOrNull(row?.detailScalarNonNullRows),
+      judgmentPayloadNullRows: getNumberOrNull(row?.detailScalarNullRows),
+      note: 'Read-only global/current-project evidence for judgment detail scalar storage. This section tracks the post-JSON detail hydration shape and does not authorize answer-column slimming.',
       rowsByListMode: rowsByListMode.map((listModeRow) => {
         return {
-          judgmentPayloadNonNullRows: Number(listModeRow.judgmentPayloadNonNullRows ?? 0),
+          judgmentPayloadNonNullRows: Number(listModeRow.detailScalarNonNullRows ?? 0),
           listModeKey: String(listModeRow.listModeKey ?? 'NULL'),
           rows: Number(listModeRow.rows ?? 0),
         }
@@ -3338,21 +3280,14 @@ const getJudgmentDetailPayloadReadinessReport = async (
           answeredArrayNonNullRows: Number(payloadKindRow.answeredArrayNonNullRows ?? 0),
           answeredOriginalNonNullRows: Number(payloadKindRow.answeredOriginalNonNullRows ?? 0),
           judgmentIdNonNullRows: Number(payloadKindRow.judgmentIdNonNullRows ?? 0),
-          judgmentPayloadNonNullRows: Number(payloadKindRow.judgmentPayloadNonNullRows ?? 0),
+          judgmentPayloadNonNullRows: Number(payloadKindRow.detailScalarNonNullRows ?? 0),
           payloadModelIdNonNullRows: Number(payloadKindRow.payloadModelIdNonNullRows ?? 0),
           payloadKind: String(payloadKindRow.payloadKind ?? 'NULL'),
           placeholderRows: Number(payloadKindRow.placeholderRows ?? 0),
           rows: Number(payloadKindRow.rows ?? 0),
         }
       }),
-      rowsByPayloadTopLevelKey: rowsByPayloadTopLevelKey.map((keyRow) => {
-        return {
-          currentProjectRows: Number(keyRow.currentProjectRows ?? 0),
-          globalRows: Number(keyRow.globalRows ?? 0),
-          key: String(keyRow.key ?? 'NULL'),
-          payloadKind: String(keyRow.payloadKind ?? 'NULL'),
-        }
-      }),
+      rowsByPayloadTopLevelKey: [],
       sourceJudgmentEvidence: {
         currentProjectSourceJudgmentRows: getNumberOrNull(sourceJudgmentRows[0]?.currentProjectSourceJudgmentRows),
         note: 'Current-project source judgment row count is context for payload scalarization only. The old serving mart model identifier column has already been dropped, so this probe intentionally avoids stale model readiness checks.',
@@ -4250,9 +4185,9 @@ const renderMarkdown = (report: EvidenceReport) => {
     '',
     `Current-project rows: ${formatValue(report.judgmentDetailPayloadReadiness.currentProjectRows)}`,
     '',
-    `judgment_payload_json null rows: ${formatValue(report.judgmentDetailPayloadReadiness.judgmentPayloadNullRows)}`,
+    `detail scalar null rows: ${formatValue(report.judgmentDetailPayloadReadiness.judgmentPayloadNullRows)}`,
     '',
-    `judgment_payload_json non-null rows: ${formatValue(report.judgmentDetailPayloadReadiness.judgmentPayloadNonNullRows)}`,
+    `detail scalar non-null rows: ${formatValue(report.judgmentDetailPayloadReadiness.judgmentPayloadNonNullRows)}`,
     '',
     `answered_original non-null rows: ${formatValue(report.judgmentDetailPayloadReadiness.answeredOriginalNonNullRows)}`,
     '',
@@ -4267,10 +4202,10 @@ const renderMarkdown = (report: EvidenceReport) => {
           [
             'Payload kind',
             'Rows',
-            'Payload non-nulls',
+            'Detail scalar non-nulls',
             'Judgment ID non-nulls',
             'Placeholder rows',
-            'Payload model.id non-nulls',
+            'judgment_model_id non-nulls',
             'answered_original non-nulls',
             'answered_original_as_array non-nulls',
           ],
@@ -4283,7 +4218,7 @@ const renderMarkdown = (report: EvidenceReport) => {
     `Current-project source judgment rows: ${formatValue(report.judgmentDetailPayloadReadiness.sourceJudgmentEvidence.currentProjectSourceJudgmentRows)}`,
     '',
     judgmentDetailListModeRows.length > 0
-      ? formatMarkdownTable(['List mode', 'Rows', 'Payload non-nulls'], judgmentDetailListModeRows)
+      ? formatMarkdownTable(['List mode', 'Rows', 'Detail scalar non-nulls'], judgmentDetailListModeRows)
       : '_No judgment detail list-mode rows were collected._',
     '',
     judgmentDetailPayloadTopLevelKeyRows.length > 0
@@ -4291,7 +4226,7 @@ const renderMarkdown = (report: EvidenceReport) => {
           ['Payload kind', 'Top-level payload JSON key', 'Global rows with key', 'Current-project rows with key'],
           judgmentDetailPayloadTopLevelKeyRows,
         )
-      : '_No judgment payload top-level JSON key rows were collected._',
+      : '_Judgment payload JSON has been scalarized; no top-level JSON key rows are collected._',
     '',
     '## Summary Contribution Serving Readiness',
     '',

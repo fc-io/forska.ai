@@ -2623,6 +2623,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
     '0137_reviewServingJudgmentDetailHumanScalars.sql',
     '0138_dropReviewJudgmentDetailModelId.sql',
     '0158_reviewJudgmentDetailListScalars.sql',
+    '0159_reviewJudgmentDetailDetailHydrationScalars.sql',
   ])
   const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
     return !targetMigrationFiles.has(fileName)
@@ -2734,7 +2735,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
               'model-a',
               'include',
               ['include'],
-              '{"answer":"include","explanation":"Because A","model":{"id":"model-a"},"prompt":{"criteriaDisposition":"include","originalText":"Prompt A text","promptHeading":"Prompt A","type":"yes_no"},"quotes":["Quote A"]}',
+              '{"answer":"include","assessments":[{"assessmentComment":"Checked","assessmentIsCorrect":true,"createdAt":"2026-06-28T10:01:00.000Z","id":"assessment-a","judgmentId":"judgment-a","updatedAt":"2026-06-28T10:02:00.000Z"}],"chunkingStrategy":"semantic","confidenceOriginal":82,"explanation":"Because A","model":{"id":"model-a","name":"Model A","provider":"openai","thinking":"high","version":"v1"},"prompt":{"criteriaDisposition":"include","originalText":"Prompt A text","promptHeading":"Prompt A","type":"yes_no"},"quotes":["Quote A"],"snapshotProjectId":"project-source","snapshotProjectModelName":"Snapshot Model","updatedAt":"2026-06-28T10:00:00.000Z"}',
               NULL
             ),
             (
@@ -2803,7 +2804,7 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
           "SELECT admission_state AS admissionState, last_error AS lastError, retry_after AS retryAfter, retry_count AS retryCount, status FROM app.review_rebuild_chunk_manifest ORDER BY chunk_id"
         )
         const rows = await database.queryJson(
-          "SELECT project_id AS projectId, payload_kind AS payloadKind, judgment_id AS judgmentId, judgment_model_id AS judgmentModelId, judgment_created_at AS judgmentCreatedAt, human_comment AS humanComment, explanation, quotes, prompt_original_text AS promptOriginalText, prompt_heading AS promptHeading, CAST(prompt_criteria_disposition AS VARCHAR) AS promptCriteriaDisposition, judgment_payload_json AS judgmentPayloadJson, placeholder_kind AS placeholderKind FROM mart.review_article_judgment_detail_serving_v4 ORDER BY article_id"
+          "SELECT project_id AS projectId, payload_kind AS payloadKind, judgment_id AS judgmentId, judgment_model_id AS judgmentModelId, judgment_created_at AS judgmentCreatedAt, judgment_updated_at AS judgmentUpdatedAt, human_comment AS humanComment, explanation, quotes, chunking_strategy AS chunkingStrategy, confidence_original AS confidenceOriginal, snapshot_project_id AS snapshotProjectId, snapshot_project_model_name AS snapshotProjectModelName, model_name AS modelName, model_provider AS modelProvider, model_thinking AS modelThinking, model_version AS modelVersion, assessment_id AS assessmentId, assessment_judgment_id AS assessmentJudgmentId, assessment_is_correct AS assessmentIsCorrect, assessment_comment AS assessmentComment, assessment_created_at AS assessmentCreatedAt, assessment_updated_at AS assessmentUpdatedAt, prompt_original_text AS promptOriginalText, prompt_heading AS promptHeading, CAST(prompt_criteria_disposition AS VARCHAR) AS promptCriteriaDisposition, placeholder_kind AS placeholderKind FROM mart.review_article_judgment_detail_serving_v4 ORDER BY article_id"
         )
         const requestRows = await database.queryJson(
           "SELECT admission_state AS admissionState, failed_at AS failedAt, last_error AS lastError, retry_after AS retryAfter, status FROM app.review_rebuild_request ORDER BY request_id"
@@ -2884,17 +2885,31 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
       rows: Array<{
         judgmentId: string | null
         judgmentModelId: string | null
-        judgmentPayloadJson: unknown
+        judgmentUpdatedAt: string | null
+        assessmentComment: string | null
+        assessmentCreatedAt: string | null
+        assessmentId: string | null
+        assessmentIsCorrect: boolean | null
+        assessmentJudgmentId: string | null
+        assessmentUpdatedAt: string | null
+        chunkingStrategy: string | null
+        confidenceOriginal: number | null
         explanation: string | null
         quotes: unknown
         humanComment: string | null
         judgmentCreatedAt: string | null
+        modelName: string | null
+        modelProvider: string | null
+        modelThinking: string | null
+        modelVersion: string | null
         payloadKind: string
         placeholderKind: string | null
         projectId: string
         promptCriteriaDisposition: string | null
         promptHeading: string | null
         promptOriginalText: string | null
+        snapshotProjectId: string | null
+        snapshotProjectModelName: string | null
       }>
       uniqueIndexRows: Array<{indexName: string; sql: string}>
     }
@@ -2928,43 +2943,95 @@ test('DuckDB migrations repair legacy review serving judgment detail payload-kin
       'prompt_type',
       'prompt_criteria_disposition',
       'judgment_created_at',
+      'judgment_updated_at',
       'human_comment',
       'explanation',
       'quotes',
-      'judgment_payload_json',
+      'chunking_strategy',
+      'confidence_original',
+      'snapshot_project_id',
+      'snapshot_project_model_name',
+      'model_name',
+      'model_provider',
+      'model_thinking',
+      'model_version',
+      'assessment_id',
+      'assessment_judgment_id',
+      'assessment_is_correct',
+      'assessment_comment',
+      'assessment_created_at',
+      'assessment_updated_at',
       'placeholder_kind',
       'detail_updated_at',
     ])
-    expect(parsed.rows).toEqual([
+    const normalizedRows = parsed.rows.map((row) => {
+      return {
+        ...row,
+        assessmentCreatedAt: row.assessmentCreatedAt === null ? null : typeof row.assessmentCreatedAt,
+        assessmentUpdatedAt: row.assessmentUpdatedAt === null ? null : typeof row.assessmentUpdatedAt,
+        judgmentUpdatedAt: row.judgmentUpdatedAt === null ? null : typeof row.judgmentUpdatedAt,
+        quotes: row.quotes === null ? null : typeof row.quotes === 'string' ? row.quotes : JSON.stringify(row.quotes),
+      }
+    })
+
+    expect(normalizedRows).toEqual([
       {
         judgmentId: 'judgment-a',
         judgmentModelId: 'model-a',
         judgmentCreatedAt: null,
+        judgmentUpdatedAt: 'string',
+        assessmentComment: 'Checked',
+        assessmentCreatedAt: 'string',
+        assessmentId: 'assessment-a',
+        assessmentIsCorrect: true,
+        assessmentJudgmentId: 'judgment-a',
+        assessmentUpdatedAt: 'string',
+        chunkingStrategy: 'semantic',
+        confidenceOriginal: 82,
         explanation: 'Because A',
-        quotes: expect.anything() as unknown,
-        judgmentPayloadJson: expect.anything() as unknown,
+        quotes: '["Quote A"]',
         humanComment: null,
+        modelName: 'Model A',
+        modelProvider: 'openai',
+        modelThinking: 'high',
+        modelVersion: 'v1',
         payloadKind: 'llm',
         placeholderKind: null,
         projectId: 'project-a',
         promptCriteriaDisposition: 'include',
         promptHeading: 'Prompt A',
         promptOriginalText: 'Prompt A text',
+        snapshotProjectId: 'project-source',
+        snapshotProjectModelName: 'Snapshot Model',
       },
       {
         judgmentId: null,
         judgmentModelId: null,
         judgmentCreatedAt: null,
+        judgmentUpdatedAt: 'string',
+        assessmentComment: null,
+        assessmentCreatedAt: null,
+        assessmentId: null,
+        assessmentIsCorrect: null,
+        assessmentJudgmentId: null,
+        assessmentUpdatedAt: null,
+        chunkingStrategy: null,
+        confidenceOriginal: null,
         explanation: null,
         quotes: null,
-        judgmentPayloadJson: null,
         humanComment: null,
+        modelName: null,
+        modelProvider: null,
+        modelThinking: null,
+        modelVersion: null,
         payloadKind: 'llm',
         placeholderKind: 'llm.unanswered',
         projectId: 'project-a',
         promptCriteriaDisposition: 'exclude',
         promptHeading: 'Prompt B',
         promptOriginalText: 'Prompt B text',
+        snapshotProjectId: null,
+        snapshotProjectModelName: null,
       },
     ])
     expect(parsed.uniqueIndexRows).toEqual([

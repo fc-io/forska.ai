@@ -1460,7 +1460,26 @@ const getJudgmentInputContentRebuildChunkOutputChecksum = async (
         COALESCE(CAST(placeholder_kind AS VARCHAR), '') || ':' ||
         COALESCE(CAST(answered_original AS VARCHAR), '') || ':' ||
         COALESCE(CAST(answered_original_as_array AS VARCHAR), '') || ':' ||
-        COALESCE(CAST(judgment_payload_json AS VARCHAR), ''),
+        COALESCE(CAST(judgment_model_id AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(is_answered AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(judgment_created_at AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(judgment_updated_at AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(confidence_original AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(chunking_strategy AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(snapshot_project_id AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(snapshot_project_model_name AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(model_name AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(model_provider AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(model_thinking AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(model_version AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(assessment_id AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(assessment_judgment_id AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(assessment_is_correct AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(assessment_comment AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(assessment_created_at AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(assessment_updated_at AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(explanation AS VARCHAR), '') || ':' ||
+        COALESCE(CAST(quotes AS VARCHAR), ''),
         '|' ORDER BY snapshot_id, review_config_hash, list_mode_key, payload_kind, article_id, prompt_id
       ), '')) AS actualChecksum
     FROM mart.review_article_judgment_detail_serving_v4 detail
