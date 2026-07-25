@@ -49,6 +49,8 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0146_reviewServingPayloadDisplayFields.sql',
   '../../db/duckdbMigrations/0147_dropReviewFilterPostingStats.sql',
   '../../db/duckdbMigrations/0148_backfillReviewPayloadDisplayFields.sql',
+  '../../db/duckdbMigrations/0149_dropReviewPayloadDisplayCopyColumns.sql',
+  '../../db/duckdbMigrations/0150_dropReviewServingProjectorWatermarkLifecyclePlaceholders.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -128,6 +130,12 @@ const reviewFilterPostingStatsDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0147_dropReviewFilterPostingStats.sql']
 const reviewPayloadDisplayFieldBackfillForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0148_backfillReviewPayloadDisplayFields.sql']
+const reviewPayloadDisplayCopyColumnDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0149_dropReviewPayloadDisplayCopyColumns.sql']
+const reviewServingProjectorWatermarkLifecyclePlaceholderDropForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath[
+    '../../db/duckdbMigrations/0150_dropReviewServingProjectorWatermarkLifecyclePlaceholders.sql'
+  ]
 const reviewFilterOptionPayloadJsonDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0130_dropReviewFilterOptionPayloadJson.sql']
 const reviewArticleServingSelectedRankCopyDropForwardMigrationSql =
@@ -400,20 +408,26 @@ test('unassessed queue serving schema drops derived queue identity', () => {
   expect(reviewQueueServingIdentityDropForwardMigrationSql).not.toContain('queue_identity VARCHAR')
 })
 
-test('projector watermark schema keeps lifecycle recovery fields nullable', () => {
+test('projector watermark schema drops unused lifecycle placeholders', () => {
   const projectorWatermarkSql = getTableSql('app.review_serving_projector_watermark')
 
   expect(projectorWatermarkSql).toContain('import_route_id VARCHAR')
-  expect(projectorWatermarkSql).toContain('snapshot_id VARCHAR')
-  expect(projectorWatermarkSql).toContain('lease_owner VARCHAR')
-  expect(projectorWatermarkSql).toContain('lease_expires_at TIMESTAMPTZ')
-  expect(projectorWatermarkSql).toContain('cursor_json JSON')
-  expect(projectorWatermarkSql).toContain('last_error VARCHAR')
-  expect(projectorWatermarkSql).not.toContain('snapshot_id VARCHAR NOT NULL')
-  expect(projectorWatermarkSql).not.toContain('lease_owner VARCHAR NOT NULL')
-  expect(projectorWatermarkSql).not.toContain('lease_expires_at TIMESTAMPTZ NOT NULL')
-  expect(projectorWatermarkSql).not.toContain('cursor_json JSON NOT NULL')
-  expect(projectorWatermarkSql).not.toContain('last_error VARCHAR NOT NULL')
+  expect(projectorWatermarkSql).not.toContain('snapshot_id')
+  expect(projectorWatermarkSql).not.toContain('status VARCHAR')
+  expect(projectorWatermarkSql).not.toContain('lease_owner')
+  expect(projectorWatermarkSql).not.toContain('lease_expires_at')
+  expect(projectorWatermarkSql).not.toContain('cursor_json')
+  expect(projectorWatermarkSql).not.toContain('last_error')
+  expect(reviewServingProjectorWatermarkLifecyclePlaceholderDropForwardMigrationSql).toContain(
+    'CREATE TABLE app.review_serving_projector_watermark_repair',
+  )
+  expect(reviewServingProjectorWatermarkLifecyclePlaceholderDropForwardMigrationSql).toContain(
+    'DROP TABLE app.review_serving_projector_watermark;',
+  )
+  expect(reviewServingProjectorWatermarkLifecyclePlaceholderDropForwardMigrationSql).not.toContain('snapshot_id')
+  expect(reviewServingProjectorWatermarkLifecyclePlaceholderDropForwardMigrationSql).not.toContain('lease_owner')
+  expect(reviewServingProjectorWatermarkLifecyclePlaceholderDropForwardMigrationSql).not.toContain('cursor_json')
+  expect(reviewServingProjectorWatermarkLifecyclePlaceholderDropForwardMigrationSql).not.toContain('last_error')
 })
 
 test('summary rebuild partial schema drops derived serving key identity', () => {
@@ -616,23 +630,33 @@ test('Phase 1 payload serving schema preserves prompt preview article ordering',
   )
 })
 
-test('Phase 1 payload serving schema carries active display hydration fields', () => {
+test('Phase 1 payload serving schema drops display-copy hydration fields after detail routes read display rows', () => {
   expect(
     getMissingColumns('mart.review_article_serving_payload_v4', [
-      'article_title',
-      'article_external_id',
-      'article_updated_at',
-      'arxiv_id',
-      'biorxiv_id',
-      'medrxiv_id',
-      'doi',
-      'pmid',
-      'journal_title',
-      'url',
-      'full_text_pdf',
-      'full_text_fetched_at',
-      'full_text_conversion_status',
+      'article_created_at',
+      'source_metadata',
+      'abstract_text',
+      'full_text_preview',
     ]),
+  ).toEqual([])
+  expect(
+    [...getTableColumns('mart.review_article_serving_payload_v4')].filter((columnName) => {
+      return [
+        'article_title',
+        'article_external_id',
+        'article_updated_at',
+        'arxiv_id',
+        'biorxiv_id',
+        'medrxiv_id',
+        'doi',
+        'pmid',
+        'journal_title',
+        'url',
+        'full_text_pdf',
+        'full_text_fetched_at',
+        'full_text_conversion_status',
+      ].includes(columnName)
+    }),
   ).toEqual([])
   expect(reviewServingPayloadDisplayFieldsForwardMigrationSql).toContain(
     'CREATE TABLE mart.review_article_serving_payload_v4_display_repair',
@@ -646,6 +670,15 @@ test('Phase 1 payload serving schema carries active display hydration fields', (
   )
   expect(reviewPayloadDisplayFieldBackfillForwardMigrationSql).toContain('FROM mart.review_article_serving_v4')
   expect(reviewPayloadDisplayFieldBackfillForwardMigrationSql).toContain('payload.article_title IS NULL')
+  expect(reviewPayloadDisplayCopyColumnDropForwardMigrationSql).toContain(
+    'CREATE TABLE mart.review_article_serving_payload_v4_repair',
+  )
+  expect(reviewPayloadDisplayCopyColumnDropForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_serving_payload_v4_repair RENAME TO review_article_serving_payload_v4;',
+  )
+  expect(reviewPayloadDisplayCopyColumnDropForwardMigrationSql).not.toContain('article_title')
+  expect(reviewPayloadDisplayCopyColumnDropForwardMigrationSql).not.toContain('article_external_id')
+  expect(reviewPayloadDisplayCopyColumnDropForwardMigrationSql).not.toContain('full_text_pdf')
 })
 
 test('Phase 1 article serving schema preserves review table display metadata', () => {

@@ -21,21 +21,32 @@ CREATE TABLE app.review_serving_projector_watermark_repair (
   CHECK (patch_watermark >= 0)
 );
 
-INSERT INTO app.review_serving_projector_watermark_repair
+INSERT INTO app.review_serving_projector_watermark_repair (
+  watermark_id,
+  projector_name,
+  project_id,
+  import_route_id,
+  projection_component,
+  source_partition,
+  source_high_water_mark,
+  base_generation,
+  patch_watermark,
+  created_at,
+  updated_at
+)
 SELECT
   watermark_id,
-  any_value(projector_name) AS projector_name,
-  any_value(project_id) AS project_id,
-  any_value(import_route_id) AS import_route_id,
-  any_value(projection_component) AS projection_component,
-  any_value(source_partition) AS source_partition,
-  MAX(source_high_water_mark) AS source_high_water_mark,
-  MAX(base_generation) AS base_generation,
-  MAX(patch_watermark) AS patch_watermark,
-  MIN(created_at) AS created_at,
-  MAX(updated_at) AS updated_at
-FROM app.review_serving_projector_watermark
-GROUP BY watermark_id;
+  projector_name,
+  project_id,
+  import_route_id,
+  projection_component,
+  source_partition,
+  source_high_water_mark,
+  base_generation,
+  patch_watermark,
+  created_at,
+  updated_at
+FROM app.review_serving_projector_watermark;
 
 DROP TABLE app.review_serving_projector_watermark;
 

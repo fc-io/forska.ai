@@ -250,21 +250,21 @@ const reviewServingArticlePhysicalSelectColumns = [
   return `${reviewServingArticleTable}.${column}`
 })
 const reviewServingArticlePayloadDisplayColumns = [
-  'article_title',
-  'article_external_id',
-  'article_updated_at',
-  'arxiv_id',
-  'biorxiv_id',
-  'medrxiv_id',
-  'doi',
-  'pmid',
-  'journal_title',
-  'url',
-  'full_text_pdf',
-  'full_text_fetched_at',
-  'full_text_conversion_status',
+  `${reviewServingArticleTable}.article_title AS article_title`,
+  `${reviewServingArticleTable}.article_external_id AS article_external_id`,
+  `${reviewServingArticleTable}.article_updated_at AS article_updated_at`,
+  `${reviewServingArticleTable}.arxiv_id AS arxiv_id`,
+  `${reviewServingArticleTable}.biorxiv_id AS biorxiv_id`,
+  `${reviewServingArticleTable}.medrxiv_id AS medrxiv_id`,
+  `${reviewServingArticleTable}.doi AS doi`,
+  `${reviewServingArticleTable}.pmid AS pmid`,
+  `${reviewServingArticleTable}.journal_title AS journal_title`,
+  `${reviewServingArticleTable}.url AS url`,
+  `${reviewServingArticleTable}.full_text_pdf AS full_text_pdf`,
+  `${reviewServingArticleTable}.full_text_fetched_at AS full_text_fetched_at`,
+  `${reviewServingArticleTable}.full_text_conversion_status AS full_text_conversion_status`,
 ].map((column) => {
-  return `COALESCE(payload.${column}, ${reviewServingArticleTable}.${column}) AS ${column}`
+  return column
 })
 
 const getReviewServingRowsSqlIdentityPredicates = (params: {

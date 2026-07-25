@@ -90,22 +90,13 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
   expect(sql).toContain('LEFT JOIN mart.review_article_serving_payload_v4 payload')
   expect(sql).toContain('payload.display_identity = $displayIdentity')
   expect(sql).toContain('payload.payload_identity = $payloadIdentity')
-  expect(sql).toContain(
-    'COALESCE(payload.article_title, mart.review_article_serving_v4.article_title) AS article_title',
-  )
-  expect(sql).toContain(
-    'COALESCE(payload.article_external_id, mart.review_article_serving_v4.article_external_id) AS article_external_id',
-  )
-  expect(sql).toContain(
-    'COALESCE(payload.journal_title, mart.review_article_serving_v4.journal_title) AS journal_title',
-  )
-  expect(sql).toContain('COALESCE(payload.url, mart.review_article_serving_v4.url) AS url')
-  expect(sql).toContain(
-    'COALESCE(payload.full_text_pdf, mart.review_article_serving_v4.full_text_pdf) AS full_text_pdf',
-  )
-  expect(sql).toContain(
-    'COALESCE(payload.full_text_conversion_status, mart.review_article_serving_v4.full_text_conversion_status) AS full_text_conversion_status',
-  )
+  expect(sql).toContain('mart.review_article_serving_v4.article_title AS article_title')
+  expect(sql).toContain('mart.review_article_serving_v4.article_external_id AS article_external_id')
+  expect(sql).toContain('mart.review_article_serving_v4.journal_title AS journal_title')
+  expect(sql).toContain('mart.review_article_serving_v4.url AS url')
+  expect(sql).toContain('mart.review_article_serving_v4.full_text_pdf AS full_text_pdf')
+  expect(sql).toContain('mart.review_article_serving_v4.full_text_conversion_status AS full_text_conversion_status')
+  expect(sql).not.toContain('COALESCE(payload.article_title')
   expect(sql).not.toContain('payload.display_identity = mart.review_article_serving_v4.display_identity')
   expect(sql).not.toContain('payload.payload_identity = mart.review_article_serving_v4.payload_identity')
   expect(sql).toContain(
