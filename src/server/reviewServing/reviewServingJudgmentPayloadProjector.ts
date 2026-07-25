@@ -573,10 +573,6 @@ const getLlmJudgmentHydrationInsertStatement = (input: ProjectReviewServingJudgm
         payload_kind,
         article_id,
         prompt_id,
-        prompt_original_text,
-        prompt_heading,
-        prompt_type,
-        prompt_criteria_disposition,
         judgment_updated_at,
         chunking_strategy,
         confidence_original,
@@ -624,10 +620,6 @@ const getLlmJudgmentHydrationInsertStatement = (input: ProjectReviewServingJudgm
         detail.payload_kind,
         detail.article_id,
         detail.prompt_id,
-        prompt.original_text AS prompt_original_text,
-        prompt.prompt_heading,
-        prompt.type AS prompt_type,
-        project_prompt.criteria_disposition AS prompt_criteria_disposition,
         judgment.updated_at AS judgment_updated_at,
         judgment.chunking_strategy,
         judgment.confidence_original,
@@ -645,11 +637,6 @@ const getLlmJudgmentHydrationInsertStatement = (input: ProjectReviewServingJudgm
         assessment.updated_at AS assessment_updated_at,
         detail.detail_updated_at
       FROM detail
-      INNER JOIN app.project_prompt project_prompt
-        ON project_prompt.project_id = ${getSqlLiteral(input.projectId)}
-        AND project_prompt.prompt_id = detail.prompt_id
-      INNER JOIN app.prompt prompt
-        ON prompt.id = detail.prompt_id
       LEFT JOIN app."judgment" judgment
         ON judgment.id = detail.judgment_id
       LEFT JOIN app.model model
@@ -677,10 +664,6 @@ const getHumanJudgmentHydrationInsertStatement = (input: ProjectReviewServingJud
         payload_kind,
         article_id,
         prompt_id,
-        prompt_original_text,
-        prompt_heading,
-        prompt_type,
-        prompt_criteria_disposition,
         judgment_updated_at,
         chunking_strategy,
         confidence_original,
@@ -720,10 +703,6 @@ const getHumanJudgmentHydrationInsertStatement = (input: ProjectReviewServingJud
         detail.payload_kind,
         detail.article_id,
         detail.prompt_id,
-        CASE WHEN detail.prompt_id = 'summary' THEN 'Overall human screening decision' ELSE prompt.original_text END AS prompt_original_text,
-        CASE WHEN detail.prompt_id = 'summary' THEN NULL ELSE prompt.prompt_heading END AS prompt_heading,
-        CASE WHEN detail.prompt_id = 'summary' THEN 'summary' ELSE prompt.type END AS prompt_type,
-        CASE WHEN detail.prompt_id = 'summary' THEN NULL ELSE project_prompt.criteria_disposition END AS prompt_criteria_disposition,
         COALESCE(judgment_human.updated_at, judgment_human_summary.updated_at) AS judgment_updated_at,
         NULL AS chunking_strategy,
         NULL AS confidence_original,
@@ -741,11 +720,6 @@ const getHumanJudgmentHydrationInsertStatement = (input: ProjectReviewServingJud
         NULL AS assessment_updated_at,
         detail.detail_updated_at
       FROM detail
-      LEFT JOIN app.project_prompt project_prompt
-        ON project_prompt.project_id = ${getSqlLiteral(input.projectId)}
-        AND project_prompt.prompt_id = detail.prompt_id
-      LEFT JOIN app.prompt prompt
-        ON prompt.id = detail.prompt_id
       LEFT JOIN app."judgment_human" judgment_human
         ON judgment_human.id = detail.judgment_id
       LEFT JOIN app."judgment_human_summary" judgment_human_summary

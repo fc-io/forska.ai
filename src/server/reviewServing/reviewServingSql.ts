@@ -129,9 +129,29 @@ const hasBoundedArticleLookupJoin = (sql: string) => {
   )
 }
 
+const hasBoundedJudgmentPromptMetadataJoin = (sql: string) => {
+  return (
+    /\bleft\s+join\s+app\.project_prompt\s+project_prompt\s+on\s+project_prompt\.project_id\s*=\s*[$:@?a-z_][\w.$:]*/iu.test(
+      sql,
+    )
+    && /\bproject_prompt\.prompt_id\s*=\s*mart\.review_article_judgment_detail_serving_v4\.prompt_id\b/iu.test(sql)
+    && /\bleft\s+join\s+app\.prompt\s+prompt\s+on\s+prompt\.id\s*=\s*mart\.review_article_judgment_detail_serving_v4\.prompt_id\b/iu.test(
+      sql,
+    )
+  )
+}
+
 const isBoundedArticleLookupReference = (sql: string, tableReference: ReviewServingSqlTableReference) => {
   return (
     tableReference.table === 'app.article' && tableReference.alias === 'article' && hasBoundedArticleLookupJoin(sql)
+  )
+}
+
+const isBoundedJudgmentPromptMetadataReference = (sql: string, tableReference: ReviewServingSqlTableReference) => {
+  return (
+    ((tableReference.table === 'app.project_prompt' && tableReference.alias === 'project_prompt')
+      || (tableReference.table === 'app.prompt' && tableReference.alias === 'prompt'))
+    && hasBoundedJudgmentPromptMetadataJoin(sql)
   )
 }
 
@@ -153,6 +173,11 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
   const unregisteredTableViolations = tableReferences
     .filter((tableReference) => {
       return tableReference !== 'app.article' || !hasBoundedArticleLookupJoin(sql)
+    })
+    .filter((tableReference) => {
+      return (
+        !['app.project_prompt', 'app.prompt'].includes(tableReference) || !hasBoundedJudgmentPromptMetadataJoin(sql)
+      )
     })
     .filter((tableReference) => {
       return !allowedTables.has(tableReference)
@@ -194,7 +219,10 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
     return required
       ? tableReferences
           .filter((tableReference, tableReferenceIndex) => {
-            if (isBoundedArticleLookupReference(sql, tableReference)) {
+            if (
+              isBoundedArticleLookupReference(sql, tableReference)
+              || isBoundedJudgmentPromptMetadataReference(sql, tableReference)
+            ) {
               return false
             }
 
@@ -321,11 +349,11 @@ const reviewServingJudgmentDetailFullColumns = [
   ].map((column) => {
     return `${reviewServingJudgmentDetailTable}.${column}`
   }),
+  `CASE WHEN ${reviewServingJudgmentDetailTable}.prompt_id = 'summary' THEN 'Overall human screening decision' ELSE prompt.original_text END AS prompt_original_text`,
+  `CASE WHEN ${reviewServingJudgmentDetailTable}.prompt_id = 'summary' THEN NULL ELSE prompt.prompt_heading END AS prompt_heading`,
+  `CASE WHEN ${reviewServingJudgmentDetailTable}.prompt_id = 'summary' THEN 'summary' ELSE prompt.type END AS prompt_type`,
+  `CASE WHEN ${reviewServingJudgmentDetailTable}.prompt_id = 'summary' THEN NULL ELSE project_prompt.criteria_disposition END AS prompt_criteria_disposition`,
   ...[
-    'prompt_original_text',
-    'prompt_heading',
-    'prompt_type',
-    'prompt_criteria_disposition',
     'judgment_updated_at',
     'chunking_strategy',
     'confidence_original',
@@ -397,6 +425,11 @@ const getReviewServingJudgmentDetailHydrationJoin = (params: {
         ` AND ${reviewServingJudgmentDetailHydrationTable}.payload_kind = ${reviewServingJudgmentDetailTable}.payload_kind`,
         ` AND ${reviewServingJudgmentDetailHydrationTable}.article_id = ${reviewServingJudgmentDetailTable}.article_id`,
         ` AND ${reviewServingJudgmentDetailHydrationTable}.prompt_id = ${reviewServingJudgmentDetailTable}.prompt_id`,
+        ` LEFT JOIN app.project_prompt project_prompt`,
+        ` ON project_prompt.project_id = ${params.projectIdParameter}`,
+        ` AND project_prompt.prompt_id = ${reviewServingJudgmentDetailTable}.prompt_id`,
+        ` LEFT JOIN app.prompt prompt`,
+        ` ON prompt.id = ${reviewServingJudgmentDetailTable}.prompt_id`,
       ].join('')
     : ''
 }
