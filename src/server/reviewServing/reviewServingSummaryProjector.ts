@@ -231,10 +231,20 @@ const getFullRebuildSummaryContributionRows = async (
           SELECT DISTINCT
             serving.article_id,
             serving.selected_import_route_id AS import_route_id,
-            serving.publication_year,
+            selected_hot.publication_year,
             serving.duplicate_flag,
             serving.conflict_flag
           FROM scoped_serving serving
+          LEFT JOIN app.review_selected_article_import_v4 selected_base
+            ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
+            AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+            AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+            AND selected_base.article_id = serving.article_id
+          LEFT JOIN app.review_import_article_hot_field selected_hot
+            ON selected_hot.import_route_id = selected_base.import_route_id
+            AND selected_hot.article_id = selected_base.article_id
+            AND selected_hot.source_record_key = selected_base.source_record_key
+            AND NOT selected_hot.tombstone
         ),
         llm_detail AS (
           SELECT detail.*

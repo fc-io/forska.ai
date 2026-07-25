@@ -469,7 +469,6 @@ CREATE TABLE IF NOT EXISTS mart.review_article_serving_v4 (
   sort_key TIMESTAMPTZ NOT NULL,
   activity_sort_at TIMESTAMPTZ NOT NULL,
   selected_import_route_id VARCHAR,
-  publication_year INTEGER,
   duplicate_flag BOOLEAN NOT NULL DEFAULT FALSE,
   conflict_flag BOOLEAN NOT NULL DEFAULT FALSE,
   llm_status_key VARCHAR,
@@ -777,9 +776,6 @@ ON mart.review_title_search_serving_v4(project_id, search_identity, project_scop
 
 CREATE INDEX IF NOT EXISTS idx_review_article_serving_v4_order
 ON mart.review_article_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, sort_key, article_id);
-
-CREATE INDEX IF NOT EXISTS idx_review_article_serving_v4_publication_year
-ON mart.review_article_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, publication_year, sort_key, article_id);
 
 CREATE INDEX IF NOT EXISTS idx_review_article_display_patch_v4_lookup
 ON mart.review_article_display_patch_v4(project_id, display_identity, base_generation, patch_watermark, sort_key, article_id);

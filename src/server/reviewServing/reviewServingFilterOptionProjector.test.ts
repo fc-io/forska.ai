@@ -46,10 +46,12 @@ const projectInput = (input?: {
     optionMode: input?.optionMode ?? 'review',
     payloadIdentity: 'payload:identity-1',
     projectId: 'project-1',
+    projectScopeIdentity: 'projectScope:identity-1',
     projectionIdentity: 'filter-option:identity-1',
     reviewConfigHash: 'review-config-1',
     searchIdentity: input?.searchIdentity ?? 'search:none',
     searchTitle: input?.searchTitle,
+    selectedImportSnapshotId: 'selected-import-snapshot-1',
     snapshotId: 'snapshot-1',
   }
 }
@@ -187,6 +189,10 @@ test('source query preserves active search and filter scope without using postin
   expect(sourceStatement).toContain("LIKE LOWER('%heart%')")
   expect(sourceStatement).toContain("('llm'), ('human')")
   expect(sourceStatement).toContain('mart.review_article_judgment_detail_serving_v4 detail')
+  expect(sourceStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
+  expect(sourceStatement).toContain('LEFT JOIN app.review_import_article_hot_field selected_hot')
+  expect(sourceStatement).toContain('selected_hot.publication_year IS NOT NULL')
+  expect(sourceStatement).not.toContain('serving.publication_year')
   expect(sourceStatement).toContain('detail.answered_original AS answerValue')
   expect(sourceStatement).toContain('unnest(detail.answered_original_as_array) AS answerValue')
   expect(sourceStatement).not.toContain('mart.review_article_filter_posting_serving_v4')

@@ -25,10 +25,12 @@ export type ProjectReviewServingFilterOptionsInput = {
   optionMode: 'human' | 'review'
   payloadIdentity: string
   projectId: string
+  projectScopeIdentity: string
   projectionIdentity: string
   reviewConfigHash: string
   searchIdentity: string
   searchTitle?: string | null
+  selectedImportSnapshotId: string
   snapshotId: string
 }
 
@@ -176,12 +178,22 @@ const getFilterOptionSourceRows = async (
           WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.selected_import_route_id IS NOT NULL
           ${aggregateBySql} serving.selected_import_route_id
           UNION ALL
-          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'publicationYear' AS facetKey, CAST(serving.publication_year AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':publicationYear:', CAST(serving.publication_year AS VARCHAR)) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'publicationYear' AS facetKey, CAST(selected_hot.publication_year AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':publicationYear:', CAST(selected_hot.publication_year AS VARCHAR)) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM mart.review_article_serving_v4 serving
           INNER JOIN active_article active ON active.article_id = serving.article_id
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
-          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.publication_year IS NOT NULL
-          ${aggregateBySql} serving.publication_year
+          LEFT JOIN app.review_selected_article_import_v4 selected_base
+            ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
+            AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+            AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+            AND selected_base.article_id = serving.article_id
+          LEFT JOIN app.review_import_article_hot_field selected_hot
+            ON selected_hot.import_route_id = selected_base.import_route_id
+            AND selected_hot.article_id = selected_base.article_id
+            AND selected_hot.source_record_key = selected_base.source_record_key
+            AND NOT selected_hot.tombstone
+          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND selected_hot.publication_year IS NOT NULL
+          ${aggregateBySql} selected_hot.publication_year
           UNION ALL
           SELECT 'review' AS filterKind, 'llmStatus' AS facetKey, serving.llm_status_key AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:llmStatus:', serving.llm_status_key) AS optionValueKey, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM mart.review_article_serving_v4 serving
@@ -295,7 +307,7 @@ const getDeleteFilterOptionRowsStatement = (input: ProjectReviewServingFilterOpt
 
 export const projectReviewServingFilterOptions = async (
   input: ProjectReviewServingFilterOptionsInput,
-  database: ReviewServingFilterOptionProjectorDatabase = getAppDatabaseService(),
+  database: ReviewServingFilterOptionProjectorDatabase = getAppDatabaseService() as ReviewServingFilterOptionProjectorDatabase,
 ) => {
   const sourceRows = await getFilterOptionSourceRows(input, database)
   const records = sourceRows.map((row) => {
