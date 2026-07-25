@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS app.review_rebuild_chunk_manifest_manual_pr122_1783542053396;
