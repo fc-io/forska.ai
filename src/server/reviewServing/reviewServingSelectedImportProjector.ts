@@ -454,8 +454,6 @@ const selectedImportServingColumns = [
   'sort_key',
   'activity_sort_at',
   'selected_import_route_id',
-  'duplicate_flag',
-  'conflict_flag',
   'llm_status_key',
   'human_status_key',
   'llm_judged_prompt_count',
@@ -519,8 +517,6 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        COALESCE(serving.sort_key, scoped.sort_key) AS sort_key,
        COALESCE(serving.activity_sort_at, scoped.activity_sort_at) AS activity_sort_at,
        selected.import_route_id AS selected_import_route_id,
-       COALESCE(selected_hot.duplicate_flag, FALSE) AS duplicate_flag,
-       COALESCE(selected_hot.conflict_flag, FALSE) AS conflict_flag,
        COALESCE(serving.llm_status_key, 'unanswered') AS llm_status_key,
        COALESCE(serving.human_status_key, 'unanswered') AS human_status_key,
        COALESCE(serving.llm_judged_prompt_count, 0) AS llm_judged_prompt_count,
@@ -537,11 +533,6 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
        AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
        AND selected.article_id = scoped.article_id
        AND NOT selected.tombstone
-     LEFT JOIN app.review_import_article_hot_field selected_hot
-       ON selected_hot.import_route_id = selected.import_route_id
-       AND selected_hot.article_id = selected.article_id
-       AND selected_hot.source_record_key = selected.source_record_key
-       AND NOT selected_hot.tombstone
      LEFT JOIN mart.review_article_serving_v4 serving
        ON serving.project_id = template.project_id
        AND serving.review_config_hash = template.review_config_hash

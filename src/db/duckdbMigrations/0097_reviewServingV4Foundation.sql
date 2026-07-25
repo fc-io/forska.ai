@@ -469,8 +469,6 @@ CREATE TABLE IF NOT EXISTS mart.review_article_serving_v4 (
   sort_key TIMESTAMPTZ NOT NULL,
   activity_sort_at TIMESTAMPTZ NOT NULL,
   selected_import_route_id VARCHAR,
-  duplicate_flag BOOLEAN NOT NULL DEFAULT FALSE,
-  conflict_flag BOOLEAN NOT NULL DEFAULT FALSE,
   llm_status_key VARCHAR,
   human_status_key VARCHAR,
   llm_judged_prompt_count INTEGER NOT NULL DEFAULT 0,
