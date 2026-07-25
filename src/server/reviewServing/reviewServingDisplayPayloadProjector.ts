@@ -119,9 +119,22 @@ type DisplayPatchRow = {
 type PayloadProjectionRow = {
   abstractText: string | null
   articleCreatedAt: Date | string | null
+  articleExternalId: string | null
   articleId: string
+  articleTitle: string
+  articleUpdatedAt: Date | string | null
+  arxivId: string | null
+  biorxivId: string | null
+  doi: string | null
+  fullTextConversionStatus: string | null
+  fullTextFetchedAt: Date | string | null
+  fullTextPdf: string | null
   fullTextPreview: string | null
+  journalTitle: string | null
+  medrxivId: string | null
+  pmid: string | null
   sourceMetadata: ReviewServingIdentityValue | null
+  url: string | null
 }
 
 type ReviewServingPayloadPatchManifestInput = {
@@ -531,6 +544,34 @@ const getPayloadRowsSql = (
     SELECT
       scope.article_id AS articleId,
       article.article_created_at AS articleCreatedAt,
+      article.article_updated_at AS articleUpdatedAt,
+      COALESCE(
+        CASE
+          WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+          ELSE selected_hot.article_title
+        END,
+        article.article_title
+      ) AS articleTitle,
+      COALESCE(
+        CASE
+          WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+          ELSE selected_hot.external_id
+        END,
+        article.article_id
+      ) AS articleExternalId,
+      article.arxiv_id AS arxivId,
+      article.biorxiv_id AS biorxivId,
+      article.medrxiv_id AS medrxivId,
+      article.doi,
+      article.pubmed_id AS pmid,
+      CASE
+        WHEN COALESCE(selected_base.tombstone, FALSE) THEN NULL
+        ELSE selected_hot.journal_title
+      END AS journalTitle,
+      COALESCE(json_extract_string(selected_source.raw_payload, '$.covidence.citation.url'), article.url) AS url,
+      article.full_text_pdf AS fullTextPdf,
+      article.full_text_fetched_at AS fullTextFetchedAt,
+      article.full_text_conversion_status AS fullTextConversionStatus,
       CASE
         WHEN article.source_metadata IS NULL AND selected_source.import_metadata IS NULL THEN NULL
         ELSE json_merge_patch(
@@ -549,6 +590,11 @@ const getPayloadRowsSql = (
       ON selected_base.project_id = scope.project_id
       AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
       AND selected_base.article_id = scope.article_id
+    LEFT JOIN app.review_import_article_hot_field selected_hot
+      ON selected_hot.import_route_id = ${selectedImportRouteIdSql}
+      AND selected_hot.article_id = scope.article_id
+      AND selected_hot.source_record_key = ${selectedSourceRecordKeySql}
+      AND NOT selected_hot.tombstone
     LEFT JOIN app.article_import_route_source_record selected_source
       ON selected_source.import_route_id = ${selectedImportRouteIdSql}
       AND selected_source.article_id = scope.article_id
@@ -578,14 +624,27 @@ const getPayloadRecord = (
     values: {
       abstract_text: row.abstractText,
       article_created_at: row.articleCreatedAt,
+      article_external_id: row.articleExternalId,
       article_id: row.articleId,
+      article_title: row.articleTitle,
+      article_updated_at: row.articleUpdatedAt,
+      arxiv_id: row.arxivId,
+      biorxiv_id: row.biorxivId,
+      doi: row.doi,
       display_identity: input.displayIdentity,
+      full_text_conversion_status: row.fullTextConversionStatus,
+      full_text_fetched_at: row.fullTextFetchedAt,
+      full_text_pdf: row.fullTextPdf,
       full_text_preview: row.fullTextPreview,
+      journal_title: row.journalTitle,
+      medrxiv_id: row.medrxivId,
       payload_identity: input.payloadIdentity,
       payload_updated_at: new Date(),
+      pmid: row.pmid,
       project_id: input.projectId,
       snapshot_id: input.snapshotId,
       source_metadata: row.sourceMetadata,
+      url: row.url,
     },
   }
 }
@@ -599,14 +658,27 @@ const getPayloadRebuildRowsStatements = (
     INSERT INTO mart.review_article_serving_payload_v4 (
       abstract_text,
       article_created_at,
+      article_external_id,
       article_id,
+      article_title,
+      article_updated_at,
+      arxiv_id,
+      biorxiv_id,
+      doi,
       display_identity,
+      full_text_conversion_status,
+      full_text_fetched_at,
+      full_text_pdf,
       full_text_preview,
+      journal_title,
+      medrxiv_id,
       payload_identity,
       payload_updated_at,
+      pmid,
       project_id,
       snapshot_id,
-      source_metadata
+      source_metadata,
+      url
     )
     WITH ${
       ranges === undefined
@@ -620,14 +692,27 @@ const getPayloadRebuildRowsStatements = (
       SELECT
         payload_source.abstractText AS abstract_text,
         payload_source.articleCreatedAt AS article_created_at,
+        payload_source.articleExternalId AS article_external_id,
         payload_source.articleId AS article_id,
+        payload_source.articleTitle AS article_title,
+        payload_source.articleUpdatedAt AS article_updated_at,
+        payload_source.arxivId AS arxiv_id,
+        payload_source.biorxivId AS biorxiv_id,
+        payload_source.doi,
         ${getSqlLiteral(input.displayIdentity)} AS display_identity,
+        payload_source.fullTextConversionStatus AS full_text_conversion_status,
+        payload_source.fullTextFetchedAt AS full_text_fetched_at,
+        payload_source.fullTextPdf AS full_text_pdf,
         payload_source.fullTextPreview AS full_text_preview,
+        payload_source.journalTitle AS journal_title,
+        payload_source.medrxivId AS medrxiv_id,
         ${getSqlLiteral(input.payloadIdentity)} AS payload_identity,
         current_timestamp AS payload_updated_at,
+        payload_source.pmid,
         ${getSqlLiteral(input.projectId)} AS project_id,
         ${getSqlLiteral(input.snapshotId)} AS snapshot_id,
-        payload_source.sourceMetadata AS source_metadata
+        payload_source.sourceMetadata AS source_metadata,
+        payload_source.url
       FROM payload_source
     )
     SELECT

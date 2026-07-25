@@ -143,6 +143,14 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
     resolve(migrationsFolder, '0144_dropReviewProjectImportDeltaCursor.sql'),
     'utf8',
   ).trim()
+  const manualPr122ChunkManifestArtifactDropSql = readFileSync(
+    resolve(migrationsFolder, '0145_dropManualPr122ChunkManifestArtifact.sql'),
+    'utf8',
+  ).trim()
+  const reviewServingPayloadDisplayFieldsSql = readFileSync(
+    resolve(migrationsFolder, '0146_reviewServingPayloadDisplayFields.sql'),
+    'utf8',
+  ).trim()
   const reviewArticleServingReviewProgressCopyDropSql = readFileSync(
     resolve(migrationsFolder, '0134_dropReviewArticleServingReviewProgressCopy.sql'),
     'utf8',
@@ -328,6 +336,287 @@ test('DuckDB migrations retire bounded review-serving storage with forward drops
       'DROP TABLE IF EXISTS app.review_project_import_delta_cursor;',
     ].join('\n'),
   )
+  expect(manualPr122ChunkManifestArtifactDropSql).toBe(
+    'DROP TABLE IF EXISTS app.review_rebuild_chunk_manifest_manual_pr122_1783542053396;',
+  )
+  expect(reviewServingPayloadDisplayFieldsSql).toContain(
+    'CREATE TABLE mart.review_article_serving_payload_v4_display_repair',
+  )
+  expect(reviewServingPayloadDisplayFieldsSql).toContain('DROP TABLE mart.review_article_serving_payload_v4;')
+  expect(reviewServingPayloadDisplayFieldsSql).toContain(
+    'ALTER TABLE mart.review_article_serving_payload_v4_display_repair RENAME TO review_article_serving_payload_v4;',
+  )
+  expect(reviewServingPayloadDisplayFieldsSql).not.toContain('ADD COLUMN')
+})
+
+test('DuckDB migration rebuilds payload serving with display hydration columns', async () => {
+  const duckdbPath = `/tmp/forska-review-payload-display-fields-${Date.now()}.duckdb`
+  const targetMigrationFile = '0146_reviewServingPayloadDisplayFields.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS mart')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE mart.review_article_serving_payload_v4 (
+            project_id VARCHAR NOT NULL,
+            display_identity VARCHAR NOT NULL,
+            payload_identity VARCHAR NOT NULL,
+            snapshot_id VARCHAR NOT NULL,
+            article_id VARCHAR NOT NULL,
+            article_created_at TIMESTAMPTZ,
+            source_metadata JSON,
+            abstract_text VARCHAR,
+            full_text_preview VARCHAR,
+            payload_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.review_article_serving_payload_v4 (
+            project_id,
+            display_identity,
+            payload_identity,
+            snapshot_id,
+            article_id,
+            article_created_at,
+            source_metadata,
+            abstract_text,
+            full_text_preview
+          )
+          VALUES (
+            'project-1',
+            'display-1',
+            'payload-1',
+            'snapshot-1',
+            'article-1',
+            TIMESTAMPTZ '2026-01-01 00:00:00+00',
+            json('{"source":"fixture"}'),
+            'abstract',
+            'preview'
+          )
+        \`)
+
+        await migrateDuckdb()
+
+        const rows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            article_title AS articleTitle,
+            article_external_id AS articleExternalId,
+            full_text_preview AS fullTextPreview
+          FROM mart.review_article_serving_payload_v4
+        \`)
+        const columns = await database.queryJson(\`
+          SELECT column_name AS columnName
+          FROM information_schema.columns
+          WHERE table_schema = 'mart'
+            AND table_name = 'review_article_serving_payload_v4'
+          ORDER BY ordinal_position
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0146_reviewServingPayloadDisplayFields.sql'"
+        )
+
+        console.log(JSON.stringify({columns, migrationRows, rows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      columns: {columnName: string}[]
+      migrationRows: {name: string}[]
+      rows: {
+        articleExternalId: string | null
+        articleId: string
+        articleTitle: string | null
+        fullTextPreview: string
+      }[]
+    }
+    const columnNames = new Set(
+      parsed.columns.map((column) => {
+        return column.columnName
+      }),
+    )
+
+    expect(columnNames.has('article_title')).toBe(true)
+    expect(columnNames.has('article_external_id')).toBe(true)
+    expect(columnNames.has('full_text_conversion_status')).toBe(true)
+    expect(parsed.rows).toEqual([
+      {articleExternalId: null, articleId: 'article-1', articleTitle: null, fullTextPreview: 'preview'},
+    ])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
+})
+
+test('DuckDB migration drops retired manual PR122 chunk manifest artifact', async () => {
+  const duckdbPath = `/tmp/forska-review-manual-pr122-chunk-manifest-drop-${Date.now()}.duckdb`
+  const targetMigrationFile = '0145_dropManualPr122ChunkManifestArtifact.sql'
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run('CREATE SCHEMA IF NOT EXISTS app')
+        await database.run(
+          "CREATE TABLE app_schema_migration (name VARCHAR PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await database.run(
+          "INSERT INTO app_schema_migration (name) VALUES ${appliedNames
+            .map((fileName) => {
+              return `('${fileName.replaceAll("'", "''")}')`
+            })
+            .join(', ')}"
+        )
+        await database.run(\`
+          CREATE TABLE app.review_rebuild_chunk_manifest (
+            chunk_id VARCHAR PRIMARY KEY,
+            request_id VARCHAR,
+            projection_component VARCHAR NOT NULL,
+            status VARCHAR NOT NULL
+          )
+        \`)
+        await database.run(\`
+          CREATE TABLE app.review_rebuild_chunk_manifest_manual_pr122_1783542053396 (
+            chunk_id VARCHAR PRIMARY KEY,
+            request_id VARCHAR,
+            projection_component VARCHAR NOT NULL,
+            status VARCHAR NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.review_rebuild_chunk_manifest_manual_pr122_1783542053396 (
+            chunk_id,
+            request_id,
+            projection_component,
+            status
+          )
+          VALUES ('manual-chunk-1', 'request-1', 'selectedImport', 'completed')
+        \`)
+
+        await migrateDuckdb()
+
+        const manualRows = await database.queryJson(\`
+          SELECT table_name AS tableName
+          FROM information_schema.tables
+          WHERE table_schema = 'app'
+            AND table_name = 'review_rebuild_chunk_manifest_manual_pr122_1783542053396'
+        \`)
+        const activeManifestRows = await database.queryJson(\`
+          SELECT table_name AS tableName
+          FROM information_schema.tables
+          WHERE table_schema = 'app'
+            AND table_name = 'review_rebuild_chunk_manifest'
+        \`)
+        const migrationRows = await database.queryJson(
+          "SELECT name FROM app_schema_migration WHERE name = '0145_dropManualPr122ChunkManifestArtifact.sql'"
+        )
+
+        console.log(JSON.stringify({activeManifestRows, manualRows, migrationRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migration')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .filter((line) => {
+        return line.trim().startsWith('{')
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      activeManifestRows: {tableName: string}[]
+      manualRows: {tableName: string}[]
+      migrationRows: {name: string}[]
+    }
+
+    expect(parsed.manualRows).toEqual([])
+    expect(parsed.activeManifestRows).toEqual([{tableName: 'review_rebuild_chunk_manifest'}])
+    expect(parsed.migrationRows).toEqual([{name: targetMigrationFile}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+  }
 })
 
 test('DuckDB migration drops retired project import delta cursor and route index', async () => {
